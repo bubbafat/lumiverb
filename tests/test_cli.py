@@ -1,5 +1,6 @@
 """CLI tests: config, library create/list, scan. All use mocks; no real HTTP or DB."""
 
+import signal
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -111,6 +112,45 @@ def test_scan_aborts_if_root_unreachable() -> None:
     assert result.exit_code == 1
     assert "Discovered" in result.output
     assert "0" in result.output
+
+
+@pytest.mark.fast
+def test_scan_registers_signal_handlers(tmp_path: Path) -> None:
+    """Patch signal.signal; invoke scan so real scan_library runs and completes; assert SIGINT/SIGTERM registered and restored."""
+    def _json(d):
+        m = MagicMock()
+        m.json.return_value = d
+        return m
+
+    mock_client = MagicMock()
+    mock_client.get.side_effect = [
+        _json([{"library_id": "lib_1", "name": "SigLib", "root_path": str(tmp_path)}]),
+        _json([]),  # no running scans
+    ]
+    mock_client.post.side_effect = [
+        _json({"scan_id": "scan_1"}),
+        _json({"files_missing": 0}),
+    ]
+    with patch("src.cli.main.LumiverbClient", return_value=mock_client), patch(
+        "src.cli.scanner.signal.signal"
+    ) as mock_signal:
+        mock_signal.side_effect = [
+            MagicMock(),
+            MagicMock(),
+            None,
+            None,
+        ]  # old handlers for register, then restore calls
+        result = runner.invoke(app, ["scan", "--library", "SigLib", "--force"])
+    assert result.exit_code == 0
+    calls = mock_signal.call_args_list
+    assert len(calls) >= 4, "expected 2 registrations + 2 restores"
+    reg_sigint = next((c for c in calls if c[0][0] == signal.SIGINT), None)
+    reg_sigterm = next((c for c in calls if c[0][0] == signal.SIGTERM), None)
+    assert reg_sigint is not None, "SIGINT handler should be registered"
+    assert reg_sigterm is not None, "SIGTERM handler should be registered"
+    restore_calls = [c for c in calls if len(c[0]) == 2 and c[0][1] is not None]
+    assert any(c[0][0] == signal.SIGINT for c in restore_calls), "SIGINT should be restored"
+    assert any(c[0][0] == signal.SIGTERM for c in restore_calls), "SIGTERM should be restored"
 
 
 @pytest.mark.fast

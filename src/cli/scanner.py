@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import signal
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,6 +49,7 @@ def scan_library(
     Scan a library: validate root, check for running scans, create scan record,
     walk filesystem, upsert each file, complete or abort scan.
     """
+    scan_id: str | None = None
     library_id = library.get("library_id", "")
     root_path_str = library.get("root_path", "")
     root_path = Path(root_path_str)
@@ -100,144 +102,167 @@ def scan_library(
                     status="aborted",
                 )
 
-    # Create scan record
-    body = {
-        "library_id": library_id,
-        "status": "running",
-        "root_path_override": path_override,
-        "worker_id": worker_id,
-    }
-    resp = client.post("/v1/scans", json=body)
-    data = resp.json()
-    scan_id = data.get("scan_id", "")
-    if not scan_id:
-        return ScanResult(
-            scan_id="",
-            files_discovered=0,
-            files_added=0,
-            files_updated=0,
-            files_skipped=0,
-            files_missing=0,
-            status="error",
-            error_message="No scan_id returned",
-        )
-
-    library_root_resolved = root_path.resolve()
-    walk_root = root_path / path_override if path_override else root_path
-    try:
-        walk_root_resolved = walk_root.resolve()
-    except OSError:
-        walk_root_resolved = walk_root
-    try:
-        walk_root_resolved.relative_to(library_root_resolved)
-    except ValueError:
-        err_msg = "Path override escapes library root"
+    def _abort_handler(signum: int, frame: object) -> None:
         try:
-            client.post(f"/v1/scans/{scan_id}/abort", json={"error_message": err_msg})
-        except Exception:
-            pass
-        return ScanResult(
-            scan_id=scan_id,
-            files_discovered=0,
-            files_added=0,
-            files_updated=0,
-            files_skipped=0,
-            files_missing=0,
-            status="error",
-            error_message=err_msg,
-        )
+            sig_name = signal.Signals(signum).name
+        except (ValueError, AttributeError):
+            sig_name = str(signum)
+        if scan_id is not None:
+            try:
+                client.post(
+                    f"/v1/scans/{scan_id}/abort",
+                    json={"error_message": f"Scan aborted by signal {sig_name}"},
+                )
+            except Exception:
+                pass
+        console.print(f"\n[yellow]Scan aborted ({sig_name}).[/yellow]")
+        raise SystemExit(130 if signum == signal.SIGINT else 143)
 
-    files_discovered = 0
-    files_added = 0
-    files_updated = 0
-    files_skipped = 0
+    old_sigint = signal.signal(signal.SIGINT, _abort_handler)
+    old_sigterm = signal.signal(signal.SIGTERM, _abort_handler)
 
     try:
-        all_files: list[tuple[Path, str, int, str | None, str]] = []
-        for p in Path(walk_root_resolved).rglob("*"):
-            if not p.is_file():
-                continue
-            ext = p.suffix.lower()
-            if ext not in SUPPORTED_EXTENSIONS:
-                continue
-            try:
-                rel_path = p.relative_to(library_root_resolved)
-            except ValueError:
-                continue
-            rel_path_str = str(rel_path).replace("\\", "/")
-            media_type = "video" if ext in VIDEO_EXTENSIONS else "image"
-            try:
-                st = p.stat()
-                file_size = st.st_size
-                file_mtime = _file_mtime_iso(p)
-            except OSError:
-                continue
-            all_files.append((p, rel_path_str, file_size, file_mtime, media_type))
-
-        use_progress = console.is_terminal
-        progress = Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-            disable=not use_progress,
-        )
-        with progress:
-            task = progress.add_task("Scanning...", total=len(all_files))
-            for p, rel_path_str, file_size, file_mtime, media_type in all_files:
-                progress.update(task, description=f"Scanning: {rel_path_str}", advance=1)
-                files_discovered += 1
-                upsert_body = {
-                    "library_id": library_id,
-                    "rel_path": rel_path_str,
-                    "file_size": file_size,
-                    "file_mtime": file_mtime,
-                    "media_type": media_type,
-                    "scan_id": scan_id,
-                    "force": force,
-                }
-                resp = client.post("/v1/assets/upsert", json=upsert_body)
-                action = resp.json().get("action", "updated")
-                if action == "added":
-                    files_added += 1
-                elif action == "updated":
-                    files_updated += 1
-                else:
-                    files_skipped += 1
-
-        # Complete scan
-        complete_body = {
-            "files_discovered": files_discovered,
-            "files_added": files_added,
-            "files_updated": files_updated,
-            "files_skipped": files_skipped,
+        # Create scan record
+        body = {
+            "library_id": library_id,
+            "status": "running",
+            "root_path_override": path_override,
+            "worker_id": worker_id,
         }
-        resp = client.post(f"/v1/scans/{scan_id}/complete", json=complete_body)
+        resp = client.post("/v1/scans", json=body)
         data = resp.json()
-        files_missing = data.get("files_missing", 0)
-        return ScanResult(
-            scan_id=scan_id,
-            files_discovered=files_discovered,
-            files_added=files_added,
-            files_updated=files_updated,
-            files_skipped=files_skipped,
-            files_missing=files_missing,
-            status="complete",
-        )
-    except Exception as e:
-        try:
-            client.post(
-                f"/v1/scans/{scan_id}/abort",
-                json={"error_message": str(e)},
+        scan_id = data.get("scan_id", "")
+        if not scan_id:
+            return ScanResult(
+                scan_id="",
+                files_discovered=0,
+                files_added=0,
+                files_updated=0,
+                files_skipped=0,
+                files_missing=0,
+                status="error",
+                error_message="No scan_id returned",
             )
-        except Exception:
-            pass
-        return ScanResult(
-            scan_id=scan_id,
-            files_discovered=files_discovered,
-            files_added=files_added,
-            files_updated=files_updated,
-            files_skipped=files_skipped,
-            files_missing=0,
-            status="error",
-            error_message=str(e),
-        )
+
+        library_root_resolved = root_path.resolve()
+        walk_root = root_path / path_override if path_override else root_path
+        try:
+            walk_root_resolved = walk_root.resolve()
+        except OSError:
+            walk_root_resolved = walk_root
+        try:
+            walk_root_resolved.relative_to(library_root_resolved)
+        except ValueError:
+            err_msg = "Path override escapes library root"
+            try:
+                client.post(f"/v1/scans/{scan_id}/abort", json={"error_message": err_msg})
+            except Exception:
+                pass
+            return ScanResult(
+                scan_id=scan_id,
+                files_discovered=0,
+                files_added=0,
+                files_updated=0,
+                files_skipped=0,
+                files_missing=0,
+                status="error",
+                error_message=err_msg,
+            )
+
+        files_discovered = 0
+        files_added = 0
+        files_updated = 0
+        files_skipped = 0
+
+        try:
+            all_files: list[tuple[Path, str, int, str | None, str]] = []
+            for p in Path(walk_root_resolved).rglob("*"):
+                if not p.is_file():
+                    continue
+                ext = p.suffix.lower()
+                if ext not in SUPPORTED_EXTENSIONS:
+                    continue
+                try:
+                    rel_path = p.relative_to(library_root_resolved)
+                except ValueError:
+                    continue
+                rel_path_str = str(rel_path).replace("\\", "/")
+                media_type = "video" if ext in VIDEO_EXTENSIONS else "image"
+                try:
+                    st = p.stat()
+                    file_size = st.st_size
+                    file_mtime = _file_mtime_iso(p)
+                except OSError:
+                    continue
+                all_files.append((p, rel_path_str, file_size, file_mtime, media_type))
+
+            use_progress = console.is_terminal
+            progress = Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+                disable=not use_progress,
+            )
+            with progress:
+                task = progress.add_task("Scanning...", total=len(all_files))
+                for p, rel_path_str, file_size, file_mtime, media_type in all_files:
+                    progress.update(task, description=f"Scanning: {rel_path_str}", advance=1)
+                    files_discovered += 1
+                    upsert_body = {
+                        "library_id": library_id,
+                        "rel_path": rel_path_str,
+                        "file_size": file_size,
+                        "file_mtime": file_mtime,
+                        "media_type": media_type,
+                        "scan_id": scan_id,
+                        "force": force,
+                    }
+                    resp = client.post("/v1/assets/upsert", json=upsert_body)
+                    action = resp.json().get("action", "updated")
+                    if action == "added":
+                        files_added += 1
+                    elif action == "updated":
+                        files_updated += 1
+                    else:
+                        files_skipped += 1
+
+            # Complete scan
+            complete_body = {
+                "files_discovered": files_discovered,
+                "files_added": files_added,
+                "files_updated": files_updated,
+                "files_skipped": files_skipped,
+            }
+            resp = client.post(f"/v1/scans/{scan_id}/complete", json=complete_body)
+            data = resp.json()
+            files_missing = data.get("files_missing", 0)
+            return ScanResult(
+                scan_id=scan_id,
+                files_discovered=files_discovered,
+                files_added=files_added,
+                files_updated=files_updated,
+                files_skipped=files_skipped,
+                files_missing=files_missing,
+                status="complete",
+            )
+        except Exception as e:
+            try:
+                client.post(
+                    f"/v1/scans/{scan_id}/abort",
+                    json={"error_message": str(e)},
+                )
+            except Exception:
+                pass
+            return ScanResult(
+                scan_id=scan_id,
+                files_discovered=files_discovered,
+                files_added=files_added,
+                files_updated=files_updated,
+                files_skipped=files_skipped,
+                files_missing=0,
+                status="error",
+                error_message=str(e),
+            )
+    finally:
+        signal.signal(signal.SIGINT, old_sigint)
+        signal.signal(signal.SIGTERM, old_sigterm)
