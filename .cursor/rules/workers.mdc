@@ -23,6 +23,7 @@ alwaysApply: false
 
 ## CLI Flags — Required on Every Worker
 - `--once`: drain the queue until empty, then exit. No polling loop.
+- **Polling workers:** All future workers that poll for work should use `--once` in this same pattern: process all available work and then terminate (e.g. invoked in a loop or by a process manager like systemd/supervisor). Avoid long-lived polling loops in favor of run-to-completion + external scheduling.
 - No `--verbose` or `--quiet` flags — users use shell redirection.
 - Polling sleep must not exceed 5 seconds (ensures responsive SIGINT shutdown).
 - CTRL+C must exit cleanly with code 0.

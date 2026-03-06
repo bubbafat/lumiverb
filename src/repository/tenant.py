@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import and_, or_
 from sqlmodel import Session, select
 
-from src.models.tenant import Asset, Library, Scan
+from src.models.tenant import Asset, Library, Scan, WorkerJob
 from ulid import ULID
 
 
@@ -236,3 +237,124 @@ class AssetRepository:
             self._session.add(asset)
         self._session.commit()
         return len(assets)
+
+    def get_by_id(self, asset_id: str) -> Asset | None:
+        """Return asset by id or None."""
+        return self._session.get(Asset, asset_id)
+
+    def list_pending_by_library(self, library_id: str) -> list[Asset]:
+        """Return all assets in library with status='pending'."""
+        stmt = (
+            select(Asset)
+            .where(Asset.library_id == library_id)
+            .where(Asset.status == "pending")
+        )
+        return list(self._session.exec(stmt).all())
+
+    def update_proxy(
+        self,
+        asset_id: str,
+        proxy_key: str,
+        thumbnail_key: str,
+        width: int,
+        height: int,
+    ) -> Asset:
+        """Update asset proxy_key, thumbnail_key, width, height, status='proxied', updated_at."""
+        asset = self._session.get(Asset, asset_id)
+        if asset is None:
+            raise ValueError(f"Asset not found: {asset_id}")
+        asset.proxy_key = proxy_key
+        asset.thumbnail_key = thumbnail_key
+        asset.width = width
+        asset.height = height
+        asset.status = "proxied"
+        asset.updated_at = _utcnow()
+        self._session.add(asset)
+        self._session.commit()
+        self._session.refresh(asset)
+        return asset
+
+
+class WorkerJobRepository:
+    """Repository for worker_jobs table."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def create(self, job_type: str, asset_id: str) -> WorkerJob:
+        """Create a pending job. job_id = job_ + ULID."""
+        job_id = "job_" + str(ULID())
+        job = WorkerJob(
+            job_id=job_id,
+            job_type=job_type,
+            asset_id=asset_id,
+            status="pending",
+        )
+        self._session.add(job)
+        self._session.commit()
+        self._session.refresh(job)
+        return job
+
+    def has_pending_job(self, job_type: str, asset_id: str) -> bool:
+        """Return True if there is a pending or claimed job of this type for this asset."""
+        stmt = (
+            select(WorkerJob)
+            .where(WorkerJob.job_type == job_type)
+            .where(WorkerJob.asset_id == asset_id)
+            .where(WorkerJob.status.in_(["pending", "claimed"]))
+        )
+        return self._session.exec(stmt).first() is not None
+
+    def claim_next(
+        self,
+        job_type: str,
+        worker_id: str,
+        lease_minutes: int,
+    ) -> WorkerJob | None:
+        """Claim next pending (or expired claimed) job with FOR UPDATE SKIP LOCKED. Return None if none."""
+        now = _utcnow()
+        stmt = (
+            select(WorkerJob)
+            .where(WorkerJob.job_type == job_type)
+            .where(
+                or_(
+                    WorkerJob.status == "pending",
+                    and_(
+                        WorkerJob.status == "claimed",
+                        WorkerJob.lease_expires_at < now,
+                    ),
+                )
+            )
+            .order_by(WorkerJob.created_at)
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+        job = self._session.exec(stmt).first()
+        if job is None:
+            return None
+        job.status = "claimed"
+        job.worker_id = worker_id
+        job.claimed_at = now
+        job.lease_expires_at = now + timedelta(minutes=lease_minutes)
+        self._session.add(job)
+        self._session.commit()
+        self._session.refresh(job)
+        return job
+
+    def set_completed(self, job: WorkerJob) -> None:
+        """Set job status to completed and completed_at."""
+        job.status = "completed"
+        job.completed_at = _utcnow()
+        job.error_message = None
+        self._session.add(job)
+        self._session.commit()
+        self._session.refresh(job)
+
+    def set_failed(self, job: WorkerJob, error_message: str) -> None:
+        """Set job status to failed and error_message."""
+        job.status = "failed"
+        job.completed_at = _utcnow()
+        job.error_message = error_message
+        self._session.add(job)
+        self._session.commit()
+        self._session.refresh(job)
