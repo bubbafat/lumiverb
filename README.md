@@ -16,6 +16,39 @@ Supports JPEG, PNG, TIFF, HEIC, HEIF, WebP, RAW (CR2/CR3/NEF/ARW/DNG/ORF/RW2), a
 
 ---
 
+## Getting Started (Self-Hosted)
+
+### Prerequisites
+- Docker and Docker Compose
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/)
+
+### Setup
+```bash
+git clone https://github.com/bubbafat/lumiverb
+cd lumiverb
+cp .env.example .env.local    # edit if needed
+docker compose up -d
+uv sync --all-extras
+./scripts/init.sh
+```
+
+In a second terminal:
+```bash
+uv run fastapi dev src/api/main.py
+```
+
+Re-run `./scripts/init.sh` after the server is running to complete setup.
+
+### First library
+```bash
+lumiverb library create "My Photos" /path/to/your/photos
+lumiverb scan --library "My Photos"
+lumiverb worker proxy --once --library "My Photos"
+```
+
+---
+
 ## Architecture Overview
 
 ```
