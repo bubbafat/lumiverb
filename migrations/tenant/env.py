@@ -7,18 +7,17 @@ from sqlalchemy import create_engine
 from sqlalchemy import pool
 from alembic import context
 
+config = context.config
+
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
+
 try:
     from src.models.tenant import SQLModel  # type: ignore[attr-defined]
     target_metadata = SQLModel.metadata
 except ImportError:
     from sqlmodel import SQLModel
     target_metadata = SQLModel.metadata
-
-
-config = context.config
-
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
 
 
 def get_url() -> str:
