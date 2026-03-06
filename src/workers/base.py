@@ -3,6 +3,9 @@
 import logging
 import time
 
+from rich.console import Console
+
+from src.cli.progress import LiveProgress
 from src.core.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -28,6 +31,7 @@ class BaseWorker:
         self._concurrency = concurrency
         self._once = once
         self._library_id = library_id
+        self._console = Console()
 
     def claim_job(self) -> dict | None:
         """
@@ -62,9 +66,22 @@ class BaseWorker:
     def run(self) -> None:
         """Main loop: claim, process, complete or fail. Respects once flag."""
         settings = get_settings()
-        while True:
-            job = self.claim_job()
-            if job is not None:
+        processed = 0
+        failed = 0
+
+        with LiveProgress(
+            self._console,
+            label=f"Processing {self.job_type} jobs",
+            counters=["done", "failed"],
+        ) as bar:
+            while True:
+                job = self.claim_job()
+                if job is None:
+                    if self._once:
+                        bar.finish()
+                        break
+                    time.sleep(settings.worker_idle_poll_seconds)
+                    continue
                 job_id = job["job_id"]
                 try:
                     logger.info(
@@ -75,11 +92,15 @@ class BaseWorker:
                     )
                     result = self.process(job)
                     self.complete_job(job_id, result or {})
+                    processed += 1
+                    bar.update(completed=1, done=1)
                     logger.info("completed job_id=%s", job_id)
                 except Exception as e:
                     logger.exception("failed job_id=%s error=%s", job_id, e)
                     self.fail_job(job_id, str(e))
-            else:
-                if self._once:
-                    return
-                time.sleep(settings.worker_idle_poll_seconds)
+                    failed += 1
+                    bar.update(completed=1, failed=1)
+
+        self._console.print(
+            f"Done: {processed:,} succeeded, {failed:,} failed"
+        )
