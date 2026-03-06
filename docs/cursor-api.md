@@ -47,6 +47,15 @@ pgvector extension is enabled at provisioning time. The `vector(512)` columns ex
 
 When writing queries, always use the tenant DB session, not the control plane session. The middleware resolves this from the API key before the route handler runs.
 
+Tenant resolution runs for every request except `/health` and `/v1/admin/*`: reads `Authorization: Bearer <token>`, validates via control plane `ApiKeyRepository.get_by_plaintext`, touches `last_used_at`, looks up `TenantDbRouting` for the connection string, and stores `tenant_id` and `connection_string` in `request.state`. Use the `get_tenant_session` dependency in route handlers to obtain a tenant DB session.
+
+## Libraries API
+
+All under `/v1/libraries`; require tenant auth (middleware).
+
+- **POST /v1/libraries** — Body: `{ "name", "root_path" }`. Name must be unique per tenant (409 if duplicate). Returns `{ "library_id", "name", "root_path", "scan_status" }` (scan_status initially `"idle"`).
+- **GET /v1/libraries** — Returns list of libraries with `library_id`, `name`, `root_path`, `scan_status`, `last_scan_at`.
+
 ## Admin API
 
 Admin routes live under `/v1/admin` and require `Authorization: Bearer {ADMIN_KEY}` (not tenant API keys). If `ADMIN_KEY` is not set, admin routes return 500.

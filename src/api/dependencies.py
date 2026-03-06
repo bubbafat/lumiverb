@@ -2,16 +2,29 @@
 
 from typing import Annotated, Generator
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 from sqlmodel import Session
 
 from src.core.config import get_settings
-from src.core.database import get_control_engine
+from src.core.database import get_control_engine, get_engine_for_url
 
 
 def get_db_session() -> Generator[Session, None, None]:
     """Yield a control plane session (for use in admin routes only)."""
     engine = get_control_engine()
+    with Session(engine) as session:
+        yield session
+
+
+def get_tenant_session(request: Request) -> Generator[Session, None, None]:
+    """
+    Yield a tenant DB session from request.state.connection_string (set by middleware).
+    Requires tenant resolution middleware to have run; raises 500 if state is missing.
+    """
+    connection_string = getattr(request.state, "connection_string", None)
+    if not connection_string:
+        raise HTTPException(status_code=500, detail="Tenant context missing")
+    engine = get_engine_for_url(connection_string)
     with Session(engine) as session:
         yield session
 

@@ -31,6 +31,11 @@ def get_tenant_engine(tenant_id: str) -> Engine:
     """Return a cached engine for a specific tenant DB."""
     settings = get_settings()
     url = settings.tenant_database_url_template.format(tenant_id=tenant_id)
+    return get_engine_for_url(url)
+
+
+def get_engine_for_url(url: str) -> Engine:
+    """Return a cached engine for the given database URL (e.g. from tenant_db_routing)."""
     if url not in _engines:
         _engines[url] = create_engine(url, pool_pre_ping=True)
     return _engines[url]
