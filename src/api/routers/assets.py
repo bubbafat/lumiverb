@@ -41,8 +41,8 @@ class AssetResponse(BaseModel):
 
 @router.get("", response_model=list[AssetResponse])
 def list_assets(
+    session: Annotated[Session, Depends(get_tenant_session)],
     library_id: str | None = None,
-    session: Annotated[Session, Depends(get_tenant_session)] = None,
 ) -> list[AssetResponse]:
     """List assets, optionally filtered by library_id."""
     asset_repo = AssetRepository(session)

@@ -3,7 +3,7 @@
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 from sqlmodel import Session
 
@@ -52,8 +52,8 @@ def enqueue_jobs(
 @router.get("/next", response_model=None)
 def get_next_job(
     job_type: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
     library_id: str | None = None,
-    session: Annotated[Session, Depends(get_tenant_session)] = None,
 ) -> Response | dict[str, Any]:
     """
     Claim next pending job of type. Returns 204 if none available.
@@ -103,6 +103,10 @@ class JobCompleteResponse(BaseModel):
     status: str
 
 
+class JobCompleteBody(BaseModel):
+    model_config = {"extra": "allow"}
+
+
 class JobFailBody(BaseModel):
     error_message: str
 
@@ -115,8 +119,8 @@ class JobFailResponse(BaseModel):
 @router.post("/{job_id}/complete", response_model=JobCompleteResponse)
 def complete_job(
     job_id: str,
-    body: dict[str, Any] = Body(...),
-    session: Annotated[Session, Depends(get_tenant_session)] = None,
+    body: JobCompleteBody,
+    session: Annotated[Session, Depends(get_tenant_session)],
 ) -> JobCompleteResponse:
     job_repo = WorkerJobRepository(session)
     job = job_repo.get_by_id(job_id)
@@ -128,11 +132,12 @@ def complete_job(
             detail=f"Job not claimed (status={job.status})",
         )
 
+    data = body.model_dump()
     if job.job_type == "proxy":
-        proxy_key = body.get("proxy_key")
-        thumbnail_key = body.get("thumbnail_key")
-        width = body.get("width")
-        height = body.get("height")
+        proxy_key = data.get("proxy_key")
+        thumbnail_key = data.get("thumbnail_key")
+        width = data.get("width")
+        height = data.get("height")
         if proxy_key is None or thumbnail_key is None or width is None or height is None:
             raise HTTPException(
                 status_code=400,
@@ -156,7 +161,7 @@ def complete_job(
 def fail_job(
     job_id: str,
     body: JobFailBody,
-    session: Annotated[Session, Depends(get_tenant_session)] = None,
+    session: Annotated[Session, Depends(get_tenant_session)],
 ) -> JobFailResponse:
     job_repo = WorkerJobRepository(session)
     job = job_repo.get_by_id(job_id)
@@ -185,8 +190,8 @@ class JobListItem(BaseModel):
 
 @router.get("", response_model=list[JobListItem])
 def list_jobs(
+    session: Annotated[Session, Depends(get_tenant_session)],
     library_id: str | None = None,
-    session: Annotated[Session, Depends(get_tenant_session)] = None,
 ) -> list[JobListItem]:
     """List jobs, optionally filtered by library_id (via asset)."""
     from sqlmodel import select
@@ -225,7 +230,7 @@ class JobStatusResponse(BaseModel):
 @router.get("/{job_id}/status", response_model=JobStatusResponse)
 def get_job_status(
     job_id: str,
-    session: Annotated[Session, Depends(get_tenant_session)] = None,
+    session: Annotated[Session, Depends(get_tenant_session)],
 ) -> JobStatusResponse:
     job_repo = WorkerJobRepository(session)
     job = job_repo.get_by_id(job_id)
