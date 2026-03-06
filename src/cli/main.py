@@ -160,18 +160,15 @@ def worker_proxy(
     library: str = typer.Option(None, "--library", help="Only process jobs for this library."),
 ) -> None:
     """Generate proxies and thumbnails for pending image assets."""
-    from src.core.database import get_engine_for_url
+    from src.storage.local import LocalStorage
     from src.workers.proxy import ProxyWorker
-    from sqlmodel import Session
 
     client = LumiverbClient()
-
-    # Resolve tenant context
+    storage = LocalStorage()
+    # tenant_id needed for storage path computation only (from lightweight context)
     ctx = client.get("/v1/tenant/context").json()
     tenant_id = ctx["tenant_id"]
-    connection_string = ctx["connection_string"]
 
-    # Optionally resolve library name to library_id
     library_id: str | None = None
     if library:
         libraries = client.get("/v1/libraries").json()
@@ -181,16 +178,15 @@ def worker_proxy(
             raise typer.Exit(1)
         library_id = match["library_id"]
 
-    engine = get_engine_for_url(connection_string)
-    with Session(engine) as session:
-        worker = ProxyWorker(
-            tenant_session=session,
-            tenant_id=tenant_id,
-            concurrency=concurrency,
-            once=once,
-            library_id=library_id,
-        )
-        worker.run()
+    worker = ProxyWorker(
+        client=client,
+        storage=storage,
+        tenant_id=tenant_id,
+        concurrency=concurrency,
+        once=once,
+        library_id=library_id,
+    )
+    worker.run()
 
 
 # ---------------------------------------------------------------------------

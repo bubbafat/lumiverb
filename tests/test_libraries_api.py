@@ -269,22 +269,17 @@ def test_delete_library_cancels_pending_jobs(libraries_client: tuple[TestClient,
     assert r_enq.status_code == 200
     assert r_enq.json()["enqueued"] >= 1
 
+    r_jobs = client.get("/v1/jobs", params={"library_id": library_id}, headers=auth)
+    assert r_jobs.status_code == 200
+    jobs = r_jobs.json()
+    assert len(jobs) >= 1
+    job_id = jobs[0]["job_id"]
+
     client.delete(f"/v1/libraries/{library_id}", headers=auth)
 
-    ctx = client.get("/v1/tenant/context", headers=auth).json()
-    conn_str = _ensure_psycopg2(ctx["connection_string"])
-    engine = create_engine(conn_str)
-    with engine.connect() as conn:
-        row = conn.execute(
-            text(
-                "SELECT w.status FROM worker_jobs w "
-                "JOIN assets a ON w.asset_id = a.asset_id WHERE a.library_id = :lib_id"
-            ),
-            {"lib_id": library_id},
-        ).fetchone()
-    engine.dispose()
-    assert row is not None
-    assert row[0] == "cancelled"
+    r_status = client.get(f"/v1/jobs/{job_id}/status", headers=auth)
+    assert r_status.status_code == 200
+    assert r_status.json()["status"] == "cancelled"
 
 
 @pytest.mark.slow

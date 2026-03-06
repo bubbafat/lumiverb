@@ -27,6 +27,65 @@ class UpsertAssetResponse(BaseModel):
     action: str  # added | updated | skipped
 
 
+class AssetResponse(BaseModel):
+    asset_id: str
+    library_id: str
+    rel_path: str
+    media_type: str
+    status: str
+    proxy_key: str | None
+    thumbnail_key: str | None
+    width: int | None
+    height: int | None
+
+
+@router.get("", response_model=list[AssetResponse])
+def list_assets(
+    library_id: str | None = None,
+    session: Annotated[Session, Depends(get_tenant_session)] = None,
+) -> list[AssetResponse]:
+    """List assets, optionally filtered by library_id."""
+    asset_repo = AssetRepository(session)
+    assets = asset_repo.list_by_library(library_id) if library_id else asset_repo.list_all()
+    return [
+        AssetResponse(
+            asset_id=a.asset_id,
+            library_id=a.library_id,
+            rel_path=a.rel_path,
+            media_type=a.media_type,
+            status=a.status,
+            proxy_key=a.proxy_key,
+            thumbnail_key=a.thumbnail_key,
+            width=a.width,
+            height=a.height,
+        )
+        for a in assets
+    ]
+
+
+@router.get("/{asset_id}", response_model=AssetResponse)
+def get_asset(
+    asset_id: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> AssetResponse:
+    """Return a single asset by id. 404 if not found."""
+    asset_repo = AssetRepository(session)
+    asset = asset_repo.get_by_id(asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    return AssetResponse(
+        asset_id=asset.asset_id,
+        library_id=asset.library_id,
+        rel_path=asset.rel_path,
+        media_type=asset.media_type,
+        status=asset.status,
+        proxy_key=asset.proxy_key,
+        thumbnail_key=asset.thumbnail_key,
+        width=asset.width,
+        height=asset.height,
+    )
+
+
 @router.post("/upsert", response_model=UpsertAssetResponse)
 def upsert_asset(
     body: UpsertAssetRequest,

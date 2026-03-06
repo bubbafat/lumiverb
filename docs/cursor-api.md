@@ -51,13 +51,18 @@ Tenant resolution runs for every request except `/health` and `/v1/admin/*`: rea
 
 ## Tenant Context
 
-- **GET /v1/tenant/context** — Tenant auth required. Returns `{ "tenant_id", "connection_string" }`. CLI/worker use this to open a direct tenant DB session. Treat `connection_string` as a secret — never log it.
+- **GET /v1/tenant/context** — Tenant auth required. Returns `{ "tenant_id" }` only. Used by CLI/worker for storage path computation. Workers must not have direct DB access; they use the jobs API only.
 
 ## Jobs API
 
 All under `/v1/jobs`; require tenant auth.
 
 - **POST /v1/jobs/enqueue** — Body: `{ "library_id", "job_type" }`. Only `job_type: "proxy"` is supported for now. Creates worker_jobs for all pending assets in the library that don’t already have a pending/claimed proxy job. Returns `{ "enqueued" }` (count of jobs created).
+- **GET /v1/jobs/next** — Query: `job_type` (required), `library_id` (optional). Claims next pending job; returns 204 if none. On success returns `{ "job_id", "job_type", "asset_id", "rel_path", "media_type", "library_id", "root_path" }`. 404 if asset or library not found (job is failed server-side).
+- **POST /v1/jobs/{job_id}/complete** — Body for proxy: `{ "proxy_key", "thumbnail_key", "width", "height" }`. Marks job completed; for proxy jobs updates asset. Returns `{ "job_id", "status": "completed" }`. 404 if job not found, 409 if job not claimed.
+- **POST /v1/jobs/{job_id}/fail** — Body: `{ "error_message" }`. Marks job failed. Returns `{ "job_id", "status": "failed" }`.
+- **GET /v1/jobs** — Query: `library_id` (optional). List jobs; filter by library when provided. Returns list of `{ "job_id", "job_type", "asset_id", "status" }`.
+- **GET /v1/jobs/{job_id}/status** — Returns `{ "job_id", "status", "error_message" }`. 404 if not found.
 
 ## Libraries API
 
@@ -77,10 +82,12 @@ All under `/v1/scans`; require tenant auth.
 - **POST /v1/scans/{scan_id}/complete** — Body: `{ "files_discovered", "files_added", "files_updated", "files_skipped" }`. Marks assets not seen in this scan as missing, completes scan, updates library `scan_status` and `last_scan_at`. Returns `{ "scan_id", "files_missing" }`.
 - **POST /v1/scans/{scan_id}/abort** — Body: `{ "error_message": null }`. Aborts scan, updates library `scan_status` to `"error"` or `"aborted"`. Returns `{ "scan_id", "status" }`.
 
-## Assets API (scan upsert)
+## Assets API
 
 All under `/v1/assets`; require tenant auth.
 
+- **GET /v1/assets** — Query: `library_id` (optional). List assets; filter by library when provided. Returns list of `{ "asset_id", "library_id", "rel_path", "media_type", "status", "proxy_key", "thumbnail_key", "width", "height" }`.
+- **GET /v1/assets/{asset_id}** — Return single asset. 404 if not found.
 - **POST /v1/assets/upsert** — Body: `{ "library_id", "rel_path", "file_size", "file_mtime" (ISO8601), "media_type", "scan_id", "force": false }`. Upserts by `(library_id, rel_path)`: create if not found (`action: "added"`); if found and `force` or size/mtime/sha256 changed then update (`action: "updated"`); if found and unchanged (sha256 set, size/mtime same) then touch only (`action: "skipped"`). Returns `{ "action": "added|updated|skipped" }`.
 
 ## Admin API
@@ -93,22 +100,13 @@ Admin routes live under `/v1/admin` and require `Authorization: Bearer {ADMIN_KE
 
 ## Worker Job Pattern
 
-Workers use lease-based claiming to prevent duplicate processing:
+Workers are API-only: they never touch the database directly. They use the jobs API (same auth as CLI).
 
-```python
-# Claim a job — sets status='claimed', claimed_at=now(), worker_id=worker_id
-# Job must be completed or released within lease_duration (default 5 min)
-# Expired leases are automatically reclaimed by the next worker poll
-GET /v1/jobs/claim?type={job_type}
+- **Claim:** GET /v1/jobs/next?job_type=…&library_id=… → 204 if no work, else job payload.
+- **Complete:** POST /v1/jobs/{job_id}/complete with result body (e.g. proxy_key, thumbnail_key, width, height for proxy).
+- **Fail:** POST /v1/jobs/{job_id}/fail with `{ "error_message" }`.
 
-# Complete a job
-POST /v1/jobs/{job_id}/complete
-
-# Release a job back to the queue (on worker error)
-POST /v1/jobs/{job_id}/release
-```
-
-Worker types in v1: `vision`, `video`, `metadata`. Type `face` is reserved for phase 2 — do not implement.
+Lease is server-managed (worker_id generated per claim). Expired leases are reclaimed on next poll. Worker types in v1: `proxy`. Type `face` is reserved for phase 2 — do not implement.
 
 ## SHA256 Deduplication
 

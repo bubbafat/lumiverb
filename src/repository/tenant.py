@@ -328,6 +328,15 @@ class AssetRepository:
         )
         return list(self._session.exec(stmt).all())
 
+    def list_by_library(self, library_id: str) -> list[Asset]:
+        """Return all assets in library."""
+        stmt = select(Asset).where(Asset.library_id == library_id)
+        return list(self._session.exec(stmt).all())
+
+    def list_all(self) -> list[Asset]:
+        """Return all assets (all libraries)."""
+        return list(self._session.exec(select(Asset)).all())
+
     def update_proxy(
         self,
         asset_id: str,
@@ -357,6 +366,10 @@ class WorkerJobRepository:
 
     def __init__(self, session: Session) -> None:
         self._session = session
+
+    def get_by_id(self, job_id: str) -> WorkerJob | None:
+        """Return job by id or None."""
+        return self._session.get(WorkerJob, job_id)
 
     def create(self, job_type: str, asset_id: str) -> WorkerJob:
         """Create a pending job. job_id = job_ + ULID."""

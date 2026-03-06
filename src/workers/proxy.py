@@ -1,13 +1,10 @@
-"""Proxy worker: generate image proxy and thumbnail from source asset."""
+"""Proxy worker: generate image proxy and thumbnail from source asset. API-only."""
 
 import logging
 from pathlib import Path
 
 import pyvips
-from sqlmodel import Session
 
-from src.models.tenant import WorkerJob
-from src.repository.tenant import AssetRepository, LibraryRepository
 from src.storage.local import LocalStorage
 from src.workers.base import BaseWorker
 
@@ -24,49 +21,38 @@ class ProxyWorker(BaseWorker):
 
     def __init__(
         self,
-        tenant_session: Session,
+        client: object,
+        storage: LocalStorage,
         tenant_id: str,
         concurrency: int = 1,
         once: bool = False,
         library_id: str | None = None,
     ) -> None:
-        super().__init__(
-            tenant_session,
-            concurrency=concurrency,
-            once=once,
-            library_id=library_id,
-        )
+        super().__init__(client, concurrency=concurrency, once=once, library_id=library_id)
+        self._storage = storage
         self._tenant_id = tenant_id
-        self._asset_repo = AssetRepository(tenant_session)
-        self._library_repo = LibraryRepository(tenant_session)
-        self._storage = LocalStorage()
 
-    def process(self, job: WorkerJob) -> None:
-        if job.asset_id is None:
-            raise ValueError("Job has no asset_id")
-        asset = self._asset_repo.get_by_id(job.asset_id)
-        if asset is None:
-            raise ValueError(f"Asset not found: {job.asset_id}")
+    def process(self, job: dict) -> dict:
+        asset_id = job["asset_id"]
+        rel_path = job["rel_path"]
+        media_type = job["media_type"]
+        root_path = job["root_path"]
+        library_id = job["library_id"]
 
-        if asset.media_type == "video":
-            logger.info("Skipping video asset_id=%s (video proxy deferred)", asset.asset_id)
-            return
+        if media_type == "video":
+            logger.info("Skipping video asset_id=%s (video proxy deferred)", asset_id)
+            return {}
 
-        library = self._library_repo.get_by_id(asset.library_id)
-        if library is None:
-            raise ValueError(f"Library not found: {asset.library_id}")
-        source_path = Path(library.root_path) / asset.rel_path
+        source_path = Path(root_path) / rel_path
         if not source_path.exists():
             raise FileNotFoundError(f"Source file not found: {source_path}")
 
         proxy_key = self._storage.proxy_key(
-            self._tenant_id, asset.library_id, asset.asset_id, asset.rel_path
+            self._tenant_id, library_id, asset_id, rel_path
         )
         thumbnail_key = self._storage.thumbnail_key(
-            self._tenant_id, asset.library_id, asset.asset_id, asset.rel_path
+            self._tenant_id, library_id, asset_id, rel_path
         )
-        if self._storage.exists(proxy_key) and self._storage.exists(thumbnail_key):
-            return
 
         img = pyvips.Image.new_from_file(str(source_path))
         width_orig = img.width
@@ -83,10 +69,9 @@ class ProxyWorker(BaseWorker):
         thumb_bytes = thumb_img.write_to_buffer(".jpg", Q=THUMBNAIL_JPEG_QUALITY)
         self._storage.write(thumbnail_key, thumb_bytes)
 
-        self._asset_repo.update_proxy(
-            asset.asset_id,
-            proxy_key=proxy_key,
-            thumbnail_key=thumbnail_key,
-            width=width_orig,
-            height=height_orig,
-        )
+        return {
+            "proxy_key": proxy_key,
+            "thumbnail_key": thumbnail_key,
+            "width": width_orig,
+            "height": height_orig,
+        }

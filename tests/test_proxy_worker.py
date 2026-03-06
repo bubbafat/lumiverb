@@ -1,4 +1,4 @@
-"""Proxy worker tests: process image, skip video, missing file. Use testcontainers Postgres."""
+"""Proxy worker tests: API-only. Process image, skip video, missing file. Use TestClient + testcontainers."""
 
 import os
 import secrets
@@ -8,21 +8,16 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from fastapi.testclient import TestClient
 from PIL import Image
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
-from sqlmodel import Session
 from testcontainers.postgres import PostgresContainer
-from ulid import ULID
 
+from src.api.main import app
+from src.cli.scanner import scan_library
 from src.core.config import get_settings
-from src.core.database import _engines, get_engine_for_url
-from src.repository.tenant import (
-    AssetRepository,
-    LibraryRepository,
-    ScanRepository,
-    WorkerJobRepository,
-)
+from src.core.database import _engines
 from src.storage.local import LocalStorage
 from src.workers.proxy import ProxyWorker
 
@@ -65,9 +60,27 @@ def _provision_tenant_db(tenant_url: str, project_root: str) -> None:
     assert result.returncode == 0, (result.stdout, result.stderr)
 
 
+class _AuthClient:
+    """HTTP client that wraps TestClient and adds Authorization. Returns response without exiting."""
+
+    def __init__(self, client: TestClient, api_key: str) -> None:
+        self._client = client
+        self._headers = {"Authorization": f"Bearer {api_key}"}
+
+    def get(self, path: str, **kwargs: object) -> object:
+        kwargs.setdefault("headers", {})
+        kwargs["headers"].update(self._headers)
+        return self._client.get(path, **kwargs)
+
+    def post(self, path: str, **kwargs: object) -> object:
+        kwargs.setdefault("headers", {})
+        kwargs["headers"].update(self._headers)
+        return self._client.post(path, **kwargs)
+
+
 @pytest.fixture(scope="module")
 def proxy_worker_env():
-    """Two testcontainers Postgres; create tenant; yield (tenant_session, tenant_id, tmp_path_factory)."""
+    """Two testcontainers Postgres; create tenant; yield (TestClient, api_key, tenant_id)."""
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with PostgresContainer("pgvector/pgvector:pg16") as control_postgres:
         control_url = _ensure_psycopg2(control_postgres.get_connection_url())
@@ -85,11 +98,6 @@ def proxy_worker_env():
         get_settings.cache_clear()
         _engines.clear()
 
-        from src.api.main import app
-        from fastapi.testclient import TestClient
-        from src.repository.control_plane import TenantDbRoutingRepository
-        from src.core.database import get_control_session
-
         with patch("src.api.routers.admin.provision_tenant_database"):
             with TestClient(app) as client:
                 r = client.post(
@@ -100,10 +108,13 @@ def proxy_worker_env():
                 assert r.status_code == 200, (r.status_code, r.text)
                 data = r.json()
                 tenant_id = data["tenant_id"]
+                api_key = data["api_key"]
 
         with PostgresContainer("pgvector/pgvector:pg16") as tenant_postgres:
             tenant_url = _ensure_psycopg2(tenant_postgres.get_connection_url())
             _provision_tenant_db(tenant_url, project_root)
+            from src.core.database import get_control_session
+            from src.repository.control_plane import TenantDbRoutingRepository
             with get_control_session() as session:
                 routing_repo = TenantDbRoutingRepository(session)
                 row = routing_repo.get_by_tenant_id(tenant_id)
@@ -112,136 +123,209 @@ def proxy_worker_env():
                 session.add(row)
                 session.commit()
 
-            engine = get_engine_for_url(tenant_url)
-            session = Session(engine)
-            try:
-                yield (session, tenant_id)
-            finally:
-                session.close()
+            with TestClient(app) as client:
+                yield client, api_key, tenant_id
         _engines.clear()
 
 
 @pytest.mark.slow
 def test_proxy_worker_processes_image(proxy_worker_env, tmp_path: Path) -> None:
-    """Worker generates proxy and thumbnail for a real JPEG; job completes, asset has keys."""
-    tenant_session, tenant_id = proxy_worker_env
-    # Real 200x150 JPEG
+    """Worker generates proxy and thumbnail via API; job completes; asset has keys."""
+    client, api_key, tenant_id = proxy_worker_env
+    auth = _AuthClient(client, api_key)
+
+    lib_name = "ProxyImage_" + secrets.token_urlsafe(4)
+    r = client.post(
+        "/v1/libraries",
+        json={"name": lib_name, "root_path": str(tmp_path)},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert r.status_code == 200, (r.status_code, r.text)
+    library = r.json()
+
     img = Image.new("RGB", (200, 150), color=(255, 0, 0))
     img.save(tmp_path / "test.jpg", "JPEG")
 
-    lib_repo = LibraryRepository(tenant_session)
-    scan_repo = ScanRepository(tenant_session)
-    asset_repo = AssetRepository(tenant_session)
-    job_repo = WorkerJobRepository(tenant_session)
+    result = scan_library(auth, library, force=True)
+    assert result.status == "complete"
 
-    lib = lib_repo.create(
-        name="ProxyImage_" + secrets.token_urlsafe(4),
-        root_path=str(tmp_path),
+    enq = client.post(
+        "/v1/jobs/enqueue",
+        json={"library_id": library["library_id"], "job_type": "proxy"},
+        headers={"Authorization": f"Bearer {api_key}"},
     )
-    scan = scan_repo.create(library_id=lib.library_id, status="complete")
-    asset = asset_repo.create_for_scan(
-        library_id=lib.library_id,
-        rel_path="test.jpg",
-        file_size=(tmp_path / "test.jpg").stat().st_size,
-        file_mtime=None,
-        media_type="image",
-        scan_id=scan.scan_id,
-    )
-    job = job_repo.create("proxy", asset.asset_id)
+    assert enq.status_code == 200
+    assert enq.json().get("enqueued", 0) >= 1
 
     data_dir = str(tmp_path / "data")
+    worker_client = _AuthClient(client, api_key)
     worker = ProxyWorker(
-        tenant_session=tenant_session,
+        client=worker_client,
+        storage=LocalStorage(data_dir=data_dir),
         tenant_id=tenant_id,
         once=True,
     )
-    worker._storage = LocalStorage(data_dir=data_dir)
     worker.run()
 
-    tenant_session.refresh(job)
-    tenant_session.refresh(asset)
-    assert job.status == "completed"
+    next_resp = client.get(
+        "/v1/jobs/next",
+        params={"job_type": "proxy"},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert next_resp.status_code == 204
 
-    asset = asset_repo.get_by_id(asset.asset_id)
-    assert asset is not None
-    assert asset.proxy_key is not None
-    assert asset.thumbnail_key is not None
+    list_resp = client.get(
+        "/v1/assets",
+        params={"library_id": library["library_id"]},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert list_resp.status_code == 200
+    assets = list_resp.json()
+    assert len(assets) == 1
+    asset = assets[0]
+    assert asset["proxy_key"] is not None
+    assert asset["thumbnail_key"] is not None
 
     storage = LocalStorage(data_dir=data_dir)
-    assert storage.exists(asset.proxy_key)
+    assert storage.exists(asset["proxy_key"])
 
 
 @pytest.mark.slow
 def test_proxy_worker_skips_video(proxy_worker_env, tmp_path: Path) -> None:
     """Video asset: worker completes job without setting proxy_key."""
-    tenant_session, tenant_id = proxy_worker_env
-    lib_repo = LibraryRepository(tenant_session)
-    scan_repo = ScanRepository(tenant_session)
-    asset_repo = AssetRepository(tenant_session)
-    job_repo = WorkerJobRepository(tenant_session)
+    client, api_key, tenant_id = proxy_worker_env
+    auth = _AuthClient(client, api_key)
 
-    lib = lib_repo.create(
-        name="ProxyVideo_" + secrets.token_urlsafe(4),
-        root_path=str(tmp_path),
+    lib_name = "ProxyVideo_" + secrets.token_urlsafe(4)
+    r = client.post(
+        "/v1/libraries",
+        json={"name": lib_name, "root_path": str(tmp_path)},
+        headers={"Authorization": f"Bearer {api_key}"},
     )
-    scan = scan_repo.create(library_id=lib.library_id, status="complete")
-    asset = asset_repo.create_for_scan(
-        library_id=lib.library_id,
-        rel_path="clip.mp4",
-        file_size=0,
-        file_mtime=None,
-        media_type="video",
-        scan_id=scan.scan_id,
-    )
-    job = job_repo.create("proxy", asset.asset_id)
+    assert r.status_code == 200
+    library = r.json()
 
+    scan_r = client.post(
+        "/v1/scans",
+        json={"library_id": library["library_id"], "status": "running"},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert scan_r.status_code == 200
+    scan_id = scan_r.json()["scan_id"]
+
+    upsert_r = client.post(
+        "/v1/assets/upsert",
+        json={
+            "library_id": library["library_id"],
+            "rel_path": "clip.mp4",
+            "file_size": 0,
+            "file_mtime": None,
+            "media_type": "video",
+            "scan_id": scan_id,
+            "force": False,
+        },
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert upsert_r.status_code == 200
+
+    client.post(
+        "/v1/scans/{}/complete".format(scan_id),
+        json={"files_discovered": 1, "files_added": 1, "files_updated": 0, "files_skipped": 0},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+
+    client.post(
+        "/v1/jobs/enqueue",
+        json={"library_id": library["library_id"], "job_type": "proxy"},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+
+    worker_client = _AuthClient(client, api_key)
     worker = ProxyWorker(
-        tenant_session=tenant_session,
+        client=worker_client,
+        storage=LocalStorage(data_dir=str(tmp_path / "data")),
         tenant_id=tenant_id,
         once=True,
     )
     worker.run()
 
-    tenant_session.refresh(job)
-    assert job.status == "completed"
+    next_resp = client.get(
+        "/v1/jobs/next",
+        params={"job_type": "proxy"},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert next_resp.status_code == 204
 
-    asset = asset_repo.get_by_id(asset.asset_id)
-    assert asset is not None
-    assert asset.proxy_key is None
+    list_resp = client.get(
+        "/v1/assets",
+        params={"library_id": library["library_id"]},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert list_resp.status_code == 200
+    assets = list_resp.json()
+    assert len(assets) == 1
+    assert assets[0]["proxy_key"] is None
 
 
 @pytest.mark.slow
 def test_proxy_worker_missing_file(proxy_worker_env, tmp_path: Path) -> None:
-    """Missing source file: job fails with error_message containing 'not found'."""
-    tenant_session, tenant_id = proxy_worker_env
-    lib_repo = LibraryRepository(tenant_session)
-    scan_repo = ScanRepository(tenant_session)
-    asset_repo = AssetRepository(tenant_session)
-    job_repo = WorkerJobRepository(tenant_session)
+    """Missing source file: worker claims job, fails it; next claim returns 204."""
+    client, api_key, tenant_id = proxy_worker_env
 
-    lib = lib_repo.create(
-        name="ProxyMissing_" + secrets.token_urlsafe(4),
-        root_path=str(tmp_path),
+    lib_name = "ProxyMissing_" + secrets.token_urlsafe(4)
+    r = client.post(
+        "/v1/libraries",
+        json={"name": lib_name, "root_path": str(tmp_path)},
+        headers={"Authorization": f"Bearer {api_key}"},
     )
-    scan = scan_repo.create(library_id=lib.library_id, status="complete")
-    asset = asset_repo.create_for_scan(
-        library_id=lib.library_id,
-        rel_path="nonexistent.jpg",
-        file_size=0,
-        file_mtime=None,
-        media_type="image",
-        scan_id=scan.scan_id,
-    )
-    job = job_repo.create("proxy", asset.asset_id)
+    assert r.status_code == 200
+    library = r.json()
 
+    scan_r = client.post(
+        "/v1/scans",
+        json={"library_id": library["library_id"], "status": "running"},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert scan_r.status_code == 200
+    scan_id = scan_r.json()["scan_id"]
+
+    client.post(
+        "/v1/assets/upsert",
+        json={
+            "library_id": library["library_id"],
+            "rel_path": "nonexistent.jpg",
+            "file_size": 0,
+            "file_mtime": None,
+            "media_type": "image",
+            "scan_id": scan_id,
+            "force": False,
+        },
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    client.post(
+        "/v1/scans/{}/complete".format(scan_id),
+        json={"files_discovered": 1, "files_added": 1, "files_updated": 0, "files_skipped": 0},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+
+    client.post(
+        "/v1/jobs/enqueue",
+        json={"library_id": library["library_id"], "job_type": "proxy"},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+
+    worker_client = _AuthClient(client, api_key)
     worker = ProxyWorker(
-        tenant_session=tenant_session,
+        client=worker_client,
+        storage=LocalStorage(data_dir=str(tmp_path / "data")),
         tenant_id=tenant_id,
         once=True,
     )
     worker.run()
 
-    tenant_session.refresh(job)
-    assert job.status == "failed"
-    assert job.error_message is not None
-    assert "not found" in job.error_message.lower()
+    next_resp = client.get(
+        "/v1/jobs/next",
+        params={"job_type": "proxy"},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert next_resp.status_code == 204

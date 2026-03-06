@@ -1,87 +1,85 @@
-"""Base worker: claim jobs with FOR UPDATE SKIP LOCKED, lease, and run loop."""
+"""Base worker: API-only. Claims jobs via GET /v1/jobs/next, complete/fail via POST."""
 
 import logging
 import time
-import uuid
-
-from sqlmodel import Session
 
 from src.core.config import get_settings
-from src.models.tenant import WorkerJob
-from src.repository.tenant import WorkerJobRepository
 
 logger = logging.getLogger(__name__)
 
 
 class BaseWorker:
-    """Claim jobs from worker_jobs, process, complete or fail. Subclasses set job_type and implement process()."""
+    """
+    API-only worker base. Never touches the database directly.
+    Uses LumiverbClient for all communication with the system.
+    Subclasses implement process(job: dict) -> dict | None.
+    """
 
-    job_type: str = ""  # subclasses set this
+    job_type: str = ""
 
     def __init__(
         self,
-        tenant_session: Session,
+        client: object,
         concurrency: int = 1,
         once: bool = False,
         library_id: str | None = None,
     ) -> None:
-        self._session = tenant_session
+        self._client = client
         self._concurrency = concurrency
         self._once = once
         self._library_id = library_id
-        self._worker_id = f"worker_{uuid.uuid4().hex[:12]}"
-        self._job_repo = WorkerJobRepository(tenant_session)
-        self._settings = get_settings()
 
-    def claim_job(self) -> WorkerJob | None:
-        """Claim next pending job of this type using FOR UPDATE SKIP LOCKED."""
-        return self._job_repo.claim_next(
-            job_type=self.job_type,
-            worker_id=self._worker_id,
-            lease_minutes=self._settings.worker_lease_minutes,
-            library_id=self._library_id,
-        )
+    def claim_job(self) -> dict | None:
+        """
+        GET /v1/jobs/next?job_type=...&library_id=...
+        Returns job dict or None if no jobs available (204).
+        """
+        params: dict[str, str] = {"job_type": self.job_type}
+        if self._library_id:
+            params["library_id"] = self._library_id
+        resp = self._client.get("/v1/jobs/next", params=params)
+        if resp.status_code == 204:
+            return None
+        resp.raise_for_status()
+        return resp.json()
 
-    def process(self, job: WorkerJob) -> None:
-        """Subclasses implement this."""
+    def complete_job(self, job_id: str, result: dict) -> None:
+        """POST /v1/jobs/{job_id}/complete with result payload."""
+        self._client.post(f"/v1/jobs/{job_id}/complete", json=result)
+
+    def fail_job(self, job_id: str, error_message: str) -> None:
+        """POST /v1/jobs/{job_id}/fail"""
+        self._client.post(f"/v1/jobs/{job_id}/fail", json={"error_message": error_message})
+
+    def process(self, job: dict) -> dict | None:
+        """
+        Subclasses implement this. Receives job dict from claim_job.
+        Returns result dict to pass to complete_job, or None for no result payload.
+        Raise any exception to trigger fail_job.
+        """
         raise NotImplementedError
 
     def run(self) -> None:
         """Main loop: claim, process, complete or fail. Respects once flag."""
+        settings = get_settings()
         while True:
             job = self.claim_job()
             if job is not None:
+                job_id = job["job_id"]
                 try:
                     logger.info(
                         "claimed job_id=%s job_type=%s asset_id=%s",
-                        job.job_id,
-                        job.job_type,
-                        job.asset_id,
+                        job_id,
+                        job.get("job_type"),
+                        job.get("asset_id"),
                     )
-                    self.process(job)
-                    self._complete_job(job)
-                    logger.info(
-                        "completed job_id=%s job_type=%s asset_id=%s",
-                        job.job_id,
-                        job.job_type,
-                        job.asset_id,
-                    )
+                    result = self.process(job)
+                    self.complete_job(job_id, result or {})
+                    logger.info("completed job_id=%s", job_id)
                 except Exception as e:
-                    self._fail_job(job, str(e))
-                    logger.exception(
-                        "failed job_id=%s job_type=%s asset_id=%s error=%s",
-                        job.job_id,
-                        job.job_type,
-                        job.asset_id,
-                        e,
-                    )
+                    logger.exception("failed job_id=%s error=%s", job_id, e)
+                    self.fail_job(job_id, str(e))
             else:
                 if self._once:
                     return
-                time.sleep(self._settings.worker_idle_poll_seconds)
-
-    def _complete_job(self, job: WorkerJob) -> None:
-        self._job_repo.set_completed(job)
-
-    def _fail_job(self, job: WorkerJob, error: str) -> None:
-        self._job_repo.set_failed(job, error)
+                time.sleep(settings.worker_idle_poll_seconds)
