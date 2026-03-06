@@ -39,6 +39,51 @@ class AssetResponse(BaseModel):
     height: int | None
 
 
+class AssetPageItem(BaseModel):
+    """Asset fields returned by GET /v1/assets/page for bulk reconciliation."""
+
+    asset_id: str
+    rel_path: str
+    file_size: int
+    file_mtime: str | None  # ISO8601
+    sha256: str | None
+    media_type: str
+
+
+@router.get("/page", responses={204: {"description": "No assets (end of pages)"}})
+def page_assets(
+    session: Annotated[Session, Depends(get_tenant_session)],
+    library_id: str,
+    after: str | None = None,
+    limit: int = 500,
+) -> list[AssetPageItem]:
+    """
+    Keyset-paginated assets for bulk reconciliation. Returns 204 if no results.
+    Query: library_id (required), after (cursor), limit (default 500, max 500).
+    """
+    if limit > 500:
+        limit = 500
+    if limit < 1:
+        limit = 1
+    asset_repo = AssetRepository(session)
+    assets = asset_repo.page_by_library(library_id=library_id, after=after, limit=limit)
+    if not assets:
+        from fastapi.responses import Response
+
+        return Response(status_code=204)
+    return [
+        AssetPageItem(
+            asset_id=a.asset_id,
+            rel_path=a.rel_path,
+            file_size=a.file_size,
+            file_mtime=a.file_mtime.isoformat() if a.file_mtime else None,
+            sha256=a.sha256,
+            media_type=a.media_type,
+        )
+        for a in assets
+    ]
+
+
 @router.get("", response_model=list[AssetResponse])
 def list_assets(
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -92,8 +137,8 @@ def upsert_asset(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> UpsertAssetResponse:
     """
-    Upsert an asset by (library_id, rel_path). Creates if not found; otherwise
-    updates or skips based on force flag and existing sha256/size/mtime.
+    Legacy single-file upsert. Prefer POST /v1/scans/{scan_id}/batch for bulk operations.
+    Upsert by (library_id, rel_path): creates if not found; otherwise updates or skips.
     """
     lib_repo = LibraryRepository(session)
     library = lib_repo.get_by_id(body.library_id)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import and_, or_, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session, select
 
 from src.models.tenant import Asset, Library, Scan, WorkerJob
@@ -193,6 +194,37 @@ class ScanRepository:
         )
         return list(self._session.exec(stmt).all())
 
+    def record_batch_counts(
+        self,
+        scan_id: str,
+        added: int,
+        updated: int,
+        skipped: int,
+        missing: int,
+    ) -> None:
+        """Accumulate batch counts on scan record. Use COALESCE for initial NULLs."""
+        self._session.execute(
+            text(
+                """
+                UPDATE scans SET
+                    files_added = COALESCE(files_added, 0) + :added,
+                    files_updated = COALESCE(files_updated, 0) + :updated,
+                    files_skipped = COALESCE(files_skipped, 0) + :skipped,
+                    files_missing = COALESCE(files_missing, 0) + :missing,
+                    files_discovered = COALESCE(files_discovered, 0) + :added + :updated + :skipped
+                WHERE scan_id = :scan_id
+                """
+            ),
+            {
+                "scan_id": scan_id,
+                "added": added,
+                "updated": updated,
+                "skipped": skipped,
+                "missing": missing,
+            },
+        )
+        self._session.commit()
+
     def complete(self, scan_id: str, counts: dict) -> Scan:
         """Set status='complete', completed_at=now(), and count fields from counts dict."""
         scan = self.get_by_id(scan_id)
@@ -203,6 +235,7 @@ class ScanRepository:
         scan.files_discovered = counts.get("files_discovered")
         scan.files_added = counts.get("files_added")
         scan.files_updated = counts.get("files_updated")
+        scan.files_skipped = counts.get("files_skipped")
         scan.files_missing = counts.get("files_missing")
         self._session.add(scan)
         self._session.commit()
@@ -237,6 +270,57 @@ class AssetRepository:
             Asset.rel_path == rel_path,
         )
         return self._session.exec(stmt).first()
+
+    def create_or_update_for_scan_bulk(
+        self,
+        library_id: str,
+        scan_id: str,
+        items: list[dict],
+    ) -> int:
+        """Insert or update assets by (library_id, rel_path). Each item: rel_path, file_size, file_mtime, media_type."""
+        if not items:
+            return 0
+        now = _utcnow()
+        values = []
+        for it in items:
+            file_mtime_dt: datetime | None = None
+            if it.get("file_mtime"):
+                try:
+                    fm = it["file_mtime"]
+                    if isinstance(fm, str):
+                        fm = fm.replace("Z", "+00:00")
+                    file_mtime_dt = datetime.fromisoformat(fm) if isinstance(fm, str) else fm
+                except (ValueError, TypeError):
+                    pass
+            asset_id = "ast_" + str(ULID())
+            values.append({
+                "asset_id": asset_id,
+                "library_id": library_id,
+                "rel_path": it["rel_path"],
+                "file_size": it["file_size"],
+                "file_mtime": file_mtime_dt,
+                "media_type": it["media_type"],
+                "status": "pending",
+                "availability": "online",
+                "last_scan_id": scan_id,
+                "created_at": now,
+                "updated_at": now,
+            })
+        stmt = pg_insert(Asset).values(values)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["library_id", "rel_path"],
+            set_={
+                "file_size": stmt.excluded.file_size,
+                "file_mtime": stmt.excluded.file_mtime,
+                "status": "pending",
+                "availability": "online",
+                "last_scan_id": scan_id,
+                "updated_at": now,
+            },
+        )
+        self._session.execute(stmt)
+        self._session.commit()
+        return len(items)
 
     def create_for_scan(
         self,
@@ -300,6 +384,42 @@ class AssetRepository:
         self._session.refresh(asset)
         return asset
 
+    def touch_for_scan_bulk(self, asset_ids: list[str], scan_id: str) -> int:
+        """Bulk update last_scan_id and availability='online'. Returns count updated."""
+        if not asset_ids:
+            return 0
+        for batch_start in range(0, len(asset_ids), 500):
+            batch = asset_ids[batch_start : batch_start + 500]
+            self._session.execute(
+                text(
+                    """
+                    UPDATE assets SET last_scan_id = :scan_id, availability = 'online'
+                    WHERE asset_id = ANY(:asset_ids)
+                    """
+                ),
+                {"scan_id": scan_id, "asset_ids": batch},
+            )
+        self._session.commit()
+        return len(asset_ids)
+
+    def set_missing_bulk(self, asset_ids: list[str]) -> int:
+        """Set availability='missing' for given asset_ids. Returns count updated."""
+        if not asset_ids:
+            return 0
+        for batch_start in range(0, len(asset_ids), 500):
+            batch = asset_ids[batch_start : batch_start + 500]
+            self._session.execute(
+                text(
+                    """
+                    UPDATE assets SET availability = 'missing'
+                    WHERE asset_id = ANY(:asset_ids)
+                    """
+                ),
+                {"asset_ids": batch},
+            )
+        self._session.commit()
+        return len(asset_ids)
+
     def mark_missing_for_scan(self, library_id: str, scan_id: str) -> int:
         """Set availability='missing' for assets in library not seen in this scan (online only). Return count updated."""
         stmt = (
@@ -331,6 +451,23 @@ class AssetRepository:
     def list_by_library(self, library_id: str) -> list[Asset]:
         """Return all assets in library."""
         stmt = select(Asset).where(Asset.library_id == library_id)
+        return list(self._session.exec(stmt).all())
+
+    def page_by_library(
+        self,
+        library_id: str,
+        after: str | None,
+        limit: int,
+    ) -> list[Asset]:
+        """Keyset pagination: return assets with asset_id > after, ordered by asset_id, limit rows."""
+        stmt = (
+            select(Asset)
+            .where(Asset.library_id == library_id)
+            .order_by(Asset.asset_id)
+            .limit(limit)
+        )
+        if after is not None:
+            stmt = stmt.where(Asset.asset_id > after)
         return list(self._session.exec(stmt).all())
 
     def list_all(self) -> list[Asset]:

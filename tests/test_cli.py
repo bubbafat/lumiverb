@@ -193,20 +193,37 @@ def test_scan_aborts_if_root_unreachable() -> None:
 @pytest.mark.fast
 def test_scan_registers_signal_handlers(tmp_path: Path) -> None:
     """Patch signal.signal; invoke scan so real scan_library runs and completes; assert SIGINT/SIGTERM registered and restored."""
+    (tmp_path / "one.jpg").write_bytes(b"\xff")
+
     def _json(d):
         m = MagicMock()
         m.json.return_value = d
+        return m
+
+    def _204():
+        m = MagicMock()
+        m.status_code = 204
         return m
 
     mock_client = MagicMock()
     mock_client.get.side_effect = [
         _json([{"library_id": "lib_1", "name": "SigLib", "root_path": str(tmp_path)}]),
         _json([]),  # no running scans
+        _204(),  # GET /v1/assets/page - no known assets
     ]
     mock_client.post.side_effect = [
         _json({"scan_id": "scan_1"}),
-        _json({"files_missing": 0}),
-        _json({"enqueued": 0}),  # enqueue after complete
+        _json({"added": 1, "updated": 0, "skipped": 0, "missing": 0}),
+        _json({
+            "scan_id": "scan_1",
+            "files_discovered": 1,
+            "files_added": 1,
+            "files_updated": 0,
+            "files_skipped": 0,
+            "files_missing": 0,
+            "status": "complete",
+        }),
+        _json({"enqueued": 0}),
     ]
     with patch("src.cli.main.LumiverbClient", return_value=mock_client), patch(
         "src.cli.scanner.signal.signal"
@@ -261,16 +278,35 @@ def test_scan_shows_conflict_warning(tmp_path: Path) -> None:
 @pytest.mark.fast
 def test_scan_force_skips_warning(tmp_path: Path) -> None:
     """Pass --force; assert input() never called."""
+    (tmp_path / "one.jpg").write_bytes(b"\xff")
+
     def _json(d):
         m = MagicMock()
         m.json.return_value = d
         return m
 
+    def _204():
+        m = MagicMock()
+        m.status_code = 204
+        return m
+
     libs = [{"library_id": "lib_1", "name": "ForceLib", "root_path": str(tmp_path)}]
     running = [{"scan_id": "scan_1", "library_id": "lib_1", "started_at": "2025-01-01T00:00:00", "worker_id": None}]
     mock_client = MagicMock()
-    mock_client.get.side_effect = [_json(libs), _json(running)]
-    mock_client.post.side_effect = [_json({"scan_id": "scan_1"}), _json({"files_missing": 0})]
+    mock_client.get.side_effect = [_json(libs), _json(running), _204()]
+    mock_client.post.side_effect = [
+        _json({"scan_id": "scan_1"}),
+        _json({"added": 1, "updated": 0, "skipped": 0, "missing": 0}),
+        _json({
+            "scan_id": "scan_1",
+            "files_discovered": 1,
+            "files_added": 1,
+            "files_updated": 0,
+            "files_skipped": 0,
+            "files_missing": 0,
+            "status": "complete",
+        }),
+    ]
     mock_input = MagicMock()
 
     with patch("src.cli.main.LumiverbClient", return_value=mock_client), patch(

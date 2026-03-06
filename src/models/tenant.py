@@ -58,6 +58,7 @@ class Scan(SQLModel, table=True):
     files_discovered: int | None = Field(default=None, nullable=True)
     files_added: int | None = Field(default=None, nullable=True)
     files_updated: int | None = Field(default=None, nullable=True)
+    files_skipped: int | None = Field(default=None, nullable=True)
     files_missing: int | None = Field(default=None, nullable=True)
     error_message: str | None = Field(default=None, nullable=True)
     started_at: datetime = Field(

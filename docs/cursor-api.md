@@ -79,7 +79,8 @@ All under `/v1/scans`; require tenant auth.
 
 - **POST /v1/scans** — Body: `{ "library_id", "status": "running|aborted|error", "root_path_override": null, "worker_id": null, "error_message": null }`. Creates scan record; if status is `running` sets library `scan_status` to `"scanning"`; if `aborted` or `error` updates library `scan_status` and `last_scan_error`. Returns `{ "scan_id" }`.
 - **GET /v1/scans/running?library_id=** — Returns list of running scans: `{ "scan_id", "library_id", "started_at", "worker_id" }`.
-- **POST /v1/scans/{scan_id}/complete** — Body: `{ "files_discovered", "files_added", "files_updated", "files_skipped" }`. Marks assets not seen in this scan as missing, completes scan, updates library `scan_status` and `last_scan_at`. Returns `{ "scan_id", "files_missing" }`.
+- **POST /v1/scans/{scan_id}/batch** — Body: `{ "items": [{ "action": "skip"|"update"|"missing"|"add", ... }] }`. Process bulk scan actions: skip (touch), update (file_size, file_mtime), missing (set availability), add (insert/upsert by rel_path). Accumulates counts on scan record. Returns `{ "added", "updated", "skipped", "missing" }`.
+- **POST /v1/scans/{scan_id}/complete** — Body: optional (ignored for backward compat). Marks assets not seen in this scan as missing, completes scan, updates library `scan_status` and `last_scan_at`. Counts are accumulated server-side via batch endpoint. Returns `{ "scan_id", "files_discovered", "files_added", "files_updated", "files_skipped", "files_missing", "status" }`.
 - **POST /v1/scans/{scan_id}/abort** — Body: `{ "error_message": null }`. Aborts scan, updates library `scan_status` to `"error"` or `"aborted"`. Returns `{ "scan_id", "status" }`.
 
 ## Assets API
@@ -87,8 +88,9 @@ All under `/v1/scans`; require tenant auth.
 All under `/v1/assets`; require tenant auth.
 
 - **GET /v1/assets** — Query: `library_id` (optional). List assets; filter by library when provided. Returns list of `{ "asset_id", "library_id", "rel_path", "media_type", "status", "proxy_key", "thumbnail_key", "width", "height" }`.
+- **GET /v1/assets/page** — Query: `library_id` (required), `after` (cursor), `limit` (default 500, max 500). Keyset-paginated assets for bulk reconciliation. Returns list of `{ "asset_id", "rel_path", "file_size", "file_mtime", "sha256", "media_type" }`. Returns 204 if no results (end of pages).
 - **GET /v1/assets/{asset_id}** — Return single asset. 404 if not found.
-- **POST /v1/assets/upsert** — Body: `{ "library_id", "rel_path", "file_size", "file_mtime" (ISO8601), "media_type", "scan_id", "force": false }`. Upserts by `(library_id, rel_path)`: create if not found (`action: "added"`); if found and `force` or size/mtime/sha256 changed then update (`action: "updated"`); if found and unchanged (sha256 set, size/mtime same) then touch only (`action: "skipped"`). Returns `{ "action": "added|updated|skipped" }`.
+- **POST /v1/assets/upsert** — Legacy single-file upsert. Prefer POST /v1/scans/{scan_id}/batch for bulk operations. Body: `{ "library_id", "rel_path", "file_size", "file_mtime" (ISO8601), "media_type", "scan_id", "force": false }`. Upserts by `(library_id, rel_path)`. Returns `{ "action": "added|updated|skipped" }`.
 
 ## Admin API
 

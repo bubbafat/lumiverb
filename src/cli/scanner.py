@@ -1,8 +1,7 @@
-"""Core scan logic: walk filesystem, upsert assets via API."""
+"""Core scan logic: walk filesystem, bulk reconcile via API."""
 
 from __future__ import annotations
 
-import os
 import signal
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -12,6 +11,9 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from src.core.file_extensions import SUPPORTED_EXTENSIONS, VIDEO_EXTENSIONS
+
+SCAN_PAGE_SIZE = 500
+SCAN_BATCH_SIZE = 500
 
 console = Console()
 
@@ -28,14 +30,48 @@ class ScanResult:
     error_message: str | None = None
 
 
-def _file_mtime_iso(path: Path) -> str | None:
-    """Return file mtime as UTC ISO8601 string, or None on error."""
-    try:
-        st = path.stat()
-        dt = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
-        return dt.isoformat()
-    except OSError:
-        return None
+def _is_unchanged(asset: dict, local_file: dict, force: bool) -> bool:
+    """Return True if asset matches local file (skip); False if needs update."""
+    if force:
+        return False
+    if asset.get("sha256") is None:
+        return (
+            asset.get("file_size") == local_file["file_size"]
+            and asset.get("file_mtime") == local_file["file_mtime"]
+        )
+    return (
+        asset.get("file_size") == local_file["file_size"]
+        and asset.get("file_mtime") == local_file["file_mtime"]
+    )
+
+
+def _build_local_map(root_path: Path, walk_root: Path) -> dict[str, dict]:
+    """Walk filesystem and build rel_path -> {file_size, file_mtime, media_type} map."""
+    local_map: dict[str, dict] = {}
+    for p in walk_root.rglob("*"):
+        if not p.is_file():
+            continue
+        ext = p.suffix.lower()
+        if ext not in SUPPORTED_EXTENSIONS:
+            continue
+        try:
+            rel_path = p.relative_to(root_path)
+        except ValueError:
+            continue
+        rel_path_str = str(rel_path).replace("\\", "/")
+        media_type = "video" if ext in VIDEO_EXTENSIONS else "image"
+        try:
+            st = p.stat()
+            dt = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
+            file_mtime = dt.isoformat()
+        except OSError:
+            continue
+        local_map[rel_path_str] = {
+            "file_size": st.st_size,
+            "file_mtime": file_mtime,
+            "media_type": media_type,
+        }
+    return local_map
 
 
 def scan_library(
@@ -46,15 +82,15 @@ def scan_library(
     worker_id: str | None = None,
 ) -> ScanResult:
     """
-    Scan a library: validate root, check for running scans, create scan record,
-    walk filesystem, upsert each file, complete or abort scan.
+    Scan a library: build local map, check root, check running scans, create scan,
+    page through server assets, reconcile, add remaining, complete.
     """
     scan_id: str | None = None
     library_id = library.get("library_id", "")
     root_path_str = library.get("root_path", "")
     root_path = Path(root_path_str)
 
-    # Root reachability
+    # Step 1: Root reachability
     if not root_path.is_dir():
         err_msg = f"Library root unreachable: {root_path_str}"
         resp = client.post(
@@ -77,7 +113,20 @@ def scan_library(
             error_message=err_msg,
         )
 
-    # Running scan conflict (unless force)
+    # Step 2: Path override validation and walk root
+    library_root_resolved = root_path.resolve()
+    walk_root = root_path / path_override if path_override else root_path
+    try:
+        walk_root_resolved = walk_root.resolve()
+    except OSError:
+        walk_root_resolved = walk_root
+    try:
+        walk_root_resolved.relative_to(library_root_resolved)
+    except ValueError:
+        # Will create scan after signal handler setup; abort with error
+        pass
+
+    # Step 3: Running scan conflict (unless force)
     if not force:
         resp = client.get(f"/v1/scans/running?library_id={library_id}")
         running = resp.json()
@@ -122,7 +171,7 @@ def scan_library(
     old_sigterm = signal.signal(signal.SIGTERM, _abort_handler)
 
     try:
-        # Create scan record
+        # Step 4: Create scan record
         body = {
             "library_id": library_id,
             "status": "running",
@@ -144,12 +193,7 @@ def scan_library(
                 error_message="No scan_id returned",
             )
 
-        library_root_resolved = root_path.resolve()
-        walk_root = root_path / path_override if path_override else root_path
-        try:
-            walk_root_resolved = walk_root.resolve()
-        except OSError:
-            walk_root_resolved = walk_root
+        # Path override escape check (after scan created)
         try:
             walk_root_resolved.relative_to(library_root_resolved)
         except ValueError:
@@ -169,83 +213,82 @@ def scan_library(
                 error_message=err_msg,
             )
 
-        files_discovered = 0
-        files_added = 0
-        files_updated = 0
-        files_skipped = 0
+        # Step 5: Build local map (no API calls)
+        use_progress = console.is_terminal
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            disable=not use_progress,
+        ) as progress:
+            task = progress.add_task("Building file map...", total=None)
+            local_map = _build_local_map(library_root_resolved, walk_root_resolved)
+            progress.update(task, description="File map built", completed=True)
 
-        try:
-            all_files: list[tuple[Path, str, int, str | None, str]] = []
-            for p in Path(walk_root_resolved).rglob("*"):
-                if not p.is_file():
-                    continue
-                ext = p.suffix.lower()
-                if ext not in SUPPORTED_EXTENSIONS:
-                    continue
-                try:
-                    rel_path = p.relative_to(library_root_resolved)
-                except ValueError:
-                    continue
-                rel_path_str = str(rel_path).replace("\\", "/")
-                media_type = "video" if ext in VIDEO_EXTENSIONS else "image"
-                try:
-                    st = p.stat()
-                    file_size = st.st_size
-                    file_mtime = _file_mtime_iso(p)
-                except OSError:
-                    continue
-                all_files.append((p, rel_path_str, file_size, file_mtime, media_type))
+        # Step 6: Page through server assets and reconcile
+        cursor = None
+        while True:
+            params = {"library_id": library_id, "limit": SCAN_PAGE_SIZE}
+            if cursor:
+                params["after"] = cursor
+            resp = client.get("/v1/assets/page", params=params)
+            if resp.status_code == 204:
+                break
+            page = resp.json()
+            if not page:
+                break
 
-            use_progress = console.is_terminal
-            progress = Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-                disable=not use_progress,
-            )
-            with progress:
-                task = progress.add_task("Scanning...", total=len(all_files))
-                for p, rel_path_str, file_size, file_mtime, media_type in all_files:
-                    progress.update(task, description=f"Scanning: {rel_path_str}", advance=1)
-                    files_discovered += 1
-                    upsert_body = {
-                        "library_id": library_id,
-                        "rel_path": rel_path_str,
-                        "file_size": file_size,
-                        "file_mtime": file_mtime,
-                        "media_type": media_type,
-                        "scan_id": scan_id,
-                        "force": force,
-                    }
-                    resp = client.post("/v1/assets/upsert", json=upsert_body)
-                    action = resp.json().get("action", "updated")
-                    if action == "added":
-                        files_added += 1
-                    elif action == "updated":
-                        files_updated += 1
+            batch_items = []
+            for asset in page:
+                rel_path = asset["rel_path"]
+                if rel_path in local_map:
+                    local_file = local_map.pop(rel_path)
+                    if _is_unchanged(asset, local_file, force):
+                        batch_items.append({"action": "skip", "asset_id": asset["asset_id"]})
                     else:
-                        files_skipped += 1
+                        batch_items.append({
+                            "action": "update",
+                            "asset_id": asset["asset_id"],
+                            "file_size": local_file["file_size"],
+                            "file_mtime": local_file["file_mtime"],
+                        })
+                else:
+                    batch_items.append({"action": "missing", "asset_id": asset["asset_id"]})
 
-            # Complete scan
-            complete_body = {
-                "files_discovered": files_discovered,
-                "files_added": files_added,
-                "files_updated": files_updated,
-                "files_skipped": files_skipped,
+            if batch_items:
+                client.post(f"/v1/scans/{scan_id}/batch", json={"items": batch_items})
+
+            cursor = page[-1]["asset_id"]
+
+        # Step 7: Add remaining new files (local_map now only has files server doesn't know)
+        new_items = [
+            {
+                "action": "add",
+                "rel_path": rel_path,
+                "file_size": info["file_size"],
+                "file_mtime": info["file_mtime"],
+                "media_type": info["media_type"],
             }
-            resp = client.post(f"/v1/scans/{scan_id}/complete", json=complete_body)
-            data = resp.json()
-            files_missing = data.get("files_missing", 0)
-            return ScanResult(
-                scan_id=scan_id,
-                files_discovered=files_discovered,
-                files_added=files_added,
-                files_updated=files_updated,
-                files_skipped=files_skipped,
-                files_missing=files_missing,
-                status="complete",
-            )
-        except Exception as e:
+            for rel_path, info in local_map.items()
+        ]
+        for i in range(0, len(new_items), SCAN_BATCH_SIZE):
+            batch = new_items[i : i + SCAN_BATCH_SIZE]
+            client.post(f"/v1/scans/{scan_id}/batch", json={"items": batch})
+
+        # Step 8: Complete scan
+        resp = client.post(f"/v1/scans/{scan_id}/complete", json={})
+        data = resp.json()
+        return ScanResult(
+            scan_id=data.get("scan_id", scan_id),
+            files_discovered=data.get("files_discovered", 0),
+            files_added=data.get("files_added", 0),
+            files_updated=data.get("files_updated", 0),
+            files_skipped=data.get("files_skipped", 0),
+            files_missing=data.get("files_missing", 0),
+            status=data.get("status", "complete"),
+        )
+    except Exception as e:
+        if scan_id is not None:
             try:
                 client.post(
                     f"/v1/scans/{scan_id}/abort",
@@ -253,16 +296,16 @@ def scan_library(
                 )
             except Exception:
                 pass
-            return ScanResult(
-                scan_id=scan_id,
-                files_discovered=files_discovered,
-                files_added=files_added,
-                files_updated=files_updated,
-                files_skipped=files_skipped,
-                files_missing=0,
-                status="error",
-                error_message=str(e),
-            )
+        return ScanResult(
+            scan_id=scan_id or "",
+            files_discovered=0,
+            files_added=0,
+            files_updated=0,
+            files_skipped=0,
+            files_missing=0,
+            status="error",
+            error_message=str(e),
+        )
     finally:
         signal.signal(signal.SIGINT, old_sigint)
         signal.signal(signal.SIGTERM, old_sigterm)

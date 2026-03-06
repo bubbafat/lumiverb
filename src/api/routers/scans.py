@@ -1,15 +1,38 @@
 """Scan management API. All routes require tenant auth (middleware)."""
 
+from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Body, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session
 from src.repository.tenant import AssetRepository, LibraryRepository, ScanRepository
 
 router = APIRouter(prefix="/v1/scans", tags=["scans"])
+
+
+class BatchItem(BaseModel):
+    """One scan action: skip, update, missing, or add."""
+
+    action: str
+    asset_id: str | None = None
+    rel_path: str | None = None
+    file_size: int | None = None
+    file_mtime: str | None = None
+    media_type: str | None = None
+
+
+class BatchRequest(BaseModel):
+    items: list[BatchItem] = Field(default_factory=list)
+
+
+class BatchResponse(BaseModel):
+    added: int
+    updated: int
+    skipped: int
+    missing: int
 
 
 class CreateScanRequest(BaseModel):
@@ -32,15 +55,22 @@ class RunningScanItem(BaseModel):
 
 
 class CompleteScanRequest(BaseModel):
-    files_discovered: int
-    files_added: int
-    files_updated: int
-    files_skipped: int
+    """Optional for backward compat; counts now accumulated server-side via batch endpoint."""
+
+    files_discovered: int | None = None
+    files_added: int | None = None
+    files_updated: int | None = None
+    files_skipped: int | None = None
 
 
 class CompleteScanResponse(BaseModel):
     scan_id: str
+    files_discovered: int
+    files_added: int
+    files_updated: int
+    files_skipped: int
     files_missing: int
+    status: str
 
 
 class AbortScanRequest(BaseModel):
@@ -99,15 +129,89 @@ def get_running_scans(
     ]
 
 
+@router.post("/{scan_id}/batch", response_model=BatchResponse)
+def batch_scan(
+    scan_id: str,
+    body: BatchRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> BatchResponse:
+    """
+    Process a batch of scan actions: skip, update, missing, add.
+    All in one transaction. Accumulates counts on scan record.
+    """
+    scan_repo = ScanRepository(session)
+    asset_repo = AssetRepository(session)
+    scan = scan_repo.get_by_id(scan_id)
+    if scan is None:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    if scan.status != "running":
+        raise HTTPException(status_code=409, detail="Scan is not running")
+
+    added = updated = skipped = missing = 0
+    skip_ids: list[str] = []
+    update_items: list[dict] = []
+    missing_ids: list[str] = []
+    add_items: list[dict] = []
+
+    for item in body.items:
+        a = item.action
+        if a == "skip" and item.asset_id:
+            skip_ids.append(item.asset_id)
+        elif a == "update" and item.asset_id and item.file_size is not None and item.file_mtime:
+            update_items.append({
+                "asset_id": item.asset_id,
+                "file_size": item.file_size,
+                "file_mtime": item.file_mtime,
+            })
+        elif a == "missing" and item.asset_id:
+            missing_ids.append(item.asset_id)
+        elif a == "add" and item.rel_path and item.file_size is not None and item.file_mtime and item.media_type:
+            add_items.append({
+                "rel_path": item.rel_path,
+                "file_size": item.file_size,
+                "file_mtime": item.file_mtime,
+                "media_type": item.media_type,
+            })
+
+    skipped = asset_repo.touch_for_scan_bulk(skip_ids, scan_id) if skip_ids else 0
+    for it in update_items:
+        file_mtime_dt: datetime | None = None
+        if it.get("file_mtime"):
+            try:
+                fm = it["file_mtime"].replace("Z", "+00:00")
+                file_mtime_dt = datetime.fromisoformat(fm)
+            except (ValueError, TypeError):
+                pass
+        asset_repo.update_for_scan(
+            asset_id=it["asset_id"],
+            file_size=it["file_size"],
+            file_mtime=file_mtime_dt,
+            availability="online",
+            status="pending",
+            last_scan_id=scan_id,
+        )
+        updated += 1
+    missing = asset_repo.set_missing_bulk(missing_ids) if missing_ids else 0
+    added = asset_repo.create_or_update_for_scan_bulk(
+        library_id=scan.library_id,
+        scan_id=scan_id,
+        items=add_items,
+    ) if add_items else 0
+
+    scan_repo.record_batch_counts(scan_id, added=added, updated=updated, skipped=skipped, missing=missing)
+    return BatchResponse(added=added, updated=updated, skipped=skipped, missing=missing)
+
+
 @router.post("/{scan_id}/complete", response_model=CompleteScanResponse)
 def complete_scan(
     scan_id: str,
-    body: CompleteScanRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
+    body: CompleteScanRequest | None = Body(default=None),
 ) -> CompleteScanResponse:
     """
     Mark scan complete, update library scan_status and last_scan_at.
-    Mark assets not seen in this scan as missing; return files_missing count.
+    Mark assets not seen in this scan as missing. Counts are accumulated
+    server-side via batch endpoint; body fields ignored if sent (backward compat).
     """
     scan_repo = ScanRepository(session)
     lib_repo = LibraryRepository(session)
@@ -117,17 +221,29 @@ def complete_scan(
         raise HTTPException(status_code=404, detail="Scan not found")
     if scan.status != "running":
         raise HTTPException(status_code=409, detail="Scan is not running")
-    files_missing = asset_repo.mark_missing_for_scan(scan.library_id, scan_id)
+    batch_missing = scan.files_missing or 0
+    complete_time_missing = asset_repo.mark_missing_for_scan(scan.library_id, scan_id)
+    total_missing = batch_missing + complete_time_missing
     counts = {
-        "files_discovered": body.files_discovered,
-        "files_added": body.files_added,
-        "files_updated": body.files_updated,
-        "files_skipped": body.files_skipped,
-        "files_missing": files_missing,
+        "files_discovered": scan.files_discovered or 0,
+        "files_added": scan.files_added or 0,
+        "files_updated": scan.files_updated or 0,
+        "files_skipped": scan.files_skipped or 0,
+        "files_missing": total_missing,
     }
     scan_repo.complete(scan_id, counts)
     lib_repo.update_scan_status(scan.library_id, "complete")
-    return CompleteScanResponse(scan_id=scan_id, files_missing=files_missing)
+    scan = scan_repo.get_by_id(scan_id)
+    assert scan is not None
+    return CompleteScanResponse(
+        scan_id=scan_id,
+        files_discovered=scan.files_discovered or 0,
+        files_added=scan.files_added or 0,
+        files_updated=scan.files_updated or 0,
+        files_skipped=scan.files_skipped or 0,
+        files_missing=total_missing,
+        status="complete",
+    )
 
 
 @router.post("/{scan_id}/abort", response_model=AbortScanResponse)
