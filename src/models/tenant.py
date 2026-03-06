@@ -27,6 +27,11 @@ class Library(SQLModel, table=True):
     name: str = Field(nullable=False)
     root_path: str = Field(nullable=False)
     scan_status: str = Field(default="idle", nullable=False)
+    last_scan_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+    last_scan_error: str | None = Field(default=None, nullable=True)
     created_at: datetime = Field(
         default_factory=_utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
@@ -37,12 +42,40 @@ class Library(SQLModel, table=True):
     )
 
 
+class Scan(SQLModel, table=True):
+    __tablename__ = "scans"
+
+    scan_id: str = Field(primary_key=True)
+    library_id: str = Field(foreign_key="libraries.library_id", nullable=False)
+    status: str = Field(default="running", nullable=False)
+    root_path_override: str | None = Field(default=None, nullable=True)
+    worker_id: str | None = Field(default=None, nullable=True)
+    heartbeat_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+    files_discovered: int | None = Field(default=None, nullable=True)
+    files_added: int | None = Field(default=None, nullable=True)
+    files_updated: int | None = Field(default=None, nullable=True)
+    files_missing: int | None = Field(default=None, nullable=True)
+    error_message: str | None = Field(default=None, nullable=True)
+    started_at: datetime = Field(
+        default_factory=_utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+    completed_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+
+
 class Asset(SQLModel, table=True):
     __tablename__ = "assets"
     __table_args__ = (UniqueConstraint("library_id", "rel_path", name="uq_assets_library_rel_path"),)
 
     asset_id: str = Field(primary_key=True)
     library_id: str = Field(foreign_key="libraries.library_id", nullable=False)
+    last_scan_id: str | None = Field(default=None, foreign_key="scans.scan_id", nullable=True)
     rel_path: str = Field(nullable=False)
     sha256: str | None = Field(default=None, nullable=True)
     file_size: int = Field(nullable=False)

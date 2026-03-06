@@ -72,6 +72,7 @@ def test_control_plane_migrations_upgrade_and_downgrade() -> None:
 
 TENANT_TABLES = [
     "libraries",
+    "scans",
     "assets",
     "video_scenes",
     "asset_metadata",
@@ -114,7 +115,7 @@ def test_tenant_schema_upgrade_and_downgrade() -> None:
                 text(
                     "SELECT table_name FROM information_schema.tables "
                     "WHERE table_schema = 'public' AND table_name IN "
-                    "('libraries', 'assets', 'video_scenes', 'asset_metadata', "
+                    "('libraries', 'scans', 'assets', 'video_scenes', 'asset_metadata', "
                     "'search_sync_queue', 'worker_jobs', 'system_metadata', "
                     "'faces', 'people', 'face_person_matches')"
                 )
@@ -136,7 +137,7 @@ def test_tenant_schema_upgrade_and_downgrade() -> None:
                 text(
                     "SELECT table_name FROM information_schema.tables "
                     "WHERE table_schema = 'public' AND table_name IN "
-                    "('libraries', 'assets', 'video_scenes', 'asset_metadata', "
+                    "('libraries', 'scans', 'assets', 'video_scenes', 'asset_metadata', "
                     "'search_sync_queue', 'worker_jobs', 'system_metadata', "
                     "'faces', 'people', 'face_person_matches')"
                 )
