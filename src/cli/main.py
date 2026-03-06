@@ -221,7 +221,7 @@ def scan(
     table.add_row("Missing", str(result.files_missing))
     console.print(table)
 
-    if result.status == "complete":
+    if result.status == "complete" and (result.files_added > 0 or result.files_updated > 0):
         library_id = match["library_id"]
         enqueue_resp = client.post(
             "/v1/jobs/enqueue",

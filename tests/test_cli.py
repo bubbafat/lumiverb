@@ -356,3 +356,61 @@ def test_scan_prints_summary() -> None:
     assert "0" in result.output
     assert "Discovered" in result.output
     assert "Added" in result.output
+
+
+@pytest.mark.fast
+def test_scan_enqueues_when_files_updated_only() -> None:
+    """Scan with files_updated > 0 and files_added == 0 should call enqueue (regression: updated files need proxy jobs)."""
+    mock_client = MagicMock()
+    mock_client.get.return_value.json.return_value = [
+        {"library_id": "lib_1", "name": "UpdatedOnlyLib", "root_path": "/path"}
+    ]
+    mock_client.post.return_value.json.return_value = {"enqueued": 2}
+    complete = ScanResult(
+        scan_id="scan_456",
+        files_discovered=3,
+        files_added=0,
+        files_updated=2,
+        files_skipped=1,
+        files_missing=0,
+        status="complete",
+    )
+
+    with patch("src.cli.main.LumiverbClient", return_value=mock_client), patch(
+        "src.cli.main.scan_library", return_value=complete
+    ):
+        result = runner.invoke(app, ["scan", "--library", "UpdatedOnlyLib"])
+
+    assert result.exit_code == 0
+    mock_client.post.assert_any_call(
+        "/v1/jobs/enqueue",
+        json={"library_id": "lib_1", "job_type": "proxy"},
+    )
+
+
+@pytest.mark.fast
+def test_is_unchanged_normalizes_mtime() -> None:
+    """Z and +00:00 suffix should be treated as equal."""
+    from src.cli.scanner import _is_unchanged
+
+    asset = {"file_size": 1000, "file_mtime": "2024-01-01T12:00:00+00:00", "sha256": None}
+    local = {"file_size": 1000, "file_mtime": "2024-01-01T12:00:00Z"}
+    assert _is_unchanged(asset, local, force=False) is True
+
+
+@pytest.mark.fast
+def test_is_unchanged_detects_size_change() -> None:
+    from src.cli.scanner import _is_unchanged
+
+    asset = {"file_size": 1000, "file_mtime": "2024-01-01T12:00:00+00:00", "sha256": None}
+    local = {"file_size": 2000, "file_mtime": "2024-01-01T12:00:00+00:00"}
+    assert _is_unchanged(asset, local, force=False) is False
+
+
+@pytest.mark.fast
+def test_is_unchanged_force_always_false() -> None:
+    from src.cli.scanner import _is_unchanged
+
+    asset = {"file_size": 1000, "file_mtime": "2024-01-01T12:00:00+00:00", "sha256": None}
+    local = {"file_size": 1000, "file_mtime": "2024-01-01T12:00:00+00:00"}
+    assert _is_unchanged(asset, local, force=True) is False
