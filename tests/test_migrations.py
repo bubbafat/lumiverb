@@ -68,3 +68,78 @@ def test_control_plane_migrations_upgrade_and_downgrade() -> None:
             )
             tables = {row[0] for row in r}
         assert tables == set(), tables
+
+
+TENANT_TABLES = [
+    "libraries",
+    "assets",
+    "video_scenes",
+    "asset_metadata",
+    "search_sync_queue",
+    "worker_jobs",
+    "system_metadata",
+    "faces",
+    "people",
+    "face_person_matches",
+]
+
+
+@pytest.mark.migration
+def test_tenant_schema_upgrade_and_downgrade() -> None:
+    """Run tenant migrations up and down on a fresh Postgres with pgvector."""
+    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
+        url = postgres.get_connection_url()
+        if url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+
+        engine = create_engine(url)
+        with engine.connect() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            conn.commit()
+
+        env = os.environ.copy()
+        env["ALEMBIC_TENANT_URL"] = url
+
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "-c", "alembic-tenant.ini", "upgrade", "head"],
+            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, (result.stdout, result.stderr)
+
+        with engine.connect() as conn:
+            r = conn.execute(
+                text(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema = 'public' AND table_name IN "
+                    "('libraries', 'assets', 'video_scenes', 'asset_metadata', "
+                    "'search_sync_queue', 'worker_jobs', 'system_metadata', "
+                    "'faces', 'people', 'face_person_matches')"
+                )
+            )
+            tables = {row[0] for row in r}
+        assert set(TENANT_TABLES) == tables, tables
+
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "-c", "alembic-tenant.ini", "downgrade", "base"],
+            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, (result.stdout, result.stderr)
+
+        with engine.connect() as conn:
+            r = conn.execute(
+                text(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema = 'public' AND table_name IN "
+                    "('libraries', 'assets', 'video_scenes', 'asset_metadata', "
+                    "'search_sync_queue', 'worker_jobs', 'system_metadata', "
+                    "'faces', 'people', 'face_person_matches')"
+                )
+            )
+            tables = {row[0] for row in r}
+        assert tables == set(), tables
