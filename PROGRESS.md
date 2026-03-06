@@ -7,8 +7,8 @@
 | 1 | Control plane schema, Alembic setup, migration tests | ✅ Done | - |
 | 2 | Tenant schema, phase 2 stubs, migration tests | ✅ Done | - |
 | 3 | Config, database layer, repositories, provisioning API | ✅ Done | - |
-| 4 | Library and asset scanner (CLI) | 🔨 In progress | - |
-| 5 | Proxy and thumbnail worker | ⬜ Planned | - |
+| 4 | Library and asset scanner (CLI) | ✅ Done | - |
+| 5 | Proxy and thumbnail worker | 🔨 In progress | - |
 | 6 | EXIF metadata worker | ⬜ Planned | - |
 | 7 | AI vision worker (Moondream) | ⬜ Planned | - |
 | 8 | Quickwit search sync worker | ⬜ Planned | - |
