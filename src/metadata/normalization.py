@@ -2,18 +2,23 @@ from __future__ import annotations
 
 """Normalization of raw EXIF into media_metadata.
 
-Pure Python helpers only: no database access. Configuration is read via
-`get_config()` for thresholds but there is no I/O beyond config.
+Pure Python helpers only: no database access. Thresholds are module-level constants.
 """
 
 import math
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict
+from typing import Any, Dict, Literal, TypedDict
 
 import reverse_geocoder as rg  # type: ignore[import-not-found]
 
-from src.core.config import get_config
-from src.models.entities import Asset, AssetType
+SHARPNESS_MAX_VARIANCE: float = 1000.0
+GENERATION_HINT_ORIGINAL_BPPPF_THRESHOLD: float = 0.08
+GENERATION_HINT_PROXY_BPPPF_THRESHOLD: float = 0.03
+
+
+class AssetInfo(TypedDict):
+    type: Literal["image", "video"]
+    mtime: float
 
 
 def _parse_exif_datetime(value: Any) -> datetime | None:
@@ -26,7 +31,7 @@ def _parse_exif_datetime(value: Any) -> datetime | None:
         return None
 
 
-def _compute_capture_ts(raw_exif: dict[str, Any], asset: Asset) -> tuple[float | None, str | None]:
+def _compute_capture_ts(raw_exif: dict[str, Any], asset: AssetInfo) -> tuple[float | None, str | None]:
     """
     Compute capture_ts (epoch seconds) and capture_ts_source.
 
@@ -68,7 +73,7 @@ def _compute_capture_ts(raw_exif: dict[str, Any], asset: Asset) -> tuple[float |
 
     # Fallback to asset.mtime (already Unix timestamp float)
     try:
-        ts = float(asset.mtime)
+        ts = float(asset["mtime"])
     except Exception:
         return None, None
     return ts, "asset_mtime"
@@ -204,12 +209,12 @@ def _resolution(raw_exif: dict[str, Any]) -> tuple[int | None, int | None]:
 
 def _generation_hint(
     raw_exif: dict[str, Any],
-    asset: Asset,
+    asset: AssetInfo,
     frame_rate: float | None,
     width: int | None,
     height: int | None,
 ) -> str:
-    if asset.type == AssetType.image:
+    if asset["type"] == "image":
         return "original"
 
     # Log-curve detection
@@ -235,17 +240,13 @@ def _generation_hint(
         except ValueError:
             bitrate = None
 
-    cfg = get_config()
-    orig_thr = getattr(cfg, "generation_hint_original_bpppf_threshold", 0.08)
-    proxy_thr = getattr(cfg, "generation_hint_proxy_bpppf_threshold", 0.03)
-
     if bitrate and frame_rate and width and height and width > 0 and height > 0 and frame_rate > 0:
         denom = float(width) * float(height) * frame_rate
         if denom > 0:
             bpppf = bitrate / denom
-            if bpppf >= orig_thr:
+            if bpppf >= GENERATION_HINT_ORIGINAL_BPPPF_THRESHOLD:
                 return "original"
-            if bpppf <= proxy_thr:
+            if bpppf <= GENERATION_HINT_PROXY_BPPPF_THRESHOLD:
                 # Additional codec name hints for proxies
                 for key in ("VideoCodecName", "CompressorName", "CodecID"):
                     v = raw_exif.get(key)
@@ -283,7 +284,7 @@ def _geo_fields(raw_exif: dict[str, Any]) -> tuple[float | None, float | None, s
     return lat, lon, country, region, city
 
 
-def normalize_media_metadata(raw_exif: dict[str, Any], *, asset: Asset) -> dict[str, Any]:
+def normalize_media_metadata(raw_exif: dict[str, Any], *, asset: AssetInfo) -> dict[str, Any]:
     """
     Normalize raw exiftool output into media_metadata.
 
@@ -299,8 +300,8 @@ def normalize_media_metadata(raw_exif: dict[str, Any], *, asset: Asset) -> dict[
     )
     color_space = _detect_color_space(raw_exif)
 
-    frame_rate = _parse_frame_rate(raw_exif) if asset.type == AssetType.video else None
-    duration_sec = _parse_duration(raw_exif, asset.type == AssetType.video)
+    frame_rate = _parse_frame_rate(raw_exif) if asset["type"] == "video" else None
+    duration_sec = _parse_duration(raw_exif, asset["type"] == "video")
     width, height = _resolution(raw_exif)
     generation_hint = _generation_hint(raw_exif, asset, frame_rate, width, height)
     gps_lat, gps_lon, country, region, city = _geo_fields(raw_exif)
