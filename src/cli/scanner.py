@@ -8,7 +8,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+)
 
 from src.core.file_extensions import SUPPORTED_EXTENSIONS, VIDEO_EXTENSIONS
 
@@ -232,42 +237,88 @@ def scan_library(
         ) as progress:
             task = progress.add_task("Building file map...", total=None)
             local_map = _build_local_map(library_root_resolved, walk_root_resolved)
-            progress.update(task, description="File map built", completed=True)
+            n_files = len(local_map)
+            progress.update(
+                task,
+                description=f"Building file map... {n_files:,} files found",
+                completed=True,
+            )
 
         # Step 6: Page through server assets and reconcile
-        cursor = None
-        while True:
-            params = {"library_id": library_id, "limit": SCAN_PAGE_SIZE}
-            if cursor:
-                params["after"] = cursor
-            resp = client.get("/v1/assets/page", params=params)
-            if resp.status_code == 204:
-                break
-            page = resp.json()
-            if not page:
-                break
+        reconciled = 0
+        added_count = updated_count = skipped_count = missing_count = 0
 
-            batch_items = []
-            for asset in page:
-                rel_path = asset["rel_path"]
-                if rel_path in local_map:
-                    local_file = local_map.pop(rel_path)
-                    if _is_unchanged(asset, local_file, force):
-                        batch_items.append({"action": "skip", "asset_id": asset["asset_id"]})
+        def _counter_text() -> str:
+            return (
+                f"{added_count:,} new  "
+                f"{updated_count:,} updated  "
+                f"{skipped_count:,} unchanged  "
+                f"{missing_count:,} missing"
+            )
+
+        with Progress(
+            SpinnerColumn(),
+            BarColumn(),
+            TextColumn("{task.completed:,} assets"),
+            TextColumn("  "),
+            TextColumn("{task.fields[counters]}"),
+            console=console,
+            disable=not use_progress,
+        ) as progress:
+            task = progress.add_task(
+                "Reconciling",
+                total=None,
+                counters=_counter_text(),
+            )
+
+            cursor = None
+            while True:
+                params = {"library_id": library_id, "limit": SCAN_PAGE_SIZE}
+                if cursor:
+                    params["after"] = cursor
+                resp = client.get("/v1/assets/page", params=params)
+                if resp.status_code == 204:
+                    progress.update(task, total=0, completed=0, counters=_counter_text())
+                    break
+                page = resp.json()
+                if not page:
+                    break
+
+                batch_items = []
+                for asset in page:
+                    rel_path = asset["rel_path"]
+                    if rel_path in local_map:
+                        local_file = local_map.pop(rel_path)
+                        if _is_unchanged(asset, local_file, force):
+                            batch_items.append({"action": "skip", "asset_id": asset["asset_id"]})
+                            skipped_count += 1
+                        else:
+                            batch_items.append({
+                                "action": "update",
+                                "asset_id": asset["asset_id"],
+                                "file_size": local_file["file_size"],
+                                "file_mtime": local_file["file_mtime"],
+                            })
+                            updated_count += 1
                     else:
-                        batch_items.append({
-                            "action": "update",
-                            "asset_id": asset["asset_id"],
-                            "file_size": local_file["file_size"],
-                            "file_mtime": local_file["file_mtime"],
-                        })
-                else:
-                    batch_items.append({"action": "missing", "asset_id": asset["asset_id"]})
+                        batch_items.append({"action": "missing", "asset_id": asset["asset_id"]})
+                        missing_count += 1
 
-            if batch_items:
-                client.post(f"/v1/scans/{scan_id}/batch", json={"items": batch_items})
+                reconciled += len(page)
+                is_last_page = len(page) < SCAN_PAGE_SIZE
+                progress.update(
+                    task,
+                    completed=reconciled,
+                    total=reconciled if is_last_page else None,
+                    counters=_counter_text(),
+                )
 
-            cursor = page[-1]["asset_id"]
+                if batch_items:
+                    client.post(f"/v1/scans/{scan_id}/batch", json={"items": batch_items})
+
+                cursor = page[-1]["asset_id"]
+                if is_last_page:
+                    break
 
         # Step 7: Add remaining new files (local_map now only has files server doesn't know)
         new_items = [
@@ -280,6 +331,8 @@ def scan_library(
             }
             for rel_path, info in local_map.items()
         ]
+        if new_items:
+            console.print(f"Adding {len(new_items):,} new files...")
         for i in range(0, len(new_items), SCAN_BATCH_SIZE):
             batch = new_items[i : i + SCAN_BATCH_SIZE]
             client.post(f"/v1/scans/{scan_id}/batch", json={"items": batch})
