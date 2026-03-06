@@ -1,0 +1,40 @@
+---
+description: Core architecture laws. Always active. Read before any plan or code change.
+globs:
+alwaysApply: true
+---
+
+# Lumiverb — Architecture Rules
+
+## Source of Truth
+- System design: @docs/architecture.md
+- API rules: @docs/cursor-api.md
+- CLI rules: @docs/cursor-cli.md
+- If a request conflicts with any of these documents, **stop and notify before acting**.
+- If a planned change contradicts any doc under `docs/`, notify me to confirm whether
+  the spec should be updated or the plan is out of spec.
+
+## Multi-Tenancy — Non-Negotiable
+- Every tenant has their own isolated PostgreSQL database. No shared tables between tenants.
+- The control plane DB (tenants, api_keys, routing) is entirely separate from tenant DBs.
+- Tenant context always comes from the API key — never from a URL parameter or request body.
+- Use the tenant DB routing layer to resolve connections. Never hardcode a connection string.
+
+## API Design
+- All routes under `/v1/`.
+- Authentication: `Authorization: Bearer <api_key>` header only.
+- Cursor pagination everywhere — never offset pagination.
+- Error envelope: `{"error": {"code": "...", "message": "...", "details": {...}}}`
+- File uploads via multipart. Files served via signed URLs — never raw object storage URLs.
+
+## Phase 1 Scope — Do Not Build
+- No user authentication or session management (Phase 5)
+- No webhooks
+- Do not populate or query `embedding_vector`, `faces`, `people`, or `face_person_matches`
+  (Phase 2 — columns exist, are nullable, must stay untouched in Phase 1)
+- No cross-tenant or multi-library search
+- No rate limiting
+
+## Documentation
+- When adding API endpoints, CLI commands, or schema changes, update the relevant file under `docs/`.
+- Check for an existing guide before creating a new one.

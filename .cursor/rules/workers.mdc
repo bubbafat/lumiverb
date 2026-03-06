@@ -1,0 +1,31 @@
+---
+description: Worker pattern rules. Active when editing worker code.
+globs: src/workers/**
+alwaysApply: false
+---
+
+# Lumiverb — Worker Rules
+
+## BaseWorker Contract
+- All workers must inherit from `BaseWorker`.
+- Implement `process_task() -> bool`: return `True` if work was done, `False` if queue empty.
+- The run loop, heartbeat, signal handling, and idle sleep are provided by `BaseWorker` — do not reimplement them.
+
+## Claiming
+- All claim queries must use `FOR UPDATE SKIP LOCKED` — no exceptions.
+- Lease duration: 10 minutes. Recovery reclaims jobs where `lease_expires_at < now()`.
+- Heartbeat: daemon thread updates `worker_status.last_seen_at` every 15s.
+- Workers stale for >60s are considered offline.
+
+## Error Handling
+- **Transient errors** (inference service down, network timeout): reset asset to pre-claim status for retry. Never increment poison counter.
+- **Permanent errors** (all other exceptions): mark asset `poisoned` with `error_message`. Never silently swallow.
+
+## CLI Flags — Required on Every Worker
+- `--once`: drain the queue until empty, then exit. No polling loop.
+- No `--verbose` or `--quiet` flags — users use shell redirection.
+- Polling sleep must not exceed 5 seconds (ensures responsive SIGINT shutdown).
+- CTRL+C must exit cleanly with code 0.
+
+## Reference
+Before implementing any worker, read @docs/reference/worker_base_pattern.md.

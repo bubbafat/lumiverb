@@ -1,0 +1,34 @@
+---
+description: Database and repository pattern rules. Active when editing database or repository code.
+globs: src/repository/**, src/models/**, migrations/**
+alwaysApply: false
+---
+
+# Lumiverb — Database Rules
+
+## Repository Pattern
+- All database access goes through Repository classes. No exceptions.
+- No ORM calls in business logic, workers, or the API layer.
+- Workers receive repositories via constructor injection.
+
+## PostgreSQL
+- PostgreSQL 16+ only. Never SQLite on the server side.
+- Use Postgres-specific features freely: JSONB, TSVECTOR, `FOR UPDATE SKIP LOCKED`, pgvector.
+- `FOR UPDATE SKIP LOCKED` is required on all worker claim queries — non-negotiable.
+
+## Schema Rules
+- All timestamps `WITH TIME ZONE`.
+- `(library_id, rel_path)` composite unique index is mandatory on the assets table.
+- Migrations must be reversible — every `upgrade` must have a working `downgrade`.
+- Run `uv run alembic -c alembic-tenant.ini upgrade head` for tenant migrations.
+- Run `uv run alembic -c alembic-control.ini upgrade head` for control plane migrations.
+
+## Two-Database Architecture
+- Control plane DB: tenants, api_keys, tenant_db_routing — never stores media metadata.
+- Tenant DB: libraries, assets, video_scenes, asset_metadata, worker_jobs, search_sync_queue.
+- Always use the tenant DB session in route handlers — middleware resolves it from the API key.
+- Never cross-query between control plane and tenant DB in the same transaction.
+
+## Phase 2 Columns — Do Not Touch
+- `embedding_vector vector(512)` exists on `asset_metadata` — nullable, do not populate or query.
+- `faces`, `people`, `face_person_matches` tables exist — do not populate or query.

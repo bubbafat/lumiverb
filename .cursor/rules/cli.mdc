@@ -1,0 +1,29 @@
+---
+description: CLI agent rules. Active when editing CLI code.
+globs: src/cli/**
+alwaysApply: false
+---
+
+# Lumiverb — CLI Rules
+
+## The CLI is an API Client Only
+- The CLI never touches the tenant DB, Quickwit, or object storage directly.
+- Every operation goes through the API (`/v1/`).
+- The only local state the CLI maintains is a SQLite asset-map cache (SHA256 dedup) —
+  this is the one permitted SQLite use in the entire codebase.
+
+## Proxy & Thumbnail Generation (happens locally before upload)
+- Proxy: JPEG, max 2048px longest side, quality 85, sRGB, generated in-memory (never written to disk as an intermediate).
+- Thumbnail: JPEG, max 400px, quality 80, in-memory.
+- SHA256 dedup: check local SQLite cache before uploading — skip if already known to server.
+- Source files never leave the local machine.
+
+## Command Design
+- All commands log at INFO level by default. No `--verbose` or `--quiet` flags.
+- All polling/scanning commands must have a `--once` flag.
+- Polling loops sleep no more than 5 seconds.
+- CTRL+C exits cleanly with code 0.
+- Always show full `uv run lumiverb ...` commands in help text and docs.
+
+## Reference
+See @docs/cursor-cli.md for full CLI design decisions.

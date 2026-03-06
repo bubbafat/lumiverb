@@ -1,0 +1,32 @@
+---
+description: Testing and environment rules. Always active.
+globs:
+alwaysApply: true
+---
+
+# Lumiverb — Testing & Environment Rules
+
+## Test-Driven
+- Every feature implementation must be accompanied by a pytest test file.
+- Every Alembic migration must have a corresponding test in `tests/test_migrations.py` that:
+  1. Uses `testcontainers` to start a fresh Postgres instance
+  2. Runs `alembic upgrade head`
+  3. Runs `alembic downgrade base` (or `-1`) to verify reversibility
+
+## Test Marks — Required on Every Test
+- `@pytest.mark.fast` — no DB, no AI, pure unit tests, mocks, `tmp_path` only
+- `@pytest.mark.slow` — requires DB via testcontainers Postgres
+- `@pytest.mark.ai` — requires Moondream Station running locally
+- `@pytest.mark.quickwit` — requires dev Quickwit at port 7281
+
+Never leave a test without a mark. Tests must never touch port 7280 (production Quickwit).
+
+## Environment
+- Package manager is `uv`. Always show full `uv` commands — never bare `python` or `pip`.
+- Always use `uv sync --all-extras` — never plain `uv sync` (it drops the dev environment).
+- Docker Compose manages infrastructure (Postgres + Quickwit).
+- The API server and workers run outside Docker in development.
+
+## Timestamps
+- All timestamps stored `WITH TIME ZONE`. Never local time.
+- Display in local time only at the UI layer.

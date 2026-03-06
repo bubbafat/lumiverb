@@ -1,0 +1,47 @@
+---
+description: Frozen algorithm reference. Attach manually with @algorithms when implementing video pipelines, search, or AI workers.
+globs:
+alwaysApply: false
+---
+
+# Lumiverb — Algorithm Reference
+
+These algorithms are extracted from the proven PoC. Do not deviate from them without
+explicit approval. Read the full reference doc before writing any implementation.
+
+## Video Scene Segmentation → @docs/reference/video_scene_segmentation.md
+Key constants — do not change:
+- `PHASH_THRESHOLD = 51` bits (Hamming distance trigger)
+- `TEMPORAL_CEILING_SEC = 30.0` (max scene length)
+- `DEBOUNCE_SEC = 3.0` (minimum time between phash-triggered cuts)
+- `SKIP_FRAMES_BEST = 2` (skip first 2 frames per scene for sharpness selection)
+- `OUT_WIDTH = 480` (FFmpeg pipe width for scene detection pass)
+- `PTS_QUEUE_TIMEOUT = 10.0` (SyncError if FFmpeg hangs)
+
+## Worker Base & Lease → @docs/reference/worker_base_pattern.md
+Key constants — do not change:
+- Lease duration: 10 minutes
+- Heartbeat interval: 15s
+- Stale worker threshold: 60s
+- Idle poll: max 5s
+
+## BM25 Similarity Search → @docs/reference/bm25_similarity_search.md
+Key constants — do not change:
+- `similarity_min_score = 0.65`
+- `similarity_floor = 0.35`
+- `similarity_step = 0.10`
+- `similarity_min_results = 3`
+- Tags appear **twice** in query tokens (BM25 weight boost — do not remove)
+- Score filtering is client-side after HTTP response (Quickwit query-level score syntax not stable)
+- Multi-index routing: one index per AI model version, fetched per request (no cache)
+
+## AI Vision & Metadata → @docs/reference/ai_vision_metadata.md
+Key constants — do not change:
+- `SHARPNESS_MAX_VARIANCE = 1000.0`
+- `MOONDREAM_TIMEOUT = 120s`
+- Face detection confidence: `0.5`
+- Semantic dedup threshold: `85%` (rapidfuzz token ratio)
+- Three Moondream calls per image: caption → tags → OCR
+- Tags: order-preserving dedup, comma-separated answer parsing
+- OCR: store `null` if response is literally `"None"`
+- EXIF: strip all keys starting with `MakerNote` before storing
