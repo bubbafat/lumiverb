@@ -269,7 +269,7 @@ def test_proxy_worker_skips_video(proxy_worker_env, tmp_path: Path) -> None:
 
 @pytest.mark.slow
 def test_proxy_worker_missing_file(proxy_worker_env, tmp_path: Path) -> None:
-    """Missing source file: worker claims job, fails it; next claim returns 204."""
+    """Missing source file: worker claims job, fails it; job status is 'failed' with 'not found' in error."""
     client, api_key, tenant_id = proxy_worker_env
 
     lib_name = "ProxyMissing_" + secrets.token_urlsafe(4)
@@ -314,6 +314,16 @@ def test_proxy_worker_missing_file(proxy_worker_env, tmp_path: Path) -> None:
         headers={"Authorization": f"Bearer {api_key}"},
     )
 
+    r_jobs = client.get(
+        "/v1/jobs",
+        params={"library_id": library["library_id"]},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert r_jobs.status_code == 200
+    jobs = r_jobs.json()
+    assert len(jobs) >= 1
+    job_id = jobs[0]["job_id"]
+
     worker_client = _AuthClient(client, api_key)
     worker = ProxyWorker(
         client=worker_client,
@@ -329,3 +339,13 @@ def test_proxy_worker_missing_file(proxy_worker_env, tmp_path: Path) -> None:
         headers={"Authorization": f"Bearer {api_key}"},
     )
     assert next_resp.status_code == 204
+
+    status_resp = client.get(
+        f"/v1/jobs/{job_id}/status",
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert status_resp.status_code == 200
+    status_data = status_resp.json()
+    assert status_data["status"] == "failed"
+    assert status_data["error_message"] is not None
+    assert "not found" in status_data["error_message"].lower()
