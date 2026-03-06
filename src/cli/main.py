@@ -9,6 +9,7 @@ from rich.table import Table
 
 from src.cli.client import LumiverbClient
 from src.cli.config import load_config, save_config
+from src.cli.scanner import scan_library
 
 app = typer.Typer()
 config_app = typer.Typer(help="Manage API URL and API key.")
@@ -95,7 +96,7 @@ def library_list() -> None:
 
 
 # ---------------------------------------------------------------------------
-# scan (stub)
+# scan
 # ---------------------------------------------------------------------------
 
 
@@ -105,8 +106,29 @@ def scan(
     path: Annotated[str | None, typer.Option("--path", "-p", help="Optional subpath.")] = None,
     force: Annotated[bool, typer.Option("--force", "-f", help="Force rescan.")] = False,
 ) -> None:
-    """Scan a library (or subpath). Not yet implemented."""
-    console.print("[yellow]Not yet implemented.[/yellow]")
+    """Scan a library for media files."""
+    client = LumiverbClient()
+    libraries = client.get("/v1/libraries").json()
+    match = next((lib for lib in libraries if lib["name"] == library), None)
+    if match is None:
+        console.print(f"[red]Library not found: {library}[/red]")
+        raise typer.Exit(1)
+
+    result = scan_library(client, match, path_override=path, force=force)
+
+    # Print summary table
+    table = Table(title=f"Scan complete ({result.scan_id})")
+    table.add_column("Metric")
+    table.add_column("Count", justify="right")
+    table.add_row("Discovered", str(result.files_discovered))
+    table.add_row("Added", str(result.files_added))
+    table.add_row("Updated", str(result.files_updated))
+    table.add_row("Skipped", str(result.files_skipped))
+    table.add_row("Missing", str(result.files_missing))
+    console.print(table)
+
+    if result.status != "complete":
+        raise typer.Exit(1)
 
 
 def main() -> None:

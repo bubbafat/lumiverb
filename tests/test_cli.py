@@ -1,4 +1,4 @@
-"""CLI tests: config, library create/list. All use mocks; no real HTTP or DB."""
+"""CLI tests: config, library create/list, scan. All use mocks; no real HTTP or DB."""
 
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -7,6 +7,7 @@ import pytest
 from typer.testing import CliRunner
 
 from src.cli.main import app
+from src.cli.scanner import ScanResult
 
 runner = CliRunner()
 
@@ -83,3 +84,113 @@ def test_library_list_shows_table() -> None:
     assert "First Lib" in result.output
     assert "Second Lib" in result.output
     mock_client.get.assert_called_once_with("/v1/libraries")
+
+
+@pytest.mark.fast
+def test_scan_aborts_if_root_unreachable() -> None:
+    """Mock scan_library to return ScanResult(status='aborted'); assert output indicates abort and exit code 1."""
+    mock_client = MagicMock()
+    mock_client.get.return_value.json.return_value = [
+        {"library_id": "lib_1", "name": "UnreachableLib", "root_path": "/nonexistent"}
+    ]
+    aborted = ScanResult(
+        scan_id="",
+        files_discovered=0,
+        files_added=0,
+        files_updated=0,
+        files_skipped=0,
+        files_missing=0,
+        status="aborted",
+    )
+
+    with patch("src.cli.main.LumiverbClient", return_value=mock_client), patch(
+        "src.cli.main.scan_library", return_value=aborted
+    ):
+        result = runner.invoke(app, ["scan", "--library", "UnreachableLib"])
+
+    assert result.exit_code == 1
+    assert "Discovered" in result.output
+    assert "0" in result.output
+
+
+@pytest.mark.fast
+def test_scan_shows_conflict_warning(tmp_path: Path) -> None:
+    """Mock client GET /v1/scans/running to return one running scan; patch input to return 'n'; assert warning and abort."""
+    libs = [
+        {
+            "library_id": "lib_1",
+            "name": "ConflictLib",
+            "root_path": str(tmp_path),
+        }
+    ]
+    running = [
+        {"scan_id": "scan_1", "library_id": "lib_1", "started_at": "2025-01-01T00:00:00", "worker_id": None}
+    ]
+    mock_client = MagicMock()
+    mock_client.get.side_effect = [
+        MagicMock(json=lambda: libs),
+        MagicMock(json=lambda: running),
+    ]
+
+    with patch("src.cli.main.LumiverbClient", return_value=mock_client), patch(
+        "src.cli.scanner.input", return_value="n"
+    ):
+        result = runner.invoke(app, ["scan", "--library", "ConflictLib"])
+
+    assert result.exit_code == 1
+    assert "already running" in result.output or "scan_1" in result.output
+
+
+@pytest.mark.fast
+def test_scan_force_skips_warning(tmp_path: Path) -> None:
+    """Pass --force; assert input() never called."""
+    def _json(d):
+        m = MagicMock()
+        m.json.return_value = d
+        return m
+
+    libs = [{"library_id": "lib_1", "name": "ForceLib", "root_path": str(tmp_path)}]
+    running = [{"scan_id": "scan_1", "library_id": "lib_1", "started_at": "2025-01-01T00:00:00", "worker_id": None}]
+    mock_client = MagicMock()
+    mock_client.get.side_effect = [_json(libs), _json(running)]
+    mock_client.post.side_effect = [_json({"scan_id": "scan_1"}), _json({"files_missing": 0})]
+    mock_input = MagicMock()
+
+    with patch("src.cli.main.LumiverbClient", return_value=mock_client), patch(
+        "src.cli.scanner.input", mock_input
+    ):
+        runner.invoke(app, ["scan", "--library", "ForceLib", "--force"])
+
+    mock_input.assert_not_called()
+
+
+@pytest.mark.fast
+def test_scan_prints_summary() -> None:
+    """Mock scan_library to return complete ScanResult with known counts; assert all counts in output."""
+    mock_client = MagicMock()
+    mock_client.get.return_value.json.return_value = [
+        {"library_id": "lib_1", "name": "SummaryLib", "root_path": "/path"}
+    ]
+    complete = ScanResult(
+        scan_id="scan_123",
+        files_discovered=10,
+        files_added=3,
+        files_updated=2,
+        files_skipped=5,
+        files_missing=0,
+        status="complete",
+    )
+
+    with patch("src.cli.main.LumiverbClient", return_value=mock_client), patch(
+        "src.cli.main.scan_library", return_value=complete
+    ):
+        result = runner.invoke(app, ["scan", "--library", "SummaryLib"])
+
+    assert result.exit_code == 0
+    assert "10" in result.output
+    assert "3" in result.output
+    assert "2" in result.output
+    assert "5" in result.output
+    assert "0" in result.output
+    assert "Discovered" in result.output
+    assert "Added" in result.output

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlmodel import Session, select
 
-from src.models.tenant import Library, Scan
+from src.models.tenant import Asset, Library, Scan
 from ulid import ULID
 
 
@@ -62,8 +62,8 @@ class LibraryRepository:
         library.scan_status = status
         if status in ("complete", "error"):
             library.last_scan_at = _utcnow()
-            if error is not None:
-                library.last_scan_error = error
+        if error is not None:
+            library.last_scan_error = error
         self._session.add(library)
         self._session.commit()
         self._session.refresh(library)
@@ -81,15 +81,18 @@ class ScanRepository:
         library_id: str,
         root_path_override: str | None = None,
         worker_id: str | None = None,
+        status: str = "running",
+        error_message: str | None = None,
     ) -> Scan:
         """Generate scan_id as scan_ + ULID(), insert, return Scan."""
         scan_id = "scan_" + str(ULID())
         scan = Scan(
             scan_id=scan_id,
             library_id=library_id,
-            status="running",
+            status=status,
             root_path_override=root_path_override,
             worker_id=worker_id,
+            error_message=error_message,
         )
         self._session.add(scan)
         self._session.commit()
@@ -141,3 +144,95 @@ class ScanRepository:
         self._session.commit()
         self._session.refresh(scan)
         return scan
+
+
+class AssetRepository:
+    """Repository for assets table."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def get_by_library_and_rel_path(self, library_id: str, rel_path: str) -> Asset | None:
+        """Return asset by (library_id, rel_path) or None."""
+        stmt = select(Asset).where(
+            Asset.library_id == library_id,
+            Asset.rel_path == rel_path,
+        )
+        return self._session.exec(stmt).first()
+
+    def create_for_scan(
+        self,
+        library_id: str,
+        rel_path: str,
+        file_size: int,
+        file_mtime: datetime | None,
+        media_type: str,
+        scan_id: str,
+    ) -> Asset:
+        """Create asset with status='pending', availability='online', last_scan_id=scan_id."""
+        asset_id = "ast_" + str(ULID())
+        asset = Asset(
+            asset_id=asset_id,
+            library_id=library_id,
+            rel_path=rel_path,
+            file_size=file_size,
+            file_mtime=file_mtime,
+            media_type=media_type,
+            status="pending",
+            availability="online",
+            last_scan_id=scan_id,
+        )
+        self._session.add(asset)
+        self._session.commit()
+        self._session.refresh(asset)
+        return asset
+
+    def update_for_scan(
+        self,
+        asset_id: str,
+        file_size: int,
+        file_mtime: datetime | None,
+        availability: str,
+        status: str,
+        last_scan_id: str,
+    ) -> Asset:
+        """Update asset file_size, file_mtime, availability, status, last_scan_id."""
+        asset = self._session.get(Asset, asset_id)
+        if asset is None:
+            raise ValueError(f"Asset not found: {asset_id}")
+        asset.file_size = file_size
+        asset.file_mtime = file_mtime
+        asset.availability = availability
+        asset.status = status
+        asset.last_scan_id = last_scan_id
+        self._session.add(asset)
+        self._session.commit()
+        self._session.refresh(asset)
+        return asset
+
+    def touch_for_scan(self, asset_id: str, last_scan_id: str) -> Asset:
+        """Update last_scan_id and availability='online' only (for skipped)."""
+        asset = self._session.get(Asset, asset_id)
+        if asset is None:
+            raise ValueError(f"Asset not found: {asset_id}")
+        asset.last_scan_id = last_scan_id
+        asset.availability = "online"
+        self._session.add(asset)
+        self._session.commit()
+        self._session.refresh(asset)
+        return asset
+
+    def mark_missing_for_scan(self, library_id: str, scan_id: str) -> int:
+        """Set availability='missing' for assets in library not seen in this scan (online only). Return count updated."""
+        stmt = (
+            select(Asset)
+            .where(Asset.library_id == library_id)
+            .where(Asset.availability == "online")
+            .where((Asset.last_scan_id != scan_id) | (Asset.last_scan_id.is_(None)))
+        )
+        assets = list(self._session.exec(stmt).all())
+        for asset in assets:
+            asset.availability = "missing"
+            self._session.add(asset)
+        self._session.commit()
+        return len(assets)

@@ -79,6 +79,10 @@ class Asset(SQLModel, table=True):
     rel_path: str = Field(nullable=False)
     sha256: str | None = Field(default=None, nullable=True)
     file_size: int = Field(nullable=False)
+    file_mtime: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
     media_type: str = Field(nullable=False)
     width: int | None = Field(default=None, nullable=True)
     height: int | None = Field(default=None, nullable=True)

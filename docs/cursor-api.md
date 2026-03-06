@@ -56,6 +56,21 @@ All under `/v1/libraries`; require tenant auth (middleware).
 - **POST /v1/libraries** — Body: `{ "name", "root_path" }`. Name must be unique per tenant (409 if duplicate). Returns `{ "library_id", "name", "root_path", "scan_status" }` (scan_status initially `"idle"`).
 - **GET /v1/libraries** — Returns list of libraries with `library_id`, `name`, `root_path`, `scan_status`, `last_scan_at`.
 
+## Scans API
+
+All under `/v1/scans`; require tenant auth.
+
+- **POST /v1/scans** — Body: `{ "library_id", "status": "running|aborted|error", "root_path_override": null, "worker_id": null, "error_message": null }`. Creates scan record; if status is `running` sets library `scan_status` to `"scanning"`; if `aborted` or `error` updates library `scan_status` and `last_scan_error`. Returns `{ "scan_id" }`.
+- **GET /v1/scans/running?library_id=** — Returns list of running scans: `{ "scan_id", "library_id", "started_at", "worker_id" }`.
+- **POST /v1/scans/{scan_id}/complete** — Body: `{ "files_discovered", "files_added", "files_updated", "files_skipped" }`. Marks assets not seen in this scan as missing, completes scan, updates library `scan_status` and `last_scan_at`. Returns `{ "scan_id", "files_missing" }`.
+- **POST /v1/scans/{scan_id}/abort** — Body: `{ "error_message": null }`. Aborts scan, updates library `scan_status` to `"error"` or `"aborted"`. Returns `{ "scan_id", "status" }`.
+
+## Assets API (scan upsert)
+
+All under `/v1/assets`; require tenant auth.
+
+- **POST /v1/assets/upsert** — Body: `{ "library_id", "rel_path", "file_size", "file_mtime" (ISO8601), "media_type", "scan_id", "force": false }`. Upserts by `(library_id, rel_path)`: create if not found (`action: "added"`); if found and `force` or size/mtime/sha256 changed then update (`action: "updated"`); if found and unchanged (sha256 set, size/mtime same) then touch only (`action: "skipped"`). Returns `{ "action": "added|updated|skipped" }`.
+
 ## Admin API
 
 Admin routes live under `/v1/admin` and require `Authorization: Bearer {ADMIN_KEY}` (not tenant API keys). If `ADMIN_KEY` is not set, admin routes return 500.
