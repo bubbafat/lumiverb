@@ -38,10 +38,13 @@ class Settings(BaseSettings):
 
     # App
     app_env: str = "development"
-    log_level: str = "INFO"
+    log_level: str = "DEBUG"
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-
+    model_config = SettingsConfigDict(
+        env_file=(".env", ".env.local"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

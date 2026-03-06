@@ -12,40 +12,33 @@ license = {text = "MIT"}
 
 dependencies = [
     # API & web framework
-    "fastapi>=0.115",
+    "fastapi[standard]>=0.115",
     "uvicorn[standard]>=0.32",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
-
     # Database
     "sqlmodel>=0.0.14",
     "alembic>=1.13",
     "psycopg2-binary>=2.9",
     "pgvector>=0.3.0",       # pgvector Python client (phase 2: face embeddings)
-
     # CLI (local agent)
     "typer>=0.12",
     "rich>=13.0",
     "httpx>=0.27",
-
     # Image processing
     "pillow>=10.0",
     "rawpy>=0.26.1",          # RAW format support (CR2, NEF, ARW, DNG, etc.)
     "pyvips>=3.1.1",          # Fast proxy/thumbnail generation (libvips)
-
     # Video processing
     "imagehash>=4.3.0",       # pHash for scene segmentation
     "opencv-python-headless>=4.8.0",  # Laplacian sharpness, frame manipulation
-
     # AI & metadata
     "requests>=2.25",         # Moondream Station HTTP client
     "pyexiftool>=0.5",        # EXIF metadata extraction
     "mediapipe>=0.10.0,<0.11",  # Face detection (BlazeFace)
     "rapidfuzz>=3.0.0",       # Semantic deduplication (scene merge)
-
     # Search
     "PyYAML>=6.0",
-
     # Utilities
     "python-ulid>=2.0",
     "reverse_geocoder>=1.5",  # GPS → country/region/city

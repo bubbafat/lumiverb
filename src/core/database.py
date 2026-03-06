@@ -75,7 +75,8 @@ def provision_tenant_database(tenant_id: str) -> None:
     url_obj = make_url(tenant_url)
 
     # Connect to default 'postgres' database to create the tenant database
-    postgres_url = str(url_obj.set(database="postgres"))
+    postgres_url = str(url_obj.set(database="control_plane"))
+
     engine = create_engine(postgres_url, isolation_level="AUTOCOMMIT")
 
     # Quote identifier for CREATE DATABASE (preserve case, prevent injection)

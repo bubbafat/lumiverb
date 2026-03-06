@@ -8,24 +8,23 @@
 #   docker compose down -v        # stop AND wipe all data
 
 services:
-
   postgres:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     container_name: lumiverb-postgres
     environment:
       POSTGRES_USER: app
       POSTGRES_PASSWORD: secret
       POSTGRES_DB: control_plane
+      POSTGRES_HOST_AUTH_METHOD: md5
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # Init script enables pgvector and creates the app role on first start
       - ./scripts/docker/postgres-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./scripts/docker/02-pg-hba.sh:/docker-entrypoint-initdb.d/02-pg-hba.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U app -d control_plane"]
       interval: 5s
-      timeout: 5s
       retries: 10
     restart: unless-stopped
 
