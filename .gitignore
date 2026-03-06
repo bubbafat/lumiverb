@@ -37,6 +37,7 @@ __pypackages__/
 .env.*
 !.env.example
 .envrc
+.env.local
 *.pem
 *.key
 secrets/
