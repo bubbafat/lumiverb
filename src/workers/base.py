@@ -23,10 +23,12 @@ class BaseWorker:
         tenant_session: Session,
         concurrency: int = 1,
         once: bool = False,
+        library_id: str | None = None,
     ) -> None:
         self._session = tenant_session
         self._concurrency = concurrency
         self._once = once
+        self._library_id = library_id
         self._worker_id = f"worker_{uuid.uuid4().hex[:12]}"
         self._job_repo = WorkerJobRepository(tenant_session)
         self._settings = get_settings()
@@ -37,6 +39,7 @@ class BaseWorker:
             job_type=self.job_type,
             worker_id=self._worker_id,
             lease_minutes=self._settings.worker_lease_minutes,
+            library_id=self._library_id,
         )
 
     def process(self, job: WorkerJob) -> None:

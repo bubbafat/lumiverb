@@ -310,6 +310,7 @@ class WorkerJobRepository:
         job_type: str,
         worker_id: str,
         lease_minutes: int,
+        library_id: str | None = None,
     ) -> WorkerJob | None:
         """Claim next pending (or expired claimed) job with FOR UPDATE SKIP LOCKED. Return None if none."""
         now = _utcnow()
@@ -325,7 +326,12 @@ class WorkerJobRepository:
                     ),
                 )
             )
-            .order_by(WorkerJob.created_at)
+        )
+        if library_id is not None:
+            stmt = stmt.join(Asset, WorkerJob.asset_id == Asset.asset_id)
+            stmt = stmt.where(Asset.library_id == library_id)
+        stmt = (
+            stmt.order_by(WorkerJob.created_at)
             .limit(1)
             .with_for_update(skip_locked=True)
         )

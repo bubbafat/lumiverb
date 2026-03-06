@@ -49,6 +49,16 @@ When writing queries, always use the tenant DB session, not the control plane se
 
 Tenant resolution runs for every request except `/health` and `/v1/admin/*`: reads `Authorization: Bearer <token>`, validates via control plane `ApiKeyRepository.get_by_plaintext`, touches `last_used_at`, looks up `TenantDbRouting` for the connection string, and stores `tenant_id` and `connection_string` in `request.state`. Use the `get_tenant_session` dependency in route handlers to obtain a tenant DB session.
 
+## Tenant Context
+
+- **GET /v1/tenant/context** — Tenant auth required. Returns `{ "tenant_id", "connection_string" }`. CLI/worker use this to open a direct tenant DB session. Treat `connection_string` as a secret — never log it.
+
+## Jobs API
+
+All under `/v1/jobs`; require tenant auth.
+
+- **POST /v1/jobs/enqueue** — Body: `{ "library_id", "job_type" }`. Only `job_type: "proxy"` is supported for now. Creates worker_jobs for all pending assets in the library that don’t already have a pending/claimed proxy job. Returns `{ "enqueued" }` (count of jobs created).
+
 ## Libraries API
 
 All under `/v1/libraries`; require tenant auth (middleware).

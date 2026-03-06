@@ -28,8 +28,14 @@ class ProxyWorker(BaseWorker):
         tenant_id: str,
         concurrency: int = 1,
         once: bool = False,
+        library_id: str | None = None,
     ) -> None:
-        super().__init__(tenant_session, concurrency=concurrency, once=once)
+        super().__init__(
+            tenant_session,
+            concurrency=concurrency,
+            once=once,
+            library_id=library_id,
+        )
         self._tenant_id = tenant_id
         self._asset_repo = AssetRepository(tenant_session)
         self._library_repo = LibraryRepository(tenant_session)

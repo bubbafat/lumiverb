@@ -130,6 +130,7 @@ def test_scan_registers_signal_handlers(tmp_path: Path) -> None:
     mock_client.post.side_effect = [
         _json({"scan_id": "scan_1"}),
         _json({"files_missing": 0}),
+        _json({"enqueued": 0}),  # enqueue after complete
     ]
     with patch("src.cli.main.LumiverbClient", return_value=mock_client), patch(
         "src.cli.scanner.signal.signal"
@@ -202,6 +203,15 @@ def test_scan_force_skips_warning(tmp_path: Path) -> None:
         runner.invoke(app, ["scan", "--library", "ForceLib", "--force"])
 
     mock_input.assert_not_called()
+
+
+@pytest.mark.fast
+def test_worker_proxy_command_exists() -> None:
+    """Worker proxy command exists and shows --once and --concurrency."""
+    result = runner.invoke(app, ["worker", "proxy", "--help"])
+    assert result.exit_code == 0
+    assert "--once" in result.output
+    assert "--concurrency" in result.output
 
 
 @pytest.mark.fast

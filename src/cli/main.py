@@ -96,6 +96,54 @@ def library_list() -> None:
 
 
 # ---------------------------------------------------------------------------
+# worker
+# ---------------------------------------------------------------------------
+
+worker_app = typer.Typer(help="Run background workers.")
+app.add_typer(worker_app, name="worker")
+
+
+@worker_app.command("proxy")
+def worker_proxy(
+    once: bool = typer.Option(False, "--once", help="Process all queued jobs then exit."),
+    concurrency: int = typer.Option(1, "--concurrency", help="Number of parallel workers."),
+    library: str = typer.Option(None, "--library", help="Only process jobs for this library."),
+) -> None:
+    """Generate proxies and thumbnails for pending image assets."""
+    from src.core.database import get_engine_for_url
+    from src.workers.proxy import ProxyWorker
+    from sqlmodel import Session
+
+    client = LumiverbClient()
+
+    # Resolve tenant context
+    ctx = client.get("/v1/tenant/context").json()
+    tenant_id = ctx["tenant_id"]
+    connection_string = ctx["connection_string"]
+
+    # Optionally resolve library name to library_id
+    library_id: str | None = None
+    if library:
+        libraries = client.get("/v1/libraries").json()
+        match = next((l for l in libraries if l["name"] == library), None)
+        if match is None:
+            typer.echo(f"Library not found: {library}", err=True)
+            raise typer.Exit(1)
+        library_id = match["library_id"]
+
+    engine = get_engine_for_url(connection_string)
+    with Session(engine) as session:
+        worker = ProxyWorker(
+            tenant_session=session,
+            tenant_id=tenant_id,
+            concurrency=concurrency,
+            once=once,
+            library_id=library_id,
+        )
+        worker.run()
+
+
+# ---------------------------------------------------------------------------
 # scan
 # ---------------------------------------------------------------------------
 
@@ -126,6 +174,15 @@ def scan(
     table.add_row("Skipped", str(result.files_skipped))
     table.add_row("Missing", str(result.files_missing))
     console.print(table)
+
+    if result.status == "complete":
+        library_id = match["library_id"]
+        enqueue_resp = client.post(
+            "/v1/jobs/enqueue",
+            json={"library_id": library_id, "job_type": "proxy"},
+        ).json()
+        enqueued = enqueue_resp.get("enqueued", 0)
+        typer.echo(f"Enqueued {enqueued} proxy jobs.")
 
     if result.status != "complete":
         raise typer.Exit(1)
