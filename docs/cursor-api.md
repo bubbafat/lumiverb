@@ -47,6 +47,14 @@ pgvector extension is enabled at provisioning time. The `vector(512)` columns ex
 
 When writing queries, always use the tenant DB session, not the control plane session. The middleware resolves this from the API key before the route handler runs.
 
+## Admin API
+
+Admin routes live under `/v1/admin` and require `Authorization: Bearer {ADMIN_KEY}` (not tenant API keys). If `ADMIN_KEY` is not set, admin routes return 500.
+
+- **POST /v1/admin/tenants** — Body: `{ "name", "plan": "free|pro|enterprise", "email" }`. Creates tenant, provisions tenant DB (pgvector + Alembic), creates routing row, creates default API key. Returns `{ "tenant_id", "api_key", "database": "provisioned" }`. On failure, cleans up and returns 500.
+- **GET /v1/admin/tenants** — Returns list of tenants with `tenant_id`, `name`, `plan`, `status` (no API keys).
+- **DELETE /v1/admin/tenants/{tenant_id}** — Soft delete: sets tenant status to `deleted`, revokes all API keys. Returns 204.
+
 ## Worker Job Pattern
 
 Workers use lease-based claiming to prevent duplicate processing:
