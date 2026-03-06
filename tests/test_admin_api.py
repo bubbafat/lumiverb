@@ -35,9 +35,9 @@ def _run_control_migrations(url: str) -> None:
     assert result.returncode == 0, (result.stdout, result.stderr)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def admin_client() -> TestClient:
-    """FastAPI TestClient with control plane DB and ADMIN_KEY set; provision_tenant_database mocked."""
+    """FastAPI TestClient with control plane DB and ADMIN_KEY set; provision_tenant_database mocked. One container per module."""
     with PostgresContainer("pgvector/pgvector:pg16") as postgres:
         url = postgres.get_connection_url()
         url = _ensure_psycopg2(url)

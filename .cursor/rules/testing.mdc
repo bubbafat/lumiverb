@@ -21,6 +21,16 @@ alwaysApply: true
 
 Never leave a test without a mark. Tests must never touch port 7280 (production Quickwit).
 
+## Test Data
+- Tests that write to a shared database must use unique identifiers (ULIDs, UUIDs,
+  or secrets.token_urlsafe) for all created records to avoid state bleed between
+  tests in the same module.
+- Never use hardcoded IDs or predictable values like "test-tenant-1" as primary keys
+  in tests — these will collide when fixtures are scoped to module or session.
+- Fixture scope preference: use `scope="module"` for container/engine fixtures,
+  `scope="function"` for sessions if rollback isolation is needed, but prefer
+  module-scoped sessions when tests use unique IDs and don't interfere.
+
 ## Environment
 - Package manager is `uv`. Always show full `uv` commands — never bare `python` or `pip`.
 - Always use `uv sync --all-extras` — never plain `uv sync` (it drops the dev environment).

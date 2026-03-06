@@ -38,9 +38,9 @@ def _run_control_migrations(url: str) -> None:
     assert result.returncode == 0, (result.stdout, result.stderr)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def control_plane_session() -> Session:
-    """Fresh Postgres with control plane schema; yield a Session."""
+    """Postgres with control plane schema; one container shared across module. Yields a Session."""
     with PostgresContainer("pgvector/pgvector:pg16") as postgres:
         url = postgres.get_connection_url()
         url = _ensure_psycopg2(url)
