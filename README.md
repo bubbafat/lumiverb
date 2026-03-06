@@ -1,4 +1,4 @@
-# [product-name]
+# Lumiverb
 
 > AI-powered photo and video library management for serious photographers.
 > Find any image or moment in a library of 100,000+ assets using natural language.
@@ -101,16 +101,16 @@ uv run uvicorn src.api.main:app --reload --port 8000
 ### 6. Provision a tenant and get an API key
 
 ```bash
-uv run photodb admin tenant create --name "My Library" --email me@example.com
+uv run lumiverb admin tenant create --name "My Library" --email me@example.com
 # Returns: tenant_id, api_key
 ```
 
 ### 7. Scan your first library
 
 ```bash
-uv run photodb config set --api-url http://localhost:8000 --api-key <your-key>
-uv run photodb library create "My Photos" /path/to/photos
-uv run photodb scan
+uv run lumiverb config set --api-url http://localhost:8000 --api-key <your-key>
+uv run lumiverb library create "My Photos" /path/to/photos
+uv run lumiverb scan
 ```
 
 ### 8. Start workers
@@ -118,10 +118,10 @@ uv run photodb scan
 In separate terminals (or use a process manager):
 
 ```bash
-uv run photodb worker proxy --once         # generate proxies and thumbnails
-uv run photodb worker ai --mode light      # run Moondream vision analysis
-uv run photodb worker metadata --phase exif
-uv run photodb worker search-sync          # push to Quickwit
+uv run lumiverb worker proxy --once         # generate proxies and thumbnails
+uv run lumiverb worker ai --mode light      # run Moondream vision analysis
+uv run lumiverb worker metadata --phase exif
+uv run lumiverb worker search-sync          # push to Quickwit
 ```
 
 > **Note:** AI workers require [Moondream Station](https://moondream.ai) running locally.
@@ -130,7 +130,7 @@ uv run photodb worker search-sync          # push to Quickwit
 ### 9. Search
 
 ```bash
-uv run photodb search "golden hour portraits"
+uv run lumiverb search "golden hour portraits"
 # or via API:
 curl "http://localhost:8000/v1/search?q=golden+hour+portraits" \
   -H "Authorization: Bearer <your-key>"

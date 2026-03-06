@@ -1,4 +1,4 @@
-# [PRODUCTNAME] API — Cursor Context
+# Lumiverb API — Cursor Context
 *Feed this to Cursor when working on the API server. These decisions are final — do not relitigate them.*
 
 ---

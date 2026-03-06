@@ -1,11 +1,11 @@
-# [PRODUCTNAME] — Architecture Document
+# Lumiverb — Architecture Document
 *Version 1.0 | Working document — name TBD*
 
 ---
 
 ## 1. Product Overview
 
-[PRODUCTNAME] is an AI-powered photo and video library management system for professional photographers, videographers, and serious hobbyists. It provides intelligent search, similarity discovery, and metadata enrichment across large personal media libraries (25,000+ assets).
+Lumiverb is an AI-powered photo and video library management system for professional photographers, videographers, and serious hobbyists. It provides intelligent search, similarity discovery, and metadata enrichment across large personal media libraries (25,000+ assets).
 
 It is not a photo editor. It is not a cloud backup service. It is the intelligent index and search layer that sits on top of your existing file storage.
 

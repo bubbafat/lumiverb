@@ -11,7 +11,7 @@ services:
 
   postgres:
     image: postgres:16
-    container_name: photodb-postgres
+    container_name: lumiverb-postgres
     environment:
       POSTGRES_USER: app
       POSTGRES_PASSWORD: secret
@@ -31,7 +31,7 @@ services:
 
   quickwit:
     image: quickwit/quickwit:0.8.1
-    container_name: photodb-quickwit
+    container_name: lumiverb-quickwit
     ports:
       - "7280:7280"   # production / main
     volumes:

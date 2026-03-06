@@ -9,7 +9,7 @@ services:
 
   quickwit-dev:
     image: quickwit/quickwit:0.8.1
-    container_name: photodb-quickwit-dev
+    container_name: lumiverb-quickwit-dev
     ports:
       - "7281:7280"
     volumes:
