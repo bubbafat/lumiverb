@@ -2,12 +2,13 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session
 from src.repository.tenant import LibraryRepository
+from src.workers.quickwit import purge_library_from_quickwit
 
 router = APIRouter(prefix="/v1/libraries", tags=["libraries"])
 
@@ -30,6 +31,11 @@ class LibraryListItem(BaseModel):
     root_path: str
     scan_status: str
     last_scan_at: str | None
+    status: str = "active"
+
+
+class EmptyTrashResponse(BaseModel):
+    deleted: int
 
 
 @router.post("", response_model=LibraryResponse)
@@ -57,10 +63,11 @@ def create_library(
 @router.get("", response_model=list[LibraryListItem])
 def list_libraries(
     session: Annotated[Session, Depends(get_tenant_session)],
+    include_trashed: Annotated[bool, Query(description="Include libraries with status=trashed")] = False,
 ) -> list[LibraryListItem]:
-    """Return all libraries for the tenant with id, name, root_path, scan_status, last_scan_at."""
+    """Return all libraries for the tenant with id, name, root_path, scan_status, last_scan_at, status."""
     repo = LibraryRepository(session)
-    libraries = repo.list_all()
+    libraries = repo.list_all(include_trashed=include_trashed)
     return [
         LibraryListItem(
             library_id=lib.library_id,
@@ -68,6 +75,40 @@ def list_libraries(
             root_path=lib.root_path,
             scan_status=lib.scan_status,
             last_scan_at=lib.last_scan_at.isoformat() if lib.last_scan_at else None,
+            status=lib.status,
         )
         for lib in libraries
     ]
+
+
+@router.post("/empty-trash", response_model=EmptyTrashResponse)
+def empty_trash(
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> EmptyTrashResponse:
+    """Hard delete all trashed libraries for this tenant. Returns count of libraries deleted."""
+    repo = LibraryRepository(session)
+    trashed = repo.get_trashed()
+    deleted = 0
+    for lib in trashed:
+        purge_library_from_quickwit(lib.library_id)
+        repo.hard_delete(lib.library_id)
+        deleted += 1
+    return EmptyTrashResponse(deleted=deleted)
+
+
+@router.delete("/{library_id}", status_code=204)
+def delete_library(
+    library_id: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> None:
+    """Soft delete: move library to trash (status=trashed), cancel pending/claimed jobs. Returns 409 if already trashed."""
+    repo = LibraryRepository(session)
+    library = repo.get_by_id(library_id)
+    if library is None:
+        raise HTTPException(status_code=404, detail="Library not found")
+    try:
+        repo.trash(library_id)
+    except ValueError as e:
+        if "already trashed" in str(e):
+            raise HTTPException(status_code=409, detail="Library is already in trash") from e
+        raise

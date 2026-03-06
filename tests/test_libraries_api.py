@@ -189,3 +189,144 @@ def test_create_library_requires_auth(libraries_client: tuple[TestClient, str]) 
         json={"name": "NoAuth", "root_path": "/nope"},
     )
     assert r.status_code == 401
+
+
+@pytest.mark.slow
+def test_delete_library_soft_deletes(libraries_client: tuple[TestClient, str]) -> None:
+    """Create library, call DELETE /v1/libraries/{library_id}; assert 204, then GET without include_trashed excludes it, GET with include_trashed=true includes it with status=trashed."""
+    client, api_key = libraries_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+    r = client.post(
+        "/v1/libraries",
+        json={"name": "ToTrash", "root_path": "/trash"},
+        headers=auth,
+    )
+    assert r.status_code == 200
+    library_id = r.json()["library_id"]
+
+    r_del = client.delete(f"/v1/libraries/{library_id}", headers=auth)
+    assert r_del.status_code == 204
+
+    r_list = client.get("/v1/libraries", headers=auth)
+    assert r_list.status_code == 200
+    libraries = r_list.json()
+    assert not any(lib["library_id"] == library_id for lib in libraries)
+
+    r_list_all = client.get("/v1/libraries", params={"include_trashed": True}, headers=auth)
+    assert r_list_all.status_code == 200
+    libraries_all = r_list_all.json()
+    trashed = [lib for lib in libraries_all if lib["library_id"] == library_id]
+    assert len(trashed) == 1
+    assert trashed[0]["status"] == "trashed"
+
+
+@pytest.mark.slow
+def test_delete_library_cancels_pending_jobs(libraries_client: tuple[TestClient, str]) -> None:
+    """Create library, create asset, create pending worker job; DELETE library; query worker_jobs directly: assert status=cancelled."""
+    client, api_key = libraries_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+
+    r_lib = client.post(
+        "/v1/libraries",
+        json={"name": "JobLib_" + __import__("secrets").token_urlsafe(6), "root_path": "/job"},
+        headers=auth,
+    )
+    assert r_lib.status_code == 200
+    library_id = r_lib.json()["library_id"]
+
+    r_scan = client.post(
+        "/v1/scans",
+        json={"library_id": library_id, "status": "running"},
+        headers=auth,
+    )
+    assert r_scan.status_code == 200
+    scan_id = r_scan.json()["scan_id"]
+
+    client.post(
+        "/v1/assets/upsert",
+        json={
+            "library_id": library_id,
+            "rel_path": "img.jpg",
+            "file_size": 1000,
+            "file_mtime": "2025-01-01T12:00:00Z",
+            "media_type": "image/jpeg",
+            "scan_id": scan_id,
+        },
+        headers=auth,
+    )
+
+    client.post(
+        f"/v1/scans/{scan_id}/complete",
+        json={"files_discovered": 1, "files_added": 1, "files_updated": 0, "files_skipped": 0},
+        headers=auth,
+    )
+
+    r_enq = client.post(
+        "/v1/jobs/enqueue",
+        json={"library_id": library_id, "job_type": "proxy"},
+        headers=auth,
+    )
+    assert r_enq.status_code == 200
+    assert r_enq.json()["enqueued"] >= 1
+
+    client.delete(f"/v1/libraries/{library_id}", headers=auth)
+
+    ctx = client.get("/v1/tenant/context", headers=auth).json()
+    conn_str = _ensure_psycopg2(ctx["connection_string"])
+    engine = create_engine(conn_str)
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT w.status FROM worker_jobs w "
+                "JOIN assets a ON w.asset_id = a.asset_id WHERE a.library_id = :lib_id"
+            ),
+            {"lib_id": library_id},
+        ).fetchone()
+    engine.dispose()
+    assert row is not None
+    assert row[0] == "cancelled"
+
+
+@pytest.mark.slow
+def test_empty_trash_hard_deletes(libraries_client: tuple[TestClient, str]) -> None:
+    """Create library, trash it, call POST /v1/libraries/empty-trash; assert response deleted=1 and library gone from DB."""
+    client, api_key = libraries_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+
+    r = client.post(
+        "/v1/libraries",
+        json={"name": "HardDelLib", "root_path": "/hard"},
+        headers=auth,
+    )
+    assert r.status_code == 200
+    library_id = r.json()["library_id"]
+
+    client.delete(f"/v1/libraries/{library_id}", headers=auth)
+
+    r_empty = client.post("/v1/libraries/empty-trash", headers=auth)
+    assert r_empty.status_code == 200
+    deleted = r_empty.json()["deleted"]
+    assert deleted >= 1, "empty-trash should have deleted at least our library"
+
+    r_list = client.get("/v1/libraries", params={"include_trashed": True}, headers=auth)
+    assert r_list.status_code == 200
+    assert not any(lib["library_id"] == library_id for lib in r_list.json()), "our library should be gone"
+
+
+@pytest.mark.slow
+def test_delete_already_trashed_returns_409(libraries_client: tuple[TestClient, str]) -> None:
+    """Trash a library, then try DELETE again; assert 409."""
+    client, api_key = libraries_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+
+    r = client.post(
+        "/v1/libraries",
+        json={"name": "AlreadyTrashed", "root_path": "/x"},
+        headers=auth,
+    )
+    assert r.status_code == 200
+    library_id = r.json()["library_id"]
+
+    client.delete(f"/v1/libraries/{library_id}", headers=auth)
+    r_again = client.delete(f"/v1/libraries/{library_id}", headers=auth)
+    assert r_again.status_code == 409

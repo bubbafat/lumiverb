@@ -74,7 +74,7 @@ def library_create(
 
 @library_app.command("list")
 def library_list() -> None:
-    """List all libraries for the current tenant."""
+    """List all libraries for the current tenant (trashed libraries are hidden by default)."""
     client = LumiverbClient()
     resp = client.get("/v1/libraries")
     libraries = resp.json()
@@ -93,6 +93,56 @@ def library_list() -> None:
             lib.get("last_scan_at") or "—",
         )
     console.print(table)
+
+
+@library_app.command("delete")
+def library_delete(
+    name: Annotated[str, typer.Argument(help="Library name to move to trash.")],
+) -> None:
+    """Move a library to trash (soft delete). Use 'lumiverb library empty-trash' to permanently delete."""
+    client = LumiverbClient()
+    resp = client.get("/v1/libraries")
+    libraries = resp.json()
+    match = next((lib for lib in libraries if lib.get("name") == name), None)
+    if match is None:
+        console.print(f"[red]Library not found: {name}[/red]")
+        raise typer.Exit(1)
+    library_id = match["library_id"]
+    confirm = typer.confirm(
+        f"Delete library '{name}'? This moves it to trash. [y/N]",
+        default=False,
+    )
+    if not confirm:
+        console.print("Aborted.")
+        raise typer.Exit(0)
+    client.delete(f"/v1/libraries/{library_id}")
+    console.print(f"Library '{name}' moved to trash.")
+    console.print("Run 'lumiverb library empty-trash' to permanently delete.")
+
+
+@library_app.command("empty-trash")
+def library_empty_trash() -> None:
+    """Permanently delete all libraries in trash and their assets."""
+    client = LumiverbClient()
+    resp = client.get("/v1/libraries", params={"include_trashed": True})
+    libraries = resp.json()
+    trashed = [lib for lib in libraries if lib.get("status") == "trashed"]
+    if not trashed:
+        console.print("Trash is empty.")
+        raise typer.Exit(0)
+    for lib in trashed:
+        console.print(f"  {lib.get('name', '')} ({lib.get('library_id', '')})")
+    confirm = typer.confirm(
+        f"Permanently delete {len(trashed)} libraries and all their assets? [y/N]",
+        default=False,
+    )
+    if not confirm:
+        console.print("Aborted.")
+        raise typer.Exit(0)
+    empty_resp = client.post("/v1/libraries/empty-trash")
+    data = empty_resp.json()
+    n = data.get("deleted", 0)
+    console.print(f"Deleted {n} libraries.")
 
 
 # ---------------------------------------------------------------------------

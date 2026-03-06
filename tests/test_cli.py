@@ -88,6 +88,82 @@ def test_library_list_shows_table() -> None:
 
 
 @pytest.mark.fast
+def test_library_delete_requires_confirmation() -> None:
+    """Mock client.get to return one library, mock input to return 'n'; assert DELETE never called, exit code 0."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = [
+        {"library_id": "lib_01DEL", "name": "ToDelete", "root_path": "/path", "scan_status": "idle", "status": "active"},
+    ]
+    mock_client = MagicMock()
+    mock_client.get.return_value = mock_response
+
+    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+        result = runner.invoke(app, ["library", "delete", "ToDelete"], input="n")
+
+    assert result.exit_code == 0
+    assert "Aborted" in result.output
+    mock_client.delete.assert_not_called()
+
+
+@pytest.mark.fast
+def test_library_delete_confirms_and_calls_api() -> None:
+    """Mock client.get to return one library, mock input to return 'y'; assert DELETE /v1/libraries/{id} called, success message printed."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = [
+        {"library_id": "lib_01DEL", "name": "ToDelete", "root_path": "/path", "scan_status": "idle", "status": "active"},
+    ]
+    mock_client = MagicMock()
+    mock_client.get.return_value = mock_response
+    mock_client.delete.return_value = MagicMock(status_code=204)
+
+    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+        result = runner.invoke(app, ["library", "delete", "ToDelete"], input="y")
+
+    assert result.exit_code == 0
+    assert "moved to trash" in result.output
+    assert "empty-trash" in result.output
+    mock_client.delete.assert_called_once()
+    call_args = mock_client.delete.call_args[0]
+    assert call_args[0] == "/v1/libraries/lib_01DEL"
+
+
+@pytest.mark.fast
+def test_library_empty_trash_aborts_if_none() -> None:
+    """Mock GET /v1/libraries?include_trashed=true to return []; assert 'Trash is empty.' printed, exit 0."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = []
+    mock_client = MagicMock()
+    mock_client.get.return_value = mock_response
+
+    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+        result = runner.invoke(app, ["library", "empty-trash"])
+
+    assert result.exit_code == 0
+    assert "Trash is empty" in result.output
+    mock_client.get.assert_called_once()
+    assert mock_client.get.call_args[1]["params"] == {"include_trashed": True}
+    mock_client.post.assert_not_called()
+
+
+@pytest.mark.fast
+def test_library_empty_trash_requires_confirmation() -> None:
+    """Mock GET to return one trashed library, mock input to return 'n'; assert POST /v1/libraries/empty-trash never called."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = [
+        {"library_id": "lib_trash1", "name": "TrashedLib", "root_path": "/x", "scan_status": "idle", "status": "trashed"},
+    ]
+    mock_client = MagicMock()
+    mock_client.get.return_value = mock_response
+
+    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+        result = runner.invoke(app, ["library", "empty-trash"], input="n")
+
+    assert result.exit_code == 0
+    assert "Aborted" in result.output
+    mock_client.post.assert_not_called()
+
+
+@pytest.mark.fast
 def test_scan_aborts_if_root_unreachable() -> None:
     """Mock scan_library to return ScanResult(status='aborted'); assert output indicates abort and exit code 1."""
     mock_client = MagicMock()

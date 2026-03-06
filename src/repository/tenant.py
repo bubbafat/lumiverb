@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, or_, text
 from sqlmodel import Session, select
 
 from src.models.tenant import Asset, Library, Scan, WorkerJob
@@ -45,10 +45,87 @@ class LibraryRepository:
         stmt = select(Library).where(Library.name == name)
         return self._session.exec(stmt).first()
 
-    def list_all(self) -> list[Library]:
-        """Return all libraries."""
+    def list_all(self, include_trashed: bool = False) -> list[Library]:
+        """Return all libraries. By default exclude status='trashed'; if include_trashed=True return all."""
         stmt = select(Library)
+        if not include_trashed:
+            stmt = stmt.where(Library.status != "trashed")
         return list(self._session.exec(stmt).all())
+
+    def get_trashed(self) -> list[Library]:
+        """Return all libraries with status='trashed'."""
+        stmt = select(Library).where(Library.status == "trashed")
+        return list(self._session.exec(stmt).all())
+
+    def trash(self, library_id: str) -> Library:
+        """Set library status to trashed, cancel pending/claimed worker jobs for its assets, return updated library."""
+        library = self.get_by_id(library_id)
+        if library is None:
+            raise ValueError(f"Library not found: {library_id}")
+        if library.status == "trashed":
+            raise ValueError(f"Library already trashed: {library_id}")
+        # Cancel pending/claimed jobs for assets in this library
+        self._session.execute(
+            text(
+                """
+                UPDATE worker_jobs SET status = 'cancelled'
+                WHERE asset_id IN (SELECT asset_id FROM assets WHERE library_id = :library_id)
+                AND status IN ('pending', 'claimed')
+                """
+            ),
+            {"library_id": library_id},
+        )
+        library.status = "trashed"
+        library.updated_at = _utcnow()
+        self._session.add(library)
+        self._session.commit()
+        self._session.refresh(library)
+        return library
+
+    def hard_delete(self, library_id: str) -> None:
+        """Permanently delete library and all related data in FK-safe order. Single transaction."""
+        # Order: worker_jobs, search_sync_queue, asset_metadata, video_scenes, assets, scans, libraries
+        params = {"library_id": library_id}
+        self._session.execute(
+            text(
+                """
+                DELETE FROM worker_jobs
+                WHERE asset_id IN (SELECT asset_id FROM assets WHERE library_id = :library_id)
+                """
+            ),
+            params,
+        )
+        self._session.execute(
+            text(
+                """
+                DELETE FROM search_sync_queue
+                WHERE asset_id IN (SELECT asset_id FROM assets WHERE library_id = :library_id)
+                """
+            ),
+            params,
+        )
+        self._session.execute(
+            text(
+                """
+                DELETE FROM asset_metadata
+                WHERE asset_id IN (SELECT asset_id FROM assets WHERE library_id = :library_id)
+                """
+            ),
+            params,
+        )
+        self._session.execute(
+            text(
+                """
+                DELETE FROM video_scenes
+                WHERE asset_id IN (SELECT asset_id FROM assets WHERE library_id = :library_id)
+                """
+            ),
+            params,
+        )
+        self._session.execute(text("DELETE FROM assets WHERE library_id = :library_id"), params)
+        self._session.execute(text("DELETE FROM scans WHERE library_id = :library_id"), params)
+        self._session.execute(text("DELETE FROM libraries WHERE library_id = :library_id"), params)
+        self._session.commit()
 
     def update_scan_status(
         self,

@@ -26,6 +26,7 @@ class Library(SQLModel, table=True):
     library_id: str = Field(primary_key=True)
     name: str = Field(nullable=False)
     root_path: str = Field(nullable=False)
+    status: str = Field(default="active", nullable=False)
     scan_status: str = Field(default="idle", nullable=False)
     last_scan_at: datetime | None = Field(
         default=None,

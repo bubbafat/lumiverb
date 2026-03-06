@@ -64,7 +64,9 @@ All under `/v1/jobs`; require tenant auth.
 All under `/v1/libraries`; require tenant auth (middleware).
 
 - **POST /v1/libraries** — Body: `{ "name", "root_path" }`. Name must be unique per tenant (409 if duplicate). Returns `{ "library_id", "name", "root_path", "scan_status" }` (scan_status initially `"idle"`).
-- **GET /v1/libraries** — Returns list of libraries with `library_id`, `name`, `root_path`, `scan_status`, `last_scan_at`.
+- **GET /v1/libraries** — Query: `include_trashed` (optional, default false). Returns list of libraries with `library_id`, `name`, `root_path`, `scan_status`, `last_scan_at`, `status` (`"active"` or `"trashed"`). Trashed libraries excluded unless `include_trashed=true`.
+- **DELETE /v1/libraries/{library_id}** — Soft delete: set library `status` to `"trashed"`, cancel pending/claimed worker jobs for its assets. Returns 204 on success, 404 if not found, 409 if already trashed.
+- **POST /v1/libraries/empty-trash** — Hard delete all trashed libraries for this tenant (cascade: worker_jobs, search_sync_queue, asset_metadata, video_scenes, assets, scans, libraries). Returns `{ "deleted": N }`.
 
 ## Scans API
 
