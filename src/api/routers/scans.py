@@ -191,7 +191,7 @@ def batch_scan(
             last_scan_id=scan_id,
         )
         updated += 1
-    missing = asset_repo.set_missing_bulk(missing_ids) if missing_ids else 0
+    missing = asset_repo.set_missing_bulk(missing_ids, scan_id) if missing_ids else 0
     added = asset_repo.create_or_update_for_scan_bulk(
         library_id=scan.library_id,
         scan_id=scan_id,

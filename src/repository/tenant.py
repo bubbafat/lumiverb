@@ -402,8 +402,8 @@ class AssetRepository:
         self._session.commit()
         return len(asset_ids)
 
-    def set_missing_bulk(self, asset_ids: list[str]) -> int:
-        """Set availability='missing' for given asset_ids. Returns count updated."""
+    def set_missing_bulk(self, asset_ids: list[str], scan_id: str) -> int:
+        """Set availability='missing' and last_scan_id for given asset_ids. Returns count updated."""
         if not asset_ids:
             return 0
         for batch_start in range(0, len(asset_ids), 500):
@@ -411,11 +411,11 @@ class AssetRepository:
             self._session.execute(
                 text(
                     """
-                    UPDATE assets SET availability = 'missing'
+                    UPDATE assets SET availability = 'missing', last_scan_id = :scan_id
                     WHERE asset_id = ANY(:asset_ids)
                     """
                 ),
-                {"asset_ids": batch},
+                {"scan_id": scan_id, "asset_ids": batch},
             )
         self._session.commit()
         return len(asset_ids)

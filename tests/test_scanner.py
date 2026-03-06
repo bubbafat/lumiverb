@@ -156,7 +156,7 @@ def test_scan_discovers_images(
 def test_scan_skips_known_files(
     scanner_client: tuple[TestClient, str], tmp_path: Path
 ) -> None:
-    """Scan same directory twice (no --force); second scan files_added=0 (no new assets)."""
+    """Scan same directory twice (no --force); second scan all skipped."""
     client, api_key = scanner_client
     for i in range(5):
         (tmp_path / f"skip_{i}.jpg").write_bytes(b"\x00")
@@ -168,7 +168,28 @@ def test_scan_skips_known_files(
     result = scan_library(auth_client, library, force=False)
     assert result.status == "complete"
     assert result.files_added == 0
+    assert result.files_skipped == 5
     assert result.files_discovered == 5
+
+
+@pytest.mark.slow
+def test_scan_updated_file(
+    scanner_client: tuple[TestClient, str], tmp_path: Path
+) -> None:
+    """Scan, change file size, scan again (no --force); assert files_updated=1, files_skipped=1."""
+    client, api_key = scanner_client
+    (tmp_path / "a.jpg").write_bytes(b"a")
+    (tmp_path / "b.jpg").write_bytes(b"b")
+    library = _create_library(
+        client, api_key, str(tmp_path), "Updated_" + __import__("secrets").token_urlsafe(4)
+    )
+    auth_client = _AuthClient(client, api_key)
+    scan_library(auth_client, library, force=True)
+    (tmp_path / "a.jpg").write_bytes(b"longer content")
+    result = scan_library(auth_client, library, force=False)
+    assert result.status == "complete"
+    assert result.files_updated == 1
+    assert result.files_skipped == 1
 
 
 @pytest.mark.slow
@@ -202,6 +223,33 @@ def test_scan_unreachable_root(scanner_client: tuple[TestClient, str]) -> None:
     auth_client = _AuthClient(client, api_key)
     result = scan_library(auth_client, library, force=True)
     assert result.status == "aborted"
+
+
+@pytest.mark.slow
+def test_scan_mixed_reconciliation(
+    scanner_client: tuple[TestClient, str], tmp_path: Path
+) -> None:
+    """Mixed scan: 2 skip, 1 add, 1 update, 1 missing; assert all counts precisely."""
+    client, api_key = scanner_client
+    (tmp_path / "a.jpg").write_bytes(b"a")
+    (tmp_path / "b.jpg").write_bytes(b"b")
+    (tmp_path / "c.jpg").write_bytes(b"c")
+    (tmp_path / "d.jpg").write_bytes(b"d")
+    library = _create_library(
+        client, api_key, str(tmp_path), "Mixed_" + __import__("secrets").token_urlsafe(4)
+    )
+    auth_client = _AuthClient(client, api_key)
+    scan_library(auth_client, library, force=True)
+    (tmp_path / "c.jpg").write_bytes(b"updated content")
+    (tmp_path / "d.jpg").unlink()
+    (tmp_path / "e.jpg").write_bytes(b"new")
+    result = scan_library(auth_client, library, force=False)
+    assert result.status == "complete"
+    assert result.files_added == 1
+    assert result.files_updated == 1
+    assert result.files_skipped == 2
+    assert result.files_missing == 1
+    assert result.files_discovered == 4  # add + update + skip (missing not "discovered")
 
 
 @pytest.mark.slow

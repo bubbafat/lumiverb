@@ -30,18 +30,27 @@ class ScanResult:
     error_message: str | None = None
 
 
+def _mtime_equal(a: str | None, b: str | None) -> bool:
+    """Compare file_mtime strings (API vs local) robustly; formats may differ (Z vs +00:00, microseconds)."""
+    if a is None and b is None:
+        return True
+    if a is None or b is None:
+        return False
+    try:
+        da = datetime.fromisoformat(a.replace("Z", "+00:00"))
+        db = datetime.fromisoformat(b.replace("Z", "+00:00"))
+        return abs((da - db).total_seconds()) < 1
+    except (ValueError, TypeError):
+        return False
+
+
 def _is_unchanged(asset: dict, local_file: dict, force: bool) -> bool:
     """Return True if asset matches local file (skip); False if needs update."""
     if force:
         return False
-    if asset.get("sha256") is None:
-        return (
-            asset.get("file_size") == local_file["file_size"]
-            and asset.get("file_mtime") == local_file["file_mtime"]
-        )
     return (
         asset.get("file_size") == local_file["file_size"]
-        and asset.get("file_mtime") == local_file["file_mtime"]
+        and _mtime_equal(asset.get("file_mtime"), local_file["file_mtime"])
     )
 
 
