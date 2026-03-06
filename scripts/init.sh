@@ -40,7 +40,34 @@ fi
 
 echo ""
 echo "=== Checking Docker stack ==="
-if ! docker compose ps 2>/dev/null | grep -q lumiverb-postgres || ! docker compose ps 2>/dev/null | grep -q lumiverb-quickwit; then
+pg_status=$(docker compose ps --format json 2>/dev/null | python3 -c "
+import json, sys
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        s = json.loads(line)
+        if s.get('Name') == 'lumiverb-postgres':
+            print(s.get('State', ''))
+    except Exception:
+        pass
+")
+qw_status=$(docker compose ps --format json 2>/dev/null | python3 -c "
+import json, sys
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        s = json.loads(line)
+        if s.get('Name') == 'lumiverb-quickwit':
+            print(s.get('State', ''))
+    except Exception:
+        pass
+")
+
+if [[ "$pg_status" != "running" ]] || [[ "$qw_status" != "running" ]]; then
   echo -e "${RED}✗ lumiverb-postgres and/or lumiverb-quickwit not running.${NC}" >&2
   echo "Run 'docker compose up -d' first." >&2
   exit 1
