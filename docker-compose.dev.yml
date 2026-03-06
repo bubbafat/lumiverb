@@ -1,0 +1,27 @@
+# Development / test overrides.
+# Runs a second Quickwit instance on port 7281 for integration tests,
+# keeping test data isolated from the main instance.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+
+services:
+
+  quickwit-dev:
+    image: quickwit/quickwit:0.8.1
+    container_name: photodb-quickwit-dev
+    ports:
+      - "7281:7280"
+    volumes:
+      - quickwit_dev_data:/quickwit/qwdata
+    environment:
+      QW_ENABLE_OTLP_ENDPOINT: "false"
+    command: run
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:7280/health/livez || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  quickwit_dev_data:

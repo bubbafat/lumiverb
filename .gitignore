@@ -1,0 +1,132 @@
+# =============================================================================
+# Python
+# =============================================================================
+__pycache__/
+*.py[codz]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+.eggs/
+dist/
+build/
+MANIFEST
+.installed.cfg
+
+# =============================================================================
+# Virtual environments & package managers
+# =============================================================================
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.pdm-python
+.pdm-build/
+.pixi/
+__pypackages__/
+
+# uv — commit uv.lock for reproducible installs
+# uv.lock  ← intentionally tracked
+
+# =============================================================================
+# Environment & secrets — NEVER commit these
+# =============================================================================
+.env
+.env.*
+!.env.example
+.envrc
+*.pem
+*.key
+secrets/
+
+# =============================================================================
+# Runtime data — never goes in the repo
+# =============================================================================
+# Local media cache (thumbnails, proxies, video scenes, head-clips)
+data/
+
+# Per-tenant SQLite map used by CLI (local agent only)
+*.db
+*.sqlite3
+*.sqlite3-journal
+
+# Alembic migration generated files (keep versions/ tracked)
+# alembic.ini is tracked; only generated env artefacts are excluded here
+
+# =============================================================================
+# Logs & diagnostics
+# =============================================================================
+*.log
+logs/
+flight_logs/
+*.dump
+
+# =============================================================================
+# Testing
+# =============================================================================
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+nosetests.xml
+*.cover
+.hypothesis/
+
+# =============================================================================
+# Type checkers & linters
+# =============================================================================
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+.ruff_cache/
+
+# =============================================================================
+# Node / frontend (React web UI, Tailwind build)
+# =============================================================================
+node_modules/
+.npm/
+# Built output — only commit if serving static assets from repo
+web/dist/
+web/build/
+static/css/tailwind.css
+
+# =============================================================================
+# Editors & IDEs
+# =============================================================================
+.DS_Store
+Thumbs.db
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+
+# Cursor
+.cursorignore
+.cursorindexingignore
+
+# =============================================================================
+# OS artefacts
+# =============================================================================
+desktop.ini
+ehthumbs.db
+
+# =============================================================================
+# Docker local overrides
+# =============================================================================
+docker-compose.override.yml
+docker-compose.local.yml
+
+# =============================================================================
+# AI model cache (MediaPipe, HuggingFace, etc.)
+# These are large and downloaded on first use
+# =============================================================================
+.cache/
+model_cache/

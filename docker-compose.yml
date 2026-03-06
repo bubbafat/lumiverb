@@ -1,0 +1,51 @@
+# Local development stack.
+# Starts PostgreSQL (control plane + tenant DB host) and Quickwit.
+# The API server and workers run outside Docker during development (uv run).
+#
+# Usage:
+#   docker compose up -d          # start infrastructure
+#   docker compose down           # stop (data persisted in volumes)
+#   docker compose down -v        # stop AND wipe all data
+
+services:
+
+  postgres:
+    image: postgres:16
+    container_name: photodb-postgres
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: control_plane
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Init script enables pgvector and creates the app role on first start
+      - ./scripts/docker/postgres-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d control_plane"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  quickwit:
+    image: quickwit/quickwit:0.8.1
+    container_name: photodb-quickwit
+    ports:
+      - "7280:7280"   # production / main
+    volumes:
+      - quickwit_data:/quickwit/qwdata
+    environment:
+      QW_ENABLE_OTLP_ENDPOINT: "false"
+    command: run
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:7280/health/livez || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  quickwit_data:
