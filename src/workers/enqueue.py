@@ -1,22 +1,58 @@
 """Enqueue worker jobs for a library."""
 
-from sqlmodel import Session
+from datetime import datetime, timezone
 
-from src.repository.tenant import AssetRepository, WorkerJobRepository
+from sqlalchemy import insert, text
+from sqlmodel import Session
+from ulid import ULID
+
+from src.models.tenant import WorkerJob
+
+ENQUEUE_BATCH_SIZE = 1000
 
 
 def enqueue_proxy_jobs(session: Session, library_id: str) -> int:
     """
-    Create worker_jobs of type 'proxy' for all assets in library with
-    status='pending' that don't already have a pending/claimed proxy job.
+    Enqueue proxy jobs for all pending assets in library that don't already
+    have a pending/claimed proxy job.
+
+    Uses a single SELECT to find eligible assets, then bulk INSERTs in
+    batches of ENQUEUE_BATCH_SIZE to stay under Postgres parameter limits.
+    Single commit at the end.
+
     Returns count of jobs enqueued.
     """
-    asset_repo = AssetRepository(session)
-    job_repo = WorkerJobRepository(session)
-    pending_assets = asset_repo.list_pending_by_library(library_id)
-    enqueued = 0
-    for asset in pending_assets:
-        if not job_repo.has_pending_job("proxy", asset.asset_id):
-            job_repo.create("proxy", asset.asset_id)
-            enqueued += 1
-    return enqueued
+    stmt = text("""
+        SELECT a.asset_id FROM assets a
+        WHERE a.library_id = :library_id
+          AND a.status = 'pending'
+          AND NOT EXISTS (
+            SELECT 1 FROM worker_jobs w
+            WHERE w.asset_id = a.asset_id
+              AND w.job_type = 'proxy'
+              AND w.status IN ('pending', 'claimed')
+          )
+    """)
+    rows = session.execute(stmt, {"library_id": library_id}).fetchall()
+    if not rows:
+        return 0
+
+    now = datetime.now(timezone.utc)
+    jobs = [
+        {
+            "job_id": "job_" + str(ULID()),
+            "job_type": "proxy",
+            "asset_id": row[0],
+            "status": "pending",
+            "created_at": now,
+        }
+        for row in rows
+    ]
+
+    total = 0
+    for i in range(0, len(jobs), ENQUEUE_BATCH_SIZE):
+        batch = jobs[i : i + ENQUEUE_BATCH_SIZE]
+        session.execute(insert(WorkerJob), batch)
+        total += len(batch)
+    session.commit()
+    return total

@@ -37,19 +37,19 @@ class LumiverbClient:
         """GET request; on non-2xx prints error envelope and exits 1."""
         url = f"{self._base_url}{path}" if path.startswith("/") else f"{self._base_url}/{path}"
         with httpx.Client() as client:
-            response = client.get(url, headers=self._headers(), **kwargs)
+            response = client.get(url, headers=self._headers(), timeout=120.0, **kwargs)
             return self._handle_response(response)
 
     def post(self, path: str, **kwargs: object) -> httpx.Response:
         """POST request; on non-2xx prints error envelope and exits 1."""
         url = f"{self._base_url}{path}" if path.startswith("/") else f"{self._base_url}/{path}"
         with httpx.Client() as client:
-            response = client.post(url, headers=self._headers(), **kwargs)
+            response = client.post(url, headers=self._headers(), timeout=120.0, **kwargs)
             return self._handle_response(response)
 
     def delete(self, path: str, **kwargs: object) -> httpx.Response:
         """DELETE request; on non-2xx prints error envelope and exits 1."""
         url = f"{self._base_url}{path}" if path.startswith("/") else f"{self._base_url}/{path}"
         with httpx.Client() as client:
-            response = client.delete(url, headers=self._headers(), **kwargs)
+            response = client.delete(url, headers=self._headers(), timeout=120.0, **kwargs)
             return self._handle_response(response)
