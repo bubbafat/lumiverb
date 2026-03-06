@@ -13,7 +13,7 @@ from src.core.io_utils import file_non_empty
 
 _log = logging.getLogger(__name__)
 
-_ZERO_BYTE_STDERR_SUFFIX = "\n[media-search] Output file is 0 bytes; treating as failure"
+_ZERO_BYTE_STDERR_SUFFIX = "\n[lumiverb] Output file is 0 bytes; treating as failure"
 _DEFAULT_STDERR_TAIL_LINES = 40
 
 
