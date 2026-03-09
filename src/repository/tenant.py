@@ -10,7 +10,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session, select
 
 from src.models.filter import AssetFilterSpec
-from src.models.tenant import Asset, AssetMetadata, Library, Scan, WorkerJob
+from src.models.tenant import Asset, AssetMetadata, Library, Scan, SearchSyncQueue, WorkerJob
 from ulid import ULID
 
 
@@ -807,3 +807,83 @@ class WorkerJobRepository:
         )
         self._session.commit()
         return result.rowcount
+
+
+class SearchSyncQueueRepository:
+    """Repository for search_sync_queue outbox table."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def enqueue(
+        self,
+        asset_id: str,
+        operation: str,
+        scene_id: str | None = None,
+    ) -> SearchSyncQueue:
+        """
+        Insert a new row into search_sync_queue.
+
+        sync_id is generated as ssq_ + ULID().
+        """
+        sync = SearchSyncQueue(
+            sync_id="ssq_" + str(ULID()),
+            asset_id=asset_id,
+            scene_id=scene_id,
+            operation=operation,
+            status="pending",
+        )
+        self._session.add(sync)
+        self._session.commit()
+        self._session.refresh(sync)
+        return sync
+
+    def claim_batch(self, limit: int) -> list[SearchSyncQueue]:
+        """
+        Claim up to `limit` pending rows using FOR UPDATE SKIP LOCKED.
+
+        Returns the claimed rows with status updated to 'processing'.
+        """
+        stmt = (
+            select(SearchSyncQueue)
+            .where(SearchSyncQueue.status == "pending")
+            .order_by(SearchSyncQueue.created_at)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        rows = list(self._session.exec(stmt).all())
+        if not rows:
+            return []
+        now = _utcnow()
+        for row in rows:
+            row.status = "processing"
+            # created_at is immutable; updated_at column does not exist on this table
+            # so we do not touch timestamps here.
+            self._session.add(row)
+        self._session.commit()
+        return rows
+
+    def mark_synced(self, sync_ids: list[str]) -> int:
+        """
+        Mark the given sync_ids as synced.
+
+        Returns the number of rows updated.
+        """
+        if not sync_ids:
+            return 0
+        result = self._session.execute(
+            text(
+                """
+                UPDATE search_sync_queue
+                SET status = 'synced'
+                WHERE sync_id = ANY(:sync_ids)
+                """
+            ),
+            {"sync_ids": sync_ids},
+        )
+        self._session.commit()
+        # SQLAlchemy's rowcount can be -1 on some drivers; coerce to int >= 0
+        try:
+            return int(result.rowcount or 0)
+        except Exception:
+            return 0

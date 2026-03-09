@@ -14,6 +14,7 @@ from src.repository.tenant import (
     AssetRepository,
     AssetMetadataRepository,
     LibraryRepository,
+    SearchSyncQueueRepository,
     WorkerJobRepository,
 )
 from src.workers.enqueue import enqueue_jobs_for_filter
@@ -197,6 +198,9 @@ def complete_job(
                 "tags": tags,
             },
         )
+        # Enqueue search sync so Quickwit can be updated for this asset.
+        queue_repo = SearchSyncQueueRepository(session)
+        queue_repo.enqueue(asset_id=job.asset_id, operation="upsert")
     job_repo.set_completed(job)
     return JobCompleteResponse(job_id=job_id, status="completed")
 
