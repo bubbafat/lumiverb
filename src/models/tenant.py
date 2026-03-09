@@ -108,6 +108,10 @@ class Asset(SQLModel, table=True):
     )
     gps_lat: float | None = Field(default=None, nullable=True)
     gps_lon: float | None = Field(default=None, nullable=True)
+    embedding_vector: Any = Field(
+        default=None,
+        sa_column=Column(Vector(512), nullable=True),
+    )
     availability: str = Field(default="online", nullable=False)
     status: str = Field(default="pending", nullable=False)
     error_message: str | None = Field(default=None, nullable=True)

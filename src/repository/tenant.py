@@ -551,6 +551,73 @@ class AssetRepository:
         stmt = select(Asset).where(Asset.asset_id.in_(asset_ids))
         return list(self._session.exec(stmt).all())
 
+    def find_similar(
+        self,
+        asset_id: str,
+        library_id: str,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[tuple[Asset, float]]:
+        """
+        Find assets similar to the given asset_id using cosine distance
+        on embedding_vector. Returns list of (Asset, distance) tuples,
+        ordered by ascending distance (most similar first).
+
+        Returns empty list if the source asset has no embedding.
+        """
+        source = self.get_by_id(asset_id)
+        if source is None or source.embedding_vector is None:
+            return []
+
+        stmt = text(
+            """
+        SELECT
+            asset_id,
+            embedding_vector <=> CAST(:vec AS vector) AS distance
+        FROM assets
+        WHERE library_id = :library_id
+          AND asset_id != :asset_id
+          AND embedding_vector IS NOT NULL
+          AND availability = 'online'
+        ORDER BY distance ASC
+        LIMIT :limit OFFSET :offset
+        """
+        )
+        rows = self._session.execute(
+            stmt,
+            {
+                "vec": str([float(x) for x in source.embedding_vector]),
+                "library_id": library_id,
+                "asset_id": asset_id,
+                "limit": limit,
+                "offset": offset,
+            },
+        ).fetchall()
+
+        if not rows:
+            return []
+
+        result_ids = [r.asset_id for r in rows]
+        distance_by_id = {r.asset_id: float(r.distance) for r in rows}
+        assets_by_id = {a.asset_id: a for a in self.get_by_ids(result_ids)}
+
+        return [
+            (assets_by_id[aid], distance_by_id[aid])
+            for aid in result_ids
+            if aid in assets_by_id
+        ]
+
+    def set_embedding(self, asset_id: str, vector: list[float]) -> None:
+        """Store the embedding vector for an asset."""
+        self._session.execute(
+            text(
+                "UPDATE assets SET embedding_vector = CAST(:vec AS vector) "
+                "WHERE asset_id = :asset_id"
+            ),
+            {"vec": str(vector), "asset_id": asset_id},
+        )
+        self._session.commit()
+
     def query_for_enqueue(
         self,
         filter: AssetFilterSpec,
