@@ -561,8 +561,11 @@ class AssetRepository:
         """
         Return asset_ids matching filter spec, suitable for job enqueueing.
 
-        If force=False: excludes assets that already have a pending/claimed
-        job of this job_type, and excludes assets where proxy_key/thumbnail_key
+        If retry_failed=True: only assets that have a failed job of this type,
+        and no pending/claimed/completed job. Excludes already-processed checks.
+
+        If force=False and not retry_failed: excludes assets that already have
+        a pending/claimed job, and excludes assets where proxy_key/thumbnail_key
         is already set (for proxy/thumbnail job types).
 
         If force=True: returns all matching assets regardless of existing jobs.
@@ -571,7 +574,7 @@ class AssetRepository:
         """
         conditions = ["a.library_id = :library_id"]
         params: dict = {"library_id": filter.library_id, "job_type": job_type}
-        join_libraries = filter.missing_ai or (job_type == "ai_vision" and not force)
+        join_libraries = filter.missing_ai or (job_type == "ai_vision" and not force and not filter.retry_failed)
 
         # Single asset shortcut
         if filter.asset_id:
@@ -619,7 +622,29 @@ class AssetRepository:
                 conditions.append("a.taken_at <= :taken_before")
                 params["taken_before"] = filter.taken_before
 
-        if not force:
+        if filter.retry_failed:
+            # Only assets with a failed job of this type; exclude pending/claimed/completed
+            conditions.append(
+                """
+                EXISTS (
+                    SELECT 1 FROM worker_jobs w
+                    WHERE w.asset_id = a.asset_id
+                      AND w.job_type = :job_type
+                      AND w.status = 'failed'
+                )
+                """
+            )
+            conditions.append(
+                """
+                NOT EXISTS (
+                    SELECT 1 FROM worker_jobs w
+                    WHERE w.asset_id = a.asset_id
+                      AND w.job_type = :job_type
+                      AND w.status IN ('pending', 'claimed', 'completed')
+                )
+                """
+            )
+        elif not force:
             conditions.append(
                 """
                 NOT EXISTS (
@@ -898,6 +923,23 @@ class WorkerJobRepository:
                 WHERE asset_id = ANY(:asset_ids)
                   AND job_type = :job_type
                   AND status IN ('pending', 'claimed')
+            """),
+            {"asset_ids": asset_ids, "job_type": job_type},
+        )
+        self._session.commit()
+        return result.rowcount
+
+    def cancel_failed_for_assets(self, asset_ids: list[str], job_type: str) -> int:
+        """Cancel failed jobs for given assets and job_type. Used by retry_failed enqueue."""
+        if not asset_ids:
+            return 0
+        result = self._session.execute(
+            text("""
+                UPDATE worker_jobs
+                SET status = 'cancelled'
+                WHERE asset_id = ANY(:asset_ids)
+                  AND job_type = :job_type
+                  AND status = 'failed'
             """),
             {"asset_ids": asset_ids, "job_type": job_type},
         )

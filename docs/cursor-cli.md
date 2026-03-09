@@ -23,5 +23,6 @@ Entry point: `lumiverb = "src.cli:main"` (setuptools); `main()` invokes the Type
 - `lumiverb library delete <name>` — Soft delete: move library to trash (prompt for confirmation)
 - `lumiverb library empty-trash` — Permanently delete all trashed libraries and their assets (prompt for confirmation)
 - `lumiverb scan --library <name> [--path <subpath>] [--force]` — Scan a library for media files; discovers/upserts assets via API, reports added/updated/skipped/missing.
+- `lumiverb enqueue <library> [--job-type proxy|exif|ai_vision] [--path <path>] [--asset <id>] [--since <iso>] [--until <iso>] [--missing-proxy] [--missing-thumbnail] [--force] [--retry-failed]` — Enqueue processing jobs for a library. `--retry-failed` re-enqueues only assets with failed jobs (mutually exclusive with `--force`).
 
 Output: Rich tables for list; green success for create; errors handled by client (stderr + exit 1).

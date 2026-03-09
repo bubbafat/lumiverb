@@ -318,6 +318,7 @@ def enqueue(
     missing_proxy: Annotated[bool, typer.Option("--missing-proxy")] = False,
     missing_thumbnail: Annotated[bool, typer.Option("--missing-thumbnail")] = False,
     force: Annotated[bool, typer.Option("--force", "-f")] = False,
+    retry_failed: Annotated[bool, typer.Option("--retry-failed")] = False,
 ) -> None:
     """Enqueue processing jobs for a library or subset of assets."""
     client = LumiverbClient()
@@ -325,6 +326,10 @@ def enqueue(
     match = next((l for l in libraries if l["name"] == library), None)
     if not match:
         console.print(f"[red]Library not found: {library}[/red]")
+        raise typer.Exit(1)
+
+    if force and retry_failed:
+        console.print("[red]--force and --retry-failed are mutually exclusive[/red]")
         raise typer.Exit(1)
 
     # Build path filter: exact if it looks like a file, prefix if folder
@@ -354,6 +359,8 @@ def enqueue(
             filter_spec["missing_proxy"] = True
         if missing_thumbnail:
             filter_spec["missing_thumbnail"] = True
+        if retry_failed:
+            filter_spec["retry_failed"] = True
 
     resp = client.post(
         "/v1/jobs/enqueue",

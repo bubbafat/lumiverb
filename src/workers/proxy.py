@@ -13,7 +13,7 @@ from src.workers.base import BaseWorker
 logger = logging.getLogger(__name__)
 
 PROXY_LONG_EDGE = 2048
-PROXY_JPEG_QUALITY = 85
+PROXY_JPEG_QUALITY = 75
 THUMBNAIL_LONG_EDGE = 256
 THUMBNAIL_JPEG_QUALITY = 80
 

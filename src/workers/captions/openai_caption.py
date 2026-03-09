@@ -8,11 +8,14 @@ Images are sent as base64 data URLs in the message content.
 from __future__ import annotations
 
 import base64
+import io
+import json
 import logging
 import re
 from pathlib import Path
 
 import requests
+from PIL import Image
 
 from src.workers.captions.base import CaptionProvider
 
@@ -46,21 +49,33 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             logger.warning("Proxy not found: %s", proxy_path)
             return {}
         try:
-            image_b64 = base64.b64encode(proxy_path.read_bytes()).decode()
+            img = Image.open(proxy_path)
+            max_edge = 1024
+            if max(img.width, img.height) > max_edge:
+                img.thumbnail((max_edge, max_edge), Image.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=75)
+            image_b64 = base64.b64encode(buf.getvalue()).decode()
             data_url = f"data:image/jpeg;base64,{image_b64}"
 
-            # Two-shot: first get description, then tags
-            description = self._chat(
-                data_url,
-                "Describe this image in one or two sentences. "
-                "Be specific about the subject, setting, and mood.",
+            prompt = (
+                "Describe this image in 2-3 sentences, being specific about "
+                "the subject, setting, and mood. Then provide 5-10 descriptive "
+                "tags. Respond only with valid JSON in this exact format:\n"
+                '{"description": "...", "tags": ["tag1", "tag2", ...]}'
             )
-            tags_raw = self._chat(
-                data_url,
-                "List 5-10 descriptive tags for this image as a "
-                "comma-separated list. Output only the tags, nothing else.",
-            )
-            tags = [t.strip() for t in tags_raw.split(",") if t.strip()]
+            raw = self._chat(data_url, prompt)
+
+            # Strip markdown code fences if present
+            clean = raw.strip()
+            if clean.startswith("```"):
+                clean = re.sub(r"^```[a-z]*\n?", "", clean)
+                clean = re.sub(r"\n?```$", "", clean)
+                clean = clean.strip()
+
+            parsed = json.loads(clean)
+            description = parsed.get("description", "").strip()
+            tags = [t.strip() for t in parsed.get("tags", []) if t.strip()]
             return {"description": description, "tags": tags}
 
         except Exception as e:  # noqa: BLE001
@@ -87,6 +102,9 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             json=payload,
             timeout=60,
         )
+        if not resp.ok:
+            logger.warning("Error from AI Provider: %s: %s", resp.status_code, resp.text)
         resp.raise_for_status()
+
         content = resp.json()["choices"][0]["message"]["content"]
         return self._strip_thinking(content)

@@ -45,7 +45,13 @@ def enqueue_jobs(
     """
     Enqueue jobs for assets matching filter spec.
     force=True cancels existing pending/claimed jobs and re-enqueues.
+    filter.retry_failed=True re-enqueues only assets with failed jobs (mutually exclusive with force).
     """
+    if body.force and body.filter.retry_failed:
+        raise HTTPException(
+            status_code=400,
+            detail="force and retry_failed are mutually exclusive",
+        )
     n = enqueue_jobs_for_filter(
         session=session,
         filter=body.filter,

@@ -77,7 +77,9 @@ def enqueue_jobs_for_filter(
     if not asset_ids:
         return 0
 
-    if force:
+    if filter.retry_failed:
+        job_repo.cancel_failed_for_assets(asset_ids, job_type)
+    elif force:
         job_repo.cancel_pending_for_assets(asset_ids, job_type)
 
     now = datetime.now(timezone.utc)

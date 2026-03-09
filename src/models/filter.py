@@ -22,6 +22,7 @@ class AssetFilterSpec(BaseModel):
     missing_proxy: bool = False
     missing_thumbnail: bool = False
     missing_ai: bool = False  # no asset_metadata row for moondream (any version)
+    retry_failed: bool = False  # only re-enqueue assets with a failed job of this type
 
     # EXIF / camera filters
     camera_make: str | None = None  # camera_make ILIKE value
