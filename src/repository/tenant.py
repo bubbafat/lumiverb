@@ -8,6 +8,7 @@ from sqlalchemy import and_, or_, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session, select
 
+from src.models.filter import AssetFilterSpec
 from src.models.tenant import Asset, Library, Scan, WorkerJob
 from ulid import ULID
 
@@ -497,6 +498,70 @@ class AssetRepository:
         self._session.refresh(asset)
         return asset
 
+    def query_for_enqueue(
+        self,
+        filter: AssetFilterSpec,
+        job_type: str,
+        force: bool,
+    ) -> list[str]:
+        """
+        Return asset_ids matching filter spec, suitable for job enqueueing.
+
+        If force=False: excludes assets that already have a pending/claimed
+        job of this job_type, and excludes assets where proxy_key/thumbnail_key
+        is already set (for proxy/thumbnail job types).
+
+        If force=True: returns all matching assets regardless of existing jobs.
+
+        Resolution order: if asset_id is set, all other filters ignored.
+        """
+        conditions = ["a.library_id = :library_id"]
+        params: dict = {"library_id": filter.library_id, "job_type": job_type}
+
+        # Single asset shortcut
+        if filter.asset_id:
+            conditions.append("a.asset_id = :asset_id")
+            params["asset_id"] = filter.asset_id
+        else:
+            if filter.path_exact:
+                conditions.append("a.rel_path = :path_exact")
+                params["path_exact"] = filter.path_exact
+            elif filter.path_prefix:
+                conditions.append("a.rel_path LIKE :path_prefix")
+                params["path_prefix"] = filter.path_prefix.rstrip("/") + "/%"
+            if filter.mtime_after:
+                conditions.append("a.file_mtime >= :mtime_after")
+                params["mtime_after"] = filter.mtime_after
+            if filter.mtime_before:
+                conditions.append("a.file_mtime <= :mtime_before")
+                params["mtime_before"] = filter.mtime_before
+            if filter.missing_proxy:
+                conditions.append("a.proxy_key IS NULL")
+            if filter.missing_thumbnail:
+                conditions.append("a.thumbnail_key IS NULL")
+
+        if not force:
+            conditions.append(
+                """
+                NOT EXISTS (
+                    SELECT 1 FROM worker_jobs w
+                    WHERE w.asset_id = a.asset_id
+                      AND w.job_type = :job_type
+                      AND w.status IN ('pending', 'claimed')
+                )
+                """
+            )
+            # Exclude already-processed assets for proxy/thumbnail job types
+            if job_type == "proxy":
+                conditions.append("a.proxy_key IS NULL")
+            elif job_type == "thumbnail":
+                conditions.append("a.thumbnail_key IS NULL")
+
+        where = " AND ".join(conditions)
+        sql = f"SELECT a.asset_id FROM assets a WHERE {where} ORDER BY a.asset_id"
+        rows = self._session.execute(text(sql), params).fetchall()
+        return [row[0] for row in rows]
+
 
 class WorkerJobRepository:
     """Repository for worker_jobs table."""
@@ -591,3 +656,20 @@ class WorkerJobRepository:
         self._session.add(job)
         self._session.commit()
         self._session.refresh(job)
+
+    def cancel_pending_for_assets(self, asset_ids: list[str], job_type: str) -> int:
+        """Cancel pending/claimed jobs for given assets and job_type. Used by force enqueue."""
+        if not asset_ids:
+            return 0
+        result = self._session.execute(
+            text("""
+                UPDATE worker_jobs
+                SET status = 'cancelled'
+                WHERE asset_id = ANY(:asset_ids)
+                  AND job_type = :job_type
+                  AND status IN ('pending', 'claimed')
+            """),
+            {"asset_ids": asset_ids, "job_type": job_type},
+        )
+        self._session.commit()
+        return result.rowcount

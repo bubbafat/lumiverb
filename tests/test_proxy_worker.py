@@ -151,7 +151,11 @@ def test_proxy_worker_processes_image(proxy_worker_env, tmp_path: Path) -> None:
 
     enq = client.post(
         "/v1/jobs/enqueue",
-        json={"library_id": library["library_id"], "job_type": "proxy"},
+        json={
+            "job_type": "proxy",
+            "filter": {"library_id": library["library_id"]},
+            "force": False,
+        },
         headers={"Authorization": f"Bearer {api_key}"},
     )
     assert enq.status_code == 200
@@ -236,7 +240,11 @@ def test_proxy_worker_skips_video(proxy_worker_env, tmp_path: Path) -> None:
 
     client.post(
         "/v1/jobs/enqueue",
-        json={"library_id": library["library_id"], "job_type": "proxy"},
+        json={
+            "job_type": "proxy",
+            "filter": {"library_id": library["library_id"]},
+            "force": False,
+        },
         headers={"Authorization": f"Bearer {api_key}"},
     )
 
@@ -310,7 +318,11 @@ def test_proxy_worker_missing_file(proxy_worker_env, tmp_path: Path) -> None:
 
     client.post(
         "/v1/jobs/enqueue",
-        json={"library_id": library["library_id"], "job_type": "proxy"},
+        json={
+            "job_type": "proxy",
+            "filter": {"library_id": library["library_id"]},
+            "force": False,
+        },
         headers={"Authorization": f"Bearer {api_key}"},
     )
 

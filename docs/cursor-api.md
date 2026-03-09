@@ -57,7 +57,7 @@ Tenant resolution runs for every request except `/health` and `/v1/admin/*`: rea
 
 All under `/v1/jobs`; require tenant auth.
 
-- **POST /v1/jobs/enqueue** — Body: `{ "library_id", "job_type" }`. Only `job_type: "proxy"` is supported for now. Creates worker_jobs for all pending assets in the library that don’t already have a pending/claimed proxy job. Returns `{ "enqueued" }` (count of jobs created).
+- **POST /v1/jobs/enqueue** — Body: `{ "job_type", "filter", "force" }`. `filter` is an AssetFilterSpec: `library_id` (required), optional `asset_id`, `path_prefix`, `path_exact`, `mtime_after`, `mtime_before`, `missing_proxy`, `missing_thumbnail`. `force` (default false): if true, cancels existing pending/claimed jobs for matching assets then enqueues. Returns `{ "enqueued" }` (count of jobs created).
 - **GET /v1/jobs/next** — Query: `job_type` (required), `library_id` (optional). Claims next pending job; returns 204 if none. On success returns `{ "job_id", "job_type", "asset_id", "rel_path", "media_type", "library_id", "root_path" }`. 404 if asset or library not found (job is failed server-side).
 - **POST /v1/jobs/{job_id}/complete** — Body for proxy: `{ "proxy_key", "thumbnail_key", "width", "height" }`. Marks job completed; for proxy jobs updates asset. Returns `{ "job_id", "status": "completed" }`. 404 if job not found, 409 if job not claimed.
 - **POST /v1/jobs/{job_id}/fail** — Body: `{ "error_message" }`. Marks job failed. Returns `{ "job_id", "status": "failed" }`.

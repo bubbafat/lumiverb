@@ -333,6 +333,7 @@ def test_scan_prints_summary() -> None:
     mock_client.get.return_value.json.return_value = [
         {"library_id": "lib_1", "name": "SummaryLib", "root_path": "/path"}
     ]
+    mock_client.post.return_value.json.return_value = {"enqueued": 5}
     complete = ScanResult(
         scan_id="scan_123",
         files_discovered=10,
@@ -384,7 +385,7 @@ def test_scan_enqueues_when_files_updated_only() -> None:
     assert result.exit_code == 0
     mock_client.post.assert_any_call(
         "/v1/jobs/enqueue",
-        json={"library_id": "lib_1", "job_type": "proxy"},
+        json={"job_type": "proxy", "filter": {"library_id": "lib_1"}, "force": False},
     )
 
 

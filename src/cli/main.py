@@ -1,5 +1,6 @@
 """Typer CLI entry point: config, library create/list, scan (stub)."""
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -225,13 +226,78 @@ def scan(
         library_id = match["library_id"]
         enqueue_resp = client.post(
             "/v1/jobs/enqueue",
-            json={"library_id": library_id, "job_type": "proxy"},
+            json={
+                "job_type": "proxy",
+                "filter": {"library_id": library_id},
+                "force": False,
+            },
         ).json()
         enqueued = enqueue_resp.get("enqueued", 0)
-        typer.echo(f"Enqueued {enqueued} proxy jobs.")
+        console.print(f"Enqueued {enqueued:,} proxy jobs.")
 
     if result.status != "complete":
         raise typer.Exit(1)
+
+
+@app.command()
+def enqueue(
+    library: Annotated[str, typer.Argument(help="Library name")],
+    job_type: Annotated[str, typer.Option("--job-type", "-j")] = "proxy",
+    path: Annotated[str | None, typer.Option("--path")] = None,
+    asset: Annotated[str | None, typer.Option("--asset")] = None,
+    since: Annotated[str | None, typer.Option("--since")] = None,
+    until: Annotated[str | None, typer.Option("--until")] = None,
+    missing_proxy: Annotated[bool, typer.Option("--missing-proxy")] = False,
+    missing_thumbnail: Annotated[bool, typer.Option("--missing-thumbnail")] = False,
+    force: Annotated[bool, typer.Option("--force", "-f")] = False,
+) -> None:
+    """Enqueue processing jobs for a library or subset of assets."""
+    client = LumiverbClient()
+    libraries = client.get("/v1/libraries").json()
+    match = next((l for l in libraries if l["name"] == library), None)
+    if not match:
+        console.print(f"[red]Library not found: {library}[/red]")
+        raise typer.Exit(1)
+
+    # Build path filter: exact if it looks like a file, prefix if folder
+    path_exact = None
+    path_prefix = None
+    if path:
+        if "." in Path(path).name:
+            path_exact = path
+        else:
+            path_prefix = path
+
+    filter_spec: dict = {
+        "library_id": match["library_id"],
+    }
+    if asset:
+        filter_spec["asset_id"] = asset
+    else:
+        if path_exact:
+            filter_spec["path_exact"] = path_exact
+        elif path_prefix:
+            filter_spec["path_prefix"] = path_prefix
+        if since:
+            filter_spec["mtime_after"] = since
+        if until:
+            filter_spec["mtime_before"] = until
+        if missing_proxy:
+            filter_spec["missing_proxy"] = True
+        if missing_thumbnail:
+            filter_spec["missing_thumbnail"] = True
+
+    resp = client.post(
+        "/v1/jobs/enqueue",
+        json={
+            "job_type": job_type,
+            "filter": filter_spec,
+            "force": force,
+        },
+    )
+    data = resp.json()
+    enqueued = data.get("enqueued", 0)
+    console.print(f"Enqueued {enqueued:,} {job_type} jobs.")
 
 
 def main() -> None:

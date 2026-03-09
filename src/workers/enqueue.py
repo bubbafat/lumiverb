@@ -6,7 +6,9 @@ from sqlalchemy import insert, text
 from sqlmodel import Session
 from ulid import ULID
 
+from src.models.filter import AssetFilterSpec
 from src.models.tenant import WorkerJob
+from src.repository.tenant import AssetRepository, WorkerJobRepository
 
 ENQUEUE_BATCH_SIZE = 1000
 
@@ -47,6 +49,47 @@ def enqueue_proxy_jobs(session: Session, library_id: str) -> int:
             "created_at": now,
         }
         for row in rows
+    ]
+
+    total = 0
+    for i in range(0, len(jobs), ENQUEUE_BATCH_SIZE):
+        batch = jobs[i : i + ENQUEUE_BATCH_SIZE]
+        session.execute(insert(WorkerJob), batch)
+        total += len(batch)
+    session.commit()
+    return total
+
+
+def enqueue_jobs_for_filter(
+    session: Session,
+    filter: AssetFilterSpec,
+    job_type: str,
+    force: bool = False,
+) -> int:
+    """
+    Enqueue jobs matching AssetFilterSpec. If force=True, cancels existing
+    pending/claimed jobs first. Bulk INSERT in batches. Returns count enqueued.
+    """
+    asset_repo = AssetRepository(session)
+    job_repo = WorkerJobRepository(session)
+
+    asset_ids = asset_repo.query_for_enqueue(filter, job_type, force)
+    if not asset_ids:
+        return 0
+
+    if force:
+        job_repo.cancel_pending_for_assets(asset_ids, job_type)
+
+    now = datetime.now(timezone.utc)
+    jobs = [
+        {
+            "job_id": "job_" + str(ULID()),
+            "job_type": job_type,
+            "asset_id": asset_id,
+            "status": "pending",
+            "created_at": now,
+        }
+        for asset_id in asset_ids
     ]
 
     total = 0

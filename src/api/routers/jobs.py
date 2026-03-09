@@ -9,12 +9,13 @@ from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session
 from src.core.config import get_settings
+from src.models.filter import AssetFilterSpec
 from src.repository.tenant import (
     AssetRepository,
     LibraryRepository,
     WorkerJobRepository,
 )
-from src.workers.enqueue import enqueue_proxy_jobs
+from src.workers.enqueue import enqueue_jobs_for_filter
 
 router = APIRouter(prefix="/v1/jobs", tags=["jobs"])
 
@@ -25,8 +26,9 @@ router = APIRouter(prefix="/v1/jobs", tags=["jobs"])
 
 
 class EnqueueRequest(BaseModel):
-    library_id: str
     job_type: str
+    filter: AssetFilterSpec
+    force: bool = False
 
 
 class EnqueueResponse(BaseModel):
@@ -38,10 +40,17 @@ def enqueue_jobs(
     body: EnqueueRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> EnqueueResponse:
-    if body.job_type != "proxy":
-        raise HTTPException(status_code=400, detail=f"Unsupported job_type: {body.job_type}")
-    enqueued = enqueue_proxy_jobs(session, body.library_id)
-    return EnqueueResponse(enqueued=enqueued)
+    """
+    Enqueue jobs for assets matching filter spec.
+    force=True cancels existing pending/claimed jobs and re-enqueues.
+    """
+    n = enqueue_jobs_for_filter(
+        session=session,
+        filter=body.filter,
+        job_type=body.job_type,
+        force=body.force,
+    )
+    return EnqueueResponse(enqueued=n)
 
 
 # ---------------------------------------------------------------------------

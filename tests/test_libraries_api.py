@@ -263,7 +263,7 @@ def test_delete_library_cancels_pending_jobs(libraries_client: tuple[TestClient,
 
     r_enq = client.post(
         "/v1/jobs/enqueue",
-        json={"library_id": library_id, "job_type": "proxy"},
+        json={"job_type": "proxy", "filter": {"library_id": library_id}, "force": False},
         headers=auth,
     )
     assert r_enq.status_code == 200
