@@ -1,8 +1,6 @@
 """Libraries API tests. TestClient + testcontainers Postgres; create tenant via admin API with provision_tenant_database mocked, then provision tenant DB manually."""
 
 import os
-import subprocess
-import sys
 from unittest.mock import patch
 
 import pytest
@@ -14,49 +12,7 @@ from testcontainers.postgres import PostgresContainer
 from src.api.main import app
 from src.core.config import get_settings
 from src.core.database import _engines
-
-
-def _ensure_psycopg2(url: str) -> str:
-    if url.startswith("postgresql://"):
-        return url.replace("postgresql://", "postgresql+psycopg2://", 1)
-    return url
-
-
-def _run_control_migrations(url: str) -> None:
-    env = os.environ.copy()
-    env["ALEMBIC_CONTROL_URL"] = url
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    result = subprocess.run(
-        [sys.executable, "-m", "alembic", "-c", "alembic-control.ini", "upgrade", "head"],
-        cwd=project_root,
-        env=env,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, (result.stdout, result.stderr)
-
-
-def _provision_tenant_db_second_container(
-    tenant_url: str,
-    project_root: str,
-) -> None:
-    """Run tenant migrations on a second Postgres container (tenant_url)."""
-    engine = create_engine(tenant_url)
-    with engine.connect() as conn:
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        conn.commit()
-    engine.dispose()
-
-    env = os.environ.copy()
-    env["ALEMBIC_TENANT_URL"] = tenant_url
-    result = subprocess.run(
-        [sys.executable, "-m", "alembic", "-c", "alembic-tenant.ini", "upgrade", "head"],
-        cwd=project_root,
-        env=env,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, (result.stdout, result.stderr)
+from tests.conftest import _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 
 @pytest.fixture(scope="module")
@@ -103,7 +59,7 @@ def libraries_client() -> tuple[TestClient, str]:
         with PostgresContainer("pgvector/pgvector:pg16") as tenant_postgres:
             tenant_url = tenant_postgres.get_connection_url()
             tenant_url = _ensure_psycopg2(tenant_url)
-            _provision_tenant_db_second_container(tenant_url, project_root)
+            _provision_tenant_db(tenant_url, project_root)
 
             from src.core.database import get_control_session
             from src.repository.control_plane import TenantDbRoutingRepository

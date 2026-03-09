@@ -1,8 +1,6 @@
 """Scanner tests: full scan flow against API + testcontainers Postgres."""
 
 import os
-import subprocess
-import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,62 +14,7 @@ from src.api.main import app
 from src.cli.scanner import scan_library
 from src.core.config import get_settings
 from src.core.database import _engines
-
-
-def _ensure_psycopg2(url: str) -> str:
-    if url.startswith("postgresql://"):
-        return url.replace("postgresql://", "postgresql+psycopg2://", 1)
-    return url
-
-
-def _run_control_migrations(url: str) -> None:
-    env = os.environ.copy()
-    env["ALEMBIC_CONTROL_URL"] = url
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    result = subprocess.run(
-        [sys.executable, "-m", "alembic", "-c", "alembic-control.ini", "upgrade", "head"],
-        cwd=project_root,
-        env=env,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, (result.stdout, result.stderr)
-
-
-def _provision_tenant_db_second_container(tenant_url: str, project_root: str) -> None:
-    engine = create_engine(tenant_url)
-    with engine.connect() as conn:
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        conn.commit()
-    engine.dispose()
-    env = os.environ.copy()
-    env["ALEMBIC_TENANT_URL"] = tenant_url
-    result = subprocess.run(
-        [sys.executable, "-m", "alembic", "-c", "alembic-tenant.ini", "upgrade", "head"],
-        cwd=project_root,
-        env=env,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, (result.stdout, result.stderr)
-
-
-class _AuthClient:
-    """Wraps TestClient and adds Authorization header for scan_library."""
-
-    def __init__(self, client: TestClient, api_key: str) -> None:
-        self._client = client
-        self._headers = {"Authorization": f"Bearer {api_key}"}
-
-    def get(self, path: str, **kwargs: object) -> object:
-        kwargs.setdefault("headers", {})
-        kwargs["headers"].update(self._headers)
-        return self._client.get(path, **kwargs)
-
-    def post(self, path: str, **kwargs: object) -> object:
-        kwargs.setdefault("headers", {})
-        kwargs["headers"].update(self._headers)
-        return self._client.post(path, **kwargs)
+from tests.conftest import _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 
 @pytest.fixture(scope="module")
@@ -108,7 +51,7 @@ def scanner_client() -> tuple[TestClient, str]:
 
         with PostgresContainer("pgvector/pgvector:pg16") as tenant_postgres:
             tenant_url = _ensure_psycopg2(tenant_postgres.get_connection_url())
-            _provision_tenant_db_second_container(tenant_url, project_root)
+            _provision_tenant_db(tenant_url, project_root)
             from src.core.database import get_control_session
             from src.repository.control_plane import TenantDbRoutingRepository
             with get_control_session() as session:

@@ -2,20 +2,21 @@
 
 ## Steps
 
-| Step | Description | Status | Commit |
-|------|-------------|--------|--------|
-| 1 | Control plane schema, Alembic setup, migration tests | ✅ Done | - |
-| 2 | Tenant schema, phase 2 stubs, migration tests | ✅ Done | - |
-| 3 | Config, database layer, repositories, provisioning API | ✅ Done | - |
-| 4 | Library and asset scanner (CLI) | ✅ Done | - |
-| 5 | Proxy and thumbnail worker | 🔨 In progress | - |
-| 6 | EXIF metadata worker | ⬜ Planned | - |
-| 7 | AI vision worker (Moondream) | ⬜ Planned | - |
-| 8 | Quickwit search sync worker | ⬜ Planned | - |
-| 9 | Search API endpoint | ⬜ Planned | - |
-| 10 | Similarity search | ⬜ Planned | - |
-| 11 | Video scene segmentation worker | ⬜ Planned | - |
-| 12 | CLI polish and end-to-end test | ⬜ Planned | - |
+| Step | Description | Status |
+|------|-------------|--------|
+| 1 | Control plane schema, Alembic setup, migration tests | ✅ Done |
+| 2 | Tenant schema, phase 2 stubs, migration tests | ✅ Done |
+| 3 | Config, database layer, repositories, provisioning API | ✅ Done |
+| 4 | Library and asset scanner (CLI) | ✅ Done |
+| 5 | Proxy and thumbnail worker | ✅ Done |
+| 6 | Library soft delete / trash | ✅ Done |
+| 7 | EXIF metadata worker | ✅ Done |
+| 8 | AI vision worker (Moondream) | ⬜ Planned |
+| 9 | Quickwit search sync worker | ⬜ Planned |
+| 10 | Search API endpoint | ⬜ Planned |
+| 11 | Similarity search | ⬜ Planned |
+| 12 | Video scene segmentation worker | ⬜ Planned |
+| 13 | CLI polish and end-to-end test | ⬜ Planned |
 
 ## Architecture Decisions Log
 
