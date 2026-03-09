@@ -23,6 +23,6 @@ def test_vision_worker_no_proxy():
         storage=MagicMock(spec=LocalStorage),
         once=True,
     )
-    with pytest.raises(ValueError, match="no proxy"):
+    with pytest.raises(ValueError, match="proxy_key"):
         worker.process({"asset_id": "ast_123", "proxy_key": None})
 

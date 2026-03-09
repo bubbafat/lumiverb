@@ -1,12 +1,14 @@
-"""AI vision worker. Uses Moondream to generate descriptions and tags."""
+"""AI vision worker. Uses caption provider abstraction for per-library model switching."""
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
+from src.models.registry import get_model_config
 from src.storage.local import LocalStorage
 from src.workers.base import BaseWorker
-from src.workers.vision import VISION_MODEL_ID, VISION_MODEL_VERSION, describe_image
+from src.workers.captions.factory import get_caption_provider
 
 logger = logging.getLogger(__name__)
 
@@ -21,21 +23,26 @@ class VisionWorker(BaseWorker):
     def process(self, job: dict) -> dict:
         asset_id = job["asset_id"]
         proxy_key = job.get("proxy_key")
+        vision_model_id = job.get("vision_model_id", "moondream")
 
         if not proxy_key:
-            raise ValueError(f"Asset {asset_id} has no proxy — run proxy worker first")
+            raise ValueError(f"No proxy_key in ai_vision job for asset {asset_id}")
 
-        proxy_path = self._storage.abs_path(proxy_key)
-        if not proxy_path.exists():
-            raise FileNotFoundError(f"Proxy not found on disk: {proxy_path}")
+        proxy_path = Path(self._storage.abs_path(proxy_key))
 
-        result = describe_image(proxy_path)
+        provider = get_caption_provider(vision_model_id)
+        result = provider.describe(proxy_path)
+
         if not result:
-            raise RuntimeError(f"Vision inference returned empty result for {asset_id}")
+            raise RuntimeError(
+                f"Caption provider {vision_model_id!r} returned empty result "
+                f"for asset {asset_id}"
+            )
 
+        config = get_model_config(vision_model_id)
         return {
-            "model_id": VISION_MODEL_ID,
-            "model_version": VISION_MODEL_VERSION,
+            "model_id": vision_model_id,
+            "model_version": config.model_version,
             "description": result.get("description", ""),
             "tags": result.get("tags", []),
         }

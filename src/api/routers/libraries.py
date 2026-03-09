@@ -7,7 +7,8 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session
-from src.repository.tenant import LibraryRepository
+from src.models.registry import VALID_MODEL_IDS
+from src.repository.tenant import LibraryRepository, _utcnow
 from src.workers.quickwit import purge_library_from_quickwit
 
 router = APIRouter(prefix="/v1/libraries", tags=["libraries"])
@@ -16,6 +17,12 @@ router = APIRouter(prefix="/v1/libraries", tags=["libraries"])
 class CreateLibraryRequest(BaseModel):
     name: str
     root_path: str
+    vision_model_id: str = "moondream"
+
+
+class LibraryUpdateRequest(BaseModel):
+    name: str | None = None
+    vision_model_id: str | None = None
 
 
 class LibraryResponse(BaseModel):
@@ -23,6 +30,7 @@ class LibraryResponse(BaseModel):
     name: str
     root_path: str
     scan_status: str
+    vision_model_id: str
 
 
 class LibraryListItem(BaseModel):
@@ -32,6 +40,7 @@ class LibraryListItem(BaseModel):
     scan_status: str
     last_scan_at: str | None
     status: str = "active"
+    vision_model_id: str = "moondream"
 
 
 class EmptyTrashResponse(BaseModel):
@@ -47,16 +56,22 @@ def create_library(
     Create a library. Name must be unique for this tenant.
     Returns 409 if a library with the same name already exists.
     """
+    if body.vision_model_id not in VALID_MODEL_IDS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown vision_model_id. Valid: {sorted(VALID_MODEL_IDS)}",
+        )
     repo = LibraryRepository(session)
     existing = repo.get_by_name(body.name)
     if existing is not None:
         raise HTTPException(status_code=409, detail="A library with this name already exists")
-    library = repo.create(name=body.name, root_path=body.root_path)
+    library = repo.create(name=body.name, root_path=body.root_path, vision_model_id=body.vision_model_id)
     return LibraryResponse(
         library_id=library.library_id,
         name=library.name,
         root_path=library.root_path,
         scan_status=library.scan_status,
+        vision_model_id=library.vision_model_id,
     )
 
 
@@ -76,6 +91,7 @@ def list_libraries(
             scan_status=lib.scan_status,
             last_scan_at=lib.last_scan_at.isoformat() if lib.last_scan_at else None,
             status=lib.status,
+            vision_model_id=lib.vision_model_id,
         )
         for lib in libraries
     ]
@@ -94,6 +110,39 @@ def empty_trash(
         repo.hard_delete(lib.library_id)
         deleted += 1
     return EmptyTrashResponse(deleted=deleted)
+
+
+@router.patch("/{library_id}", response_model=LibraryResponse)
+def update_library(
+    library_id: str,
+    body: LibraryUpdateRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> LibraryResponse:
+    """Update library name and/or vision_model_id."""
+    repo = LibraryRepository(session)
+    library = repo.get_by_id(library_id)
+    if library is None:
+        raise HTTPException(status_code=404, detail="Library not found")
+    if body.vision_model_id is not None:
+        if body.vision_model_id not in VALID_MODEL_IDS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unknown vision_model_id. Valid: {sorted(VALID_MODEL_IDS)}",
+            )
+        library.vision_model_id = body.vision_model_id
+    if body.name is not None:
+        library.name = body.name
+    library.updated_at = _utcnow()
+    session.add(library)
+    session.commit()
+    session.refresh(library)
+    return LibraryResponse(
+        library_id=library.library_id,
+        name=library.name,
+        root_path=library.root_path,
+        scan_status=library.scan_status,
+        vision_model_id=library.vision_model_id,
+    )
 
 
 @router.delete("/{library_id}", status_code=204)

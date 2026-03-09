@@ -24,7 +24,7 @@ class LibraryRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def create(self, name: str, root_path: str) -> Library:
+    def create(self, name: str, root_path: str, vision_model_id: str = "moondream") -> Library:
         """Generate library_id as lib_ + ULID(), insert, return Library."""
         library_id = "lib_" + str(ULID())
         library = Library(
@@ -32,6 +32,7 @@ class LibraryRepository:
             name=name,
             root_path=root_path,
             scan_status="idle",
+            vision_model_id=vision_model_id,
         )
         self._session.add(library)
         self._session.commit()
@@ -570,6 +571,7 @@ class AssetRepository:
         """
         conditions = ["a.library_id = :library_id"]
         params: dict = {"library_id": filter.library_id, "job_type": job_type}
+        join_libraries = filter.missing_ai or (job_type == "ai_vision" and not force)
 
         # Single asset shortcut
         if filter.asset_id:
@@ -598,7 +600,7 @@ class AssetRepository:
                     NOT EXISTS (
                         SELECT 1 FROM asset_metadata m
                         WHERE m.asset_id = a.asset_id
-                          AND m.model_id = 'moondream'
+                          AND m.model_id = l.vision_model_id
                     )
                     """
                 )
@@ -641,13 +643,14 @@ class AssetRepository:
                     NOT EXISTS (
                         SELECT 1 FROM asset_metadata m
                         WHERE m.asset_id = a.asset_id
-                          AND m.model_id = 'moondream'
+                          AND m.model_id = l.vision_model_id
                     )
                     """
                 )
 
         where = " AND ".join(conditions)
-        sql = f"SELECT a.asset_id FROM assets a WHERE {where} ORDER BY a.asset_id"
+        from_clause = "FROM assets a JOIN libraries l ON l.library_id = a.library_id" if join_libraries else "FROM assets a"
+        sql = f"SELECT a.asset_id {from_clause} WHERE {where} ORDER BY a.asset_id"
         rows = self._session.execute(text(sql), params).fetchall()
         return [row[0] for row in rows]
 

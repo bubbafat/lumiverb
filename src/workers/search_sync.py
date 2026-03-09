@@ -6,14 +6,15 @@ from typing import Iterable
 
 from sqlmodel import Session
 
+from src.models.registry import VALID_MODEL_IDS, get_model_config
 from src.models.tenant import Asset, AssetMetadata
 from src.repository.tenant import (
     AssetMetadataRepository,
     AssetRepository,
+    LibraryRepository,
     SearchSyncQueueRepository,
 )
 from src.search.quickwit_client import QuickwitClient
-from src.workers.vision import VISION_MODEL_ID, VISION_MODEL_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ class SearchSyncWorker:
         self._batch_size = batch_size
         self._asset_repo = AssetRepository(session)
         self._meta_repo = AssetMetadataRepository(session)
+        self._library_repo = LibraryRepository(session)
         self._queue_repo = SearchSyncQueueRepository(session)
         self._quickwit = quickwit or QuickwitClient()
 
@@ -84,18 +86,23 @@ class SearchSyncWorker:
                     sync_ids.append(row.sync_id)
                     continue
 
-                # For now we target the Moondream vision metadata only.
+                library = self._library_repo.get_by_id(asset.library_id)
+                vision_model_id = library.vision_model_id if library else "moondream"
+                if vision_model_id not in VALID_MODEL_IDS:
+                    vision_model_id = "moondream"
+                config = get_model_config(vision_model_id)
+
                 meta: AssetMetadata | None = self._meta_repo.get(
                     asset_id=asset.asset_id,
-                    model_id=VISION_MODEL_ID,
-                    model_version=VISION_MODEL_VERSION,
+                    model_id=vision_model_id,
+                    model_version=config.model_version,
                 )
                 if meta is None:
                     logger.debug(
                         "No AI metadata for asset_id=%s model=%s version=%s; skipping",
                         asset.asset_id,
-                        VISION_MODEL_ID,
-                        VISION_MODEL_VERSION,
+                        vision_model_id,
+                        config.model_version,
                     )
                     sync_ids.append(row.sync_id)
                     continue

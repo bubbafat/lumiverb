@@ -17,8 +17,8 @@ from src.repository.tenant import (
     SearchSyncQueueRepository,
     WorkerJobRepository,
 )
+from src.models.registry import get_model_config
 from src.workers.enqueue import enqueue_jobs_for_filter
-from src.workers.vision import VISION_MODEL_ID, VISION_MODEL_VERSION
 
 router = APIRouter(prefix="/v1/jobs", tags=["jobs"])
 
@@ -104,6 +104,7 @@ def get_next_job(
         "root_path": library.root_path,
         "proxy_key": asset.proxy_key,
         "thumbnail_key": asset.thumbnail_key,
+        "vision_model_id": library.vision_model_id,
     }
 
 
@@ -184,8 +185,8 @@ def complete_job(
     elif job.job_type == "ai_vision":
         if job.asset_id is None:
             raise HTTPException(status_code=400, detail="Job has no asset_id")
-        model_id = data.get("model_id", VISION_MODEL_ID)
-        model_version = data.get("model_version", VISION_MODEL_VERSION)
+        model_id = data.get("model_id", "moondream")
+        model_version = data.get("model_version") or get_model_config(model_id).model_version
         description = data.get("description", "")
         tags = data.get("tags", [])
         meta_repo = AssetMetadataRepository(session)

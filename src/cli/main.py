@@ -96,6 +96,23 @@ def library_list() -> None:
     console.print(table)
 
 
+@library_app.command("set-model")
+def library_set_model(
+    library_id: Annotated[str, typer.Argument(help="Library ID.")],
+    model: Annotated[str, typer.Argument(help="Model ID: moondream, qwen")],
+) -> None:
+    """Set the vision model for a library."""
+    from src.models.registry import VALID_MODEL_IDS
+
+    if model not in VALID_MODEL_IDS:
+        typer.echo(f"Unknown model {model!r}. Valid: {sorted(VALID_MODEL_IDS)}")
+        raise typer.Exit(1)
+    client = LumiverbClient()
+    r = client.patch(f"/v1/libraries/{library_id}", json={"vision_model_id": model})
+    r.raise_for_status()
+    typer.echo(f"Library {library_id} now uses model: {model}")
+
+
 @library_app.command("delete")
 def library_delete(
     name: Annotated[str, typer.Argument(help="Library name to move to trash.")],

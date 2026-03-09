@@ -25,6 +25,8 @@ class ModelConfig:
     # moondream_weight + clip_weight = 1.0
     moondream_weight: float
     clip_weight: float
+    # Model version string (stored in asset_metadata.model_version)
+    model_version: str
 
 
 REGISTRY: dict[str, ModelConfig] = {
@@ -35,6 +37,7 @@ REGISTRY: dict[str, ModelConfig] = {
         embedding_dim=512,
         moondream_weight=0.3,
         clip_weight=0.7,
+        model_version="2",
     ),
     "qwen": ModelConfig(
         display_name="Qwen VL (LM Studio)",
@@ -44,6 +47,7 @@ REGISTRY: dict[str, ModelConfig] = {
         embedding_dim=512,
         moondream_weight=0.0,
         clip_weight=1.0,
+        model_version="1",
     ),
 }
 
