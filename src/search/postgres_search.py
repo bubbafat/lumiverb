@@ -18,8 +18,8 @@ def search_assets(
     - assets.rel_path
     - assets.camera_make
     - assets.camera_model
-    - asset_metadata.data->>'description'  (moondream)
-    - asset_metadata.data->>'tags'          (moondream, cast to text)
+    - asset_metadata.data->>'description'  (most recent per asset, any model)
+    - asset_metadata.data->>'tags'         (most recent per asset, any model)
 
     Returns list of dicts with asset_id, rel_path, thumbnail_key,
     proxy_key, description, tags, score=0.0 (no ranking).
@@ -37,9 +37,13 @@ def search_assets(
             COALESCE(m.data->>'description', '') AS description,
             COALESCE(m.data->'tags', '[]'::jsonb) AS tags
         FROM assets a
-        LEFT JOIN asset_metadata m
-            ON m.asset_id = a.asset_id
-           AND m.model_id = 'moondream'
+        LEFT JOIN LATERAL (
+            SELECT data
+            FROM asset_metadata
+            WHERE asset_id = a.asset_id
+            ORDER BY generated_at DESC
+            LIMIT 1
+        ) m ON true
         WHERE a.library_id = :library_id
           AND a.availability = 'online'
           AND (
