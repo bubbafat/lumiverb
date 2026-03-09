@@ -117,3 +117,50 @@ class QuickwitClient:
                 f"Quickwit ingest failed for index {index_id}: {resp.status_code} {resp.text}"
             )
 
+    def search(
+        self,
+        library_id: str,
+        query: str,
+        max_hits: int = 20,
+        start_offset: int = 0,
+    ) -> list[dict]:
+        """
+        BM25 full-text search against the library's Quickwit index.
+
+        Returns list of hit dicts. Raises on HTTP error.
+        If Quickwit is disabled, returns empty list.
+        """
+        if not self._enabled:
+            return []
+
+        index_id = self.index_id_for_library(library_id)
+        resp = requests.get(
+            f"{self._base_url}/api/v1/{index_id}/search",
+            params={
+                "query": query,
+                "max_hits": max_hits,
+                "start_offset": start_offset,
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        hits = data.get("hits", [])
+        results: list[dict] = []
+        for hit in hits:
+            results.append(
+                {
+                    "asset_id": hit.get("asset_id", ""),
+                    "rel_path": hit.get("rel_path", ""),
+                    "thumbnail_key": hit.get("thumbnail_key"),
+                    "proxy_key": hit.get("proxy_key"),
+                    "camera_make": hit.get("camera_make"),
+                    "camera_model": hit.get("camera_model"),
+                    "description": hit.get("description", ""),
+                    "tags": hit.get("tags", []),
+                    "score": hit.get("_score", 0.0),
+                    "source": "quickwit",
+                }
+            )
+        return results
+

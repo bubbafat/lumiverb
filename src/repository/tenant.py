@@ -544,6 +544,13 @@ class AssetRepository:
         )
         self._session.commit()
 
+    def get_by_ids(self, asset_ids: list[str]) -> list[Asset]:
+        """Return assets for a list of asset_ids. Order not guaranteed."""
+        if not asset_ids:
+            return []
+        stmt = select(Asset).where(Asset.asset_id.in_(asset_ids))
+        return list(self._session.exec(stmt).all())
+
     def query_for_enqueue(
         self,
         filter: AssetFilterSpec,
