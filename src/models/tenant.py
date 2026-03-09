@@ -41,6 +41,7 @@ class Library(SQLModel, table=True):
         default_factory=_utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
+    vision_model_id: str = Field(default="moondream", nullable=False)
 
 
 class Scan(SQLModel, table=True):
@@ -108,10 +109,6 @@ class Asset(SQLModel, table=True):
     )
     gps_lat: float | None = Field(default=None, nullable=True)
     gps_lon: float | None = Field(default=None, nullable=True)
-    embedding_vector: Any = Field(
-        default=None,
-        sa_column=Column(Vector(512), nullable=True),
-    )
     availability: str = Field(default="online", nullable=False)
     status: str = Field(default="pending", nullable=False)
     error_message: str | None = Field(default=None, nullable=True)
@@ -163,6 +160,30 @@ class AssetMetadata(SQLModel, table=True):
     data: dict = Field(
         default_factory=dict,
         sa_column=Column(JSONB, nullable=False),
+    )
+
+
+class AssetEmbedding(SQLModel, table=True):
+    __tablename__ = "asset_embeddings"
+    __table_args__ = (
+        UniqueConstraint(
+            "asset_id",
+            "model_id",
+            "model_version",
+            name="uq_asset_embeddings_asset_model_version",
+        ),
+    )
+
+    embedding_id: str = Field(primary_key=True)
+    asset_id: str = Field(foreign_key="assets.asset_id", nullable=False)
+    model_id: str = Field(nullable=False)
+    model_version: str = Field(nullable=False)
+    embedding_vector: Any = Field(
+        sa_column=Column(Vector(512), nullable=False),
+    )
+    created_at: datetime = Field(
+        default_factory=_utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
     )
 
 

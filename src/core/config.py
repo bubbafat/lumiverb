@@ -40,6 +40,16 @@ class Settings(BaseSettings):
     app_env: str = "development"
     log_level: str = "DEBUG"
 
+    # Embedding
+    clip_model_name: str = "ViT-B-32"
+    clip_pretrained: str = "openai"
+    embedding_moondream_weight: float = 0.3
+    embedding_clip_weight: float = 0.7
+
+    # LM Studio (Qwen, Step 11.2)
+    lmstudio_url: str = "http://localhost:1234/v1"
+    lmstudio_vision_model: str = "qwen2.5-vl-7b-instruct"
+
     model_config = SettingsConfigDict(
         env_file=(".env", ".env.local"),
         env_file_encoding="utf-8",

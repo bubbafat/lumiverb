@@ -10,7 +10,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session, select
 
 from src.models.filter import AssetFilterSpec
-from src.models.tenant import Asset, AssetMetadata, Library, Scan, SearchSyncQueue, WorkerJob
+from src.models.tenant import Asset, AssetEmbedding, AssetMetadata, Library, Scan, SearchSyncQueue, WorkerJob
 from ulid import ULID
 
 
@@ -551,73 +551,6 @@ class AssetRepository:
         stmt = select(Asset).where(Asset.asset_id.in_(asset_ids))
         return list(self._session.exec(stmt).all())
 
-    def find_similar(
-        self,
-        asset_id: str,
-        library_id: str,
-        limit: int = 20,
-        offset: int = 0,
-    ) -> list[tuple[Asset, float]]:
-        """
-        Find assets similar to the given asset_id using cosine distance
-        on embedding_vector. Returns list of (Asset, distance) tuples,
-        ordered by ascending distance (most similar first).
-
-        Returns empty list if the source asset has no embedding.
-        """
-        source = self.get_by_id(asset_id)
-        if source is None or source.embedding_vector is None:
-            return []
-
-        stmt = text(
-            """
-        SELECT
-            asset_id,
-            embedding_vector <=> CAST(:vec AS vector) AS distance
-        FROM assets
-        WHERE library_id = :library_id
-          AND asset_id != :asset_id
-          AND embedding_vector IS NOT NULL
-          AND availability = 'online'
-        ORDER BY distance ASC
-        LIMIT :limit OFFSET :offset
-        """
-        )
-        rows = self._session.execute(
-            stmt,
-            {
-                "vec": str([float(x) for x in source.embedding_vector]),
-                "library_id": library_id,
-                "asset_id": asset_id,
-                "limit": limit,
-                "offset": offset,
-            },
-        ).fetchall()
-
-        if not rows:
-            return []
-
-        result_ids = [r.asset_id for r in rows]
-        distance_by_id = {r.asset_id: float(r.distance) for r in rows}
-        assets_by_id = {a.asset_id: a for a in self.get_by_ids(result_ids)}
-
-        return [
-            (assets_by_id[aid], distance_by_id[aid])
-            for aid in result_ids
-            if aid in assets_by_id
-        ]
-
-    def set_embedding(self, asset_id: str, vector: list[float]) -> None:
-        """Store the embedding vector for an asset."""
-        self._session.execute(
-            text(
-                "UPDATE assets SET embedding_vector = CAST(:vec AS vector) "
-                "WHERE asset_id = :asset_id"
-            ),
-            {"vec": str(vector), "asset_id": asset_id},
-        )
-        self._session.commit()
-
     def query_for_enqueue(
         self,
         filter: AssetFilterSpec,
@@ -769,6 +702,92 @@ class AssetMetadataRepository:
     def list_for_asset(self, asset_id: str) -> list[AssetMetadata]:
         stmt = select(AssetMetadata).where(AssetMetadata.asset_id == asset_id)
         return list(self._session.exec(stmt).all())
+
+
+class AssetEmbeddingRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def upsert(
+        self,
+        asset_id: str,
+        model_id: str,
+        model_version: str,
+        vector: list[float],
+    ) -> None:
+        """
+        Insert or update the embedding for (asset_id, model_id, model_version).
+        Uses ON CONFLICT DO UPDATE on the unique constraint.
+        """
+        stmt = pg_insert(AssetEmbedding).values(
+            embedding_id="emb_" + str(ULID()),
+            asset_id=asset_id,
+            model_id=model_id,
+            model_version=model_version,
+            embedding_vector=vector,
+            created_at=_utcnow(),
+        )
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_asset_embeddings_asset_model_version",
+            set_={"embedding_vector": vector, "created_at": _utcnow()},
+        )
+        self._session.execute(stmt)
+        self._session.commit()
+
+    def get(
+        self,
+        asset_id: str,
+        model_id: str,
+        model_version: str,
+    ) -> AssetEmbedding | None:
+        stmt = select(AssetEmbedding).where(
+            AssetEmbedding.asset_id == asset_id,
+            AssetEmbedding.model_id == model_id,
+            AssetEmbedding.model_version == model_version,
+        )
+        return self._session.exec(stmt).first()
+
+    def find_similar(
+        self,
+        library_id: str,
+        model_id: str,
+        model_version: str,
+        vector: list[float],
+        exclude_asset_id: str,
+        limit: int,
+        offset: int = 0,
+    ) -> list[tuple[str, float]]:
+        """
+        Return (asset_id, distance) pairs ordered by cosine distance ASC.
+        Filters to assets in library_id that are online.
+        """
+        rows = self._session.execute(
+            text(
+                """
+                SELECT ae.asset_id,
+                       ae.embedding_vector <=> CAST(:vec AS vector) AS distance
+                FROM asset_embeddings ae
+                JOIN assets a ON a.asset_id = ae.asset_id
+                WHERE a.library_id   = :library_id
+                  AND a.availability = 'online'
+                  AND ae.model_id      = :model_id
+                  AND ae.model_version = :model_version
+                  AND ae.asset_id     != :exclude_id
+                ORDER BY distance ASC
+                LIMIT :limit OFFSET :offset
+            """
+            ),
+            {
+                "vec": str(vector),
+                "library_id": library_id,
+                "model_id": model_id,
+                "model_version": model_version,
+                "exclude_id": exclude_asset_id,
+                "limit": limit,
+                "offset": offset,
+            },
+        ).fetchall()
+        return [(r.asset_id, float(r.distance)) for r in rows]
 
 
 class WorkerJobRepository:

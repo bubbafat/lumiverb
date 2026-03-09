@@ -16,7 +16,7 @@ from src.api.main import app
 from src.core.config import get_settings
 from src.core.database import _engines, get_control_session
 from src.repository.control_plane import TenantDbRoutingRepository
-from src.repository.tenant import AssetRepository, LibraryRepository, ScanRepository
+from src.repository.tenant import AssetEmbeddingRepository, AssetRepository, LibraryRepository, ScanRepository
 from tests.conftest import _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 
@@ -156,10 +156,12 @@ def test_similar_with_embeddings(similarity_client: Tuple[_AuthClient, str, str]
             scan_id=scan.scan_id,
         )
 
-        repo = AssetRepository(session)
-        repo.set_embedding(base_asset.asset_id, base_vec)
-        repo.set_embedding(close_asset.asset_id, close_vec)
-        repo.set_embedding(far_asset.asset_id, far_vec)
+        emb_repo = AssetEmbeddingRepository(session)
+        from src.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
+
+        emb_repo.upsert(base_asset.asset_id, "clip", CLIP_VERSION, base_vec)
+        emb_repo.upsert(close_asset.asset_id, "clip", CLIP_VERSION, close_vec)
+        emb_repo.upsert(far_asset.asset_id, "clip", CLIP_VERSION, far_vec)
 
         base_id = base_asset.asset_id
         close_id = close_asset.asset_id

@@ -10,7 +10,8 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session
-from src.repository.tenant import AssetRepository
+from src.core.config import get_settings
+from src.repository.tenant import AssetEmbeddingRepository, AssetRepository, LibraryRepository
 
 logger = logging.getLogger(__name__)
 
@@ -39,27 +40,39 @@ def find_similar(
     session: Annotated[Session, Depends(get_tenant_session)],
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
-) -> SimilarityResponse:
-    """
-    Find assets visually similar to the given asset_id.
+    ) -> SimilarityResponse:
+    from src.models.registry import get_model_config
+    from src.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
+    from src.workers.embeddings.moondream_provider import MODEL_VERSION as MD_VERSION
 
-    Returns empty hits with embedding_available=False if the source
-    asset has no embedding vector yet (embedding generation is Step 11.1).
-
-    Similarity is cosine distance on 512-dim embedding vectors.
-    Results are ordered most-similar first (ascending distance).
-    """
     asset_repo = AssetRepository(session)
-    source = asset_repo.get_by_id(asset_id)
+    lib_repo = LibraryRepository(session)
+    emb_repo = AssetEmbeddingRepository(session)
 
+    source = asset_repo.get_by_id(asset_id)
     if source is None:
         raise HTTPException(status_code=404, detail="Asset not found")
     if source.library_id != library_id:
         raise HTTPException(status_code=404, detail="Asset not in library")
 
-    embedding_available = source.embedding_vector is not None
+    library = lib_repo.get_by_id(library_id)
+    vision_model_id = library.vision_model_id if library else "moondream"
+    _config = get_model_config(vision_model_id)
 
-    if not embedding_available:
+    settings = get_settings()
+    moondream_weight = settings.embedding_moondream_weight
+    clip_weight = settings.embedding_clip_weight
+
+    # Fetch top-(limit*3) candidates from each model for re-ranking pool
+    K = min(limit * 3, 100)
+
+    # CLIP candidates
+    clip_emb = emb_repo.get(asset_id, "clip", CLIP_VERSION)
+
+    # Moondream candidates (only if moondream weight > 0)
+    md_emb = emb_repo.get(asset_id, "moondream", MD_VERSION) if moondream_weight > 0 else None
+
+    if clip_emb is None and md_emb is None:
         return SimilarityResponse(
             source_asset_id=asset_id,
             hits=[],
@@ -67,23 +80,58 @@ def find_similar(
             embedding_available=False,
         )
 
-    results = asset_repo.find_similar(
-        asset_id=asset_id,
-        library_id=library_id,
-        limit=limit,
-        offset=offset,
-    )
+    # Collect candidates from each available model
+    scores: dict[str, float] = {}  # asset_id -> weighted score
 
-    hits = [
-        SimilarHit(
-            asset_id=a.asset_id,
-            rel_path=a.rel_path,
-            thumbnail_key=a.thumbnail_key,
-            proxy_key=a.proxy_key,
-            distance=dist,
+    if clip_emb is not None:
+        clip_candidates = emb_repo.find_similar(
+            library_id=library_id,
+            model_id="clip",
+            model_version=CLIP_VERSION,
+            vector=[float(x) for x in clip_emb.embedding_vector],
+            exclude_asset_id=asset_id,
+            limit=K,
         )
-        for a, dist in results
-    ]
+        for cand_id, dist in clip_candidates:
+            scores[cand_id] = scores.get(cand_id, 0.0) + clip_weight * dist
+
+    if md_emb is not None:
+        md_candidates = emb_repo.find_similar(
+            library_id=library_id,
+            model_id="moondream",
+            model_version=MD_VERSION,
+            vector=[float(x) for x in md_emb.embedding_vector],
+            exclude_asset_id=asset_id,
+            limit=K,
+        )
+        for cand_id, dist in md_candidates:
+            scores[cand_id] = scores.get(cand_id, 0.0) + moondream_weight * dist
+
+    # Sort by weighted score ascending (lower = more similar), take top limit
+    ranked = sorted(scores.items(), key=lambda x: x[1])[:limit]
+
+    if not ranked:
+        return SimilarityResponse(
+            source_asset_id=asset_id, hits=[], total=0, embedding_available=True
+        )
+
+    asset_ids = [aid for aid, _ in ranked]
+    assets_by_id = {a.asset_id: a for a in asset_repo.get_by_ids(asset_ids)}
+
+    hits: list[SimilarHit] = []
+    for cand_id, score in ranked:
+        asset = assets_by_id.get(cand_id)
+        if asset is None:
+            continue
+        hits.append(
+            SimilarHit(
+                asset_id=asset.asset_id,
+                rel_path=asset.rel_path,
+                thumbnail_key=asset.thumbnail_key,
+                proxy_key=asset.proxy_key,
+                distance=score,
+            )
+        )
 
     return SimilarityResponse(
         source_asset_id=asset_id,
