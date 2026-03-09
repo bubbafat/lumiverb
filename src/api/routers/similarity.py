@@ -10,7 +10,6 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session
-from src.core.config import get_settings
 from src.repository.tenant import AssetEmbeddingRepository, AssetRepository, LibraryRepository
 
 logger = logging.getLogger(__name__)
@@ -41,7 +40,7 @@ def find_similar(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     ) -> SimilarityResponse:
-    from src.models.registry import get_model_config
+    from src.models.registry import get_embedding_config
     from src.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
     from src.workers.embeddings.moondream_provider import MODEL_VERSION as MD_VERSION
 
@@ -57,11 +56,10 @@ def find_similar(
 
     library = lib_repo.get_by_id(library_id)
     vision_model_id = library.vision_model_id if library else "moondream"
-    _config = get_model_config(vision_model_id)
+    config = get_embedding_config(vision_model_id)
 
-    settings = get_settings()
-    moondream_weight = settings.embedding_moondream_weight
-    clip_weight = settings.embedding_clip_weight
+    moondream_weight = config.moondream_weight
+    clip_weight = config.clip_weight
 
     # Fetch top-(limit*3) candidates from each model for re-ranking pool
     K = min(limit * 3, 100)

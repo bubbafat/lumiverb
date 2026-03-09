@@ -1,7 +1,7 @@
 """
-Qwen VL caption provider via LM Studio OpenAI-compatible API.
+OpenAI-compatible vision caption provider.
 
-LM Studio exposes POST /v1/chat/completions with vision support.
+Works with any OpenAI-compatible API (LM Studio, Ollama, vLLM, etc.).
 Images are sent as base64 data URLs in the message content.
 """
 
@@ -19,13 +19,14 @@ from src.workers.captions.base import CaptionProvider
 logger = logging.getLogger(__name__)
 
 
-class QwenCaptionProvider(CaptionProvider):
+class OpenAICompatibleCaptionProvider(CaptionProvider):
     """
-    Calls a locally-running LM Studio instance serving a Qwen VL model.
+    Calls any OpenAI-compatible vision API.
 
     Config (from Settings):
-        lmstudio_url:           http://localhost:1234/v1
-        lmstudio_vision_model:  qwen2.5-vl-7b-instruct (or whatever is loaded)
+        vision_api_url: base URL (e.g. http://localhost:1234/v1)
+
+    The model ID is passed at construction time (from library.vision_model_id).
     """
 
     def __init__(self, base_url: str, model: str) -> None:
@@ -34,7 +35,7 @@ class QwenCaptionProvider(CaptionProvider):
 
     @property
     def provider_id(self) -> str:
-        return "qwen_lmstudio"
+        return "openai_compatible"
 
     def _strip_thinking(self, text: str) -> str:
         """Strip <think>...</think> blocks; some reasoning models prefix responses with them."""
@@ -63,7 +64,7 @@ class QwenCaptionProvider(CaptionProvider):
             return {"description": description, "tags": tags}
 
         except Exception as e:  # noqa: BLE001
-            logger.warning("Qwen caption failed for %s: %s", proxy_path, e)
+            logger.warning("OpenAI-compatible caption failed for %s: %s", proxy_path, e)
             return {}
 
     def _chat(self, data_url: str, prompt: str) -> str:
@@ -89,4 +90,3 @@ class QwenCaptionProvider(CaptionProvider):
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"]
         return self._strip_thinking(content)
-

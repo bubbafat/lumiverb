@@ -46,9 +46,8 @@ class Settings(BaseSettings):
     embedding_moondream_weight: float = 0.3
     embedding_clip_weight: float = 0.7
 
-    # LM Studio (Qwen, Step 11.2)
-    lmstudio_url: str = "http://localhost:1234/v1"
-    lmstudio_vision_model: str = "qwen2.5-vl-7b-instruct"
+    # Vision API (OpenAI-compatible endpoint for non-Moondream models)
+    vision_api_url: str = "http://localhost:1234/v1"
 
     model_config = SettingsConfigDict(
         env_file=(".env", ".env.local"),

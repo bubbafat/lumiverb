@@ -84,6 +84,7 @@ def library_list() -> None:
     table.add_column("Name")
     table.add_column("Root path")
     table.add_column("Scan status")
+    table.add_column("Vision Model")
     table.add_column("Last scan")
     for lib in libraries:
         table.add_row(
@@ -91,6 +92,7 @@ def library_list() -> None:
             lib.get("name", ""),
             lib.get("root_path", ""),
             lib.get("scan_status", ""),
+            lib.get("vision_model_id", "moondream"),
             lib.get("last_scan_at") or "—",
         )
     console.print(table)
@@ -99,13 +101,18 @@ def library_list() -> None:
 @library_app.command("set-model")
 def library_set_model(
     library_id: Annotated[str, typer.Argument(help="Library ID.")],
-    model: Annotated[str, typer.Argument(help="Model ID: moondream, qwen")],
+    model: Annotated[
+        str,
+        typer.Argument(
+            help='Model ID. Use "moondream" for local Moondream inference, '
+            'or any OpenAI-compatible model ID (e.g. "qwen3-visioncaption-2b", "llava:13b") '
+            "for remote inference via VISION_API_URL.",
+        ),
+    ],
 ) -> None:
     """Set the vision model for a library."""
-    from src.models.registry import VALID_MODEL_IDS
-
-    if model not in VALID_MODEL_IDS:
-        typer.echo(f"Unknown model {model!r}. Valid: {sorted(VALID_MODEL_IDS)}")
+    if not model.strip():
+        typer.echo("Model ID cannot be empty.")
         raise typer.Exit(1)
     client = LumiverbClient()
     r = client.patch(f"/v1/libraries/{library_id}", json={"vision_model_id": model})

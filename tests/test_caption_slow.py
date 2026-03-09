@@ -137,7 +137,7 @@ def test_vision_worker_uses_provider_from_library(caption_slow_env: tuple, tmp_p
 
 @pytest.mark.slow
 def test_patch_library_vision_model_id(caption_slow_env: tuple, tmp_path: Path) -> None:
-    """PATCH /v1/libraries/{id} with vision_model_id=qwen, assert GET /v1/libraries returns vision_model_id=qwen."""
+    """PATCH /v1/libraries/{id} with arbitrary vision_model_id, assert GET returns it."""
     client, api_key, tenant_url = caption_slow_env
 
     lib_name = "PatchModel_" + secrets.token_urlsafe(4)
@@ -150,28 +150,29 @@ def test_patch_library_vision_model_id(caption_slow_env: tuple, tmp_path: Path) 
     library = r.json()
     library_id = library["library_id"]
 
+    model_id = "qwen3-visioncaption-2b"
     patch_r = client.patch(
         f"/v1/libraries/{library_id}",
-        json={"vision_model_id": "qwen"},
+        json={"vision_model_id": model_id},
         headers={"Authorization": f"Bearer {api_key}"},
     )
     assert patch_r.status_code == 200
-    assert patch_r.json().get("vision_model_id") == "qwen"
+    assert patch_r.json().get("vision_model_id") == model_id
 
     list_r = client.get("/v1/libraries", headers={"Authorization": f"Bearer {api_key}"})
     assert list_r.status_code == 200
     libs = list_r.json()
     match = next((l for l in libs if l["library_id"] == library_id), None)
     assert match is not None
-    assert match["vision_model_id"] == "qwen"
+    assert match["vision_model_id"] == model_id
 
 
 @pytest.mark.slow
-def test_patch_library_invalid_model_id(caption_slow_env: tuple, tmp_path: Path) -> None:
-    """PATCH /v1/libraries/{id} with vision_model_id=invented, assert 422."""
+def test_patch_library_empty_model_id(caption_slow_env: tuple, tmp_path: Path) -> None:
+    """PATCH /v1/libraries/{id} with vision_model_id='', assert 422."""
     client, api_key, tenant_url = caption_slow_env
 
-    lib_name = "InvalidModel_" + secrets.token_urlsafe(4)
+    lib_name = "EmptyModel_" + secrets.token_urlsafe(4)
     r = client.post(
         "/v1/libraries",
         json={"name": lib_name, "root_path": str(tmp_path)},
@@ -182,19 +183,20 @@ def test_patch_library_invalid_model_id(caption_slow_env: tuple, tmp_path: Path)
 
     patch_r = client.patch(
         f"/v1/libraries/{library_id}",
-        json={"vision_model_id": "invented"},
+        json={"vision_model_id": ""},
         headers={"Authorization": f"Bearer {api_key}"},
     )
     assert patch_r.status_code == 422
 
 
 @pytest.mark.slow
-def test_vision_worker_qwen_provider_called(caption_slow_env: tuple, tmp_path: Path) -> None:
-    """Set library to qwen. Enqueue and claim ai_vision job. Mock QwenCaptionProvider.describe. Complete. Assert model_id=qwen."""
+def test_vision_worker_openai_provider_called(caption_slow_env: tuple, tmp_path: Path) -> None:
+    """Set library to OpenAI-compatible model. Enqueue and claim ai_vision job. Mock describe. Complete. Assert model_id stored."""
     client, api_key, tenant_url = caption_slow_env
     auth = _AuthClient(client, api_key)
 
-    lib_name = "QwenProvider_" + secrets.token_urlsafe(4)
+    model_id = "qwen3-visioncaption-2b"
+    lib_name = "OpenAIProvider_" + secrets.token_urlsafe(4)
     r = client.post(
         "/v1/libraries",
         json={"name": lib_name, "root_path": str(tmp_path)},
@@ -206,13 +208,13 @@ def test_vision_worker_qwen_provider_called(caption_slow_env: tuple, tmp_path: P
 
     patch_r = client.patch(
         f"/v1/libraries/{library_id}",
-        json={"vision_model_id": "qwen"},
+        json={"vision_model_id": model_id},
         headers={"Authorization": f"Bearer {api_key}"},
     )
     assert patch_r.status_code == 200
 
     img = Image.new("RGB", (6, 6), color=(100, 50, 150))
-    img.save(tmp_path / "qwen.jpg", "JPEG")
+    img.save(tmp_path / "vision.jpg", "JPEG")
     result = scan_library(auth, library, force=True)
     assert result.status == "complete"
 
@@ -225,7 +227,7 @@ def test_vision_worker_qwen_provider_called(caption_slow_env: tuple, tmp_path: P
         "/v1/jobs/next", params={"job_type": "proxy"}, headers={"Authorization": f"Bearer {api_key}"}
     ).json()
     asset_id = proxy_job["asset_id"]
-    proxy_key = "t/l/proxies/00/" + asset_id + "_qwen.jpg"
+    proxy_key = "t/l/proxies/00/" + asset_id + "_vision.jpg"
     client.post(
         f"/v1/jobs/{proxy_job['job_id']}/complete",
         json={"proxy_key": proxy_key, "thumbnail_key": "t", "width": 6, "height": 6},
@@ -242,11 +244,11 @@ def test_vision_worker_qwen_provider_called(caption_slow_env: tuple, tmp_path: P
     )
     assert next_vis.status_code == 200
     vis_job = next_vis.json()
-    assert vis_job.get("vision_model_id") == "qwen"
+    assert vis_job.get("vision_model_id") == model_id
 
-    mock_result = {"description": "Mocked Qwen description", "tags": ["mock", "qwen"]}
+    mock_result = {"description": "Mocked description", "tags": ["mock", "vision"]}
     with patch(
-        "src.workers.captions.qwen_caption.QwenCaptionProvider.describe",
+        "src.workers.captions.openai_caption.OpenAICompatibleCaptionProvider.describe",
         return_value=mock_result,
     ):
         from src.storage.local import get_storage
@@ -255,7 +257,7 @@ def test_vision_worker_qwen_provider_called(caption_slow_env: tuple, tmp_path: P
         storage = get_storage()
         worker = VisionWorker(client=MagicMock(), storage=storage, once=True)
         payload = worker.process(vis_job)
-        assert payload["model_id"] == "qwen"
+        assert payload["model_id"] == model_id
         assert payload["model_version"] == "1"
         assert payload["description"] == mock_result["description"]
         assert payload["tags"] == mock_result["tags"]
@@ -263,7 +265,7 @@ def test_vision_worker_qwen_provider_called(caption_slow_env: tuple, tmp_path: P
     complete_r = client.post(
         f"/v1/jobs/{vis_job['job_id']}/complete",
         json={
-            "model_id": "qwen",
+            "model_id": model_id,
             "model_version": "1",
             "description": mock_result["description"],
             "tags": mock_result["tags"],
@@ -277,13 +279,13 @@ def test_vision_worker_qwen_provider_called(caption_slow_env: tuple, tmp_path: P
         row = conn.execute(
             text(
                 "SELECT model_id, model_version, data FROM asset_metadata "
-                "WHERE asset_id = :asset_id AND model_id = 'qwen' AND model_version = '1'"
+                "WHERE asset_id = :asset_id AND model_id = :model_id AND model_version = '1'"
             ),
-            {"asset_id": asset_id},
+            {"asset_id": asset_id, "model_id": model_id},
         ).fetchone()
     engine.dispose()
     assert row is not None
-    assert row[0] == "qwen"
+    assert row[0] == model_id
     assert row[1] == "1"
     data = _jsonb(row[2])
     assert data["description"] == mock_result["description"]

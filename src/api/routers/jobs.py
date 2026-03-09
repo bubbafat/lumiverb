@@ -17,7 +17,6 @@ from src.repository.tenant import (
     SearchSyncQueueRepository,
     WorkerJobRepository,
 )
-from src.models.registry import get_model_config
 from src.workers.enqueue import enqueue_jobs_for_filter
 
 router = APIRouter(prefix="/v1/jobs", tags=["jobs"])
@@ -186,7 +185,7 @@ def complete_job(
         if job.asset_id is None:
             raise HTTPException(status_code=400, detail="Job has no asset_id")
         model_id = data.get("model_id", "moondream")
-        model_version = data.get("model_version") or get_model_config(model_id).model_version
+        model_version = data.get("model_version", "1")
         description = data.get("description", "")
         tags = data.get("tags", [])
         meta_repo = AssetMetadataRepository(session)

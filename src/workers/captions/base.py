@@ -12,7 +12,7 @@ class CaptionProvider(ABC):
     @property
     @abstractmethod
     def provider_id(self) -> str:
-        """Matches ModelConfig.caption_provider in the registry."""
+        """Provider identifier for logging/provenance."""
 
     @abstractmethod
     def describe(self, proxy_path: Path) -> dict:

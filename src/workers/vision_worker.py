@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from src.models.registry import get_model_config
+from src.models.registry import model_version_for_provenance
 from src.storage.local import LocalStorage
 from src.workers.base import BaseWorker
 from src.workers.captions.factory import get_caption_provider
@@ -39,10 +39,9 @@ class VisionWorker(BaseWorker):
                 f"for asset {asset_id}"
             )
 
-        config = get_model_config(vision_model_id)
         return {
             "model_id": vision_model_id,
-            "model_version": config.model_version,
+            "model_version": model_version_for_provenance(vision_model_id),
             "description": result.get("description", ""),
             "tags": result.get("tags", []),
         }

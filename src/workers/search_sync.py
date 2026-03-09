@@ -6,7 +6,7 @@ from typing import Iterable
 
 from sqlmodel import Session
 
-from src.models.registry import VALID_MODEL_IDS, get_model_config
+from src.models.registry import model_version_for_provenance
 from src.models.tenant import Asset, AssetMetadata
 from src.repository.tenant import (
     AssetMetadataRepository,
@@ -88,21 +88,19 @@ class SearchSyncWorker:
 
                 library = self._library_repo.get_by_id(asset.library_id)
                 vision_model_id = library.vision_model_id if library else "moondream"
-                if vision_model_id not in VALID_MODEL_IDS:
-                    vision_model_id = "moondream"
-                config = get_model_config(vision_model_id)
+                model_version = model_version_for_provenance(vision_model_id)
 
                 meta: AssetMetadata | None = self._meta_repo.get(
                     asset_id=asset.asset_id,
                     model_id=vision_model_id,
-                    model_version=config.model_version,
+                    model_version=model_version,
                 )
                 if meta is None:
                     logger.debug(
                         "No AI metadata for asset_id=%s model=%s version=%s; skipping",
                         asset.asset_id,
                         vision_model_id,
-                        config.model_version,
+                        model_version,
                     )
                     sync_ids.append(row.sync_id)
                     continue

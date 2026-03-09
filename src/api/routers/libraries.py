@@ -7,7 +7,6 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session
-from src.models.registry import VALID_MODEL_IDS
 from src.repository.tenant import LibraryRepository, _utcnow
 from src.workers.quickwit import purge_library_from_quickwit
 
@@ -56,10 +55,10 @@ def create_library(
     Create a library. Name must be unique for this tenant.
     Returns 409 if a library with the same name already exists.
     """
-    if body.vision_model_id not in VALID_MODEL_IDS:
+    if not body.vision_model_id.strip():
         raise HTTPException(
             status_code=422,
-            detail=f"Unknown vision_model_id. Valid: {sorted(VALID_MODEL_IDS)}",
+            detail="vision_model_id cannot be empty",
         )
     repo = LibraryRepository(session)
     existing = repo.get_by_name(body.name)
@@ -124,10 +123,10 @@ def update_library(
     if library is None:
         raise HTTPException(status_code=404, detail="Library not found")
     if body.vision_model_id is not None:
-        if body.vision_model_id not in VALID_MODEL_IDS:
+        if not body.vision_model_id.strip():
             raise HTTPException(
                 status_code=422,
-                detail=f"Unknown vision_model_id. Valid: {sorted(VALID_MODEL_IDS)}",
+                detail="vision_model_id cannot be empty",
             )
         library.vision_model_id = body.vision_model_id
     if body.name is not None:
