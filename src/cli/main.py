@@ -286,12 +286,17 @@ def scan(
 
     if result.status == "complete" and (result.files_added > 0 or result.files_updated > 0):
         library_id = match["library_id"]
+        enqueue_filter: dict = {"library_id": library_id}
+        if path:
+            normalised = path.replace("\\", "/").strip("/")
+            enqueue_filter["path_prefix"] = normalised
+
         for job_type in ("proxy", "exif"):
             enqueue_resp = client.post(
                 "/v1/jobs/enqueue",
                 json={
                     "job_type": job_type,
-                    "filter": {"library_id": library_id},
+                    "filter": enqueue_filter,
                     "force": False,
                 },
             ).json()

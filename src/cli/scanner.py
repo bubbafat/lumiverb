@@ -239,6 +239,11 @@ def scan_library(
             )
 
         # Step 6: Page through server assets and reconcile
+        path_prefix: str | None = None
+        if path_override:
+            normalised = path_override.replace("\\", "/").strip("/")
+            path_prefix = normalised + "/"  # e.g. "Photos/HS150/HollyFest2025/"
+
         reconciled = 0
         added_count = updated_count = skipped_count = missing_count = 0
 
@@ -295,8 +300,14 @@ def scan_library(
                             })
                             updated_count += 1
                     else:
-                        batch_items.append({"action": "missing", "asset_id": asset["asset_id"]})
-                        missing_count += 1
+                        # Only mark missing if within the scanned subtree
+                        if path_prefix is None or rel_path.startswith(path_prefix) or rel_path == path_override.replace("\\", "/").strip("/"):
+                            batch_items.append({"action": "missing", "asset_id": asset["asset_id"]})
+                            missing_count += 1
+                        else:
+                            # Outside scanned path — treat as skip (don't touch it)
+                            batch_items.append({"action": "skip", "asset_id": asset["asset_id"]})
+                            skipped_count += 1
 
                 reconciled += len(page)
                 is_last_page = len(page) < SCAN_PAGE_SIZE
