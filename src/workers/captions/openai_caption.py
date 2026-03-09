@@ -73,7 +73,10 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                 clean = re.sub(r"\n?```$", "", clean)
                 clean = clean.strip()
 
-            parsed = json.loads(clean)
+            match = re.search(r'\{.*\}', clean, re.DOTALL)
+            if not match:
+                raise ValueError(f"No JSON object found in response: {clean[:100]!r}")
+            parsed = json.loads(match.group(0))
             description = parsed.get("description", "").strip()
             tags = [t.strip() for t in parsed.get("tags", []) if t.strip()]
             return {"description": description, "tags": tags}
@@ -94,7 +97,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                     ],
                 }
             ],
-            "max_tokens": 300,
+            "max_tokens": 500,
             "temperature": 0.2,
         }
         resp = requests.post(
