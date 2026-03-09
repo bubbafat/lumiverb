@@ -140,35 +140,25 @@ class VideoScene(SQLModel, table=True):
 
 class AssetMetadata(SQLModel, table=True):
     __tablename__ = "asset_metadata"
+    __table_args__ = (
+        UniqueConstraint(
+            "asset_id",
+            "model_id",
+            "model_version",
+            name="uq_asset_metadata_asset_model_version",
+        ),
+    )
 
-    asset_id: str = Field(primary_key=True, foreign_key="assets.asset_id")
-    exif_json: dict[str, Any] | None = Field(
-        default=None,
-        sa_column=Column(JSONB, nullable=True),
+    metadata_id: str = Field(primary_key=True)
+    asset_id: str = Field(foreign_key="assets.asset_id", index=True)
+    model_id: str = Field(nullable=False)
+    model_version: str = Field(nullable=False)
+    generated_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False)
     )
-    sharpness_score: float | None = Field(default=None, nullable=True)
-    face_count: int | None = Field(default=0, nullable=True)
-    ai_description: str | None = Field(default=None, nullable=True)
-    ai_tags: list[str] | None = Field(
-        default=None,
-        sa_column=Column(JSONB, nullable=True),
-    )
-    ai_ocr_text: str | None = Field(default=None, nullable=True)
-    ai_description_at: datetime | None = Field(
-        default=None,
-        sa_column=Column(DateTime(timezone=True), nullable=True),
-    )
-    embedding_vector: Any = Field(
-        default=None,
-        sa_column=Column(Vector(512), nullable=True),
-    )
-    created_at: datetime = Field(
-        default_factory=_utcnow,
-        sa_column=Column(DateTime(timezone=True), nullable=False),
-    )
-    updated_at: datetime = Field(
-        default_factory=_utcnow,
-        sa_column=Column(DateTime(timezone=True), nullable=False),
+    data: dict = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False),
     )
 
 

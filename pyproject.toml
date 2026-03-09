@@ -34,6 +34,7 @@ dependencies = [
     "opencv-python-headless>=4.8.0",  # Laplacian sharpness, frame manipulation
     # AI & metadata
     "requests>=2.25",         # Moondream Station HTTP client
+    "moondream>=0.0.5",
     "pyexiftool>=0.5",        # EXIF metadata extraction
     "mediapipe>=0.10.0,<0.11",  # Face detection (BlazeFace)
     "rapidfuzz>=3.0.0",       # Semantic deduplication (scene merge)

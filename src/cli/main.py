@@ -207,6 +207,27 @@ def worker_exif(
     worker.run()
 
 
+@worker_app.command("vision")
+def worker_vision(
+    library: Annotated[str | None, typer.Option("--library")] = None,
+    once: Annotated[bool, typer.Option("--once")] = False,
+) -> None:
+    """Run the AI vision worker (Moondream descriptions and tags)."""
+    from src.storage.local import get_storage
+    from src.workers.vision_worker import VisionWorker
+
+    client = LumiverbClient()
+    storage = get_storage()
+    library_id = _resolve_library_id(client, library) if library else None
+    worker = VisionWorker(
+        client=client,
+        storage=storage,
+        once=once,
+        library_id=library_id,
+    )
+    worker.run()
+
+
 # ---------------------------------------------------------------------------
 # scan
 # ---------------------------------------------------------------------------

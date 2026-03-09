@@ -10,7 +10,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session, select
 
 from src.models.filter import AssetFilterSpec
-from src.models.tenant import Asset, Library, Scan, WorkerJob
+from src.models.tenant import Asset, AssetMetadata, Library, Scan, WorkerJob
 from ulid import ULID
 
 
@@ -585,6 +585,16 @@ class AssetRepository:
                 conditions.append("a.proxy_key IS NULL")
             if filter.missing_thumbnail:
                 conditions.append("a.thumbnail_key IS NULL")
+            if filter.missing_ai:
+                conditions.append(
+                    """
+                    NOT EXISTS (
+                        SELECT 1 FROM asset_metadata m
+                        WHERE m.asset_id = a.asset_id
+                          AND m.model_id = 'moondream'
+                    )
+                    """
+                )
             if filter.camera_make:
                 conditions.append("a.camera_make ILIKE :camera_make")
                 params["camera_make"] = f"%{filter.camera_make}%"
@@ -618,11 +628,73 @@ class AssetRepository:
                 conditions.append("a.thumbnail_key IS NULL")
             elif job_type == "exif":
                 conditions.append("a.exif_extracted_at IS NULL")
+            elif job_type == "ai_vision":
+                conditions.append(
+                    """
+                    NOT EXISTS (
+                        SELECT 1 FROM asset_metadata m
+                        WHERE m.asset_id = a.asset_id
+                          AND m.model_id = 'moondream'
+                    )
+                    """
+                )
 
         where = " AND ".join(conditions)
         sql = f"SELECT a.asset_id FROM assets a WHERE {where} ORDER BY a.asset_id"
         rows = self._session.execute(text(sql), params).fetchall()
         return [row[0] for row in rows]
+
+
+class AssetMetadataRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def upsert(
+        self,
+        asset_id: str,
+        model_id: str,
+        model_version: str,
+        data: dict,
+    ) -> None:
+        """
+        Insert or update metadata row for (asset_id, model_id, model_version).
+        On conflict: update data and generated_at only.
+        """
+        now = _utcnow()
+        stmt = pg_insert(AssetMetadata).values(
+            metadata_id="meta_" + str(ULID()),
+            asset_id=asset_id,
+            model_id=model_id,
+            model_version=model_version,
+            generated_at=now,
+            data=data,
+        )
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_asset_metadata_asset_model_version",
+            set_={
+                "data": stmt.excluded.data,
+                "generated_at": stmt.excluded.generated_at,
+            },
+        )
+        self._session.execute(stmt)
+        self._session.commit()
+
+    def get(
+        self,
+        asset_id: str,
+        model_id: str,
+        model_version: str,
+    ) -> AssetMetadata | None:
+        stmt = select(AssetMetadata).where(
+            AssetMetadata.asset_id == asset_id,
+            AssetMetadata.model_id == model_id,
+            AssetMetadata.model_version == model_version,
+        )
+        return self._session.exec(stmt).first()
+
+    def list_for_asset(self, asset_id: str) -> list[AssetMetadata]:
+        stmt = select(AssetMetadata).where(AssetMetadata.asset_id == asset_id)
+        return list(self._session.exec(stmt).all())
 
 
 class WorkerJobRepository:

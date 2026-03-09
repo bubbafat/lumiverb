@@ -12,10 +12,12 @@ from src.core.config import get_settings
 from src.models.filter import AssetFilterSpec
 from src.repository.tenant import (
     AssetRepository,
+    AssetMetadataRepository,
     LibraryRepository,
     WorkerJobRepository,
 )
 from src.workers.enqueue import enqueue_jobs_for_filter
+from src.workers.vision import VISION_MODEL_ID, VISION_MODEL_VERSION
 
 router = APIRouter(prefix="/v1/jobs", tags=["jobs"])
 
@@ -99,6 +101,8 @@ def get_next_job(
         "media_type": asset.media_type,
         "library_id": asset.library_id,
         "root_path": library.root_path,
+        "proxy_key": asset.proxy_key,
+        "thumbnail_key": asset.thumbnail_key,
     }
 
 
@@ -175,6 +179,23 @@ def complete_job(
             taken_at=data.get("taken_at"),
             gps_lat=data.get("gps_lat"),
             gps_lon=data.get("gps_lon"),
+        )
+    elif job.job_type == "ai_vision":
+        if job.asset_id is None:
+            raise HTTPException(status_code=400, detail="Job has no asset_id")
+        model_id = data.get("model_id", VISION_MODEL_ID)
+        model_version = data.get("model_version", VISION_MODEL_VERSION)
+        description = data.get("description", "")
+        tags = data.get("tags", [])
+        meta_repo = AssetMetadataRepository(session)
+        meta_repo.upsert(
+            asset_id=job.asset_id,
+            model_id=model_id,
+            model_version=model_version,
+            data={
+                "description": description,
+                "tags": tags,
+            },
         )
     job_repo.set_completed(job)
     return JobCompleteResponse(job_id=job_id, status="completed")

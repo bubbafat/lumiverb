@@ -21,6 +21,7 @@ class AssetFilterSpec(BaseModel):
     # Status filters
     missing_proxy: bool = False
     missing_thumbnail: bool = False
+    missing_ai: bool = False  # no asset_metadata row for moondream (any version)
 
     # EXIF / camera filters
     camera_make: str | None = None  # camera_make ILIKE value
