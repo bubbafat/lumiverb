@@ -11,19 +11,18 @@ VISION_MODEL_ID = "moondream"
 VISION_MODEL_VERSION = "2"
 
 _model = None
-_tokenizer = None
 
 
 def _load_model():
-    global _model, _tokenizer
+    global _model
     if _model is not None:
-        return _model, _tokenizer
+        return _model
     logger.info("Loading Moondream model...")
     import moondream as md
 
     _model = md.vl(model="moondream-2b-int8.mf")
     logger.info("Moondream model loaded.")
-    return _model, _tokenizer
+    return _model
 
 
 def describe_image(proxy_path: Path) -> dict:
@@ -40,7 +39,7 @@ def describe_image(proxy_path: Path) -> dict:
     try:
         from PIL import Image as PILImage
 
-        model, _ = _load_model()
+        model = _load_model()
         image = PILImage.open(proxy_path)
         description = model.caption(image)["caption"]
         tags_raw = model.query(
