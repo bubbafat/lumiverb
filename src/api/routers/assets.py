@@ -37,6 +37,13 @@ class AssetResponse(BaseModel):
     thumbnail_key: str | None
     width: int | None
     height: int | None
+    sha256: str | None = None
+    exif_extracted_at: str | None = None  # ISO8601
+    camera_make: str | None = None
+    camera_model: str | None = None
+    taken_at: str | None = None  # ISO8601
+    gps_lat: float | None = None
+    gps_lon: float | None = None
 
 
 class AssetPageItem(BaseModel):
@@ -103,6 +110,13 @@ def list_assets(
             thumbnail_key=a.thumbnail_key,
             width=a.width,
             height=a.height,
+            sha256=a.sha256,
+            exif_extracted_at=a.exif_extracted_at.isoformat() if a.exif_extracted_at else None,
+            camera_make=a.camera_make,
+            camera_model=a.camera_model,
+            taken_at=a.taken_at.isoformat() if a.taken_at else None,
+            gps_lat=a.gps_lat,
+            gps_lon=a.gps_lon,
         )
         for a in assets
     ]
@@ -128,6 +142,13 @@ def get_asset(
         thumbnail_key=asset.thumbnail_key,
         width=asset.width,
         height=asset.height,
+        sha256=asset.sha256,
+        exif_extracted_at=asset.exif_extracted_at.isoformat() if asset.exif_extracted_at else None,
+        camera_make=asset.camera_make,
+        camera_model=asset.camera_model,
+        taken_at=asset.taken_at.isoformat() if asset.taken_at else None,
+        gps_lat=asset.gps_lat,
+        gps_lon=asset.gps_lon,
     )
 
 

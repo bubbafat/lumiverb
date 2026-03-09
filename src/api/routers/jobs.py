@@ -162,6 +162,20 @@ def complete_job(
             width=width,
             height=height,
         )
+    elif job.job_type == "exif":
+        if job.asset_id is None:
+            raise HTTPException(status_code=400, detail="Job has no asset_id")
+        asset_repo = AssetRepository(session)
+        asset_repo.update_exif(
+            asset_id=job.asset_id,
+            sha256=data.get("sha256"),
+            exif=data.get("exif", {}),
+            camera_make=data.get("camera_make"),
+            camera_model=data.get("camera_model"),
+            taken_at=data.get("taken_at"),
+            gps_lat=data.get("gps_lat"),
+            gps_lon=data.get("gps_lon"),
+        )
     job_repo.set_completed(job)
     return JobCompleteResponse(job_id=job_id, status="completed")
 

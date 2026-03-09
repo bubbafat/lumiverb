@@ -21,3 +21,10 @@ class AssetFilterSpec(BaseModel):
     # Status filters
     missing_proxy: bool = False
     missing_thumbnail: bool = False
+
+    # EXIF / camera filters
+    camera_make: str | None = None  # camera_make ILIKE value
+    camera_model: str | None = None  # camera_model ILIKE value
+    missing_exif: bool = False  # exif_extracted_at IS NULL
+    taken_after: datetime | None = None
+    taken_before: datetime | None = None

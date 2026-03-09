@@ -154,11 +154,21 @@ worker_app = typer.Typer(help="Run background workers.")
 app.add_typer(worker_app, name="worker")
 
 
+def _resolve_library_id(client: object, library_name: str) -> str:
+    """Resolve library name to library_id. Exits with 1 if not found."""
+    libraries = client.get("/v1/libraries").json()
+    match = next((l for l in libraries if l.get("name") == library_name), None)
+    if match is None:
+        typer.echo(f"Library not found: {library_name}", err=True)
+        raise typer.Exit(1)
+    return match["library_id"]
+
+
 @worker_app.command("proxy")
 def worker_proxy(
     once: bool = typer.Option(False, "--once", help="Process all queued jobs then exit."),
     concurrency: int = typer.Option(1, "--concurrency", help="Number of parallel workers."),
-    library: str = typer.Option(None, "--library", help="Only process jobs for this library."),
+    library: str | None = typer.Option(None, "--library", help="Only process jobs for this library."),
 ) -> None:
     """Generate proxies and thumbnails for pending image assets."""
     from src.storage.local import LocalStorage
@@ -170,14 +180,7 @@ def worker_proxy(
     ctx = client.get("/v1/tenant/context").json()
     tenant_id = ctx["tenant_id"]
 
-    library_id: str | None = None
-    if library:
-        libraries = client.get("/v1/libraries").json()
-        match = next((l for l in libraries if l["name"] == library), None)
-        if match is None:
-            typer.echo(f"Library not found: {library}", err=True)
-            raise typer.Exit(1)
-        library_id = match["library_id"]
+    library_id: str | None = _resolve_library_id(client, library) if library else None
 
     worker = ProxyWorker(
         client=client,
@@ -187,6 +190,20 @@ def worker_proxy(
         once=once,
         library_id=library_id,
     )
+    worker.run()
+
+
+@worker_app.command("exif")
+def worker_exif(
+    library: Annotated[str | None, typer.Option("--library")] = None,
+    once: Annotated[bool, typer.Option("--once")] = False,
+) -> None:
+    """Run the EXIF metadata worker."""
+    from src.workers.exif_worker import ExifWorker
+
+    client = LumiverbClient()
+    library_id = _resolve_library_id(client, library) if library else None
+    worker = ExifWorker(client=client, once=once, library_id=library_id)
     worker.run()
 
 
@@ -224,16 +241,17 @@ def scan(
 
     if result.status == "complete" and (result.files_added > 0 or result.files_updated > 0):
         library_id = match["library_id"]
-        enqueue_resp = client.post(
-            "/v1/jobs/enqueue",
-            json={
-                "job_type": "proxy",
-                "filter": {"library_id": library_id},
-                "force": False,
-            },
-        ).json()
-        enqueued = enqueue_resp.get("enqueued", 0)
-        console.print(f"Enqueued {enqueued:,} proxy jobs.")
+        for job_type in ("proxy", "exif"):
+            enqueue_resp = client.post(
+                "/v1/jobs/enqueue",
+                json={
+                    "job_type": job_type,
+                    "filter": {"library_id": library_id},
+                    "force": False,
+                },
+            ).json()
+            enqueued = enqueue_resp.get("enqueued", 0)
+            console.print(f"Enqueued {enqueued:,} {job_type} jobs.")
 
     if result.status != "complete":
         raise typer.Exit(1)

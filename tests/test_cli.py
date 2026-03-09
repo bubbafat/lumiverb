@@ -223,7 +223,8 @@ def test_scan_registers_signal_handlers(tmp_path: Path) -> None:
             "files_missing": 0,
             "status": "complete",
         }),
-        _json({"enqueued": 0}),
+        _json({"enqueued": 0}),  # proxy enqueue
+        _json({"enqueued": 0}),  # exif enqueue
     ]
     with patch("src.cli.main.LumiverbClient", return_value=mock_client), patch(
         "src.cli.scanner.signal.signal"

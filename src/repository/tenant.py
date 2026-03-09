@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import and_, or_, text
@@ -498,6 +499,51 @@ class AssetRepository:
         self._session.refresh(asset)
         return asset
 
+    def update_exif(
+        self,
+        asset_id: str,
+        sha256: str | None,
+        exif: dict,
+        camera_make: str | None,
+        camera_model: str | None,
+        taken_at: str | None,
+        gps_lat: float | None,
+        gps_lon: float | None,
+    ) -> None:
+        """Update EXIF fields on asset record."""
+        taken_at_dt: datetime | None = None
+        if taken_at:
+            try:
+                taken_at_dt = datetime.fromisoformat(taken_at)
+            except ValueError:
+                pass
+        self._session.execute(
+            text("""
+                UPDATE assets SET
+                    sha256 = :sha256,
+                    exif = :exif,
+                    exif_extracted_at = :now,
+                    camera_make = :camera_make,
+                    camera_model = :camera_model,
+                    taken_at = :taken_at,
+                    gps_lat = :gps_lat,
+                    gps_lon = :gps_lon
+                WHERE asset_id = :asset_id
+            """),
+            {
+                "sha256": sha256,
+                "exif": json.dumps(exif) if exif else None,
+                "now": _utcnow(),
+                "camera_make": camera_make,
+                "camera_model": camera_model,
+                "taken_at": taken_at_dt,
+                "gps_lat": gps_lat,
+                "gps_lon": gps_lon,
+                "asset_id": asset_id,
+            },
+        )
+        self._session.commit()
+
     def query_for_enqueue(
         self,
         filter: AssetFilterSpec,
@@ -539,6 +585,20 @@ class AssetRepository:
                 conditions.append("a.proxy_key IS NULL")
             if filter.missing_thumbnail:
                 conditions.append("a.thumbnail_key IS NULL")
+            if filter.camera_make:
+                conditions.append("a.camera_make ILIKE :camera_make")
+                params["camera_make"] = f"%{filter.camera_make}%"
+            if filter.camera_model:
+                conditions.append("a.camera_model ILIKE :camera_model")
+                params["camera_model"] = f"%{filter.camera_model}%"
+            if filter.missing_exif:
+                conditions.append("a.exif_extracted_at IS NULL")
+            if filter.taken_after:
+                conditions.append("a.taken_at >= :taken_after")
+                params["taken_after"] = filter.taken_after
+            if filter.taken_before:
+                conditions.append("a.taken_at <= :taken_before")
+                params["taken_before"] = filter.taken_before
 
         if not force:
             conditions.append(
@@ -551,11 +611,13 @@ class AssetRepository:
                 )
                 """
             )
-            # Exclude already-processed assets for proxy/thumbnail job types
+            # Exclude already-processed assets for proxy/thumbnail/exif job types
             if job_type == "proxy":
                 conditions.append("a.proxy_key IS NULL")
             elif job_type == "thumbnail":
                 conditions.append("a.thumbnail_key IS NULL")
+            elif job_type == "exif":
+                conditions.append("a.exif_extracted_at IS NULL")
 
         where = " AND ".join(conditions)
         sql = f"SELECT a.asset_id FROM assets a WHERE {where} ORDER BY a.asset_id"

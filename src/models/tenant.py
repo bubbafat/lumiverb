@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Column, DateTime, UniqueConstraint
+from sqlalchemy import Column, DateTime, JSON, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
@@ -95,6 +95,19 @@ class Asset(SQLModel, table=True):
     )
     proxy_key: str | None = Field(default=None, nullable=True)
     thumbnail_key: str | None = Field(default=None, nullable=True)
+    exif: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    exif_extracted_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+    camera_make: str | None = Field(default=None, nullable=True)
+    camera_model: str | None = Field(default=None, nullable=True)
+    taken_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+    gps_lat: float | None = Field(default=None, nullable=True)
+    gps_lon: float | None = Field(default=None, nullable=True)
     availability: str = Field(default="online", nullable=False)
     status: str = Field(default="pending", nullable=False)
     error_message: str | None = Field(default=None, nullable=True)
