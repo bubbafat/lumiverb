@@ -263,7 +263,8 @@ def worker_search_sync(
     """Run the search sync worker."""
     import time
 
-    from src.cli.progress import LiveProgress
+    from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
+
     from src.core.config import get_settings
     from src.core.database import get_tenant_session
     from src.repository.tenant import SearchSyncQueueRepository
@@ -307,25 +308,39 @@ def worker_search_sync(
         total_synced = 0
         total_skipped = 0
         total_batches = 0
-        console.print(f"Search sync queue: {pending:,} pending assets")
 
-        with LiveProgress(
-            console,
-            label="Syncing search index",
-            counters=["synced", "skipped", "batches"],
-        ) as bar:
+        def _counter_text() -> str:
+            return f"{total_synced:,} synced  {total_skipped:,} skipped"
+
+        use_progress = console.is_terminal
+        with Progress(
+            SpinnerColumn(),
+            BarColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            TextColumn("  "),
+            TextColumn("{task.completed:,} / {task.total:,} assets"),
+            TextColumn("  "),
+            TextColumn("{task.fields[counters]}"),
+            console=console,
+            disable=not use_progress,
+        ) as progress:
+            task = progress.add_task(
+                "Syncing search index",
+                total=pending,
+                completed=0,
+                counters=_counter_text(),
+            )
+
             if once:
                 result = worker.run_once()
                 total_synced = result["synced"]
                 total_skipped = result["skipped"]
                 total_batches = result["batches"]
-                bar.update(
+                progress.update(
+                    task,
                     completed=total_synced + total_skipped,
-                    synced=total_synced,
-                    skipped=total_skipped,
-                    batches=total_batches,
+                    counters=_counter_text(),
                 )
-                bar.finish()
             else:
                 settings = get_settings()
                 while True:
@@ -334,8 +349,20 @@ def worker_search_sync(
                     total_synced += s
                     total_skipped += sk
                     total_batches += b
-                    bar.update(completed=s + sk, synced=s, skipped=sk, batches=b)
-                    time.sleep(settings.worker_idle_poll_seconds)
+                    completed = total_synced + total_skipped
+                    progress.update(task, completed=completed, counters=_counter_text())
+
+                    if s + sk == 0:
+                        # Queue empty; refresh total in case new work arrived
+                        pending = worker.pending_count()
+                        if pending > 0:
+                            progress.update(task, total=completed + pending)
+                        time.sleep(settings.worker_idle_poll_seconds)
+                    elif completed >= pending:
+                        # Caught up; refresh total for any newly enqueued work
+                        new_pending = worker.pending_count()
+                        pending = completed + new_pending
+                        progress.update(task, total=pending)
 
         if quickwit.enabled:
             table = Table(show_header=True)
