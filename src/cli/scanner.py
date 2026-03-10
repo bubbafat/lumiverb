@@ -8,13 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from rich.console import Console
-from rich.progress import (
-    BarColumn,
-    Progress,
-    SpinnerColumn,
-    TextColumn,
-)
 
+from src.cli.progress import UnifiedProgress, UnifiedProgressSpec
 from src.core.file_extensions import SUPPORTED_EXTENSIONS, VIDEO_EXTENSIONS
 
 SCAN_PAGE_SIZE = 500
@@ -222,21 +217,17 @@ def scan_library(
             )
 
         # Step 5: Build local map (no API calls)
-        use_progress = console.is_terminal
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-            disable=not use_progress,
-        ) as progress:
-            task = progress.add_task("Building file map...", total=None)
+        spec = UnifiedProgressSpec(
+            label="Building file map",
+            unit="files",
+            counters=[],
+            total=None,
+        )
+        with UnifiedProgress(console, spec) as bar:
             local_map = _build_local_map(library_root_resolved, walk_root_resolved)
             n_files = len(local_map)
-            progress.update(
-                task,
-                description=f"Building file map... {n_files:,} files found",
-                completed=True,
-            )
+            bar.update(completed=n_files)
+            bar.finish()
 
         # Step 6: Page through server assets and reconcile
         path_prefix: str | None = None
@@ -247,29 +238,13 @@ def scan_library(
         reconciled = 0
         added_count = updated_count = skipped_count = missing_count = 0
 
-        def _counter_text() -> str:
-            return (
-                f"{added_count:,} new  "
-                f"{updated_count:,} updated  "
-                f"{skipped_count:,} unchanged  "
-                f"{missing_count:,} missing"
-            )
-
-        with Progress(
-            SpinnerColumn(),
-            BarColumn(),
-            TextColumn("{task.completed:,} assets"),
-            TextColumn("  "),
-            TextColumn("{task.fields[counters]}"),
-            console=console,
-            disable=not use_progress,
-        ) as progress:
-            task = progress.add_task(
-                "Reconciling",
-                total=None,
-                counters=_counter_text(),
-            )
-
+        spec = UnifiedProgressSpec(
+            label="Reconciling",
+            unit="assets",
+            counters=["new", "updated", "unchanged", "missing"],
+            total=None,
+        )
+        with UnifiedProgress(console, spec) as bar:
             cursor = None
             while True:
                 params = {"library_id": library_id, "limit": SCAN_PAGE_SIZE}
@@ -277,7 +252,14 @@ def scan_library(
                     params["after"] = cursor
                 resp = client.get("/v1/assets/page", params=params)
                 if resp.status_code == 204:
-                    progress.update(task, total=0, completed=0, counters=_counter_text())
+                    bar.update(
+                        completed=0,
+                        total=0,
+                        new=len(local_map),
+                        updated=updated_count,
+                        unchanged=skipped_count,
+                        missing=missing_count,
+                    )
                     break
                 page = resp.json()
                 if not page:
@@ -311,11 +293,13 @@ def scan_library(
 
                 reconciled += len(page)
                 is_last_page = len(page) < SCAN_PAGE_SIZE
-                progress.update(
-                    task,
+                bar.update(
                     completed=reconciled,
                     total=reconciled if is_last_page else None,
-                    counters=_counter_text(),
+                    new=len(local_map),
+                    updated=updated_count,
+                    unchanged=skipped_count,
+                    missing=missing_count,
                 )
 
                 if batch_items:

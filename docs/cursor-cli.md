@@ -11,6 +11,7 @@ See docs/architecture.md for the full design.
 - `src/cli/main.py` — Typer app entry point; command groups: `config`, `library`, and top-level `scan`
 - `src/cli/config.py` — Local config in `~/.lumiverb/config.json` (`api_url`, `api_key`): `load_config`, `save_config`, `get_api_url`, `get_api_key`
 - `src/cli/client.py` — `LumiverbClient`: thin httpx wrapper, reads config for base URL and `Authorization: Bearer <api_key>`; on non-2xx prints error envelope and exits 1
+- `src/cli/progress.py` — `UnifiedProgress`: unified layout (spinner + bar + N/M units + counters) for all long-running commands (scan, workers, search-sync). Disabled when not a terminal.
 
 Entry point: `lumiverb = "src.cli:main"` (setuptools); `main()` invokes the Typer app.
 

@@ -263,8 +263,7 @@ def worker_search_sync(
     """Run the search sync worker."""
     import time
 
-    from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
-
+    from src.cli.progress import UnifiedProgress, UnifiedProgressSpec
     from src.core.config import get_settings
     from src.core.database import get_tenant_session
     from src.repository.tenant import SearchSyncQueueRepository
@@ -281,15 +280,21 @@ def worker_search_sync(
     with get_tenant_session(tenant_id) as session:
         if force_resync:
             queue_repo = SearchSyncQueueRepository(session)
-
-            def _progress(completed: int, total: int) -> None:
-                console.print(f"Enqueued {completed:,} / {total:,}...")
-
-            asset_ids = queue_repo.enqueue_all_for_library(
-                library_id,
-                path_prefix=path_prefix,
-                progress_callback=_progress,
+            spec = UnifiedProgressSpec(
+                label="Enqueuing assets for resync",
+                unit="assets",
+                counters=[],
+                total=None,
             )
+            with UnifiedProgress(console, spec) as bar:
+                def _progress(completed: int, total: int) -> None:
+                    bar.update(completed=completed, total=total)
+
+                asset_ids = queue_repo.enqueue_all_for_library(
+                    library_id,
+                    path_prefix=path_prefix,
+                    progress_callback=_progress,
+                )
             if asset_ids:
                 console.print(f"Re-enqueued {len(asset_ids):,} assets for resync.")
 
@@ -308,37 +313,22 @@ def worker_search_sync(
         total_synced = 0
         total_skipped = 0
         total_batches = 0
+        base_synced = 0
+        base_skipped = 0
 
-        def _counter_text() -> str:
-            return f"{total_synced:,} synced  {total_skipped:,} skipped"
-
-        use_progress = console.is_terminal
-        with Progress(
-            SpinnerColumn(),
-            BarColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            TextColumn("  "),
-            TextColumn("{task.completed:,} / {task.total:,} assets"),
-            TextColumn("  "),
-            TextColumn("{task.fields[counters]}"),
-            console=console,
-            disable=not use_progress,
-        ) as progress:
-            task = progress.add_task(
-                "Syncing search index",
-                total=pending,
-                completed=0,
-                counters=_counter_text(),
-            )
-
-            base_synced = 0
-            base_skipped = 0
+        spec = UnifiedProgressSpec(
+            label="Syncing search index",
+            unit="assets",
+            counters=["synced", "skipped"],
+            total=pending,
+        )
+        with UnifiedProgress(console, spec) as bar:
 
             def _on_batch(synced: int, skipped: int, batches: int) -> None:
-                progress.update(
-                    task,
+                bar.update(
                     completed=base_synced + base_skipped + synced + skipped,
-                    counters=f"{base_synced + synced:,} synced  {base_skipped + skipped:,} skipped",
+                    synced=base_synced + synced,
+                    skipped=base_skipped + skipped,
                 )
 
             if once:
@@ -346,10 +336,10 @@ def worker_search_sync(
                 total_synced = result["synced"]
                 total_skipped = result["skipped"]
                 total_batches = result["batches"]
-                progress.update(
-                    task,
+                bar.update(
                     completed=total_synced + total_skipped,
-                    counters=_counter_text(),
+                    synced=total_synced,
+                    skipped=total_skipped,
                 )
             else:
                 settings = get_settings()
@@ -362,19 +352,33 @@ def worker_search_sync(
                     base_synced += s
                     base_skipped += sk
                     completed = total_synced + total_skipped
-                    progress.update(task, completed=completed, counters=_counter_text())
+                    bar.update(
+                        completed=completed,
+                        synced=total_synced,
+                        skipped=total_skipped,
+                    )
 
                     if s + sk == 0:
                         # Queue empty; refresh total in case new work arrived
                         pending = worker.pending_count()
                         if pending > 0:
-                            progress.update(task, total=completed + pending)
+                            bar.update(
+                                completed=completed,
+                                total=completed + pending,
+                                synced=total_synced,
+                                skipped=total_skipped,
+                            )
                         time.sleep(settings.worker_idle_poll_seconds)
                     elif completed >= pending:
                         # Caught up; refresh total for any newly enqueued work
                         new_pending = worker.pending_count()
                         pending = completed + new_pending
-                        progress.update(task, total=pending)
+                        bar.update(
+                            completed=completed,
+                            total=pending,
+                            synced=total_synced,
+                            skipped=total_skipped,
+                        )
 
         if quickwit.enabled:
             table = Table(show_header=True)
@@ -492,11 +496,20 @@ def status(
 
     any_failures = any(pivot.get(s, {}).get("failed", 0) > 0 for s in stages_with_data)
     if any_failures:
-        failed_stages = [s for s in stages_with_data if pivot.get(s, {}).get("failed", 0) > 0 and s != "search_sync"]
+        failed_stages = [
+            (s, pivot[s]["failed"])
+            for s in stages_with_data
+            if pivot.get(s, {}).get("failed", 0) > 0
+            and s != "search_sync"
+        ]
         if failed_stages:
-            # Use friendly alias for vision (ai_vision → vision)
-            hint_type = "vision" if failed_stages[0] == "ai_vision" else failed_stages[0]
-            console.print(f"\nRun 'lumiverb failures --library {library} --job-type {hint_type}' to see failure details.")
+            # Show hint for the stage with most failures
+            worst = max(failed_stages, key=lambda x: x[1])
+            hint_type = "vision" if worst[0] == "ai_vision" else worst[0]
+            console.print(
+                f"\nRun 'lumiverb failures --library {library} "
+                f"--job-type {hint_type}' to see failure details."
+            )
 
 
 # ---------------------------------------------------------------------------

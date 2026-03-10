@@ -956,10 +956,9 @@ class WorkerJobRepository:
 
     def pipeline_status(self, library_id: str) -> list[dict]:
         """
-        Return [{job_type, status, count}] for the latest job state per (asset_id, job_type).
-
-        Uses DISTINCT ON to pick the most recent job per asset per type, then counts.
-        Counts are bounded by asset count (no double-counting from retries/cancelled).
+        Return [{job_type, status, count}] for all jobs in library.
+        Uses latest-state per (asset_id, job_type) — counts reflect
+        current state, not historical retries.
         """
         rows = self._session.execute(
             text("""
@@ -993,6 +992,10 @@ class WorkerJobRepository:
         Return (rows, total_count) where rows are the most recent failed job per asset.
         total_count is the unfiltered count of distinct assets with failures.
         Each row: {rel_path, error_message, failed_at}
+
+        DISTINCT ON (asset_id) is correct here: we filter to a single
+        job_type and status='failed', so we get the most recent failed
+        job per asset within that type. No job_type in the DISTINCT needed.
         """
         path_filter = ""
         params: dict = {

@@ -5,7 +5,7 @@ import time
 
 from rich.console import Console
 
-from src.cli.progress import LiveProgress
+from src.cli.progress import UnifiedProgress, UnifiedProgressSpec
 from src.core.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -68,12 +68,13 @@ class BaseWorker:
         settings = get_settings()
         processed = 0
         failed = 0
-
-        with LiveProgress(
-            self._console,
+        spec = UnifiedProgressSpec(
             label=f"Processing {self.job_type} jobs",
+            unit="jobs",
             counters=["done", "failed"],
-        ) as bar:
+            total=None,
+        )
+        with UnifiedProgress(self._console, spec) as bar:
             while True:
                 job = self.claim_job()
                 if job is None:
@@ -93,13 +94,21 @@ class BaseWorker:
                     result = self.process(job)
                     self.complete_job(job_id, result or {})
                     processed += 1
-                    bar.update(completed=1, done=1)
+                    bar.update(
+                        completed=processed + failed,
+                        done=processed,
+                        failed=failed,
+                    )
                     logger.info("completed job_id=%s", job_id)
                 except Exception as e:
                     logger.exception("failed job_id=%s error=%s", job_id, e)
                     self.fail_job(job_id, str(e))
                     failed += 1
-                    bar.update(completed=1, failed=1)
+                    bar.update(
+                        completed=processed + failed,
+                        done=processed,
+                        failed=failed,
+                    )
 
         self._console.print(
             f"Done: {processed:,} succeeded, {failed:,} failed"

@@ -14,8 +14,9 @@ runner = CliRunner()
 def test_pipeline_status_groups_correctly() -> None:
     """
     Mock pipeline_status returning latest-state counts (what the fixed query produces).
-    Under the old query, retries could double-count (e.g. 150 completed for 100 assets).
-    New implementation bounds counts by asset count; assert output is sensible.
+    Tests latest-state semantics: one row per (asset_id, job_type); historical
+    retries/cancelled jobs are ignored. Old query would double-count (e.g. 150
+    completed for 100 assets); new implementation bounds counts by asset count.
     """
     mock_client = MagicMock()
     mock_client.get.return_value.json.side_effect = [
@@ -177,3 +178,43 @@ def test_failures_shows_retry_hint() -> None:
 
     assert result.exit_code == 0
     assert "lumiverb enqueue" in result.output
+
+
+@pytest.mark.fast
+def test_status_hint_shows_worst_failure_type() -> None:
+    """Hint shows the job type with the most failures (ai_vision, not proxy)."""
+    mock_client = MagicMock()
+    mock_client.get.return_value.json.side_effect = [
+        [{"library_id": "lib_01", "name": "Test", "root_path": "/photos"}],
+        {"tenant_id": "ten_01"},
+    ]
+
+    mock_session = MagicMock()
+    mock_cm = MagicMock()
+    mock_cm.__enter__.return_value = mock_session
+    mock_cm.__exit__.return_value = None
+
+    mock_asset_repo = MagicMock()
+    mock_asset_repo.count_by_library.return_value = 100
+
+    mock_job_repo = MagicMock()
+    mock_job_repo.pipeline_status.return_value = [
+        {"job_type": "proxy", "status": "failed", "count": 2},
+        {"job_type": "ai_vision", "status": "failed", "count": 50},
+    ]
+
+    mock_ssq_repo = MagicMock()
+    mock_ssq_repo.search_sync_pipeline_status.return_value = []
+
+    with (
+        patch("src.cli.main.LumiverbClient", return_value=mock_client),
+        patch("src.core.database.get_tenant_session", return_value=mock_cm),
+        patch("src.repository.tenant.AssetRepository", return_value=mock_asset_repo),
+        patch("src.repository.tenant.WorkerJobRepository", return_value=mock_job_repo),
+        patch("src.repository.tenant.SearchSyncQueueRepository", return_value=mock_ssq_repo),
+    ):
+        result = runner.invoke(app, ["status", "--library", "Test"])
+
+    assert result.exit_code == 0
+    assert "vision" in result.output
+    assert "lumiverb failures" in result.output
