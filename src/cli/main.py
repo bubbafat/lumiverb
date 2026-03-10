@@ -401,7 +401,16 @@ JOB_TYPE_DISPLAY: dict[str, str] = {
     "embed": "Embeddings",
 }
 
+JOB_TYPE_ALIASES: dict[str, str] = {
+    "vision": "ai_vision",
+}
+
 STAGE_ORDER: list[str] = ["proxy", "exif", "ai_vision", "search_sync", "embed"]
+
+
+def _resolve_job_type(job_type: str) -> str:
+    """Resolve user-friendly aliases (e.g. vision) to actual job_type (ai_vision)."""
+    return JOB_TYPE_ALIASES.get(job_type.lower(), job_type)
 
 
 @app.command("status")
@@ -485,7 +494,9 @@ def status(
     if any_failures:
         failed_stages = [s for s in stages_with_data if pivot.get(s, {}).get("failed", 0) > 0 and s != "search_sync"]
         if failed_stages:
-            console.print(f"\nRun 'lumiverb failures --library {library} --job-type {failed_stages[0]}' to see failure details.")
+            # Use friendly alias for vision (ai_vision → vision)
+            hint_type = "vision" if failed_stages[0] == "ai_vision" else failed_stages[0]
+            console.print(f"\nRun 'lumiverb failures --library {library} --job-type {hint_type}' to see failure details.")
 
 
 # ---------------------------------------------------------------------------
@@ -496,11 +507,12 @@ def status(
 @app.command("failures")
 def failures(
     library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
-    job_type: Annotated[str, typer.Option("--job-type", "-j", help="Job type (e.g. ai_vision, proxy).")],
+    job_type: Annotated[str, typer.Option("--job-type", "-j", help="Job type (proxy, exif, ai_vision, vision, ...).")],
     path: Annotated[str | None, typer.Option("--path", "-p", help="Optional path prefix to filter.")] = None,
     limit: Annotated[int, typer.Option("--limit", help="Max failures to show.")] = 20,
 ) -> None:
     """List failed jobs with error messages. Shows most recent failure per asset. Prints retry command hint."""
+    job_type = _resolve_job_type(job_type)
     from src.core.database import get_tenant_session
     from src.repository.tenant import WorkerJobRepository
 
@@ -636,6 +648,8 @@ def enqueue(
     if force and retry_failed:
         console.print("[red]--force and --retry-failed are mutually exclusive[/red]")
         raise typer.Exit(1)
+
+    job_type = _resolve_job_type(job_type)
 
     # Build path filter: exact if it looks like a file, prefix if folder
     path_exact = None

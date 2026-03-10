@@ -72,6 +72,42 @@ def test_pipeline_status_groups_correctly() -> None:
 
 
 @pytest.mark.fast
+def test_failures_accepts_vision_alias() -> None:
+    """--job-type vision resolves to ai_vision; list_failures receives ai_vision."""
+    mock_client = MagicMock()
+    mock_client.get.return_value.json.side_effect = [
+        [{"library_id": "lib_01", "name": "Test", "root_path": "/photos"}],
+        {"tenant_id": "ten_01"},
+    ]
+
+    mock_session = MagicMock()
+    mock_cm = MagicMock()
+    mock_cm.__enter__.return_value = mock_session
+    mock_cm.__exit__.return_value = None
+
+    mock_job_repo = MagicMock()
+    mock_job_repo.list_failures.return_value = (
+        [{"rel_path": "Photos/foo.jpg", "error_message": "Vision failed", "failed_at": None}],
+        1,
+    )
+
+    def make_job_repo(*args: object, **kwargs: object) -> MagicMock:
+        return mock_job_repo
+
+    with (
+        patch("src.cli.main.LumiverbClient", return_value=mock_client),
+        patch("src.core.database.get_tenant_session", return_value=mock_cm),
+        patch("src.repository.tenant.WorkerJobRepository", side_effect=make_job_repo),
+    ):
+        result = runner.invoke(app, ["failures", "--library", "Test", "--job-type", "vision"])
+
+    assert result.exit_code == 0
+    mock_job_repo.list_failures.assert_called_once()
+    call_kwargs = mock_job_repo.list_failures.call_args[1]
+    assert call_kwargs["job_type"] == "ai_vision"
+
+
+@pytest.mark.fast
 def test_failures_truncates_long_errors() -> None:
     """Pass an error message > 60 chars; assert output truncates with '...'."""
     long_error = "A" * 70
