@@ -389,6 +389,175 @@ def worker_search_sync(
 
 
 # ---------------------------------------------------------------------------
+# status
+# ---------------------------------------------------------------------------
+
+
+JOB_TYPE_DISPLAY: dict[str, str] = {
+    "proxy": "Proxy",
+    "exif": "EXIF",
+    "ai_vision": "Vision (AI)",
+    "search_sync": "Search Sync",
+    "embed": "Embeddings",
+}
+
+STAGE_ORDER: list[str] = ["proxy", "exif", "ai_vision", "search_sync", "embed"]
+
+
+@app.command("status")
+def status(
+    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
+) -> None:
+    """Show pipeline status: asset counts by stage (proxy, EXIF, vision, search sync) with done/pending/failed breakdown."""
+    from src.core.database import get_tenant_session
+    from src.repository.tenant import AssetRepository, SearchSyncQueueRepository, WorkerJobRepository
+
+    client = LumiverbClient()
+    libraries = client.get("/v1/libraries").json()
+    match = next((lib for lib in libraries if lib.get("name") == library), None)
+    if match is None:
+        console.print(f"[red]Library not found: {library}[/red]")
+        raise typer.Exit(1)
+
+    library_id = match["library_id"]
+    ctx = client.get("/v1/tenant/context").json()
+    tenant_id = ctx["tenant_id"]
+
+    with get_tenant_session(tenant_id) as session:
+        asset_repo = AssetRepository(session)
+        job_repo = WorkerJobRepository(session)
+        ssq_repo = SearchSyncQueueRepository(session)
+
+        total_assets = asset_repo.count_by_library(library_id)
+        job_rows = job_repo.pipeline_status(library_id)
+        ssq_rows = ssq_repo.search_sync_pipeline_status(library_id)
+
+    # Build pivot: stage -> {done, pending, failed}
+    pivot: dict[str, dict[str, int]] = {}
+    for r in job_rows:
+        jt = r["job_type"]
+        if jt not in pivot:
+            pivot[jt] = {"done": 0, "pending": 0, "failed": 0}
+        status_val = r["status"]
+        count = r["count"]
+        if status_val == "completed":
+            pivot[jt]["done"] += count
+        elif status_val in ("pending", "claimed"):
+            pivot[jt]["pending"] += count
+        elif status_val == "failed":
+            pivot[jt]["failed"] += count
+
+    for r in ssq_rows:
+        jt = "search_sync"
+        if jt not in pivot:
+            pivot[jt] = {"done": 0, "pending": 0, "failed": 0}
+        status_val = r["status"]
+        count = r["count"]
+        if status_val == "synced":
+            pivot[jt]["done"] += count
+        elif status_val in ("pending", "processing"):
+            pivot[jt]["pending"] += count
+
+    # Only show stages with at least one job
+    stages_with_data = [s for s in STAGE_ORDER if s in pivot and (pivot[s]["done"] + pivot[s]["pending"] + pivot[s]["failed"] > 0)]
+
+    console.print(f"Library: {library}  ({library_id})")
+    console.print(f"Total assets: {total_assets:,}")
+    console.print()
+
+    table = Table(show_header=True)
+    table.add_column("Stage", style="bold")
+    table.add_column("Done", justify="right")
+    table.add_column("Pending", justify="right")
+    table.add_column("Failed", justify="right")
+    for stage in stages_with_data:
+        d = pivot[stage]
+        display = JOB_TYPE_DISPLAY.get(stage, stage)
+        table.add_row(
+            display,
+            f"{d['done']:,}",
+            f"{d['pending']:,}",
+            f"{d['failed']:,}",
+        )
+    console.print(table)
+
+    any_failures = any(pivot.get(s, {}).get("failed", 0) > 0 for s in stages_with_data)
+    if any_failures:
+        failed_stages = [s for s in stages_with_data if pivot.get(s, {}).get("failed", 0) > 0 and s != "search_sync"]
+        if failed_stages:
+            console.print(f"\nRun 'lumiverb failures --library {library} --job-type {failed_stages[0]}' to see failure details.")
+
+
+# ---------------------------------------------------------------------------
+# failures
+# ---------------------------------------------------------------------------
+
+
+@app.command("failures")
+def failures(
+    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
+    job_type: Annotated[str, typer.Option("--job-type", "-j", help="Job type (e.g. ai_vision, proxy).")],
+    path: Annotated[str | None, typer.Option("--path", "-p", help="Optional path prefix to filter.")] = None,
+    limit: Annotated[int, typer.Option("--limit", help="Max failures to show.")] = 20,
+) -> None:
+    """List failed jobs with error messages. Shows most recent failure per asset. Prints retry command hint."""
+    from src.core.database import get_tenant_session
+    from src.repository.tenant import WorkerJobRepository
+
+    client = LumiverbClient()
+    libraries = client.get("/v1/libraries").json()
+    match = next((lib for lib in libraries if lib.get("name") == library), None)
+    if match is None:
+        console.print(f"[red]Library not found: {library}[/red]")
+        raise typer.Exit(1)
+
+    library_id = match["library_id"]
+    ctx = client.get("/v1/tenant/context").json()
+    tenant_id = ctx["tenant_id"]
+
+    path_prefix = (path or "").replace("\\", "/").strip().strip("/") or None
+
+    with get_tenant_session(tenant_id) as session:
+        job_repo = WorkerJobRepository(session)
+        rows, total_count = job_repo.list_failures(
+            library_id=library_id,
+            job_type=job_type,
+            path_prefix=path_prefix,
+            limit=limit,
+        )
+
+    def truncate(s: str, max_len: int = 60) -> str:
+        if len(s) <= max_len:
+            return s
+        return s[: max_len - 3] + "..."
+
+    if total_count == 0:
+        console.print(f"No failed {job_type} jobs for library {library}.")
+        return
+
+    path_desc = f" under {path_prefix}" if path_prefix else ""
+    showing = min(limit, len(rows))
+    console.print(f"Failed {job_type} jobs for library {library}")
+    console.print(f"Showing {showing} of {total_count} failures{path_desc}")
+    console.print()
+
+    table = Table(show_header=True)
+    table.add_column("Path")
+    table.add_column("Error")
+    for r in rows:
+        table.add_row(r["rel_path"], truncate(r["error_message"]))
+    console.print(table)
+
+    path_arg = f" --path {path_prefix}" if path_prefix else ""
+    console.print()
+    console.print("To retry all:")
+    console.print(f"  lumiverb enqueue {library} --job-type {job_type} --retry-failed")
+    if path_prefix:
+        console.print("To retry scoped:")
+        console.print(f"  lumiverb enqueue {library} --job-type {job_type} --retry-failed --path {path_prefix}")
+
+
+# ---------------------------------------------------------------------------
 # scan
 # ---------------------------------------------------------------------------
 

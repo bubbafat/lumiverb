@@ -22,6 +22,8 @@ Entry point: `lumiverb = "src.cli:main"` (setuptools); `main()` invokes the Type
 - `lumiverb library set-model <library_id> <model>` — PATCH vision_model_id. Use `moondream` for local Moondream; any other string for OpenAI-compatible API (via VISION_API_URL).
 - `lumiverb library delete <name>` — Soft delete: move library to trash (prompt for confirmation)
 - `lumiverb library empty-trash` — Permanently delete all trashed libraries and their assets (prompt for confirmation)
+- `lumiverb status --library <name>` — Show pipeline status: asset counts by stage (proxy, EXIF, vision, search sync) with done/pending/failed breakdown.
+- `lumiverb failures --library <name> --job-type <type> [--path <prefix>] [--limit N]` — List failed jobs with error messages. Shows most recent failure per asset. Prints retry command hint.
 - `lumiverb scan --library <name> [--path <subpath>] [--force]` — Scan a library for media files; discovers/upserts assets via API, reports added/updated/skipped/missing.
 - `lumiverb enqueue <library> [--job-type proxy|exif|ai_vision] [--path <path>] [--asset <id>] [--since <iso>] [--until <iso>] [--missing-proxy] [--missing-thumbnail] [--force] [--retry-failed]` — Enqueue processing jobs for a library. `--retry-failed` re-enqueues only assets with failed jobs (mutually exclusive with `--force`).
 - `lumiverb worker search-sync --library <name> [--once] [--path <subpath>] [--force-resync]` — Run the search sync worker. Drains search_sync_queue, indexes asset metadata to Quickwit (if enabled), falls back gracefully if Quickwit is unavailable. `--path` scopes sync to a subfolder. `--force-resync` re-enqueues all assets regardless of prior sync status. Shows progress and summary table on completion.

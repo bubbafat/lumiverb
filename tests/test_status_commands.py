@@ -1,0 +1,133 @@
+"""Fast tests for lumiverb status and failures CLI commands."""
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+from typer.testing import CliRunner
+
+from src.cli.main import app
+
+runner = CliRunner()
+
+
+@pytest.mark.fast
+def test_pipeline_status_groups_correctly() -> None:
+    """Mock session returning known job counts; assert the table output contains correct Done/Pending/Failed values."""
+    mock_client = MagicMock()
+    mock_client.get.return_value.json.side_effect = [
+        [{"library_id": "lib_01", "name": "Test", "root_path": "/photos"}],
+        {"tenant_id": "ten_01"},
+    ]
+
+    mock_session = MagicMock()
+    mock_cm = MagicMock()
+    mock_cm.__enter__.return_value = mock_session
+    mock_cm.__exit__.return_value = None
+
+    mock_asset_repo = MagicMock()
+    mock_asset_repo.count_by_library.return_value = 100
+
+    mock_job_repo = MagicMock()
+    mock_job_repo.pipeline_status.return_value = [
+        {"job_type": "proxy", "status": "completed", "count": 90},
+        {"job_type": "proxy", "status": "failed", "count": 10},
+        {"job_type": "exif", "status": "completed", "count": 100},
+    ]
+
+    mock_ssq_repo = MagicMock()
+    mock_ssq_repo.search_sync_pipeline_status.return_value = []
+
+    def make_asset_repo(*args: object, **kwargs: object) -> MagicMock:
+        return mock_asset_repo
+
+    def make_job_repo(*args: object, **kwargs: object) -> MagicMock:
+        return mock_job_repo
+
+    def make_ssq_repo(*args: object, **kwargs: object) -> MagicMock:
+        return mock_ssq_repo
+
+    with (
+        patch("src.cli.main.LumiverbClient", return_value=mock_client),
+        patch("src.core.database.get_tenant_session", return_value=mock_cm),
+        patch("src.repository.tenant.AssetRepository", side_effect=make_asset_repo),
+        patch("src.repository.tenant.WorkerJobRepository", side_effect=make_job_repo),
+        patch("src.repository.tenant.SearchSyncQueueRepository", side_effect=make_ssq_repo),
+    ):
+        result = runner.invoke(app, ["status", "--library", "Test"])
+
+    assert result.exit_code == 0
+    assert "90" in result.output  # Proxy Done
+    assert "10" in result.output  # Proxy Failed
+    assert "100" in result.output  # EXIF Done, Total assets
+
+
+@pytest.mark.fast
+def test_failures_truncates_long_errors() -> None:
+    """Pass an error message > 60 chars; assert output truncates with '...'."""
+    long_error = "A" * 70
+
+    mock_client = MagicMock()
+    mock_client.get.return_value.json.side_effect = [
+        [{"library_id": "lib_01", "name": "Test", "root_path": "/photos"}],
+        {"tenant_id": "ten_01"},
+    ]
+
+    mock_session = MagicMock()
+    mock_cm = MagicMock()
+    mock_cm.__enter__.return_value = mock_session
+    mock_cm.__exit__.return_value = None
+
+    mock_job_repo = MagicMock()
+    mock_job_repo.list_failures.return_value = (
+        [{"rel_path": "Photos/foo.jpg", "error_message": long_error, "failed_at": None}],
+        1,
+    )
+
+    def make_job_repo(*args: object, **kwargs: object) -> MagicMock:
+        return mock_job_repo
+
+    with (
+        patch("src.cli.main.LumiverbClient", return_value=mock_client),
+        patch("src.core.database.get_tenant_session", return_value=mock_cm),
+        patch("src.repository.tenant.WorkerJobRepository", side_effect=make_job_repo),
+    ):
+        result = runner.invoke(app, ["failures", "--library", "Test", "--job-type", "ai_vision"])
+
+    assert result.exit_code == 0
+    # Rich uses Unicode ellipsis (…) when truncating
+    assert "…" in result.output or "..." in result.output
+    assert long_error not in result.output
+
+
+@pytest.mark.fast
+def test_failures_shows_retry_hint() -> None:
+    """Invoke failures command via typer runner; assert output contains 'lumiverb enqueue'."""
+    mock_client = MagicMock()
+    mock_client.get.return_value.json.side_effect = [
+        [{"library_id": "lib_01", "name": "Test", "root_path": "/photos"}],
+        {"tenant_id": "ten_01"},
+    ]
+
+    mock_session = MagicMock()
+    mock_cm = MagicMock()
+    mock_cm.__enter__.return_value = mock_session
+    mock_cm.__exit__.return_value = None
+
+    mock_job_repo = MagicMock()
+    mock_job_repo.list_failures.return_value = (
+        [{"rel_path": "Photos/foo.jpg", "error_message": "Caption failed", "failed_at": None}],
+        1,
+    )
+
+    def make_job_repo(*args: object, **kwargs: object) -> MagicMock:
+        return mock_job_repo
+
+    with (
+        patch("src.cli.main.LumiverbClient", return_value=mock_client),
+        patch("src.core.database.get_tenant_session", return_value=mock_cm),
+        patch("src.repository.tenant.WorkerJobRepository", side_effect=make_job_repo),
+    ):
+        result = runner.invoke(app, ["failures", "--library", "Test", "--job-type", "ai_vision"])
+
+    assert result.exit_code == 0
+    assert "lumiverb enqueue" in result.output

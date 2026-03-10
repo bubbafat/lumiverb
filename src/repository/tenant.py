@@ -456,6 +456,14 @@ class AssetRepository:
         stmt = select(Asset).where(Asset.library_id == library_id)
         return list(self._session.exec(stmt).all())
 
+    def count_by_library(self, library_id: str) -> int:
+        """Return total asset count for library."""
+        result = self._session.execute(
+            text("SELECT COUNT(*)::int FROM assets WHERE library_id = :library_id"),
+            {"library_id": library_id},
+        )
+        return int(result.scalar() or 0)
+
     def page_by_library(
         self,
         library_id: str,
@@ -946,6 +954,93 @@ class WorkerJobRepository:
         self._session.commit()
         return result.rowcount
 
+    def pipeline_status(self, library_id: str) -> list[dict]:
+        """
+        Return [{job_type, status, count}] for all jobs in library.
+        Used to build pipeline overview (done/pending/failed by stage).
+        """
+        rows = self._session.execute(
+            text("""
+                SELECT wj.job_type, wj.status, COUNT(*)::int as count
+                FROM worker_jobs wj
+                JOIN assets a ON a.asset_id = wj.asset_id
+                WHERE a.library_id = :library_id
+                GROUP BY wj.job_type, wj.status
+            """),
+            {"library_id": library_id},
+        ).fetchall()
+        return [{"job_type": r.job_type, "status": r.status, "count": r.count} for r in rows]
+
+    def list_failures(
+        self,
+        library_id: str,
+        job_type: str,
+        path_prefix: str | None = None,
+        limit: int = 20,
+    ) -> tuple[list[dict], int]:
+        """
+        Return (rows, total_count) where rows are the most recent failed job per asset.
+        total_count is the unfiltered count of distinct assets with failures.
+        Each row: {rel_path, error_message, failed_at}
+        """
+        path_filter = ""
+        params: dict = {
+            "library_id": library_id,
+            "job_type": job_type,
+        }
+        if path_prefix:
+            normalised = path_prefix.replace("\\", "/").strip().strip("/")
+            path_filter = " AND (a.rel_path = :path_exact OR a.rel_path LIKE :path_pattern)"
+            params["path_exact"] = normalised
+            params["path_pattern"] = normalised + "/%"
+
+        # Total count (distinct assets with failed jobs, with optional path filter)
+        count_sql = f"""
+            SELECT COUNT(*)::int FROM (
+                SELECT DISTINCT ON (wj.asset_id) wj.asset_id
+                FROM worker_jobs wj
+                JOIN assets a ON a.asset_id = wj.asset_id
+                WHERE a.library_id = :library_id
+                  AND wj.job_type = :job_type
+                  AND wj.status = 'failed'
+                  {path_filter}
+                ORDER BY wj.asset_id, wj.created_at DESC
+            ) sub
+        """
+        total = int(
+            self._session.execute(text(count_sql), params).scalar() or 0
+        )
+
+        # Rows: most recent failed job per asset
+        params["limit"] = limit
+        rows_sql = f"""
+            SELECT * FROM (
+                SELECT DISTINCT ON (wj.asset_id)
+                    a.rel_path,
+                    wj.error_message,
+                    wj.completed_at
+                FROM worker_jobs wj
+                JOIN assets a ON a.asset_id = wj.asset_id
+                WHERE a.library_id = :library_id
+                  AND wj.job_type = :job_type
+                  AND wj.status = 'failed'
+                  {path_filter}
+                ORDER BY wj.asset_id, wj.created_at DESC
+            ) sub
+            ORDER BY rel_path
+            LIMIT :limit
+        """
+        rows = self._session.execute(text(rows_sql), params).fetchall()
+        return (
+            [
+                {
+                    "rel_path": r.rel_path,
+                    "error_message": r.error_message or "",
+                    "failed_at": r.completed_at,
+                }
+            for r in rows
+        ], total)
+
 
 class SearchSyncQueueRepository:
     """Repository for search_sync_queue outbox table."""
@@ -1105,6 +1200,23 @@ class SearchSyncQueueRepository:
                 cb(completed, total)
 
         return asset_ids
+
+    def search_sync_pipeline_status(self, library_id: str) -> list[dict]:
+        """
+        Return [{status, count}] for search_sync_latest in this library.
+        Status is synced, pending, or processing. Used for pipeline overview.
+        """
+        rows = self._session.execute(
+            text("""
+                SELECT ssl.status, COUNT(*)::int as count
+                FROM search_sync_latest ssl
+                JOIN assets a ON a.asset_id = ssl.asset_id
+                WHERE a.library_id = :library_id
+                GROUP BY ssl.status
+            """),
+            {"library_id": library_id},
+        ).fetchall()
+        return [{"status": r.status, "count": r.count} for r in rows]
 
     def pending_count(self, library_id: str | None = None, path_prefix: str | None = None) -> int:
         """
