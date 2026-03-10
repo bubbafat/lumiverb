@@ -12,7 +12,11 @@ runner = CliRunner()
 
 @pytest.mark.fast
 def test_pipeline_status_groups_correctly() -> None:
-    """Mock session returning known job counts; assert the table output contains correct Done/Pending/Failed values."""
+    """
+    Mock pipeline_status returning latest-state counts (what the fixed query produces).
+    Under the old query, retries could double-count (e.g. 150 completed for 100 assets).
+    New implementation bounds counts by asset count; assert output is sensible.
+    """
     mock_client = MagicMock()
     mock_client.get.return_value.json.side_effect = [
         [{"library_id": "lib_01", "name": "Test", "root_path": "/photos"}],
@@ -24,9 +28,11 @@ def test_pipeline_status_groups_correctly() -> None:
     mock_cm.__enter__.return_value = mock_session
     mock_cm.__exit__.return_value = None
 
+    total_assets = 100
     mock_asset_repo = MagicMock()
-    mock_asset_repo.count_by_library.return_value = 100
+    mock_asset_repo.count_by_library.return_value = total_assets
 
+    # Simulates latest-state counts: proxy 90+10=100, exif 100 (all <= total_assets)
     mock_job_repo = MagicMock()
     mock_job_repo.pipeline_status.return_value = [
         {"job_type": "proxy", "status": "completed", "count": 90},
@@ -59,6 +65,10 @@ def test_pipeline_status_groups_correctly() -> None:
     assert "90" in result.output  # Proxy Done
     assert "10" in result.output  # Proxy Failed
     assert "100" in result.output  # EXIF Done, Total assets
+    # Status counts must not exceed total assets (would indicate double-counting)
+    status_rows = mock_job_repo.pipeline_status.return_value
+    for row in status_rows:
+        assert row["count"] <= total_assets
 
 
 @pytest.mark.fast

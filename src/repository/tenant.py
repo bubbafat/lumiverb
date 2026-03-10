@@ -956,16 +956,27 @@ class WorkerJobRepository:
 
     def pipeline_status(self, library_id: str) -> list[dict]:
         """
-        Return [{job_type, status, count}] for all jobs in library.
-        Used to build pipeline overview (done/pending/failed by stage).
+        Return [{job_type, status, count}] for the latest job state per (asset_id, job_type).
+
+        Uses DISTINCT ON to pick the most recent job per asset per type, then counts.
+        Counts are bounded by asset count (no double-counting from retries/cancelled).
         """
         rows = self._session.execute(
             text("""
-                SELECT wj.job_type, wj.status, COUNT(*)::int as count
-                FROM worker_jobs wj
-                JOIN assets a ON a.asset_id = wj.asset_id
-                WHERE a.library_id = :library_id
-                GROUP BY wj.job_type, wj.status
+                WITH latest_jobs AS (
+                    SELECT DISTINCT ON (wj.asset_id, wj.job_type)
+                        wj.asset_id,
+                        wj.job_type,
+                        wj.status
+                    FROM worker_jobs wj
+                    JOIN assets a ON a.asset_id = wj.asset_id
+                    WHERE a.library_id = :library_id
+                    ORDER BY wj.asset_id, wj.job_type, wj.created_at DESC
+                )
+                SELECT job_type, status, COUNT(*)::int as count
+                FROM latest_jobs
+                GROUP BY job_type, status
+                ORDER BY job_type, status
             """),
             {"library_id": library_id},
         ).fetchall()
@@ -994,7 +1005,9 @@ class WorkerJobRepository:
             params["path_exact"] = normalised
             params["path_pattern"] = normalised + "/%"
 
-        # Total count (distinct assets with failed jobs, with optional path filter)
+        # Total count (distinct assets with failed jobs, with optional path filter).
+        # DISTINCT ON (asset_id) is correct: job_type is in WHERE, so we get one row per asset
+        # for this job type; multiple historical failed rows collapse to the latest per asset.
         count_sql = f"""
             SELECT COUNT(*)::int FROM (
                 SELECT DISTINCT ON (wj.asset_id) wj.asset_id
@@ -1011,7 +1024,7 @@ class WorkerJobRepository:
             self._session.execute(text(count_sql), params).scalar() or 0
         )
 
-        # Rows: most recent failed job per asset
+        # Rows: most recent failed job per asset (DISTINCT ON correct: job_type in WHERE)
         params["limit"] = limit
         rows_sql = f"""
             SELECT * FROM (
