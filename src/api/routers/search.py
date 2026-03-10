@@ -96,6 +96,14 @@ def search(
         hits = search_assets(session, library_id, q, limit=limit, offset=offset)
         source = "postgres"
 
+    # Deduplicate by asset_id, keeping highest score
+    seen: dict[str, dict] = {}
+    for hit in hits:
+        asset_id = hit["asset_id"]
+        if asset_id not in seen or hit["score"] > seen[asset_id]["score"]:
+            seen[asset_id] = hit
+    hits = list(seen.values())
+
     return SearchResponse(
         query=q,
         hits=[SearchHit(**h) for h in hits],

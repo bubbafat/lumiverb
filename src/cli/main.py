@@ -252,6 +252,108 @@ def worker_vision(
     worker.run()
 
 
+# Shell alias: function lumi-search-sync() { lumiverb worker search-sync --library "$1" --once; }
+@worker_app.command("search-sync")
+def worker_search_sync(
+    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
+    once: Annotated[bool, typer.Option("--once", help="Process one batch then exit.")] = False,
+    force_resync: Annotated[bool, typer.Option("--force-resync", help="Re-enqueue all assets before syncing.")] = False,
+    path: Annotated[str | None, typer.Option("--path", "-p", help="Optional subpath to scope sync.")] = None,
+) -> None:
+    """Run the search sync worker."""
+    import time
+
+    from src.cli.progress import LiveProgress
+    from src.core.config import get_settings
+    from src.core.database import get_tenant_session
+    from src.repository.tenant import AssetRepository, SearchSyncQueueRepository
+    from src.search.quickwit_client import QuickwitClient
+    from src.workers.search_sync import SearchSyncWorker
+
+    path_prefix = (path or "").replace("\\", "/").strip().strip("/") or None
+
+    client = LumiverbClient()
+    library_id = _resolve_library_id(client, library)
+    ctx = client.get("/v1/tenant/context").json()
+    tenant_id = ctx["tenant_id"]
+
+    with get_tenant_session(tenant_id) as session:
+        if force_resync:
+            asset_repo = AssetRepository(session)
+            queue_repo = SearchSyncQueueRepository(session)
+            assets = asset_repo.list_by_library(library_id)
+            if path_prefix:
+                assets = [
+                    a
+                    for a in assets
+                    if a.rel_path == path_prefix or a.rel_path.startswith(path_prefix + "/")
+                ]
+            asset_ids = [a.asset_id for a in assets]
+            if asset_ids:
+
+                def _progress(completed: int, total: int) -> None:
+                    console.print(f"Enqueued {completed:,} / {total:,}...")
+
+                queue_repo.enqueue_all_for_library(library_id, asset_ids, progress_callback=_progress)
+                console.print(f"Re-enqueued {len(asset_ids):,} assets for resync.")
+
+        quickwit = QuickwitClient()
+        worker = SearchSyncWorker(
+            session=session,
+            library_id=library_id,
+            quickwit=quickwit,
+            path_prefix=path_prefix,
+        )
+        pending = worker.pending_count()
+        if pending == 0 and once:
+            console.print("No pending items in search_sync_queue.")
+            return
+
+        total_synced = 0
+        total_skipped = 0
+        total_batches = 0
+        console.print(f"Search sync queue: {pending:,} pending assets")
+
+        with LiveProgress(
+            console,
+            label="Syncing search index",
+            counters=["synced", "skipped", "batches"],
+        ) as bar:
+            if once:
+                result = worker.run_once()
+                total_synced = result["synced"]
+                total_skipped = result["skipped"]
+                total_batches = result["batches"]
+                bar.update(
+                    completed=total_synced + total_skipped,
+                    synced=total_synced,
+                    skipped=total_skipped,
+                    batches=total_batches,
+                )
+                bar.finish()
+            else:
+                settings = get_settings()
+                while True:
+                    result = worker.run_once()
+                    s, sk, b = result["synced"], result["skipped"], result["batches"]
+                    total_synced += s
+                    total_skipped += sk
+                    total_batches += b
+                    bar.update(completed=s + sk, synced=s, skipped=sk, batches=b)
+                    time.sleep(settings.worker_idle_poll_seconds)
+
+        if quickwit.enabled:
+            table = Table(show_header=True)
+            table.add_column("Metric", style="dim")
+            table.add_column("Count", justify="right")
+            table.add_row("Synced", str(total_synced))
+            table.add_row("Skipped", str(total_skipped))
+            table.add_row("Batches", str(total_batches))
+            console.print(table)
+        else:
+            console.print("Quickwit disabled; no assets indexed.")
+
+
 # ---------------------------------------------------------------------------
 # scan
 # ---------------------------------------------------------------------------

@@ -24,5 +24,8 @@ Entry point: `lumiverb = "src.cli:main"` (setuptools); `main()` invokes the Type
 - `lumiverb library empty-trash` — Permanently delete all trashed libraries and their assets (prompt for confirmation)
 - `lumiverb scan --library <name> [--path <subpath>] [--force]` — Scan a library for media files; discovers/upserts assets via API, reports added/updated/skipped/missing.
 - `lumiverb enqueue <library> [--job-type proxy|exif|ai_vision] [--path <path>] [--asset <id>] [--since <iso>] [--until <iso>] [--missing-proxy] [--missing-thumbnail] [--force] [--retry-failed]` — Enqueue processing jobs for a library. `--retry-failed` re-enqueues only assets with failed jobs (mutually exclusive with `--force`).
+- `lumiverb worker search-sync --library <name> [--once] [--path <subpath>] [--force-resync]` — Run the search sync worker. Drains search_sync_queue, indexes asset metadata to Quickwit (if enabled), falls back gracefully if Quickwit is unavailable. `--path` scopes sync to a subfolder. `--force-resync` re-enqueues all assets regardless of prior sync status. Shows progress and summary table on completion.
+
+Shell alias (one-shot sync): `function lumi-search-sync() { lumiverb worker search-sync --library "$1" --once; }`
 
 Output: Rich tables for list; green success for create; errors handled by client (stderr + exit 1).

@@ -43,40 +43,64 @@ class SearchSyncWorker:
         library_id: str,
         quickwit: QuickwitClient | None = None,
         batch_size: int = 100,
+        path_prefix: str | None = None,
     ) -> None:
         self._session = session
         self._library_id = library_id
         self._batch_size = batch_size
+        self._path_prefix = (
+            (path_prefix or "").replace("\\", "/").strip().strip("/") or None
+        )
         self._asset_repo = AssetRepository(session)
         self._meta_repo = AssetMetadataRepository(session)
         self._library_repo = LibraryRepository(session)
         self._queue_repo = SearchSyncQueueRepository(session)
         self._quickwit = quickwit or QuickwitClient()
 
-    def run_once(self) -> int:
+    def pending_count(self) -> int:
+        """Return number of unsynced rows in search_sync_queue for this library/path."""
+        return self._queue_repo.pending_count(
+            library_id=self._library_id,
+            path_prefix=self._path_prefix,
+        )
+
+    def run_once(self) -> dict[str, int]:
         """
         Drain the queue until empty.
 
-        Returns the total number of rows processed.
+        Returns {"synced": N, "skipped": M, "batches": B} where:
+        - synced: number of unique assets successfully ingested to Quickwit
+        - skipped: number of unique assets that were marked synced without ingesting
+          (missing asset or no metadata)
+        - batches: number of claim batches processed
         """
-        total = 0
+        asset_status: dict[str, str] = {}
+        synced = 0
+        skipped = 0
+        batches = 0
         if not self._quickwit.enabled:
             logger.info("Quickwit disabled; skipping search sync run for library_id=%s", self._library_id)
-            return 0
+            return {"synced": 0, "skipped": 0, "batches": 0}
 
         # Ensure index exists before ingesting
         self._quickwit.ensure_index_for_library(self._library_id)
 
         while True:
-            batch = self._queue_repo.claim_batch(self._batch_size)
+            batch = self._queue_repo.claim_batch(
+                self._batch_size,
+                library_id=self._library_id,
+                path_prefix=self._path_prefix,
+            )
             if not batch:
                 break
+            batches += 1
 
             docs: list[dict] = []
             sync_ids: list[str] = []
 
             for row in batch:
                 asset = self._asset_repo.get_by_id(row.asset_id)
+                asset_id = row.asset_id
                 if asset is None:
                     logger.warning(
                         "search_sync_queue row %s references missing asset_id=%s; marking synced",
@@ -84,6 +108,9 @@ class SearchSyncWorker:
                         row.asset_id,
                     )
                     sync_ids.append(row.sync_id)
+                    # Only mark skipped if we haven't already marked this asset as synced.
+                    if asset_status.get(asset_id) != "synced":
+                        asset_status[asset_id] = "skipped"
                     continue
 
                 library = self._library_repo.get_by_id(asset.library_id)
@@ -103,11 +130,14 @@ class SearchSyncWorker:
                         model_version,
                     )
                     sync_ids.append(row.sync_id)
+                    if asset_status.get(asset_id) != "synced":
+                        asset_status[asset_id] = "skipped"
                     continue
 
                 doc = self._build_document(asset, meta)
                 docs.append(doc)
                 sync_ids.append(row.sync_id)
+                asset_status[asset_id] = "synced"
 
             if docs:
                 self._quickwit.ingest_documents_for_library(self._library_id, docs)
@@ -115,9 +145,10 @@ class SearchSyncWorker:
             if sync_ids:
                 self._queue_repo.mark_synced(sync_ids)
 
-            total += len(sync_ids)
+        synced = sum(1 for v in asset_status.values() if v == "synced")
+        skipped = sum(1 for v in asset_status.values() if v == "skipped")
 
-        return total
+        return {"synced": synced, "skipped": skipped, "batches": batches}
 
     def _build_document(self, asset: Asset, meta: AssetMetadata) -> dict:
         """

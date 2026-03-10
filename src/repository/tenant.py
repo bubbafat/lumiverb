@@ -976,20 +976,61 @@ class SearchSyncQueueRepository:
         self._session.refresh(sync)
         return sync
 
-    def claim_batch(self, limit: int) -> list[SearchSyncQueue]:
+    def claim_batch(
+        self,
+        limit: int,
+        library_id: str | None = None,
+        path_prefix: str | None = None,
+    ) -> list[SearchSyncQueue]:
         """
         Claim up to `limit` pending rows using FOR UPDATE SKIP LOCKED.
 
+        Optionally filter by library_id (JOIN assets) and path_prefix (rel_path LIKE prefix).
         Returns the claimed rows with status updated to 'processing'.
         """
-        stmt = (
-            select(SearchSyncQueue)
-            .where(SearchSyncQueue.status == "pending")
-            .order_by(SearchSyncQueue.created_at)
-            .limit(limit)
-            .with_for_update(skip_locked=True)
+        prefix_param = (
+            (path_prefix or "").replace("\\", "/").strip().strip("/") if path_prefix else ""
         )
-        rows = list(self._session.exec(stmt).all())
+        if library_id or prefix_param:
+            conditions = ["ssq.status = 'pending'"]
+            params: dict = {"batch_limit": limit}
+            if library_id:
+                conditions.append("a.library_id = :library_id")
+                params["library_id"] = library_id
+            if prefix_param:
+                # Match enqueue logic: exact path or path/... (not pathX)
+                conditions.append(
+                    "(a.rel_path = :path_prefix OR a.rel_path LIKE :path_prefix_slash)"
+                )
+                params["path_prefix"] = prefix_param
+                params["path_prefix_slash"] = f"{prefix_param}/%"
+            where = " AND ".join(conditions)
+            stmt = text(
+                f"""
+                SELECT ssq.sync_id FROM search_sync_queue ssq
+                JOIN assets a ON a.asset_id = ssq.asset_id
+                WHERE {where}
+                ORDER BY ssq.created_at
+                LIMIT :batch_limit
+                FOR UPDATE OF ssq SKIP LOCKED
+                """
+            )
+            result = self._session.execute(stmt, params)
+            sync_ids = [row[0] for row in result.fetchall()]
+            rows = [
+                self._session.get(SearchSyncQueue, sid)
+                for sid in sync_ids
+                if self._session.get(SearchSyncQueue, sid) is not None
+            ]
+        else:
+            stmt = (
+                select(SearchSyncQueue)
+                .where(SearchSyncQueue.status == "pending")
+                .order_by(SearchSyncQueue.created_at)
+                .limit(limit)
+                .with_for_update(skip_locked=True)
+            )
+            rows = list(self._session.exec(stmt).all())
         if not rows:
             return []
         now = _utcnow()
@@ -1000,6 +1041,103 @@ class SearchSyncQueueRepository:
             self._session.add(row)
         self._session.commit()
         return rows
+
+    RESYNC_BATCH_SIZE = 500
+
+    def enqueue_all_for_library(
+        self,
+        library_id: str,
+        asset_ids: list[str],
+        progress_callback: object | None = None,
+    ) -> int:
+        """
+        Insert or update search_sync_queue rows for all given assets,
+        setting status to 'pending' so they get re-processed.
+
+        Processes in batches of RESYNC_BATCH_SIZE. If progress_callback is provided,
+        it is called after each batch as progress_callback(completed, total).
+        """
+        if not asset_ids:
+            return 0
+
+        total = len(asset_ids)
+        cb = progress_callback if callable(progress_callback) else None
+
+        for i in range(0, total, self.RESYNC_BATCH_SIZE):
+            batch = asset_ids[i : i + self.RESYNC_BATCH_SIZE]
+
+            # Reset existing rows to pending
+            self._session.execute(
+                text(
+                    """
+                    UPDATE search_sync_queue
+                    SET status = 'pending'
+                    WHERE asset_id = ANY(:asset_ids)
+                    """
+                ),
+                {"asset_ids": batch},
+            )
+            self._session.commit()
+
+            # Find asset_ids in batch that have no row
+            rows = self._session.execute(
+                text(
+                    """
+                    SELECT asset_id FROM search_sync_queue
+                    WHERE asset_id = ANY(:asset_ids)
+                    """
+                ),
+                {"asset_ids": batch},
+            ).fetchall()
+            existing = {r[0] for r in rows}
+            to_insert = [aid for aid in batch if aid not in existing]
+
+            for asset_id in to_insert:
+                self.enqueue(asset_id, "index", scene_id=None)
+
+            completed = min(i + self.RESYNC_BATCH_SIZE, total)
+            if cb:
+                cb(completed, total)
+
+        return total
+
+    def pending_count(self, library_id: str | None = None, path_prefix: str | None = None) -> int:
+        """Return number of pending rows in search_sync_queue."""
+        prefix_param = (
+            (path_prefix or "").replace("\\", "/").strip().strip("/") if path_prefix else ""
+        )
+        if library_id or prefix_param:
+            conditions = ["ssq.status = 'pending'"]
+            params: dict = {}
+            if library_id:
+                conditions.append("a.library_id = :library_id")
+                params["library_id"] = library_id
+            if prefix_param:
+                # Match enqueue logic: exact path or path/...
+                conditions.append(
+                    "(a.rel_path = :path_prefix OR a.rel_path LIKE :path_prefix_slash)"
+                )
+                params["path_prefix"] = prefix_param
+                params["path_prefix_slash"] = f"{prefix_param}/%"
+            where = " AND ".join(conditions)
+            stmt = text(
+                f"""
+                SELECT COUNT(DISTINCT a.asset_id) FROM search_sync_queue ssq
+                JOIN assets a ON a.asset_id = ssq.asset_id
+                WHERE {where}
+                """
+            )
+            result = self._session.execute(stmt, params)
+        else:
+            stmt = text(
+                """
+                SELECT COUNT(DISTINCT asset_id)
+                FROM search_sync_queue
+                WHERE status = 'pending'
+                """
+            )
+            result = self._session.execute(stmt)
+        return int(result.scalar() or 0)
 
     def mark_synced(self, sync_ids: list[str]) -> int:
         """

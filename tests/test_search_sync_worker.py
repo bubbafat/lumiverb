@@ -244,8 +244,8 @@ def test_search_sync_worker_drains_queue_and_marks_synced(search_sync_env: tuple
             quickwit=dummy_qw,
             batch_size=10,
         )
-        processed = worker.run_once()
-        assert processed >= 1
+        result = worker.run_once()
+        assert result["synced"] >= 1
 
         # Queue row should now be marked as synced.
         repo = SearchSyncQueueRepository(session)

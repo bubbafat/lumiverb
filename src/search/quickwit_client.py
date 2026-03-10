@@ -11,6 +11,8 @@ from src.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+INGEST_BATCH_SIZE = 500
+
 
 class QuickwitClient:
     """
@@ -91,9 +93,9 @@ class QuickwitClient:
         docs: Iterable[dict],
     ) -> None:
         """
-        Ingest a batch of documents into the library's index.
+        Ingest documents into the library's index in batches.
 
-        Documents are sent as NDJSON and committed immediately.
+        Documents are sent as NDJSON, batched to avoid HTTP body size limits.
         """
         if not self._enabled:
             logger.debug("Quickwit disabled; skipping ingest for library_id=%s", library_id)
@@ -104,18 +106,20 @@ class QuickwitClient:
             return
 
         index_id = self.index_id_for_library(library_id)
-        ndjson = "\n".join(json.dumps(d) for d in docs_list) + "\n"
+        for i in range(0, len(docs_list), INGEST_BATCH_SIZE):
+            batch = docs_list[i : i + INGEST_BATCH_SIZE]
+            ndjson = "\n".join(json.dumps(d) for d in batch) + "\n"
 
-        resp = requests.post(
-            f"{self._base_url}/api/v1/{index_id}/ingest?commit=force",
-            headers={"Content-Type": "application/json"},
-            data=ndjson,
-            timeout=30,
-        )
-        if resp.status_code not in (200, 202):
-            raise RuntimeError(
-                f"Quickwit ingest failed for index {index_id}: {resp.status_code} {resp.text}"
+            resp = requests.post(
+                f"{self._base_url}/api/v1/{index_id}/ingest?commit=force",
+                headers={"Content-Type": "application/json"},
+                data=ndjson,
+                timeout=30,
             )
+            if resp.status_code not in (200, 202):
+                raise RuntimeError(
+                    f"Quickwit ingest failed for index {index_id}: {resp.status_code} {resp.text}"
+                )
 
     def search(
         self,
@@ -140,25 +144,29 @@ class QuickwitClient:
                 "query": query,
                 "max_hits": max_hits,
                 "start_offset": start_offset,
+                "sort_by": "_score",
             },
             timeout=10,
         )
         resp.raise_for_status()
         data = resp.json()
-        hits = data.get("hits", [])
+        raw_hits = data.get("hits", [])
         results: list[dict] = []
-        for hit in hits:
+        for hit in raw_hits:
+            # Quickwit may return doc in _source or flat; _score is at hit root
+            source_doc = hit.get("_source", hit)
+            score = hit.get("_score", 0.0)
             results.append(
                 {
-                    "asset_id": hit.get("asset_id", ""),
-                    "rel_path": hit.get("rel_path", ""),
-                    "thumbnail_key": hit.get("thumbnail_key"),
-                    "proxy_key": hit.get("proxy_key"),
-                    "camera_make": hit.get("camera_make"),
-                    "camera_model": hit.get("camera_model"),
-                    "description": hit.get("description", ""),
-                    "tags": hit.get("tags", []),
-                    "score": hit.get("_score", 0.0),
+                    "asset_id": source_doc.get("asset_id", ""),
+                    "rel_path": source_doc.get("rel_path", ""),
+                    "thumbnail_key": source_doc.get("thumbnail_key"),
+                    "proxy_key": source_doc.get("proxy_key"),
+                    "camera_make": source_doc.get("camera_make"),
+                    "camera_model": source_doc.get("camera_model"),
+                    "description": source_doc.get("description", ""),
+                    "tags": source_doc.get("tags", []),
+                    "score": float(score),
                     "source": "quickwit",
                 }
             )
