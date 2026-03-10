@@ -331,8 +331,18 @@ def worker_search_sync(
                 counters=_counter_text(),
             )
 
+            base_synced = 0
+            base_skipped = 0
+
+            def _on_batch(synced: int, skipped: int, batches: int) -> None:
+                progress.update(
+                    task,
+                    completed=base_synced + base_skipped + synced + skipped,
+                    counters=f"{base_synced + synced:,} synced  {base_skipped + skipped:,} skipped",
+                )
+
             if once:
-                result = worker.run_once()
+                result = worker.run_once(progress_callback=_on_batch)
                 total_synced = result["synced"]
                 total_skipped = result["skipped"]
                 total_batches = result["batches"]
@@ -344,11 +354,13 @@ def worker_search_sync(
             else:
                 settings = get_settings()
                 while True:
-                    result = worker.run_once()
+                    result = worker.run_once(progress_callback=_on_batch)
                     s, sk, b = result["synced"], result["skipped"], result["batches"]
                     total_synced += s
                     total_skipped += sk
                     total_batches += b
+                    base_synced += s
+                    base_skipped += sk
                     completed = total_synced + total_skipped
                     progress.update(task, completed=completed, counters=_counter_text())
 

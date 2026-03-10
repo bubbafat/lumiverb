@@ -64,9 +64,15 @@ class SearchSyncWorker:
             path_prefix=self._path_prefix,
         )
 
-    def run_once(self) -> dict[str, int]:
+    def run_once(
+        self,
+        progress_callback: object | None = None,
+    ) -> dict[str, int]:
         """
         Drain the queue until empty.
+
+        If progress_callback is provided, it is called after each batch with
+        (synced: int, skipped: int, batches: int).
 
         Returns {"synced": N, "skipped": M, "batches": B} where:
         - synced: number of unique assets successfully ingested to Quickwit
@@ -78,6 +84,8 @@ class SearchSyncWorker:
         synced = 0
         skipped = 0
         batches = 0
+        cb = progress_callback if callable(progress_callback) else None
+
         if not self._quickwit.enabled:
             logger.info("Quickwit disabled; skipping search sync run for library_id=%s", self._library_id)
             return {"synced": 0, "skipped": 0, "batches": 0}
@@ -145,8 +153,10 @@ class SearchSyncWorker:
             if sync_ids:
                 self._queue_repo.mark_synced(sync_ids)
 
-        synced = sum(1 for v in asset_status.values() if v == "synced")
-        skipped = sum(1 for v in asset_status.values() if v == "skipped")
+            synced = sum(1 for v in asset_status.values() if v == "synced")
+            skipped = sum(1 for v in asset_status.values() if v == "skipped")
+            if cb:
+                cb(synced, skipped, batches)
 
         return {"synced": synced, "skipped": skipped, "batches": batches}
 
