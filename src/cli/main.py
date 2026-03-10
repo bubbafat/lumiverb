@@ -266,7 +266,7 @@ def worker_search_sync(
     from src.cli.progress import LiveProgress
     from src.core.config import get_settings
     from src.core.database import get_tenant_session
-    from src.repository.tenant import AssetRepository, SearchSyncQueueRepository
+    from src.repository.tenant import SearchSyncQueueRepository
     from src.search.quickwit_client import QuickwitClient
     from src.workers.search_sync import SearchSyncWorker
 
@@ -279,22 +279,17 @@ def worker_search_sync(
 
     with get_tenant_session(tenant_id) as session:
         if force_resync:
-            asset_repo = AssetRepository(session)
             queue_repo = SearchSyncQueueRepository(session)
-            assets = asset_repo.list_by_library(library_id)
-            if path_prefix:
-                assets = [
-                    a
-                    for a in assets
-                    if a.rel_path == path_prefix or a.rel_path.startswith(path_prefix + "/")
-                ]
-            asset_ids = [a.asset_id for a in assets]
+
+            def _progress(completed: int, total: int) -> None:
+                console.print(f"Enqueued {completed:,} / {total:,}...")
+
+            asset_ids = queue_repo.enqueue_all_for_library(
+                library_id,
+                path_prefix=path_prefix,
+                progress_callback=_progress,
+            )
             if asset_ids:
-
-                def _progress(completed: int, total: int) -> None:
-                    console.print(f"Enqueued {completed:,} / {total:,}...")
-
-                queue_repo.enqueue_all_for_library(library_id, asset_ids, progress_callback=_progress)
                 console.print(f"Re-enqueued {len(asset_ids):,} assets for resync.")
 
         quickwit = QuickwitClient()

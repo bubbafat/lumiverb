@@ -123,6 +123,17 @@ def test_tenant_schema_upgrade_and_downgrade() -> None:
             tables = {row[0] for row in r}
         assert set(TENANT_TABLES) == tables, tables
 
+        # Verify search_sync_latest view exists (from our migration)
+        with engine.connect() as conn:
+            r = conn.execute(
+                text(
+                    "SELECT table_name FROM information_schema.views "
+                    "WHERE table_schema = 'public' AND table_name = 'search_sync_latest'"
+                )
+            )
+            views = {row[0] for row in r}
+        assert "search_sync_latest" in views, "search_sync_latest view should exist"
+
         result = subprocess.run(
             [sys.executable, "-m", "alembic", "-c", "alembic-tenant.ini", "downgrade", "base"],
             cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
