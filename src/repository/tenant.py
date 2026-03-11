@@ -12,6 +12,7 @@ from sqlmodel import Session, select
 from src.core.io_utils import normalize_path_prefix
 from src.core.utils import utcnow
 from src.models.filter import AssetFilterSpec
+from src.models.similarity import SimilarityScope
 from src.models.tenant import Asset, AssetEmbedding, AssetMetadata, Library, Scan, SearchSyncQueue, WorkerJob
 from ulid import ULID
 
@@ -792,37 +793,52 @@ class AssetEmbeddingRepository:
         exclude_asset_id: str,
         limit: int,
         offset: int = 0,
+        scope: SimilarityScope | None = None,
     ) -> list[tuple[str, float]]:
         """
         Return (asset_id, distance) pairs ordered by cosine distance ASC.
         Filters to assets in library_id that are online.
+        Optional scope applies extra filters (e.g. date range via taken_at).
         """
-        rows = self._session.execute(
-            text(
-                """
+        conditions = [
+            "a.library_id = :library_id",
+            "a.availability = 'online'",
+            "ae.model_id = :model_id",
+            "ae.model_version = :model_version",
+            "ae.asset_id != :exclude_id",
+        ]
+        params: dict = {
+            "vec": str(vector),
+            "library_id": library_id,
+            "model_id": model_id,
+            "model_version": model_version,
+            "exclude_id": exclude_asset_id,
+            "limit": limit,
+            "offset": offset,
+        }
+        if scope and scope.date_range:
+            dr = scope.date_range
+            if dr.from_ts is not None:
+                conditions.append(
+                    "a.taken_at IS NOT NULL AND a.taken_at >= to_timestamp(:from_ts) AT TIME ZONE 'UTC'"
+                )
+                params["from_ts"] = dr.from_ts
+            if dr.to_ts is not None:
+                conditions.append(
+                    "a.taken_at IS NOT NULL AND a.taken_at <= to_timestamp(:to_ts) AT TIME ZONE 'UTC'"
+                )
+                params["to_ts"] = dr.to_ts
+        where = " AND ".join(conditions)
+        sql = f"""
                 SELECT ae.asset_id,
                        ae.embedding_vector <=> CAST(:vec AS vector) AS distance
                 FROM asset_embeddings ae
                 JOIN assets a ON a.asset_id = ae.asset_id
-                WHERE a.library_id   = :library_id
-                  AND a.availability = 'online'
-                  AND ae.model_id      = :model_id
-                  AND ae.model_version = :model_version
-                  AND ae.asset_id     != :exclude_id
+                WHERE {where}
                 ORDER BY distance ASC
                 LIMIT :limit OFFSET :offset
             """
-            ),
-            {
-                "vec": str(vector),
-                "library_id": library_id,
-                "model_id": model_id,
-                "model_version": model_version,
-                "exclude_id": exclude_asset_id,
-                "limit": limit,
-                "offset": offset,
-            },
-        ).fetchall()
+        rows = self._session.execute(text(sql), params).fetchall()
         return [(r.asset_id, float(r.distance)) for r in rows]
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import secrets
+from datetime import datetime, timezone
 from typing import Tuple
 from unittest.mock import patch
 
@@ -188,4 +189,98 @@ def test_similar_asset_not_found(similarity_client: Tuple[_AuthClient, str, str]
         f"/v1/similar?asset_id=ast_unknown&library_id={library_id}",
     )
     assert resp.status_code == 404
+
+
+@pytest.mark.slow
+def test_similar_date_range_filter(similarity_client: Tuple[_AuthClient, str, str]) -> None:
+    """GET /v1/similar with from_ts/to_ts returns only assets with taken_at in range."""
+    auth_client, library_id, tenant_url = similarity_client
+
+    # October 2025 range (Unix seconds, inclusive)
+    oct_start = int(datetime(2025, 10, 1, 0, 0, 0, tzinfo=timezone.utc).timestamp())
+    oct_end = int(datetime(2025, 10, 31, 23, 59, 59, tzinfo=timezone.utc).timestamp())
+    nov_1 = datetime(2025, 11, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    engine = create_engine(tenant_url)
+    with Session(engine) as session:
+        scan_repo = ScanRepository(session)
+        scan = scan_repo.create(library_id=library_id)
+        asset_repo = AssetRepository(session)
+        base_vec, close_vec, far_vec = _asset_vectors()
+
+        base_asset = asset_repo.create_for_scan(
+            library_id=library_id,
+            rel_path="date_filter/base.jpg",
+            file_size=100,
+            file_mtime=None,
+            media_type="image/jpeg",
+            scan_id=scan.scan_id,
+        )
+        close_asset = asset_repo.create_for_scan(
+            library_id=library_id,
+            rel_path="date_filter/close_oct.jpg",
+            file_size=100,
+            file_mtime=None,
+            media_type="image/jpeg",
+            scan_id=scan.scan_id,
+        )
+        far_asset = asset_repo.create_for_scan(
+            library_id=library_id,
+            rel_path="date_filter/far_nov.jpg",
+            file_size=100,
+            file_mtime=None,
+            media_type="image/jpeg",
+            scan_id=scan.scan_id,
+        )
+        base_asset.taken_at = datetime(2025, 10, 15, 12, 0, 0, tzinfo=timezone.utc)
+        close_asset.taken_at = datetime(2025, 10, 20, 12, 0, 0, tzinfo=timezone.utc)
+        far_asset.taken_at = nov_1
+        session.add(base_asset)
+        session.add(close_asset)
+        session.add(far_asset)
+        session.commit()
+
+        emb_repo = AssetEmbeddingRepository(session)
+        from src.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
+
+        emb_repo.upsert(base_asset.asset_id, "clip", CLIP_VERSION, base_vec)
+        emb_repo.upsert(close_asset.asset_id, "clip", CLIP_VERSION, close_vec)
+        emb_repo.upsert(far_asset.asset_id, "clip", CLIP_VERSION, far_vec)
+
+        base_id = base_asset.asset_id
+        close_id = close_asset.asset_id
+        far_id = far_asset.asset_id
+
+    # No date filter: both close and far appear (may be more hits from other tests in same library)
+    resp = auth_client.get(
+        f"/v1/similar?asset_id={base_id}&library_id={library_id}",
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["embedding_available"] is True
+    ids_no_filter = [hit["asset_id"] for hit in data["hits"]]
+    assert close_id in ids_no_filter and far_id in ids_no_filter
+
+    # October only: only close (far is November)
+    resp_oct = auth_client.get(
+        f"/v1/similar?asset_id={base_id}&library_id={library_id}&from_ts={oct_start}&to_ts={oct_end}",
+    )
+    assert resp_oct.status_code == 200, resp_oct.text
+    data_oct = resp_oct.json()
+    assert data_oct["embedding_available"] is True
+    assert data_oct["total"] == 1
+    assert data_oct["hits"][0]["asset_id"] == close_id
+
+
+@pytest.mark.slow
+def test_similar_from_ts_gt_to_ts_returns_422(similarity_client: Tuple[_AuthClient, str, str]) -> None:
+    """GET /v1/similar with from_ts > to_ts returns 422."""
+    auth_client, library_id, _tenant_url = similarity_client
+
+    resp = auth_client.get(
+        f"/v1/similar?asset_id=ast_any&library_id={library_id}&from_ts=1000&to_ts=500",
+    )
+    assert resp.status_code == 422
+    assert "from_ts" in resp.text or "to_ts" in resp.text.lower()
+
 

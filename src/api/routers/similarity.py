@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session
+from src.models.similarity import DateRange, SimilarityScope
 from src.repository.tenant import AssetEmbeddingRepository, AssetRepository, LibraryRepository
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,18 @@ def find_similar(
     session: Annotated[Session, Depends(get_tenant_session)],
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    from_ts: float | None = Query(default=None, description="Unix timestamp (seconds), inclusive start of capture-time range."),
+    to_ts: float | None = Query(default=None, description="Unix timestamp (seconds), inclusive end of capture-time range."),
     ) -> SimilarityResponse:
+    if from_ts is not None and to_ts is not None and from_ts > to_ts:
+        raise HTTPException(
+            status_code=422,
+            detail="from_ts must be less than or equal to to_ts",
+        )
+    scope: SimilarityScope | None = None
+    if from_ts is not None or to_ts is not None:
+        scope = SimilarityScope(date_range=DateRange(from_ts=from_ts, to_ts=to_ts))
+
     from src.models.registry import get_embedding_config
     from src.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
     from src.workers.embeddings.moondream_provider import MODEL_VERSION as MD_VERSION
@@ -89,6 +101,7 @@ def find_similar(
             vector=[float(x) for x in clip_emb.embedding_vector],
             exclude_asset_id=asset_id,
             limit=K,
+            scope=scope,
         )
         for cand_id, dist in clip_candidates:
             scores[cand_id] = scores.get(cand_id, 0.0) + clip_weight * dist
@@ -101,12 +114,13 @@ def find_similar(
             vector=[float(x) for x in md_emb.embedding_vector],
             exclude_asset_id=asset_id,
             limit=K,
+            scope=scope,
         )
         for cand_id, dist in md_candidates:
             scores[cand_id] = scores.get(cand_id, 0.0) + moondream_weight * dist
 
-    # Sort by weighted score ascending (lower = more similar), take top limit
-    ranked = sorted(scores.items(), key=lambda x: x[1])[:limit]
+    # Sort by weighted score ascending (lower = more similar), apply offset/limit
+    ranked = sorted(scores.items(), key=lambda x: x[1])[offset : offset + limit]
 
     if not ranked:
         return SimilarityResponse(
