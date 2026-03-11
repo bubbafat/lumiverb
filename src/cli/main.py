@@ -776,7 +776,9 @@ def search(
         return
 
     if output == "json":
-        console.print(_json.dumps(hits, indent=2))
+        import sys as _sys
+        _sys.stdout.write(_json.dumps(hits, indent=2))
+        _sys.stdout.write("\n")
 
     elif output == "text":
         for hit in hits:
