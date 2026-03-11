@@ -1144,7 +1144,7 @@ class SearchSyncQueueRepository:
                 JOIN assets a ON a.asset_id = ssl.asset_id
                 WHERE ssl.status = 'pending'
                    OR (ssl.status = 'processing'
-                       AND ssl.processing_started_at < NOW() - (:lease_interval || ' minutes')::interval)
+                       AND ssl.processing_started_at < NOW() - (:lease_interval)::interval)
                 {library_filter}
                 {path_filter}
                 ORDER BY ssl.created_at

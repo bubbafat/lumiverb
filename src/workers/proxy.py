@@ -90,8 +90,6 @@ def _load_raw_image(source_path: Path) -> tuple[pyvips.Image, bool]:
         rgb.tobytes(), width, height, bands, "uchar"
     ), False
 
-    raise ValueError(f"Not a RAW file: {source_path}")
-
 
 class ProxyWorker(BaseWorker):
     job_type = "proxy"
