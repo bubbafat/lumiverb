@@ -1116,6 +1116,7 @@ class SearchSyncQueueRepository:
         batch_size: int = 100,
         library_id: str | None = None,
         path_prefix: str | None = None,
+        lease_minutes: int = 5,
     ) -> list[SearchSyncQueue]:
         """
         Claim up to batch_size assets whose latest sync state is pending.
@@ -1134,6 +1135,7 @@ class SearchSyncQueueRepository:
             if normalised:
                 path_filter = " AND a.rel_path LIKE :path_prefix"
                 params["path_prefix"] = normalised + "/%"
+        params["lease_interval"] = f"{lease_minutes} minutes"
 
         sql = f"""
             WITH candidates AS (
@@ -1141,6 +1143,8 @@ class SearchSyncQueueRepository:
                 FROM search_sync_latest ssl
                 JOIN assets a ON a.asset_id = ssl.asset_id
                 WHERE ssl.status = 'pending'
+                   OR (ssl.status = 'processing'
+                       AND ssl.processing_started_at < NOW() - (:lease_interval || ' minutes')::interval)
                 {library_filter}
                 {path_filter}
                 ORDER BY ssl.created_at
@@ -1153,7 +1157,8 @@ class SearchSyncQueueRepository:
                 FOR UPDATE OF ssq SKIP LOCKED
             )
             UPDATE search_sync_queue
-            SET status = 'processing'
+            SET status = 'processing',
+                processing_started_at = NOW()
             WHERE sync_id IN (SELECT sync_id FROM locked)
             RETURNING sync_id, asset_id, operation
         """

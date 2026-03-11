@@ -116,7 +116,7 @@ Runs on the machine where source files live. Communicates only via the API.
 Responsibilities:
 - Filesystem scanning (recursive, respects ignore patterns)
 - SHA256 deduplication (checked against API before upload)
-- Proxy and thumbnail generation (in memory, never writes source files externally)
+- Proxy and thumbnail generation (in memory, never writes source files externally; TIFFs use Pillow to avoid libvips/libtiff memory cap on large files)
 - EXIF and metadata extraction
 - Uploads proxy + thumbnail + metadata to API
 - Maintains local SQLite: `filepath → asset_id` mapping

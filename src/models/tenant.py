@@ -193,6 +193,10 @@ class SearchSyncQueue(SQLModel, table=True):
     scene_id: str | None = Field(default=None, foreign_key="video_scenes.scene_id", nullable=True)
     operation: str = Field(nullable=False)
     status: str = Field(default="pending", nullable=False)
+    processing_started_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),

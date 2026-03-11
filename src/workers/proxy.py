@@ -1,4 +1,8 @@
-"""Proxy worker: generate image proxy and thumbnail from source asset. API-only."""
+"""Proxy worker: generate image proxy and thumbnail from source asset. API-only.
+
+TIFF files are loaded with Pillow (not libvips) because libvips's libtiff backend
+has a hardcoded 50MB cumulative allocation cap that fails on large/panorama TIFFs.
+"""
 
 import logging
 from pathlib import Path
@@ -13,68 +17,80 @@ from src.workers.base import BaseWorker
 logger = logging.getLogger(__name__)
 
 PROXY_LONG_EDGE = 2048
+# TIFFs use Pillow instead of libvips to avoid libtiff's 50MB cumulative allocation cap.
+TIFF_EXTENSIONS = {".tif", ".tiff"}
 PROXY_JPEG_QUALITY = 75
 THUMBNAIL_LONG_EDGE = 256
 THUMBNAIL_JPEG_QUALITY = 80
 
 
-def _load_vips_image(source_path: Path) -> tuple[pyvips.Image, bool]:
-    """
-    Load image into pyvips. Returns (image, from_embedded_thumb).
+def _pil_to_vips(pil_image: "PIL.Image.Image") -> pyvips.Image:
+    """Convert a PIL Image to a pyvips Image via numpy. Always converts to RGB."""
+    import numpy as np
 
-    For RAW files:
+    pil_image = pil_image.convert("RGB")
+    arr = np.asarray(pil_image, dtype=np.uint8)
+    height, width, bands = arr.shape
+    return pyvips.Image.new_from_memory(arr.tobytes(), width, height, bands, "uchar")
+
+
+def _load_raw_image(source_path: Path) -> tuple[pyvips.Image, bool]:
+    """
+    Load RAW image into pyvips. Returns (image, from_embedded_thumb).
+
     - Try extract_thumb() first (fast path)
     - If embedded JPEG long edge >= PROXY_LONG_EDGE: use it
     - Otherwise: fall back to full rawpy decode (slow but full quality)
 
-    For non-RAW: load directly (no sequential — two passes needed).
+    Only call for files with extension in RAW_EXTENSIONS.
     """
     ext = source_path.suffix.lower()
+    if ext not in RAW_EXTENSIONS:
+        raise ValueError(f"Not a RAW file: {source_path}")
 
-    if ext in RAW_EXTENSIONS:
-        try:
-            with rawpy.imread(str(source_path)) as raw:
-                thumb = raw.extract_thumb()
-            if thumb.format == rawpy.ThumbFormat.JPEG:
-                img = pyvips.Image.new_from_buffer(bytes(thumb.data), "")
-                long_edge = max(img.width, img.height)
-                if long_edge >= PROXY_LONG_EDGE:
-                    return img, True
-                else:
-                    logger.debug(
-                        "Embedded JPEG too small (%dpx), falling back to full decode: %s",
-                        long_edge,
-                        source_path.name,
-                    )
-                    # Fall through to full decode below
-            elif thumb.format == rawpy.ThumbFormat.BITMAP:
-                import numpy as np
-
-                arr = np.array(thumb.data, dtype=np.uint8)
-                height, width, bands = arr.shape
-                img = pyvips.Image.new_from_memory(
-                    arr.tobytes(), width, height, bands, "uchar"
-                )
-                long_edge = max(img.width, img.height)
-                if long_edge >= PROXY_LONG_EDGE:
-                    return img, True
-                # Fall through to full decode below
-        except rawpy.LibRawNoThumbnailError:
-            pass  # Fall through to full decode
-        except rawpy.LibRawFileUnsupportedError:
-            raise ValueError(f"Unsupported RAW format: {source_path}")
-
-        # Full RAW decode fallback
+    try:
         with rawpy.imread(str(source_path)) as raw:
-            rgb = raw.postprocess()
-        import numpy as np
+            thumb = raw.extract_thumb()
+        if thumb.format == rawpy.ThumbFormat.JPEG:
+            img = pyvips.Image.new_from_buffer(bytes(thumb.data), "")
+            long_edge = max(img.width, img.height)
+            if long_edge >= PROXY_LONG_EDGE:
+                return img, True
+            else:
+                logger.debug(
+                    "Embedded JPEG too small (%dpx), falling back to full decode: %s",
+                    long_edge,
+                    source_path.name,
+                )
+                # Fall through to full decode below
+        elif thumb.format == rawpy.ThumbFormat.BITMAP:
+            import numpy as np
 
-        height, width, bands = rgb.shape
-        return pyvips.Image.new_from_memory(
-            rgb.tobytes(), width, height, bands, "uchar"
-        ), False
+            arr = np.array(thumb.data, dtype=np.uint8)
+            height, width, bands = arr.shape
+            img = pyvips.Image.new_from_memory(
+                arr.tobytes(), width, height, bands, "uchar"
+            )
+            long_edge = max(img.width, img.height)
+            if long_edge >= PROXY_LONG_EDGE:
+                return img, True
+            # Fall through to full decode below
+    except rawpy.LibRawNoThumbnailError:
+        pass  # Fall through to full decode
+    except rawpy.LibRawFileUnsupportedError:
+        raise ValueError(f"Unsupported RAW format: {source_path}")
 
-    return pyvips.Image.new_from_file(str(source_path)), False
+    # Full RAW decode fallback
+    with rawpy.imread(str(source_path)) as raw:
+        rgb = raw.postprocess()
+    import numpy as np
+
+    height, width, bands = rgb.shape
+    return pyvips.Image.new_from_memory(
+        rgb.tobytes(), width, height, bands, "uchar"
+    ), False
+
+    raise ValueError(f"Not a RAW file: {source_path}")
 
 
 class ProxyWorker(BaseWorker):
@@ -115,20 +131,59 @@ class ProxyWorker(BaseWorker):
             self._tenant_id, library_id, asset_id, rel_path
         )
 
-        img, from_thumb = _load_vips_image(source_path)
-        width_orig = img.width
-        height_orig = img.height
+        ext = source_path.suffix.lower()
 
-        # Generate proxy (resize down only — never upscale)
-        if max(width_orig, height_orig) > PROXY_LONG_EDGE:
-            proxy_img = img.thumbnail_image(
+        if ext in RAW_EXTENSIONS:
+            # RAW: existing path unchanged
+            img, from_thumb = _load_raw_image(source_path)
+            width_orig = img.width
+            height_orig = img.height
+
+            if max(width_orig, height_orig) > PROXY_LONG_EDGE:
+                proxy_img = img.thumbnail_image(
+                    PROXY_LONG_EDGE,
+                    height=PROXY_LONG_EDGE,
+                    size=pyvips.enums.Size.DOWN,
+                )
+            else:
+                proxy_img = img  # already smaller than proxy size — use as-is
+
+        elif ext in TIFF_EXTENSIONS:
+            # TIFF: use Pillow to avoid libvips/libtiff 50MB cumulative allocation cap
+            from PIL import Image as PILImage
+
+            pil_img = PILImage.open(source_path)
+            width_orig, height_orig = pil_img.size
+
+            scale = PROXY_LONG_EDGE / max(width_orig, height_orig)
+            if scale < 1.0:
+                new_w = int(width_orig * scale)
+                new_h = int(height_orig * scale)
+                pil_img = pil_img.resize((new_w, new_h), PILImage.LANCZOS)
+
+            proxy_img = _pil_to_vips(pil_img)
+            from_thumb = False
+
+        else:
+            # All other non-RAW formats: pyvips thumbnail (exploits embedded previews)
+            header = pyvips.Image.new_from_file(
+                str(source_path),
+                access="sequential",
+                fail_on=pyvips.enums.FailOn.NONE,
+            )
+            width_orig = header.width
+            height_orig = header.height
+            del header
+
+            proxy_img = pyvips.Image.thumbnail(
+                str(source_path),
                 PROXY_LONG_EDGE,
                 height=PROXY_LONG_EDGE,
                 size=pyvips.enums.Size.DOWN,
             )
-        else:
-            proxy_img = img  # already smaller than proxy size — use as-is
+            from_thumb = False
 
+        # Generate proxy (resize down only — never upscale)
         proxy_bytes = proxy_img.write_to_buffer(".jpg[Q=%d]" % PROXY_JPEG_QUALITY)
         self._storage.write(proxy_key, proxy_bytes)
 

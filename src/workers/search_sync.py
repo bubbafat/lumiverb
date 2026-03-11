@@ -5,6 +5,7 @@ from typing import Iterable
 
 from sqlmodel import Session
 
+from src.core.config import get_settings
 from src.core.io_utils import normalize_path_prefix
 from src.core.utils import utcnow
 from src.models.registry import model_version_for_provenance
@@ -88,11 +89,14 @@ class SearchSyncWorker:
         # Ensure index exists before ingesting
         self._quickwit.ensure_index_for_library(self._library_id)
 
+        settings = get_settings()
+
         while True:
             batch = self._queue_repo.claim_batch(
                 self._batch_size,
                 library_id=self._library_id,
                 path_prefix=self._path_prefix,
+                lease_minutes=settings.search_sync_lease_minutes,
             )
             if not batch:
                 break

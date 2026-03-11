@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     # Workers
     worker_idle_poll_seconds: float = 5.0
     worker_lease_minutes: int = 10
+    search_sync_lease_minutes: int = 5
 
     # Metadata
     exiftool_path: str = "exiftool"

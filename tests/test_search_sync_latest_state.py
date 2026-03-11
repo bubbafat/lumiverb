@@ -103,10 +103,15 @@ def test_claim_batch_deduplicates_assets() -> None:
     from src.repository.tenant import SearchSyncQueueRepository
 
     mock_session = MagicMock()
-    mock_session.execute.return_value.fetchall.return_value = [
-        ("ssq_abc", "ast_1", "index"),
-    ]
-    mock_session.execute.return_value.rowcount = 1
+
+    class _ExecResult:
+        def __init__(self):
+            self.rowcount = 1
+
+        def fetchall(self):
+            return [("ssq_abc", "ast_1", "index")]
+
+    mock_session.execute.return_value = _ExecResult()
     mock_row = MagicMock()
     mock_row.sync_id = "ssq_abc"
     mock_row.asset_id = "ast_1"

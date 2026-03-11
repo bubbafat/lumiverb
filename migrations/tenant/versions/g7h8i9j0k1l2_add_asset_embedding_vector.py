@@ -35,6 +35,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_assets_embedding_hnsw", table_name="assets")
+    op.drop_index("ix_assets_embedding_hnsw", table_name="assets", if_exists=True)
     op.drop_column("assets", "embedding_vector")
 

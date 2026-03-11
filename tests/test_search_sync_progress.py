@@ -32,7 +32,15 @@ def test_claim_batch_path_filter_applied() -> None:
     from src.repository.tenant import SearchSyncQueueRepository
 
     mock_session = MagicMock()
-    mock_session.execute.return_value.fetchall.return_value = []
+
+    class _ExecResult:
+        def __init__(self):
+            self.rowcount = 0
+
+        def fetchall(self):
+            return []
+
+    mock_session.execute.return_value = _ExecResult()
     mock_session.get.return_value = None
 
     repo = SearchSyncQueueRepository(mock_session)
