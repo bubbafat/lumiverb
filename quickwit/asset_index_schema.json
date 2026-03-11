@@ -38,6 +38,16 @@
         "fieldnorms": false
       },
       {
+        "name": "path_tokens",
+        "type": "text",
+        "indexed": true,
+        "stored": false,
+        "fast": false,
+        "tokenizer": "default",
+        "record": "position",
+        "fieldnorms": true
+      },
+      {
         "name": "media_type",
         "type": "text",
         "indexed": true,
@@ -99,6 +109,7 @@
         "type": "array<text>",
         "indexed": true,
         "stored": true,
+        "tokenizer": "default",
         "record": "position",
         "fieldnorms": true
       },
@@ -138,7 +149,7 @@
     "timestamp_field": "indexed_at"
   },
   "search_settings": {
-    "default_search_fields": ["description", "tags"]
+    "default_search_fields": ["description", "tags", "path_tokens", "camera_make", "camera_model"]
   },
   "indexing_settings": {
     "commit_timeout_secs": 10

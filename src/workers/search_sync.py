@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Iterable
 
 from sqlmodel import Session
@@ -19,6 +20,12 @@ from src.repository.tenant import (
 from src.search.quickwit_client import QuickwitClient
 
 logger = logging.getLogger(__name__)
+
+
+def _path_to_tokens(rel_path: str) -> str:
+    """Turn rel_path into space-separated tokens for search (e.g. Photos/UK2024/DSC07171.ARW → Photos UK2024 DSC07171 ARW)."""
+    s = re.sub(r"[/\\_\-.]", " ", rel_path)
+    return re.sub(r" +", " ", s).strip()
 
 
 class SearchSyncWorker:
@@ -179,6 +186,7 @@ class SearchSyncWorker:
             "asset_id": asset.asset_id,
             "library_id": asset.library_id,
             "rel_path": asset.rel_path,
+            "path_tokens": _path_to_tokens(asset.rel_path),
             "media_type": asset.media_type,
             "description": description,
             "tags": tags,
