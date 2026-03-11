@@ -36,7 +36,7 @@ def test_enqueue_force_and_retry_failed_mutually_exclusive() -> None:
     with patch("src.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
-            ["enqueue", "TestLib", "--force", "--retry-failed"],
+            ["enqueue", "-l", "TestLib", "--force", "--retry-failed"],
         )
 
     assert result.exit_code == 1
@@ -56,7 +56,7 @@ def test_enqueue_retry_failed_passes_filter_to_api() -> None:
     with patch("src.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
-            ["enqueue", "TestLib", "--retry-failed"],
+            ["enqueue", "-l", "TestLib", "--retry-failed"],
         )
 
     assert result.exit_code == 0

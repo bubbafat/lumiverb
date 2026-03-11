@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Annotated
 
+import json as _json
 import typer
 from rich.console import Console
 from rich.markup import escape
@@ -193,7 +194,7 @@ def _resolve_library_id(client: object, library_name: str) -> str:
 def worker_proxy(
     once: bool = typer.Option(False, "--once", help="Process all queued jobs then exit."),
     concurrency: int = typer.Option(1, "--concurrency", help="Number of parallel workers."),
-    library: str | None = typer.Option(None, "--library", help="Only process jobs for this library."),
+    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
 ) -> None:
     """Generate proxies and thumbnails for pending image assets."""
     from src.storage.local import LocalStorage
@@ -220,7 +221,7 @@ def worker_proxy(
 
 @worker_app.command("exif")
 def worker_exif(
-    library: Annotated[str | None, typer.Option("--library")] = None,
+    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
     once: Annotated[bool, typer.Option("--once")] = False,
 ) -> None:
     """Run the EXIF metadata worker."""
@@ -234,7 +235,7 @@ def worker_exif(
 
 @worker_app.command("vision")
 def worker_vision(
-    library: Annotated[str | None, typer.Option("--library")] = None,
+    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
     once: Annotated[bool, typer.Option("--once")] = False,
 ) -> None:
     """Run the AI vision worker (Moondream descriptions and tags)."""
@@ -508,10 +509,10 @@ def status(
             # Show hint for the stage with most failures
             worst = max(failed_stages, key=lambda x: x[1])
             hint_type = "vision" if worst[0] == "ai_vision" else worst[0]
-            console.print(
-                f"\nRun 'lumiverb failures --library {library} "
-                f"--job-type {hint_type}' to see failure details."
-            )
+        console.print(
+            f"\nRun 'lumiverb failures -l {library} "
+            f"--job-type {hint_type}' to see failure details."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -579,10 +580,10 @@ def failures(
     path_arg = f" --path {path_prefix}" if path_prefix else ""
     console.print()
     console.print("To retry all:")
-    console.print(f"  lumiverb enqueue {library} --job-type {job_type} --retry-failed")
+    console.print(f"  lumiverb enqueue -l {library} --job-type {job_type} --retry-failed")
     if path_prefix:
         console.print("To retry scoped:")
-        console.print(f"  lumiverb enqueue {library} --job-type {job_type} --retry-failed --path {path_prefix}")
+        console.print(f"  lumiverb enqueue -l {library} --job-type {job_type} --retry-failed --path {path_prefix}")
 
 
 # ---------------------------------------------------------------------------
@@ -643,7 +644,7 @@ def scan(
 
 @app.command()
 def enqueue(
-    library: Annotated[str, typer.Argument(help="Library name")],
+    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
     job_type: Annotated[str, typer.Option("--job-type", "-j")] = "proxy",
     path: Annotated[str | None, typer.Option("--path")] = None,
     asset: Annotated[str | None, typer.Option("--asset")] = None,
@@ -709,6 +710,103 @@ def enqueue(
     data = resp.json()
     enqueued = data.get("enqueued", 0)
     console.print(f"Enqueued {enqueued:,} {job_type} jobs.")
+
+
+@app.command("search")
+def search(
+    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
+    query: Annotated[str, typer.Argument(help="Search query.")],
+    output: Annotated[str, typer.Option("--output", "-o", help="Output format: table, json, text.")] = "table",
+    limit: Annotated[int, typer.Option("--limit", help="Max results. 0 = all.")] = 20,
+    offset: Annotated[int, typer.Option("--offset", help="Result offset.")] = 0,
+) -> None:
+    """Search assets in a library by natural language query."""
+    if output not in ("table", "json", "text"):
+        console.print("[red]--output must be one of: table, json, text[/red]")
+        raise typer.Exit(1)
+
+    client = LumiverbClient()
+    library_id = _resolve_library_id(client, library)
+
+    if limit == 0:
+        # Fetch all results by paginating until exhausted
+        all_hits: list[dict] = []
+        page_offset = offset
+        page_size = 100
+        source = "unknown"
+        while True:
+            resp = client.get(
+                "/v1/search",
+                params={
+                    "library_id": library_id,
+                    "q": query,
+                    "limit": page_size,
+                    "offset": page_offset,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            source = data.get("source", "unknown")
+            hits = data.get("hits", [])
+            all_hits.extend(hits)
+            if len(hits) < page_size:
+                break
+            page_offset += page_size
+        hits = all_hits
+    else:
+        resp = client.get(
+            "/v1/search",
+            params={
+                "library_id": library_id,
+                "q": query,
+                "limit": limit,
+                "offset": offset,
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        hits = data.get("hits", [])
+        source = data.get("source", "unknown")
+
+    if not hits:
+        console.print("[yellow]No results found.[/yellow]")
+        raise typer.Exit(0)
+
+    if output == "json":
+        console.print(_json.dumps(hits, indent=2))
+
+    elif output == "text":
+        for hit in hits:
+            console.print(f"[bold]{hit['rel_path']}[/bold]")
+            if hit.get("description"):
+                console.print(f"  {hit['description']}")
+            if hit.get("tags"):
+                console.print(f"  Tags: {', '.join(hit['tags'])}")
+            console.print()
+
+    else:  # table (default)
+        table = Table(
+            title=f"Search results for [bold]{query!r}[/bold] — {len(hits)} hit(s) via {source}",
+            show_lines=False,
+        )
+        table.add_column("Path", style="cyan", no_wrap=False, max_width=60)
+        table.add_column("Description", no_wrap=False, max_width=50)
+        table.add_column("Tags", no_wrap=False, max_width=30)
+        table.add_column("Score", justify="right", style="dim")
+        table.add_column("Source", style="dim")
+
+        for hit in hits:
+            tags = ", ".join(hit.get("tags") or [])
+            description = hit.get("description") or ""
+            table.add_row(
+                hit["rel_path"],
+                description[:120] + "…" if len(description) > 120 else description,
+                tags[:80] + "…" if len(tags) > 80 else tags,
+                f"{hit.get('score', 0.0):.3f}",
+                hit.get("source", ""),
+            )
+
+        console.print(table)
 
 
 def main() -> None:

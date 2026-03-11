@@ -164,9 +164,9 @@ class ProxyWorker(BaseWorker):
 
         else:
             # All other non-RAW formats: pyvips thumbnail (exploits embedded previews)
+            # Use a non-sequential header read for true source dimensions only.
             header = pyvips.Image.new_from_file(
                 str(source_path),
-                access="sequential",
                 fail_on=pyvips.enums.FailOn.NONE,
             )
             width_orig = header.width
@@ -180,6 +180,10 @@ class ProxyWorker(BaseWorker):
                 size=pyvips.enums.Size.DOWN,
             )
             from_thumb = False
+
+            # Materialize the proxy in memory so subsequent thumbnailing does not
+            # trigger a second pass over a sequential JPEG source.
+            proxy_img = proxy_img.copy_memory()
 
         # Generate proxy (resize down only — never upscale)
         proxy_bytes = proxy_img.write_to_buffer(".jpg[Q=%d]" % PROXY_JPEG_QUALITY)
