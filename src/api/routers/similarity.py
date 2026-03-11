@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session
-from src.models.similarity import DateRange, SimilarityScope
+from src.models.similarity import CameraSpec, DateRange, SimilarityScope
 from src.repository.tenant import AssetEmbeddingRepository, AssetRepository, LibraryRepository
 
 logger = logging.getLogger(__name__)
@@ -46,6 +46,14 @@ def find_similar(
         default=None,
         description="Comma-separated: image, video. Restrict results to these types (by media_type prefix).",
     ),
+    camera_make: list[str] | None = Query(
+        default=None,
+        description="Camera make(s); pair with camera_model by index. OR across pairs.",
+    ),
+    camera_model: list[str] | None = Query(
+        default=None,
+        description="Camera model(s); pair with camera_make by index. OR across pairs.",
+    ),
     ) -> SimilarityResponse:
     if from_ts is not None and to_ts is not None and from_ts > to_ts:
         raise HTTPException(
@@ -60,11 +68,31 @@ def find_similar(
         if not asset_types_list:
             asset_types_list = None
 
+    # Build list of (make, model) pairs from repeated params; OR across pairs
+    cameras_list: list[CameraSpec] | None = None
+    if camera_make is not None or camera_model is not None:
+        makes = camera_make or []
+        models = camera_model or []
+        if makes or models:
+            n = max(len(makes), len(models))
+            cameras_list = [
+                CameraSpec(
+                    make=makes[i] if i < len(makes) else None,
+                    model=models[i] if i < len(models) else None,
+                )
+                for i in range(n)
+            ]
+            # Drop pairs that are both None
+            cameras_list = [c for c in cameras_list if c.make is not None or c.model is not None]
+            if not cameras_list:
+                cameras_list = None
+
     scope: SimilarityScope | None = None
-    if from_ts is not None or to_ts is not None or asset_types_list is not None:
+    if from_ts is not None or to_ts is not None or asset_types_list is not None or cameras_list is not None:
         scope = SimilarityScope(
             date_range=DateRange(from_ts=from_ts, to_ts=to_ts) if (from_ts is not None or to_ts is not None) else None,
             asset_types=asset_types_list if asset_types_list is not None else "all",
+            cameras=cameras_list,
         )
 
     from src.models.registry import get_embedding_config

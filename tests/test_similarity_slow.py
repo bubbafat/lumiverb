@@ -367,4 +367,102 @@ def test_similar_asset_types_filter(similarity_client: Tuple[_AuthClient, str, s
     assert close_id not in ids_video
 
 
+@pytest.mark.slow
+def test_similar_camera_filter(similarity_client: Tuple[_AuthClient, str, str]) -> None:
+    """GET /v1/similar with camera_make/camera_model returns only matching camera(s); repeated params OR across pairs."""
+    auth_client, library_id, tenant_url = similarity_client
+
+    engine = create_engine(tenant_url)
+    with Session(engine) as session:
+        scan_repo = ScanRepository(session)
+        scan = scan_repo.create(library_id=library_id)
+        asset_repo = AssetRepository(session)
+        base_vec, close_vec, far_vec = _asset_vectors()
+
+        base_asset = asset_repo.create_for_scan(
+            library_id=library_id,
+            rel_path="camera_filter/base.jpg",
+            file_size=100,
+            file_mtime=None,
+            media_type="image/jpeg",
+            scan_id=scan.scan_id,
+        )
+        close_asset = asset_repo.create_for_scan(
+            library_id=library_id,
+            rel_path="camera_filter/close_canon.jpg",
+            file_size=100,
+            file_mtime=None,
+            media_type="image/jpeg",
+            scan_id=scan.scan_id,
+        )
+        far_asset = asset_repo.create_for_scan(
+            library_id=library_id,
+            rel_path="camera_filter/far_nikon.jpg",
+            file_size=100,
+            file_mtime=None,
+            media_type="image/jpeg",
+            scan_id=scan.scan_id,
+        )
+        base_asset.camera_make = "Canon"
+        base_asset.camera_model = "EOS R5"
+        close_asset.camera_make = "Canon"
+        close_asset.camera_model = "EOS R5"
+        far_asset.camera_make = "Nikon"
+        far_asset.camera_model = "Z9"
+        session.add(base_asset)
+        session.add(close_asset)
+        session.add(far_asset)
+        session.commit()
+
+        emb_repo = AssetEmbeddingRepository(session)
+        from src.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
+
+        emb_repo.upsert(base_asset.asset_id, "clip", CLIP_VERSION, base_vec)
+        emb_repo.upsert(close_asset.asset_id, "clip", CLIP_VERSION, close_vec)
+        emb_repo.upsert(far_asset.asset_id, "clip", CLIP_VERSION, far_vec)
+
+        base_id = base_asset.asset_id
+        close_id = close_asset.asset_id
+        far_id = far_asset.asset_id
+
+    # No camera filter: both close and far can appear
+    resp = auth_client.get(
+        f"/v1/similar?asset_id={base_id}&library_id={library_id}",
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["embedding_available"] is True
+    ids_no_filter = [hit["asset_id"] for hit in data["hits"]]
+    assert close_id in ids_no_filter and far_id in ids_no_filter
+
+    # Single pair: Canon EOS R5 -> only close
+    resp_canon = auth_client.get(
+        "/v1/similar",
+        params={"asset_id": base_id, "library_id": library_id, "camera_make": "Canon", "camera_model": "EOS R5"},
+    )
+    assert resp_canon.status_code == 200, resp_canon.text
+    data_canon = resp_canon.json()
+    assert data_canon["embedding_available"] is True
+    ids_canon = [hit["asset_id"] for hit in data_canon["hits"]]
+    assert close_id in ids_canon
+    assert far_id not in ids_canon
+
+    # Two pairs (OR): Canon EOS R5 or Nikon Z9 -> both close and far
+    resp_both = auth_client.get(
+        "/v1/similar",
+        params={
+            "asset_id": base_id,
+            "library_id": library_id,
+            "camera_make": ["Canon", "Nikon"],
+            "camera_model": ["EOS R5", "Z9"],
+        },
+    )
+    assert resp_both.status_code == 200, resp_both.text
+    data_both = resp_both.json()
+    assert data_both["embedding_available"] is True
+    ids_both = [hit["asset_id"] for hit in data_both["hits"]]
+    assert close_id in ids_both and far_id in ids_both
+
+
+
 

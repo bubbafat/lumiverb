@@ -835,6 +835,24 @@ class AssetEmbeddingRepository:
             conditions.append("(" + " OR ".join(placeholders) + ")")
             for i, pat in enumerate(type_patterns):
                 params[f"asset_type_pat_{i}"] = pat
+        if scope and scope.cameras:
+            # OR across (make, model) pairs; within each pair AND
+            cam_clauses = []
+            for i, c in enumerate(scope.cameras):
+                if c.make is not None and c.model is not None:
+                    cam_clauses.append(
+                        "(a.camera_make = :cam_make_{i} AND a.camera_model = :cam_model_{i})".format(i=i)
+                    )
+                    params[f"cam_make_{i}"] = c.make
+                    params[f"cam_model_{i}"] = c.model
+                elif c.make is not None:
+                    cam_clauses.append("a.camera_make = :cam_make_{i}".format(i=i))
+                    params[f"cam_make_{i}"] = c.make
+                elif c.model is not None:
+                    cam_clauses.append("a.camera_model = :cam_model_{i}".format(i=i))
+                    params[f"cam_model_{i}"] = c.model
+            if cam_clauses:
+                conditions.append("(" + " OR ".join(cam_clauses) + ")")
         where = " AND ".join(conditions)
         sql = f"""
                 SELECT ae.asset_id,
