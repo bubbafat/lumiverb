@@ -813,6 +813,73 @@ def search(
         console.print(f"[dim]{n} result(s) via {source}[/dim]")
 
 
+# ---------------------------------------------------------------------------
+# similar
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def similar(
+    asset_id: Annotated[str, typer.Argument(help="Asset ID to find similar assets for.")],
+    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
+    limit: Annotated[int, typer.Option("--limit", help="Max similar assets to return.")] = 10,
+    offset: Annotated[int, typer.Option("--offset", help="Start offset for pagination.")] = 0,
+    output: Annotated[str, typer.Option("--output", "-o", help="Output format: table, json, text")] = "table",
+) -> None:
+    """Find visually similar assets by vector similarity (default: 10 results)."""
+    if output not in ("table", "json", "text"):
+        console.print("[red]--output must be one of: table, json, text[/red]")
+        raise typer.Exit(1)
+
+    client = LumiverbClient()
+    library_id = _resolve_library_id(client, library)
+
+    resp = client.get(
+        "/v1/similar",
+        params={
+            "asset_id": asset_id,
+            "library_id": library_id,
+            "limit": limit,
+            "offset": offset,
+        },
+    )
+    data = resp.json()
+    hits = data.get("hits", [])
+    embedding_available = data.get("embedding_available", False)
+
+    if not embedding_available and not hits:
+        console.print("No similar assets (source asset has no embeddings).")
+        return
+
+    if not hits:
+        console.print("No similar assets.")
+        return
+
+    if output == "json":
+        import sys as _sys
+        _sys.stdout.write(_json.dumps(data, indent=2))
+        _sys.stdout.write("\n")
+
+    elif output == "text":
+        for hit in hits:
+            console.print(hit["rel_path"])
+
+    else:  # table (default)
+        table = Table(show_header=True, show_lines=False)
+        table.add_column("Path", style="cyan", no_wrap=False)
+        table.add_column("Distance", justify="right", style="dim")
+        table.add_column("Asset ID", style="dim")
+        for hit in hits:
+            table.add_row(
+                hit["rel_path"],
+                f"{hit.get('distance', 0.0):.4f}",
+                hit.get("asset_id", ""),
+            )
+        console.print(table)
+        n = len(hits)
+        console.print(f"[dim]{n} similar asset(s)[/dim]")
+
+
 def main() -> None:
     """Entry point for the lumiverb script."""
     app()
