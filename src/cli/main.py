@@ -300,6 +300,10 @@ def worker_search_sync(
                 )
             if asset_ids:
                 console.print(f"Re-enqueued {len(asset_ids):,} assets for resync.")
+            else:
+                console.print(
+                    "No assets to re-enqueue (library has no online, non-trashed assets for this path)."
+                )
 
         quickwit = QuickwitClient()
         worker = SearchSyncWorker(

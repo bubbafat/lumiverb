@@ -33,7 +33,9 @@
         "indexed": true,
         "stored": true,
         "fast": false,
-        "tokenizer": "raw"
+        "tokenizer": "default",
+        "record": "basic",
+        "fieldnorms": false
       },
       {
         "name": "media_type",
@@ -49,7 +51,7 @@
         "indexed": true,
         "stored": true,
         "fast": true,
-        "input_formats": ["unix_timestamp"],
+        "input_formats": ["unix_timestamp", "iso8601"],
         "precision": "seconds"
       },
       {
@@ -88,13 +90,17 @@
         "indexed": true,
         "stored": true,
         "fast": false,
-        "tokenizer": "default"
+        "tokenizer": "default",
+        "record": "position",
+        "fieldnorms": true
       },
       {
         "name": "tags",
         "type": "array<text>",
         "indexed": true,
-        "stored": true
+        "stored": true,
+        "record": "position",
+        "fieldnorms": true
       },
       {
         "name": "searchable",
