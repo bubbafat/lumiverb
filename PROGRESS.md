@@ -11,9 +11,9 @@
 | 5 | Proxy and thumbnail worker | ✅ Done |
 | 6 | Library soft delete / trash | ✅ Done |
 | 7 | EXIF metadata worker | ✅ Done |
-| 8 | AI vision worker (Moondream) | ⬜ Planned |
-| 9 | Quickwit search sync worker | ⬜ Planned |
-| 10 | Search API endpoint | ⬜ Planned |
+| 8 | AI vision worker (Moondream) | ✅ Done |
+| 9 | Quickwit search sync worker | ✅ Done |
+| 10 | Search API endpoint | ✅ Done |
 | 11 | Similarity search | ⬜ Planned |
 | 12 | Video scene segmentation worker | ⬜ Planned |
 | 13 | CLI polish and end-to-end test | ⬜ Planned |
