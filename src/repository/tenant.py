@@ -828,6 +828,13 @@ class AssetEmbeddingRepository:
                     "a.taken_at IS NOT NULL AND a.taken_at <= to_timestamp(:to_ts) AT TIME ZONE 'UTC'"
                 )
                 params["to_ts"] = dr.to_ts
+        if scope and scope.asset_types and scope.asset_types != "all":
+            # scope.asset_types is list["image" | "video"]; match media_type by prefix
+            type_patterns = [f"{t}%" for t in scope.asset_types]
+            placeholders = [f"a.media_type LIKE :asset_type_pat_{i}" for i in range(len(type_patterns))]
+            conditions.append("(" + " OR ".join(placeholders) + ")")
+            for i, pat in enumerate(type_patterns):
+                params[f"asset_type_pat_{i}"] = pat
         where = " AND ".join(conditions)
         sql = f"""
                 SELECT ae.asset_id,

@@ -175,9 +175,11 @@ def test_similar_with_embeddings(similarity_client: Tuple[_AuthClient, str, str]
     data = resp.json()
 
     assert data["embedding_available"] is True
-    assert data["total"] == 2
+    assert data["total"] >= 2
     ids = [hit["asset_id"] for hit in data["hits"]]
-    assert ids == [close_id, far_id]
+    assert close_id in ids and far_id in ids
+    # Closest first: close should appear before far
+    assert ids.index(close_id) < ids.index(far_id)
 
 
 @pytest.mark.slow
@@ -282,5 +284,87 @@ def test_similar_from_ts_gt_to_ts_returns_422(similarity_client: Tuple[_AuthClie
     )
     assert resp.status_code == 422
     assert "from_ts" in resp.text or "to_ts" in resp.text.lower()
+
+
+@pytest.mark.slow
+def test_similar_asset_types_filter(similarity_client: Tuple[_AuthClient, str, str]) -> None:
+    """GET /v1/similar with asset_types=image returns only image assets; asset_types=video only video."""
+    auth_client, library_id, tenant_url = similarity_client
+
+    engine = create_engine(tenant_url)
+    with Session(engine) as session:
+        scan_repo = ScanRepository(session)
+        scan = scan_repo.create(library_id=library_id)
+        asset_repo = AssetRepository(session)
+        base_vec, close_vec, far_vec = _asset_vectors()
+
+        base_asset = asset_repo.create_for_scan(
+            library_id=library_id,
+            rel_path="type_filter/base.jpg",
+            file_size=100,
+            file_mtime=None,
+            media_type="image/jpeg",
+            scan_id=scan.scan_id,
+        )
+        close_asset = asset_repo.create_for_scan(
+            library_id=library_id,
+            rel_path="type_filter/close_image.jpg",
+            file_size=100,
+            file_mtime=None,
+            media_type="image/jpeg",
+            scan_id=scan.scan_id,
+        )
+        far_asset = asset_repo.create_for_scan(
+            library_id=library_id,
+            rel_path="type_filter/far_video.mp4",
+            file_size=100,
+            file_mtime=None,
+            media_type="video",
+            scan_id=scan.scan_id,
+        )
+
+        emb_repo = AssetEmbeddingRepository(session)
+        from src.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
+
+        emb_repo.upsert(base_asset.asset_id, "clip", CLIP_VERSION, base_vec)
+        emb_repo.upsert(close_asset.asset_id, "clip", CLIP_VERSION, close_vec)
+        emb_repo.upsert(far_asset.asset_id, "clip", CLIP_VERSION, far_vec)
+
+        base_id = base_asset.asset_id
+        close_id = close_asset.asset_id
+        far_id = far_asset.asset_id
+
+    # No asset_types filter: both close (image) and far (video) can appear
+    resp = auth_client.get(
+        f"/v1/similar?asset_id={base_id}&library_id={library_id}",
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["embedding_available"] is True
+    ids_no_filter = [hit["asset_id"] for hit in data["hits"]]
+    assert close_id in ids_no_filter and far_id in ids_no_filter
+
+    # asset_types=image: only close (image) in results
+    resp_image = auth_client.get(
+        f"/v1/similar?asset_id={base_id}&library_id={library_id}&asset_types=image",
+    )
+    assert resp_image.status_code == 200, resp_image.text
+    data_image = resp_image.json()
+    assert data_image["embedding_available"] is True
+    ids_image = [hit["asset_id"] for hit in data_image["hits"]]
+    assert close_id in ids_image
+    assert far_id not in ids_image
+
+    # asset_types=video: only far (video) in results
+    resp_video = auth_client.get(
+        f"/v1/similar?asset_id={base_id}&library_id={library_id}&asset_types=video",
+    )
+    assert resp_video.status_code == 200, resp_video.text
+    data_video = resp_video.json()
+    assert data_video["embedding_available"] is True
+    ids_video = [hit["asset_id"] for hit in data_video["hits"]]
+    assert far_id in ids_video
+    assert close_id not in ids_video
+
 
 

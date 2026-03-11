@@ -42,15 +42,30 @@ def find_similar(
     offset: int = Query(default=0, ge=0),
     from_ts: float | None = Query(default=None, description="Unix timestamp (seconds), inclusive start of capture-time range."),
     to_ts: float | None = Query(default=None, description="Unix timestamp (seconds), inclusive end of capture-time range."),
+    asset_types: str | None = Query(
+        default=None,
+        description="Comma-separated: image, video. Restrict results to these types (by media_type prefix).",
+    ),
     ) -> SimilarityResponse:
     if from_ts is not None and to_ts is not None and from_ts > to_ts:
         raise HTTPException(
             status_code=422,
             detail="from_ts must be less than or equal to to_ts",
         )
+    allowed = {"image", "video"}
+    asset_types_list: list[str] | None = None
+    if asset_types is not None and asset_types.strip():
+        parsed = [s.strip().lower() for s in asset_types.split(",") if s.strip()]
+        asset_types_list = [t for t in parsed if t in allowed]
+        if not asset_types_list:
+            asset_types_list = None
+
     scope: SimilarityScope | None = None
-    if from_ts is not None or to_ts is not None:
-        scope = SimilarityScope(date_range=DateRange(from_ts=from_ts, to_ts=to_ts))
+    if from_ts is not None or to_ts is not None or asset_types_list is not None:
+        scope = SimilarityScope(
+            date_range=DateRange(from_ts=from_ts, to_ts=to_ts) if (from_ts is not None or to_ts is not None) else None,
+            asset_types=asset_types_list if asset_types_list is not None else "all",
+        )
 
     from src.models.registry import get_embedding_config
     from src.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
