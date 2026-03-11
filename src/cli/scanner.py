@@ -11,6 +11,7 @@ from rich.console import Console
 
 from src.cli.progress import UnifiedProgress, UnifiedProgressSpec
 from src.core.file_extensions import SUPPORTED_EXTENSIONS, VIDEO_EXTENSIONS
+from src.core.io_utils import normalize_path_prefix
 
 SCAN_PAGE_SIZE = 500
 SCAN_BATCH_SIZE = 500
@@ -231,9 +232,11 @@ def scan_library(
 
         # Step 6: Page through server assets and reconcile
         path_prefix: str | None = None
+        normalized_override: str | None = None
         if path_override:
-            normalised = path_override.replace("\\", "/").strip("/")
-            path_prefix = normalised + "/"  # e.g. "Photos/HS150/HollyFest2025/"
+            normalized_override = normalize_path_prefix(path_override)
+            if normalized_override:
+                path_prefix = normalized_override + "/"  # e.g. "Photos/HS150/HollyFest2025/"
 
         reconciled = 0
         added_count = updated_count = skipped_count = missing_count = 0
@@ -283,7 +286,9 @@ def scan_library(
                             updated_count += 1
                     else:
                         # Only mark missing if within the scanned subtree
-                        if path_prefix is None or rel_path.startswith(path_prefix) or rel_path == path_override.replace("\\", "/").strip("/"):
+                        if path_prefix is None or rel_path.startswith(path_prefix) or (
+                            normalized_override is not None and rel_path == normalized_override
+                        ):
                             batch_items.append({"action": "missing", "asset_id": asset["asset_id"]})
                             missing_count += 1
                         else:

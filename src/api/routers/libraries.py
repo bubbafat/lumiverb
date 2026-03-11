@@ -7,7 +7,8 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session
-from src.repository.tenant import LibraryRepository, _utcnow
+from src.core.utils import utcnow
+from src.repository.tenant import LibraryRepository
 from src.workers.quickwit import purge_library_from_quickwit
 
 router = APIRouter(prefix="/v1/libraries", tags=["libraries"])
@@ -131,7 +132,7 @@ def update_library(
         library.vision_model_id = body.vision_model_id
     if body.name is not None:
         library.name = body.name
-    library.updated_at = _utcnow()
+    library.updated_at = utcnow()
     session.add(library)
     session.commit()
     session.refresh(library)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
@@ -10,9 +10,7 @@ from sqlalchemy import Column, DateTime, JSON, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+from src.core.utils import utcnow
 
 
 # ---------------------------------------------------------------------------
@@ -34,11 +32,11 @@ class Library(SQLModel, table=True):
     )
     last_scan_error: str | None = Field(default=None, nullable=True)
     created_at: datetime = Field(
-        default_factory=_utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
     updated_at: datetime = Field(
-        default_factory=_utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
     vision_model_id: str = Field(default="moondream", nullable=False)
@@ -63,7 +61,7 @@ class Scan(SQLModel, table=True):
     files_missing: int | None = Field(default=None, nullable=True)
     error_message: str | None = Field(default=None, nullable=True)
     started_at: datetime = Field(
-        default_factory=_utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
     completed_at: datetime | None = Field(
@@ -113,11 +111,11 @@ class Asset(SQLModel, table=True):
     status: str = Field(default="pending", nullable=False)
     error_message: str | None = Field(default=None, nullable=True)
     created_at: datetime = Field(
-        default_factory=_utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
     updated_at: datetime = Field(
-        default_factory=_utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
 
@@ -134,7 +132,7 @@ class VideoScene(SQLModel, table=True):
     proxy_key: str | None = Field(default=None, nullable=True)
     thumbnail_key: str | None = Field(default=None, nullable=True)
     created_at: datetime = Field(
-        default_factory=_utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
 
@@ -182,7 +180,7 @@ class AssetEmbedding(SQLModel, table=True):
         sa_column=Column(Vector(512), nullable=False),
     )
     created_at: datetime = Field(
-        default_factory=_utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
 
@@ -196,7 +194,7 @@ class SearchSyncQueue(SQLModel, table=True):
     operation: str = Field(nullable=False)
     status: str = Field(default="pending", nullable=False)
     created_at: datetime = Field(
-        default_factory=_utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
 
@@ -224,7 +222,7 @@ class WorkerJob(SQLModel, table=True):
     )
     error_message: str | None = Field(default=None, nullable=True)
     created_at: datetime = Field(
-        default_factory=_utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
 
@@ -235,7 +233,7 @@ class SystemMetadata(SQLModel, table=True):
     key: str = Field(primary_key=True)
     value: str = Field(nullable=False)
     updated_at: datetime = Field(
-        default_factory=_utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
 
@@ -260,7 +258,7 @@ class Face(SQLModel, table=True):
     )
     detection_confidence: float | None = Field(default=None, nullable=True)
     created_at: datetime = Field(
-        default_factory=_utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
 
@@ -272,7 +270,7 @@ class Person(SQLModel, table=True):
     display_name: str = Field(nullable=False)
     created_by_user: bool = Field(default=True, nullable=False)
     created_at: datetime = Field(
-        default_factory=_utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
 
@@ -290,6 +288,6 @@ class FacePersonMatch(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
     created_at: datetime = Field(
-        default_factory=_utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )

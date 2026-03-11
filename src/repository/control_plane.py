@@ -4,16 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlmodel import Session, select
 
+from src.core.utils import utcnow
 from src.models.control_plane import ApiKey, Tenant, TenantDbRouting
 from ulid import ULID
-
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 class TenantRepository:
@@ -121,7 +118,7 @@ class ApiKeyRepository:
         api_key = self._session.exec(stmt).first()
         if api_key is None:
             raise ValueError(f"API key not found: {key_id}")
-        api_key.revoked_at = _utcnow()
+        api_key.revoked_at = utcnow()
         self._session.add(api_key)
         self._session.commit()
         self._session.refresh(api_key)
@@ -132,7 +129,7 @@ class ApiKeyRepository:
         stmt = select(ApiKey).where(ApiKey.key_id == key_id)
         api_key = self._session.exec(stmt).first()
         if api_key is not None:
-            api_key.last_used_at = _utcnow()
+            api_key.last_used_at = utcnow()
             self._session.add(api_key)
             try:
                 self._session.commit()

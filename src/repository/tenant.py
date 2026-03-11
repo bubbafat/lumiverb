@@ -3,19 +3,17 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from sqlalchemy import and_, func, or_, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session, select
 
+from src.core.io_utils import normalize_path_prefix
+from src.core.utils import utcnow
 from src.models.filter import AssetFilterSpec
 from src.models.tenant import Asset, AssetEmbedding, AssetMetadata, Library, Scan, SearchSyncQueue, WorkerJob
 from ulid import ULID
-
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 class LibraryRepository:
@@ -80,7 +78,7 @@ class LibraryRepository:
             {"library_id": library_id},
         )
         library.status = "trashed"
-        library.updated_at = _utcnow()
+        library.updated_at = utcnow()
         self._session.add(library)
         self._session.commit()
         self._session.refresh(library)
@@ -143,7 +141,7 @@ class LibraryRepository:
             raise ValueError(f"Library not found: {library_id}")
         library.scan_status = status
         if status in ("complete", "error"):
-            library.last_scan_at = _utcnow()
+            library.last_scan_at = utcnow()
         if error is not None:
             library.last_scan_error = error
         self._session.add(library)
@@ -188,7 +186,7 @@ class ScanRepository:
 
     def get_running_scans(self, library_id: str) -> list[Scan]:
         """Return scans with status='running' and started_at within last 2 minutes (staleness threshold)."""
-        threshold = _utcnow() - timedelta(minutes=2)
+        threshold = utcnow() - timedelta(minutes=2)
         stmt = (
             select(Scan)
             .where(Scan.library_id == library_id)
@@ -234,7 +232,7 @@ class ScanRepository:
         if scan is None:
             raise ValueError(f"Scan not found: {scan_id}")
         scan.status = "complete"
-        scan.completed_at = _utcnow()
+        scan.completed_at = utcnow()
         scan.files_discovered = counts.get("files_discovered")
         scan.files_added = counts.get("files_added")
         scan.files_updated = counts.get("files_updated")
@@ -251,7 +249,7 @@ class ScanRepository:
         if scan is None:
             raise ValueError(f"Scan not found: {scan_id}")
         scan.status = "error" if error_message else "aborted"
-        scan.completed_at = _utcnow()
+        scan.completed_at = utcnow()
         if error_message is not None:
             scan.error_message = error_message
         self._session.add(scan)
@@ -283,7 +281,7 @@ class AssetRepository:
         """Insert or update assets by (library_id, rel_path). Each item: rel_path, file_size, file_mtime, media_type."""
         if not items:
             return 0
-        now = _utcnow()
+        now = utcnow()
         values = []
         for it in items:
             file_mtime_dt: datetime | None = None
@@ -502,7 +500,7 @@ class AssetRepository:
         asset.width = width
         asset.height = height
         asset.status = "proxied"
-        asset.updated_at = _utcnow()
+        asset.updated_at = utcnow()
         self._session.add(asset)
         self._session.commit()
         self._session.refresh(asset)
@@ -527,7 +525,8 @@ class AssetRepository:
             except ValueError:
                 pass
         self._session.execute(
-            text("""
+            text(
+                """
                 UPDATE assets SET
                     sha256 = :sha256,
                     exif = :exif,
@@ -538,11 +537,12 @@ class AssetRepository:
                     gps_lat = :gps_lat,
                     gps_lon = :gps_lon
                 WHERE asset_id = :asset_id
-            """),
+                """
+            ),
             {
                 "sha256": sha256,
                 "exif": json.dumps(exif) if exif else None,
-                "now": _utcnow(),
+                "now": utcnow(),
                 "camera_make": camera_make,
                 "camera_model": camera_model,
                 "taken_at": taken_at_dt,
@@ -703,7 +703,7 @@ class AssetMetadataRepository:
         Insert or update metadata row for (asset_id, model_id, model_version).
         On conflict: update data and generated_at only.
         """
-        now = _utcnow()
+        now = utcnow()
         stmt = pg_insert(AssetMetadata).values(
             metadata_id="meta_" + str(ULID()),
             asset_id=asset_id,
@@ -761,11 +761,11 @@ class AssetEmbeddingRepository:
             model_id=model_id,
             model_version=model_version,
             embedding_vector=vector,
-            created_at=_utcnow(),
+            created_at=utcnow(),
         )
         stmt = stmt.on_conflict_do_update(
             constraint="uq_asset_embeddings_asset_model_version",
-            set_={"embedding_vector": vector, "created_at": _utcnow()},
+            set_={"embedding_vector": vector, "created_at": utcnow()},
         )
         self._session.execute(stmt)
         self._session.commit()
@@ -888,7 +888,7 @@ class WorkerJobRepository:
         library_id: str | None = None,
     ) -> WorkerJob | None:
         """Claim next pending (or expired claimed) job with FOR UPDATE SKIP LOCKED. Return None if none."""
-        now = _utcnow()
+        now = utcnow()
         stmt = (
             select(WorkerJob)
             .where(WorkerJob.job_type == job_type)
@@ -925,7 +925,7 @@ class WorkerJobRepository:
     def set_completed(self, job: WorkerJob) -> None:
         """Set job status to completed and completed_at."""
         job.status = "completed"
-        job.completed_at = _utcnow()
+        job.completed_at = utcnow()
         job.error_message = None
         self._session.add(job)
         self._session.commit()
@@ -934,7 +934,7 @@ class WorkerJobRepository:
     def set_failed(self, job: WorkerJob, error_message: str) -> None:
         """Set job status to failed and error_message."""
         job.status = "failed"
-        job.completed_at = _utcnow()
+        job.completed_at = utcnow()
         job.error_message = error_message
         self._session.add(job)
         self._session.commit()
@@ -1023,10 +1023,11 @@ class WorkerJobRepository:
             "job_type": job_type,
         }
         if path_prefix:
-            normalised = path_prefix.replace("\\", "/").strip().strip("/")
-            path_filter = " AND (a.rel_path = :path_exact OR a.rel_path LIKE :path_pattern)"
-            params["path_exact"] = normalised
-            params["path_pattern"] = normalised + "/%"
+            normalised = normalize_path_prefix(path_prefix)
+            if normalised:
+                path_filter = " AND (a.rel_path = :path_exact OR a.rel_path LIKE :path_pattern)"
+                params["path_exact"] = normalised
+                params["path_pattern"] = normalised + "/%"
 
         # Total count (distinct assets where the latest job is failed, with optional path filter).
         # DISTINCT ON (asset_id) is correct: job_type is in WHERE, so we get one row per asset
@@ -1129,9 +1130,10 @@ class SearchSyncQueueRepository:
         if library_id:
             params["library_id"] = library_id
         if path_prefix:
-            normalised = path_prefix.replace("\\", "/").strip("/")
-            path_filter = " AND a.rel_path LIKE :path_prefix"
-            params["path_prefix"] = normalised + "/%"
+            normalised = normalize_path_prefix(path_prefix)
+            if normalised:
+                path_filter = " AND a.rel_path LIKE :path_prefix"
+                params["path_prefix"] = normalised + "/%"
 
         sql = f"""
             WITH candidates AS (
@@ -1192,9 +1194,10 @@ class SearchSyncQueueRepository:
         """
         params: dict = {"library_id": library_id}
         if path_prefix:
-            normalised = path_prefix.replace("\\", "/").strip("/")
-            sql += " AND rel_path LIKE :path_prefix"
-            params["path_prefix"] = normalised + "/%"
+            normalised = normalize_path_prefix(path_prefix)
+            if normalised:
+                sql += " AND rel_path LIKE :path_prefix"
+                params["path_prefix"] = normalised + "/%"
         asset_ids = [r[0] for r in self._session.execute(text(sql), params).fetchall()]
         if not asset_ids:
             return []
@@ -1273,9 +1276,10 @@ class SearchSyncQueueRepository:
             sql += " AND a.library_id = :library_id"
             params["library_id"] = library_id
         if path_prefix:
-            normalised = path_prefix.replace("\\", "/").strip("/")
-            sql += " AND a.rel_path LIKE :path_prefix"
-            params["path_prefix"] = normalised + "/%"
+            normalised = normalize_path_prefix(path_prefix)
+            if normalised:
+                sql += " AND a.rel_path LIKE :path_prefix"
+                params["path_prefix"] = normalised + "/%"
         return int(self._session.execute(text(sql), params).scalar() or 0)
 
     def mark_synced(self, sync_ids: list[str]) -> int:

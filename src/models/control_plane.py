@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from sqlalchemy import Column, DateTime
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+from src.core.utils import utcnow
 
 
 class Tenant(SQLModel, table=True):
@@ -20,7 +18,7 @@ class Tenant(SQLModel, table=True):
     plan: str = Field(default="free", nullable=False)
     status: str = Field(default="active", nullable=False)
     created_at: datetime = Field(
-        default_factory=_utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
 
@@ -37,7 +35,7 @@ class ApiKey(SQLModel, table=True):
         sa_column=Column(JSONB, nullable=False),
     )
     created_at: datetime = Field(
-        default_factory=_utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
     last_used_at: datetime | None = Field(
@@ -57,6 +55,6 @@ class TenantDbRouting(SQLModel, table=True):
     connection_string: str = Field(nullable=False)
     region: str = Field(default="local", nullable=False)
     created_at: datetime = Field(
-        default_factory=_utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )

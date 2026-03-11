@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import Iterable
 
 from sqlmodel import Session
 
+from src.core.io_utils import normalize_path_prefix
+from src.core.utils import utcnow
 from src.models.registry import model_version_for_provenance
 from src.models.tenant import Asset, AssetMetadata
 from src.repository.tenant import (
@@ -17,10 +18,6 @@ from src.repository.tenant import (
 from src.search.quickwit_client import QuickwitClient
 
 logger = logging.getLogger(__name__)
-
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 class SearchSyncWorker:
@@ -48,9 +45,7 @@ class SearchSyncWorker:
         self._session = session
         self._library_id = library_id
         self._batch_size = batch_size
-        self._path_prefix = (
-            (path_prefix or "").replace("\\", "/").strip().strip("/") or None
-        )
+        self._path_prefix = normalize_path_prefix(path_prefix)
         self._asset_repo = AssetRepository(session)
         self._meta_repo = AssetMetadataRepository(session)
         self._library_repo = LibraryRepository(session)
@@ -173,7 +168,7 @@ class SearchSyncWorker:
         if asset.taken_at:
             capture_ts = int(asset.taken_at.timestamp())
 
-        indexed_at = int(_utcnow().timestamp())
+        indexed_at = int(utcnow().timestamp())
 
         return {
             "id": asset.asset_id,

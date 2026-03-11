@@ -11,6 +11,7 @@ from rich.table import Table
 from src.cli.client import LumiverbClient
 from src.cli.config import load_config, save_config
 from src.cli.scanner import scan_library
+from src.core.io_utils import normalize_path_prefix
 
 app = typer.Typer()
 config_app = typer.Typer(help="Manage API URL and API key.")
@@ -269,8 +270,9 @@ def worker_search_sync(
     from src.repository.tenant import SearchSyncQueueRepository
     from src.search.quickwit_client import QuickwitClient
     from src.workers.search_sync import SearchSyncWorker
+    from src.core.io_utils import normalize_path_prefix
 
-    path_prefix = (path or "").replace("\\", "/").strip().strip("/") or None
+    path_prefix = normalize_path_prefix(path)
 
     client = LumiverbClient()
     library_id = _resolve_library_id(client, library)
@@ -541,6 +543,7 @@ def failures(
     tenant_id = ctx["tenant_id"]
 
     path_prefix = (path or "").replace("\\", "/").strip().strip("/") or None
+    path_prefix = normalize_path_prefix(path)
 
     with get_tenant_session(tenant_id) as session:
         job_repo = WorkerJobRepository(session)
@@ -618,8 +621,9 @@ def scan(
         library_id = match["library_id"]
         enqueue_filter: dict = {"library_id": library_id}
         if path:
-            normalised = path.replace("\\", "/").strip("/")
-            enqueue_filter["path_prefix"] = normalised
+            normalised = normalize_path_prefix(path)
+            if normalised:
+                enqueue_filter["path_prefix"] = normalised
 
         for job_type in ("proxy", "exif"):
             enqueue_resp = client.post(
