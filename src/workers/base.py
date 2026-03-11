@@ -33,6 +33,16 @@ class BaseWorker:
         self._library_id = library_id
         self._console = Console()
 
+    def _pending_count(self) -> int:
+        """GET /v1/jobs/pending — count of pending/claimed jobs for progress total."""
+        params: dict[str, str] = {"job_type": self.job_type}
+        if self._library_id:
+            params["library_id"] = self._library_id
+        resp = self._client.get("/v1/jobs/pending", params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        return int(data.get("pending", 0))
+
     def claim_job(self) -> dict | None:
         """
         GET /v1/jobs/next?job_type=...&library_id=...
@@ -68,11 +78,12 @@ class BaseWorker:
         settings = get_settings()
         processed = 0
         failed = 0
+        pending = self._pending_count()
         spec = UnifiedProgressSpec(
             label=f"Processing {self.job_type} jobs",
             unit="jobs",
             counters=["done", "failed"],
-            total=None,
+            total=pending if pending > 0 else None,
         )
         with UnifiedProgress(self._console, spec) as bar:
             while True:

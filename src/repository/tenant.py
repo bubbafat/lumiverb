@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_, or_, text
+from sqlalchemy import and_, func, or_, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session, select
 
@@ -859,6 +859,26 @@ class WorkerJobRepository:
             .where(WorkerJob.status.in_(["pending", "claimed"]))
         )
         return self._session.exec(stmt).first() is not None
+
+    def pending_count(
+        self,
+        job_type: str,
+        library_id: str | None = None,
+    ) -> int:
+        """Count jobs with status pending or claimed. Same filters as claim_next (job_type, optional library_id)."""
+        stmt = (
+            select(func.count())
+            .select_from(WorkerJob)
+            .where(
+                WorkerJob.job_type == job_type,
+                WorkerJob.status.in_(["pending", "claimed"]),
+            )
+        )
+        if library_id is not None:
+            stmt = stmt.join(Asset, WorkerJob.asset_id == Asset.asset_id)
+            stmt = stmt.where(Asset.library_id == library_id)
+        result = self._session.execute(stmt)
+        return int(result.scalar() or 0)
 
     def claim_next(
         self,

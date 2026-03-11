@@ -114,6 +114,30 @@ def get_next_job(
 
 
 # ---------------------------------------------------------------------------
+# Pending count (workers)
+# ---------------------------------------------------------------------------
+
+
+class PendingCountResponse(BaseModel):
+    pending: int
+
+
+@router.get("/pending", response_model=PendingCountResponse)
+def get_pending_count(
+    job_type: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    library_id: str | None = None,
+) -> PendingCountResponse:
+    """
+    Count pending/claimed jobs of type. Same filters as GET /next.
+    Used by workers for progress display (total work remaining).
+    """
+    job_repo = WorkerJobRepository(session)
+    count = job_repo.pending_count(job_type=job_type, library_id=library_id)
+    return PendingCountResponse(pending=count)
+
+
+# ---------------------------------------------------------------------------
 # Complete / fail (workers)
 # ---------------------------------------------------------------------------
 
