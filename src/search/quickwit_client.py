@@ -138,9 +138,9 @@ class QuickwitClient:
             return []
 
         index_id = self.index_id_for_library(library_id)
-        resp = requests.get(
+        resp = requests.post(
             f"{self._base_url}/api/v1/{index_id}/search",
-            params={
+            json={
                 "query": query,
                 "max_hits": max_hits,
                 "start_offset": start_offset,
@@ -153,9 +153,10 @@ class QuickwitClient:
         raw_hits = data.get("hits", [])
         results: list[dict] = []
         for hit in raw_hits:
-            # Quickwit may return doc in _source or flat; _score is at hit root
+            # Quickwit may return doc in _source or flat
             source_doc = hit.get("_source", hit)
-            score = hit.get("_score", 0.0)
+            # Quickwit does not expose BM25 scores in the response body; results are sorted by relevance but score value is unavailable.
+            score = 0.0
             results.append(
                 {
                     "asset_id": source_doc.get("asset_id", ""),

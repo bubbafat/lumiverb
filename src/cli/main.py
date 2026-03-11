@@ -716,13 +716,13 @@ def enqueue(
     console.print(f"Enqueued {enqueued:,} {job_type} jobs.")
 
 
-@app.command("search")
+@app.command()
 def search(
-    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
-    query: Annotated[str, typer.Argument(help="Search query.")],
-    output: Annotated[str, typer.Option("--output", "-o", help="Output format: table, json, text.")] = "table",
-    limit: Annotated[int, typer.Option("--limit", help="Max results. 0 = all.")] = 20,
-    offset: Annotated[int, typer.Option("--offset", help="Result offset.")] = 0,
+    library: Annotated[str, typer.Option("--library", "-l", help="Library name")],
+    query: Annotated[str, typer.Argument(help="Search query")],
+    output: Annotated[str, typer.Option("--output", "-o", help="Output format: table, json, text")] = "table",
+    limit: Annotated[int, typer.Option("--limit", help="Max results (0 = all)")] = 20,
+    offset: Annotated[int, typer.Option("--offset", help="Start offset")] = 0,
 ) -> None:
     """Search assets in a library by natural language query."""
     if output not in ("table", "json", "text"):
@@ -733,7 +733,6 @@ def search(
     library_id = _resolve_library_id(client, library)
 
     if limit == 0:
-        # Fetch all results by paginating until exhausted
         all_hits: list[dict] = []
         page_offset = offset
         page_size = 100
@@ -751,9 +750,9 @@ def search(
             resp.raise_for_status()
             data = resp.json()
             source = data.get("source", "unknown")
-            hits = data.get("hits", [])
-            all_hits.extend(hits)
-            if len(hits) < page_size:
+            batch = data.get("hits", [])
+            all_hits.extend(batch)
+            if len(batch) < page_size:
                 break
             page_offset += page_size
         hits = all_hits
@@ -773,44 +772,43 @@ def search(
         source = data.get("source", "unknown")
 
     if not hits:
-        console.print("[yellow]No results found.[/yellow]")
-        raise typer.Exit(0)
+        console.print("No results.")
+        return
 
     if output == "json":
         console.print(_json.dumps(hits, indent=2))
 
     elif output == "text":
         for hit in hits:
-            console.print(f"[bold]{hit['rel_path']}[/bold]")
-            if hit.get("description"):
-                console.print(f"  {hit['description']}")
-            if hit.get("tags"):
-                console.print(f"  Tags: {', '.join(hit['tags'])}")
-            console.print()
+            console.print(hit["rel_path"])
 
     else:  # table (default)
-        table = Table(
-            title=f"Search results for [bold]{query!r}[/bold] — {len(hits)} hit(s) via {source}",
-            show_lines=False,
-        )
-        table.add_column("Path", style="cyan", no_wrap=False, max_width=60)
-        table.add_column("Description", no_wrap=False, max_width=50)
-        table.add_column("Tags", no_wrap=False, max_width=30)
-        table.add_column("Score", justify="right", style="dim")
+        table = Table(show_header=True, show_lines=False)
+        table.add_column("Path", style="cyan", no_wrap=False)
+        table.add_column("Description", no_wrap=False, max_width=120)
+        table.add_column("Tags", no_wrap=False, max_width=80)
+        if source == "postgres":
+            table.add_column("Score", justify="right", style="dim")
         table.add_column("Source", style="dim")
 
         for hit in hits:
-            tags = ", ".join(hit.get("tags") or [])
+            tags_str = ", ".join(hit.get("tags") or [])
             description = hit.get("description") or ""
-            table.add_row(
+            desc_display = description[:120] + "…" if len(description) > 120 else description
+            tags_display = tags_str[:80] + "…" if len(tags_str) > 80 else tags_str
+            row: list[str] = [
                 hit["rel_path"],
-                description[:120] + "…" if len(description) > 120 else description,
-                tags[:80] + "…" if len(tags) > 80 else tags,
-                f"{hit.get('score', 0.0):.3f}",
-                hit.get("source", ""),
-            )
+                desc_display,
+                tags_display,
+            ]
+            if source == "postgres":
+                row.append(f"{hit.get('score', 0.0):.3f}")
+            row.append(hit.get("source", ""))
+            table.add_row(*row)
 
         console.print(table)
+        n = len(hits)
+        console.print(f"[dim]{n} result(s) via {source}[/dim]")
 
 
 def main() -> None:

@@ -64,12 +64,13 @@ def test_search_calls_api_with_library_id_and_query() -> None:
     assert call_args[1]["params"]["q"] == "sunset"
     assert call_args[1]["params"]["limit"] == 10
     assert "sunset.jpg" in result.output
-    assert "0.900" in result.output or "0.9" in result.output
+    # Quickwit source: Score column is omitted, so no score in table
+    assert "quickwit" in result.output
 
 
 @pytest.mark.fast
 def test_search_no_results_exit_0() -> None:
-    """Empty hits: print 'No results found', exit 0."""
+    """Empty hits: print 'No results.', exit 0."""
     mock_client = MagicMock()
     mock_client.get.side_effect = [
         MagicMock(json=lambda: [{"library_id": "lib_1", "name": "EmptyLib", "root_path": "/path"}]),
@@ -80,7 +81,7 @@ def test_search_no_results_exit_0() -> None:
         result = runner.invoke(app, ["search", "-l", "EmptyLib", "xyz"])
 
     assert result.exit_code == 0
-    assert "No results found" in result.output
+    assert "No results." in result.output
 
 
 @pytest.mark.fast
