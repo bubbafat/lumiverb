@@ -1028,41 +1028,44 @@ class WorkerJobRepository:
             params["path_exact"] = normalised
             params["path_pattern"] = normalised + "/%"
 
-        # Total count (distinct assets with failed jobs, with optional path filter).
+        # Total count (distinct assets where the latest job is failed, with optional path filter).
         # DISTINCT ON (asset_id) is correct: job_type is in WHERE, so we get one row per asset
-        # for this job type; multiple historical failed rows collapse to the latest per asset.
+        # for this job type; we then filter to only those whose latest status is failed.
         count_sql = f"""
             SELECT COUNT(*)::int FROM (
-                SELECT DISTINCT ON (wj.asset_id) wj.asset_id
+                SELECT DISTINCT ON (wj.asset_id)
+                    wj.asset_id,
+                    wj.status
                 FROM worker_jobs wj
                 JOIN assets a ON a.asset_id = wj.asset_id
                 WHERE a.library_id = :library_id
                   AND wj.job_type = :job_type
-                  AND wj.status = 'failed'
                   {path_filter}
                 ORDER BY wj.asset_id, wj.created_at DESC
-            ) sub
+            ) latest
+            WHERE latest.status = 'failed'
         """
         total = int(
             self._session.execute(text(count_sql), params).scalar() or 0
         )
 
-        # Rows: most recent failed job per asset (DISTINCT ON correct: job_type in WHERE)
+        # Rows: most recent job per asset; filtered after DISTINCT to only those still failed.
         params["limit"] = limit
         rows_sql = f"""
             SELECT * FROM (
                 SELECT DISTINCT ON (wj.asset_id)
                     a.rel_path,
+                    wj.status,
                     wj.error_message,
                     wj.completed_at
                 FROM worker_jobs wj
                 JOIN assets a ON a.asset_id = wj.asset_id
                 WHERE a.library_id = :library_id
                   AND wj.job_type = :job_type
-                  AND wj.status = 'failed'
                   {path_filter}
                 ORDER BY wj.asset_id, wj.created_at DESC
-            ) sub
+            ) latest
+            WHERE latest.status = 'failed'
             ORDER BY rel_path
             LIMIT :limit
         """
