@@ -214,6 +214,22 @@ def get_asset(
     return _to_asset_response(asset)
 
 
+class ThumbnailKeyUpdateRequest(BaseModel):
+    thumbnail_key: str
+
+
+@router.post("/{asset_id}/thumbnail-key")
+def set_thumbnail_key(
+    asset_id: str,
+    body: ThumbnailKeyUpdateRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> dict:
+    """Record a thumbnail_key for a video asset after the index worker extracts the first frame."""
+    asset_repo = AssetRepository(session)
+    asset_repo.update_thumbnail_key(asset_id, body.thumbnail_key)
+    return {"asset_id": asset_id, "thumbnail_key": body.thumbnail_key}
+
+
 @router.post("/upsert", response_model=UpsertAssetResponse)
 def upsert_asset(
     body: UpsertAssetRequest,

@@ -527,6 +527,16 @@ class AssetRepository:
         self._session.add(asset)
         self._session.commit()
 
+    def update_thumbnail_key(self, asset_id: str, thumbnail_key: str) -> None:
+        """Record a thumbnail_key on the asset. Used by VideoIndexWorker after extracting first frame."""
+        asset = self._session.get(Asset, asset_id)
+        if asset is None:
+            raise ValueError(f"Asset not found: {asset_id}")
+        asset.thumbnail_key = thumbnail_key
+        asset.updated_at = utcnow()
+        self._session.add(asset)
+        self._session.commit()
+
     def update_exif(
         self,
         asset_id: str,

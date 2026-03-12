@@ -79,8 +79,7 @@ class VideoIndexWorker(BaseWorker):
             if not ok:
                 raise RuntimeError(f"Transcode failed for {source}")
 
-            # Thumbnail: extract frame at 0, write to storage. TODO: POST thumbnail_key to asset
-            # when POST /v1/assets/{asset_id}/thumbnail-key exists (not implemented yet).
+            # Thumbnail: extract frame at 0, write to storage, then record thumbnail_key on asset.
             thumb_path = tmpdir / f"{asset_id}_thumb.jpg"
             if extract_video_frame(source, thumb_path, timestamp=0.0) and thumb_path.exists():
                 original_filename = Path(job["rel_path"]).name
@@ -88,6 +87,12 @@ class VideoIndexWorker(BaseWorker):
                 dest = storage.abs_path(key)
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(thumb_path, dest)
+                resp = self._request("POST", f"/v1/assets/{asset_id}/thumbnail-key", json={"thumbnail_key": key})
+                if resp.status_code // 100 != 2:
+                    logger.warning(
+                        "Failed to record thumbnail_key for asset %s: HTTP %s",
+                        asset_id, resp.status_code,
+                    )
 
             while True:
                 resp = self._request("GET", f"/v1/video/{asset_id}/chunks/next")
@@ -112,7 +117,7 @@ class VideoIndexWorker(BaseWorker):
 
     def _request(self, method: str, path: str, **kwargs: object):
         """Raw request for endpoints that use 204/409; returns response without exiting."""
-        return getattr(self._client, "request")(method, path, **kwargs)
+        return self._client.raw(method, path, **kwargs)
 
     def _process_chunk(
         self,
