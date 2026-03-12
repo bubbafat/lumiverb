@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import logging
-from typing import Annotated, Literal, Union
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session
@@ -18,43 +18,44 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/search", tags=["search"])
 
 
-class ImageHit(BaseModel):
-    type: Literal["image"] = "image"
+class SearchHit(BaseModel):
+    """
+    Unified search hit model for both image assets and video scenes.
+
+    - Image hits use: type="image", asset_id, rel_path, thumbnail_key, proxy_key,
+      camera_make/model, description, tags, score, source.
+    - Scene hits use: type="scene", scene_id, asset_id, rel_path, thumbnail_key,
+      proxy_key, start_ms, end_ms, rep_frame_ms, duration_sec, description,
+      tags, score, source.
+    """
+
+    type: Literal["image", "scene"] = "image"
+
+    # Common fields
     asset_id: str
     rel_path: str
-    thumbnail_key: str | None
-    proxy_key: str | None
+    thumbnail_key: str | None = None
+    proxy_key: str | None = None
+    description: str
+    tags: list[str]
+    score: float
+    source: str
+
+    # Image-only fields
     camera_make: str | None = None
     camera_model: str | None = None
-    description: str
-    tags: list[str]
-    score: float
-    source: str  # "quickwit" or "postgres"
 
-
-class SceneHit(BaseModel):
-    type: Literal["scene"] = "scene"
-    scene_id: str
-    asset_id: str
-    rel_path: str
-    thumbnail_key: str | None
-    proxy_key: str | None = None
-    start_ms: int
-    end_ms: int
-    rep_frame_ms: int
-    duration_sec: float | None
-    description: str
-    tags: list[str]
-    score: float
-    source: str  # "quickwit_scenes"
-
-
-SearchHit = Annotated[Union[ImageHit, SceneHit], Field(discriminator="type")]
+    # Scene-only fields
+    scene_id: str | None = None
+    start_ms: int | None = None
+    end_ms: int | None = None
+    rep_frame_ms: int | None = None
+    duration_sec: float | None = None
 
 
 class SearchResponse(BaseModel):
     query: str
-    hits: list[ImageHit | SceneHit]
+    hits: list[SearchHit]
     total: int
     source: str
 
@@ -182,12 +183,9 @@ def search(
     all_hits = all_hits[:limit]
 
     # Build typed hits
-    typed_hits: list[ImageHit | SceneHit] = []
-    for hit in all_hits:
-        if hit["type"] == "image":
-            typed_hits.append(ImageHit(**{k: v for k, v in hit.items() if k != "type"}))
-        else:
-            typed_hits.append(SceneHit(**{k: v for k, v in hit.items() if k != "type"}))
+    typed_hits: list[SearchHit] = [
+        SearchHit(**{k: v for k, v in hit.items() if k != "type"}) for hit in all_hits
+    ]
 
     return SearchResponse(
         query=q,

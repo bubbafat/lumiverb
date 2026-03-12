@@ -1004,7 +1004,14 @@ def scan(
 @app.command()
 def enqueue(
     library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
-    job_type: Annotated[str, typer.Option("--job-type", "-j")],
+    job_type: Annotated[
+        str,
+        typer.Option(
+            "--job-type",
+            "-j",
+            help="Job type to enqueue (proxy, exif, ai_vision, embed, ...). Defaults to proxy.",
+        ),
+    ] = "proxy",
     path: Annotated[
         str | None,
         typer.Option(
