@@ -411,6 +411,34 @@ def worker_embed(
     worker.run()
 
 
+@worker_app.command("video-index")
+def worker_video_index(
+    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
+    once: Annotated[bool, typer.Option("--once", help="Process queue until empty then exit.")] = False,
+) -> None:
+    """Run the video index worker (scene detection for video assets)."""
+    from src.workers.video_index_worker import VideoIndexWorker
+
+    client = LumiverbClient()
+    library_id = _resolve_library_id(client, library) if library else None
+    worker = VideoIndexWorker(client=client, once=once, library_id=library_id)
+    worker.run()
+
+
+@worker_app.command("video-vision")
+def worker_video_vision(
+    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
+    once: Annotated[bool, typer.Option("--once", help="Process queue until empty then exit.")] = False,
+) -> None:
+    """Run the video vision worker (AI descriptions for video scenes)."""
+    from src.workers.video_vision_worker import VideoVisionWorker
+
+    client = LumiverbClient()
+    library_id = _resolve_library_id(client, library) if library else None
+    worker = VideoVisionWorker(client=client, once=once, library_id=library_id)
+    worker.run()
+
+
 # Shell alias: function lumi-search-sync() { lumiverb worker search-sync --library "$1" --once; }
 @worker_app.command("search-sync")
 def worker_search_sync(
@@ -571,9 +599,10 @@ JOB_TYPE_DISPLAY: dict[str, str] = {
 
 JOB_TYPE_ALIASES: dict[str, str] = {
     "vision": "ai_vision",
+    "video": "video-index",
 }
 
-STAGE_ORDER: list[str] = ["proxy", "exif", "ai_vision", "search_sync", "embed"]
+STAGE_ORDER: list[str] = ["proxy", "exif", "ai_vision", "search_sync", "embed", "video-index", "video-vision"]
 
 
 def _resolve_job_type(job_type: str) -> str:
