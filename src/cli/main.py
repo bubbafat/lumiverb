@@ -239,6 +239,93 @@ def _resolve_asset_id(
     return resp.json()["asset_id"]
 
 
+@app.command("download")
+def download(
+    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
+    asset_id: Annotated[
+        str | None,
+        typer.Option("--asset-id", help="Asset ID to download."),
+    ] = None,
+    path: Annotated[
+        str | None,
+        typer.Option("--path", "-p", help="Relative path to asset file within the library."),
+    ] = None,
+    size: Annotated[
+        str,
+        typer.Option("--size", "-s", help="Which file to download: proxy or thumbnail."),
+    ] = "proxy",
+    output: Annotated[
+        str | None,
+        typer.Option(
+            "--output",
+            "-o",
+            help="Output file path. Omit to stream to stdout (pipe only).",
+        ),
+    ] = None,
+) -> None:
+    """Download a proxy or thumbnail image for an asset.
+
+    Output to a file with --output, or pipe to another command (e.g. | viu -).
+    Writing binary to a terminal is not allowed.
+    """
+    import os
+    import sys
+
+    if size not in ("proxy", "thumbnail"):
+        console.print("[red]--size must be one of: proxy, thumbnail[/red]")
+        raise typer.Exit(1)
+
+    # Guard: refuse to write binary to a TTY
+    stdout_is_tty = sys.stdout.isatty()
+    if output is None and stdout_is_tty:
+        console.print(
+            "[red]Refusing to write binary to terminal.[/red]\n"
+            "Use [bold]--output <path>[/bold] to save to a file, "
+            "or pipe to another command (e.g. [bold]| viu -[/bold])."
+        )
+        raise typer.Exit(1)
+
+    client = LumiverbClient()
+    library_id = _resolve_library_id(client, library)
+    resolved_asset_id = _resolve_asset_id(client, library_id, asset_id, path)
+
+    # Stream the response so we don't buffer the whole file in memory
+    with client.stream(f"/v1/assets/{resolved_asset_id}/{size}") as resp:
+        if resp.status_code == 404:
+            console.print(f"[red]No {size} available for asset {resolved_asset_id}[/red]")
+            raise typer.Exit(1)
+
+        resp.raise_for_status()
+
+        if output:
+            out_path = Path(output)
+
+            # If output is a directory (existing or implied by trailing slash), derive filename.
+            output_str = str(output)
+            is_dir_hint = output_str.endswith(("/", "\\")) or out_path.is_dir()
+            if is_dir_hint:
+                # Ensure directory exists before deriving filename.
+                out_dir = out_path
+                out_dir.mkdir(parents=True, exist_ok=True)
+
+                # derive filename from asset rel_path
+                asset_resp = client.get(f"/v1/assets/{resolved_asset_id}").json()
+                stem = Path(asset_resp["rel_path"]).stem
+                out_path = out_dir / f"{stem}_{size}.jpg"
+            else:
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(out_path, "wb") as f:
+                for chunk in resp.iter_bytes(chunk_size=65536):
+                    f.write(chunk)
+            console.print(f"Saved to {out_path}")
+        else:
+            # Pipe mode: stream bytes to stdout
+            for chunk in resp.iter_bytes(chunk_size=65536):
+                sys.stdout.buffer.write(chunk)
+            sys.stdout.buffer.flush()
+
+
 @worker_app.command("proxy")
 def worker_proxy(
     once: bool = typer.Option(False, "--once", help="Process all queued jobs then exit."),

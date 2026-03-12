@@ -443,3 +443,176 @@ def test_is_unchanged_force_always_false() -> None:
     asset = {"file_size": 1000, "file_mtime": "2024-01-01T12:00:00+00:00", "sha256": None}
     local = {"file_size": 1000, "file_mtime": "2024-01-01T12:00:00+00:00"}
     assert _is_unchanged(asset, local, force=True) is False
+
+
+@pytest.mark.fast
+def test_download_refuses_tty_without_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When stdout is a TTY and --output is omitted, command should refuse to write binary."""
+    # Pretend stdout is a TTY by patching the isatty method on the real stdout object.
+    import sys
+    import typer
+
+    from src.cli.main import download, console
+
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True, raising=False)
+
+    # Capture console output.
+    messages: list[str] = []
+
+    def _print(*args, **kwargs):
+        msg = "".join(str(a) for a in args)
+        messages.append(msg)
+
+    monkeypatch.setattr(console, "print", _print)
+
+    # Patch client, though it should not be used before the TTY guard triggers.
+    mock_client = MagicMock()
+
+    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+        with pytest.raises(typer.Exit) as exc:
+            download(
+                library="TestLib",
+                asset_id=None,
+                path="Photos/one.jpg",
+                size="proxy",
+                output=None,
+            )
+
+    assert exc.value.exit_code == 1
+    combined = "\n".join(messages)
+    assert "Refusing to write binary to terminal" in combined
+
+
+@pytest.mark.fast
+def test_download_saves_to_file(tmp_path: Path) -> None:
+    """Download with --output file writes streamed bytes and prints Saved message."""
+    from httpx import Response, Request
+
+    mock_client = MagicMock()
+
+    # Resolve library_id
+    libs_resp = MagicMock()
+    libs_resp.json.return_value = [{"library_id": "lib_1", "name": "TestLib"}]
+    # Asset lookup by path
+    asset_lookup_resp = MagicMock()
+    asset_lookup_resp.status_code = 200
+    asset_lookup_resp.json.return_value = {"asset_id": "ast_123"}
+
+    def _get_side_effect(path: str, **kwargs):
+        if path == "/v1/libraries":
+            return libs_resp
+        if path == "/v1/assets/by-path":
+            return asset_lookup_resp
+        if path == "/v1/assets/ast_123":
+            meta = MagicMock()
+            meta.json.return_value = {"rel_path": "Photos/one.jpg"}
+            return meta
+        raise AssertionError(f"Unexpected GET path {path}")
+
+    mock_client.get.side_effect = _get_side_effect
+
+    # Streaming response
+    req = Request("GET", "http://example.com")
+    stream_resp = Response(200, request=req)
+    chunks = [b"abc", b"def"]
+
+    def _iter_bytes(chunk_size: int = 65536):
+        for c in chunks:
+            yield c
+
+    stream_resp.iter_bytes = _iter_bytes  # type: ignore[assignment]
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _stream_ctx(path: str, **kwargs):
+        yield stream_resp
+
+    mock_client.stream.side_effect = _stream_ctx
+
+    out_file = tmp_path / "out.jpg"
+
+    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+        result = runner.invoke(
+            app,
+            [
+                "download",
+                "--library",
+                "TestLib",
+                "--path",
+                "Photos/one.jpg",
+                "--output",
+                str(out_file),
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert out_file.read_bytes() == b"abcdef"
+    assert "Saved to" in result.output
+
+
+@pytest.mark.fast
+def test_download_saves_to_directory(tmp_path: Path) -> None:
+    """Download with --output dir/ derives filename from rel_path."""
+    from httpx import Response, Request
+
+    mock_client = MagicMock()
+
+    libs_resp = MagicMock()
+    libs_resp.json.return_value = [{"library_id": "lib_1", "name": "TestLib"}]
+    asset_lookup_resp = MagicMock()
+    asset_lookup_resp.status_code = 200
+    asset_lookup_resp.json.return_value = {"asset_id": "ast_123"}
+
+    asset_meta_resp = MagicMock()
+    asset_meta_resp.json.return_value = {"rel_path": "Photos/UK2024/DSC07171.ARW"}
+
+    def _get_side_effect(path: str, **kwargs):
+        if path == "/v1/libraries":
+            return libs_resp
+        if path == "/v1/assets/by-path":
+            return asset_lookup_resp
+        if path == "/v1/assets/ast_123":
+            return asset_meta_resp
+        raise AssertionError(f"Unexpected GET path {path}")
+
+    mock_client.get.side_effect = _get_side_effect
+
+    req = Request("GET", "http://example.com")
+    stream_resp = Response(200, request=req)
+    chunks = [b"\x00" * 4]
+
+    def _iter_bytes(chunk_size: int = 65536):
+        for c in chunks:
+            yield c
+
+    stream_resp.iter_bytes = _iter_bytes  # type: ignore[assignment]
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _stream_ctx(path: str, **kwargs):
+        yield stream_resp
+
+    mock_client.stream.side_effect = _stream_ctx
+
+    out_dir = tmp_path / "out"
+
+    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+        result = runner.invoke(
+            app,
+            [
+                "download",
+                "--library",
+                "TestLib",
+                "--asset-id",
+                "ast_123",
+                "--output",
+                str(out_dir) + "/",
+            ],
+        )
+
+    assert result.exit_code == 0
+    expected_file = out_dir / "DSC07171_proxy.jpg"
+    assert expected_file.exists()
+    assert expected_file.read_bytes() == b"\x00" * 4

@@ -1,14 +1,17 @@
 """Assets API: upsert for scanner. All routes require tenant auth (middleware)."""
 
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session
 from src.repository.tenant import AssetRepository, LibraryRepository, ScanRepository
+from src.storage.local import get_storage
 
 router = APIRouter(prefix="/v1/assets", tags=["assets"])
 
@@ -91,6 +94,46 @@ def page_assets(
     ]
 
 
+def _stream_asset_file(
+    asset_id: str,
+    size: str,  # "proxy" or "thumbnail"
+    request: Request,
+    session: Session,
+) -> StreamingResponse:
+    asset_repo = AssetRepository(session)
+    asset = asset_repo.get_by_id(asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    key = asset.proxy_key if size == "proxy" else asset.thumbnail_key
+    if not key:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No {size} available for this asset",
+        )
+
+    storage = get_storage()
+    path = storage.abs_path(key)
+    if not path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"{size.capitalize()} file not found on disk",
+        )
+
+    filename = Path(asset.rel_path).stem + ".jpg"
+
+    def _iter() -> bytes:
+        with open(path, "rb") as f:
+            while chunk := f.read(65536):
+                yield chunk
+
+    return StreamingResponse(
+        _iter(),
+        media_type="image/jpeg",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
+
+
 def _to_asset_response(asset) -> AssetResponse:
     """Map an Asset ORM/model object to AssetResponse."""
     return AssetResponse(
@@ -111,6 +154,26 @@ def _to_asset_response(asset) -> AssetResponse:
         gps_lat=asset.gps_lat,
         gps_lon=asset.gps_lon,
     )
+
+
+@router.get("/{asset_id}/proxy")
+def stream_proxy(
+    asset_id: str,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> StreamingResponse:
+    """Stream the proxy JPEG for an asset."""
+    return _stream_asset_file(asset_id, "proxy", request, session)
+
+
+@router.get("/{asset_id}/thumbnail")
+def stream_thumbnail(
+    asset_id: str,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> StreamingResponse:
+    """Stream the thumbnail JPEG for an asset."""
+    return _stream_asset_file(asset_id, "thumbnail", request, session)
 
 
 @router.get("/by-path", response_model=AssetResponse)

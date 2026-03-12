@@ -161,6 +161,108 @@ def test_get_asset_by_path_happy_path(assets_client: tuple[TestClient, str]) -> 
 
 
 @pytest.mark.slow
+def test_stream_proxy_happy_path(assets_client: tuple[TestClient, str], tmp_path: Path) -> None:
+    """Create library + asset + proxy file; GET /v1/assets/{asset_id}/proxy streams JPEG bytes."""
+    from src.core.config import get_settings
+    from src.core.database import get_tenant_session
+    from src.repository.tenant import AssetRepository
+    from src.storage.local import get_storage
+
+    client, api_key = assets_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+
+    # Create library
+    r_lib = client.post(
+        "/v1/libraries",
+        json={
+            "name": "AssetsStreamLib",
+            "root_path": "/x",
+        },
+        headers=auth,
+    )
+    assert r_lib.status_code == 200
+    library_id = r_lib.json()["library_id"]
+
+    # Create asset via scans API
+    r_scan = client.post(
+        "/v1/scans",
+        json={"library_id": library_id, "status": "running"},
+        headers=auth,
+    )
+    assert r_scan.status_code == 200
+    scan_id = r_scan.json()["scan_id"]
+
+    rel_path = "photos/proxy.jpg"
+    client.post(
+        f"/v1/scans/{scan_id}/batch",
+        json={
+            "items": [
+                {
+                    "action": "add",
+                    "rel_path": rel_path,
+                    "file_size": 123,
+                    "file_mtime": "2025-01-01T12:00:00Z",
+                    "media_type": "image",
+                }
+            ]
+        },
+        headers=auth,
+    )
+
+    # Resolve asset_id
+    r_asset = client.get(
+        "/v1/assets/by-path",
+        params={"library_id": library_id, "rel_path": rel_path},
+        headers=auth,
+    )
+    assert r_asset.status_code == 200
+    asset_id = r_asset.json()["asset_id"]
+
+    # Look up tenant_id and patch proxy_key on the asset to point at a real file on disk.
+    ctx = client.get("/v1/tenant/context", headers=auth)
+    assert ctx.status_code == 200
+    tenant_id = ctx.json()["tenant_id"]
+
+    settings = get_settings()
+    storage = get_storage()
+
+    # Write a JPEG-like payload to the expected storage path.
+    from sqlalchemy import text as _text
+
+    from src.core.database import _engines, get_control_session
+    from src.repository.control_plane import TenantDbRoutingRepository
+
+    # Resolve tenant connection string to open tenant session.
+    with get_control_session() as control_session:
+        routing_repo = TenantDbRoutingRepository(control_session)
+        row = routing_repo.get_by_tenant_id(tenant_id)
+        assert row is not None
+        tenant_url = row.connection_string
+
+    _engines.clear()
+    from sqlalchemy import create_engine
+
+    engine = create_engine(tenant_url)
+    with engine.connect() as conn:
+        conn.execute(_text("UPDATE assets SET proxy_key = :key WHERE asset_id = :asset_id"), {"key": f"{tenant_id}/{library_id}/proxies/00/{asset_id}.jpg", "asset_id": asset_id})
+        conn.commit()
+    engine.dispose()
+    _engines.clear()
+
+    proxy_key = f"{tenant_id}/{library_id}/proxies/00/{asset_id}.jpg"
+    proxy_path = storage.abs_path(proxy_key)
+    proxy_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = b"\xff\xd8\xff" + b"\x00" * 10
+    proxy_path.write_bytes(payload)
+
+    # Stream proxy via API
+    r_stream = client.get(f"/v1/assets/{asset_id}/proxy", headers=auth)
+    assert r_stream.status_code == 200
+    assert r_stream.headers["content-type"] == "image/jpeg"
+    assert r_stream.content == payload
+
+
+@pytest.mark.slow
 def test_get_asset_by_path_404_when_missing(assets_client: tuple[TestClient, str]) -> None:
     """GET /v1/assets/by-path returns 404 for unknown rel_path."""
     client, api_key = assets_client
