@@ -193,6 +193,9 @@ def test_search_sync_worker_counts_assets_not_rows(tenant_db_session: Session, t
         def ensure_index_for_library(self, lib_id):
             self.ensure_calls.append(lib_id)
 
+        def ensure_scene_index_for_library(self, lib_id):
+            self.ensure_calls.append(lib_id)
+
         def ingest_documents_for_library(self, lib_id, docs):
             self.ingested.extend(docs)
 
