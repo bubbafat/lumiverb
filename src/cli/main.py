@@ -254,6 +254,27 @@ def worker_vision(
     worker.run()
 
 
+@worker_app.command("embed")
+def worker_embed(
+    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
+    once: Annotated[bool, typer.Option("--once", help="Process queue until empty then exit.")] = False,
+) -> None:
+    """Run the embedding worker (CLIP + Moondream vectors for similarity search)."""
+    from src.storage.local import get_storage
+    from src.workers.embed_worker import EmbedWorker
+
+    client = LumiverbClient()
+    storage = get_storage()
+    library_id = _resolve_library_id(client, library) if library else None
+    worker = EmbedWorker(
+        client=client,
+        storage=storage,
+        once=once,
+        library_id=library_id,
+    )
+    worker.run()
+
+
 # Shell alias: function lumi-search-sync() { lumiverb worker search-sync --library "$1" --once; }
 @worker_app.command("search-sync")
 def worker_search_sync(
@@ -527,7 +548,7 @@ def status(
 @app.command("failures")
 def failures(
     library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
-    job_type: Annotated[str, typer.Option("--job-type", "-j", help="Job type (proxy, exif, ai_vision, vision, ...).")],
+    job_type: Annotated[str, typer.Option("--job-type", "-j", help="Job type (proxy, exif, ai_vision, vision, embed, ...).")],
     path: Annotated[str | None, typer.Option("--path", "-p", help="Optional path prefix to filter.")] = None,
     limit: Annotated[int, typer.Option("--limit", help="Max failures to show.")] = 20,
 ) -> None:

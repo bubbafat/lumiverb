@@ -681,6 +681,16 @@ class AssetRepository:
                     )
                     """
                 )
+            elif job_type == "embed":
+                conditions.append("a.proxy_key IS NOT NULL")
+                conditions.append(
+                    """
+                    NOT EXISTS (
+                        SELECT 1 FROM asset_embeddings ae
+                        WHERE ae.asset_id = a.asset_id
+                    )
+                    """
+                )
 
         where = " AND ".join(conditions)
         from_clause = "FROM assets a JOIN libraries l ON l.library_id = a.library_id" if join_libraries else "FROM assets a"

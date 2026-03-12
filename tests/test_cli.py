@@ -328,6 +328,15 @@ def test_worker_proxy_command_exists() -> None:
 
 
 @pytest.mark.fast
+def test_worker_embed_command_exists() -> None:
+    """Worker embed command exists and shows --once and --library."""
+    result = runner.invoke(app, ["worker", "embed", "--help"])
+    assert result.exit_code == 0
+    assert "--once" in result.output
+    assert "library" in result.output.lower()
+
+
+@pytest.mark.fast
 def test_scan_prints_summary() -> None:
     """Mock scan_library to return complete ScanResult with known counts; assert all counts in output."""
     mock_client = MagicMock()

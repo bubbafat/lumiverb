@@ -106,10 +106,10 @@ Admin routes live under `/v1/admin` and require `Authorization: Bearer {ADMIN_KE
 Workers are API-only: they never touch the database directly. They use the jobs API (same auth as CLI).
 
 - **Claim:** GET /v1/jobs/next?job_type=…&library_id=… → 204 if no work, else job payload.
-- **Complete:** POST /v1/jobs/{job_id}/complete with result body (e.g. proxy_key, thumbnail_key, width, height for proxy).
+- **Complete:** POST /v1/jobs/{job_id}/complete with result body. Per job_type: **proxy** — `proxy_key`, `thumbnail_key`, `width`, `height`; **exif** — `sha256`, `exif`, `camera_make`, `camera_model`, `taken_at`, `gps_lat`, `gps_lon`; **ai_vision** — `model_id`, `model_version`, `description`, `tags`; **embed** — `embeddings`: list of `{ "model_id", "model_version", "vector" }` (e.g. clip + moondream), written to `asset_embeddings`.
 - **Fail:** POST /v1/jobs/{job_id}/fail with `{ "error_message" }`.
 
-Lease is server-managed (worker_id generated per claim). Expired leases are reclaimed on next poll. Worker types in v1: `proxy`. Type `face` is reserved for phase 2 — do not implement.
+Lease is server-managed (worker_id generated per claim). Expired leases are reclaimed on next poll. Worker types: `proxy`, `exif`, `ai_vision`, `embed`. Type `face` is reserved for phase 2 — do not implement.
 
 ## SHA256 Deduplication
 

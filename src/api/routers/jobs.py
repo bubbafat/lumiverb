@@ -12,6 +12,7 @@ from src.core.config import get_settings
 from src.models.filter import AssetFilterSpec
 from src.repository.tenant import (
     AssetRepository,
+    AssetEmbeddingRepository,
     AssetMetadataRepository,
     LibraryRepository,
     SearchSyncQueueRepository,
@@ -231,6 +232,31 @@ def complete_job(
         # Enqueue search sync so Quickwit can be updated for this asset.
         queue_repo = SearchSyncQueueRepository(session)
         queue_repo.enqueue(asset_id=job.asset_id, operation="upsert")
+    elif job.job_type == "embed":
+        if job.asset_id is None:
+            raise HTTPException(status_code=400, detail="Job has no asset_id")
+        embeddings = data.get("embeddings")
+        if not embeddings or not isinstance(embeddings, list):
+            raise HTTPException(
+                status_code=400,
+                detail="embeddings list required for embed jobs",
+            )
+        emb_repo = AssetEmbeddingRepository(session)
+        for item in embeddings:
+            model_id = item.get("model_id")
+            model_version = item.get("model_version")
+            vector = item.get("vector")
+            if not model_id or not model_version or not isinstance(vector, list):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Each embedding must have model_id, model_version, and vector",
+                )
+            emb_repo.upsert(
+                asset_id=job.asset_id,
+                model_id=model_id,
+                model_version=model_version,
+                vector=[float(x) for x in vector],
+            )
     job_repo.set_completed(job)
     return JobCompleteResponse(job_id=job_id, status="completed")
 
