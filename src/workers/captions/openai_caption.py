@@ -40,6 +40,34 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
     def provider_id(self) -> str:
         return "openai_compatible"
 
+    def _extract_first_json_object(self, text: str) -> str | None:
+        """Extract the first complete {...} JSON object from text using brace counting."""
+        start = text.find("{")
+        if start == -1:
+            return None
+        depth = 0
+        in_string = False
+        escape_next = False
+        for i, ch in enumerate(text[start:], start):
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == "\\" and in_string:
+                escape_next = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
+        return None
+
     def _strip_thinking(self, text: str) -> str:
         """Strip <think>...</think> blocks; some reasoning models prefix responses with them."""
         return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
@@ -73,10 +101,10 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                 clean = re.sub(r"\n?```$", "", clean)
                 clean = clean.strip()
 
-            match = re.search(r'\{.*\}', clean, re.DOTALL)
-            if not match:
+            json_str = self._extract_first_json_object(clean)
+            if not json_str:
                 raise ValueError(f"No JSON object found in response: {clean[:100]!r}")
-            parsed = json.loads(match.group(0))
+            parsed = json.loads(json_str)
             description = parsed.get("description", "").strip()
             tags = [t.strip() for t in parsed.get("tags", []) if t.strip()]
             return {"description": description, "tags": tags}
