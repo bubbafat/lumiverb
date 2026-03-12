@@ -10,12 +10,13 @@ from src.core.config import get_settings
 from src.core.io_utils import normalize_path_prefix
 from src.core.utils import utcnow
 from src.models.registry import model_version_for_provenance
-from src.models.tenant import Asset, AssetMetadata
+from src.models.tenant import Asset, AssetMetadata, VideoScene
 from src.repository.tenant import (
     AssetMetadataRepository,
     AssetRepository,
     LibraryRepository,
     SearchSyncQueueRepository,
+    VideoSceneRepository,
 )
 from src.search.quickwit_client import QuickwitClient
 
@@ -95,6 +96,7 @@ class SearchSyncWorker:
 
         # Ensure index exists before ingesting
         self._quickwit.ensure_index_for_library(self._library_id)
+        self._quickwit.ensure_scene_index_for_library(self._library_id)
 
         settings = get_settings()
 
@@ -110,51 +112,69 @@ class SearchSyncWorker:
             batches += 1
 
             docs: list[dict] = []
+            scene_docs: list[dict] = []
             sync_ids: list[str] = []
 
             for row in batch:
-                asset = self._asset_repo.get_by_id(row.asset_id)
-                asset_id = row.asset_id
-                if asset is None:
-                    logger.warning(
-                        "search_sync_queue row %s references missing asset_id=%s; marking synced",
-                        row.sync_id,
-                        row.asset_id,
-                    )
+                if row.scene_id:
+                    # Scene document path
+                    scene = VideoSceneRepository(self._session).get_by_id(row.scene_id)
+                    asset = self._asset_repo.get_by_id(row.asset_id)
+                    if scene is None or asset is None:
+                        sync_ids.append(row.sync_id)
+                        if asset_status.get(row.asset_id) != "synced":
+                            asset_status[row.asset_id] = "skipped"
+                        continue
+                    scene_doc = self._build_scene_document(scene, asset)
+                    scene_docs.append(scene_doc)
                     sync_ids.append(row.sync_id)
-                    # Only mark skipped if we haven't already marked this asset as synced.
-                    if asset_status.get(asset_id) != "synced":
-                        asset_status[asset_id] = "skipped"
-                    continue
+                    asset_status[row.asset_id] = "synced"
+                else:
+                    # Existing asset document path — unchanged
+                    asset = self._asset_repo.get_by_id(row.asset_id)
+                    asset_id = row.asset_id
+                    if asset is None:
+                        logger.warning(
+                            "search_sync_queue row %s references missing asset_id=%s; marking synced",
+                            row.sync_id,
+                            row.asset_id,
+                        )
+                        sync_ids.append(row.sync_id)
+                        # Only mark skipped if we haven't already marked this asset as synced.
+                        if asset_status.get(asset_id) != "synced":
+                            asset_status[asset_id] = "skipped"
+                        continue
 
-                library = self._library_repo.get_by_id(asset.library_id)
-                vision_model_id = library.vision_model_id if library else "moondream"
-                model_version = model_version_for_provenance(vision_model_id)
+                    library = self._library_repo.get_by_id(asset.library_id)
+                    vision_model_id = library.vision_model_id if library else "moondream"
+                    model_version = model_version_for_provenance(vision_model_id)
 
-                meta: AssetMetadata | None = self._meta_repo.get(
-                    asset_id=asset.asset_id,
-                    model_id=vision_model_id,
-                    model_version=model_version,
-                )
-                if meta is None:
-                    logger.debug(
-                        "No AI metadata for asset_id=%s model=%s version=%s; skipping",
-                        asset.asset_id,
-                        vision_model_id,
-                        model_version,
+                    meta: AssetMetadata | None = self._meta_repo.get(
+                        asset_id=asset.asset_id,
+                        model_id=vision_model_id,
+                        model_version=model_version,
                     )
-                    sync_ids.append(row.sync_id)
-                    if asset_status.get(asset_id) != "synced":
-                        asset_status[asset_id] = "skipped"
-                    continue
+                    if meta is None:
+                        logger.debug(
+                            "No AI metadata for asset_id=%s model=%s version=%s; skipping",
+                            asset.asset_id,
+                            vision_model_id,
+                            model_version,
+                        )
+                        sync_ids.append(row.sync_id)
+                        if asset_status.get(asset_id) != "synced":
+                            asset_status[asset_id] = "skipped"
+                        continue
 
-                doc = self._build_document(asset, meta)
-                docs.append(doc)
-                sync_ids.append(row.sync_id)
-                asset_status[asset_id] = "synced"
+                    doc = self._build_document(asset, meta)
+                    docs.append(doc)
+                    sync_ids.append(row.sync_id)
+                    asset_status[asset_id] = "synced"
 
             if docs:
                 self._quickwit.ingest_documents_for_library(self._library_id, docs)
+            if scene_docs:
+                self._quickwit.ingest_scene_documents_for_library(self._library_id, scene_docs)
 
             if sync_ids:
                 self._queue_repo.mark_synced(sync_ids)
@@ -198,6 +218,29 @@ class SearchSyncWorker:
             "searchable": True,
             "model_id": meta.model_id,
             "model_version": meta.model_version,
+            "indexed_at": indexed_at,
+        }
+
+    def _build_scene_document(self, scene: VideoScene, asset: Asset) -> dict:
+        indexed_at = int(utcnow().timestamp())
+        return {
+            "id": scene.scene_id,
+            "scene_id": scene.scene_id,
+            "asset_id": asset.asset_id,
+            "library_id": asset.library_id,
+            "rel_path": asset.rel_path,
+            "start_ms": scene.start_ms,
+            "end_ms": scene.end_ms,
+            "rep_frame_ms": scene.rep_frame_ms,
+            "thumbnail_key": scene.thumbnail_key,
+            "duration_sec": asset.duration_sec
+            or (asset.duration_ms / 1000.0 if asset.duration_ms else None),
+            "description": scene.description or "",
+            "tags": scene.tags or [],
+            "sharpness_score": scene.sharpness_score,
+            "keep_reason": scene.keep_reason,
+            "model_id": scene.model_id if hasattr(scene, "model_id") else "",
+            "model_version": scene.model_version if hasattr(scene, "model_version") else "",
             "indexed_at": indexed_at,
         }
 

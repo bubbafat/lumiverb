@@ -1388,6 +1388,41 @@ class SearchSyncQueueRepository:
             return 0
 
 
+class VideoSceneRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def get_scenes_for_asset(self, asset_id: str) -> list[VideoScene]:
+        """Return all scenes for an asset ordered by start_ms."""
+        return list(
+            self._session.exec(
+                select(VideoScene)
+                .where(VideoScene.asset_id == asset_id)
+                .order_by(VideoScene.start_ms)
+            ).all()
+        )
+
+    def get_by_id(self, scene_id: str) -> VideoScene | None:
+        return self._session.get(VideoScene, scene_id)
+
+    def update_vision(
+        self,
+        scene_id: str,
+        model_id: str,
+        model_version: str,
+        description: str,
+        tags: list[str],
+    ) -> None:
+        """Write vision results back to a scene row."""
+        scene = self._session.get(VideoScene, scene_id)
+        if scene is None:
+            raise ValueError(f"Scene not found: {scene_id}")
+        scene.description = description
+        scene.tags = tags
+        self._session.add(scene)
+        self._session.commit()
+
+
 class VideoIndexChunkRepository:
     """Repository for video_index_chunks and chunk completion (scenes)."""
 
