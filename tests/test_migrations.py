@@ -75,6 +75,7 @@ TENANT_TABLES = [
     "scans",
     "assets",
     "video_scenes",
+    "video_index_chunks",
     "asset_metadata",
     "search_sync_queue",
     "worker_jobs",
@@ -115,8 +116,8 @@ def test_tenant_schema_upgrade_and_downgrade() -> None:
                 text(
                     "SELECT table_name FROM information_schema.tables "
                     "WHERE table_schema = 'public' AND table_name IN "
-                    "('libraries', 'scans', 'assets', 'video_scenes', 'asset_metadata', "
-                    "'search_sync_queue', 'worker_jobs', 'system_metadata', "
+                    "('libraries', 'scans', 'assets', 'video_scenes', 'video_index_chunks', "
+                    "'asset_metadata', 'search_sync_queue', 'worker_jobs', 'system_metadata', "
                     "'faces', 'people', 'face_person_matches')"
                 )
             )
@@ -148,8 +149,8 @@ def test_tenant_schema_upgrade_and_downgrade() -> None:
                 text(
                     "SELECT table_name FROM information_schema.tables "
                     "WHERE table_schema = 'public' AND table_name IN "
-                    "('libraries', 'scans', 'assets', 'video_scenes', 'asset_metadata', "
-                    "'search_sync_queue', 'worker_jobs', 'system_metadata', "
+                    "('libraries', 'scans', 'assets', 'video_scenes', 'video_index_chunks', "
+                    "'asset_metadata', 'search_sync_queue', 'worker_jobs', 'system_metadata', "
                     "'faces', 'people', 'face_person_matches')"
                 )
             )

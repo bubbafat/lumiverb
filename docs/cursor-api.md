@@ -33,8 +33,9 @@ Two-layer Postgres architecture:
 
 **Tenant DB** (one per tenant, same Postgres instance):
 - `libraries` — library_id, name, root_path, scan_status, created_at
-- `assets` — asset_id, library_id, sha256, file_path, file_size, media_type, width, height, duration_ms, captured_at, proxy_key, thumbnail_key, availability, created_at
-- `video_scenes` — scene_id, asset_id, start_ms, end_ms, rep_frame_ms, proxy_key, thumbnail_key
+- `assets` — asset_id, library_id, sha256, file_path, file_size, media_type, width, height, duration_ms, duration_sec, captured_at, proxy_key, thumbnail_key, availability, video_indexed, created_at
+- `video_scenes` — scene_id, asset_id, start_ms, end_ms, rep_frame_ms, proxy_key, thumbnail_key, description, tags, sharpness_score, keep_reason, phash, created_at
+- `video_index_chunks` — chunk_id, asset_id, chunk_index, start_ms, end_ms, status, worker_id, claimed_at, lease_expires_at, completed_at, error_message, anchor_phash, scene_start_ms, created_at
 - `asset_metadata` — asset_id, exif_json, sharpness_score, face_count, ai_description, ai_description_at, embedding_vector vector(512) [nullable]
 - `search_sync_queue` — asset_id, scene_id, operation, status, created_at
 - `worker_jobs` — job_id, job_type, asset_id, status, worker_id, claimed_at, completed_at, error
@@ -58,12 +59,23 @@ Tenant resolution runs for every request except `/health` and `/v1/admin/*`: rea
 All under `/v1/jobs`; require tenant auth.
 
 - **POST /v1/jobs/enqueue** — Body: `{ "job_type", "filter", "force" }`. `filter` is an AssetFilterSpec: `library_id` (required), optional `asset_id`, `path_prefix`, `path_exact`, `mtime_after`, `mtime_before`, `missing_proxy`, `missing_thumbnail`, `retry_failed`. `force` (default false): if true, cancels existing pending/claimed jobs for matching assets then enqueues. `filter.retry_failed` (default false): if true, re-enqueues only assets with failed jobs (mutually exclusive with `force`). Returns `{ "enqueued" }` (count of jobs created).
-- **GET /v1/jobs/next** — Query: `job_type` (required), `library_id` (optional). Claims next pending job; returns 204 if none. On success returns `{ "job_id", "job_type", "asset_id", "rel_path", "media_type", "library_id", "root_path" }`. 404 if asset or library not found (job is failed server-side).
+- **GET /v1/jobs/next** — Query: `job_type` (required), `library_id` (optional). Claims next pending job; returns 204 if none. On success returns `{ "job_id", "job_type", "asset_id", "rel_path", "media_type", "library_id", "root_path", "proxy_key", "thumbnail_key", "vision_model_id" }`. For video assets, also includes `"duration_sec"` (from asset.duration_sec or duration_ms/1000). 404 if asset or library not found (job is failed server-side).
 - **GET /v1/jobs/pending** — Query: `job_type` (required), `library_id` (optional). Returns `{ "pending": N }` count of pending/claimed jobs. Same filters as `/next`. Used by workers for progress display (total work remaining).
-- **POST /v1/jobs/{job_id}/complete** — Body for proxy: `{ "proxy_key", "thumbnail_key", "width", "height" }`. Marks job completed; for proxy jobs updates asset. Returns `{ "job_id", "status": "completed" }`. 404 if job not found, 409 if job not claimed.
+- **POST /v1/jobs/{job_id}/complete** — Body depends on job_type: **proxy** — `proxy_key`, `thumbnail_key`, `width`, `height`; **exif** — `sha256`, `exif`, `camera_make`, `camera_model`, `taken_at`, `gps_lat`, `gps_lon`; **ai_vision** — `model_id`, `model_version`, `description`, `tags`; **embed** — `embeddings`; **video-index** — no body (chunk work done via video API); **video-vision** — same as ai_vision; marks asset `video_indexed` true and enqueues search sync. Returns `{ "job_id", "status": "completed" }`. 404 if job not found, 409 if job not claimed.
 - **POST /v1/jobs/{job_id}/fail** — Body: `{ "error_message" }`. Marks job failed. Returns `{ "job_id", "status": "failed" }`.
 - **GET /v1/jobs** — Query: `library_id` (optional). List jobs; filter by library when provided. Returns list of `{ "job_id", "job_type", "asset_id", "status" }`.
 - **GET /v1/jobs/{job_id}/status** — Returns `{ "job_id", "status", "error_message" }`. 404 if not found.
+
+Valid `job_type` values: `proxy`, `exif`, `ai_vision`, `embed`, `video-index`, `video-vision`. For `video-index`, the worker claims one job per asset, then uses the video chunk API to claim and complete 30-second chunks; when all chunks are done the server enqueues a `video-vision` job for that asset.
+
+## Video chunk API
+
+All under `/v1/video`; require tenant auth. Used by the video-index worker to process video assets in 30-second chunks (server-owned policy). No video bytes reach the server — only scene rep frame keys and metadata.
+
+- **POST /v1/video/{asset_id}/chunks** — Body: `{ "duration_sec" }`. Initialize chunks for the asset (idempotent). Returns `{ "chunk_count", "already_initialized" }`.
+- **GET /v1/video/{asset_id}/chunks/next** — Claim next pending chunk for the asset. Returns 204 if none. On success returns `{ "chunk_id", "worker_id", "chunk_index", "start_ts", "end_ts", "overlap_sec", "anchor_phash", "scene_start_ts", "video_duration_sec", "is_last" }`. Worker must send `worker_id` when completing or failing the chunk.
+- **POST /v1/video/chunks/{chunk_id}/complete** — Body: `{ "worker_id", "scenes", "next_anchor_phash", "next_scene_start_ms" }`. `scenes`: list of `{ "scene_index", "start_ms", "end_ms", "rep_frame_ms", "proxy_key", "thumbnail_key", "description", "tags", "sharpness_score", "keep_reason", "phash" }`. Persists scenes, updates next chunk anchor state, marks chunk completed. When all chunks for the asset are complete, enqueues a `video-vision` job. Returns `{ "chunk_id", "scenes_saved", "all_complete" }`. 409 if chunk not owned by worker.
+- **POST /v1/video/chunks/{chunk_id}/fail** — Body: `{ "worker_id", "error_message" }`. Marks chunk failed. Returns `{ "chunk_id", "status": "failed" }`. 409 if chunk not owned by worker.
 
 ## Libraries API
 
@@ -106,10 +118,10 @@ Admin routes live under `/v1/admin` and require `Authorization: Bearer {ADMIN_KE
 Workers are API-only: they never touch the database directly. They use the jobs API (same auth as CLI).
 
 - **Claim:** GET /v1/jobs/next?job_type=…&library_id=… → 204 if no work, else job payload.
-- **Complete:** POST /v1/jobs/{job_id}/complete with result body. Per job_type: **proxy** — `proxy_key`, `thumbnail_key`, `width`, `height`; **exif** — `sha256`, `exif`, `camera_make`, `camera_model`, `taken_at`, `gps_lat`, `gps_lon`; **ai_vision** — `model_id`, `model_version`, `description`, `tags`; **embed** — `embeddings`: list of `{ "model_id", "model_version", "vector" }` (e.g. clip + moondream), written to `asset_embeddings`.
+- **Complete:** POST /v1/jobs/{job_id}/complete with result body. Per job_type: **proxy** — `proxy_key`, `thumbnail_key`, `width`, `height`; **exif** — `sha256`, `exif`, `camera_make`, `camera_model`, `taken_at`, `gps_lat`, `gps_lon`; **ai_vision** — `model_id`, `model_version`, `description`, `tags`; **embed** — `embeddings`: list of `{ "model_id", "model_version", "vector" }`; **video-index** — no body (worker uses video chunk API, then calls complete when all chunks done); **video-vision** — same as ai_vision; sets asset `video_indexed` and enqueues search sync.
 - **Fail:** POST /v1/jobs/{job_id}/fail with `{ "error_message" }`.
 
-Lease is server-managed (worker_id generated per claim). Expired leases are reclaimed on next poll. Worker types: `proxy`, `exif`, `ai_vision`, `embed`. Type `face` is reserved for phase 2 — do not implement.
+Lease is server-managed (worker_id generated per claim). Expired leases are reclaimed on next poll. Worker types: `proxy`, `exif`, `ai_vision`, `embed`, `video-index`, `video-vision`. Type `face` is reserved for phase 2 — do not implement.
 
 ## SHA256 Deduplication
 

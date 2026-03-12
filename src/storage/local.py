@@ -43,6 +43,15 @@ class LocalStorage:
         original_stem = Path(original_filename).stem
         return f"{tenant_id}/{library_id}/thumbnails/{bucket:02d}/{asset_id}_{original_stem}.jpg"
 
+    def scene_rep_key(
+        self, tenant_id: str, library_id: str, asset_id: str, rep_frame_ms: int
+    ) -> str:
+        bucket = self._bucket_from_asset_id(asset_id)
+        return (
+            f"{tenant_id}/{library_id}/scenes/{bucket:02d}"
+            f"/{asset_id}_{rep_frame_ms:010d}.jpg"
+        )
+
     def abs_path(self, key: str) -> Path:
         return Path(self._data_dir) / key
 

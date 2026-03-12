@@ -1,0 +1,191 @@
+"""Video chunk API: init chunks, claim next, complete, fail. All require tenant auth."""
+
+import uuid
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from pydantic import BaseModel
+from sqlmodel import Session, select
+
+from src.api.dependencies import get_tenant_session
+from src.models.tenant import VideoIndexChunk
+from src.repository.tenant import (
+    AssetRepository,
+    VideoIndexChunkRepository,
+    WorkerJobRepository,
+)
+
+router = APIRouter(prefix="/v1/video", tags=["video"])
+
+
+# ---------------------------------------------------------------------------
+# Init chunks
+# ---------------------------------------------------------------------------
+
+
+class InitChunksRequest(BaseModel):
+    duration_sec: float
+
+
+class InitChunksResponse(BaseModel):
+    chunk_count: int
+    already_initialized: bool
+
+
+@router.post("/{asset_id}/chunks", response_model=InitChunksResponse)
+def init_chunks(
+    asset_id: str,
+    body: InitChunksRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> InitChunksResponse:
+    chunk_repo = VideoIndexChunkRepository(session)
+    created = chunk_repo.create_chunks_for_asset(asset_id, body.duration_sec)
+    total = chunk_repo.chunk_count(asset_id)
+    return InitChunksResponse(
+        chunk_count=total,
+        already_initialized=created == 0,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Claim next chunk
+# ---------------------------------------------------------------------------
+
+
+class ChunkWorkOrder(BaseModel):
+    chunk_id: str
+    worker_id: str
+    chunk_index: int
+    start_ts: float
+    end_ts: float
+    overlap_sec: float
+    anchor_phash: str | None
+    scene_start_ts: float | None
+    video_duration_sec: float
+    is_last: bool
+
+
+@router.get("/{asset_id}/chunks/next", response_model=None)
+def claim_next_chunk(
+    asset_id: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    request: Request,
+) -> Response | ChunkWorkOrder:
+    worker_id = f"vid_{uuid.uuid4().hex[:12]}"
+    chunk_repo = VideoIndexChunkRepository(session)
+    asset_repo = AssetRepository(session)
+
+    chunk = chunk_repo.claim_next_chunk(asset_id, worker_id)
+    if chunk is None:
+        return Response(status_code=204)
+
+    asset = asset_repo.get_by_id(asset_id)
+    total_chunks = chunk_repo.chunk_count(asset_id)
+    video_duration_sec = (asset.duration_sec if asset and asset.duration_sec is not None else 0.0) or (
+        asset.duration_ms / 1000.0 if asset and asset.duration_ms is not None else 0.0
+    )
+
+    return ChunkWorkOrder(
+        chunk_id=chunk.chunk_id,
+        worker_id=worker_id,
+        chunk_index=chunk.chunk_index,
+        start_ts=chunk.start_ms / 1000.0,
+        end_ts=chunk.end_ms / 1000.0,
+        overlap_sec=VideoIndexChunkRepository.OVERLAP_SEC,
+        anchor_phash=chunk.anchor_phash,
+        scene_start_ts=chunk.scene_start_ms / 1000.0 if chunk.scene_start_ms is not None else None,
+        video_duration_sec=video_duration_sec,
+        is_last=(chunk.chunk_index == total_chunks - 1),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Complete chunk
+# ---------------------------------------------------------------------------
+
+
+class SceneResult(BaseModel):
+    scene_index: int
+    start_ms: int
+    end_ms: int
+    rep_frame_ms: int
+    proxy_key: str | None = None
+    thumbnail_key: str | None = None
+    description: str | None = None
+    tags: list[str] | None = None
+    sharpness_score: float | None = None
+    keep_reason: str | None = None
+    phash: str | None = None
+
+
+class ChunkCompleteRequest(BaseModel):
+    worker_id: str
+    scenes: list[SceneResult]
+    next_anchor_phash: str | None
+    next_scene_start_ms: int | None
+
+
+class ChunkCompleteResponse(BaseModel):
+    chunk_id: str
+    scenes_saved: int
+    all_complete: bool
+
+
+@router.post("/chunks/{chunk_id}/complete", response_model=ChunkCompleteResponse)
+def complete_chunk(
+    chunk_id: str,
+    body: ChunkCompleteRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> ChunkCompleteResponse:
+    chunk_repo = VideoIndexChunkRepository(session)
+    chunk = session.exec(select(VideoIndexChunk).where(VideoIndexChunk.chunk_id == chunk_id)).first()
+    if chunk is None:
+        raise HTTPException(status_code=404, detail="Chunk not found")
+
+    ok = chunk_repo.complete_chunk(
+        chunk_id=chunk_id,
+        worker_id=body.worker_id,
+        next_anchor_phash=body.next_anchor_phash,
+        next_scene_start_ms=body.next_scene_start_ms,
+        scenes=[s.model_dump() for s in body.scenes],
+    )
+    if not ok:
+        raise HTTPException(status_code=409, detail="Chunk not claimable by this worker")
+
+    asset_id = chunk.asset_id
+    all_done = chunk_repo.all_chunks_complete(asset_id)
+
+    if all_done and asset_id:
+        job_repo = WorkerJobRepository(session)
+        if not job_repo.has_pending_job("video-vision", asset_id):
+            job_repo.create("video-vision", asset_id)
+            session.commit()
+
+    return ChunkCompleteResponse(
+        chunk_id=chunk_id,
+        scenes_saved=len(body.scenes),
+        all_complete=all_done,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fail chunk
+# ---------------------------------------------------------------------------
+
+
+class ChunkFailRequest(BaseModel):
+    worker_id: str
+    error_message: str
+
+
+@router.post("/chunks/{chunk_id}/fail")
+def fail_chunk(
+    chunk_id: str,
+    body: ChunkFailRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> dict:
+    chunk_repo = VideoIndexChunkRepository(session)
+    ok = chunk_repo.fail_chunk(chunk_id, body.worker_id, body.error_message)
+    if not ok:
+        raise HTTPException(status_code=409, detail="Chunk not owned by this worker")
+    return {"chunk_id": chunk_id, "status": "failed"}

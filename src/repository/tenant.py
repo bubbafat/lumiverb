@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, func, or_, text
+from sqlalchemy import and_, func, insert, or_, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session, select
 
@@ -13,7 +13,17 @@ from src.core.io_utils import normalize_path_prefix
 from src.core.utils import utcnow
 from src.models.filter import AssetFilterSpec
 from src.models.similarity import SimilarityScope
-from src.models.tenant import Asset, AssetEmbedding, AssetMetadata, Library, Scan, SearchSyncQueue, WorkerJob
+from src.models.tenant import (
+    Asset,
+    AssetEmbedding,
+    AssetMetadata,
+    Library,
+    Scan,
+    SearchSyncQueue,
+    VideoIndexChunk,
+    VideoScene,
+    WorkerJob,
+)
 from ulid import ULID
 
 
@@ -507,6 +517,16 @@ class AssetRepository:
         self._session.refresh(asset)
         return asset
 
+    def set_video_indexed(self, asset_id: str) -> None:
+        """Set asset.video_indexed = True. Used when video-vision job completes."""
+        asset = self._session.get(Asset, asset_id)
+        if asset is None:
+            raise ValueError(f"Asset not found: {asset_id}")
+        asset.video_indexed = True
+        asset.updated_at = utcnow()
+        self._session.add(asset)
+        self._session.commit()
+
     def update_exif(
         self,
         asset_id: str,
@@ -691,6 +711,9 @@ class AssetRepository:
                     )
                     """
                 )
+            elif job_type == "video-index":
+                conditions.append("a.proxy_key IS NOT NULL")
+                conditions.append("(a.video_indexed IS NOT TRUE)")
 
         where = " AND ".join(conditions)
         from_clause = "FROM assets a JOIN libraries l ON l.library_id = a.library_id" if join_libraries else "FROM assets a"
@@ -1363,3 +1386,194 @@ class SearchSyncQueueRepository:
             return int(result.rowcount or 0)
         except Exception:
             return 0
+
+
+class VideoIndexChunkRepository:
+    """Repository for video_index_chunks and chunk completion (scenes)."""
+
+    CHUNK_DURATION_SEC: float = 30.0
+    OVERLAP_SEC: float = 2.0
+    LEASE_MINUTES: int = 5
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def create_chunks_for_asset(
+        self,
+        asset_id: str,
+        duration_sec: float,
+    ) -> int:
+        """
+        Pre-generate all pending chunks for a video asset based on duration.
+        Idempotent — skips creation if chunks already exist for this asset.
+        Returns count of chunks created.
+        """
+        existing = self._session.exec(
+            select(VideoIndexChunk).where(VideoIndexChunk.asset_id == asset_id)
+        ).first()
+        if existing:
+            return 0
+
+        chunks: list[dict] = []
+        start = 0.0
+        index = 0
+        now = utcnow()
+        while start < duration_sec:
+            end = min(start + self.CHUNK_DURATION_SEC, duration_sec)
+            chunks.append({
+                "chunk_id": "chk_" + str(ULID()),
+                "asset_id": asset_id,
+                "chunk_index": index,
+                "start_ms": int(start * 1000),
+                "end_ms": int(end * 1000),
+                "status": "pending",
+                "created_at": now,
+            })
+            start = end
+            index += 1
+
+        if chunks:
+            self._session.execute(insert(VideoIndexChunk), chunks)
+            self._session.commit()
+        return len(chunks)
+
+    def claim_next_chunk(
+        self,
+        asset_id: str,
+        worker_id: str,
+    ) -> VideoIndexChunk | None:
+        """
+        Claim the next pending chunk for an asset (lowest chunk_index).
+        Also reclaims chunks whose lease has expired.
+        Returns None if no chunks available.
+        """
+        now = utcnow()
+        lease_expires = now + timedelta(minutes=self.LEASE_MINUTES)
+
+        # Reclaim expired leases
+        expired = self._session.exec(
+            select(VideoIndexChunk).where(
+                VideoIndexChunk.asset_id == asset_id,
+                VideoIndexChunk.status == "claimed",
+                VideoIndexChunk.lease_expires_at < now,
+            )
+        ).all()
+        for chunk in expired:
+            chunk.status = "pending"
+            chunk.worker_id = None
+            chunk.claimed_at = None
+            chunk.lease_expires_at = None
+            self._session.add(chunk)
+
+        chunk = self._session.exec(
+            select(VideoIndexChunk)
+            .where(
+                VideoIndexChunk.asset_id == asset_id,
+                VideoIndexChunk.status == "pending",
+            )
+            .order_by(VideoIndexChunk.chunk_index)
+            .limit(1)
+        ).first()
+
+        if chunk is None:
+            return None
+
+        chunk.status = "claimed"
+        chunk.worker_id = worker_id
+        chunk.claimed_at = now
+        chunk.lease_expires_at = lease_expires
+        self._session.add(chunk)
+        self._session.commit()
+        self._session.refresh(chunk)
+        return chunk
+
+    def complete_chunk(
+        self,
+        chunk_id: str,
+        worker_id: str,
+        next_anchor_phash: str | None,
+        next_scene_start_ms: int | None,
+        scenes: list[dict],
+    ) -> bool:
+        """
+        Complete a chunk: persist scenes, update anchor state on next pending
+        chunk, mark chunk complete. All in one transaction.
+        Returns False if chunk not found or not owned by worker_id.
+        """
+        chunk = self._session.exec(
+            select(VideoIndexChunk).where(VideoIndexChunk.chunk_id == chunk_id)
+        ).first()
+        if chunk is None or chunk.worker_id != worker_id or chunk.status != "claimed":
+            return False
+
+        now = utcnow()
+
+        # Persist scenes
+        for s in scenes:
+            scene = VideoScene(
+                scene_id="scn_" + str(ULID()),
+                asset_id=chunk.asset_id,
+                scene_index=s["scene_index"],
+                start_ms=s["start_ms"],
+                end_ms=s["end_ms"],
+                rep_frame_ms=s["rep_frame_ms"],
+                proxy_key=s.get("proxy_key"),
+                thumbnail_key=s.get("thumbnail_key"),
+                description=s.get("description"),
+                tags=s.get("tags"),
+                sharpness_score=s.get("sharpness_score"),
+                keep_reason=s.get("keep_reason"),
+                phash=s.get("phash"),
+                created_at=now,
+            )
+            self._session.add(scene)
+
+        # Update anchor state on the next pending chunk
+        if next_anchor_phash is not None:
+            next_chunk = self._session.exec(
+                select(VideoIndexChunk).where(
+                    VideoIndexChunk.asset_id == chunk.asset_id,
+                    VideoIndexChunk.chunk_index == chunk.chunk_index + 1,
+                )
+            ).first()
+            if next_chunk:
+                next_chunk.anchor_phash = next_anchor_phash
+                next_chunk.scene_start_ms = next_scene_start_ms
+                self._session.add(next_chunk)
+
+        chunk.status = "completed"
+        chunk.completed_at = now
+        self._session.add(chunk)
+        self._session.commit()
+        return True
+
+    def fail_chunk(self, chunk_id: str, worker_id: str, error_message: str) -> bool:
+        """Mark a chunk as failed."""
+        chunk = self._session.exec(
+            select(VideoIndexChunk).where(VideoIndexChunk.chunk_id == chunk_id)
+        ).first()
+        if chunk is None or chunk.worker_id != worker_id:
+            return False
+        chunk.status = "failed"
+        chunk.error_message = error_message
+        self._session.add(chunk)
+        self._session.commit()
+        return True
+
+    def all_chunks_complete(self, asset_id: str) -> bool:
+        """True if every chunk for this asset is completed."""
+        incomplete = self._session.exec(
+            select(VideoIndexChunk).where(
+                VideoIndexChunk.asset_id == asset_id,
+                VideoIndexChunk.status != "completed",
+            )
+        ).first()
+        return incomplete is None
+
+    def chunk_count(self, asset_id: str) -> int:
+        result = self._session.execute(
+            select(func.count()).select_from(VideoIndexChunk).where(
+                VideoIndexChunk.asset_id == asset_id
+            )
+        )
+        return int(result.scalar() or 0)

@@ -54,6 +54,27 @@ def test_thumbnail_key_format() -> None:
 
 
 @pytest.mark.fast
+def test_scene_rep_key_format() -> None:
+    """Assert scene rep key uses scenes/ bucket and zero-padded rep_frame_ms."""
+    storage = LocalStorage(data_dir="/data")
+    tenant_id = "ten_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+    library_id = "lib_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+    asset_id = "ast_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+    rep_frame_ms = 12345
+
+    key = storage.scene_rep_key(tenant_id, library_id, asset_id, rep_frame_ms)
+
+    # Pattern: tenant_id/library_id/scenes/{2-digit}/{asset_id}_{rep_frame_ms:010d}.jpg
+    pattern = re.compile(
+        r"^[^/]+/[^/]+/scenes/\d{2}/ast_[A-Z0-9]+_\d{10}\.jpg$"
+    )
+    assert pattern.match(key), f"Key {key!r} did not match expected pattern"
+    parts = key.split("/")
+    assert parts[2] == "scenes"
+    assert parts[4].endswith("_0000012345.jpg")
+
+
+@pytest.mark.fast
 def test_write_and_exists(tmp_path: Path) -> None:
     """Write bytes, assert exists returns True."""
     storage = LocalStorage(data_dir=str(tmp_path))
