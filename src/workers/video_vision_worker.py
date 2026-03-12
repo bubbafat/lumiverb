@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Callable
 
 from src.core.config import get_settings
 from src.models.registry import model_version_for_provenance
@@ -22,9 +23,18 @@ class VideoVisionWorker(BaseWorker):
         client: object,
         once: bool = False,
         library_id: str | None = None,
+        progress_callback: Callable[[dict], None] | None = None,
         **kwargs: object,
     ) -> None:
         super().__init__(client=client, once=once, library_id=library_id, **kwargs)
+        self._progress_callback = progress_callback
+
+    def _emit(self, event: dict) -> None:
+        if self._progress_callback:
+            try:
+                self._progress_callback(event)
+            except Exception:
+                pass
 
     def process(self, job: dict) -> dict:
         """
@@ -57,7 +67,15 @@ class VideoVisionWorker(BaseWorker):
         provider = get_caption_provider(vision_model_id)
         model_version = model_version_for_provenance(vision_model_id)
 
-        for scene in scenes:
+        self._emit(
+            {
+                "event": "job_started",
+                "rel_path": job.get("rel_path", ""),
+                "total_scenes": len(scenes),
+            }
+        )
+
+        for scene_idx, scene in enumerate(scenes):
             scene_id = scene["scene_id"]
             thumbnail_key = scene.get("thumbnail_key")
             if not thumbnail_key:
@@ -72,6 +90,17 @@ class VideoVisionWorker(BaseWorker):
                     scene_id,
                 )
                 continue
+
+            self._emit(
+                {
+                    "event": "scene_started",
+                    "rel_path": job.get("rel_path", ""),
+                    "scene_index": scene_idx,
+                    "total_scenes": len(scenes),
+                    "start_ms": scene.get("start_ms", 0),
+                    "end_ms": scene.get("end_ms", 0),
+                }
+            )
 
             result = provider.describe(rep_path)
             if not result:
@@ -95,6 +124,14 @@ class VideoVisionWorker(BaseWorker):
             self._client.post(
                 f"/v1/video/scenes/{scene_id}/sync",
                 json={"asset_id": asset_id},
+            )
+
+            self._emit(
+                {
+                    "event": "scene_complete",
+                    "scene_index": scene_idx,
+                    "total_scenes": len(scenes),
+                }
             )
 
         return {

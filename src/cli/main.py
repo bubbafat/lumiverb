@@ -523,13 +523,89 @@ def worker_video_vision(
     library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
     once: Annotated[bool, typer.Option("--once", help="Process queue until empty then exit.")] = False,
 ) -> None:
-    """Run the video vision worker (AI descriptions for video scenes)."""
+    """Run the video vision worker (AI scene description for video assets)."""
+    import threading
+    from pathlib import Path as _Path
+    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
     from src.workers.video_vision_worker import VideoVisionWorker
 
     client = LumiverbClient()
     library_id = _resolve_library_id(client, library) if library else None
-    worker = VideoVisionWorker(client=client, once=once, library_id=library_id)
-    worker.run()
+    console = Console()
+    _lock = threading.Lock()
+
+    with Progress(
+        SpinnerColumn(),
+        BarColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        TextColumn("  "),
+        TextColumn("{task.fields[detail]}"),
+        console=console,
+        refresh_per_second=10,
+    ) as progress:
+        job_task = progress.add_task(
+            "Processing video-vision jobs",
+            total=None,
+            detail="",
+        )
+        scene_task = progress.add_task(
+            "",
+            total=100,
+            completed=0,
+            visible=False,
+            detail="",
+        )
+
+        def on_progress(event: dict) -> None:
+            kind = event.get("event")
+            rel_path = event.get("rel_path", "")
+            filename = _Path(rel_path).name if rel_path else ""
+
+            with _lock:
+                if kind == "job_started":
+                    total = event["total_scenes"]
+                    progress.update(
+                        scene_task,
+                            visible=True,
+                            total=total,
+                            completed=0,
+                            description=f"  [cyan]{filename}[/cyan]",
+                            detail=f"0 / {total} scenes",
+                    )
+
+                elif kind == "scene_started":
+                    scene_idx = event["scene_index"]
+                    total = event["total_scenes"]
+                    start_ms = event["start_ms"]
+                    end_ms = event["end_ms"]
+                    progress.update(
+                        scene_task,
+                        completed=scene_idx,
+                        detail=f"{scene_idx + 1} / {total} scenes  ({start_ms // 1000}s – {end_ms // 1000}s)",
+                    )
+
+                elif kind == "scene_complete":
+                    scene_idx = event["scene_index"]
+                    total = event["total_scenes"]
+                    progress.update(
+                        scene_task,
+                        completed=scene_idx + 1,
+                        detail=f"{scene_idx + 1} / {total} scenes",
+                    )
+                    if scene_idx + 1 >= total:
+                        progress.update(scene_task, visible=False, detail="")
+                        progress.update(job_task, detail=f"{filename} · {total} scenes done")
+
+        worker = VideoVisionWorker(
+            client=client,
+            once=once,
+            library_id=library_id,
+            progress_callback=on_progress,
+            suppress_base_progress=True,
+        )
+        worker.run()
+
+    console.print("Done.")
 
 
 # Shell alias: function lumi-search-sync() { lumiverb worker search-sync --library "$1" --once; }
