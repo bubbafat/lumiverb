@@ -111,7 +111,7 @@ class VideoIndexWorker(BaseWorker):
                         "chunk_index": work_order["chunk_index"],
                         "start_ts": work_order["start_ts"],
                         "end_ts": work_order["end_ts"],
-                        "video_duration_sec": work_order["video_duration_sec"],
+                        "video_duration_sec": duration_sec,
                     }
                 )
 
@@ -124,14 +124,14 @@ class VideoIndexWorker(BaseWorker):
                     tenant_id=tenant_id,
                     library_id=library_id,
                     asset_id=asset_id,
-                    frame_callback=lambda pts, s, e: self._emit(
+                    frame_callback=lambda pts, s, e, _dur=duration_sec: self._emit(
                         {
                             "event": "frame_scanned",
                             "rel_path": job["rel_path"],
                             "pts": pts,
                             "start_ts": s,
                             "end_ts": e,
-                            "video_duration_sec": work_order["video_duration_sec"],
+                            "video_duration_sec": _dur,
                         }
                     ),
                 )
@@ -141,7 +141,7 @@ class VideoIndexWorker(BaseWorker):
                         "event": "chunk_complete",
                         "chunk_index": work_order["chunk_index"],
                         "end_ts": work_order["end_ts"],
-                        "video_duration_sec": work_order["video_duration_sec"],
+                        "video_duration_sec": duration_sec,
                     }
                 )
         finally:
@@ -182,10 +182,27 @@ class VideoIndexWorker(BaseWorker):
         try:
             collected: list[RawFrame] = []
             scanner = VideoScanner(proxy_path)
-            for raw in scanner.scan(start_ts=scan_start, end_ts=scan_end):
-                collected.append(raw)
-                if frame_callback:
-                    frame_callback(raw.pts, work_order["start_ts"], work_order["end_ts"])
+            try:
+                for raw in scanner.scan(start_ts=scan_start, end_ts=scan_end):
+                    collected.append(raw)
+                    if frame_callback:
+                        frame_callback(
+                            raw.pts,
+                            work_order["start_ts"],
+                            work_order["end_ts"],
+                        )
+            except Exception as scan_err:
+                logger.debug(
+                    "VideoIndexWorker scanner exception while scanning chunk %s: %r",
+                    chunk_id,
+                    scan_err,
+                )
+                raise
+            logger.debug(
+                "VideoIndexWorker after scan: collected=%d for chunk=%s",
+                len(collected),
+                chunk_id,
+            )
 
             if not collected:
                 from src.video.scene_segmenter import DEBOUNCE_SEC

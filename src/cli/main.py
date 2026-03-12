@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Annotated
 
 import json as _json
+import logging
 import typer
 from rich.console import Console
 from rich.markup import escape
@@ -13,6 +14,9 @@ from src.cli.client import LumiverbClient
 from src.cli.config import load_config, save_config
 from src.cli.scanner import scan_library
 from src.core.io_utils import normalize_path_prefix
+from src.core.logging_config import configure_logging
+
+_log = logging.getLogger(__name__)
 
 app = typer.Typer()
 config_app = typer.Typer(help="Manage API URL and API key.")
@@ -21,6 +25,12 @@ library_app = typer.Typer(help="Create and list libraries.")
 app.add_typer(library_app, name="library")
 
 console = Console()
+
+
+@app.callback()
+def _main() -> None:
+    """Lumiverb media asset management CLI."""
+    configure_logging()
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +483,7 @@ def worker_video_index(
                     )
 
                 elif kind == "frame_scanned":
+                    _log.debug("frame_scanned: duration=%r event=%r", duration, event)
                     pts = event["pts"]
                     start_ts = event["start_ts"]
                     end_ts = event["end_ts"]
@@ -483,7 +494,7 @@ def worker_video_index(
                     progress.update(
                         scan_task,
                         completed=int(pct * 100),
-                        detail=f"{pts:.0f}s  ({video_pct:.0f}% of video)",
+                        detail=f"{elapsed:.0f}s / {chunk_duration:.0f}s  ({video_pct:.0f}% of video)",
                     )
 
                 elif kind == "chunk_complete":

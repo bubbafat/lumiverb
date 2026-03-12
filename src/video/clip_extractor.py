@@ -12,6 +12,7 @@ from typing import Callable
 from src.core.io_utils import file_non_empty
 
 _log = logging.getLogger(__name__)
+logger = _log
 
 _ZERO_BYTE_STDERR_SUFFIX = "\n[lumiverb] Output file is 0 bytes; treating as failure"
 _DEFAULT_STDERR_TAIL_LINES = 40
@@ -49,7 +50,16 @@ class FFmpegAttempt:
 
 
 def _run_ffmpeg(cmd: list[str]) -> FFmpegAttempt:
+    logger.debug("Running: %s", " ".join(str(a) for a in cmd))
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    logger.debug("Exited %d: %s", result.returncode, " ".join(str(a) for a in cmd))
+    if result.returncode != 0 and result.stderr:
+        logger.warning(
+            "stderr: %s",
+            result.stderr.decode(errors="replace")
+            if isinstance(result.stderr, bytes)
+            else result.stderr,
+        )
     return FFmpegAttempt(cmd=cmd, returncode=int(result.returncode), stderr=result.stderr or "")
 
 
@@ -64,6 +74,7 @@ def run_ffmpeg_with_progress(
 
     Expects the command to include FFmpeg's `-progress pipe:2` option when on_progress is used.
     """
+    logger.debug("Running: %s", " ".join(str(a) for a in cmd))
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.DEVNULL,
@@ -102,11 +113,15 @@ def run_ffmpeg_with_progress(
         if process.stderr is not None:
             process.stderr.close()
     stderr = "".join(stderr_lines).strip()
-    return FFmpegAttempt(
+    attempt = FFmpegAttempt(
         cmd=cmd,
         returncode=int(process.returncode),
         stderr=stderr,
     )
+    logger.debug("Exited %d: %s", attempt.returncode, " ".join(str(a) for a in cmd))
+    if attempt.returncode != 0 and attempt.stderr:
+        logger.warning("stderr: %s", attempt.stderr)
+    return attempt
 
 
 def probe_video_duration(source: Path) -> float | None:
@@ -123,7 +138,16 @@ def probe_video_duration(source: Path) -> float | None:
         "default=noprint_wrappers=1:nokey=1",
         str(source),
     ]
+    logger.debug("Running: %s", " ".join(str(a) for a in cmd))
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    logger.debug("Exited %d: %s", result.returncode, " ".join(str(a) for a in cmd))
+    if result.returncode != 0 and result.stderr:
+        logger.warning(
+            "stderr: %s",
+            result.stderr.decode(errors="replace")
+            if isinstance(result.stderr, bytes)
+            else result.stderr,
+        )
     if result.returncode != 0:
         if result.stderr:
             _log.warning(
@@ -153,12 +177,22 @@ def _is_h264_videotoolbox_available() -> bool:
     """Return True if FFmpeg reports h264_videotoolbox encoder (macOS)."""
     if sys.platform != "darwin":
         return False
+    cmd = ["ffmpeg", "-hide_banner", "-encoders"]
+    logger.debug("Running: %s", " ".join(str(a) for a in cmd))
     result = subprocess.run(
-        ["ffmpeg", "-hide_banner", "-encoders"],
+        cmd,
         capture_output=True,
         text=True,
         check=False,
     )
+    logger.debug("Exited %d: %s", result.returncode, " ".join(str(a) for a in cmd))
+    if result.returncode != 0 and result.stderr:
+        logger.warning(
+            "stderr: %s",
+            result.stderr.decode(errors="replace")
+            if isinstance(result.stderr, bytes)
+            else result.stderr,
+        )
     return "h264_videotoolbox" in (result.stdout or "") if result.returncode == 0 else False
 
 
@@ -430,7 +464,16 @@ def extract_video_clip(
         "+faststart",
         str(dest),
     ]
+    logger.debug("Running: %s", " ".join(str(a) for a in cmd))
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    logger.debug("Exited %d: %s", result.returncode, " ".join(str(a) for a in cmd))
+    if result.returncode != 0 and result.stderr:
+        logger.warning(
+            "stderr: %s",
+            result.stderr.decode(errors="replace")
+            if isinstance(result.stderr, bytes)
+            else result.stderr,
+        )
     if result.returncode == 0:
         if not file_non_empty(dest):
             dest.unlink(missing_ok=True)
@@ -503,6 +546,7 @@ async def extract_clip(
         str(dest_path),
     ]
 
+    logger.debug("Running: %s", " ".join(str(a) for a in cmd))
     process = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -518,6 +562,7 @@ async def extract_clip(
             except (asyncio.CancelledError, OSError):
                 pass
 
+    logger.debug("Exited %d: %s", process.returncode, " ".join(str(a) for a in cmd))
     if process.returncode == 0:
         if not file_non_empty(dest_path):
             dest_path.unlink(missing_ok=True)

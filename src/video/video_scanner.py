@@ -18,6 +18,7 @@ from queue import Empty, Queue
 from typing import Iterator
 
 _log = logging.getLogger(__name__)
+logger = _log
 
 OUT_WIDTH = 480
 PTS_QUEUE_TIMEOUT = 10.0
@@ -51,7 +52,16 @@ def _get_video_size(source: Path) -> tuple[int, int]:
         "csv=p=0",
         str(source),
     ]
+    logger.debug("Running: %s", " ".join(str(a) for a in cmd))
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    logger.debug("Exited %d: %s", result.returncode, " ".join(str(a) for a in cmd))
+    if result.returncode != 0 and result.stderr:
+        logger.warning(
+            "stderr: %s",
+            result.stderr.decode(errors="replace")
+            if isinstance(result.stderr, bytes)
+            else result.stderr,
+        )
     if result.returncode != 0 or not result.stdout.strip():
         raise ValueError(f"Could not get video size for {source}: {result.stderr or result.stdout}")
     parts = result.stdout.strip().split(",")
@@ -138,6 +148,7 @@ class VideoScanner:
             cmd.insert(4, "-hwaccel")
             cmd.insert(5, "auto")
 
+        logger.debug("Running: %s", " ".join(str(a) for a in cmd))
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -178,4 +189,5 @@ class VideoScanner:
             if proc.poll() is None:
                 proc.kill()
                 proc.wait()
+            logger.debug("FFmpeg exited %d", proc.returncode)
             stderr_thread.join(timeout=1.0)
