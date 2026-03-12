@@ -494,7 +494,7 @@ def worker_video_index(
                     progress.update(
                         scan_task,
                         completed=int(pct * 100),
-                        detail=f"{elapsed:.0f}s / {chunk_duration:.0f}s  ({video_pct:.0f}% of video)",
+                        detail=f"{elapsed:.0f}s / {chunk_duration:.0f}s  ({video_pct:.0f}% of scene)",
                     )
 
                 elif kind == "chunk_complete":

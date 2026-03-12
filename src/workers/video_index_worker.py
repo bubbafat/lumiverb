@@ -26,7 +26,6 @@ from src.storage.local import LocalStorage
 from src.video.clip_extractor import (
     extract_video_frame,
     probe_video_duration,
-    transcode_to_720p_h264,
 )
 from src.video.scene_segmenter import SceneSegmenter
 from src.video.video_scanner import VideoScanner, RawFrame
@@ -77,11 +76,6 @@ class VideoIndexWorker(BaseWorker):
 
         tmpdir = Path(tempfile.mkdtemp())
         try:
-            proxy_path = tmpdir / f"{asset_id}_proxy.mp4"
-            ok = transcode_to_720p_h264(source, proxy_path)
-            if not ok:
-                raise RuntimeError(f"Transcode failed for {source}")
-
             # Thumbnail: extract frame at 0, write to storage, then record thumbnail_key on asset.
             thumb_path = tmpdir / f"{asset_id}_thumb.jpg"
             if extract_video_frame(source, thumb_path, timestamp=0.0) and thumb_path.exists():
@@ -115,35 +109,67 @@ class VideoIndexWorker(BaseWorker):
                     }
                 )
 
-                self._process_chunk(
-                    source=source,
-                    proxy_path=proxy_path,
-                    work_order=work_order,
-                    tmpdir=tmpdir,
-                    storage=storage,
-                    tenant_id=tenant_id,
-                    library_id=library_id,
-                    asset_id=asset_id,
-                    frame_callback=lambda pts, s, e, _dur=duration_sec: self._emit(
-                        {
-                            "event": "frame_scanned",
-                            "rel_path": job["rel_path"],
-                            "pts": pts,
-                            "start_ts": s,
-                            "end_ts": e,
-                            "video_duration_sec": _dur,
-                        }
-                    ),
-                )
+                chunk_start = max(0.0, work_order["start_ts"] - work_order["overlap_sec"])
+                chunk_end = work_order["end_ts"]
+                chunk_duration = chunk_end - chunk_start
 
-                self._emit(
-                    {
-                        "event": "chunk_complete",
-                        "chunk_index": work_order["chunk_index"],
-                        "end_ts": work_order["end_ts"],
-                        "video_duration_sec": duration_sec,
-                    }
+                proxy_path = tmpdir / f"{asset_id}_chunk_{work_order['chunk_index']}_proxy.mp4"
+                ok = self._transcode_chunk_proxy(
+                    source=source,
+                    dest=proxy_path,
+                    start_sec=chunk_start,
+                    duration_sec=chunk_duration,
                 )
+                if not ok:
+                    self._emit(
+                        {
+                            "event": "chunk_failed",
+                            "chunk_index": work_order["chunk_index"],
+                        }
+                    )
+                    self._request(
+                        "POST",
+                        f"/v1/video/chunks/{work_order['chunk_id']}/fail",
+                        json={
+                            "worker_id": work_order["worker_id"],
+                            "error_message": "Proxy transcode failed",
+                        },
+                    )
+                    continue
+
+                try:
+                    self._process_chunk(
+                        source=source,
+                        proxy_path=proxy_path,
+                        work_order=work_order,
+                        chunk_offset_sec=chunk_start,
+                        tmpdir=tmpdir,
+                        storage=storage,
+                        tenant_id=tenant_id,
+                        library_id=library_id,
+                        asset_id=asset_id,
+                        frame_callback=lambda pts, s, e, _dur=duration_sec: self._emit(
+                            {
+                                "event": "frame_scanned",
+                                "rel_path": job["rel_path"],
+                                "pts": pts,
+                                "start_ts": s,
+                                "end_ts": e,
+                                "video_duration_sec": _dur,
+                            }
+                        ),
+                    )
+
+                    self._emit(
+                        {
+                            "event": "chunk_complete",
+                            "chunk_index": work_order["chunk_index"],
+                            "end_ts": work_order["end_ts"],
+                            "video_duration_sec": duration_sec,
+                        }
+                    )
+                finally:
+                    proxy_path.unlink(missing_ok=True)
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -161,10 +187,55 @@ class VideoIndexWorker(BaseWorker):
                 # never let progress crash the worker
                 pass
 
+    def _transcode_chunk_proxy(
+        self,
+        source: Path,
+        dest: Path,
+        start_sec: float,
+        duration_sec: float,
+    ) -> bool:
+        """Transcode a chunk window from source to a 720p H.264 proxy."""
+        import subprocess
+
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-ss",
+            str(start_sec),
+            "-i",
+            str(source),
+            "-t",
+            str(duration_sec),
+            "-vf",
+            "scale=-2:720",
+            "-c:v",
+            "libx264",
+            "-b:v",
+            "3M",
+            "-pix_fmt",
+            "yuv420p",
+            "-an",
+            str(dest),
+        ]
+        logger.debug("Running: %s", " ".join(str(a) for a in cmd))
+        result = subprocess.run(cmd, capture_output=True)
+        logger.debug("Exited %d: %s", result.returncode, cmd[0])
+        if result.returncode != 0:
+            logger.warning(
+                "Chunk transcode failed (exit %d): %s",
+                result.returncode,
+                result.stderr.decode(errors="replace"),
+            )
+        return result.returncode == 0
+
     def _process_chunk(
         self,
         source: Path,
         proxy_path: Path,
+        chunk_offset_sec: float,
         work_order: dict,
         tmpdir: Path,
         storage: LocalStorage,
@@ -176,8 +247,9 @@ class VideoIndexWorker(BaseWorker):
         """Run scene detection on chunk, extract rep frames, complete or fail chunk."""
         chunk_id = work_order["chunk_id"]
         worker_id = work_order["worker_id"]
-        scan_start = max(0.0, work_order["start_ts"] - work_order["overlap_sec"])
-        scan_end = work_order["end_ts"]
+        chunk_offset = chunk_offset_sec
+        scan_start = 0.0
+        scan_end = work_order["end_ts"] - chunk_offset
 
         try:
             collected: list[RawFrame] = []
@@ -187,7 +259,7 @@ class VideoIndexWorker(BaseWorker):
                     collected.append(raw)
                     if frame_callback:
                         frame_callback(
-                            raw.pts,
+                            raw.pts + chunk_offset,
                             work_order["start_ts"],
                             work_order["end_ts"],
                         )
@@ -211,12 +283,12 @@ class VideoIndexWorker(BaseWorker):
                 logger.info(
                     "No keyframes found in chunk %s (%.1f–%.1f); falling back to interval extraction",
                     work_order["chunk_id"],
-                    scan_start,
-                    scan_end,
+                    work_order["start_ts"],
+                    work_order["end_ts"],
                 )
-                t = work_order["start_ts"]
-                while t < work_order["end_ts"]:
-                    frame_path = tmpdir / f"{asset_id}_fallback_{int(t * 1000)}.jpg"
+                t = 0.0
+                while t < scan_end:
+                    frame_path = tmpdir / f"{asset_id}_fallback_{int((t + chunk_offset) * 1000)}.jpg"
                     if extract_video_frame(proxy_path, frame_path, timestamp=t):
                         img = Image.open(frame_path).convert("RGB")
                         w, h = img.size
@@ -227,7 +299,7 @@ class VideoIndexWorker(BaseWorker):
                         frame_path.unlink(missing_ok=True)
                         if frame_callback:
                             frame_callback(
-                                t,
+                                t + chunk_offset,
                                 work_order["start_ts"],
                                 work_order["end_ts"],
                             )
@@ -239,25 +311,32 @@ class VideoIndexWorker(BaseWorker):
                     chunk_id,
                 )
 
+            scene_start_ts = work_order.get("scene_start_ts")
+            if scene_start_ts is not None:
+                scene_start_ts = max(0.0, scene_start_ts - chunk_offset)
             segmenter = SceneSegmenter(
                 frames=collected,
                 anchor_phash=work_order.get("anchor_phash"),
-                scene_start_ts=work_order.get("scene_start_ts"),
+                scene_start_ts=scene_start_ts,
             )
             scenes_raw = segmenter.segment()
 
-            start_boundary_ms = int(work_order["start_ts"] * 1000)
+            start_boundary_ms = int((work_order["start_ts"] - chunk_offset) * 1000)
             filtered = [s for s in scenes_raw if s.end_ms > start_boundary_ms]
 
             scene_dicts = []
             for i, scene in enumerate(filtered):
-                rep_path = tmpdir / f"{asset_id}_{scene.rep_frame_ms}.jpg"
-                extract_video_frame(source, rep_path, timestamp=scene.rep_frame_ms / 1000.0)
+                chunk_offset_ms = int(round(chunk_offset * 1000))
+                abs_rep_ms = scene.rep_frame_ms + chunk_offset_ms
+                abs_start_ms = scene.start_ms + chunk_offset_ms
+                abs_end_ms = scene.end_ms + chunk_offset_ms
+                rep_path = tmpdir / f"{asset_id}_{abs_rep_ms}.jpg"
+                extract_video_frame(source, rep_path, timestamp=abs_rep_ms / 1000.0)
                 key = storage.scene_rep_key(
                     tenant_id=tenant_id,
                     library_id=library_id,
                     asset_id=asset_id,
-                    rep_frame_ms=scene.rep_frame_ms,
+                    rep_frame_ms=abs_rep_ms,
                 )
                 dest = storage.abs_path(key)
                 dest.parent.mkdir(parents=True, exist_ok=True)
@@ -265,9 +344,9 @@ class VideoIndexWorker(BaseWorker):
                 rep_path.unlink(missing_ok=True)
                 scene_dicts.append({
                     "scene_index": i,
-                    "start_ms": scene.start_ms,
-                    "end_ms": scene.end_ms,
-                    "rep_frame_ms": scene.rep_frame_ms,
+                    "start_ms": abs_start_ms,
+                    "end_ms": abs_end_ms,
+                    "rep_frame_ms": abs_rep_ms,
                     "proxy_key": None,
                     "thumbnail_key": key,
                     "description": None,
@@ -281,6 +360,8 @@ class VideoIndexWorker(BaseWorker):
             next_scene_start_ms = getattr(segmenter, "next_scene_start_ms", None)
             if next_anchor_phash is None and scenes_raw:
                 next_anchor_phash = getattr(scenes_raw[-1], "phash", None)
+            if next_scene_start_ms is not None:
+                next_scene_start_ms = next_scene_start_ms + int(round(chunk_offset * 1000))
 
             resp = self._request(
                 "POST",
