@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -31,6 +31,23 @@ class SimilarityResponse(BaseModel):
     hits: list[SimilarHit]
     total: int
     embedding_available: bool
+
+
+class ImageSimilarityRequest(BaseModel):
+    library_id: str
+    image_b64: str  # base64-encoded JPEG/PNG, already resized by client
+    limit: int = 20
+    offset: int = 0
+    # Scope filters — mirrors the GET endpoint's query params as a structured body
+    from_ts: float | None = None
+    to_ts: float | None = None
+    asset_types: list[Literal["image", "video"]] | None = None
+    cameras: list[CameraSpec] | None = None
+
+
+class ImageSimilarityResponse(BaseModel):
+    hits: list[SimilarHit]
+    total: int
 
 
 @router.get("", response_model=SimilarityResponse)
@@ -142,8 +159,8 @@ def find_similar(
             model_id="clip",
             model_version=CLIP_VERSION,
             vector=[float(x) for x in clip_emb.embedding_vector],
-            exclude_asset_id=asset_id,
             limit=K,
+            exclude_asset_id=asset_id,
             scope=scope,
         )
         for cand_id, dist in clip_candidates:
@@ -155,8 +172,8 @@ def find_similar(
             model_id="moondream",
             model_version=MD_VERSION,
             vector=[float(x) for x in md_emb.embedding_vector],
-            exclude_asset_id=asset_id,
             limit=K,
+            exclude_asset_id=asset_id,
             scope=scope,
         )
         for cand_id, dist in md_candidates:
@@ -194,4 +211,74 @@ def find_similar(
         total=len(hits),
         embedding_available=True,
     )
+
+
+@router.post("/search-by-image", response_model=ImageSimilarityResponse)
+def search_by_image(
+    body: ImageSimilarityRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> ImageSimilarityResponse:
+    import base64
+    import io
+    from PIL import Image as PILImage
+    from src.workers.embeddings.clip_provider import CLIPEmbeddingProvider, MODEL_VERSION as CLIP_VERSION
+
+    # Validate timestamps
+    if body.from_ts is not None and body.to_ts is not None and body.from_ts > body.to_ts:
+        raise HTTPException(status_code=422, detail="from_ts must be <= to_ts")
+
+    # Decode image
+    image_bytes = base64.b64decode(body.image_b64)
+    pil_image = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
+
+    # Generate CLIP embedding in memory
+    provider = CLIPEmbeddingProvider()
+    vector = provider.embed_image(pil_image)
+
+    # Build scope (same logic as GET endpoint)
+    scope: SimilarityScope | None = None
+    date_range = (
+        DateRange(from_ts=body.from_ts, to_ts=body.to_ts)
+        if (body.from_ts is not None or body.to_ts is not None)
+        else None
+    )
+    asset_types = body.asset_types if body.asset_types else "all"
+    if date_range is not None or body.cameras is not None or body.asset_types is not None:
+        scope = SimilarityScope(
+            date_range=date_range,
+            asset_types=asset_types,
+            cameras=body.cameras,
+        )
+
+    # Query
+    emb_repo = AssetEmbeddingRepository(session)
+    asset_repo = AssetRepository(session)
+
+    candidates = emb_repo.find_similar(
+        library_id=body.library_id,
+        model_id="clip",
+        model_version=CLIP_VERSION,
+        vector=vector,
+        limit=body.limit,
+        offset=body.offset,
+        exclude_asset_id=None,  # no source asset to exclude
+        scope=scope,
+    )
+
+    asset_ids = [aid for aid, _ in candidates]
+    assets_by_id = {a.asset_id: a for a in asset_repo.get_by_ids(asset_ids)}
+
+    hits = [
+        SimilarHit(
+            asset_id=asset.asset_id,
+            rel_path=asset.rel_path,
+            thumbnail_key=asset.thumbnail_key,
+            proxy_key=asset.proxy_key,
+            distance=dist,
+        )
+        for cand_id, dist in candidates
+        if (asset := assets_by_id.get(cand_id)) is not None
+    ]
+
+    return ImageSimilarityResponse(hits=hits, total=len(hits))
 

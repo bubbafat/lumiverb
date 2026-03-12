@@ -901,6 +901,111 @@ def similar(
         console.print(f"[dim]{n} similar asset(s)[/dim]")
 
 
+@app.command("similar-image")
+def similar_image(
+    image_path: Annotated[Path, typer.Argument(help="Path to query image")],
+    library: Annotated[str, typer.Option("--library", "-l")] = "",
+    limit: Annotated[int, typer.Option("--limit")] = 20,
+    offset: Annotated[int, typer.Option("--offset")] = 0,
+    output: Annotated[str, typer.Option("--output")] = "table",
+    from_ts: Annotated[float | None, typer.Option("--from-ts")] = None,
+    to_ts: Annotated[float | None, typer.Option("--to-ts")] = None,
+    asset_types: Annotated[str | None, typer.Option("--asset-types")] = None,
+    camera_make: Annotated[list[str] | None, typer.Option("--camera-make")] = None,
+    camera_model: Annotated[list[str] | None, typer.Option("--camera-model")] = None,
+) -> None:
+    """Find visually similar assets by uploading a query image."""
+    import base64
+    import io
+    from PIL import Image as PILImage
+
+    PROXY_LONG_EDGE = 2048
+
+    client = LumiverbClient()
+    libraries = client.get("/v1/libraries").json()
+    match = next((l for l in libraries if l.get("name") == library), None)
+    if not match:
+        console.print(f"[red]Library not found: {library}[/red]")
+        raise typer.Exit(1)
+
+    pil_img = PILImage.open(image_path).convert("RGB")
+    w, h = pil_img.size
+    scale = PROXY_LONG_EDGE / max(w, h)
+    if scale < 1.0:
+        pil_img = pil_img.resize((int(w * scale), int(h * scale)), PILImage.LANCZOS)
+
+    buf = io.BytesIO()
+    pil_img.save(buf, format="JPEG", quality=85)
+    image_b64 = base64.b64encode(buf.getvalue()).decode()
+
+    cameras = None
+    if camera_make or camera_model:
+        makes = camera_make or []
+        models = camera_model or []
+        n = max(len(makes), len(models))
+        cameras = [
+            {
+                "make": makes[i] if i < len(makes) else None,
+                "model": models[i] if i < len(models) else None,
+            }
+            for i in range(n)
+            if (makes[i] if i < len(makes) else None)
+            or (models[i] if i < len(models) else None)
+        ]
+
+    asset_types_list = None
+    if asset_types:
+        allowed = {"image", "video"}
+        asset_types_list = [
+            t.strip() for t in asset_types.split(",") if t.strip() in allowed
+        ]
+        if not asset_types_list:
+            asset_types_list = None
+
+    payload: dict = {
+        "library_id": match["library_id"],
+        "image_b64": image_b64,
+        "limit": limit,
+        "offset": offset,
+    }
+    if from_ts is not None:
+        payload["from_ts"] = from_ts
+    if to_ts is not None:
+        payload["to_ts"] = to_ts
+    if asset_types_list:
+        payload["asset_types"] = asset_types_list
+    if cameras:
+        payload["cameras"] = cameras
+
+    resp = client.post("/v1/similar/search-by-image", json=payload)
+    resp.raise_for_status()
+    data = resp.json()
+    hits = data.get("hits", [])
+    total = data.get("total", 0)
+
+    if output == "json":
+        import sys as _sys
+
+        _sys.stdout.write(_json.dumps(data, indent=2))
+        _sys.stdout.write("\n")
+        return
+
+    from rich.table import Table as _Table
+
+    table = _Table(show_header=True, header_style="bold")
+    table.add_column("Path", no_wrap=False)
+    table.add_column("Distance", justify="right", width=10)
+    table.add_column("Asset ID", width=28)
+    for hit in hits:
+        table.add_row(
+            hit.get("rel_path", ""),
+            f"{hit.get('distance', 0.0):.4f}",
+            hit.get("asset_id", ""),
+        )
+    console.print(table)
+    console.print(f"{total} result(s)")
+
+
 def main() -> None:
     """Entry point for the lumiverb script."""
     app()

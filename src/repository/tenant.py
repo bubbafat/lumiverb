@@ -800,9 +800,9 @@ class AssetEmbeddingRepository:
         model_id: str,
         model_version: str,
         vector: list[float],
-        exclude_asset_id: str,
         limit: int,
         offset: int = 0,
+        exclude_asset_id: str | None = None,
         scope: SimilarityScope | None = None,
     ) -> list[tuple[str, float]]:
         """
@@ -815,17 +815,18 @@ class AssetEmbeddingRepository:
             "a.availability = 'online'",
             "ae.model_id = :model_id",
             "ae.model_version = :model_version",
-            "ae.asset_id != :exclude_id",
         ]
         params: dict = {
             "vec": str(vector),
             "library_id": library_id,
             "model_id": model_id,
             "model_version": model_version,
-            "exclude_id": exclude_asset_id,
             "limit": limit,
             "offset": offset,
         }
+        if exclude_asset_id is not None:
+            conditions.append("ae.asset_id != :exclude_id")
+            params["exclude_id"] = exclude_asset_id
         if scope and scope.date_range:
             dr = scope.date_range
             if dr.from_ts is not None:

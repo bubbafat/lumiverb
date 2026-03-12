@@ -231,3 +231,103 @@ def test_similar_limit_and_offset_passed_to_api() -> None:
     call_args = mock_client.get.call_args_list[1]
     assert call_args[1]["params"]["limit"] == 5
     assert call_args[1]["params"]["offset"] == 3
+
+
+@pytest.mark.fast
+def test_similar_image_calls_api_and_prints_table(tmp_path) -> None:
+    """similar-image resizes, encodes, resolves library, and POSTs payload."""
+    from PIL import Image as PILImage
+
+    img_path = tmp_path / "query.jpg"
+    PILImage.new("RGB", (4000, 3000), color=(255, 0, 0)).save(img_path, format="JPEG")
+
+    mock_client = MagicMock()
+    mock_client.get.return_value.json.return_value = [
+        {"library_id": "lib_img", "name": "ImgLib", "root_path": "/x"}
+    ]
+    mock_client.post.return_value.json.return_value = {
+        "hits": [
+            {
+                "asset_id": "ast_1",
+                "rel_path": "photo.jpg",
+                "thumbnail_key": None,
+                "proxy_key": None,
+                "distance": 0.1234,
+            }
+        ],
+        "total": 1,
+    }
+
+    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+        result = runner.invoke(
+            app,
+            [
+                "similar-image",
+                str(img_path),
+                "--library",
+                "ImgLib",
+                "--limit",
+                "10",
+                "--offset",
+                "0",
+            ],
+        )
+
+    assert result.exit_code == 0
+    # First call lists libraries
+    mock_client.get.assert_called_once_with("/v1/libraries")
+    # Second call posts search-by-image
+    assert mock_client.post.call_args[0][0] == "/v1/similar/search-by-image"
+    payload = mock_client.post.call_args[1]["json"]
+    assert payload["library_id"] == "lib_img"
+    assert payload["limit"] == 10
+    assert payload["offset"] == 0
+    assert "image_b64" in payload and isinstance(payload["image_b64"], str)
+    # Output table shows path, distance, and total
+    assert "photo.jpg" in result.output
+    assert "0.1234" in result.output
+    assert "1 result(s)" in result.output
+
+
+@pytest.mark.fast
+def test_similar_image_json_output(tmp_path) -> None:
+    """--output json prints full response as JSON."""
+    from PIL import Image as PILImage
+
+    img_path = tmp_path / "query.jpg"
+    PILImage.new("RGB", (100, 100), color=(0, 255, 0)).save(img_path, format="JPEG")
+
+    mock_client = MagicMock()
+    mock_client.get.return_value.json.return_value = [
+        {"library_id": "lib_json", "name": "JsonLib", "root_path": "/x"}
+    ]
+    mock_client.post.return_value.json.return_value = {
+        "hits": [
+            {
+                "asset_id": "ast_2",
+                "rel_path": "img.jpg",
+                "thumbnail_key": None,
+                "proxy_key": None,
+                "distance": 0.5,
+            }
+        ],
+        "total": 1,
+    }
+
+    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+        result = runner.invoke(
+            app,
+            [
+                "similar-image",
+                str(img_path),
+                "--library",
+                "JsonLib",
+                "--output",
+                "json",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert '"hits"' in result.output
+    assert '"total"' in result.output
+    assert '"img.jpg"' in result.output

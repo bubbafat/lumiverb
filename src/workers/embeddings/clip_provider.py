@@ -59,21 +59,21 @@ class CLIPEmbeddingProvider(EmbeddingProvider):
             )
         return self._model, self._preprocess, self._device
 
-    def embed(self, proxy_path: Path) -> list[float]:
+    def embed_image(self, pil_image: "PIL.Image.Image") -> list[float]:
+        """Embed an already-open PIL Image. Shared by embed() and the API endpoint."""
         import numpy as np
         import torch
-        from PIL import Image as PILImage
 
         model, preprocess, device = self._load()
-        image = PILImage.open(proxy_path).convert("RGB")
-        tensor = preprocess(image).unsqueeze(0).to(device)
-
+        tensor = preprocess(pil_image).unsqueeze(0).to(device)
         with torch.no_grad():
             features = model.encode_image(tensor)
-            # L2-normalize
             features = features / features.norm(dim=-1, keepdim=True)
-
-        vec = features.squeeze(0).cpu().numpy().astype(float)
-        # Ensure standard Python list[float]
+        vec = features.squeeze(0).cpu().numpy()
         return np.asarray(vec, dtype=float).tolist()
+
+    def embed(self, proxy_path: Path) -> list[float]:
+        from PIL import Image as PILImage
+
+        return self.embed_image(PILImage.open(proxy_path).convert("RGB"))
 

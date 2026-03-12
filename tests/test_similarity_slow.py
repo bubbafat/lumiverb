@@ -96,6 +96,9 @@ def test_similar_no_embedding(similarity_client: Tuple[_AuthClient, str, str]) -
     auth_client, library_id, tenant_url = similarity_client
 
     engine = create_engine(tenant_url)
+    base_id: str
+    close_id: str
+    far_id: str
     with Session(engine) as session:
         scan_repo = ScanRepository(session)
         scan = scan_repo.create(library_id=library_id)
@@ -284,6 +287,92 @@ def test_similar_from_ts_gt_to_ts_returns_422(similarity_client: Tuple[_AuthClie
     )
     assert resp.status_code == 422
     assert "from_ts" in resp.text or "to_ts" in resp.text.lower()
+
+
+@pytest.mark.slow
+def test_search_by_image_basic(similarity_client: Tuple[_AuthClient, str, str]) -> None:
+    """POST /v1/similar/search-by-image returns ranked hits using CLIP embeddings."""
+    import base64
+    import io
+    from unittest.mock import patch
+
+    from PIL import Image as PILImage
+
+    from src.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
+
+    auth_client, library_id, tenant_url = similarity_client
+
+    engine = create_engine(tenant_url)
+    with Session(engine) as session:
+        scan_repo = ScanRepository(session)
+        scan = scan_repo.create(library_id=library_id)
+        asset_repo = AssetRepository(session)
+        base_vec, close_vec, far_vec = _asset_vectors()
+
+        base_asset = asset_repo.create_for_scan(
+            library_id=library_id,
+            rel_path="image_search/base.jpg",
+            file_size=100,
+            file_mtime=None,
+            media_type="image/jpeg",
+            scan_id=scan.scan_id,
+        )
+        close_asset = asset_repo.create_for_scan(
+            library_id=library_id,
+            rel_path="image_search/close.jpg",
+            file_size=100,
+            file_mtime=None,
+            media_type="image/jpeg",
+            scan_id=scan.scan_id,
+        )
+        far_asset = asset_repo.create_for_scan(
+            library_id=library_id,
+            rel_path="image_search/far.jpg",
+            file_size=100,
+            file_mtime=None,
+            media_type="image/jpeg",
+            scan_id=scan.scan_id,
+        )
+
+        emb_repo = AssetEmbeddingRepository(session)
+        emb_repo.upsert(base_asset.asset_id, "clip", CLIP_VERSION, base_vec)
+        emb_repo.upsert(close_asset.asset_id, "clip", CLIP_VERSION, close_vec)
+        emb_repo.upsert(far_asset.asset_id, "clip", CLIP_VERSION, far_vec)
+
+        base_id = base_asset.asset_id
+        close_id = close_asset.asset_id
+        far_id = far_asset.asset_id
+
+    # Create a small in-memory JPEG and base64-encode it
+    img = PILImage.new("RGB", (256, 256), color=(128, 128, 128))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    image_b64 = base64.b64encode(buf.getvalue()).decode()
+
+    class _DummyProvider:
+        def embed_image(self, _pil_image):
+            # Use the base vector so similarity is defined vs stored embeddings
+            return base_vec
+
+    with patch("src.workers.embeddings.clip_provider.CLIPEmbeddingProvider", return_value=_DummyProvider()):
+        resp = auth_client.post(
+            "/v1/similar/search-by-image",
+            json={
+                "library_id": library_id,
+                "image_b64": image_b64,
+                "limit": 10,
+                "offset": 0,
+            },
+        )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    hits = data.get("hits", [])
+    assert data["total"] >= 2
+    ids = [h["asset_id"] for h in hits]
+    assert close_id in ids and far_id in ids
+    # Closest first: close should appear before far
+    assert ids.index(close_id) < ids.index(far_id)
 
 
 @pytest.mark.slow
