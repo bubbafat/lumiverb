@@ -722,8 +722,8 @@ class AssetRepository:
                     """
                 )
             elif job_type == "video-index":
-                conditions.append("a.proxy_key IS NOT NULL")
-                conditions.append("(a.video_indexed IS NOT TRUE)")
+                conditions.append("a.media_type = 'video'")
+                conditions.append("a.video_indexed IS NOT TRUE")
 
         where = " AND ".join(conditions)
         from_clause = "FROM assets a JOIN libraries l ON l.library_id = a.library_id" if join_libraries else "FROM assets a"

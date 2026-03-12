@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Column, DateTime, JSON, UniqueConstraint
+from sqlalchemy import BigInteger, Column, DateTime, JSON, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
@@ -79,7 +79,7 @@ class Asset(SQLModel, table=True):
     last_scan_id: str | None = Field(default=None, foreign_key="scans.scan_id", nullable=True)
     rel_path: str = Field(nullable=False)
     sha256: str | None = Field(default=None, nullable=True)
-    file_size: int = Field(nullable=False)
+    file_size: int = Field(sa_column=Column(BigInteger, nullable=False))
     file_mtime: datetime | None = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
