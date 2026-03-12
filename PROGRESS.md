@@ -14,9 +14,9 @@
 | 8 | AI vision worker (Moondream) | ✅ Done |
 | 9 | Quickwit search sync worker | ✅ Done |
 | 10 | Search API endpoint | ✅ Done |
-| 11 | Similarity search | ⬜ Planned |
-| 12 | Video scene segmentation worker | ⬜ Planned |
-| 13 | CLI polish and end-to-end test | ⬜ Planned |
+| 11 | Similarity search | ✅ Done |
+| 12 | Video scene segmentation worker | ✅ Done |
+| 13 | CLI polish and end-to-end test | ✅ Done |
 
 ## Architecture Decisions Log
 
