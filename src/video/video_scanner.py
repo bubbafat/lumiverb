@@ -106,6 +106,8 @@ class VideoScanner:
             for line in pipe:
                 if line is None:
                     break
+                if isinstance(line, bytes):
+                    line = line.decode("utf-8", errors="replace")
                 m = pts_re.search(line)
                 if m:
                     try:
