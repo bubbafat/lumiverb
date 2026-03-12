@@ -161,6 +161,9 @@ class _DummyQuickwit:
     def ensure_index_for_library(self, library_id: str) -> None:
         self.ensure_calls.append(library_id)
 
+    def ensure_scene_index_for_library(self, library_id: str) -> None:
+        self.ensure_calls.append(library_id)
+
     def ingest_documents_for_library(self, library_id: str, docs):
         self.ingested.extend(list(docs))
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -65,9 +65,9 @@ MediaType = Literal["image", "video", "all"]
 
 @router.get("", response_model=SearchResponse)
 def search(
-    library_id: str,
-    q: Annotated[str, Query(min_length=1, max_length=500)],
     session: Annotated[Session, Depends(get_tenant_session)],
+    library_id: str,
+    q: str = Query(min_length=1, max_length=500),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     media_type: MediaType = Query(default="all"),
