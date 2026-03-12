@@ -12,6 +12,8 @@ from src.models.tenant import VideoIndexChunk
 from src.repository.tenant import (
     AssetRepository,
     VideoIndexChunkRepository,
+    VideoSceneRepository,
+    SearchSyncQueueRepository,
     WorkerJobRepository,
 )
 
@@ -189,3 +191,108 @@ def fail_chunk(
     if not ok:
         raise HTTPException(status_code=409, detail="Chunk not owned by this worker")
     return {"chunk_id": chunk_id, "status": "failed"}
+
+
+# ---------------------------------------------------------------------------
+# List scenes (VideoVisionWorker)
+# ---------------------------------------------------------------------------
+
+
+class SceneListItem(BaseModel):
+    scene_id: str
+    start_ms: int
+    end_ms: int
+    rep_frame_ms: int
+    thumbnail_key: str | None
+    description: str | None
+    tags: list[str] | None
+    sharpness_score: float | None
+    keep_reason: str | None
+    phash: str | None
+
+
+class ScenesResponse(BaseModel):
+    scenes: list[SceneListItem]
+
+
+@router.get("/{asset_id}/scenes", response_model=ScenesResponse)
+def get_scenes_for_asset(
+    asset_id: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> ScenesResponse:
+    """Return all scenes for an asset ordered by start_ms. Used by VideoVisionWorker."""
+    scene_repo = VideoSceneRepository(session)
+    scenes = scene_repo.get_scenes_for_asset(asset_id)
+    return ScenesResponse(
+        scenes=[
+            SceneListItem(
+                scene_id=s.scene_id,
+                start_ms=s.start_ms,
+                end_ms=s.end_ms,
+                rep_frame_ms=s.rep_frame_ms,
+                thumbnail_key=s.thumbnail_key,
+                description=s.description,
+                tags=s.tags,
+                sharpness_score=s.sharpness_score,
+                keep_reason=s.keep_reason,
+                phash=s.phash,
+            )
+            for s in scenes
+        ]
+    )
+
+
+# ---------------------------------------------------------------------------
+# Update scene vision (VideoVisionWorker)
+# ---------------------------------------------------------------------------
+
+
+class SceneVisionUpdateRequest(BaseModel):
+    model_id: str
+    model_version: str
+    description: str
+    tags: list[str]
+
+
+class SceneVisionUpdateResponse(BaseModel):
+    scene_id: str
+    status: str
+
+
+@router.patch("/scenes/{scene_id}", response_model=SceneVisionUpdateResponse)
+def update_scene_vision(
+    scene_id: str,
+    body: SceneVisionUpdateRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> SceneVisionUpdateResponse:
+    """Update vision results on a scene after describing its rep frame."""
+    scene_repo = VideoSceneRepository(session)
+    scene_repo.update_vision(
+        scene_id=scene_id,
+        model_id=body.model_id,
+        model_version=body.model_version,
+        description=body.description,
+        tags=body.tags,
+    )
+    return SceneVisionUpdateResponse(scene_id=scene_id, status="updated")
+
+
+# ---------------------------------------------------------------------------
+# Enqueue scene-level search sync (VideoVisionWorker)
+# ---------------------------------------------------------------------------
+
+
+class SceneSyncRequest(BaseModel):
+    asset_id: str
+
+
+@router.post("/scenes/{scene_id}/sync")
+def enqueue_scene_sync(
+    scene_id: str,
+    body: SceneSyncRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> dict:
+    """Enqueue a search sync entry for the given scene."""
+    queue_repo = SearchSyncQueueRepository(session)
+    queue_repo.enqueue(asset_id=body.asset_id, operation="upsert", scene_id=scene_id)
+    return {"scene_id": scene_id, "status": "enqueued"}
