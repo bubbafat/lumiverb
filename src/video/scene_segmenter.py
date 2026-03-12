@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import Enum
+from typing import Iterable
 
 import cv2
 import imagehash
@@ -84,7 +85,7 @@ class SceneSegmenter:
 
     def __init__(
         self,
-        frames: list[RawFrame],
+        frames: Iterable[RawFrame],
         anchor_phash: str | None = None,
         scene_start_ts: float | None = None,
     ) -> None:
@@ -99,9 +100,6 @@ class SceneSegmenter:
         Run segmentation. After return, self.next_anchor_phash and self.next_scene_start_ms
         are set for the next chunk's anchor state.
         """
-        if not self._frames:
-            return []
-
         scenes: list[Scene] = []
         anchor_phash = self._anchor_phash
         scene_start_pts = self._scene_start_ts
@@ -109,8 +107,12 @@ class SceneSegmenter:
         best_pts: float | None = None
         best_sharpness: float = -1.0
         frames_since_start = 0
+        last_raw: RawFrame | None = None
+        had_frames = False
 
         for i, raw in enumerate(self._frames):
+            had_frames = True
+            last_raw = raw
             pts = raw.pts
             if scene_start_pts is None:
                 scene_start_pts = pts
@@ -167,17 +169,19 @@ class SceneSegmenter:
                 best_sharpness = sharpness
                 best_bytes = raw.bytes
                 best_pts = pts
+        if not had_frames:
+            return []
 
         # Close final scene (forced)
         if scene_start_pts is not None:
             rep_pts = best_pts if best_pts is not None else (
-                self._frames[-1].pts if self._frames else 0
+                last_raw.pts if last_raw else 0
             )
             rep_ms = int(round(rep_pts * 1000))
             start_ms = int(round(scene_start_pts * 1000))
-            end_pts = self._frames[-1].pts if self._frames else scene_start_pts
+            end_pts = last_raw.pts if last_raw else scene_start_pts
             end_ms = int(round(end_pts * 1000))
-            last_phash = _frame_to_phash(self._frames[-1]) if self._frames else None
+            last_phash = _frame_to_phash(last_raw) if last_raw else None
             scenes.append(
                 Scene(
                     start_ms=start_ms,

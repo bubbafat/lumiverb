@@ -417,12 +417,94 @@ def worker_video_index(
     once: Annotated[bool, typer.Option("--once", help="Process queue until empty then exit.")] = False,
 ) -> None:
     """Run the video index worker (scene detection for video assets)."""
+    import threading
+    from pathlib import Path as _Path
+    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
     from src.workers.video_index_worker import VideoIndexWorker
 
     client = LumiverbClient()
     library_id = _resolve_library_id(client, library) if library else None
-    worker = VideoIndexWorker(client=client, once=once, library_id=library_id)
-    worker.run()
+    console = Console()
+
+    jobs_done = 0
+    jobs_failed = 0
+    _lock = threading.Lock()
+
+    with Progress(
+        SpinnerColumn(),
+        BarColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        TextColumn("  "),
+        TextColumn("{task.fields[detail]}"),
+        console=console,
+        refresh_per_second=10,
+    ) as progress:
+        job_task = progress.add_task(
+            "Processing video-index jobs",
+            total=None,
+            detail="",
+        )
+        scan_task = progress.add_task(
+            "",
+            total=100,
+            completed=0,
+            visible=False,
+            detail="",
+        )
+
+        def on_progress(event: dict) -> None:
+            nonlocal jobs_done, jobs_failed
+            kind = event.get("event")
+            rel_path = event.get("rel_path", "")
+            filename = _Path(rel_path).name if rel_path else ""
+            duration = event.get("video_duration_sec") or 0.0
+
+            with _lock:
+                if kind == "chunk_claimed":
+                    start_ts = event["start_ts"]
+                    end_ts = event["end_ts"]
+                    progress.update(
+                        scan_task,
+                        visible=True,
+                        total=100,
+                        completed=0,
+                        description=f"  [cyan]{filename}[/cyan]",
+                        detail=f"scanning {start_ts:.0f}s – {end_ts:.0f}s",
+                    )
+
+                elif kind == "frame_scanned":
+                    pts = event["pts"]
+                    start_ts = event["start_ts"]
+                    end_ts = event["end_ts"]
+                    chunk_duration = max(end_ts - start_ts, 1.0)
+                    elapsed = max(pts - start_ts, 0.0)
+                    pct = min(elapsed / chunk_duration, 1.0)
+                    video_pct = (pts / duration * 100) if duration > 0 else 0.0
+                    progress.update(
+                        scan_task,
+                        completed=int(pct * 100),
+                        detail=f"{pts:.0f}s  ({video_pct:.0f}% of video)",
+                    )
+
+                elif kind == "chunk_complete":
+                    end_ts = event["end_ts"]
+                    video_pct = (end_ts / duration * 100) if duration > 0 else 0.0
+                    progress.update(scan_task, visible=False, detail="")
+                    progress.update(
+                        job_task,
+                        detail=f"last chunk to {end_ts:.0f}s  ({video_pct:.0f}% of video)",
+                    )
+
+        worker = VideoIndexWorker(
+            client=client,
+            once=once,
+            library_id=library_id,
+            progress_callback=on_progress,
+            suppress_base_progress=True,
+        )
+        worker.run()
+
+    console.print(f"Done: {jobs_done:,} succeeded, {jobs_failed:,} failed")
 
 
 @worker_app.command("video-vision")

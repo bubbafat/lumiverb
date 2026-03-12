@@ -19,6 +19,7 @@ import logging
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Callable
 
 from src.core.config import get_settings
 from src.storage.local import LocalStorage
@@ -28,7 +29,7 @@ from src.video.clip_extractor import (
     transcode_to_720p_h264,
 )
 from src.video.scene_segmenter import SceneSegmenter
-from src.video.video_scanner import VideoScanner
+from src.video.video_scanner import VideoScanner, RawFrame
 from src.workers.base import BaseWorker
 
 logger = logging.getLogger(__name__)
@@ -42,9 +43,11 @@ class VideoIndexWorker(BaseWorker):
         client: object,
         once: bool = False,
         library_id: str | None = None,
+        progress_callback: Callable[[dict], None] | None = None,
         **kwargs: object,
     ) -> None:
         super().__init__(client=client, once=once, library_id=library_id, **kwargs)
+        self._progress_callback = progress_callback
 
     def process(self, job: dict) -> dict:
         """Process a single video-index job. Returns {}; chunk work is done via video API."""
@@ -100,6 +103,18 @@ class VideoIndexWorker(BaseWorker):
                     break
                 resp.raise_for_status()
                 work_order = resp.json()
+
+                self._emit(
+                    {
+                        "event": "chunk_claimed",
+                        "rel_path": job["rel_path"],
+                        "chunk_index": work_order["chunk_index"],
+                        "start_ts": work_order["start_ts"],
+                        "end_ts": work_order["end_ts"],
+                        "video_duration_sec": work_order["video_duration_sec"],
+                    }
+                )
+
                 self._process_chunk(
                     source=source,
                     proxy_path=proxy_path,
@@ -109,6 +124,25 @@ class VideoIndexWorker(BaseWorker):
                     tenant_id=tenant_id,
                     library_id=library_id,
                     asset_id=asset_id,
+                    frame_callback=lambda pts, s, e: self._emit(
+                        {
+                            "event": "frame_scanned",
+                            "rel_path": job["rel_path"],
+                            "pts": pts,
+                            "start_ts": s,
+                            "end_ts": e,
+                            "video_duration_sec": work_order["video_duration_sec"],
+                        }
+                    ),
+                )
+
+                self._emit(
+                    {
+                        "event": "chunk_complete",
+                        "chunk_index": work_order["chunk_index"],
+                        "end_ts": work_order["end_ts"],
+                        "video_duration_sec": work_order["video_duration_sec"],
+                    }
                 )
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
@@ -118,6 +152,14 @@ class VideoIndexWorker(BaseWorker):
     def _request(self, method: str, path: str, **kwargs: object):
         """Raw request for endpoints that use 204/409; returns response without exiting."""
         return self._client.raw(method, path, **kwargs)
+
+    def _emit(self, event: dict) -> None:
+        if self._progress_callback:
+            try:
+                self._progress_callback(event)
+            except Exception:
+                # never let progress crash the worker
+                pass
 
     def _process_chunk(
         self,
@@ -129,6 +171,7 @@ class VideoIndexWorker(BaseWorker):
         tenant_id: str,
         library_id: str,
         asset_id: str,
+        frame_callback: Callable[[float, float, float], None] | None = None,
     ) -> None:
         """Run scene detection on chunk, extract rep frames, complete or fail chunk."""
         chunk_id = work_order["chunk_id"]
@@ -137,10 +180,50 @@ class VideoIndexWorker(BaseWorker):
         scan_end = work_order["end_ts"]
 
         try:
+            collected: list[RawFrame] = []
             scanner = VideoScanner(proxy_path)
-            raw_frames = scanner.scan(start_ts=scan_start, end_ts=scan_end)
+            for raw in scanner.scan(start_ts=scan_start, end_ts=scan_end):
+                collected.append(raw)
+                if frame_callback:
+                    frame_callback(raw.pts, work_order["start_ts"], work_order["end_ts"])
+
+            if not collected:
+                from src.video.scene_segmenter import DEBOUNCE_SEC
+                from PIL import Image
+
+                logger.info(
+                    "No keyframes found in chunk %s (%.1f–%.1f); falling back to interval extraction",
+                    work_order["chunk_id"],
+                    scan_start,
+                    scan_end,
+                )
+                t = work_order["start_ts"]
+                while t < work_order["end_ts"]:
+                    frame_path = tmpdir / f"{asset_id}_fallback_{int(t * 1000)}.jpg"
+                    if extract_video_frame(proxy_path, frame_path, timestamp=t):
+                        img = Image.open(frame_path).convert("RGB")
+                        w, h = img.size
+                        raw_bytes = img.tobytes()
+                        collected.append(
+                            RawFrame(bytes=raw_bytes, pts=t, width=w, height=h)
+                        )
+                        frame_path.unlink(missing_ok=True)
+                        if frame_callback:
+                            frame_callback(
+                                t,
+                                work_order["start_ts"],
+                                work_order["end_ts"],
+                            )
+                    t += DEBOUNCE_SEC
+
+            if not collected:
+                logger.warning(
+                    "No frames available for chunk %s after fallback; completing with empty scenes",
+                    chunk_id,
+                )
+
             segmenter = SceneSegmenter(
-                frames=raw_frames,
+                frames=collected,
                 anchor_phash=work_order.get("anchor_phash"),
                 scene_start_ts=work_order.get("scene_start_ts"),
             )

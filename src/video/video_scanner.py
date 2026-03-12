@@ -1,4 +1,6 @@
-"""FFmpeg-based video scanner for scene detection. Outputs 1 FPS raw RGB frames and PTS.
+"""FFmpeg-based video scanner for scene detection.
+
+Outputs raw RGB24 keyframes at proxy resolution with PTS.
 
 See docs/reference/video_scene_segmentation.md for the pipe contract and constants.
 """
@@ -13,6 +15,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Queue
+from typing import Iterator
 
 _log = logging.getLogger(__name__)
 
@@ -82,7 +85,6 @@ class VideoScanner:
         if not self._source.exists():
             raise FileNotFoundError(str(self._source))
         self._width, self._height = _get_video_size(self._source)
-        self._out_height = _scaled_height(self._width, self._height)
 
     def scan(
         self,
@@ -90,14 +92,14 @@ class VideoScanner:
         end_ts: float,
         *,
         hwaccel: bool = True,
-    ) -> list[RawFrame]:
+    ) -> Iterator[RawFrame]:
         """
-        Decode from start_ts to end_ts at 1 FPS, returning list of RawFrame.
+        Decode from start_ts to end_ts, yielding RawFrame for each decoded keyframe.
+
         Raises SyncError if PTS does not arrive within PTS_QUEUE_TIMEOUT.
         """
-        frame_size = OUT_WIDTH * self._out_height * 3
+        frame_size = self._width * self._height * 3
         pts_queue: Queue[float] = Queue()
-        frames: list[RawFrame] = []
 
         def consume_stderr(pipe) -> None:
             pts_re = re.compile(r"pts_time:([\d.]+)")
@@ -116,13 +118,14 @@ class VideoScanner:
             "-hide_banner",
             "-loglevel",
             "info",
-            "-y",
             "-ss",
             str(start_ts),
             "-i",
             str(self._source),
             "-vf",
-            f"fps=1,scale={OUT_WIDTH}:{self._out_height},showinfo",
+            "select='eq(pict_type\\,I)',showinfo",
+            "-vsync",
+            "0",
             "-f",
             "rawvideo",
             "-pix_fmt",
@@ -163,18 +166,14 @@ class VideoScanner:
                     )
                 if pts > end_ts:
                     break
-                frames.append(
-                    RawFrame(
-                        bytes=chunk,
-                        pts=pts,
-                        width=OUT_WIDTH,
-                        height=self._out_height,
-                    )
+                yield RawFrame(
+                    bytes=chunk,
+                    pts=pts,
+                    width=self._width,
+                    height=self._height,
                 )
         finally:
             if proc.poll() is None:
                 proc.kill()
                 proc.wait()
             stderr_thread.join(timeout=1.0)
-
-        return frames
