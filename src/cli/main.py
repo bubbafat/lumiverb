@@ -1184,7 +1184,6 @@ def search(
         table.add_column("Detail", no_wrap=False, max_width=40)
         table.add_column("Description", no_wrap=False, max_width=100)
         table.add_column("Tags", no_wrap=False, max_width=60)
-        table.add_column("Score", justify="right", style="dim")
 
         for hit in hits:
             hit_type = hit.get("type", "image")
@@ -1192,7 +1191,6 @@ def search(
             description = hit.get("description") or ""
             desc_display = description[:100] + "…" if len(description) > 100 else description
             tags_display = tags_str[:60] + "…" if len(tags_str) > 60 else tags_str
-            score = hit.get("score", 0.0)
 
             if hit_type == "scene":
                 start_s = (hit.get("start_ms") or 0) // 1000
@@ -1209,7 +1207,6 @@ def search(
                 detail,
                 desc_display,
                 tags_display,
-                f"{score:.3f}",
             )
 
         console.print(table)
