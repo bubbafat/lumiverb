@@ -17,7 +17,10 @@ def test_search_invalid_output_exits_1() -> None:
     mock_client.get.return_value.json.return_value = [{"library_id": "lib_1", "name": "Lib", "root_path": "/path"}]
 
     with patch("src.cli.main.LumiverbClient", return_value=mock_client):
-        result = runner.invoke(app, ["search", "-l", "Lib", "query", "--output", "xml"])
+        result = runner.invoke(
+            app,
+            ["search", "-l", "Lib", "--query", "query", "--output", "xml"],
+        )
 
     assert result.exit_code == 1
     assert "table, json, text" in result.output
@@ -53,7 +56,10 @@ def test_search_calls_api_with_library_id_and_query() -> None:
     ]
 
     with patch("src.cli.main.LumiverbClient", return_value=mock_client):
-        result = runner.invoke(app, ["search", "--library", "MyLib", "sunset", "--limit", "10"])
+        result = runner.invoke(
+            app,
+            ["search", "--library", "MyLib", "--query", "sunset", "--limit", "10"],
+        )
 
     assert result.exit_code == 0
     assert mock_client.get.call_count == 2
@@ -78,7 +84,10 @@ def test_search_no_results_exit_0() -> None:
     ]
 
     with patch("src.cli.main.LumiverbClient", return_value=mock_client):
-        result = runner.invoke(app, ["search", "-l", "EmptyLib", "xyz"])
+        result = runner.invoke(
+            app,
+            ["search", "-l", "EmptyLib", "--query", "xyz"],
+        )
 
     assert result.exit_code == 0
     assert "No results." in result.output
@@ -104,7 +113,10 @@ def test_search_json_output() -> None:
     ]
 
     with patch("src.cli.main.LumiverbClient", return_value=mock_client):
-        result = runner.invoke(app, ["search", "-l", "J", "q", "-o", "json"])
+        result = runner.invoke(
+            app,
+            ["search", "-l", "J", "--query", "q", "-o", "json"],
+        )
 
     assert result.exit_code == 0
     assert "rel_path" in result.output

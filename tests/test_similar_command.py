@@ -19,7 +19,15 @@ def test_similar_invalid_output_exits_1() -> None:
     with patch("src.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
-            ["similar", "ast_abc", "-l", "Lib", "--output", "xml"],
+            [
+                "similar",
+                "-l",
+                "Lib",
+                "--asset-id",
+                "ast_abc",
+                "--output",
+                "xml",
+            ],
         )
 
     assert result.exit_code == 1
@@ -53,7 +61,16 @@ def test_similar_calls_api_with_asset_id_library_id_limit_offset() -> None:
     ]
 
     with patch("src.cli.main.LumiverbClient", return_value=mock_client):
-        result = runner.invoke(app, ["similar", "ast_src", "--library", "MyLib"])
+        result = runner.invoke(
+            app,
+            [
+                "similar",
+                "--library",
+                "MyLib",
+                "--asset-id",
+                "ast_src",
+            ],
+        )
 
     assert result.exit_code == 0
     assert mock_client.get.call_count == 2
@@ -86,7 +103,16 @@ def test_similar_no_embeddings_exit_0() -> None:
     ]
 
     with patch("src.cli.main.LumiverbClient", return_value=mock_client):
-        result = runner.invoke(app, ["similar", "ast_foo", "-l", "EmptyLib"])
+        result = runner.invoke(
+            app,
+            [
+                "similar",
+                "-l",
+                "EmptyLib",
+                "--asset-id",
+                "ast_foo",
+            ],
+        )
 
     assert result.exit_code == 0
     assert "No similar assets" in result.output
@@ -111,7 +137,16 @@ def test_similar_no_hits_exit_0() -> None:
     ]
 
     with patch("src.cli.main.LumiverbClient", return_value=mock_client):
-        result = runner.invoke(app, ["similar", "ast_bar", "-l", "Lib"])
+        result = runner.invoke(
+            app,
+            [
+                "similar",
+                "-l",
+                "Lib",
+                "--asset-id",
+                "ast_bar",
+            ],
+        )
 
     assert result.exit_code == 0
     assert "No similar assets." in result.output
@@ -142,7 +177,16 @@ def test_similar_table_output() -> None:
     ]
 
     with patch("src.cli.main.LumiverbClient", return_value=mock_client):
-        result = runner.invoke(app, ["similar", "ast_1", "-l", "T"])
+        result = runner.invoke(
+            app,
+            [
+                "similar",
+                "-l",
+                "T",
+                "--asset-id",
+                "ast_1",
+            ],
+        )
 
     assert result.exit_code == 0
     assert "folder/image.jpg" in result.output
@@ -176,7 +220,18 @@ def test_similar_json_output() -> None:
     ]
 
     with patch("src.cli.main.LumiverbClient", return_value=mock_client):
-        result = runner.invoke(app, ["similar", "ast_1", "-l", "J", "-o", "json"])
+        result = runner.invoke(
+            app,
+            [
+                "similar",
+                "-l",
+                "J",
+                "--asset-id",
+                "ast_1",
+                "-o",
+                "json",
+            ],
+        )
 
     assert result.exit_code == 0
     assert "source_asset_id" in result.output
@@ -206,7 +261,18 @@ def test_similar_text_output() -> None:
     ]
 
     with patch("src.cli.main.LumiverbClient", return_value=mock_client):
-        result = runner.invoke(app, ["similar", "ast_1", "-l", "Txt", "-o", "text"])
+        result = runner.invoke(
+            app,
+            [
+                "similar",
+                "-l",
+                "Txt",
+                "--asset-id",
+                "ast_1",
+                "-o",
+                "text",
+            ],
+        )
 
     assert result.exit_code == 0
     assert "p1.jpg" in result.output
@@ -226,7 +292,20 @@ def test_similar_limit_and_offset_passed_to_api() -> None:
     ]
 
     with patch("src.cli.main.LumiverbClient", return_value=mock_client):
-        runner.invoke(app, ["similar", "ast_1", "-l", "L", "--limit", "5", "--offset", "3"])
+        runner.invoke(
+            app,
+            [
+                "similar",
+                "-l",
+                "L",
+                "--asset-id",
+                "ast_1",
+                "--limit",
+                "5",
+                "--offset",
+                "3",
+            ],
+        )
 
     call_args = mock_client.get.call_args_list[1]
     assert call_args[1]["params"]["limit"] == 5
@@ -263,6 +342,7 @@ def test_similar_image_calls_api_and_prints_table(tmp_path) -> None:
             app,
             [
                 "similar-image",
+                "--image-path",
                 str(img_path),
                 "--library",
                 "ImgLib",
@@ -319,6 +399,7 @@ def test_similar_image_json_output(tmp_path) -> None:
             app,
             [
                 "similar-image",
+                "--image-path",
                 str(img_path),
                 "--library",
                 "JsonLib",

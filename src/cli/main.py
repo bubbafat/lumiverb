@@ -62,8 +62,8 @@ def config_show() -> None:
 
 @library_app.command("create")
 def library_create(
-    name: Annotated[str, typer.Argument(help="Library name.")],
-    path: Annotated[str, typer.Argument(help="Root path on disk.")],
+    name: Annotated[str, typer.Option("--name", "-n", help="Library name.")],
+    path: Annotated[str, typer.Option("--path", "-p", help="Root path on disk.")],
 ) -> None:
     """Create a library with the given name and root path."""
     client = LumiverbClient()
@@ -102,10 +102,12 @@ def library_list() -> None:
 
 @library_app.command("set-model")
 def library_set_model(
-    library_id: Annotated[str, typer.Argument(help="Library ID.")],
+    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
     model: Annotated[
         str,
-        typer.Argument(
+        typer.Option(
+            "--model",
+            "-m",
             help='Model ID. Use "moondream" for local Moondream inference, '
             'or any OpenAI-compatible model ID (e.g. "qwen3-visioncaption-2b", "llava:13b") '
             "for remote inference via VISION_API_URL.",
@@ -117,6 +119,7 @@ def library_set_model(
         typer.echo("Model ID cannot be empty.")
         raise typer.Exit(1)
     client = LumiverbClient()
+    library_id = _resolve_library_id(client, library)
     r = client.patch(f"/v1/libraries/{library_id}", json={"vision_model_id": model})
     r.raise_for_status()
     typer.echo(f"Library {library_id} now uses model: {model}")
@@ -124,7 +127,10 @@ def library_set_model(
 
 @library_app.command("delete")
 def library_delete(
-    name: Annotated[str, typer.Argument(help="Library name to move to trash.")],
+    name: Annotated[
+        str,
+        typer.Option("--name", "-n", help="Library name to move to trash."),
+    ],
 ) -> None:
     """Move a library to trash (soft delete). Use 'lumiverb library empty-trash' to permanently delete."""
     client = LumiverbClient()
@@ -188,6 +194,49 @@ def _resolve_library_id(client: object, library_name: str) -> str:
         typer.echo(f"Library not found: {library_name}", err=True)
         raise typer.Exit(1)
     return match["library_id"]
+
+
+def _resolve_asset_id(
+    client: object,
+    library_id: str,
+    asset_id: str | None,
+    path: str | None,
+) -> str:
+    """
+    Resolve --asset-id or --path to a concrete asset_id.
+    Exactly one of asset_id or path must be provided.
+    Raises typer.Exit(1) with an error message if path is a directory,
+    if neither is provided, or if both are provided.
+    """
+    if asset_id and path:
+        console.print("[red]--asset-id and --path are mutually exclusive[/red]")
+        raise typer.Exit(1)
+    if not asset_id and not path:
+        console.print("[red]One of --asset-id or --path is required[/red]")
+        raise typer.Exit(1)
+    if asset_id:
+        return asset_id
+
+    norm = normalize_path_prefix(path)
+    if norm is None:
+        console.print("[red]Invalid path[/red]")
+        raise typer.Exit(1)
+
+    if "." not in Path(norm).name:
+        console.print(
+            f"[red]Path '{norm}' looks like a directory. This command operates on a single asset. Use --path with a file path.[/red]"
+        )
+        raise typer.Exit(1)
+
+    resp = client.get(
+        "/v1/assets/by-path",
+        params={"library_id": library_id, "rel_path": norm},
+    )
+    if resp.status_code == 404:
+        console.print(f"[red]Asset not found: {norm}[/red]")
+        raise typer.Exit(1)
+    resp.raise_for_status()
+    return resp.json()["asset_id"]
 
 
 @worker_app.command("proxy")
@@ -671,8 +720,30 @@ def scan(
 def enqueue(
     library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
     job_type: Annotated[str, typer.Option("--job-type", "-j")] = "proxy",
-    path: Annotated[str | None, typer.Option("--path")] = None,
-    asset: Annotated[str | None, typer.Option("--asset")] = None,
+    path: Annotated[
+        str | None,
+        typer.Option(
+            "--path",
+            "-p",
+            help="Path prefix to scope enqueue (non-recursive by default).",
+        ),
+    ] = None,
+    recursive: Annotated[
+        bool,
+        typer.Option(
+            "--recursive",
+            "-r",
+            help="Include assets in subdirectories (currently same behavior as non-recursive; server-side depth limiting TBD).",
+        ),
+    ] = False,
+    asset_id: Annotated[
+        str | None,
+        typer.Option("--asset-id", help="Enqueue a single asset by ID."),
+    ] = None,
+    asset_path: Annotated[
+        str | None,
+        typer.Option("--asset-path", help="Enqueue a single asset by path."),
+    ] = None,
     since: Annotated[str | None, typer.Option("--since")] = None,
     until: Annotated[str | None, typer.Option("--until")] = None,
     missing_proxy: Annotated[bool, typer.Option("--missing-proxy")] = False,
@@ -692,27 +763,38 @@ def enqueue(
         console.print("[red]--force and --retry-failed are mutually exclusive[/red]")
         raise typer.Exit(1)
 
-    job_type = _resolve_job_type(job_type)
+    if asset_id and asset_path:
+        console.print("[red]--asset-id and --asset-path are mutually exclusive[/red]")
+        raise typer.Exit(1)
 
-    # Build path filter: exact if it looks like a file, prefix if folder
-    path_exact = None
-    path_prefix = None
-    if path:
-        if "." in Path(path).name:
-            path_exact = path
-        else:
-            path_prefix = path
+    job_type = _resolve_job_type(job_type)
 
     filter_spec: dict = {
         "library_id": match["library_id"],
     }
-    if asset:
-        filter_spec["asset_id"] = asset
+
+    library_id = match["library_id"]
+
+    if asset_path:
+        resolved_asset_id = _resolve_asset_id(
+            client,
+            library_id=library_id,
+            asset_id=None,
+            path=asset_path,
+        )
+        filter_spec["asset_id"] = resolved_asset_id
+    elif asset_id:
+        filter_spec["asset_id"] = asset_id
     else:
-        if path_exact:
-            filter_spec["path_exact"] = path_exact
-        elif path_prefix:
-            filter_spec["path_prefix"] = path_prefix
+        if path:
+            norm = normalize_path_prefix(path)
+            if norm:
+                # TODO: implement non-recursive depth limiting server-side.
+                # For now, both recursive and non-recursive use path_prefix.
+                filter_spec["path_prefix"] = norm
+                if recursive:
+                    filter_spec["path_prefix"] = norm
+
         if since:
             filter_spec["mtime_after"] = since
         if until:
@@ -740,7 +822,7 @@ def enqueue(
 @app.command()
 def search(
     library: Annotated[str, typer.Option("--library", "-l", help="Library name")],
-    query: Annotated[str, typer.Argument(help="Search query")],
+    query: Annotated[str, typer.Option("--query", "-q", help="Search query")],
     output: Annotated[str, typer.Option("--output", "-o", help="Output format: table, json, text")] = "table",
     limit: Annotated[int, typer.Option("--limit", help="Max results (0 = all)")] = 20,
     offset: Annotated[int, typer.Option("--offset", help="Start offset")] = 0,
@@ -841,8 +923,19 @@ def search(
 
 @app.command()
 def similar(
-    asset_id: Annotated[str, typer.Argument(help="Asset ID to find similar assets for.")],
     library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
+    asset_id: Annotated[
+        str | None,
+        typer.Option("--asset-id", help="Asset ID to find similar assets for."),
+    ] = None,
+    path: Annotated[
+        str | None,
+        typer.Option(
+            "--path",
+            "-p",
+            help="Relative path to asset file within the library.",
+        ),
+    ] = None,
     limit: Annotated[int, typer.Option("--limit", help="Max similar assets to return.")] = 10,
     offset: Annotated[int, typer.Option("--offset", help="Start offset for pagination.")] = 0,
     output: Annotated[str, typer.Option("--output", "-o", help="Output format: table, json, text")] = "table",
@@ -854,11 +947,17 @@ def similar(
 
     client = LumiverbClient()
     library_id = _resolve_library_id(client, library)
+    resolved_asset_id = _resolve_asset_id(
+        client,
+        library_id=library_id,
+        asset_id=asset_id,
+        path=path,
+    )
 
     resp = client.get(
         "/v1/similar",
         params={
-            "asset_id": asset_id,
+            "asset_id": resolved_asset_id,
             "library_id": library_id,
             "limit": limit,
             "offset": offset,
@@ -903,7 +1002,14 @@ def similar(
 
 @app.command("similar-image")
 def similar_image(
-    image_path: Annotated[Path, typer.Argument(help="Path to query image")],
+    image_path: Annotated[
+        Path,
+        typer.Option(
+            "--image-path",
+            "-i",
+            help="Path to query image",
+        ),
+    ],
     library: Annotated[str, typer.Option("--library", "-l")] = "",
     limit: Annotated[int, typer.Option("--limit")] = 20,
     offset: Annotated[int, typer.Option("--offset")] = 0,

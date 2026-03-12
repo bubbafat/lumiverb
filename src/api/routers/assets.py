@@ -91,47 +91,8 @@ def page_assets(
     ]
 
 
-@router.get("", response_model=list[AssetResponse])
-def list_assets(
-    session: Annotated[Session, Depends(get_tenant_session)],
-    library_id: str | None = None,
-) -> list[AssetResponse]:
-    """List assets, optionally filtered by library_id."""
-    asset_repo = AssetRepository(session)
-    assets = asset_repo.list_by_library(library_id) if library_id else asset_repo.list_all()
-    return [
-        AssetResponse(
-            asset_id=a.asset_id,
-            library_id=a.library_id,
-            rel_path=a.rel_path,
-            media_type=a.media_type,
-            status=a.status,
-            proxy_key=a.proxy_key,
-            thumbnail_key=a.thumbnail_key,
-            width=a.width,
-            height=a.height,
-            sha256=a.sha256,
-            exif_extracted_at=a.exif_extracted_at.isoformat() if a.exif_extracted_at else None,
-            camera_make=a.camera_make,
-            camera_model=a.camera_model,
-            taken_at=a.taken_at.isoformat() if a.taken_at else None,
-            gps_lat=a.gps_lat,
-            gps_lon=a.gps_lon,
-        )
-        for a in assets
-    ]
-
-
-@router.get("/{asset_id}", response_model=AssetResponse)
-def get_asset(
-    asset_id: str,
-    session: Annotated[Session, Depends(get_tenant_session)],
-) -> AssetResponse:
-    """Return a single asset by id. 404 if not found."""
-    asset_repo = AssetRepository(session)
-    asset = asset_repo.get_by_id(asset_id)
-    if asset is None:
-        raise HTTPException(status_code=404, detail="Asset not found")
+def _to_asset_response(asset) -> AssetResponse:
+    """Map an Asset ORM/model object to AssetResponse."""
     return AssetResponse(
         asset_id=asset.asset_id,
         library_id=asset.library_id,
@@ -150,6 +111,44 @@ def get_asset(
         gps_lat=asset.gps_lat,
         gps_lon=asset.gps_lon,
     )
+
+
+@router.get("/by-path", response_model=AssetResponse)
+def get_asset_by_path(
+    library_id: str,
+    rel_path: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> AssetResponse:
+    """Return a single asset by library_id + rel_path. 404 if not found."""
+    asset_repo = AssetRepository(session)
+    asset = asset_repo.get_by_library_and_rel_path(library_id, rel_path)
+    if asset is None:
+        raise HTTPException(status_code=404, detail=f"Asset not found: {rel_path}")
+    return _to_asset_response(asset)
+
+
+@router.get("", response_model=list[AssetResponse])
+def list_assets(
+    session: Annotated[Session, Depends(get_tenant_session)],
+    library_id: str | None = None,
+) -> list[AssetResponse]:
+    """List assets, optionally filtered by library_id."""
+    asset_repo = AssetRepository(session)
+    assets = asset_repo.list_by_library(library_id) if library_id else asset_repo.list_all()
+    return [_to_asset_response(a) for a in assets]
+
+
+@router.get("/{asset_id}", response_model=AssetResponse)
+def get_asset(
+    asset_id: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> AssetResponse:
+    """Return a single asset by id. 404 if not found."""
+    asset_repo = AssetRepository(session)
+    asset = asset_repo.get_by_id(asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    return _to_asset_response(asset)
 
 
 @router.post("/upsert", response_model=UpsertAssetResponse)

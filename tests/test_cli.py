@@ -45,7 +45,17 @@ def test_library_create_prints_id() -> None:
     mock_client.post.return_value = mock_response
 
     with patch("src.cli.main.LumiverbClient", return_value=mock_client):
-        result = runner.invoke(app, ["library", "create", "My Library", "/photos"])
+        result = runner.invoke(
+            app,
+            [
+                "library",
+                "create",
+                "--name",
+                "My Library",
+                "--path",
+                "/photos",
+            ],
+        )
 
     assert result.exit_code == 0
     assert "lib_" in result.output
@@ -98,7 +108,11 @@ def test_library_delete_requires_confirmation() -> None:
     mock_client.get.return_value = mock_response
 
     with patch("src.cli.main.LumiverbClient", return_value=mock_client):
-        result = runner.invoke(app, ["library", "delete", "ToDelete"], input="n")
+        result = runner.invoke(
+            app,
+            ["library", "delete", "--name", "ToDelete"],
+            input="n",
+        )
 
     assert result.exit_code == 0
     assert "Aborted" in result.output
@@ -117,7 +131,11 @@ def test_library_delete_confirms_and_calls_api() -> None:
     mock_client.delete.return_value = MagicMock(status_code=204)
 
     with patch("src.cli.main.LumiverbClient", return_value=mock_client):
-        result = runner.invoke(app, ["library", "delete", "ToDelete"], input="y")
+        result = runner.invoke(
+            app,
+            ["library", "delete", "--name", "ToDelete"],
+            input="y",
+        )
 
     assert result.exit_code == 0
     assert "moved to trash" in result.output
