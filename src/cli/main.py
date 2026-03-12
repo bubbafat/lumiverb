@@ -1004,7 +1004,7 @@ def scan(
 @app.command()
 def enqueue(
     library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
-    job_type: Annotated[str, typer.Option("--job-type", "-j")] = "proxy",
+    job_type: Annotated[str, typer.Option("--job-type", "-j")],
     path: Annotated[
         str | None,
         typer.Option(
@@ -1107,12 +1107,17 @@ def search(
     library: Annotated[str, typer.Option("--library", "-l", help="Library name")],
     query: Annotated[str, typer.Option("--query", "-q", help="Search query")],
     output: Annotated[str, typer.Option("--output", "-o", help="Output format: table, json, text")] = "table",
+    media_type: Annotated[str, typer.Option("--media-type", "-m", help="Filter by type: image, video, all")] = "all",
     limit: Annotated[int, typer.Option("--limit", help="Max results (0 = all)")] = 20,
     offset: Annotated[int, typer.Option("--offset", help="Start offset")] = 0,
 ) -> None:
-    """Search assets in a library by natural language query."""
+    """Search assets and video scenes in a library by natural language query."""
     if output not in ("table", "json", "text"):
         console.print("[red]--output must be one of: table, json, text[/red]")
+        raise typer.Exit(1)
+
+    if media_type not in ("image", "video", "all"):
+        console.print("[red]--media-type must be one of: image, video, all[/red]")
         raise typer.Exit(1)
 
     client = LumiverbClient()
@@ -1131,6 +1136,7 @@ def search(
                     "q": query,
                     "limit": page_size,
                     "offset": page_offset,
+                    "media_type": media_type,
                 },
             )
             resp.raise_for_status()
@@ -1150,6 +1156,7 @@ def search(
                 "q": query,
                 "limit": limit,
                 "offset": offset,
+                "media_type": media_type,
             },
         )
         resp.raise_for_status()
@@ -1172,27 +1179,38 @@ def search(
 
     else:  # table (default)
         table = Table(show_header=True, show_lines=False)
+        table.add_column("Type", style="dim", width=6)
         table.add_column("Path", style="cyan", no_wrap=False)
-        table.add_column("Description", no_wrap=False, max_width=120)
-        table.add_column("Tags", no_wrap=False, max_width=80)
-        if source == "postgres":
-            table.add_column("Score", justify="right", style="dim")
-        table.add_column("Source", style="dim")
+        table.add_column("Detail", no_wrap=False, max_width=40)
+        table.add_column("Description", no_wrap=False, max_width=100)
+        table.add_column("Tags", no_wrap=False, max_width=60)
+        table.add_column("Score", justify="right", style="dim")
 
         for hit in hits:
+            hit_type = hit.get("type", "image")
             tags_str = ", ".join(hit.get("tags") or [])
             description = hit.get("description") or ""
-            desc_display = description[:120] + "…" if len(description) > 120 else description
-            tags_display = tags_str[:80] + "…" if len(tags_str) > 80 else tags_str
-            row: list[str] = [
+            desc_display = description[:100] + "…" if len(description) > 100 else description
+            tags_display = tags_str[:60] + "…" if len(tags_str) > 60 else tags_str
+            score = hit.get("score", 0.0)
+
+            if hit_type == "scene":
+                start_s = (hit.get("start_ms") or 0) // 1000
+                end_s = (hit.get("end_ms") or 0) // 1000
+                detail = f"{start_s}s – {end_s}s"
+                type_label = "[magenta]scene[/magenta]"
+            else:
+                detail = hit.get("camera_model") or hit.get("camera_make") or ""
+                type_label = "[blue]image[/blue]"
+
+            table.add_row(
+                type_label,
                 hit["rel_path"],
+                detail,
                 desc_display,
                 tags_display,
-            ]
-            if source == "postgres":
-                row.append(f"{hit.get('score', 0.0):.3f}")
-            row.append(hit.get("source", ""))
-            table.add_row(*row)
+                f"{score:.3f}",
+            )
 
         console.print(table)
         n = len(hits)
