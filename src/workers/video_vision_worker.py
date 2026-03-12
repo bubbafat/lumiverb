@@ -76,6 +76,12 @@ class VideoVisionWorker(BaseWorker):
         )
 
         for scene_idx, scene in enumerate(scenes):
+            if scene.get("description"):
+                logger.debug(
+                    "Scene %s already has description; skipping", scene.get("scene_id")
+                )
+                continue
+
             scene_id = scene["scene_id"]
             thumbnail_key = scene.get("thumbnail_key")
             if not thumbnail_key:
@@ -132,6 +138,20 @@ class VideoVisionWorker(BaseWorker):
                     "scene_index": scene_idx,
                     "total_scenes": len(scenes),
                 }
+            )
+
+        resp = self._client.get(f"/v1/video/{asset_id}/scenes")
+        resp.raise_for_status()
+        refreshed = resp.json()["scenes"]
+        missing = [
+            s["scene_id"]
+            for s in refreshed
+            if not s.get("description") and s.get("thumbnail_key")
+        ]
+        if missing:
+            raise RuntimeError(
+                f"{len(missing)} scene(s) still missing description after vision pass "
+                f"for asset {asset_id}: {missing}"
             )
 
         return {
