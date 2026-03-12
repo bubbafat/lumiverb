@@ -94,3 +94,16 @@ class LumiverbClient:
         with httpx.Client() as client:
             response = client.delete(url, headers=self._headers(), timeout=120.0, **kwargs)
             return self._handle_response(response)
+
+    def request(self, method: str, path: str, **kwargs: object) -> httpx.Response:
+        """
+        Low-level request that returns the raw httpx.Response without exiting on errors.
+
+        Intended for internal workers that need to inspect non-2xx statuses such as 404
+        or 409 (e.g. video chunk completion where 409 is a valid "lease expired" signal).
+        CLI commands should continue to use the high-level helpers (get/post/patch/delete)
+        so that user-facing error handling remains unchanged.
+        """
+        url = f"{self._base_url}{path}" if path.startswith("/") else f"{self._base_url}/{path}"
+        with httpx.Client() as client:
+            return client.request(method, url, headers=self._headers(), timeout=120.0, **kwargs)
