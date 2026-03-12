@@ -792,8 +792,6 @@ def enqueue(
                 # TODO: implement non-recursive depth limiting server-side.
                 # For now, both recursive and non-recursive use path_prefix.
                 filter_spec["path_prefix"] = norm
-                if recursive:
-                    filter_spec["path_prefix"] = norm
 
         if since:
             filter_spec["mtime_after"] = since
