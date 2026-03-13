@@ -181,7 +181,7 @@ export default function BrowsePage() {
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-6 px-6 py-6">
       <div className="flex items-center gap-2 text-sm text-gray-400">
         <Link to="/" className="hover:text-gray-300">
           Libraries
@@ -213,7 +213,7 @@ export default function BrowsePage() {
           </p>
         </div>
       ) : (
-        <div style={{ width: "100%", contain: "strict" }}>
+        <div style={{ width: "100%" }}>
           <div
             style={{
               height: `${rowVirtualizer.getTotalSize()}px`,

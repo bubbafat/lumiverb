@@ -57,7 +57,6 @@ function AssetCellInner({ asset, onClick }: AssetCellProps) {
           <img
             src={url}
             alt={filename}
-            loading="lazy"
             className="h-full w-full object-cover"
           />
         )}
