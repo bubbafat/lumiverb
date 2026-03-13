@@ -25,6 +25,17 @@ def _priority_for_job_type(job_type: str) -> int:
     return 10
 
 
+def _batch_insert_jobs(session: Session, jobs: list[dict]) -> int:
+    """Bulk-INSERT jobs in batches of ENQUEUE_BATCH_SIZE. Returns count inserted."""
+    total = 0
+    for i in range(0, len(jobs), ENQUEUE_BATCH_SIZE):
+        batch = jobs[i : i + ENQUEUE_BATCH_SIZE]
+        session.execute(insert(WorkerJob), batch)
+        total += len(batch)
+    session.commit()
+    return total
+
+
 def enqueue_proxy_jobs(session: Session, library_id: str) -> int:
     """
     Enqueue proxy jobs for all pending assets in library that don't already
@@ -53,31 +64,23 @@ def enqueue_proxy_jobs(session: Session, library_id: str) -> int:
 
     now = datetime.now(timezone.utc)
     priority = _priority_for_job_type("proxy")
-    jobs = []
-    for row in rows:
-        jobs.append(
-            {
-                "job_id": "job_" + str(ULID()),
-                "job_type": "proxy",
-                "asset_id": row[0],
-                "status": "pending",
-                "priority": priority,
-                "created_at": now,
-            }
-        )
-
-    total = 0
-    for i in range(0, len(jobs), ENQUEUE_BATCH_SIZE):
-        batch = jobs[i : i + ENQUEUE_BATCH_SIZE]
-        session.execute(insert(WorkerJob), batch)
-        total += len(batch)
-    session.commit()
-    return total
+    jobs = [
+        {
+            "job_id": "job_" + str(ULID()),
+            "job_type": "proxy",
+            "asset_id": row[0],
+            "status": "pending",
+            "priority": priority,
+            "created_at": now,
+        }
+        for row in rows
+    ]
+    return _batch_insert_jobs(session, jobs)
 
 
 def enqueue_jobs_for_filter(
     session: Session,
-    filter: AssetFilterSpec,
+    asset_filter: AssetFilterSpec,
     job_type: str,
     force: bool = False,
 ) -> int:
@@ -88,35 +91,26 @@ def enqueue_jobs_for_filter(
     asset_repo = AssetRepository(session)
     job_repo = WorkerJobRepository(session)
 
-    asset_ids = asset_repo.query_for_enqueue(filter, job_type, force)
+    asset_ids = asset_repo.query_for_enqueue(asset_filter, job_type, force)
     if not asset_ids:
         return 0
 
-    if filter.retry_failed:
+    if asset_filter.retry_failed:
         job_repo.cancel_failed_for_assets(asset_ids, job_type)
     elif force:
         job_repo.cancel_pending_for_assets(asset_ids, job_type)
 
     now = datetime.now(timezone.utc)
-    # Priority: 0=urgent, 10=normal, 20=low.
     priority = _priority_for_job_type(job_type)
-    jobs = []
-    for asset_id in asset_ids:
-        jobs.append(
-            {
-                "job_id": "job_" + str(ULID()),
-                "job_type": job_type,
-                "asset_id": asset_id,
-                "status": "pending",
-                "priority": priority,
-                "created_at": now,
-            }
-        )
-
-    total = 0
-    for i in range(0, len(jobs), ENQUEUE_BATCH_SIZE):
-        batch = jobs[i : i + ENQUEUE_BATCH_SIZE]
-        session.execute(insert(WorkerJob), batch)
-        total += len(batch)
-    session.commit()
-    return total
+    jobs = [
+        {
+            "job_id": "job_" + str(ULID()),
+            "job_type": job_type,
+            "asset_id": asset_id,
+            "status": "pending",
+            "priority": priority,
+            "created_at": now,
+        }
+        for asset_id in asset_ids
+    ]
+    return _batch_insert_jobs(session, jobs)

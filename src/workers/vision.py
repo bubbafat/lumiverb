@@ -7,9 +7,6 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-VISION_MODEL_ID = "moondream"
-VISION_MODEL_VERSION = "2"
-
 _model = None
 
 

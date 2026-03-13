@@ -87,3 +87,48 @@ def test_model_version_for_provenance():
     assert model_version_for_provenance("moondream") == "2"
     assert model_version_for_provenance("qwen3-visioncaption-2b") == "1"
     assert model_version_for_provenance("llava:13b") == "1"
+
+
+@pytest.mark.fast
+def test_openai_provider_sends_auth_header_when_api_key_set() -> None:
+    """When api_key is provided, _chat sends Authorization: Bearer <key>."""
+    from unittest.mock import MagicMock, patch
+
+    from src.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+
+    p = OpenAICompatibleCaptionProvider("http://localhost:1234/v1", "gpt-4o", api_key="sk-test")
+    assert p._api_key == "sk-test"
+
+    mock_resp = MagicMock()
+    mock_resp.ok = True
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {
+        "choices": [{"message": {"content": '{"description": "test", "tags": []}'}}]
+    }
+
+    with patch("requests.post", return_value=mock_resp) as mock_post:
+        p._chat("data:image/jpeg;base64,abc", "describe this")
+        headers = mock_post.call_args.kwargs.get("headers", {})
+        assert headers.get("Authorization") == "Bearer sk-test"
+
+
+@pytest.mark.fast
+def test_openai_provider_omits_auth_header_when_no_api_key() -> None:
+    """When api_key is None, no Authorization header is included."""
+    from unittest.mock import MagicMock, patch
+
+    from src.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+
+    p = OpenAICompatibleCaptionProvider("http://localhost:1234/v1", "gpt-4o", api_key=None)
+
+    mock_resp = MagicMock()
+    mock_resp.ok = True
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {
+        "choices": [{"message": {"content": '{"description": "test", "tags": []}'}}]
+    }
+
+    with patch("requests.post", return_value=mock_resp) as mock_post:
+        p._chat("data:image/jpeg;base64,abc", "describe this")
+        headers = mock_post.call_args.kwargs.get("headers", {})
+        assert "Authorization" not in headers

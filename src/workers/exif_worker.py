@@ -23,7 +23,10 @@ class ExifWorker(BaseWorker):
         rel_path = job["rel_path"]
         root_path = job["root_path"]
 
-        source_path = Path(root_path) / rel_path
+        root = Path(root_path).resolve()
+        source_path = (root / rel_path).resolve()
+        if not source_path.is_relative_to(root):
+            raise ValueError(f"rel_path escapes library root: {rel_path!r}")
         if not source_path.exists():
             raise FileNotFoundError(f"Source file not found: {source_path}")
 

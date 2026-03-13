@@ -32,9 +32,10 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
     The model ID is passed at construction time (from library.vision_model_id).
     """
 
-    def __init__(self, base_url: str, model: str) -> None:
+    def __init__(self, base_url: str, model: str, api_key: str | None = None) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
+        self._api_key = api_key
 
     @property
     def provider_id(self) -> str:
@@ -128,9 +129,13 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             "max_tokens": 500,
             "temperature": 0.2,
         }
+        headers = {}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
         resp = requests.post(
             f"{self._base_url}/chat/completions",
             json=payload,
+            headers=headers,
             timeout=60,
         )
         if not resp.ok:

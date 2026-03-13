@@ -60,9 +60,6 @@ class VideoVisionWorker(BaseWorker):
 
         settings = get_settings()
         storage = LocalStorage(data_dir=settings.data_dir)
-        tenant_ctx = self._client.get("/v1/tenant/context").json()
-        tenant_id = tenant_ctx["tenant_id"]
-        library_id = job["library_id"]
 
         provider = get_caption_provider(vision_model_id)
         model_version = model_version_for_provenance(vision_model_id)

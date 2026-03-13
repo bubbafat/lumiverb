@@ -37,7 +37,10 @@ class VideoPreviewWorker(BaseWorker):
         root_path = job["root_path"]
         library_id = job["library_id"]
 
-        source_path = Path(root_path) / rel_path
+        root = Path(root_path).resolve()
+        source_path = (root / rel_path).resolve()
+        if not source_path.is_relative_to(root):
+            raise ValueError(f"rel_path escapes library root: {rel_path!r}")
         if not source_path.exists():
             raise FileNotFoundError(f"Source file not found: {source_path}")
 
@@ -85,7 +88,7 @@ class VideoPreviewWorker(BaseWorker):
 
         logger.info("Generating video preview for asset_id=%s via ffmpeg", asset_id)
         try:
-            subprocess.run(cmd, check=True)
+            subprocess.run(cmd, check=True, capture_output=True)
         except subprocess.CalledProcessError as exc:
             raise RuntimeError(f"ffmpeg failed for {source_path}: {exc}") from exc
 

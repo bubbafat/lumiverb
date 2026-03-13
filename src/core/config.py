@@ -49,6 +49,7 @@ class Settings(BaseSettings):
 
     # Vision API (OpenAI-compatible endpoint for non-Moondream models)
     vision_api_url: str = "http://localhost:1234/v1"
+    vision_api_key: str = ""  # Optional Bearer token for the vision API endpoint
 
     model_config = SettingsConfigDict(
         env_file=(".env", ".env.local"),

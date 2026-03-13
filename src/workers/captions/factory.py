@@ -26,4 +26,5 @@ def get_caption_provider(vision_model_id: str) -> CaptionProvider:
     return OpenAICompatibleCaptionProvider(
         base_url=settings.vision_api_url,
         model=vision_model_id,
+        api_key=settings.vision_api_key or None,
     )

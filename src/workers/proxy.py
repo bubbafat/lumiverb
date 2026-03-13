@@ -7,8 +7,10 @@ has a hardcoded 50MB cumulative allocation cap that fails on large/panorama TIFF
 import logging
 from pathlib import Path
 
+import numpy as np
 import pyvips
 import rawpy
+from PIL import Image as PILImage
 
 from src.core.file_extensions import RAW_EXTENSIONS
 from src.storage.local import LocalStorage
@@ -24,10 +26,8 @@ THUMBNAIL_LONG_EDGE = 256
 THUMBNAIL_JPEG_QUALITY = 80
 
 
-def _pil_to_vips(pil_image: "PIL.Image.Image") -> pyvips.Image:
+def _pil_to_vips(pil_image: "PILImage.Image") -> pyvips.Image:
     """Convert a PIL Image to a pyvips Image via numpy. Always converts to RGB."""
-    import numpy as np
-
     pil_image = pil_image.convert("RGB")
     arr = np.asarray(pil_image, dtype=np.uint8)
     height, width, bands = arr.shape
@@ -64,8 +64,6 @@ def _load_raw_image(source_path: Path) -> tuple[pyvips.Image, bool]:
                 )
                 # Fall through to full decode below
         elif thumb.format == rawpy.ThumbFormat.BITMAP:
-            import numpy as np
-
             arr = np.array(thumb.data, dtype=np.uint8)
             height, width, bands = arr.shape
             img = pyvips.Image.new_from_memory(
@@ -83,8 +81,6 @@ def _load_raw_image(source_path: Path) -> tuple[pyvips.Image, bool]:
     # Full RAW decode fallback
     with rawpy.imread(str(source_path)) as raw:
         rgb = raw.postprocess()
-    import numpy as np
-
     height, width, bands = rgb.shape
     return pyvips.Image.new_from_memory(
         rgb.tobytes(), width, height, bands, "uchar"
@@ -118,7 +114,10 @@ class ProxyWorker(BaseWorker):
             logger.info("Skipping video asset_id=%s (video proxy deferred)", asset_id)
             return {}
 
-        source_path = Path(root_path) / rel_path
+        root = Path(root_path).resolve()
+        source_path = (root / rel_path).resolve()
+        if not source_path.is_relative_to(root):
+            raise ValueError(f"rel_path escapes library root: {rel_path!r}")
         if not source_path.exists():
             raise FileNotFoundError(f"Source file not found: {source_path}")
 
@@ -148,8 +147,6 @@ class ProxyWorker(BaseWorker):
 
         elif ext in TIFF_EXTENSIONS:
             # TIFF: use Pillow to avoid libvips/libtiff 50MB cumulative allocation cap
-            from PIL import Image as PILImage
-
             pil_img = PILImage.open(source_path)
             width_orig, height_orig = pil_img.size
 

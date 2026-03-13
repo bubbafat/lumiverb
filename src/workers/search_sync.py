@@ -115,10 +115,11 @@ class SearchSyncWorker:
             scene_docs: list[dict] = []
             sync_ids: list[str] = []
 
+            scene_repo = VideoSceneRepository(self._session)
             for row in batch:
                 if row.scene_id:
                     # Scene document path
-                    scene = VideoSceneRepository(self._session).get_by_id(row.scene_id)
+                    scene = scene_repo.get_by_id(row.scene_id)
                     asset = self._asset_repo.get_by_id(row.asset_id)
                     if scene is None or asset is None:
                         sync_ids.append(row.sync_id)
@@ -239,8 +240,8 @@ class SearchSyncWorker:
             "tags": scene.tags or [],
             "sharpness_score": scene.sharpness_score,
             "keep_reason": scene.keep_reason,
-            "model_id": scene.model_id if hasattr(scene, "model_id") else "",
-            "model_version": scene.model_version if hasattr(scene, "model_version") else "",
+            "model_id": scene.model_id or "",
+            "model_version": scene.model_version or "",
             "indexed_at": indexed_at,
         }
 

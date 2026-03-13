@@ -17,18 +17,20 @@ from __future__ import annotations
 
 import logging
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Callable
 
+from PIL import Image
 from src.core.config import get_settings
 from src.storage.local import LocalStorage
 from src.video.clip_extractor import (
     extract_video_frame,
     probe_video_duration,
 )
-from src.video.scene_segmenter import SceneSegmenter
-from src.video.video_scanner import VideoScanner, RawFrame
+from src.video.scene_segmenter import DEBOUNCE_SEC, SceneSegmenter
+from src.video.video_scanner import RawFrame, VideoScanner
 from src.workers.base import BaseWorker
 
 logger = logging.getLogger(__name__)
@@ -51,7 +53,10 @@ class VideoIndexWorker(BaseWorker):
     def process(self, job: dict) -> dict:
         """Process a single video-index job. Returns {}; chunk work is done via video API."""
         asset_id = job["asset_id"]
-        source = Path(job["root_path"]) / job["rel_path"]
+        root = Path(job["root_path"]).resolve()
+        source = (root / job["rel_path"]).resolve()
+        if not source.is_relative_to(root):
+            raise ValueError(f"rel_path escapes library root: {job['rel_path']!r}")
         if not source.exists():
             raise FileNotFoundError(f"Source not found: {source}")
 
@@ -142,7 +147,7 @@ class VideoIndexWorker(BaseWorker):
                         source=source,
                         proxy_path=proxy_path,
                         work_order=work_order,
-                        chunk_offset_sec=chunk_start,
+                        chunk_offset=chunk_start,
                         tmpdir=tmpdir,
                         storage=storage,
                         tenant_id=tenant_id,
@@ -195,8 +200,6 @@ class VideoIndexWorker(BaseWorker):
         duration_sec: float,
     ) -> bool:
         """Transcode a chunk window from source to a 720p H.264 proxy."""
-        import subprocess
-
         cmd = [
             "ffmpeg",
             "-hide_banner",
@@ -235,7 +238,7 @@ class VideoIndexWorker(BaseWorker):
         self,
         source: Path,
         proxy_path: Path,
-        chunk_offset_sec: float,
+        chunk_offset: float,
         work_order: dict,
         tmpdir: Path,
         storage: LocalStorage,
@@ -247,7 +250,6 @@ class VideoIndexWorker(BaseWorker):
         """Run scene detection on chunk, extract rep frames, complete or fail chunk."""
         chunk_id = work_order["chunk_id"]
         worker_id = work_order["worker_id"]
-        chunk_offset = chunk_offset_sec
         scan_start = 0.0
         scan_end = work_order["end_ts"] - chunk_offset
 
@@ -277,9 +279,6 @@ class VideoIndexWorker(BaseWorker):
             )
 
             if not collected:
-                from src.video.scene_segmenter import DEBOUNCE_SEC
-                from PIL import Image
-
                 logger.info(
                     "No keyframes found in chunk %s (%.1f–%.1f); falling back to interval extraction",
                     work_order["chunk_id"],

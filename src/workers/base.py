@@ -30,7 +30,6 @@ class BaseWorker:
         suppress_base_progress: bool = False,
     ) -> None:
         self._client = client
-        self._concurrency = concurrency
         self._once = once
         self._library_id = library_id
         self._console = Console()

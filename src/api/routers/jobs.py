@@ -56,7 +56,7 @@ def enqueue_jobs(
         )
     n = enqueue_jobs_for_filter(
         session=session,
-        filter=body.filter,
+        asset_filter=body.filter,
         job_type=body.job_type,
         force=body.force,
     )
