@@ -3,8 +3,14 @@ import type { JustifiedRow, JustifiedItem } from "./justifiedLayout";
 import { computeJustifiedRows } from "./justifiedLayout";
 
 export type VirtualRowKind =
-  | { type: "header"; label: string }
-  | { type: "images"; groupIndex: number; rowIndex: number; justifiedRow: JustifiedRow };
+  | { type: "header"; label: string; height: number }
+  | {
+      type: "images";
+      groupIndex: number;
+      rowIndex: number;
+      justifiedRow: JustifiedRow;
+      height: number;
+    };
 
 export function buildVirtualRows(
   groups: DateGroup[],
@@ -17,13 +23,13 @@ export function buildVirtualRows(
   const virtualRows: VirtualRowKind[] = [];
 
   groups.forEach((group, groupIndex) => {
-    virtualRows.push({ type: "header", label: group.label });
+    const headerHeight = 40;
+    virtualRows.push({ type: "header", label: group.label, height: headerHeight });
 
     const items: JustifiedItem[] = group.assets.map((asset) => {
       const w = asset.width ?? 0;
       const h = asset.height ?? 0;
-      const aspectRatio =
-        w > 0 && h > 0 ? w / h : 4 / 3;
+      const aspectRatio = w > 0 && h > 0 ? w / h : 4 / 3;
 
       return { aspectRatio };
     });
@@ -43,6 +49,7 @@ export function buildVirtualRows(
         groupIndex,
         rowIndex,
         justifiedRow,
+        height: justifiedRow.height + rowGap,
       });
     });
   });

@@ -14,7 +14,6 @@ import type { VirtualRowKind } from "../lib/virtualRows";
 
 const PAGE_SIZE = 100;
 const TARGET_ROW_HEIGHT = 220;
-const HEADER_HEIGHT = 40;
 const ROW_GAP = 4;
 
 export default function BrowsePage() {
@@ -138,9 +137,7 @@ export default function BrowsePage() {
     count: virtualRows.length,
     getScrollElement: () => parentEl,
     estimateSize: (index) =>
-      virtualRows[index]?.type === "header"
-        ? HEADER_HEIGHT
-        : TARGET_ROW_HEIGHT + ROW_GAP,
+      virtualRows[index]?.height ?? TARGET_ROW_HEIGHT + ROW_GAP,
     overscan: 3,
   });
 
@@ -341,12 +338,12 @@ export default function BrowsePage() {
                 <div
                   key={virtualItem.key}
                   style={commonStyle}
-                  className="pt-1"
                 >
                   <div
                     className="relative"
                     style={{
                       height: `${justifiedRow.height}px`,
+                      marginTop: `${ROW_GAP}px`,
                     }}
                   >
                     {justifiedRow.items.map((itemIndex, idx) => {
