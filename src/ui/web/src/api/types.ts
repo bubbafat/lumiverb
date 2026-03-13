@@ -8,6 +8,12 @@ export interface LibraryListItem {
   vision_model_id: string;
 }
 
+export interface DirectoryNode {
+  name: string;
+  path: string;
+  asset_count: number;
+}
+
 export interface LibraryResponse {
   library_id: string;
   name: string;

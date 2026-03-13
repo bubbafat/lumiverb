@@ -1,6 +1,7 @@
 import type {
   AssetDetail,
   AssetPageItem,
+  DirectoryNode,
   EmptyTrashResponse,
   JobListItem,
   LibraryListItem,
@@ -91,15 +92,28 @@ export async function emptyTrash(): Promise<EmptyTrashResponse> {
   });
 }
 
+export async function listDirectories(
+  libraryId: string,
+  parent?: string,
+): Promise<DirectoryNode[]> {
+  const qs = new URLSearchParams();
+  if (parent) qs.set("parent", parent);
+  return apiFetch<DirectoryNode[]>(
+    `/libraries/${libraryId}/directories?${qs.toString()}`,
+  );
+}
+
 /** Paginated assets for a library. Returns null on 204 (end of pages). */
 export async function pageAssets(
   libraryId: string,
   after?: string,
   limit = 100,
+  pathPrefix?: string,
 ): Promise<AssetPageItem[] | null> {
   const params = new URLSearchParams({ library_id: libraryId });
   if (after) params.set("after", after);
   params.set("limit", String(limit));
+  if (pathPrefix) params.set("path_prefix", pathPrefix);
   const res = await fetch(`/v1/assets/page?${params}`, {
     headers: authHeaders(),
   });

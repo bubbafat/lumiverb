@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link, useLocation, useParams } from "react-router-dom";
+import { useMemo } from "react";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { listJobs, listLibraries } from "../api/client";
 import type { JobListItem, LibraryListItem } from "../api/types";
+import { DirectoryTree } from "./DirectoryTree";
 
 const SIDEBAR_COLLAPSED_KEY = "lv_sidebar_collapsed";
 
@@ -95,6 +96,20 @@ export interface SidebarProps {
 export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
   const { libraryId } = useParams<{ libraryId: string }>();
   const location = useLocation();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const activePath = searchParams.get("path");
+
+  const onNavigate = (path: string | null) => {
+    if (!libraryId) return;
+    if (path) {
+      navigate(
+        `/libraries/${libraryId}/browse?path=${encodeURIComponent(path)}`,
+      );
+    } else {
+      navigate(`/libraries/${libraryId}/browse`);
+    }
+  };
 
   const { data: libraries, isLoading: isLibrariesLoading } = useQuery({
     queryKey: ["libraries", false],
@@ -160,26 +175,38 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
           ) : (
             items.map((lib) => {
               const active = lib.library_id === libraryId;
+              const isBrowseRoute =
+                active &&
+                libraryId &&
+                location.pathname === `/libraries/${libraryId}/browse`;
               return (
-                <Link
-                  key={lib.library_id}
-                  to={`/libraries/${lib.library_id}/browse`}
-                  className={`group flex items-center gap-2 rounded-lg px-2 py-2 text-sm transition-colors duration-150 ${
-                    active
-                      ? "bg-indigo-600/30 text-indigo-200"
-                      : "text-gray-300 hover:bg-gray-800/80"
-                  }`}
-                >
-                  <span
-                    className={`h-2 w-2 rounded-full ${scanStatusColor(
-                      lib.scan_status,
-                    )}`}
-                  />
-                  {photoStackIcon()}
-                  {showLabels && (
-                    <span className="truncate">{lib.name}</span>
+                <div key={lib.library_id}>
+                  <Link
+                    to={`/libraries/${lib.library_id}/browse`}
+                    className={`group flex items-center gap-2 rounded-lg px-2 py-2 text-sm transition-colors duration-150 ${
+                      active && !activePath
+                        ? "bg-indigo-600/30 text-indigo-200"
+                        : "text-gray-300 hover:bg-gray-800/80"
+                    }`}
+                  >
+                    <span
+                      className={`h-2 w-2 rounded-full ${scanStatusColor(
+                        lib.scan_status,
+                      )}`}
+                    />
+                    {photoStackIcon()}
+                    {showLabels && (
+                      <span className="truncate">{lib.name}</span>
+                    )}
+                  </Link>
+                  {isBrowseRoute && libraryId && (
+                    <DirectoryTree
+                      libraryId={libraryId}
+                      activePath={activePath}
+                      onNavigate={onNavigate}
+                    />
                   )}
-                </Link>
+                </div>
               );
             })
           )}

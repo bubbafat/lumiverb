@@ -1,5 +1,5 @@
 import { useMemo, useRef, useEffect, useState, useCallback } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useSearchParams } from "react-router-dom";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { pageAssets, listLibraries } from "../api/client";
@@ -18,6 +18,8 @@ const ROW_GAP = 4;
 
 export default function BrowsePage() {
   const { libraryId } = useParams<{ libraryId: string }>();
+  const [searchParams] = useSearchParams();
+  const pathPrefix = searchParams.get("path") ?? undefined;
   const parentEl = useScrollContainer();
   const sentinelRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
@@ -39,9 +41,9 @@ export default function BrowsePage() {
     error,
     isError,
   } = useInfiniteQuery({
-    queryKey: ["assets", libraryId!],
+    queryKey: ["assets", libraryId!, pathPrefix ?? null],
     queryFn: ({ pageParam }) =>
-      pageAssets(libraryId!, pageParam, PAGE_SIZE),
+      pageAssets(libraryId!, pageParam, PAGE_SIZE, pathPrefix),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => {
       if (!lastPage || lastPage.length < PAGE_SIZE) return undefined;
@@ -191,6 +193,12 @@ export default function BrowsePage() {
         </Link>
         <span>/</span>
         <span className="text-gray-300">{library.name}</span>
+        {pathPrefix && (
+          <>
+            <span>/</span>
+            <span className="text-gray-500">{pathPrefix}</span>
+          </>
+        )}
       </div>
 
       {isLoading ? (
