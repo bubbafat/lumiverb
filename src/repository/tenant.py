@@ -502,7 +502,7 @@ class AssetRepository:
         width: int,
         height: int,
     ) -> Asset:
-        """Update asset proxy_key, thumbnail_key, width, height, status='proxied', updated_at."""
+        """Update asset proxy_key, thumbnail_key, width, height, status='proxy_ready', updated_at."""
         asset = self._session.get(Asset, asset_id)
         if asset is None:
             raise ValueError(f"Asset not found: {asset_id}")
@@ -510,12 +510,36 @@ class AssetRepository:
         asset.thumbnail_key = thumbnail_key
         asset.width = width
         asset.height = height
-        asset.status = "proxied"
+        asset.status = "proxy_ready"
         asset.updated_at = utcnow()
         self._session.add(asset)
         self._session.commit()
         self._session.refresh(asset)
         return asset
+
+    def set_status(self, asset_id: str, status: str) -> None:
+        """Set asset.status to the given value and bump updated_at."""
+        asset = self._session.get(Asset, asset_id)
+        if asset is None:
+            raise ValueError(f"Asset not found: {asset_id}")
+        asset.status = status
+        asset.updated_at = utcnow()
+        self._session.add(asset)
+        self._session.commit()
+
+    def set_video_preview(
+        self,
+        asset_id: str,
+        video_preview_key: str,
+    ) -> None:
+        """Record video preview key and generated_at timestamp."""
+        asset = self._session.get(Asset, asset_id)
+        if asset is None:
+            raise ValueError(f"Asset not found: {asset_id}")
+        asset.video_preview_key = video_preview_key
+        asset.video_preview_generated_at = utcnow()
+        self._session.add(asset)
+        self._session.commit()
 
     def set_video_indexed(self, asset_id: str) -> None:
         """Set asset.video_indexed = True. Used when video-vision job completes."""
@@ -921,7 +945,7 @@ class WorkerJobRepository:
         """Return job by id or None."""
         return self._session.get(WorkerJob, job_id)
 
-    def create(self, job_type: str, asset_id: str) -> WorkerJob:
+    def create(self, job_type: str, asset_id: str, priority: int = 10) -> WorkerJob:
         """Create a pending job. job_id = job_ + ULID."""
         job_id = "job_" + str(ULID())
         job = WorkerJob(
@@ -929,6 +953,7 @@ class WorkerJobRepository:
             job_type=job_type,
             asset_id=asset_id,
             status="pending",
+            priority=priority,
         )
         self._session.add(job)
         self._session.commit()
@@ -972,26 +997,25 @@ class WorkerJobRepository:
         lease_minutes: int,
         library_id: str | None = None,
     ) -> WorkerJob | None:
-        """Claim next pending (or expired claimed) job with FOR UPDATE SKIP LOCKED. Return None if none."""
+        """Claim next pending (or expired claimed) job with FOR UPDATE SKIP LOCKED. Return None if none.
+
+        Jobs are claimed in priority order (lower priority value first), then by created_at.
+        """
         now = utcnow()
-        stmt = (
-            select(WorkerJob)
-            .where(WorkerJob.job_type == job_type)
-            .where(
-                or_(
-                    WorkerJob.status == "pending",
-                    and_(
-                        WorkerJob.status == "claimed",
-                        WorkerJob.lease_expires_at < now,
-                    ),
-                )
+        stmt = select(WorkerJob).where(WorkerJob.job_type == job_type).where(
+            or_(
+                WorkerJob.status == "pending",
+                and_(
+                    WorkerJob.status == "claimed",
+                    WorkerJob.lease_expires_at < now,
+                ),
             )
         )
         if library_id is not None:
             stmt = stmt.join(Asset, WorkerJob.asset_id == Asset.asset_id)
             stmt = stmt.where(Asset.library_id == library_id)
         stmt = (
-            stmt.order_by(WorkerJob.created_at)
+            stmt.order_by(WorkerJob.priority, WorkerJob.created_at)
             .limit(1)
             .with_for_update(skip_locked=True)
         )

@@ -111,6 +111,15 @@ class Asset(SQLModel, table=True):
     availability: str = Field(default="online", nullable=False)
     status: str = Field(default="pending", nullable=False)
     video_indexed: bool = Field(default=False, nullable=False)
+    video_preview_key: str | None = Field(default=None, nullable=True)
+    video_preview_last_accessed_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+    video_preview_generated_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
     error_message: str | None = Field(default=None, nullable=True)
     created_at: datetime = Field(
         default_factory=utcnow,
@@ -252,6 +261,7 @@ class WorkerJob(SQLModel, table=True):
     asset_id: str | None = Field(default=None, foreign_key="assets.asset_id", nullable=True)
     scene_id: str | None = Field(default=None, foreign_key="video_scenes.scene_id", nullable=True)
     status: str = Field(default="pending", nullable=False)
+    priority: int = Field(default=10, nullable=False)
     worker_id: str | None = Field(default=None, nullable=True)
     claimed_at: datetime | None = Field(
         default=None,

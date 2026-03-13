@@ -5,13 +5,17 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session
-from src.repository.tenant import AssetRepository, LibraryRepository, ScanRepository
+from src.repository.tenant import AssetRepository, LibraryRepository, ScanRepository, WorkerJobRepository
 from src.storage.local import get_storage
+from src.core.utils import utcnow
+
+
+PRIORITY_URGENT = 0
 
 router = APIRouter(prefix="/v1/assets", tags=["assets"])
 
@@ -47,6 +51,9 @@ class AssetResponse(BaseModel):
     taken_at: str | None = None  # ISO8601
     gps_lat: float | None = None
     gps_lon: float | None = None
+    video_preview_key: str | None = None
+    video_preview_generated_at: str | None = None  # ISO8601
+    video_preview_last_accessed_at: str | None = None  # ISO8601
 
 
 class AssetPageItem(BaseModel):
@@ -134,6 +141,64 @@ def _stream_asset_file(
     )
 
 
+def _stream_file_with_range(
+    path: Path,
+    request: Request,
+    media_type: str,
+) -> StreamingResponse:
+    file_size = path.stat().st_size
+    range_header = request.headers.get("range")
+    start = 0
+    end = file_size - 1
+    status_code = 200
+    headers: dict[str, str] = {"Accept-Ranges": "bytes"}
+
+    if range_header:
+        # Format: bytes=start-end
+        try:
+            units, _, range_spec = range_header.partition("=")
+            if units.strip().lower() == "bytes":
+                start_str, _, end_str = range_spec.partition("-")
+                if start_str:
+                    start = int(start_str)
+                if end_str:
+                    end = int(end_str)
+                if end >= file_size:
+                    end = file_size - 1
+                if start > end:
+                    start = 0
+                    end = file_size - 1
+                status_code = 206
+        except Exception:
+            start = 0
+            end = file_size - 1
+
+    content_length = end - start + 1
+    headers["Content-Length"] = str(content_length)
+    if status_code == 206:
+        headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
+
+    def file_iterator() -> bytes:
+        with open(path, "rb") as f:
+            f.seek(start)
+            remaining = content_length
+            chunk_size = 65536
+            while remaining > 0:
+                read_size = min(chunk_size, remaining)
+                chunk = f.read(read_size)
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+
+    return StreamingResponse(
+        file_iterator(),
+        media_type=media_type,
+        status_code=status_code,
+        headers=headers,
+    )
+
+
 def _to_asset_response(asset) -> AssetResponse:
     """Map an Asset ORM/model object to AssetResponse."""
     return AssetResponse(
@@ -153,6 +218,13 @@ def _to_asset_response(asset) -> AssetResponse:
         taken_at=asset.taken_at.isoformat() if asset.taken_at else None,
         gps_lat=asset.gps_lat,
         gps_lon=asset.gps_lon,
+        video_preview_key=asset.video_preview_key,
+        video_preview_generated_at=asset.video_preview_generated_at.isoformat()
+        if asset.video_preview_generated_at
+        else None,
+        video_preview_last_accessed_at=asset.video_preview_last_accessed_at.isoformat()
+        if asset.video_preview_last_accessed_at
+        else None,
     )
 
 
@@ -212,6 +284,52 @@ def get_asset(
     if asset is None:
         raise HTTPException(status_code=404, detail="Asset not found")
     return _to_asset_response(asset)
+
+
+def _enqueue_video_preview_job_if_needed(
+    session: Session,
+    asset_id: str,
+) -> None:
+    job_repo = WorkerJobRepository(session)
+    if job_repo.has_pending_job("video-preview", asset_id):
+        return
+    job_repo.create(job_type="video-preview", asset_id=asset_id, priority=PRIORITY_URGENT)
+
+
+@router.get("/{asset_id}/preview")
+def stream_or_enqueue_preview(
+    asset_id: str,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+):
+    asset_repo = AssetRepository(session)
+    asset = asset_repo.get_by_id(asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    if not asset.media_type.startswith("video/"):
+        raise HTTPException(status_code=422, detail="Preview only supported for video assets")
+
+    storage = get_storage()
+
+    if asset.video_preview_key:
+        path = storage.abs_path(asset.video_preview_key)
+        if path.exists():
+            asset.video_preview_last_accessed_at = utcnow()
+            session.add(asset)
+            session.commit()
+            return _stream_file_with_range(path, request, media_type="video/mp4")
+
+        # File is missing on disk – clear key and re-enqueue.
+        asset.video_preview_key = None
+        session.add(asset)
+        session.commit()
+        _enqueue_video_preview_job_if_needed(session, asset.asset_id)
+        return JSONResponse({"status": "generating"}, status_code=202)
+
+    # No preview yet – enqueue and return 202.
+    _enqueue_video_preview_job_if_needed(session, asset.asset_id)
+    return JSONResponse({"status": "generating"}, status_code=202)
 
 
 class ThumbnailKeyUpdateRequest(BaseModel):

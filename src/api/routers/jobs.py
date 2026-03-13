@@ -203,6 +203,17 @@ def complete_job(
             width=width,
             height=height,
         )
+    elif job.job_type == "video-preview":
+        video_preview_key = data.get("video_preview_key")
+        if video_preview_key is None:
+            raise HTTPException(
+                status_code=400,
+                detail="video_preview_key required for video-preview jobs",
+            )
+        if job.asset_id is None:
+            raise HTTPException(status_code=400, detail="Job has no asset_id")
+        asset_repo = AssetRepository(session)
+        asset_repo.set_video_preview(job.asset_id, video_preview_key=video_preview_key)
     elif job.job_type == "exif":
         if job.asset_id is None:
             raise HTTPException(status_code=400, detail="Job has no asset_id")
@@ -237,6 +248,9 @@ def complete_job(
         # Enqueue search sync so Quickwit can be updated for this asset.
         queue_repo = SearchSyncQueueRepository(session)
         queue_repo.enqueue(asset_id=job.asset_id, operation="upsert")
+        # Advance asset status to described.
+        asset_repo = AssetRepository(session)
+        asset_repo.set_status(job.asset_id, "described")
     elif job.job_type == "embed":
         if job.asset_id is None:
             raise HTTPException(status_code=400, detail="Job has no asset_id")
@@ -305,6 +319,7 @@ class JobListItem(BaseModel):
     job_type: str
     asset_id: str | None
     status: str
+    priority: int
 
 
 @router.get("", response_model=list[JobListItem])
@@ -330,6 +345,7 @@ def list_jobs(
             job_type=j.job_type,
             asset_id=j.asset_id,
             status=j.status,
+            priority=j.priority,
         )
         for j in jobs
     ]

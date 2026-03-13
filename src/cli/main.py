@@ -512,6 +512,33 @@ def worker_vision(
     worker.run()
 
 
+@worker_app.command("video-preview")
+def worker_video_preview(
+    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
+    once: Annotated[bool, typer.Option("--once", help="Process queue until empty then exit.")] = False,
+    concurrency: Annotated[int, typer.Option("--concurrency", help="Number of parallel workers.")] = 1,
+) -> None:
+    """Run the video preview worker (short MP4 previews for video assets)."""
+    from src.storage.local import LocalStorage
+    from src.workers.video_preview_worker import VideoPreviewWorker
+
+    client = LumiverbClient()
+    storage = LocalStorage()
+    ctx = client.get("/v1/tenant/context").json()
+    tenant_id = ctx["tenant_id"]
+    library_id = _resolve_library_id(client, library) if library else None
+
+    worker = VideoPreviewWorker(
+        client=client,
+        storage=storage,
+        tenant_id=tenant_id,
+        concurrency=concurrency,
+        once=once,
+        library_id=library_id,
+    )
+    worker.run()
+
+
 @worker_app.command("embed")
 def worker_embed(
     library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,

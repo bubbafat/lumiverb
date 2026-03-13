@@ -40,16 +40,18 @@ def enqueue_proxy_jobs(session: Session, library_id: str) -> int:
         return 0
 
     now = datetime.now(timezone.utc)
-    jobs = [
-        {
-            "job_id": "job_" + str(ULID()),
-            "job_type": "proxy",
-            "asset_id": row[0],
-            "status": "pending",
-            "created_at": now,
-        }
-        for row in rows
-    ]
+    jobs = []
+    for row in rows:
+        jobs.append(
+            {
+                "job_id": "job_" + str(ULID()),
+                "job_type": "proxy",
+                "asset_id": row[0],
+                "status": "pending",
+                "priority": 10,
+                "created_at": now,
+            }
+        )
 
     total = 0
     for i in range(0, len(jobs), ENQUEUE_BATCH_SIZE):
@@ -83,16 +85,20 @@ def enqueue_jobs_for_filter(
         job_repo.cancel_pending_for_assets(asset_ids, job_type)
 
     now = datetime.now(timezone.utc)
-    jobs = [
-        {
-            "job_id": "job_" + str(ULID()),
-            "job_type": job_type,
-            "asset_id": asset_id,
-            "status": "pending",
-            "created_at": now,
-        }
-        for asset_id in asset_ids
-    ]
+    # Priority: 0=urgent, 10=normal, 20=low. Default to normal priority.
+    priority = 10
+    jobs = []
+    for asset_id in asset_ids:
+        jobs.append(
+            {
+                "job_id": "job_" + str(ULID()),
+                "job_type": job_type,
+                "asset_id": asset_id,
+                "status": "pending",
+                "priority": priority,
+                "created_at": now,
+            }
+        )
 
     total = 0
     for i in range(0, len(jobs), ENQUEUE_BATCH_SIZE):
