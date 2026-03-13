@@ -11,7 +11,8 @@ from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session
 from src.core.io_utils import normalize_path_prefix
-from src.repository.tenant import AssetRepository, LibraryRepository, ScanRepository, WorkerJobRepository
+from src.models.registry import model_version_for_provenance
+from src.repository.tenant import AssetMetadataRepository, AssetRepository, LibraryRepository, ScanRepository, WorkerJobRepository
 from src.storage.local import get_storage
 from src.core.utils import utcnow
 
@@ -55,6 +56,7 @@ class AssetResponse(BaseModel):
     video_preview_key: str | None = None
     video_preview_generated_at: str | None = None  # ISO8601
     video_preview_last_accessed_at: str | None = None  # ISO8601
+    ai_description: str | None = None
 
 
 class AssetPageItem(BaseModel):
@@ -275,7 +277,9 @@ def get_asset_by_path(
     asset = asset_repo.get_by_library_and_rel_path(library_id, rel_path)
     if asset is None:
         raise HTTPException(status_code=404, detail=f"Asset not found: {rel_path}")
-    return _to_asset_response(asset)
+    response = _to_asset_response(asset)
+    response.ai_description = _fetch_ai_description(asset.asset_id, asset.library_id, session)
+    return response
 
 
 @router.get("", response_model=list[AssetResponse])
@@ -299,7 +303,26 @@ def get_asset(
     asset = asset_repo.get_by_id(asset_id)
     if asset is None:
         raise HTTPException(status_code=404, detail="Asset not found")
-    return _to_asset_response(asset)
+    response = _to_asset_response(asset)
+    response.ai_description = _fetch_ai_description(asset.asset_id, asset.library_id, session)
+    return response
+
+
+def _fetch_ai_description(asset_id: str, library_id: str, session: Session) -> str | None:
+    lib_repo = LibraryRepository(session)
+    library = lib_repo.get_by_id(library_id)
+    if library is None:
+        return None
+    meta_repo = AssetMetadataRepository(session)
+    model_version = model_version_for_provenance(library.vision_model_id)
+    meta = meta_repo.get(
+        asset_id=asset_id,
+        model_id=library.vision_model_id,
+        model_version=model_version,
+    )
+    if meta and meta.data:
+        return meta.data.get("description") or None
+    return None
 
 
 def _enqueue_video_preview_job_if_needed(
