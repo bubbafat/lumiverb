@@ -11,6 +11,7 @@ import type { AssetPageItem } from "../api/types";
 const MIN_CELL_SIZE = 220;
 const ASPECT_RATIO = 4 / 3;
 const PAGE_SIZE = 100;
+const ESTIMATED_CELL_HEIGHT = MIN_CELL_SIZE / ASPECT_RATIO; // ~165px fallback before first measurement
 
 function chunk<T>(arr: T[], size: number): T[][] {
   const result: T[][] = [];
@@ -22,7 +23,9 @@ function chunk<T>(arr: T[], size: number): T[][] {
 
 export default function BrowsePage() {
   const { libraryId } = useParams<{ libraryId: string }>();
-  const gridRef = useRef<HTMLDivElement>(null);
+  // Callback ref: gives us a stable state value (not a stale ref.current) for the scroll container.
+  // This ensures the ResizeObserver and IntersectionObserver always see the live element.
+  const [parentEl, setParentEl] = useState<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
   const [lightboxAsset, setLightboxAsset] = useState<AssetPageItem | null>(null);
@@ -70,38 +73,39 @@ export default function BrowsePage() {
     [flatAssets, columnCount],
   );
 
-  const parentRef = useRef<HTMLDivElement>(null);
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => cellHeight,
+    getScrollElement: () => parentEl,
+    // Use a real minimum so getTotalSize() is never 0 before measurement.
+    // A 0 total height places the sentinel at the top of the scroll area,
+    // making it permanently visible and causing all pages to be fetched at once.
+    estimateSize: () => Math.max(cellHeight, ESTIMATED_CELL_HEIGHT),
     overscan: 3,
   });
 
+  // Observe the scroll container for width changes. Using parentEl (state, not ref)
+  // ensures this effect re-runs if the element is replaced (e.g. after loading).
   useEffect(() => {
-    const el = gridRef.current;
-    if (!el) return;
+    if (!parentEl) return;
     const ro = new ResizeObserver((entries) => {
-      for (const e of entries) {
-        setContainerWidth(e.contentRect.width);
-      }
+      setContainerWidth(entries[0]?.contentRect.width ?? 0);
     });
-    ro.observe(el);
+    ro.observe(parentEl);
     return () => ro.disconnect();
-  }, []);
+  }, [parentEl]);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
-    if (!sentinel || !hasNextPage || isFetchingNextPage) return;
+    if (!sentinel || !hasNextPage || isFetchingNextPage || !parentEl) return;
     const io = new IntersectionObserver(
       (entries) => {
         if (entries[0]?.isIntersecting) fetchNextPage();
       },
-      { root: parentRef.current, rootMargin: "200px", threshold: 0 },
+      { root: parentEl, rootMargin: "200px", threshold: 0 },
     );
     io.observe(sentinel);
     return () => io.disconnect();
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage, parentEl]);
 
   const handleAssetClick = useCallback((asset: AssetPageItem) => {
     setLightboxAsset(asset);
@@ -189,7 +193,6 @@ export default function BrowsePage() {
 
       {isLoading ? (
         <div
-          ref={gridRef}
           className="grid gap-4"
           style={{
             gridTemplateColumns: `repeat(${columnCount}, 1fr)`,
@@ -212,11 +215,11 @@ export default function BrowsePage() {
         </div>
       ) : (
         <div
-          ref={parentRef}
+          ref={setParentEl}
           className="h-[calc(100vh-12rem)] overflow-auto"
           style={{ contain: "strict" }}
         >
-          <div ref={gridRef} style={{ width: "100%" }}>
+          <div style={{ width: "100%" }}>
             <div
               style={{
                 height: `${rowVirtualizer.getTotalSize()}px`,
