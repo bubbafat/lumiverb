@@ -1,4 +1,10 @@
-import type { EmptyTrashResponse, LibraryListItem, LibraryResponse } from "./types";
+import type {
+  AssetDetail,
+  AssetPageItem,
+  EmptyTrashResponse,
+  LibraryListItem,
+  LibraryResponse,
+} from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -12,20 +18,27 @@ export class ApiError extends Error {
 
 const apiKey = import.meta.env.VITE_API_KEY as string | undefined;
 
+const authHeaders = (): HeadersInit =>
+  apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+
+type ApiFetchOptions = Omit<RequestInit, "body"> & { body?: unknown };
+
 async function apiFetch<T>(
   path: string,
-  options?: RequestInit & { body?: unknown },
+  options?: ApiFetchOptions,
 ): Promise<T> {
   const { body, ...rest } = options ?? {};
   const headers: HeadersInit = {
     "Content-Type": "application/json",
-    ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+    ...authHeaders(),
     ...rest.headers,
   };
+  const fetchBody =
+    body !== undefined ? JSON.stringify(body) : (rest as RequestInit).body;
   const res = await fetch(`/v1${path}`, {
     ...rest,
     headers,
-    body: body !== undefined ? JSON.stringify(body) : rest.body,
+    body: fetchBody,
   });
   if (!res.ok) {
     let message = res.statusText;
@@ -41,6 +54,13 @@ async function apiFetch<T>(
     return undefined as T;
   }
   return res.json() as Promise<T>;
+}
+
+/** Fetch blob (e.g. image) with auth. Used for thumbnail/proxy URLs. */
+export async function apiFetchBlob(path: string): Promise<Blob> {
+  const res = await fetch(`/v1${path}`, { headers: authHeaders() });
+  if (!res.ok) throw new ApiError(res.status, res.statusText);
+  return res.blob();
 }
 
 export async function listLibraries(
@@ -68,4 +88,42 @@ export async function emptyTrash(): Promise<EmptyTrashResponse> {
   return apiFetch<EmptyTrashResponse>("/libraries/empty-trash", {
     method: "POST",
   });
+}
+
+/** Paginated assets for a library. Returns null on 204 (end of pages). */
+export async function pageAssets(
+  libraryId: string,
+  after?: string,
+  limit = 100,
+): Promise<AssetPageItem[] | null> {
+  const params = new URLSearchParams({ library_id: libraryId });
+  if (after) params.set("after", after);
+  params.set("limit", String(limit));
+  const res = await fetch(`/v1/assets/page?${params}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    let message = res.statusText;
+    try {
+      const json = (await res.json()) as { error?: { message?: string } };
+      message = json?.error?.message ?? message;
+    } catch {
+      // ignore
+    }
+    throw new ApiError(res.status, message);
+  }
+  if (res.status === 204) return null;
+  return res.json() as Promise<AssetPageItem[]>;
+}
+
+export async function getAsset(assetId: string): Promise<AssetDetail> {
+  return apiFetch<AssetDetail>(`/assets/${assetId}`);
+}
+
+export function thumbnailUrl(assetId: string): string {
+  return `/v1/assets/${assetId}/thumbnail`;
+}
+
+export function proxyUrl(assetId: string): string {
+  return `/v1/assets/${assetId}/proxy`;
 }

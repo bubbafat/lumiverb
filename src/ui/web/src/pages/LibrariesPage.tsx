@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   listLibraries,
@@ -149,6 +150,14 @@ export default function LibrariesPage() {
                       </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-3">
+                      {lib.status !== "trashed" && (
+                        <Link
+                          to={`/libraries/${lib.library_id}/browse`}
+                          className="rounded-lg border border-gray-600 px-3 py-1.5 text-sm font-medium text-gray-300 transition-colors duration-150 hover:border-gray-500 hover:bg-gray-800/50"
+                        >
+                          Browse
+                        </Link>
+                      )}
                       <Badge variant={scanStatusVariant(lib.scan_status)}>
                         {lib.scan_status}
                       </Badge>

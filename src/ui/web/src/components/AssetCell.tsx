@@ -1,0 +1,85 @@
+import { memo } from "react";
+import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
+import type { AssetPageItem } from "../api/types";
+
+interface AssetCellProps {
+  asset: AssetPageItem;
+  onClick: () => void;
+}
+
+function basename(relPath: string): string {
+  const i = relPath.lastIndexOf("/");
+  return i >= 0 ? relPath.slice(i + 1) : relPath;
+}
+
+function AssetCellInner({ asset, onClick }: AssetCellProps) {
+  const { url, isLoading, error } = useAuthenticatedImage(asset.asset_id, "thumbnail");
+  const filename = basename(asset.rel_path);
+  const isVideo = asset.media_type.startsWith("video/");
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group relative w-full cursor-pointer overflow-hidden rounded-lg bg-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-gray-950"
+      style={{ aspectRatio: "4/3" }}
+    >
+      {/* Letterbox/pillarbox dark fill */}
+      <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
+        {isLoading && (
+          <div className="h-full w-full animate-pulse bg-gray-800" aria-hidden />
+        )}
+        {error && (
+          <div className="flex h-full w-full items-center justify-center bg-gray-900">
+            <svg
+              className="h-10 w-10 text-gray-600"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              aria-hidden
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.5}
+                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+              />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.5}
+                d="M12 9v2m0 4h.01"
+              />
+            </svg>
+          </div>
+        )}
+        {url && !error && (
+          <img
+            src={url}
+            alt={filename}
+            loading="lazy"
+            className="h-full w-full object-cover"
+          />
+        )}
+      </div>
+
+      {/* Hover overlay */}
+      <div
+        className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+        aria-hidden
+      />
+      <div className="pointer-events-none absolute bottom-0 left-0 right-0 p-2 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+        <div className="flex items-center gap-2">
+          <span className="truncate text-sm font-medium text-white">{filename}</span>
+          {isVideo && (
+            <span className="shrink-0 rounded bg-gray-700/80 px-2 py-0.5 text-xs text-gray-300">
+              Video
+            </span>
+          )}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+export const AssetCell = memo(AssetCellInner);
