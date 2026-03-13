@@ -71,6 +71,8 @@ def search(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     media_type: MediaType = Query(default="all"),
+    path_prefix: str | None = None,
+    tag: str | None = None,
 ) -> SearchResponse:
     """
     Search assets and video scenes by natural language query.
@@ -128,6 +130,8 @@ def search(
                     hit["proxy_key"] = asset.proxy_key
                     hit["camera_make"] = asset.camera_make
                     hit["camera_model"] = asset.camera_model
+                if hit.get("tags") is None:
+                    hit["tags"] = []
                 hit["type"] = "image"
 
     # --- Scene search ---
@@ -168,6 +172,33 @@ def search(
                 if hit.get("tags") is None:
                     hit["tags"] = []
                 hit["type"] = "scene"
+
+    # --- Apply optional path_prefix and tag filters after enrichment ---
+    def _path_matches(rel_path: str | None) -> bool:
+        if not rel_path or not path_prefix:
+            return False
+        return rel_path == path_prefix or rel_path.startswith(path_prefix + "/")
+
+    def _has_tag(tags: list[str] | None) -> bool:
+        if tag is None:
+            return True
+        return tag in (tags or [])
+
+    if path_prefix or tag:
+        if image_hits:
+            image_hits = [
+                h
+                for h in image_hits
+                if (not path_prefix or _path_matches(h.get("rel_path")))
+                and _has_tag(h.get("tags"))
+            ]
+        if scene_hits:
+            scene_hits = [
+                h
+                for h in scene_hits
+                if (not path_prefix or _path_matches(h.get("rel_path")))
+                and _has_tag(h.get("tags"))
+            ]
 
     # --- Merge, deduplicate images by asset_id, sort by score ---
     seen_images: dict[str, dict] = {}

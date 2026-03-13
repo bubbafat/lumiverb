@@ -6,6 +6,7 @@ import type {
   JobListItem,
   LibraryListItem,
   LibraryResponse,
+  SearchResponse,
 } from "./types";
 
 export class ApiError extends Error {
@@ -109,11 +110,13 @@ export async function pageAssets(
   after?: string,
   limit = 100,
   pathPrefix?: string,
+   tag?: string,
 ): Promise<AssetPageItem[] | null> {
   const params = new URLSearchParams({ library_id: libraryId });
   if (after) params.set("after", after);
   params.set("limit", String(limit));
   if (pathPrefix) params.set("path_prefix", pathPrefix);
+  if (tag) params.set("tag", tag);
   const res = await fetch(`/v1/assets/page?${params}`, {
     headers: authHeaders(),
   });
@@ -129,6 +132,22 @@ export async function pageAssets(
   }
   if (res.status === 204) return null;
   return res.json() as Promise<AssetPageItem[]>;
+}
+
+export async function searchAssets(params: {
+  libraryId: string;
+  q: string;
+  pathPrefix?: string;
+  tag?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<SearchResponse> {
+  const qs = new URLSearchParams({ library_id: params.libraryId, q: params.q });
+  if (params.pathPrefix) qs.set("path_prefix", params.pathPrefix);
+  if (params.tag) qs.set("tag", params.tag);
+  if (params.limit) qs.set("limit", String(params.limit));
+  if (params.offset) qs.set("offset", String(params.offset));
+  return apiFetch<SearchResponse>(`/search?${qs.toString()}`);
 }
 
 export async function getAsset(assetId: string): Promise<AssetDetail> {

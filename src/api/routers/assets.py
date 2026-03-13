@@ -69,6 +69,10 @@ class AssetPageItem(BaseModel):
     file_mtime: str | None  # ISO8601
     sha256: str | None
     media_type: str
+    width: int | None = None
+    height: int | None = None
+    taken_at: str | None = None  # ISO8601
+    status: str = "pending"
 
 
 @router.get("/page", responses={204: {"description": "No assets (end of pages)"}})
@@ -78,6 +82,7 @@ def page_assets(
     after: str | None = None,
     limit: int = 500,
     path_prefix: str | None = None,
+    tag: str | None = None,
 ) -> list[AssetPageItem]:
     """
     Keyset-paginated assets for bulk reconciliation. Returns 204 if no results.
@@ -102,6 +107,7 @@ def page_assets(
         after=after,
         limit=limit,
         path_prefix=normalized_prefix,
+        tag=tag,
     )
     if not assets:
         from fastapi.responses import Response
@@ -115,6 +121,10 @@ def page_assets(
             file_mtime=a.file_mtime.isoformat() if a.file_mtime else None,
             sha256=a.sha256,
             media_type=a.media_type,
+            width=a.width,
+            height=a.height,
+            taken_at=a.taken_at.isoformat() if a.taken_at else None,
+            status=a.status,
         )
         for a in assets
     ]

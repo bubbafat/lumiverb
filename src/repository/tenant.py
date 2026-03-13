@@ -480,25 +480,59 @@ class AssetRepository:
         after: str | None,
         limit: int,
         path_prefix: str | None = None,
+        tag: str | None = None,
     ) -> list[Asset]:
         """Keyset pagination: return assets with asset_id > after, ordered by asset_id, limit rows.
 
         Optional path_prefix filters to assets whose rel_path equals the prefix
         or starts with prefix + '/'. The prefix is expected to be normalized
         (no leading/trailing slash).
+
+        Optional tag filters to assets whose latest metadata row's tags array
+        (data->'tags') contains the given tag.
         """
-        stmt = select(Asset).where(Asset.library_id == library_id)
+        conditions = ["a.library_id = :library_id"]
+        params: dict[str, object] = {
+            "library_id": library_id,
+            "limit": limit,
+        }
         if path_prefix:
-            stmt = stmt.where(
-                or_(
-                    Asset.rel_path == path_prefix,
-                    Asset.rel_path.like(path_prefix + "/%"),
-                )
+            conditions.append(
+                "(a.rel_path = :path_prefix OR a.rel_path LIKE :path_prefix_like)"
             )
+            params["path_prefix"] = path_prefix
+            params["path_prefix_like"] = path_prefix + "/%"
         if after is not None:
-            stmt = stmt.where(Asset.asset_id > after)
-        stmt = stmt.order_by(Asset.asset_id).limit(limit)
-        return list(self._session.exec(stmt).all())
+            conditions.append("a.asset_id > :after")
+            params["after"] = after
+        if tag is not None:
+            conditions.append("m.tags @> jsonb_build_array(:tag)")
+            params["tag"] = tag
+
+        where_sql = " AND ".join(conditions)
+        id_sql = f"""
+            SELECT a.asset_id
+            FROM assets a
+            LEFT JOIN LATERAL (
+                SELECT data->'tags' AS tags
+                FROM asset_metadata
+                WHERE asset_id = a.asset_id
+                ORDER BY generated_at DESC
+                LIMIT 1
+            ) m ON TRUE
+            WHERE {where_sql}
+            ORDER BY a.asset_id
+            LIMIT :limit
+        """
+        result = self._session.execute(text(id_sql).bindparams(**params))
+        asset_ids = [row[0] for row in result.all()]
+        if not asset_ids:
+            return []
+        assets_by_id = {
+            a.asset_id: a
+            for a in self._session.exec(select(Asset).where(Asset.asset_id.in_(asset_ids))).all()
+        }
+        return [assets_by_id[aid] for aid in asset_ids if aid in assets_by_id]
 
     def list_rel_paths_for_library_non_deleted(self, library_id: str) -> list[str]:
         """Return rel_path for all assets in library where status != 'deleted'."""

@@ -39,6 +39,30 @@ export interface AssetPageItem {
   status: string;
 }
 
+export interface SearchHit {
+  type: "image" | "scene";
+  asset_id: string;
+  rel_path: string;
+  thumbnail_key: string | null;
+  proxy_key: string | null;
+  description: string;
+  tags: string[];
+  score: number;
+  source: string;
+  camera_make: string | null;
+  camera_model: string | null;
+  scene_id: string | null;
+  start_ms: number | null;
+  end_ms: number | null;
+}
+
+export interface SearchResponse {
+  query: string;
+  hits: SearchHit[];
+  total: number;
+  source: string;
+}
+
 export interface AssetDetail {
   asset_id: string;
   library_id: string;

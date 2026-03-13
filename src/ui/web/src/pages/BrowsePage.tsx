@@ -2,9 +2,10 @@ import { useMemo, useRef, useEffect, useState, useCallback } from "react";
 import { useParams, Link, useSearchParams } from "react-router-dom";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { pageAssets, listLibraries } from "../api/client";
+import { pageAssets, listLibraries, searchAssets } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
 import { Lightbox } from "../components/Lightbox";
+import { FilterBar } from "../components/FilterBar";
 import type { AssetPageItem } from "../api/types";
 import { useScrollContainer } from "../context/ScrollContainerContext";
 import { groupAssetsByDate } from "../lib/groupByDate";
@@ -18,13 +19,26 @@ const ROW_GAP = 4;
 
 export default function BrowsePage() {
   const { libraryId } = useParams<{ libraryId: string }>();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const pathPrefix = searchParams.get("path") ?? undefined;
+  const activeQ = searchParams.get("q");
+  const activeTag = searchParams.get("tag");
   const parentEl = useScrollContainer();
   const sentinelRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
   const [lightboxAsset, setLightboxAsset] = useState<AssetPageItem | null>(null);
   const [errorDismissed, setErrorDismissed] = useState(false);
+
+  const isSearchMode = !!activeQ;
+
+  function setParam(key: string, value: string | null) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (value) next.set(key, value);
+      else next.delete(key);
+      return next;
+    });
+  }
 
   const { data: libraries } = useQuery({
     queryKey: ["libraries", true],
@@ -32,30 +46,74 @@ export default function BrowsePage() {
   });
   const library = libraries?.find((l) => l.library_id === libraryId);
 
-  const {
-    data,
-    isLoading,
-    isFetchingNextPage,
-    hasNextPage,
-    fetchNextPage,
-    error,
-    isError,
-  } = useInfiniteQuery({
-    queryKey: ["assets", libraryId!, pathPrefix ?? null],
+  const browseQuery = useInfiniteQuery({
+    queryKey: ["assets", libraryId!, pathPrefix ?? null, activeTag ?? null],
     queryFn: ({ pageParam }) =>
-      pageAssets(libraryId!, pageParam, PAGE_SIZE, pathPrefix),
+      pageAssets(
+        libraryId!,
+        pageParam,
+        PAGE_SIZE,
+        pathPrefix,
+        activeTag ?? undefined,
+      ),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => {
       if (!lastPage || lastPage.length < PAGE_SIZE) return undefined;
       return lastPage[lastPage.length - 1].asset_id;
     },
-    enabled: !!libraryId,
+    enabled: !!libraryId && !isSearchMode,
+  });
+
+  const searchQuery = useQuery({
+    queryKey: [
+      "search",
+      libraryId!,
+      activeQ,
+      pathPrefix ?? null,
+      activeTag ?? null,
+    ],
+    queryFn: () =>
+      searchAssets({
+        libraryId: libraryId!,
+        q: activeQ!,
+        pathPrefix,
+        tag: activeTag ?? undefined,
+        limit: 100,
+      }),
+    enabled: !!libraryId && isSearchMode,
   });
 
   const flatAssets = useMemo(() => {
-    if (!data?.pages) return [];
-    return data.pages.flatMap((p) => p ?? []);
-  }, [data?.pages]);
+    if (isSearchMode) {
+      return (searchQuery.data?.hits ?? [])
+        .filter((h) => h.type === "image")
+        .map((h) => ({
+          asset_id: h.asset_id,
+          rel_path: h.rel_path,
+          file_size: 0,
+          file_mtime: null,
+          sha256: null,
+          media_type: "image/jpeg",
+          width: null,
+          height: null,
+          taken_at: null,
+          status: "indexed",
+        }));
+    }
+    if (!browseQuery.data?.pages) return [];
+    return browseQuery.data.pages.flatMap((p) => p ?? []);
+  }, [isSearchMode, searchQuery.data, browseQuery.data]);
+
+  const isLoading = isSearchMode
+    ? searchQuery.isLoading
+    : browseQuery.isLoading;
+  const isFetchingNextPage = isSearchMode
+    ? false
+    : browseQuery.isFetchingNextPage;
+  const hasNextPage = isSearchMode ? false : browseQuery.hasNextPage;
+  const fetchNextPage = browseQuery.fetchNextPage;
+  const error = isSearchMode ? searchQuery.error : browseQuery.error;
+  const isError = isSearchMode ? searchQuery.isError : browseQuery.isError;
 
   const groups = useMemo(
     () => groupAssetsByDate(flatAssets),
@@ -201,6 +259,15 @@ export default function BrowsePage() {
         )}
       </div>
 
+      <FilterBar
+        q={activeQ}
+        tag={activeTag}
+        path={pathPrefix ?? null}
+        onChangeQ={(v) => setParam("q", v)}
+        onChangeTag={(v) => setParam("tag", v)}
+        onChangePath={(v) => setParam("path", v)}
+      />
+
       {isLoading ? (
         <div className="flex gap-4">
           {Array.from({ length: 6 }).map((_, i) => (
@@ -326,6 +393,10 @@ export default function BrowsePage() {
           assets={flatAssets}
           onClose={handleLightboxClose}
           onNavigate={handleLightboxNavigate}
+          onTagClick={(tag) => {
+            setParam("tag", tag);
+            setLightboxAsset(null);
+          }}
         />
       )}
     </div>

@@ -10,6 +10,7 @@ interface LightboxProps {
   assets: AssetPageItem[];
   onClose: () => void;
   onNavigate: (index: number) => void;
+  onTagClick?: (tag: string) => void;
 }
 
 
@@ -28,6 +29,7 @@ export function Lightbox({
   assets,
   onClose,
   onNavigate,
+  onTagClick,
 }: LightboxProps) {
   const currentIndex = assets.findIndex((a) => a.asset_id === asset.asset_id);
   const hasPrev = currentIndex > 0;
@@ -185,14 +187,28 @@ export function Lightbox({
                     <MetadataSkeleton />
                   ) : (
                     <div className="mt-1 flex flex-wrap gap-1.5">
-                      {detail?.ai_tags?.map((tag) => (
-                        <span
-                          key={tag}
-                          className="rounded-full bg-gray-700/60 px-2.5 py-0.5 text-xs text-gray-300"
-                        >
-                          {tag}
-                        </span>
-                      ))}
+                      {detail?.ai_tags?.map((tag) =>
+                        onTagClick ? (
+                          <button
+                            key={tag}
+                            type="button"
+                            onClick={() => {
+                              onTagClick(tag);
+                              onClose();
+                            }}
+                            className="rounded-full bg-gray-700/60 px-2.5 py-0.5 text-xs text-gray-300 hover:bg-indigo-600/40 hover:text-indigo-200 transition-colors cursor-pointer"
+                          >
+                            {tag}
+                          </button>
+                        ) : (
+                          <span
+                            key={tag}
+                            className="rounded-full bg-gray-700/60 px-2.5 py-0.5 text-xs text-gray-300"
+                          >
+                            {tag}
+                          </span>
+                        ),
+                      )}
                     </div>
                   )}
                 </div>
