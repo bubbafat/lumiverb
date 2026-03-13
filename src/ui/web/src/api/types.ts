@@ -57,6 +57,7 @@ export interface AssetDetail {
   gps_lat: number | null;
   gps_lon: number | null;
   ai_description?: string | null;
+  ai_tags: string[];
 }
 
 export interface JobListItem {

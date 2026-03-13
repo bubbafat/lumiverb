@@ -75,6 +75,9 @@ export function Lightbox({
   }, [handleKeyDown]);
 
   const filename = basename(asset.rel_path);
+  const formatGps = (lat: number, lon: number): string => {
+    return `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex bg-black/90">
@@ -161,32 +164,61 @@ export function Lightbox({
         {/* Right: metadata panel */}
         <div className="w-full overflow-y-auto border-t border-gray-700 bg-gray-900/50 p-6 lg:w-80 lg:border-l lg:border-t-0">
           <div className="space-y-4">
+            {/* Section 1: Basic info */}
             <div>
               <div className="text-lg font-medium text-gray-100">{filename}</div>
               <div className="mt-1 font-mono text-xs text-gray-500">
                 {asset.rel_path}
               </div>
+              <div className="mt-2 text-sm text-gray-400">
+                {formatFileSize(asset.file_size)} · {asset.media_type}
+              </div>
             </div>
 
             <hr className="border-gray-700" />
 
-            {/* AI description */}
+            {/* Section 2: AI description */}
             <div>
               <div className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">
-                AI description
+                Description
               </div>
               {detailLoading ? (
                 <MetadataSkeleton />
               ) : detail?.ai_description ? (
-                <p className="italic text-gray-400">{detail.ai_description}</p>
+                <p className="italic text-gray-300">{detail.ai_description}</p>
               ) : (
                 <p className="text-gray-500">No description yet</p>
               )}
             </div>
 
-            <hr className="border-gray-700" />
+            {/* Section 3: Tags */}
+            {(detailLoading || (detail?.ai_tags && detail.ai_tags.length > 0)) && (
+              <>
+                <hr className="border-gray-700" />
+                <div>
+                  <div className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">
+                    Tags
+                  </div>
+                  {detailLoading && !detail ? (
+                    <MetadataSkeleton />
+                  ) : (
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {detail?.ai_tags?.map((tag) => (
+                        <span
+                          key={tag}
+                          className="rounded-full bg-gray-700/60 px-2.5 py-0.5 text-xs text-gray-300"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
 
-            {/* Details table */}
+            {/* Section 4: Details */}
+            <hr className="border-gray-700" />
             <div>
               <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500">
                 Details
@@ -194,65 +226,68 @@ export function Lightbox({
               {detailLoading ? (
                 <MetadataSkeleton />
               ) : (
-                <table className="w-full text-sm">
-                  <tbody className="space-y-1">
-                    <tr>
-                      <td className="text-gray-500">Taken at</td>
-                      <td className="pl-4 text-gray-300">
-                        {formatDate((detail as AssetDetail)?.taken_at ?? null)}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td className="text-gray-500">Camera</td>
-                      <td className="pl-4 text-gray-300">
-                        {detail
-                          ? [
-                              (detail as AssetDetail).camera_make,
-                              (detail as AssetDetail).camera_model,
-                            ]
-                              .filter(Boolean)
-                              .join(" ") || "Unknown"
-                          : "Unknown"}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td className="text-gray-500">Dimensions</td>
-                      <td className="pl-4 text-gray-300">
-                        {(detail as AssetDetail)?.width != null &&
-                        (detail as AssetDetail)?.height != null
-                          ? `${(detail as AssetDetail).width} × ${(detail as AssetDetail).height}`
-                          : "Unknown"}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td className="text-gray-500">File size</td>
-                      <td className="pl-4 text-gray-300">
-                        {formatFileSize(asset.file_size)}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td className="text-gray-500">SHA256</td>
-                      <td
-                        className="pl-4 font-mono text-gray-400"
-                        title={asset.sha256 ?? undefined}
+                <dl className="space-y-2">
+                  {detail?.taken_at && (
+                    <div className="flex">
+                      <dt className="w-2/5 text-xs text-gray-500">Taken</dt>
+                      <dd className="w-3/5 text-sm text-gray-300">
+                        {formatDate(detail.taken_at)}
+                      </dd>
+                    </div>
+                  )}
+                  {detail &&
+                    (detail.camera_make || detail.camera_model) && (
+                      <div className="flex">
+                        <dt className="w-2/5 text-xs text-gray-500">Camera</dt>
+                        <dd className="w-3/5 text-sm text-gray-300">
+                          {[detail.camera_make, detail.camera_model]
+                            .filter(Boolean)
+                            .join(" ")}
+                        </dd>
+                      </div>
+                    )}
+                  {detail &&
+                    detail.width != null &&
+                    detail.height != null && (
+                      <div className="flex">
+                        <dt className="w-2/5 text-xs text-gray-500">
+                          Dimensions
+                        </dt>
+                        <dd className="w-3/5 text-sm text-gray-300">
+                          {detail.width} × {detail.height}
+                        </dd>
+                      </div>
+                    )}
+                  {detail &&
+                    detail.gps_lat != null &&
+                    detail.gps_lon != null && (
+                      <div className="flex">
+                        <dt className="w-2/5 text-xs text-gray-500">GPS</dt>
+                        <dd className="w-3/5 text-sm text-gray-300">
+                          {formatGps(detail.gps_lat, detail.gps_lon)}
+                        </dd>
+                      </div>
+                    )}
+                  <div className="flex">
+                    <dt className="w-2/5 text-xs text-gray-500">File size</dt>
+                    <dd className="w-3/5 text-sm text-gray-300">
+                      {formatFileSize(asset.file_size)}
+                    </dd>
+                  </div>
+                  {(detail?.sha256 || asset.sha256) && (
+                    <div className="flex">
+                      <dt className="w-2/5 text-xs text-gray-500">SHA256</dt>
+                      <dd
+                        className="w-3/5 font-mono text-xs text-gray-400"
+                        title={(detail?.sha256 || asset.sha256) ?? undefined}
                       >
-                        {asset.sha256
-                          ? `${asset.sha256.slice(0, 16)}…`
-                          : "Unknown"}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
+                        {(detail?.sha256 || asset.sha256)?.slice(0, 16)}
+                        …
+                      </dd>
+                    </div>
+                  )}
+                </dl>
               )}
-            </div>
-
-            <hr className="border-gray-700" />
-
-            {/* Media type badge */}
-            <div>
-              <span className="inline-flex rounded-full bg-gray-700/50 px-2.5 py-0.5 text-xs text-gray-300">
-                {asset.media_type}
-              </span>
             </div>
           </div>
         </div>
