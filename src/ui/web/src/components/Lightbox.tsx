@@ -8,6 +8,7 @@ import { basename, formatFileSize, formatDate } from "../lib/format";
 interface LightboxProps {
   asset: AssetPageItem;
   assets: AssetPageItem[];
+  hasMore?: boolean;
   onClose: () => void;
   onNavigate: (index: number) => void;
   onTagClick?: (tag: string) => void;
@@ -58,6 +59,7 @@ function MetadataSkeleton() {
 export function Lightbox({
   asset,
   assets,
+  hasMore = false,
   onClose,
   onNavigate,
   onTagClick,
@@ -67,7 +69,7 @@ export function Lightbox({
   const [showSimilar, setShowSimilar] = useState(false);
   const currentIndex = assets.findIndex((a) => a.asset_id === asset.asset_id);
   const hasPrev = currentIndex > 0;
-  const hasNext = currentIndex >= 0 && currentIndex < assets.length - 1;
+  const hasNext = (currentIndex >= 0 && currentIndex < assets.length - 1) || (currentIndex === assets.length - 1 && hasMore);
 
   useEffect(() => {
     setShowSimilar(false);

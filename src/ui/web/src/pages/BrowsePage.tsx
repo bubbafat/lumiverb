@@ -120,6 +120,12 @@ export default function BrowsePage() {
     [flatAssets],
   );
 
+  // Navigation order must match visual grid order (groups sorted date-desc, assets within each group in group order)
+  const orderedAssets = useMemo(
+    () => groups.flatMap((g) => g.assets),
+    [groups],
+  );
+
   const virtualRows: VirtualRowKind[] = useMemo(
     () =>
       containerWidth > 0
@@ -171,10 +177,14 @@ export default function BrowsePage() {
 
   const handleLightboxNavigate = useCallback(
     (index: number) => {
-      const asset = flatAssets[index];
+      const asset = orderedAssets[index];
       if (asset) setLightboxAsset(asset);
+      // Prefetch next page when within 20 assets of the end
+      if (hasNextPage && !isFetchingNextPage && index >= orderedAssets.length - 20) {
+        fetchNextPage();
+      }
     },
-    [flatAssets],
+    [orderedAssets, hasNextPage, isFetchingNextPage, fetchNextPage],
   );
 
   if (!libraryId) {
@@ -390,7 +400,8 @@ export default function BrowsePage() {
       {lightboxAsset && (
         <Lightbox
           asset={lightboxAsset}
-          assets={flatAssets}
+          assets={orderedAssets}
+          hasMore={hasNextPage}
           onClose={handleLightboxClose}
           onNavigate={handleLightboxNavigate}
           onTagClick={(tag) => {
