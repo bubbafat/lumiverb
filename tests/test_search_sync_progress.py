@@ -63,13 +63,16 @@ def test_force_resync_batches() -> None:
     asset_ids = [f"ast_{i:05d}" for i in range(1100)]
 
     mock_session = MagicMock()
-    # 1st fetchall: SELECT assets returns 1100 rows; 2nd-4th: SELECT existing returns []
+    # 1st fetchall: SELECT assets returns 1100 rows; per batch: existing then already_synced
     mock_fetchall = MagicMock(
         side_effect=[
             [(aid,) for aid in asset_ids],
             [],  # batch 0 existing
+            [],  # batch 0 already_synced (filter before insert)
             [],  # batch 1 existing
+            [],  # batch 1 already_synced
             [],  # batch 2 existing
+            [],  # batch 2 already_synced
         ]
     )
     mock_exec_result = MagicMock()

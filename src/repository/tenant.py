@@ -1255,18 +1255,38 @@ class SearchSyncQueueRepository:
         asset_id: str,
         operation: str,
         scene_id: str | None = None,
-    ) -> SearchSyncQueue:
+    ) -> SearchSyncQueue | None:
         """
         Insert a new row into search_sync_queue.
 
-        sync_id is generated as ssq_ + ULID().
+        sync_id is generated as ssq_ + ULID(). Returns None and skips insert if
+        a synced row already exists for this (asset_id, scene_id) with
+        created_at >= the new row's created_at (avoids creating a stale pending
+        row that would be hidden by search_sync_latest).
         """
+        now = utcnow()
+        exists = self._session.execute(
+            text(
+                """
+                SELECT 1 FROM search_sync_queue
+                WHERE asset_id = :asset_id
+                  AND (scene_id IS NOT DISTINCT FROM :scene_id)
+                  AND status = 'synced'
+                  AND created_at >= :created_at
+                LIMIT 1
+                """
+            ),
+            {"asset_id": asset_id, "scene_id": scene_id, "created_at": now},
+        ).scalar()
+        if exists:
+            return None
         sync = SearchSyncQueue(
             sync_id="ssq_" + str(ULID()),
             asset_id=asset_id,
             scene_id=scene_id,
             operation=operation,
             status="pending",
+            created_at=now,
         )
         self._session.add(sync)
         self._session.commit()
@@ -1401,8 +1421,37 @@ class SearchSyncQueueRepository:
             existing = {r[0] for r in rows}
             to_insert = [aid for aid in batch if aid not in existing]
 
-            for aid in to_insert:
-                self.enqueue(aid, "index", scene_id=None)
+            if to_insert:
+                insert_time = utcnow()
+                # Exclude asset_ids that already have a synced row with created_at >= insert_time,
+                # so we never insert a stale pending row hidden by search_sync_latest.
+                already_synced = self._session.execute(
+                    text(
+                        """
+                        SELECT asset_id FROM search_sync_queue
+                        WHERE asset_id = ANY(:asset_ids)
+                          AND scene_id IS NOT DISTINCT FROM NULL
+                          AND status = 'synced'
+                          AND created_at >= :insert_time
+                        """
+                    ),
+                    {"asset_ids": to_insert, "insert_time": insert_time},
+                ).fetchall()
+                skip_ids = {r[0] for r in already_synced}
+                to_insert = [aid for aid in to_insert if aid not in skip_ids]
+
+                for aid in to_insert:
+                    sync = SearchSyncQueue(
+                        sync_id="ssq_" + str(ULID()),
+                        asset_id=aid,
+                        scene_id=None,
+                        operation="index",
+                        status="pending",
+                        created_at=insert_time,
+                    )
+                    self._session.add(sync)
+                if to_insert:
+                    self._session.commit()
 
             completed = min(i + self.RESYNC_BATCH_SIZE, total)
             if cb:
