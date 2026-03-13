@@ -95,3 +95,18 @@ export interface JobListItem {
   completed_at: string | null;
 }
 
+export interface SimilarHit {
+  asset_id: string;
+  rel_path: string;
+  thumbnail_key: string | null;
+  proxy_key: string | null;
+  distance: number;
+}
+
+export interface SimilarityResponse {
+  source_asset_id: string;
+  hits: SimilarHit[];
+  total: number;
+  embedding_available: boolean;
+}
+

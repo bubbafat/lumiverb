@@ -397,6 +397,10 @@ export default function BrowsePage() {
             setParam("tag", tag);
             setLightboxAsset(null);
           }}
+          libraryId={libraryId}
+          onSimilarClick={(similarAsset) => {
+            setLightboxAsset(similarAsset);
+          }}
         />
       )}
     </div>

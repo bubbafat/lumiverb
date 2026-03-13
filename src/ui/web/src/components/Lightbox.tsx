@@ -1,8 +1,8 @@
-import { useEffect, useCallback } from "react";
+import { useEffect, useCallback, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { getAsset } from "../api/client";
+import { getAsset, findSimilar } from "../api/client";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
-import type { AssetDetail, AssetPageItem } from "../api/types";
+import type { AssetPageItem, SimilarHit } from "../api/types";
 import { basename, formatFileSize, formatDate } from "../lib/format";
 
 interface LightboxProps {
@@ -11,6 +11,37 @@ interface LightboxProps {
   onClose: () => void;
   onNavigate: (index: number) => void;
   onTagClick?: (tag: string) => void;
+  onSimilarClick?: (asset: AssetPageItem) => void;
+  libraryId?: string;
+}
+
+function SimilarThumbnail({
+  hit,
+  onClick,
+}: {
+  hit: SimilarHit;
+  onClick: () => void;
+}) {
+  const { url, isLoading } = useAuthenticatedImage(hit.asset_id, "thumbnail");
+  const filename = basename(hit.rel_path);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group relative aspect-square w-full overflow-hidden rounded-lg bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+    >
+      {isLoading && (
+        <div className="absolute inset-0 animate-pulse bg-gray-700" />
+      )}
+      {url && (
+        <img
+          src={url}
+          alt={filename}
+          className="h-full w-full object-cover transition-opacity group-hover:opacity-80"
+        />
+      )}
+    </button>
+  );
 }
 
 
@@ -30,10 +61,17 @@ export function Lightbox({
   onClose,
   onNavigate,
   onTagClick,
+  onSimilarClick,
+  libraryId,
 }: LightboxProps) {
+  const [showSimilar, setShowSimilar] = useState(false);
   const currentIndex = assets.findIndex((a) => a.asset_id === asset.asset_id);
   const hasPrev = currentIndex > 0;
   const hasNext = currentIndex >= 0 && currentIndex < assets.length - 1;
+
+  useEffect(() => {
+    setShowSimilar(false);
+  }, [asset.asset_id]);
 
   const { url: proxyUrl, isLoading: proxyLoading } = useAuthenticatedImage(
     asset.asset_id,
@@ -42,6 +80,17 @@ export function Lightbox({
   const { data: detail, isLoading: detailLoading } = useQuery({
     queryKey: ["asset", asset.asset_id],
     queryFn: () => getAsset(asset.asset_id),
+  });
+
+  const { data: similarData, isLoading: similarLoading } = useQuery({
+    queryKey: ["similar", asset.asset_id, libraryId],
+    queryFn: () =>
+      findSimilar({
+        assetId: asset.asset_id,
+        libraryId: libraryId!,
+        limit: 20,
+      }),
+    enabled: showSimilar && !!libraryId,
   });
 
   const handleKeyDown = useCallback(
@@ -155,7 +204,7 @@ export function Lightbox({
                 {asset.rel_path}
               </div>
               <div className="mt-2 text-sm text-gray-400">
-                {formatFileSize(asset.file_size)} · {asset.media_type}
+                {formatFileSize(asset.file_size)} · {detail?.media_type ?? asset.media_type}
               </div>
             </div>
 
@@ -287,6 +336,73 @@ export function Lightbox({
                 </dl>
               )}
             </div>
+
+            {libraryId && (
+              <>
+                <hr className="border-gray-700" />
+                <button
+                  type="button"
+                  onClick={() => setShowSimilar((s) => !s)}
+                  className="w-full rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-700 hover:text-gray-100"
+                >
+                  {showSimilar ? "Hide similar" : "Find similar"}
+                </button>
+                {showSimilar && (
+                  <div className="space-y-2">
+                    {similarLoading && (
+                      <div className="grid grid-cols-2 gap-2">
+                        {[1, 2, 3, 4].map((i) => (
+                          <div
+                            key={i}
+                            className="aspect-square animate-pulse rounded-lg bg-gray-700"
+                          />
+                        ))}
+                      </div>
+                    )}
+                    {!similarLoading && !similarData?.embedding_available && (
+                      <p className="text-xs text-gray-500">
+                        No visual embedding yet for this image.
+                      </p>
+                    )}
+                    {!similarLoading &&
+                      similarData?.embedding_available &&
+                      similarData.hits.length === 0 && (
+                        <p className="text-xs text-gray-500">
+                          No similar images found.
+                        </p>
+                      )}
+                    {!similarLoading &&
+                      similarData?.embedding_available &&
+                      similarData.hits.length > 0 && (
+                        <div className="grid grid-cols-2 gap-2">
+                          {similarData.hits.map((hit) => (
+                            <SimilarThumbnail
+                              key={hit.asset_id}
+                              hit={hit}
+                              onClick={() => {
+                                if (onSimilarClick) {
+                                  onSimilarClick({
+                                    asset_id: hit.asset_id,
+                                    rel_path: hit.rel_path,
+                                    file_size: 0,
+                                    file_mtime: null,
+                                    sha256: null,
+                                    media_type: "image/jpeg",
+                                    width: null,
+                                    height: null,
+                                    taken_at: null,
+                                    status: "indexed",
+                                  });
+                                }
+                              }}
+                            />
+                          ))}
+                        </div>
+                      )}
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
       </div>

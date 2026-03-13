@@ -7,6 +7,7 @@ import type {
   LibraryListItem,
   LibraryResponse,
   SearchResponse,
+  SimilarityResponse,
 } from "./types";
 
 export class ApiError extends Error {
@@ -152,6 +153,20 @@ export async function searchAssets(params: {
 
 export async function getAsset(assetId: string): Promise<AssetDetail> {
   return apiFetch<AssetDetail>(`/assets/${assetId}`);
+}
+
+export async function findSimilar(params: {
+  assetId: string;
+  libraryId: string;
+  limit?: number;
+  pathPrefix?: string;
+}): Promise<SimilarityResponse> {
+  const qs = new URLSearchParams({
+    asset_id: params.assetId,
+    library_id: params.libraryId,
+  });
+  if (params.limit) qs.set("limit", String(params.limit));
+  return apiFetch<SimilarityResponse>(`/similar?${qs.toString()}`);
 }
 
 export function thumbnailUrl(assetId: string): string {
