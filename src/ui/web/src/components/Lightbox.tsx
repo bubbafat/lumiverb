@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { getAsset } from "../api/client";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 import type { AssetDetail, AssetPageItem } from "../api/types";
+import { basename, formatFileSize, formatDate } from "../lib/format";
 
 interface LightboxProps {
   asset: AssetPageItem;
@@ -11,25 +12,6 @@ interface LightboxProps {
   onNavigate: (index: number) => void;
 }
 
-function basename(relPath: string): string {
-  const i = relPath.lastIndexOf("/");
-  return i >= 0 ? relPath.slice(i + 1) : relPath;
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatDate(iso: string | null): string {
-  if (!iso) return "Unknown";
-  try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return "Unknown";
-  }
-}
 
 function MetadataSkeleton() {
   return (
