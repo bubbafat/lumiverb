@@ -30,7 +30,7 @@
 
 | Step | Description | Status |
 |------|-------------|--------|
-| 15 | Progressive availability: job priority ordering, asset status lifecycle, video fast-path preview | 🔜 Next |
+| 15 | Progressive availability: job priority ordering, asset status lifecycle, on-demand video preview | 🔄 In progress |
 
 ### Phase 4: Web UI (React + TypeScript + Tailwind)
 
@@ -42,7 +42,7 @@ UI lives at `src/ui/web/`. Vite dev server proxies `/v1/` to `http://localhost:8
 | 17 | Admin: multi-key support per tenant + CLI admin commands | ✅ Done |
 | 18 | App shell redesign: sidebar (libraries, worker status, filters) + routing | 🔜 Planned |
 | 19 | Justified grid with date groups + virtualization + infinite scroll | 🔜 Planned |
-| 20 | Lightbox: image + 10s video preview, metadata panel, search term highlighting | 🔜 Planned |
+| 20 | Lightbox: image + on-demand video preview, metadata panel, search term highlighting | 🔜 Planned |
 | 21 | Search: query bar, results in justified grid, term highlighting | 🔜 Planned |
 | 22 | Similarity: "find similar" from lightbox, results grid | 🔜 Planned |
 | 23 | Worker & job status panel (sidebar functional) | 🔜 Planned |
@@ -84,6 +84,11 @@ UI lives at `src/ui/web/`. Vite dev server proxies `/v1/` to `http://localhost:8
 | Authenticated image fetching via useAuthenticatedImage hook | img src can't send auth headers; hook fetches via apiFetch and returns object URL |
 | Virtualized justified grid (@tanstack/react-virtual) | 25,000+ assets; justified layout matches Google Photos UX north star |
 | Asset status lifecycle: pending → proxy_ready → described → indexed | Enables progressive UI display; each pipeline stage advances status |
-| Job priority field on worker_jobs | Proxy jobs always claimed before vision/search-sync; fast time-to-first-display |
-| Video fast-path: 10s preview as high-priority job | Full scene segmentation deferred; preview available in seconds |
+| Job priority field on worker_jobs (0=urgent, 10=normal, 20=low) | Proxy jobs always claimed before vision/search-sync; fast time-to-first-display |
+| Video preview is on-demand, not pre-generated | No wasted work for unviewed videos; generated on first hover, cached thereafter |
+| Video preview triggered by GET /v1/assets/{id}/preview | Returns stream if cached, 202+generates if not; UI polls asset until preview_key set |
+| video_preview_last_accessed_at tracked on every stream | Enables future cleanup: "delete previews not accessed in N days" |
+| Video preview includes audio track | UI controls mute via <video muted> attribute; user preference toggles audio on explicit play |
+| Preview missing from disk → re-enqueue, not error | Graceful recovery; DB is source of truth, filesystem is a cache |
+| Future CLI: cache purge-previews --older-than Nd, cache purge-library | Data foundation (last_accessed_at) laid now; commands deferred |
 | Corporate/operator management UI | Out of scope for this project |
