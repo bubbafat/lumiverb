@@ -9,6 +9,7 @@ from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session
 from src.core.config import get_settings
+from src.core import asset_status
 from src.models.filter import AssetFilterSpec
 from src.repository.tenant import (
     AssetRepository,
@@ -250,7 +251,7 @@ def complete_job(
         queue_repo.enqueue(asset_id=job.asset_id, operation="upsert")
         # Advance asset status to described.
         asset_repo = AssetRepository(session)
-        asset_repo.set_status(job.asset_id, "described")
+        asset_repo.set_status(job.asset_id, asset_status.DESCRIBED)
     elif job.job_type == "embed":
         if job.asset_id is None:
             raise HTTPException(status_code=400, detail="Job has no asset_id")

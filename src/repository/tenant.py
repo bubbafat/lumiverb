@@ -11,6 +11,7 @@ from sqlmodel import Session, select
 
 from src.core.io_utils import normalize_path_prefix
 from src.core.utils import utcnow
+from src.core import asset_status
 from src.models.filter import AssetFilterSpec
 from src.models.similarity import SimilarityScope
 from src.models.tenant import (
@@ -312,7 +313,7 @@ class AssetRepository:
                 "file_size": it["file_size"],
                 "file_mtime": file_mtime_dt,
                 "media_type": it["media_type"],
-                "status": "pending",
+                "status": asset_status.PENDING,
                 "availability": "online",
                 "last_scan_id": scan_id,
                 "created_at": now,
@@ -352,7 +353,7 @@ class AssetRepository:
             file_size=file_size,
             file_mtime=file_mtime,
             media_type=media_type,
-            status="pending",
+            status=asset_status.PENDING,
             availability="online",
             last_scan_id=scan_id,
         )
@@ -510,7 +511,7 @@ class AssetRepository:
         asset.thumbnail_key = thumbnail_key
         asset.width = width
         asset.height = height
-        asset.status = "proxy_ready"
+        asset.status = asset_status.PROXY_READY
         asset.updated_at = utcnow()
         self._session.add(asset)
         self._session.commit()

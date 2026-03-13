@@ -13,6 +13,18 @@ from src.repository.tenant import AssetRepository, WorkerJobRepository
 ENQUEUE_BATCH_SIZE = 1000
 
 
+def _priority_for_job_type(job_type: str) -> int:
+    """
+    Return default priority for a job type.
+
+    0 = urgent, 10 = normal, 20 = low.
+    Proxy and video-preview jobs are urgent to minimize time-to-first-view.
+    """
+    if job_type in ("proxy", "video-preview"):
+        return 0
+    return 10
+
+
 def enqueue_proxy_jobs(session: Session, library_id: str) -> int:
     """
     Enqueue proxy jobs for all pending assets in library that don't already
@@ -40,6 +52,7 @@ def enqueue_proxy_jobs(session: Session, library_id: str) -> int:
         return 0
 
     now = datetime.now(timezone.utc)
+    priority = _priority_for_job_type("proxy")
     jobs = []
     for row in rows:
         jobs.append(
@@ -48,7 +61,7 @@ def enqueue_proxy_jobs(session: Session, library_id: str) -> int:
                 "job_type": "proxy",
                 "asset_id": row[0],
                 "status": "pending",
-                "priority": 10,
+                "priority": priority,
                 "created_at": now,
             }
         )
@@ -85,8 +98,8 @@ def enqueue_jobs_for_filter(
         job_repo.cancel_pending_for_assets(asset_ids, job_type)
 
     now = datetime.now(timezone.utc)
-    # Priority: 0=urgent, 10=normal, 20=low. Default to normal priority.
-    priority = 10
+    # Priority: 0=urgent, 10=normal, 20=low.
+    priority = _priority_for_job_type(job_type)
     jobs = []
     for asset_id in asset_ids:
         jobs.append(
