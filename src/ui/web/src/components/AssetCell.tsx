@@ -5,6 +5,7 @@ import type { AssetPageItem } from "../api/types";
 interface AssetCellProps {
   asset: AssetPageItem;
   onClick: () => void;
+  aspectRatio?: number;
 }
 
 function basename(relPath: string): string {
@@ -12,17 +13,21 @@ function basename(relPath: string): string {
   return i >= 0 ? relPath.slice(i + 1) : relPath;
 }
 
-function AssetCellInner({ asset, onClick }: AssetCellProps) {
-  const { url, isLoading, error } = useAuthenticatedImage(asset.asset_id, "thumbnail");
+function AssetCellInner({ asset, onClick, aspectRatio }: AssetCellProps) {
+  const { url, isLoading, error } = useAuthenticatedImage(
+    asset.asset_id,
+    "thumbnail",
+  );
   const filename = basename(asset.rel_path);
   const isVideo = asset.media_type.startsWith("video/");
+  const effectiveAspectRatio = aspectRatio ?? 4 / 3;
 
   return (
     <button
       type="button"
       onClick={onClick}
       className="group relative w-full cursor-pointer overflow-hidden rounded-lg bg-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-gray-950"
-      style={{ aspectRatio: "4/3" }}
+      style={{ aspectRatio: String(effectiveAspectRatio) }}
     >
       {/* Letterbox/pillarbox dark fill */}
       <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
@@ -69,7 +74,9 @@ function AssetCellInner({ asset, onClick }: AssetCellProps) {
       />
       <div className="pointer-events-none absolute bottom-0 left-0 right-0 p-2 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
         <div className="flex items-center gap-2">
-          <span className="truncate text-sm font-medium text-white">{filename}</span>
+          <span className="truncate text-sm font-medium text-white">
+            {filename}
+          </span>
           {isVideo && (
             <span className="shrink-0 rounded bg-gray-700/80 px-2 py-0.5 text-xs text-gray-300">
               Video

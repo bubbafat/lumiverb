@@ -2,25 +2,19 @@ import { useMemo, useRef, useEffect, useState, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { pageAssets } from "../api/client";
-import { listLibraries } from "../api/client";
+import { pageAssets, listLibraries } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
 import { Lightbox } from "../components/Lightbox";
 import type { AssetPageItem } from "../api/types";
 import { useScrollContainer } from "../context/ScrollContainerContext";
+import { groupAssetsByDate } from "../lib/groupByDate";
+import { buildVirtualRows } from "../lib/virtualRows";
+import type { VirtualRowKind } from "../lib/virtualRows";
 
-const MIN_CELL_SIZE = 220;
-const ASPECT_RATIO = 4 / 3;
 const PAGE_SIZE = 100;
-const ESTIMATED_CELL_HEIGHT = MIN_CELL_SIZE / ASPECT_RATIO; // ~165px fallback before first measurement
-
-function chunk<T>(arr: T[], size: number): T[][] {
-  const result: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) {
-    result.push(arr.slice(i, i + size));
-  }
-  return result;
-}
+const TARGET_ROW_HEIGHT = 220;
+const HEADER_HEIGHT = 40;
+const ROW_GAP = 4;
 
 export default function BrowsePage() {
   const { libraryId } = useParams<{ libraryId: string }>();
@@ -58,32 +52,33 @@ export default function BrowsePage() {
 
   const flatAssets = useMemo(() => {
     if (!data?.pages) return [];
-    return data.pages.flatMap((p) => (p ?? []));
+    return data.pages.flatMap((p) => p ?? []);
   }, [data?.pages]);
 
-  const columnCount = Math.max(
-    1,
-    containerWidth > 0 ? Math.floor(containerWidth / MIN_CELL_SIZE) : 4,
+  const groups = useMemo(
+    () => groupAssetsByDate(flatAssets),
+    [flatAssets],
   );
-  const cellWidth = containerWidth / columnCount;
-  const cellHeight = cellWidth / ASPECT_RATIO;
-  const rows = useMemo(
-    () => chunk(flatAssets, columnCount),
-    [flatAssets, columnCount],
+
+  const virtualRows: VirtualRowKind[] = useMemo(
+    () =>
+      containerWidth > 0
+        ? buildVirtualRows(groups, containerWidth, TARGET_ROW_HEIGHT, ROW_GAP)
+        : [],
+    [groups, containerWidth],
   );
 
   const rowVirtualizer = useVirtualizer({
-    count: rows.length,
+    count: virtualRows.length,
     getScrollElement: () => parentEl,
-    // Use a real minimum so getTotalSize() is never 0 before measurement.
-    // A 0 total height places the sentinel at the top of the scroll area,
-    // making it permanently visible and causing all pages to be fetched at once.
-    estimateSize: () => Math.max(cellHeight, ESTIMATED_CELL_HEIGHT),
+    estimateSize: (index) =>
+      virtualRows[index]?.type === "header"
+        ? HEADER_HEIGHT
+        : TARGET_ROW_HEIGHT + ROW_GAP,
     overscan: 3,
   });
 
-  // Observe the scroll container for width changes. Using parentEl (state, not ref)
-  // ensures this effect re-runs if the element is replaced (e.g. after loading).
+  // Observe the scroll container for width changes.
   useEffect(() => {
     if (!parentEl) return;
     const ro = new ResizeObserver((entries) => {
@@ -114,15 +109,21 @@ export default function BrowsePage() {
     setLightboxAsset(null);
   }, []);
 
-  const handleLightboxNavigate = useCallback((index: number) => {
-    const asset = flatAssets[index];
-    if (asset) setLightboxAsset(asset);
-  }, [flatAssets]);
+  const handleLightboxNavigate = useCallback(
+    (index: number) => {
+      const asset = flatAssets[index];
+      if (asset) setLightboxAsset(asset);
+    },
+    [flatAssets],
+  );
 
   if (!libraryId) {
     return (
       <div className="text-gray-400">
-        Invalid library. <Link to="/" className="text-indigo-400 hover:underline">Go to libraries</Link>
+        Invalid library.{" "}
+        <Link to="/" className="text-indigo-400 hover:underline">
+          Go to libraries
+        </Link>
       </div>
     );
   }
@@ -132,12 +133,12 @@ export default function BrowsePage() {
       <div className="space-y-4">
         <div className="animate-pulse space-y-4">
           <div className="h-8 w-48 rounded bg-gray-800" />
-          <div className="grid grid-cols-4 gap-4">
-            {Array.from({ length: 12 }).map((_, i) => (
+          <div className="flex gap-4">
+            {Array.from({ length: 6 }).map((_, i) => (
               <div
+                // eslint-disable-next-line react/no-array-index-key
                 key={i}
-                className="rounded-lg bg-gray-800"
-                style={{ aspectRatio: "4/3" }}
+                className="h-[220px] flex-1 rounded-lg bg-gray-800"
               />
             ))}
           </div>
@@ -151,7 +152,9 @@ export default function BrowsePage() {
       <div className="flex flex-col gap-4">
         {library && (
           <div className="flex items-center gap-2 text-sm text-gray-400">
-            <Link to="/" className="hover:text-gray-300">Libraries</Link>
+            <Link to="/" className="hover:text-gray-300">
+              Libraries
+            </Link>
             <span>/</span>
             <span className="text-gray-300">{library.name}</span>
           </div>
@@ -191,17 +194,12 @@ export default function BrowsePage() {
       </div>
 
       {isLoading ? (
-        <div
-          className="grid gap-4"
-          style={{
-            gridTemplateColumns: `repeat(${columnCount}, 1fr)`,
-          }}
-        >
-          {Array.from({ length: Math.min(3 * columnCount, 12) }).map((_, i) => (
+        <div className="flex gap-4">
+          {Array.from({ length: 6 }).map((_, i) => (
             <div
+              // eslint-disable-next-line react/no-array-index-key
               key={i}
-              className="animate-pulse rounded-lg bg-gray-800"
-              style={{ aspectRatio: "4/3" }}
+              className="h-[220px] flex-1 animate-pulse rounded-lg bg-gray-800"
             />
           ))}
         </div>
@@ -221,33 +219,80 @@ export default function BrowsePage() {
               position: "relative",
             }}
           >
-            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-              const row = rows[virtualRow.index];
-              if (!row) return null;
+            {rowVirtualizer.getVirtualItems().map((virtualItem) => {
+              const vr = virtualRows[virtualItem.index];
+              if (!vr) return null;
+
+              const commonStyle: React.CSSProperties = {
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                height: `${virtualItem.size}px`,
+                transform: `translateY(${virtualItem.start}px)`,
+              };
+
+              if (vr.type === "header") {
+                return (
+                  <div
+                    key={virtualItem.key}
+                    style={commonStyle}
+                    className="flex items-end"
+                  >
+                    <div className="px-1 py-2 text-sm font-semibold text-gray-400">
+                      {vr.label}
+                    </div>
+                  </div>
+                );
+              }
+
+              const group = groups[vr.groupIndex];
+              if (!group) return null;
+              const { justifiedRow } = vr;
+
+              let x = 0;
+
               return (
                 <div
-                  key={virtualRow.key}
-                  style={{
-                    position: "absolute",
-                    top: 0,
-                    left: 0,
-                    width: "100%",
-                    height: `${virtualRow.size}px`,
-                    transform: `translateY(${virtualRow.start}px)`,
-                    display: "grid",
-                    gridTemplateColumns: `repeat(${columnCount}, 1fr)`,
-                    gap: 16,
-                  }}
-                  data-index={virtualRow.index}
+                  key={virtualItem.key}
+                  style={commonStyle}
+                  className="pt-1"
                 >
-                  {row.map((asset) => (
-                    <div key={asset.asset_id}>
-                      <AssetCell
-                        asset={asset}
-                        onClick={() => handleAssetClick(asset)}
-                      />
-                    </div>
-                  ))}
+                  <div
+                    className="relative"
+                    style={{
+                      height: `${justifiedRow.height}px`,
+                    }}
+                  >
+                    {justifiedRow.items.map((itemIndex, idx) => {
+                      const asset = group.assets[itemIndex];
+                      if (!asset) return null;
+                      const width = justifiedRow.widths[idx];
+                      const left = x;
+                      x += width + ROW_GAP;
+
+                      const aspectRatio = justifiedRow.widths[idx] / justifiedRow.height;
+
+                      return (
+                        <div
+                          key={asset.asset_id}
+                          className="absolute"
+                          style={{
+                            left,
+                            top: 0,
+                            width,
+                            height: "100%",
+                          }}
+                        >
+                          <AssetCell
+                            asset={asset}
+                            onClick={() => handleAssetClick(asset)}
+                            aspectRatio={aspectRatio}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               );
             })}

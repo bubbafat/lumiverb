@@ -27,6 +27,10 @@ export interface AssetPageItem {
   file_mtime: string | null;
   sha256: string | null;
   media_type: string;
+  width: number | null;
+  height: number | null;
+  taken_at: string | null;
+  status: string;
 }
 
 export interface AssetDetail {
