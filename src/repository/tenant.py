@@ -479,16 +479,34 @@ class AssetRepository:
         library_id: str,
         after: str | None,
         limit: int,
+        path_prefix: str | None = None,
     ) -> list[Asset]:
-        """Keyset pagination: return assets with asset_id > after, ordered by asset_id, limit rows."""
-        stmt = (
-            select(Asset)
-            .where(Asset.library_id == library_id)
-            .order_by(Asset.asset_id)
-            .limit(limit)
-        )
+        """Keyset pagination: return assets with asset_id > after, ordered by asset_id, limit rows.
+
+        Optional path_prefix filters to assets whose rel_path equals the prefix
+        or starts with prefix + '/'. The prefix is expected to be normalized
+        (no leading/trailing slash).
+        """
+        stmt = select(Asset).where(Asset.library_id == library_id)
+        if path_prefix:
+            stmt = stmt.where(
+                or_(
+                    Asset.rel_path == path_prefix,
+                    Asset.rel_path.like(path_prefix + "/%"),
+                )
+            )
         if after is not None:
             stmt = stmt.where(Asset.asset_id > after)
+        stmt = stmt.order_by(Asset.asset_id).limit(limit)
+        return list(self._session.exec(stmt).all())
+
+    def list_rel_paths_for_library_non_deleted(self, library_id: str) -> list[str]:
+        """Return rel_path for all assets in library where status != 'deleted'."""
+        stmt = (
+            select(Asset.rel_path)
+            .where(Asset.library_id == library_id)
+            .where(Asset.status != "deleted")
+        )
         return list(self._session.exec(stmt).all())
 
     def list_all(self) -> list[Asset]:

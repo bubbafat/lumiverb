@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session
+from src.core.io_utils import normalize_path_prefix
 from src.repository.tenant import AssetRepository, LibraryRepository, ScanRepository, WorkerJobRepository
 from src.storage.local import get_storage
 from src.core.utils import utcnow
@@ -73,17 +74,32 @@ def page_assets(
     library_id: str,
     after: str | None = None,
     limit: int = 500,
+    path_prefix: str | None = None,
 ) -> list[AssetPageItem]:
     """
     Keyset-paginated assets for bulk reconciliation. Returns 204 if no results.
-    Query: library_id (required), after (cursor), limit (default 500, max 500).
+    Query: library_id (required), after (cursor), limit (default 500, max 500),
+    optional path_prefix for directory-scoped pagination.
     """
     if limit > 500:
         limit = 500
     if limit < 1:
         limit = 1
     asset_repo = AssetRepository(session)
-    assets = asset_repo.page_by_library(library_id=library_id, after=after, limit=limit)
+    normalized_prefix: str | None = None
+    if path_prefix is not None:
+        normalized_prefix = normalize_path_prefix(path_prefix)
+        if normalized_prefix and ".." in normalized_prefix.split("/"):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid path_prefix; path traversal not allowed",
+            )
+    assets = asset_repo.page_by_library(
+        library_id=library_id,
+        after=after,
+        limit=limit,
+        path_prefix=normalized_prefix,
+    )
     if not assets:
         from fastapi.responses import Response
 

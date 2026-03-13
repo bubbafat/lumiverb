@@ -5,10 +5,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlmodel import Session
-
 from src.api.dependencies import get_tenant_session
+from src.core.io_utils import normalize_path_prefix
 from src.core.utils import utcnow
-from src.repository.tenant import LibraryRepository
+from src.repository.tenant import AssetRepository, LibraryRepository
 from src.workers.quickwit import purge_library_from_quickwit
 
 router = APIRouter(prefix="/v1/libraries", tags=["libraries"])
@@ -45,6 +45,12 @@ class LibraryListItem(BaseModel):
 
 class EmptyTrashResponse(BaseModel):
     deleted: int
+
+
+class DirectoryItem(BaseModel):
+    name: str
+    path: str
+    asset_count: int
 
 
 @router.post("", response_model=LibraryResponse)
@@ -161,3 +167,64 @@ def delete_library(
         if "already trashed" in str(e):
             raise HTTPException(status_code=409, detail="Library is already in trash") from e
         raise
+
+
+@router.get("/{library_id}/directories", response_model=list[DirectoryItem])
+def list_directories(
+    library_id: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    parent: str = "",
+) -> list[DirectoryItem]:
+    """
+    Return immediate child directories under the given parent path for a library.
+
+    The directory tree is derived from asset rel_path values where status != 'deleted'.
+    """
+    # Basic path traversal protection
+    if parent and any(part == ".." for part in parent.split("/")):
+        raise HTTPException(status_code=400, detail="Invalid parent; path traversal not allowed")
+
+    lib_repo = LibraryRepository(session)
+    library = lib_repo.get_by_id(library_id)
+    if library is None:
+        raise HTTPException(status_code=404, detail="Library not found")
+
+    # Normalize parent but treat empty string as root
+    parent_norm = ""
+    if parent:
+        norm = normalize_path_prefix(parent)
+        parent_norm = norm or ""
+
+    asset_repo = AssetRepository(session)
+    rel_paths = asset_repo.list_rel_paths_for_library_non_deleted(library_id)
+
+    # Aggregate asset counts for each directory path
+    dir_counts: dict[str, int] = {}
+    for rel_path in rel_paths:
+        parts = rel_path.split("/")
+        if len(parts) <= 1:
+            # Asset at library root; contributes to no subdirectories
+            continue
+        # For a/b/c.jpg -> directories: "a", "a/b"
+        for depth in range(1, len(parts)):
+            dir_path = "/".join(parts[:depth])
+            dir_counts[dir_path] = dir_counts.get(dir_path, 0) + 1
+
+    # Compute immediate children for the requested parent
+    items: list[DirectoryItem] = []
+    for dir_path, count in dir_counts.items():
+        if "/" in dir_path:
+            parent_of_dir, name = dir_path.rsplit("/", 1)
+        else:
+            parent_of_dir, name = "", dir_path
+        if parent_of_dir == parent_norm:
+            items.append(
+                DirectoryItem(
+                    name=name,
+                    path=dir_path,
+                    asset_count=count,
+                )
+            )
+
+    items.sort(key=lambda d: d.name)
+    return items
