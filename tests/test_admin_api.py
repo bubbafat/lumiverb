@@ -153,3 +153,119 @@ def test_delete_tenant_soft_deletes(admin_client: TestClient) -> None:
     tenants = [t for t in list_r.json() if t["tenant_id"] == tenant_id]
     assert len(tenants) == 1
     assert tenants[0]["status"] == "deleted"
+
+
+@pytest.mark.slow
+def test_create_additional_key(admin_client: TestClient) -> None:
+    """Create a tenant, then create a second key; assert raw key returned and different from first."""
+    create = admin_client.post(
+        "/v1/admin/tenants",
+        json={"name": "KeysTenant", "plan": "free"},
+        headers={"Authorization": "Bearer test-admin-secret"},
+    )
+    assert create.status_code == 200
+    tenant_id = create.json()["tenant_id"]
+    first_key = create.json()["api_key"]
+    assert first_key.startswith("lv_")
+
+    r = admin_client.post(
+        f"/v1/admin/tenants/{tenant_id}/keys",
+        json={"name": "robert-macbook"},
+        headers={"Authorization": "Bearer test-admin-secret"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["api_key"].startswith("lv_")
+    assert data["api_key"] != first_key
+    assert data["name"] == "robert-macbook"
+    assert data["tenant_id"] == tenant_id
+
+
+@pytest.mark.slow
+def test_create_key_unknown_tenant(admin_client: TestClient) -> None:
+    """POST /v1/admin/tenants/{tenant_id}/keys for non-existent tenant returns 404."""
+    r = admin_client.post(
+        "/v1/admin/tenants/ten_nonexistent9999/keys",
+        json={"name": "some-key"},
+        headers={"Authorization": "Bearer test-admin-secret"},
+    )
+    assert r.status_code == 404
+
+
+@pytest.mark.slow
+def test_create_key_soft_deleted_tenant_returns_404(admin_client: TestClient) -> None:
+    """POST /v1/admin/tenants/{tenant_id}/keys for soft-deleted tenant returns 404."""
+    create = admin_client.post(
+        "/v1/admin/tenants",
+        json={"name": "ToDeleteForKeys", "plan": "free"},
+        headers={"Authorization": "Bearer test-admin-secret"},
+    )
+    assert create.status_code == 200
+    tenant_id = create.json()["tenant_id"]
+    admin_client.delete(
+        f"/v1/admin/tenants/{tenant_id}",
+        headers={"Authorization": "Bearer test-admin-secret"},
+    )
+
+    r = admin_client.post(
+        f"/v1/admin/tenants/{tenant_id}/keys",
+        json={"name": "some-key"},
+        headers={"Authorization": "Bearer test-admin-secret"},
+    )
+    assert r.status_code == 404
+
+
+@pytest.mark.slow
+def test_list_keys(admin_client: TestClient) -> None:
+    """Create tenant, create two additional keys, GET returns all three with correct names."""
+    create = admin_client.post(
+        "/v1/admin/tenants",
+        json={"name": "ListKeysTenant", "plan": "free"},
+        headers={"Authorization": "Bearer test-admin-secret"},
+    )
+    assert create.status_code == 200
+    tenant_id = create.json()["tenant_id"]
+
+    admin_client.post(
+        f"/v1/admin/tenants/{tenant_id}/keys",
+        json={"name": "key-one"},
+        headers={"Authorization": "Bearer test-admin-secret"},
+    )
+    admin_client.post(
+        f"/v1/admin/tenants/{tenant_id}/keys",
+        json={"name": "key-two"},
+        headers={"Authorization": "Bearer test-admin-secret"},
+    )
+
+    r = admin_client.get(
+        f"/v1/admin/tenants/{tenant_id}/keys",
+        headers={"Authorization": "Bearer test-admin-secret"},
+    )
+    assert r.status_code == 200
+    keys = r.json()
+    assert len(keys) == 3  # default + key-one + key-two
+    names = {k["name"] for k in keys}
+    assert names == {"default", "key-one", "key-two"}
+    for k in keys:
+        assert k["tenant_id"] == tenant_id
+        assert "name" in k
+        assert "created_at" in k
+        assert "api_key" not in k
+
+
+@pytest.mark.slow
+def test_create_key_requires_admin_auth(admin_client: TestClient) -> None:
+    """POST without admin key returns 401."""
+    create = admin_client.post(
+        "/v1/admin/tenants",
+        json={"name": "AuthTestTenant", "plan": "free"},
+        headers={"Authorization": "Bearer test-admin-secret"},
+    )
+    assert create.status_code == 200
+    tenant_id = create.json()["tenant_id"]
+
+    r = admin_client.post(
+        f"/v1/admin/tenants/{tenant_id}/keys",
+        json={"name": "unauthorized-key"},
+    )
+    assert r.status_code == 401

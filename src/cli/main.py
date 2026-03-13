@@ -195,6 +195,118 @@ def library_empty_trash() -> None:
 worker_app = typer.Typer(help="Run background workers.")
 app.add_typer(worker_app, name="worker")
 
+admin_app = typer.Typer(help="Admin operations (tenant provisioning, API keys). Requires admin key.")
+app.add_typer(admin_app, name="admin")
+admin_keys_app = typer.Typer(help="Manage API keys for a tenant.")
+admin_app.add_typer(admin_keys_app, name="keys")
+admin_tenants_app = typer.Typer(help="Manage tenants.")
+admin_app.add_typer(admin_tenants_app, name="tenants")
+
+
+def _require_admin_key(
+    admin_key: str | None,
+) -> str:
+    """Return admin key or exit with error if missing."""
+    key = admin_key or _get_env_admin_key()
+    if not key:
+        typer.echo(
+            "Admin key required. Use --admin-key or set LUMIVERB_ADMIN_KEY.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    return key
+
+
+def _get_env_admin_key() -> str | None:
+    """Read LUMIVERB_ADMIN_KEY from environment."""
+    import os
+    return os.environ.get("LUMIVERB_ADMIN_KEY") or None
+
+
+# ---------------------------------------------------------------------------
+# admin keys
+# ---------------------------------------------------------------------------
+
+
+@admin_keys_app.command("create")
+def admin_keys_create(
+    tenant_id: Annotated[str, typer.Option("--tenant-id", help="Tenant ID (e.g. ten_xxx).")],
+    name: Annotated[str, typer.Option("--name", "-n", help="Human-readable label for the key (e.g. robert-macbook).")],
+    admin_key: Annotated[
+        str | None,
+        typer.Option("--admin-key", envvar="LUMIVERB_ADMIN_KEY", help="Admin key for API auth."),
+    ] = None,
+) -> None:
+    """Create a new API key for a tenant. The raw key is printed once and never stored."""
+    key = _require_admin_key(admin_key)
+    client = LumiverbClient(api_key_override=key)
+    resp = client.post(
+        f"/v1/admin/tenants/{tenant_id}/keys",
+        json={"name": name},
+    )
+    data = resp.json()
+    raw_key = data.get("api_key", "")
+    console.print(f"[green]API key created.[/green]")
+    console.print(raw_key)
+
+
+@admin_keys_app.command("list")
+def admin_keys_list(
+    tenant_id: Annotated[str, typer.Option("--tenant-id", help="Tenant ID (e.g. ten_xxx).")],
+    admin_key: Annotated[
+        str | None,
+        typer.Option("--admin-key", envvar="LUMIVERB_ADMIN_KEY", help="Admin key for API auth."),
+    ] = None,
+) -> None:
+    """List API key metadata for a tenant (name, created_at). Raw keys are never shown."""
+    key = _require_admin_key(admin_key)
+    client = LumiverbClient(api_key_override=key)
+    resp = client.get(f"/v1/admin/tenants/{tenant_id}/keys")
+    keys = resp.json()
+    table = Table(title=f"Keys for tenant {tenant_id}")
+    table.add_column("Name")
+    table.add_column("Created")
+    for k in keys:
+        table.add_row(k.get("name", ""), k.get("created_at", ""))
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# admin tenants
+# ---------------------------------------------------------------------------
+
+
+@admin_tenants_app.command("list")
+def admin_tenants_list(
+    admin_key: Annotated[
+        str | None,
+        typer.Option("--admin-key", envvar="LUMIVERB_ADMIN_KEY", help="Admin key for API auth."),
+    ] = None,
+) -> None:
+    """List all tenants with id, name, plan, status."""
+    key = _require_admin_key(admin_key)
+    client = LumiverbClient(api_key_override=key)
+    resp = client.get("/v1/admin/tenants")
+    tenants = resp.json()
+    table = Table(title="Tenants")
+    table.add_column("Tenant ID", style="dim")
+    table.add_column("Name")
+    table.add_column("Plan")
+    table.add_column("Status")
+    for t in tenants:
+        table.add_row(
+            t.get("tenant_id", ""),
+            t.get("name", ""),
+            t.get("plan", ""),
+            t.get("status", ""),
+        )
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# worker (continued)
+# ---------------------------------------------------------------------------
+
 
 def _resolve_library_id(client: object, library_name: str) -> str:
     """Resolve library name to library_id. Exits with 1 if not found."""

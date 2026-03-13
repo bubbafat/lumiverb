@@ -23,6 +23,9 @@ Entry point: `lumiverb = "src.cli:main"` (setuptools); `main()` invokes the Type
 - `lumiverb library set-model <library_id> <model>` — PATCH vision_model_id. Use `moondream` for local Moondream; any other string for OpenAI-compatible API (via VISION_API_URL).
 - `lumiverb library delete <name>` — Soft delete: move library to trash (prompt for confirmation)
 - `lumiverb library empty-trash` — Permanently delete all trashed libraries and their assets (prompt for confirmation)
+- `lumiverb admin keys create --tenant-id <id> --name <label>` — Create new API key for tenant. Requires `--admin-key` or `LUMIVERB_ADMIN_KEY`. Prints raw key once.
+- `lumiverb admin keys list --tenant-id <id>` — List API key metadata (name, created_at) for a tenant. Requires `--admin-key` or `LUMIVERB_ADMIN_KEY`.
+- `lumiverb admin tenants list` — List tenants (tenant_id, name, plan, status). Requires `--admin-key` or `LUMIVERB_ADMIN_KEY`.
 - `lumiverb status --library <name>` — Show pipeline status: asset counts by stage (proxy, EXIF, vision, search sync) with done/pending/failed breakdown.
 - `lumiverb failures --library <name> --job-type <type> [--path <prefix>] [--limit N]` — List failed jobs with error messages. Shows most recent failure per asset. Prints retry command hint.
 - `lumiverb scan --library <name> [--path <subpath>] [--force]` — Scan a library for media files; discovers/upserts assets via API, reports added/updated/skipped/missing.

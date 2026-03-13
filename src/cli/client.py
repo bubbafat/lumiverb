@@ -12,9 +12,9 @@ from src.cli.config import get_api_key, get_api_url
 class LumiverbClient:
     """HTTP client that uses CLI config for base_url and Authorization header."""
 
-    def __init__(self) -> None:
+    def __init__(self, api_key_override: str | None = None) -> None:
         self._base_url = get_api_url().rstrip("/")
-        self._api_key = get_api_key()
+        self._api_key = api_key_override if api_key_override is not None else get_api_key()
 
     def _headers(self) -> dict[str, str]:
         headers: dict[str, str] = {}

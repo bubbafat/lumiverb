@@ -37,6 +37,22 @@ class TenantListItem(BaseModel):
     status: str
 
 
+class CreateTenantKeyRequest(BaseModel):
+    name: str
+
+
+class CreateTenantKeyResponse(BaseModel):
+    api_key: str
+    name: str
+    tenant_id: str
+
+
+class KeyMetadataItem(BaseModel):
+    name: str
+    tenant_id: str
+    created_at: str
+
+
 @router.post("/tenants", response_model=CreateTenantResponse)
 def create_tenant(
     body: CreateTenantRequest,
@@ -134,6 +150,66 @@ def list_tenants(
             status=t.status,
         )
         for t in tenants
+    ]
+
+
+@router.post("/tenants/{tenant_id}/keys", response_model=CreateTenantKeyResponse)
+def create_tenant_key(
+    tenant_id: str,
+    body: CreateTenantKeyRequest,
+    _: Annotated[None, Depends(require_admin)],
+    session: Annotated[Session, Depends(get_db_session)],
+) -> CreateTenantKeyResponse:
+    """
+    Create a new API key for a tenant. Returns the raw key once; it is never stored.
+    Returns 404 if the tenant does not exist or is soft-deleted.
+    """
+    tenant_repo = TenantRepository(session)
+    key_repo = ApiKeyRepository(session)
+    tenant = tenant_repo.get_by_id(tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    if tenant.status == "deleted":
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    api_key_row, plaintext_key = key_repo.create(
+        tenant_id=tenant_id,
+        name=body.name,
+        scopes=["read", "write"],
+    )
+    return CreateTenantKeyResponse(
+        api_key=plaintext_key,
+        name=body.name,
+        tenant_id=tenant_id,
+    )
+
+
+@router.get("/tenants/{tenant_id}/keys", response_model=list[KeyMetadataItem])
+def list_tenant_keys(
+    tenant_id: str,
+    _: Annotated[None, Depends(require_admin)],
+    session: Annotated[Session, Depends(get_db_session)],
+) -> list[KeyMetadataItem]:
+    """
+    List API key metadata for a tenant. Never returns raw keys.
+    Returns 404 if the tenant does not exist or is soft-deleted.
+    """
+    tenant_repo = TenantRepository(session)
+    key_repo = ApiKeyRepository(session)
+    tenant = tenant_repo.get_by_id(tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    if tenant.status == "deleted":
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    keys = key_repo.list_by_tenant_id(tenant_id)
+    return [
+        KeyMetadataItem(
+            name=k.name,
+            tenant_id=k.tenant_id,
+            created_at=k.created_at.isoformat(),
+        )
+        for k in keys
     ]
 
 
