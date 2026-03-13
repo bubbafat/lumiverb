@@ -35,7 +35,7 @@ echo -e "${GREEN}✓ Control plane up to date${NC}"
 
 echo ""
 echo "=== Step 2: Enumerating tenants ==="
-tenant_urls=$(python3 - <<'PYEOF'
+tenant_urls=$(uv run python - <<'PYEOF'
 import os, sys
 url = os.environ.get("CONTROL_PLANE_DATABASE_URL", "")
 if not url:

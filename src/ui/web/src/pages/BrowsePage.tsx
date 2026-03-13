@@ -7,6 +7,7 @@ import { listLibraries } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
 import { Lightbox } from "../components/Lightbox";
 import type { AssetPageItem } from "../api/types";
+import { useScrollContainer } from "../context/ScrollContainerContext";
 
 const MIN_CELL_SIZE = 220;
 const ASPECT_RATIO = 4 / 3;
@@ -23,9 +24,7 @@ function chunk<T>(arr: T[], size: number): T[][] {
 
 export default function BrowsePage() {
   const { libraryId } = useParams<{ libraryId: string }>();
-  // Callback ref: gives us a stable state value (not a stale ref.current) for the scroll container.
-  // This ensures the ResizeObserver and IntersectionObserver always see the live element.
-  const [parentEl, setParentEl] = useState<HTMLDivElement | null>(null);
+  const parentEl = useScrollContainer();
   const sentinelRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
   const [lightboxAsset, setLightboxAsset] = useState<AssetPageItem | null>(null);
@@ -214,63 +213,57 @@ export default function BrowsePage() {
           </p>
         </div>
       ) : (
-        <div
-          ref={setParentEl}
-          className="h-[calc(100vh-12rem)] overflow-auto"
-          style={{ contain: "strict" }}
-        >
-          <div style={{ width: "100%" }}>
-            <div
-              style={{
-                height: `${rowVirtualizer.getTotalSize()}px`,
-                width: "100%",
-                position: "relative",
-              }}
-            >
-              {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-                const row = rows[virtualRow.index];
-                if (!row) return null;
-                return (
-                  <div
-                    key={virtualRow.key}
-                    style={{
-                      position: "absolute",
-                      top: 0,
-                      left: 0,
-                      width: "100%",
-                      height: `${virtualRow.size}px`,
-                      transform: `translateY(${virtualRow.start}px)`,
-                      display: "grid",
-                      gridTemplateColumns: `repeat(${columnCount}, 1fr)`,
-                      gap: 16,
-                    }}
-                    data-index={virtualRow.index}
-                  >
-                    {row.map((asset) => (
-                      <div key={asset.asset_id}>
-                        <AssetCell
-                          asset={asset}
-                          onClick={() => handleAssetClick(asset)}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Sentinel for infinite scroll */}
-            <div ref={sentinelRef} className="h-4" />
-
-            {isFetchingNextPage && (
-              <div className="flex justify-center py-4">
+        <div style={{ width: "100%", contain: "strict" }}>
+          <div
+            style={{
+              height: `${rowVirtualizer.getTotalSize()}px`,
+              width: "100%",
+              position: "relative",
+            }}
+          >
+            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+              const row = rows[virtualRow.index];
+              if (!row) return null;
+              return (
                 <div
-                  className="h-8 w-8 animate-spin rounded-full border-2 border-gray-600 border-t-indigo-500"
-                  aria-hidden
-                />
-              </div>
-            )}
+                  key={virtualRow.key}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    height: `${virtualRow.size}px`,
+                    transform: `translateY(${virtualRow.start}px)`,
+                    display: "grid",
+                    gridTemplateColumns: `repeat(${columnCount}, 1fr)`,
+                    gap: 16,
+                  }}
+                  data-index={virtualRow.index}
+                >
+                  {row.map((asset) => (
+                    <div key={asset.asset_id}>
+                      <AssetCell
+                        asset={asset}
+                        onClick={() => handleAssetClick(asset)}
+                      />
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
           </div>
+
+          {/* Sentinel for infinite scroll */}
+          <div ref={sentinelRef} className="h-4" />
+
+          {isFetchingNextPage && (
+            <div className="flex justify-center py-4">
+              <div
+                className="h-8 w-8 animate-spin rounded-full border-2 border-gray-600 border-t-indigo-500"
+                aria-hidden
+              />
+            </div>
+          )}
         </div>
       )}
 

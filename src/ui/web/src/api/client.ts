@@ -2,6 +2,7 @@ import type {
   AssetDetail,
   AssetPageItem,
   EmptyTrashResponse,
+  JobListItem,
   LibraryListItem,
   LibraryResponse,
 } from "./types";
@@ -127,3 +128,14 @@ export function thumbnailUrl(assetId: string): string {
 export function proxyUrl(assetId: string): string {
   return `/v1/assets/${assetId}/proxy`;
 }
+
+export async function listJobs(params: {
+  status?: string;
+  limit?: number;
+}): Promise<JobListItem[]> {
+  const qs = new URLSearchParams();
+  if (params.status) qs.set("status", params.status);
+  if (params.limit) qs.set("limit", String(params.limit));
+  return apiFetch<JobListItem[]>(`/jobs?${qs.toString()}`);
+}
+

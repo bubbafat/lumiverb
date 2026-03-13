@@ -48,3 +48,15 @@ export interface AssetDetail {
   gps_lon: number | null;
   ai_description?: string | null;
 }
+
+export interface JobListItem {
+  job_id: string;
+  job_type: string;
+  status: string;
+  priority: number;
+  asset_id: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
