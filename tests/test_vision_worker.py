@@ -1,3 +1,41 @@
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from src.storage.local import LocalStorage
+from src.workers.vision_worker import VisionWorker
+
+
+@pytest.mark.fast
+def test_vision_worker_raises_on_empty_description_and_tags(tmp_path: Path) -> None:
+    client = MagicMock()
+    storage = LocalStorage(data_dir=str(tmp_path))
+    worker = VisionWorker(client=client, storage=storage, once=True)
+
+    job = {
+        "job_id": "job-1",
+        "asset_id": "asset-1",
+        "proxy_key": "proxies/asset-1.jpg",
+        "vision_model_id": "moondream",
+    }
+
+    # Create an empty file to satisfy LocalStorage path resolution if accessed.
+    proxy_path = Path(storage.abs_path(job["proxy_key"]))
+    proxy_path.parent.mkdir(parents=True, exist_ok=True)
+    proxy_path.touch()
+
+    with patch("src.workers.captions.factory.get_caption_provider") as mock_factory:
+        mock_provider = MagicMock()
+        # Whitespace-only description and tags – should be treated as empty overall.
+        mock_provider.describe.return_value = {"description": "   ", "tags": ["", "  ", "\n"]}
+        mock_factory.return_value = mock_provider
+
+        with pytest.raises(RuntimeError) as excinfo:
+            worker.process(job)
+
+    assert "empty description and tags" in str(excinfo.value)
+
 import json
 import os
 import secrets
