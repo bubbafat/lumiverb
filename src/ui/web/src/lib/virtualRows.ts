@@ -2,6 +2,8 @@ import type { DateGroup } from "./groupByDate";
 import type { JustifiedRow, JustifiedItem } from "./justifiedLayout";
 import { computeJustifiedRows } from "./justifiedLayout";
 
+export const HEADER_HEIGHT = 40;
+
 export type VirtualRowKind =
   | { type: "header"; label: string; height: number }
   | {
@@ -23,8 +25,7 @@ export function buildVirtualRows(
   const virtualRows: VirtualRowKind[] = [];
 
   groups.forEach((group, groupIndex) => {
-    const headerHeight = 40;
-    virtualRows.push({ type: "header", label: group.label, height: headerHeight });
+    virtualRows.push({ type: "header", label: group.label, height: HEADER_HEIGHT });
 
     const items: JustifiedItem[] = group.assets.map((asset) => {
       const w = asset.width ?? 0;
@@ -52,6 +53,40 @@ export function buildVirtualRows(
         height: justifiedRow.height + rowGap,
       });
     });
+  });
+
+  return virtualRows;
+}
+
+export function buildFixedGridRows(
+  groups: DateGroup[],
+  containerWidth: number,
+  columns: number,
+  rowHeight: number,
+  rowGap = 4,
+): VirtualRowKind[] {
+  if (containerWidth <= 0 || !groups.length) return [];
+  const virtualRows: VirtualRowKind[] = [];
+  const colWidth = (containerWidth - rowGap * (columns - 1)) / columns;
+
+  groups.forEach((group, groupIndex) => {
+    virtualRows.push({ type: "header", label: group.label, height: HEADER_HEIGHT });
+
+    for (let i = 0; i < group.assets.length; i += columns) {
+      const items = group.assets.slice(i, i + columns);
+      const justifiedRow: JustifiedRow = {
+        items: items.map((_, idx) => i + idx),
+        widths: items.map(() => colWidth),
+        height: rowHeight,
+      };
+      virtualRows.push({
+        type: "images",
+        groupIndex,
+        rowIndex: Math.floor(i / columns),
+        justifiedRow,
+        height: rowHeight + rowGap,
+      });
+    }
   });
 
   return virtualRows;

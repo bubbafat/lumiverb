@@ -9,12 +9,15 @@ import { FilterBar } from "../components/FilterBar";
 import type { AssetPageItem } from "../api/types";
 import { useScrollContainer } from "../context/ScrollContainerContext";
 import { groupAssetsByDate } from "../lib/groupByDate";
-import { buildVirtualRows } from "../lib/virtualRows";
+import { buildVirtualRows, buildFixedGridRows } from "../lib/virtualRows";
 import type { VirtualRowKind } from "../lib/virtualRows";
 
 const PAGE_SIZE = 100;
 const TARGET_ROW_HEIGHT = 220;
 const ROW_GAP = 4;
+const MOBILE_BREAKPOINT = 500;
+const MOBILE_COLUMNS = 2;
+const MOBILE_ROW_HEIGHT = 160;
 
 export default function BrowsePage() {
   const { libraryId } = useParams<{ libraryId: string }>();
@@ -126,10 +129,19 @@ export default function BrowsePage() {
   );
 
   const virtualRows: VirtualRowKind[] = useMemo(
-    () =>
-      containerWidth > 0
-        ? buildVirtualRows(groups, containerWidth, TARGET_ROW_HEIGHT, ROW_GAP)
-        : [],
+    () => {
+      if (containerWidth <= 0) return [];
+      if (containerWidth < MOBILE_BREAKPOINT) {
+        return buildFixedGridRows(
+          groups,
+          containerWidth,
+          MOBILE_COLUMNS,
+          MOBILE_ROW_HEIGHT,
+          ROW_GAP,
+        );
+      }
+      return buildVirtualRows(groups, containerWidth, TARGET_ROW_HEIGHT, ROW_GAP);
+    },
     [groups, containerWidth],
   );
 
