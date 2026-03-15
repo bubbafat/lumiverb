@@ -110,7 +110,7 @@ class LibraryRepository:
 
     def hard_delete(self, library_id: str) -> None:
         """Permanently delete library and all related data in FK-safe order. Single transaction."""
-        # Order: worker_jobs, search_sync_queue, asset_metadata, video_scenes, assets, scans, libraries
+        # Order: worker_jobs, search_sync_queue, asset_metadata, video_scenes, video_index_chunks, assets, scans, libraries
         params = {"library_id": library_id}
         self._session.execute(
             text(
@@ -143,6 +143,15 @@ class LibraryRepository:
             text(
                 """
                 DELETE FROM video_scenes
+                WHERE asset_id IN (SELECT asset_id FROM assets WHERE library_id = :library_id)
+                """
+            ),
+            params,
+        )
+        self._session.execute(
+            text(
+                """
+                DELETE FROM video_index_chunks
                 WHERE asset_id IN (SELECT asset_id FROM assets WHERE library_id = :library_id)
                 """
             ),
