@@ -195,6 +195,9 @@ def library_empty_trash() -> None:
 worker_app = typer.Typer(help="Run background workers.")
 app.add_typer(worker_app, name="worker")
 
+pipeline_app = typer.Typer(help="Orchestrate pipeline runs (scan + workers) with locking and live dashboard.")
+app.add_typer(pipeline_app, name="pipeline")
+
 admin_app = typer.Typer(help="Admin operations (tenant provisioning, API keys). Requires admin key.")
 app.add_typer(admin_app, name="admin")
 admin_keys_app = typer.Typer(help="Manage API keys for a tenant.")
@@ -316,6 +319,16 @@ def _resolve_library_id(client: object, library_name: str) -> str:
         typer.echo(f"Library not found: {library_name}", err=True)
         raise typer.Exit(1)
     return match["library_id"]
+
+
+def _resolve_library(client: object, library_name: str) -> dict:
+    """Resolve library name to full library dict (library_id, name, root_path, ...). Exits with 1 if not found."""
+    libraries = client.get("/v1/libraries").json()
+    match = next((l for l in libraries if l.get("name") == library_name), None)
+    if match is None:
+        typer.echo(f"Library not found: {library_name}", err=True)
+        raise typer.Exit(1)
+    return match
 
 
 def _resolve_asset_id(
@@ -926,6 +939,88 @@ STAGE_ORDER: list[str] = [
 def _resolve_job_type(job_type: str) -> str:
     """Resolve user-friendly aliases (e.g. vision) to actual job_type (ai_vision)."""
     return JOB_TYPE_ALIASES.get(job_type.lower(), job_type)
+
+
+# ---------------------------------------------------------------------------
+# pipeline
+# ---------------------------------------------------------------------------
+
+
+@pipeline_app.command("run")
+def pipeline_run(
+    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
+    media_type: Annotated[
+        str,
+        typer.Option("--media-type", help="Run image, video, or all stages."),
+    ] = "all",
+    path: Annotated[
+        str | None,
+        typer.Option("--path", "-p", help="Optional subpath to scope scan and workers."),
+    ] = None,
+    once: Annotated[bool, typer.Option("--once", help="Run until queues are empty then exit.")] = False,
+    skip_scan: Annotated[bool, typer.Option("--skip-scan", help="Skip initial scan.")] = False,
+    force: Annotated[bool, typer.Option("--force", help="Force acquire lock (release existing holder).")] = False,
+    interval: Annotated[int, typer.Option("--interval", help="Seconds between poll cycles in continuous mode.")] = 60,
+    lock_timeout: Annotated[
+        int,
+        typer.Option("--lock-timeout", help="Minutes after which a stale lock can be taken."),
+    ] = 5,
+) -> None:
+    """Run the pipeline supervisor: acquire lock, optional scan, then poll status and run workers with a live dashboard."""
+    from src.cli.pipeline_dashboard import PipelineDashboard
+    from src.core.database import get_tenant_session
+    from src.repository.tenant import AssetRepository, PipelineLockHeldError, PipelineLockRepository
+    from src.workers.pipeline_supervisor import PathUnreachableError, PipelineSupervisor
+
+    client = LumiverbClient()
+    ctx = client.get("/v1/tenant/context").json()
+    tenant_id = ctx["tenant_id"]
+
+    library_obj = _resolve_library(client, library)
+    library_id = library_obj["library_id"]
+    library_name = library_obj.get("name", library)
+    path_prefix = normalize_path_prefix(path) if path else None
+
+    with get_tenant_session(tenant_id) as session:
+        lock_repo = PipelineLockRepository(session)
+        if force:
+            lock_repo.force_acquire(tenant_id)
+        else:
+            try:
+                lock_repo.try_acquire(tenant_id, lock_timeout_minutes=lock_timeout)
+            except PipelineLockHeldError as e:
+                console.print(
+                    f"[red]Pipeline lock held by {e.hostname} pid={e.pid} since {e.started_at}[/red]"
+                )
+                console.print("Use --force to override.")
+                raise typer.Exit(1)
+
+        total_assets = AssetRepository(session).count_by_library(library_id)
+        dashboard = PipelineDashboard(library_name, total_assets)
+        supervisor = PipelineSupervisor(
+            library_id=library_id,
+            library_name=library_name,
+            tenant_id=tenant_id,
+            client=client,
+            lock_repo=lock_repo,
+            dashboard=dashboard,
+            media_type=media_type,
+            path_prefix=path_prefix,
+            once=once,
+            interval=interval,
+            lock_timeout_minutes=lock_timeout,
+            skip_scan=skip_scan,
+        )
+        try:
+            with dashboard:
+                supervisor.run()
+        except PathUnreachableError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1)
+        except KeyboardInterrupt:
+            console.print("Interrupted.")
+        finally:
+            lock_repo.release(tenant_id)
 
 
 @app.command("status")
