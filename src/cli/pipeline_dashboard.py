@@ -50,10 +50,14 @@ class PipelineDashboard:
     def __enter__(self) -> PipelineDashboard:
         self._layout = Layout()
         self._layout.split_column(
-            Layout(name="status", minimum_size=6),
-            Layout(name="workers", minimum_size=4),
+            Layout(name="top", minimum_size=6),
             Layout(name="log", ratio=1, minimum_size=8),
         )
+        self._layout["top"].split_row(
+            Layout(name="status"),
+            Layout(name="workers"),
+        )
+        self._layout["top"].size = self._top_height()
         self._live = Live(
             self._layout,
             console=self._console,
@@ -104,6 +108,7 @@ class PipelineDashboard:
                 state["ended_at"] = now
 
         if self._live is not None and self._layout is not None:
+            self._layout["top"].size = self._top_height()
             self._layout["workers"].update(self._render_workers())
             self._live.refresh()
 
@@ -151,10 +156,18 @@ class PipelineDashboard:
         self._flash_red = {k: v for k, v in self._flash_red.items() if v > now}
 
         if self._live is not None and self._layout is not None:
+            self._layout["top"].size = self._top_height()
             self._layout["status"].update(self._render_status())
             self._layout["workers"].update(self._render_workers())
             self._layout["log"].update(self._render_log())
             self._live.refresh()
+
+    def _top_height(self) -> int:
+        # Status panel: border (2) + table header + separator (2) + one row per stage
+        status_h = len(self._stages) + 4
+        # Workers panel: border (2) + one row per worker
+        workers_h = len(self._worker_states) + 2
+        return max(status_h, workers_h) + 2  # +2 lines breathing room
 
     def _render_status(self) -> Panel | Group:
         """Build status section: table (and optional warning)."""
