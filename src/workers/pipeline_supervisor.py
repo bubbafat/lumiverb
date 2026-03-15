@@ -213,23 +213,25 @@ class PipelineSupervisor:
         self._heartbeat_stop = threading.Event()
         self._heartbeat_thread: threading.Thread | None = None
         self._status_poll_thread: threading.Thread | None = None
-        self._current_proc: subprocess.Popen | None = None
+        self._current_procs: list[subprocess.Popen] = []
+        self._procs_lock = threading.Lock()
 
     def _terminate_current_proc(self) -> None:
-        """Terminate the current subprocess if any (e.g. on CTRL+C)."""
-        if self._current_proc is None:
-            return
-        try:
-            self._current_proc.terminate()
+        """Terminate all running subprocesses (e.g. on CTRL+C)."""
+        with self._procs_lock:
+            procs = list(self._current_procs)
+        for proc in procs:
             try:
-                self._current_proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                self._current_proc.kill()
-                self._current_proc.wait(timeout=5)
-        except Exception as e:
-            _log.warning("Error terminating subprocess: %s", e)
-        finally:
-            self._current_proc = None
+                proc.terminate()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=5)
+            except Exception as e:
+                _log.warning("Error terminating subprocess: %s", e)
+        with self._procs_lock:
+            self._current_procs.clear()
 
     def _dashboard_update(self, stages: list[dict[str, Any]], log_line: str | None = None) -> None:
         if self._dashboard is None:
@@ -287,7 +289,8 @@ class PipelineSupervisor:
             stderr=subprocess.STDOUT,
             text=True,
         )
-        self._current_proc = proc
+        with self._procs_lock:
+            self._current_procs.append(proc)
         try:
             assert proc.stdout is not None
             for line in proc.stdout:
@@ -300,68 +303,66 @@ class PipelineSupervisor:
             else:
                 self._dashboard_set_worker_status("scan", "Scan", "completed")
         finally:
-            self._current_proc = None
+            with self._procs_lock:
+                if proc in self._current_procs:
+                    self._current_procs.remove(proc)
 
     def _run_workers(self, stages: list[PipelineStage]) -> None:
-        for stage in stages:
-            cmd = _lumiverb_cmd() + [
-                "worker",
-                stage.worker_cmd,
-                "--library",
-                self.library_name,
-                "--once",
-            ]
-            if self._path_prefix:
-                cmd += ["--path", self._path_prefix]
-            _log.info("Running worker: %s", " ".join(cmd))
-            self._dashboard_set_worker_status(stage.worker_cmd, stage.label, "active")
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-            self._current_proc = proc
-            try:
-                assert proc.stdout is not None
-                for line in proc.stdout:
-                    line = line.rstrip("\n")
-                    self._dashboard_update([], log_line=line)
-                proc.wait()
-                if proc.returncode != 0:
-                    _log.warning("Worker %s exited with code %s", stage.worker_cmd, proc.returncode)
-                    self._dashboard_set_worker_status(stage.worker_cmd, stage.label, "error")
-                else:
-                    self._dashboard_set_worker_status(stage.worker_cmd, stage.label, "idle")
-            finally:
-                self._current_proc = None
+        """Spawn all stages concurrently; each drains stdout in its own thread."""
+        self._run_workers_concurrent(stages, library_name=self.library_name, path_prefix=self._path_prefix)
 
     def _run_workers_tenant(self, stages: list[PipelineStage]) -> None:
         """Like _run_workers but without --library (workers claim from all libraries)."""
-        for stage in stages:
+        self._run_workers_concurrent(stages, library_name=None, path_prefix=None)
+
+    def _run_workers_concurrent(
+        self,
+        stages: list[PipelineStage],
+        *,
+        library_name: str | None,
+        path_prefix: str | None,
+    ) -> None:
+        """Spawn all stages in parallel; wait for all to finish."""
+        if not stages:
+            return
+
+        def _spawn(stage: PipelineStage) -> tuple[PipelineStage, subprocess.Popen]:
             cmd = _lumiverb_cmd() + ["worker", stage.worker_cmd, "--once"]
-            _log.info("Running worker (tenant-wide): %s", " ".join(cmd))
+            if library_name:
+                cmd += ["--library", library_name]
+            if path_prefix:
+                cmd += ["--path", path_prefix]
+            _log.info("Running worker: %s", " ".join(cmd))
             self._dashboard_set_worker_status(stage.worker_cmd, stage.label, "active")
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-            self._current_proc = proc
-            try:
-                assert proc.stdout is not None
-                for line in proc.stdout:
-                    line = line.rstrip("\n")
-                    self._dashboard_update([], log_line=line)
-                proc.wait()
-                if proc.returncode != 0:
-                    _log.warning("Worker %s exited with code %s", stage.worker_cmd, proc.returncode)
-                    self._dashboard_set_worker_status(stage.worker_cmd, stage.label, "error")
-                else:
-                    self._dashboard_set_worker_status(stage.worker_cmd, stage.label, "idle")
-            finally:
-                self._current_proc = None
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            with self._procs_lock:
+                self._current_procs.append(proc)
+            return stage, proc
+
+        def _drain(stage: PipelineStage, proc: subprocess.Popen) -> None:
+            assert proc.stdout is not None
+            prefix = f"[{stage.label}] "
+            for line in proc.stdout:
+                self._dashboard_update([], log_line=prefix + line.rstrip("\n"))
+            proc.wait()
+            with self._procs_lock:
+                if proc in self._current_procs:
+                    self._current_procs.remove(proc)
+            if proc.returncode != 0:
+                _log.warning("Worker %s exited with code %s", stage.worker_cmd, proc.returncode)
+                self._dashboard_set_worker_status(stage.worker_cmd, stage.label, "error")
+            else:
+                self._dashboard_set_worker_status(stage.worker_cmd, stage.label, "idle")
+
+        spawned = [_spawn(stage) for stage in stages]
+        drain_threads = [
+            threading.Thread(target=_drain, args=(stage, proc), daemon=True)
+            for stage, proc in spawned
+        ]
+        for t in drain_threads:
+            t.start()
+        for t in drain_threads:
+            t.join()
 
     def run(self) -> None:
         """
@@ -464,7 +465,8 @@ class PipelineSupervisor:
                     _log.info("Running scan: %s", " ".join(cmd))
                     self._dashboard_set_worker_status("scan", f"Scan ({lib['library_name']})", "active")
                     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-                    self._current_proc = proc
+                    with self._procs_lock:
+                        self._current_procs.append(proc)
                     try:
                         assert proc.stdout is not None
                         for line in proc.stdout:
@@ -476,7 +478,9 @@ class PipelineSupervisor:
                         else:
                             self._dashboard_set_worker_status("scan", f"Scan ({lib['library_name']})", "completed")
                     finally:
-                        self._current_proc = None
+                        with self._procs_lock:
+                            if proc in self._current_procs:
+                                self._current_procs.remove(proc)
 
             while True:
                 try:
