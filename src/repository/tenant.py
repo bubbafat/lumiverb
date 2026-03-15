@@ -624,6 +624,7 @@ class AssetRepository:
         taken_at: str | None,
         gps_lat: float | None,
         gps_lon: float | None,
+        duration_sec: float | None = None,
     ) -> None:
         """Update EXIF fields on asset record."""
         taken_at_dt: datetime | None = None
@@ -643,7 +644,8 @@ class AssetRepository:
                     camera_model = :camera_model,
                     taken_at = :taken_at,
                     gps_lat = :gps_lat,
-                    gps_lon = :gps_lon
+                    gps_lon = :gps_lon,
+                    duration_sec = COALESCE(:duration_sec, duration_sec)
                 WHERE asset_id = :asset_id
                 """
             ),
@@ -656,6 +658,7 @@ class AssetRepository:
                 "taken_at": taken_at_dt,
                 "gps_lat": gps_lat,
                 "gps_lon": gps_lon,
+                "duration_sec": duration_sec,
                 "asset_id": asset_id,
             },
         )

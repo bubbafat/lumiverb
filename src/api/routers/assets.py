@@ -73,6 +73,7 @@ class AssetPageItem(BaseModel):
     height: int | None = None
     taken_at: str | None = None  # ISO8601
     status: str = "pending"
+    duration_sec: float | None = None
 
 
 @router.get("/page", responses={204: {"description": "No assets (end of pages)"}})
@@ -125,6 +126,7 @@ def page_assets(
             height=a.height,
             taken_at=a.taken_at.isoformat() if a.taken_at else None,
             status=a.status,
+            duration_sec=a.duration_sec or (a.duration_ms / 1000.0 if a.duration_ms else None),
         )
         for a in assets
     ]

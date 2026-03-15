@@ -228,6 +228,7 @@ def complete_job(
             taken_at=data.get("taken_at"),
             gps_lat=data.get("gps_lat"),
             gps_lon=data.get("gps_lon"),
+            duration_sec=data.get("duration_sec"),
         )
     elif job.job_type == "ai_vision":
         if job.asset_id is None:

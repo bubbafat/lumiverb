@@ -8,6 +8,15 @@ interface AssetCellProps {
   aspectRatio?: number;
 }
 
+function formatDuration(sec: number): string {
+  const totalSec = Math.round(sec);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
 function basename(relPath: string): string {
   const i = relPath.lastIndexOf("/");
   return i >= 0 ? relPath.slice(i + 1) : relPath;
@@ -19,7 +28,7 @@ function AssetCellInner({ asset, onClick, aspectRatio }: AssetCellProps) {
     "thumbnail",
   );
   const filename = basename(asset.rel_path);
-  const isVideo = asset.media_type.startsWith("video/");
+  const isVideo = asset.media_type === "video" || asset.media_type.startsWith("video/");
   const effectiveAspectRatio = aspectRatio ?? 4 / 3;
 
   return (
@@ -66,6 +75,20 @@ function AssetCellInner({ asset, onClick, aspectRatio }: AssetCellProps) {
           />
         )}
       </div>
+
+      {/* Video duration badge */}
+      {isVideo && (
+        <div className="pointer-events-none absolute right-1.5 top-1.5 flex items-center gap-1 rounded-full bg-black/60 px-1.5 py-0.5">
+          <svg className="h-3 w-3 shrink-0 text-white" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+            <path d="M8 5v14l11-7z" />
+          </svg>
+          {asset.duration_sec != null && (
+            <span className="text-xs font-medium tabular-nums text-white">
+              {formatDuration(asset.duration_sec)}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Hover overlay */}
       <div

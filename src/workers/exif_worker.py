@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from src.metadata.normalization import _parse_duration
 from src.workers.base import BaseWorker
 from src.workers.exif_extract import (
     compute_sha256,
@@ -34,6 +35,8 @@ class ExifWorker(BaseWorker):
         sha256 = compute_sha256(source_path)
         gps_lat, gps_lon = parse_gps(exif_data)
         taken_at = parse_taken_at(exif_data)
+        media_type = job.get("media_type", "")
+        duration_sec = _parse_duration(exif_data, media_type == "video" or media_type.startswith("video/"))
 
         return {
             "sha256": sha256,
@@ -43,4 +46,5 @@ class ExifWorker(BaseWorker):
             "taken_at": taken_at.isoformat() if taken_at else None,
             "gps_lat": gps_lat,
             "gps_lon": gps_lon,
+            "duration_sec": duration_sec,
         }

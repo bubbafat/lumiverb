@@ -54,6 +54,8 @@ EXIF_FIELDS = [
     # Software
     "Software",
     "ProcessingSoftware",
+    # Video
+    "Duration",
 ]
 
 

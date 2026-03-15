@@ -37,6 +37,7 @@ export interface AssetPageItem {
   height: number | null;
   taken_at: string | null;
   status: string;
+  duration_sec: number | null;
 }
 
 export interface SearchHit {
