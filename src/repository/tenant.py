@@ -1187,6 +1187,30 @@ class WorkerJobRepository:
         ).fetchall()
         return [{"job_type": r.job_type, "status": r.status, "count": r.count} for r in rows]
 
+    def pipeline_status_tenant(self) -> list[dict]:
+        """
+        Return [{library_id, job_type, status, count}] across all libraries.
+        Same logic as pipeline_status but without library filter.
+        """
+        rows = self._session.execute(
+            text("""
+                WITH latest_jobs AS (
+                    SELECT DISTINCT ON (wj.asset_id, wj.job_type)
+                        a.library_id,
+                        wj.job_type,
+                        wj.status
+                    FROM worker_jobs wj
+                    JOIN assets a ON a.asset_id = wj.asset_id
+                    ORDER BY wj.asset_id, wj.job_type, wj.created_at DESC
+                )
+                SELECT library_id, job_type, status, COUNT(*)::int as count
+                FROM latest_jobs
+                GROUP BY library_id, job_type, status
+                ORDER BY library_id, job_type, status
+            """),
+        ).fetchall()
+        return [{"library_id": r.library_id, "job_type": r.job_type, "status": r.status, "count": r.count} for r in rows]
+
     def list_failures(
         self,
         library_id: str,
@@ -1612,6 +1636,18 @@ class SearchSyncQueueRepository:
             {"library_id": library_id},
         ).fetchall()
         return [{"status": r.status, "count": r.count} for r in rows]
+
+    def search_sync_pipeline_status_tenant(self) -> list[dict]:
+        """Return [{library_id, status, count}] across all libraries."""
+        rows = self._session.execute(
+            text("""
+                SELECT a.library_id, ssl.status, COUNT(*)::int as count
+                FROM search_sync_latest ssl
+                JOIN assets a ON a.asset_id = ssl.asset_id
+                GROUP BY a.library_id, ssl.status
+            """),
+        ).fetchall()
+        return [{"library_id": r.library_id, "status": r.status, "count": r.count} for r in rows]
 
     def pending_count(self, library_id: str | None = None, path_prefix: str | None = None) -> int:
         """

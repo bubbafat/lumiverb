@@ -95,6 +95,23 @@ def _run_status_json(library_name: str) -> dict[str, Any]:
     return json.loads(stdout)
 
 
+def _run_status_json_tenant() -> dict[str, Any]:
+    """Run lumiverb status --output json (no library); return parsed JSON. Raises on failure."""
+    cmd = _lumiverb_cmd() + ["status", "--output", "json"]
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"status --output json failed (rc={result.returncode}): {result.stderr or result.stdout}")
+    stdout = result.stdout.strip()
+    if not stdout:
+        raise RuntimeError(f"status --output json produced no output; stderr: {result.stderr.strip()!r}")
+    return json.loads(stdout)
+
+
 def _all_worker_stages(media_type: str) -> list[PipelineStage]:
     """Deduplicated list of all stages for the given media_type (no pending filter)."""
     if media_type == "image":
@@ -177,7 +194,10 @@ class PipelineSupervisor:
         interval: int = 60,
         lock_timeout_minutes: int = 5,
         skip_scan: bool = False,
+        libraries: list[dict[str, Any]] | None = None,
     ) -> None:
+        # libraries: tenant-wide mode — list of {library_id, library_name, root_path}
+        self._libraries = libraries
         self.library_id = library_id
         self.library_name = library_name
         self.tenant_id = tenant_id
@@ -292,12 +312,45 @@ class PipelineSupervisor:
             finally:
                 self._current_proc = None
 
+    def _run_workers_tenant(self, stages: list[PipelineStage]) -> None:
+        """Like _run_workers but without --library (workers claim from all libraries)."""
+        for stage in stages:
+            cmd = _lumiverb_cmd() + ["worker", stage.worker_cmd, "--once"]
+            _log.info("Running worker (tenant-wide): %s", " ".join(cmd))
+            self._dashboard_set_worker_status(stage.worker_cmd, stage.label, "active")
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            self._current_proc = proc
+            try:
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    line = line.rstrip("\n")
+                    self._dashboard_update([], log_line=line)
+                proc.wait()
+                if proc.returncode != 0:
+                    _log.warning("Worker %s exited with code %s", stage.worker_cmd, proc.returncode)
+                    self._dashboard_set_worker_status(stage.worker_cmd, stage.label, "error")
+                else:
+                    self._dashboard_set_worker_status(stage.worker_cmd, stage.label, "idle")
+            finally:
+                self._current_proc = None
+
     def run(self) -> None:
         """
         Run the pipeline loop. Caller must hold the lock and will release it in finally.
         Starts heartbeat thread, optionally runs scan, then polls status and spawns workers until
         no pending and (once mode or interrupted).
         """
+        if self._libraries is not None:
+            self._run_tenant()
+        else:
+            self._run_single_library()
+
+    def _run_single_library(self) -> None:
         self._heartbeat_stop.clear()
         self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
         self._heartbeat_thread.start()
@@ -350,6 +403,84 @@ class PipelineSupervisor:
 
                 self._run_workers(to_run)
                 # Loop immediately to re-poll (no sleep) so we pick up new pending work
+        finally:
+            self._terminate_current_proc()
+            self._heartbeat_stop.set()
+            if self._heartbeat_thread is not None:
+                self._heartbeat_thread.join(timeout=35)
+            self._heartbeat_thread = None
+
+    def _run_tenant(self) -> None:
+        """Tenant-wide pipeline loop: scan all libraries, poll status across all, run workers without --library."""
+        assert self._libraries is not None
+        self._heartbeat_stop.clear()
+        self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+        self._heartbeat_thread.start()
+
+        if not self._skip_scan:
+            self._dashboard_set_worker_status("scan", "Scan", "idle")
+        for stage in _all_worker_stages(self._media_type):
+            self._dashboard_set_worker_status(stage.worker_cmd, stage.label, "idle")
+
+        try:
+            if not self._skip_scan:
+                for lib in self._libraries:
+                    root_path = lib.get("root_path", "")
+                    if not _check_path_reachable(root_path):
+                        raise PathUnreachableError(root_path)
+                for lib in self._libraries:
+                    cmd = _lumiverb_cmd() + ["scan", "--library", lib["library_name"]]
+                    _log.info("Running scan: %s", " ".join(cmd))
+                    self._dashboard_set_worker_status("scan", f"Scan ({lib['library_name']})", "active")
+                    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                    self._current_proc = proc
+                    try:
+                        assert proc.stdout is not None
+                        for line in proc.stdout:
+                            self._dashboard_update([], log_line=line.rstrip("\n"))
+                        proc.wait()
+                        if proc.returncode != 0:
+                            _log.warning("Scan exited with code %s", proc.returncode)
+                            self._dashboard_set_worker_status("scan", f"Scan ({lib['library_name']})", "error")
+                        else:
+                            self._dashboard_set_worker_status("scan", f"Scan ({lib['library_name']})", "completed")
+                    finally:
+                        self._current_proc = None
+
+            while True:
+                try:
+                    data = _run_status_json_tenant()
+                except Exception as e:
+                    _log.warning("Status poll failed: %s", e)
+                    self._dashboard_update([], log_line=f"Status poll failed: {e}")
+                    self._heartbeat_stop.wait(min(60, self._interval))
+                    continue
+
+                # Flatten per-library stages for dashboard; aggregate pending names for worker selection
+                flat_stages: list[dict[str, Any]] = []
+                pending_names: set[str] = set()
+                for lib_data in data.get("libraries", []):
+                    lib_name = lib_data.get("library", "")
+                    for stage in lib_data.get("stages", []):
+                        flat_stages.append({**stage, "library_name": lib_name})
+                        if stage.get("pending", 0) > 0:
+                            pending_names.add(stage["name"])
+
+                self._dashboard_update(flat_stages, log_line=None)
+
+                if not pending_names:
+                    if self._once:
+                        return
+                    self._heartbeat_stop.wait(self._interval)
+                    continue
+
+                mock_pending = [{"name": n} for n in pending_names]
+                to_run = _select_stages_to_run(mock_pending, self._media_type)
+                if not to_run:
+                    self._heartbeat_stop.wait(min(10, self._interval))
+                    continue
+
+                self._run_workers_tenant(to_run)
         finally:
             self._terminate_current_proc()
             self._heartbeat_stop.set()

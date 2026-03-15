@@ -948,14 +948,14 @@ def _resolve_job_type(job_type: str) -> str:
 
 @pipeline_app.command("run")
 def pipeline_run(
-    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
+    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name. Omit to run across all libraries.")] = None,
     media_type: Annotated[
         str,
         typer.Option("--media-type", help="Run image, video, or all stages."),
     ] = "all",
     path: Annotated[
         str | None,
-        typer.Option("--path", "-p", help="Optional subpath to scope scan and workers."),
+        typer.Option("--path", "-p", help="Optional subpath to scope scan and workers (single-library mode only)."),
     ] = None,
     once: Annotated[bool, typer.Option("--once", help="Run until queues are empty then exit.")] = False,
     skip_scan: Annotated[bool, typer.Option("--skip-scan", help="Skip initial scan.")] = False,
@@ -972,14 +972,31 @@ def pipeline_run(
     from src.repository.tenant import AssetRepository, PipelineLockHeldError, PipelineLockRepository
     from src.workers.pipeline_supervisor import PathUnreachableError, PipelineSupervisor
 
+    if path and library is None:
+        console.print("[red]--path cannot be used in tenant-wide mode; specify --library to use --path[/red]")
+        raise typer.Exit(1)
+
     client = LumiverbClient()
     ctx = client.get("/v1/tenant/context").json()
     tenant_id = ctx["tenant_id"]
+    all_libraries = client.get("/v1/libraries").json()
 
-    library_obj = _resolve_library(client, library)
-    library_id = library_obj["library_id"]
-    library_name = library_obj.get("name", library)
-    path_prefix = normalize_path_prefix(path) if path else None
+    if library is not None:
+        library_obj = _resolve_library(client, library)
+        library_id = library_obj["library_id"]
+        library_name = library_obj.get("name", library)
+        path_prefix = normalize_path_prefix(path) if path else None
+        supervisor_libraries = None
+        dashboard_name = library_name
+    else:
+        library_id = ""
+        library_name = ""
+        path_prefix = None
+        supervisor_libraries = [
+            {"library_id": lib["library_id"], "library_name": lib.get("name", ""), "root_path": lib.get("root_path", "")}
+            for lib in all_libraries
+        ]
+        dashboard_name = "(all libraries)"
 
     with get_tenant_session(tenant_id) as session:
         lock_repo = PipelineLockRepository(session)
@@ -995,8 +1012,13 @@ def pipeline_run(
                 console.print("Use --force to override.")
                 raise typer.Exit(1)
 
-        total_assets = AssetRepository(session).count_by_library(library_id)
-        dashboard = PipelineDashboard(library_name, total_assets)
+        asset_repo = AssetRepository(session)
+        if supervisor_libraries is not None:
+            total_assets = sum(asset_repo.count_by_library(lib["library_id"]) for lib in all_libraries)
+        else:
+            total_assets = asset_repo.count_by_library(library_id)
+
+        dashboard = PipelineDashboard(dashboard_name, total_assets)
         supervisor = PipelineSupervisor(
             library_id=library_id,
             library_name=library_name,
@@ -1010,6 +1032,7 @@ def pipeline_run(
             interval=interval,
             lock_timeout_minutes=lock_timeout,
             skip_scan=skip_scan,
+            libraries=supervisor_libraries,
         )
         try:
             with dashboard:
@@ -1025,7 +1048,7 @@ def pipeline_run(
 
 @app.command("status")
 def status(
-    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
+    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name. Omit for all libraries.")] = None,
     output: Annotated[
         str,
         typer.Option("--output", "-o", help="Output format: table (default) or json."),
@@ -1044,109 +1067,150 @@ def status(
         logging.getLogger("httpx").setLevel(logging.WARNING)
 
     client = LumiverbClient()
-    libraries = client.get("/v1/libraries").json()
-    match = next((lib for lib in libraries if lib.get("name") == library), None)
-    if match is None:
-        console.print(f"[red]Library not found: {library}[/red]")
-        raise typer.Exit(1)
-
-    library_id = match["library_id"]
+    all_libraries = client.get("/v1/libraries").json()
     ctx = client.get("/v1/tenant/context").json()
     tenant_id = ctx["tenant_id"]
+
+    tenant_wide = library is None
+    if not tenant_wide:
+        match = next((lib for lib in all_libraries if lib.get("name") == library), None)
+        if match is None:
+            console.print(f"[red]Library not found: {library}[/red]")
+            raise typer.Exit(1)
+        target_libraries = [match]
+    else:
+        target_libraries = all_libraries
+
+    lib_by_id = {lib["library_id"]: lib for lib in all_libraries}
 
     with get_tenant_session(tenant_id) as session:
         asset_repo = AssetRepository(session)
         job_repo = WorkerJobRepository(session)
         ssq_repo = SearchSyncQueueRepository(session)
 
-        total_assets = asset_repo.count_by_library(library_id)
-        job_rows = job_repo.pipeline_status(library_id)
-        ssq_rows = ssq_repo.search_sync_pipeline_status(library_id)
+        lib_totals = {lib["library_id"]: asset_repo.count_by_library(lib["library_id"]) for lib in target_libraries}
 
-    # Build pivot: stage -> {done, pending, failed}
-    pivot: dict[str, dict[str, int]] = {}
-    for r in job_rows:
-        jt = r["job_type"]
-        if jt not in pivot:
-            pivot[jt] = {"done": 0, "pending": 0, "failed": 0}
-        status_val = r["status"]
-        count = r["count"]
-        if status_val == "completed":
-            pivot[jt]["done"] += count
-        elif status_val in ("pending", "claimed"):
-            pivot[jt]["pending"] += count
-        elif status_val == "failed":
-            pivot[jt]["failed"] += count
+        if tenant_wide:
+            job_rows_all = job_repo.pipeline_status_tenant()
+            ssq_rows_all = ssq_repo.search_sync_pipeline_status_tenant()
+        else:
+            lib_id = target_libraries[0]["library_id"]
+            job_rows_all = [{"library_id": lib_id, **r} for r in job_repo.pipeline_status(lib_id)]
+            ssq_rows_all = [{"library_id": lib_id, **r} for r in ssq_repo.search_sync_pipeline_status(lib_id)]
 
-    for r in ssq_rows:
-        jt = "search_sync"
-        if jt not in pivot:
-            pivot[jt] = {"done": 0, "pending": 0, "failed": 0}
-        status_val = r["status"]
-        count = r["count"]
-        if status_val == "synced":
-            pivot[jt]["done"] += count
-        elif status_val in ("pending", "processing"):
-            pivot[jt]["pending"] += count
+    # Build per-library pivot: library_id -> stage -> {done, pending, failed}
+    per_lib_pivot: dict[str, dict[str, dict[str, int]]] = {lib["library_id"]: {} for lib in target_libraries}
+    for r in job_rows_all:
+        lid, jt = r["library_id"], r["job_type"]
+        if lid not in per_lib_pivot:
+            continue
+        if jt not in per_lib_pivot[lid]:
+            per_lib_pivot[lid][jt] = {"done": 0, "pending": 0, "failed": 0}
+        sv, count = r["status"], r["count"]
+        if sv == "completed":
+            per_lib_pivot[lid][jt]["done"] += count
+        elif sv in ("pending", "claimed"):
+            per_lib_pivot[lid][jt]["pending"] += count
+        elif sv == "failed":
+            per_lib_pivot[lid][jt]["failed"] += count
 
-    # Only show stages with at least one job
-    stages_with_data = [s for s in STAGE_ORDER if s in pivot and (pivot[s]["done"] + pivot[s]["pending"] + pivot[s]["failed"] > 0)]
+    for r in ssq_rows_all:
+        lid = r["library_id"]
+        if lid not in per_lib_pivot:
+            continue
+        if "search_sync" not in per_lib_pivot[lid]:
+            per_lib_pivot[lid]["search_sync"] = {"done": 0, "pending": 0, "failed": 0}
+        sv, count = r["status"], r["count"]
+        if sv == "synced":
+            per_lib_pivot[lid]["search_sync"]["done"] += count
+        elif sv in ("pending", "processing"):
+            per_lib_pivot[lid]["search_sync"]["pending"] += count
+
+    def _lib_stages(pivot: dict[str, dict[str, int]]) -> list[dict]:
+        return [
+            {
+                "name": s,
+                "label": JOB_TYPE_DISPLAY.get(s, s),
+                "done": pivot[s]["done"],
+                "pending": pivot[s]["pending"],
+                "failed": pivot[s]["failed"],
+            }
+            for s in STAGE_ORDER
+            if s in pivot and (pivot[s]["done"] + pivot[s]["pending"] + pivot[s]["failed"] > 0)
+        ]
 
     if output == "json":
-        payload = {
-            "library": library,
-            "library_id": library_id,
-            "total_assets": total_assets,
-            "stages": [
-                {
-                    "name": stage,
-                    "label": JOB_TYPE_DISPLAY.get(stage, stage),
-                    "done": pivot[stage]["done"],
-                    "pending": pivot[stage]["pending"],
-                    "failed": pivot[stage]["failed"],
-                }
-                for stage in stages_with_data
-            ],
-        }
+        if tenant_wide:
+            payload: dict = {
+                "libraries": [
+                    {
+                        "library": lib_by_id[lid].get("name", lid),
+                        "library_id": lid,
+                        "total_assets": lib_totals[lid],
+                        "stages": _lib_stages(pivot),
+                    }
+                    for lid, pivot in per_lib_pivot.items()
+                ]
+            }
+        else:
+            lib_id = target_libraries[0]["library_id"]
+            lib_obj = target_libraries[0]
+            payload = {
+                "library": lib_obj.get("name", lib_id),
+                "library_id": lib_id,
+                "total_assets": lib_totals[lib_id],
+                "stages": _lib_stages(per_lib_pivot[lib_id]),
+            }
         print(_json.dumps(payload, ensure_ascii=False))
         return
 
-    console.print(f"Library: {library}  ({library_id})")
-    console.print(f"Total assets: {total_assets:,}")
-    console.print()
+    if tenant_wide:
+        total_all = sum(lib_totals.values())
+        console.print(f"Total assets (all libraries): {total_all:,}")
+        console.print()
+        table = Table(show_header=True)
+        table.add_column("Library", style="bold")
+        table.add_column("Stage", style="bold")
+        table.add_column("Done", justify="right")
+        table.add_column("Pending", justify="right")
+        table.add_column("Failed", justify="right")
+        for lib in target_libraries:
+            lid = lib["library_id"]
+            lib_name = lib.get("name", lid)
+            stages = _lib_stages(per_lib_pivot[lid])
+            for s in stages:
+                table.add_row(lib_name, s["label"], f"{s['done']:,}", f"{s['pending']:,}", f"{s['failed']:,}")
+        console.print(table)
+    else:
+        lib_id = target_libraries[0]["library_id"]
+        lib_obj = target_libraries[0]
+        lib_name = lib_obj.get("name", lib_id)
+        console.print(f"Library: {lib_name}  ({lib_id})")
+        console.print(f"Total assets: {lib_totals[lib_id]:,}")
+        console.print()
+        table = Table(show_header=True)
+        table.add_column("Stage", style="bold")
+        table.add_column("Done", justify="right")
+        table.add_column("Pending", justify="right")
+        table.add_column("Failed", justify="right")
+        stages = _lib_stages(per_lib_pivot[lib_id])
+        for s in stages:
+            table.add_row(s["label"], f"{s['done']:,}", f"{s['pending']:,}", f"{s['failed']:,}")
+        console.print(table)
 
-    table = Table(show_header=True)
-    table.add_column("Stage", style="bold")
-    table.add_column("Done", justify="right")
-    table.add_column("Pending", justify="right")
-    table.add_column("Failed", justify="right")
-    for stage in stages_with_data:
-        d = pivot[stage]
-        display = JOB_TYPE_DISPLAY.get(stage, stage)
-        table.add_row(
-            display,
-            f"{d['done']:,}",
-            f"{d['pending']:,}",
-            f"{d['failed']:,}",
-        )
-    console.print(table)
-
-    any_failures = any(pivot.get(s, {}).get("failed", 0) > 0 for s in stages_with_data)
-    if any_failures:
+        pivot = per_lib_pivot[lib_id]
         failed_stages = [
-            (s, pivot[s]["failed"])
-            for s in stages_with_data
-            if pivot.get(s, {}).get("failed", 0) > 0
-            and s != "search_sync"
+            (s["name"], s["failed"])
+            for s in stages
+            if s["failed"] > 0 and s["name"] != "search_sync"
         ]
         if failed_stages:
-            # Show hint for the stage with most failures
             worst = max(failed_stages, key=lambda x: x[1])
             hint_type = "vision" if worst[0] == "ai_vision" else worst[0]
-        console.print(
-            f"\nRun 'lumiverb failures -l {library} "
-            f"--job-type {hint_type}' to see failure details."
-        )
+            console.print(
+                f"\nRun 'lumiverb failures -l {lib_name} "
+                f"--job-type {hint_type}' to see failure details."
+            )
 
 
 # ---------------------------------------------------------------------------

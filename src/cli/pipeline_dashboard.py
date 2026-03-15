@@ -138,18 +138,20 @@ class PipelineDashboard:
             self._status_warning = False
             for s in stages:
                 name = s.get("name", "")
+                library_name = s.get("library_name", "")
+                flash_key = f"{library_name}:{name}" if library_name else name
                 done = s.get("done", 0)
                 pending = s.get("pending", 0)
                 failed = s.get("failed", 0)
-                prev = self._prev_counts.get(name, {})
+                prev = self._prev_counts.get(flash_key, {})
                 prev_done = prev.get("done", 0)
                 prev_pending = prev.get("pending", 0)
                 prev_failed = prev.get("failed", 0)
                 if pending < prev_pending or done > prev_done:
-                    self._flash_green[name] = now + FLASH_DURATION
+                    self._flash_green[flash_key] = now + FLASH_DURATION
                 if failed > prev_failed:
-                    self._flash_red[name] = now + FLASH_DURATION
-                self._prev_counts[name] = {"done": done, "pending": pending, "failed": failed}
+                    self._flash_red[flash_key] = now + FLASH_DURATION
+                self._prev_counts[flash_key] = {"done": done, "pending": pending, "failed": failed}
             self._stages = stages
 
         # Expire old flashes
@@ -173,7 +175,10 @@ class PipelineDashboard:
     def _render_status(self) -> Panel | Group:
         """Build status section: table (and optional warning)."""
         now = time.time()
+        has_library = any(s.get("library_name") for s in self._stages)
         table = Table(show_header=True, header_style="bold")
+        if has_library:
+            table.add_column("Library", style="bold")
         table.add_column("Stage", style="bold")
         table.add_column("Pending", justify="right")
         table.add_column("Done", justify="right")
@@ -181,31 +186,33 @@ class PipelineDashboard:
 
         for s in self._stages:
             name = s.get("name", "")
+            library_name = s.get("library_name", "")
+            flash_key = f"{library_name}:{name}" if library_name else name
             label = s.get("label", name)
             pending = s.get("pending", 0)
             done = s.get("done", 0)
             failed = s.get("failed", 0)
-            if self._flash_green.get(name, 0) > now:
+            if self._flash_green.get(flash_key, 0) > now:
                 style = "green"
-            elif name in self._flash_red:
-                if self._flash_red[name] > now:
-                    style = "red"
-                else:
-                    style = "dim red"
+            elif self._flash_red.get(flash_key, 0) > now:
+                style = "red"
+            elif flash_key in self._flash_red:
+                style = "dim red"
             else:
                 style = ""
             p_str = f"{pending:,}"
             d_str = f"{done:,}"
             f_str = f"{failed:,}"
             if style:
-                table.add_row(
-                    f"[{style}]{label}[/]",
-                    f"[{style}]{p_str}[/]",
-                    f"[{style}]{d_str}[/]",
-                    f"[{style}]{f_str}[/]",
-                )
+                row = [f"[{style}]{label}[/]", f"[{style}]{p_str}[/]", f"[{style}]{d_str}[/]", f"[{style}]{f_str}[/]"]
+                if has_library:
+                    row = [f"[{style}]{library_name}[/]"] + row
+                table.add_row(*row)
             else:
-                table.add_row(label, p_str, d_str, f_str)
+                row = [label, p_str, d_str, f_str]
+                if has_library:
+                    row = [library_name] + row
+                table.add_row(*row)
 
         header = f"[bold]Library: {self.library_name}[/]  Total assets: {self.total_assets:,}"
         if self._status_warning:
