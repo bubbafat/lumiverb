@@ -69,6 +69,13 @@ class PipelineDashboard:
             self._live = None
         self._layout = None
 
+    @staticmethod
+    def _fmt_duration(seconds: float) -> str:
+        """Format a duration in seconds as e.g. '2m 14s' or '45s'."""
+        s = int(seconds)
+        m, s = divmod(s, 60)
+        return f"{m}m {s:02d}s" if m else f"{s}s"
+
     def set_worker_status(self, worker_cmd: str, label: str, status: str) -> None:
         """
         Set the status of a worker. Creates the entry if it doesn't exist (preserving
@@ -76,15 +83,25 @@ class PipelineDashboard:
 
         status: "idle" | "active" | "completed" | "error"
         """
+        now = time.time()
         if worker_cmd not in self._worker_states:
             self._worker_states[worker_cmd] = {
                 "label": label,
                 "status": status,
                 "order": len(self._worker_states),
+                "started_at": now if status == "active" else None,
+                "ended_at": None,
             }
         else:
-            self._worker_states[worker_cmd]["label"] = label
-            self._worker_states[worker_cmd]["status"] = status
+            state = self._worker_states[worker_cmd]
+            prev_status = state["status"]
+            state["label"] = label
+            state["status"] = status
+            if status == "active":
+                state["started_at"] = now
+                state["ended_at"] = None
+            elif status in ("completed", "error") and prev_status == "active":
+                state["ended_at"] = now
 
         if self._live is not None and self._layout is not None:
             self._layout["workers"].update(self._render_workers())
@@ -194,6 +211,7 @@ class PipelineDashboard:
 
     def _render_workers(self) -> Panel:
         """Build workers section: compact table showing each worker's current status."""
+        now = time.time()
         table = Table(show_header=False, box=None, padding=(0, 2))
         table.add_column("Worker", style="bold")
         table.add_column("Status")
@@ -201,12 +219,19 @@ class PipelineDashboard:
         for state in sorted(self._worker_states.values(), key=lambda s: s["order"]):
             label = state["label"]
             status = state["status"]
+            started_at: float | None = state.get("started_at")
+            ended_at: float | None = state.get("ended_at")
             if status == "active":
-                status_text = Text("● active", style="green")
+                elapsed = self._fmt_duration(now - started_at) if started_at else "…"
+                status_text = Text(f"● active ({elapsed})", style="green")
             elif status == "completed":
-                status_text = Text("✓ completed", style="white")
+                duration = self._fmt_duration(ended_at - started_at) if started_at and ended_at else ""
+                suffix = f" in {duration}" if duration else ""
+                status_text = Text(f"✓ completed{suffix}", style="white")
             elif status == "error":
-                status_text = Text("✗ error", style="red")
+                duration = self._fmt_duration(ended_at - started_at) if started_at and ended_at else ""
+                suffix = f" after {duration}" if duration else ""
+                status_text = Text(f"✗ error{suffix}", style="red")
             else:
                 status_text = Text("idle", style="dim")
             table.add_row(label, status_text)
