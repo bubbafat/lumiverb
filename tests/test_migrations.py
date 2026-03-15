@@ -83,6 +83,7 @@ TENANT_TABLES = [
     "faces",
     "people",
     "face_person_matches",
+    "pipeline_locks",
 ]
 
 
@@ -118,7 +119,7 @@ def test_tenant_schema_upgrade_and_downgrade() -> None:
                     "WHERE table_schema = 'public' AND table_name IN "
                     "('libraries', 'scans', 'assets', 'video_scenes', 'video_index_chunks', "
                     "'asset_metadata', 'search_sync_queue', 'worker_jobs', 'system_metadata', "
-                    "'faces', 'people', 'face_person_matches')"
+                    "'faces', 'people', 'face_person_matches', 'pipeline_locks')"
                 )
             )
             tables = {row[0] for row in r}
@@ -151,7 +152,7 @@ def test_tenant_schema_upgrade_and_downgrade() -> None:
                     "WHERE table_schema = 'public' AND table_name IN "
                     "('libraries', 'scans', 'assets', 'video_scenes', 'video_index_chunks', "
                     "'asset_metadata', 'search_sync_queue', 'worker_jobs', 'system_metadata', "
-                    "'faces', 'people', 'face_person_matches')"
+                    "'faces', 'people', 'face_person_matches', 'pipeline_locks')"
                 )
             )
             tables = {row[0] for row in r}
