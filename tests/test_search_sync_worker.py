@@ -278,4 +278,7 @@ def test_search_sync_worker_drains_queue_and_marks_synced(search_sync_env: tuple
     doc = docs_for_asset[0]
     assert doc["description"] == "A bright red square."
     assert doc["tags"] == ["red", "square"]
+    # Provenance comes from asset_metadata (library's vision model)
+    assert doc["model_id"] == "moondream"
+    assert doc["model_version"] == "2"
 

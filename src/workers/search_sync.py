@@ -10,7 +10,7 @@ from src.core.config import get_settings
 from src.core.io_utils import normalize_path_prefix
 from src.core.utils import utcnow
 from src.models.registry import model_version_for_provenance
-from src.models.tenant import Asset, AssetMetadata, VideoScene
+from src.models.tenant import Asset, AssetMetadata, Library, VideoScene
 from src.repository.tenant import (
     AssetMetadataRepository,
     AssetRepository,
@@ -115,6 +115,7 @@ class SearchSyncWorker:
             scene_docs: list[dict] = []
             sync_ids: list[str] = []
 
+            library = self._library_repo.get_by_id(self._library_id)
             scene_repo = VideoSceneRepository(self._session)
             for row in batch:
                 if row.scene_id:
@@ -126,7 +127,7 @@ class SearchSyncWorker:
                         if asset_status.get(row.asset_id) != "synced":
                             asset_status[row.asset_id] = "skipped"
                         continue
-                    scene_doc = self._build_scene_document(scene, asset)
+                    scene_doc = self._build_scene_document(scene, asset, library)
                     scene_docs.append(scene_doc)
                     sync_ids.append(row.sync_id)
                     asset_status[row.asset_id] = "synced"
@@ -222,7 +223,11 @@ class SearchSyncWorker:
             "indexed_at": indexed_at,
         }
 
-    def _build_scene_document(self, scene: VideoScene, asset: Asset) -> dict:
+    def _build_scene_document(
+        self, scene: VideoScene, asset: Asset, library: Library | None
+    ) -> dict:
+        model_id = library.vision_model_id if library else "moondream"
+        model_version = model_version_for_provenance(model_id)
         indexed_at = int(utcnow().timestamp())
         return {
             "id": scene.scene_id,
@@ -240,8 +245,8 @@ class SearchSyncWorker:
             "tags": scene.tags or [],
             "sharpness_score": scene.sharpness_score,
             "keep_reason": scene.keep_reason,
-            "model_id": scene.model_id or "",
-            "model_version": scene.model_version or "",
+            "model_id": model_id,
+            "model_version": model_version,
             "indexed_at": indexed_at,
         }
 
