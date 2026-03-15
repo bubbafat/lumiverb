@@ -903,6 +903,7 @@ JOB_TYPE_DISPLAY: dict[str, str] = {
     "ai_vision": "Vision (AI)",
     "search_sync": "Search Sync",
     "embed": "Embeddings",
+    "video-preview": "Video Preview",
 }
 
 JOB_TYPE_ALIASES: dict[str, str] = {
@@ -910,7 +911,16 @@ JOB_TYPE_ALIASES: dict[str, str] = {
     "video": "video-index",
 }
 
-STAGE_ORDER: list[str] = ["proxy", "exif", "ai_vision", "search_sync", "embed", "video-index", "video-vision"]
+STAGE_ORDER: list[str] = [
+    "proxy",
+    "exif",
+    "ai_vision",
+    "search_sync",
+    "embed",
+    "video-index",
+    "video-vision",
+    "video-preview",
+]
 
 
 def _resolve_job_type(job_type: str) -> str:
@@ -921,10 +931,22 @@ def _resolve_job_type(job_type: str) -> str:
 @app.command("status")
 def status(
     library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
+    output: Annotated[
+        str,
+        typer.Option("--output", "-o", help="Output format: table (default) or json."),
+    ] = "table",
 ) -> None:
     """Show pipeline status: asset counts by stage (proxy, EXIF, vision, search sync) with done/pending/failed breakdown."""
     from src.core.database import get_tenant_session
     from src.repository.tenant import AssetRepository, SearchSyncQueueRepository, WorkerJobRepository
+
+    if output not in ("table", "json"):
+        console.print("[red]--output must be one of: table, json[/red]")
+        raise typer.Exit(1)
+
+    if output == "json":
+        logging.getLogger().setLevel(logging.WARNING)
+        logging.getLogger("httpx").setLevel(logging.WARNING)
 
     client = LumiverbClient()
     libraries = client.get("/v1/libraries").json()
@@ -974,6 +996,25 @@ def status(
 
     # Only show stages with at least one job
     stages_with_data = [s for s in STAGE_ORDER if s in pivot and (pivot[s]["done"] + pivot[s]["pending"] + pivot[s]["failed"] > 0)]
+
+    if output == "json":
+        payload = {
+            "library": library,
+            "library_id": library_id,
+            "total_assets": total_assets,
+            "stages": [
+                {
+                    "name": stage,
+                    "label": JOB_TYPE_DISPLAY.get(stage, stage),
+                    "done": pivot[stage]["done"],
+                    "pending": pivot[stage]["pending"],
+                    "failed": pivot[stage]["failed"],
+                }
+                for stage in stages_with_data
+            ],
+        }
+        print(_json.dumps(payload, ensure_ascii=False))
+        return
 
     console.print(f"Library: {library}  ({library_id})")
     console.print(f"Total assets: {total_assets:,}")
