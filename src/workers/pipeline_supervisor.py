@@ -91,6 +91,28 @@ def _run_status_json(library_name: str) -> dict[str, Any]:
     return json.loads(result.stdout)
 
 
+def _all_worker_stages(media_type: str) -> list[PipelineStage]:
+    """Deduplicated list of all stages for the given media_type (no pending filter)."""
+    if media_type == "image":
+        candidates: list[PipelineStage] = list(IMAGE_STAGES)
+    elif media_type == "video":
+        candidates = list(VIDEO_STAGES)
+    else:
+        candidates = list(IMAGE_STAGES)
+        seen_cmds = {s.worker_cmd for s in candidates}
+        for s in VIDEO_STAGES:
+            if s.worker_cmd not in seen_cmds:
+                candidates.append(s)
+                seen_cmds.add(s.worker_cmd)
+    seen: set[str] = set()
+    out: list[PipelineStage] = []
+    for s in candidates:
+        if s.worker_cmd not in seen:
+            seen.add(s.worker_cmd)
+            out.append(s)
+    return out
+
+
 def _stages_with_pending(stages_payload: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return stages that have pending > 0 (from status JSON)."""
     return [s for s in stages_payload if s.get("pending", 0) > 0]
@@ -191,6 +213,13 @@ class PipelineSupervisor:
         if callable(update):
             update(stages, log_line)
 
+    def _dashboard_set_worker_status(self, worker_cmd: str, label: str, status: str) -> None:
+        if self._dashboard is None:
+            return
+        fn = getattr(self._dashboard, "set_worker_status", None)
+        if callable(fn):
+            fn(worker_cmd, label, status)
+
     def _heartbeat_loop(self) -> None:
         while not self._heartbeat_stop.wait(30):
             try:
@@ -203,6 +232,7 @@ class PipelineSupervisor:
         if self._path_prefix:
             cmd += ["--path", self._path_prefix]
         _log.info("Running scan: %s", " ".join(cmd))
+        self._dashboard_set_worker_status("scan", "Scan", "active")
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -218,6 +248,9 @@ class PipelineSupervisor:
             proc.wait()
             if proc.returncode != 0:
                 _log.warning("Scan exited with code %s", proc.returncode)
+                self._dashboard_set_worker_status("scan", "Scan", "error")
+            else:
+                self._dashboard_set_worker_status("scan", "Scan", "completed")
         finally:
             self._current_proc = None
 
@@ -233,6 +266,7 @@ class PipelineSupervisor:
             if self._path_prefix:
                 cmd += ["--path", self._path_prefix]
             _log.info("Running worker: %s", " ".join(cmd))
+            self._dashboard_set_worker_status(stage.worker_cmd, stage.label, "active")
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -248,6 +282,9 @@ class PipelineSupervisor:
                 proc.wait()
                 if proc.returncode != 0:
                     _log.warning("Worker %s exited with code %s", stage.worker_cmd, proc.returncode)
+                    self._dashboard_set_worker_status(stage.worker_cmd, stage.label, "error")
+                else:
+                    self._dashboard_set_worker_status(stage.worker_cmd, stage.label, "idle")
             finally:
                 self._current_proc = None
 
@@ -260,6 +297,12 @@ class PipelineSupervisor:
         self._heartbeat_stop.clear()
         self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
         self._heartbeat_thread.start()
+
+        # Pre-populate worker status as idle so the dashboard shows the full picture immediately.
+        if not self._skip_scan:
+            self._dashboard_set_worker_status("scan", "Scan", "idle")
+        for stage in _all_worker_stages(self._media_type):
+            self._dashboard_set_worker_status(stage.worker_cmd, stage.label, "idle")
 
         try:
             if not self._skip_scan:

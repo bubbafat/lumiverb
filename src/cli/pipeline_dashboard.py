@@ -1,4 +1,4 @@
-"""Rich live dashboard for pipeline run: status table + log panel with flash and resilience."""
+"""Rich live dashboard for pipeline run: status table + worker status + log panel."""
 
 from __future__ import annotations
 
@@ -22,7 +22,8 @@ class PipelineDashboard:
     """
     Context manager that runs a Rich Live display with:
     (1) Status table: Stage | Pending | Done | Failed, with flash on progress/failure
-    (2) Log panel: last N lines of subprocess output.
+    (2) Workers table: Worker | Status (idle/active/completed/error)
+    (3) Log panel: last N lines of subprocess output.
 
     When status polling fails, keeps last known stages and shows a warning in the status section.
     """
@@ -42,11 +43,15 @@ class PipelineDashboard:
         # stage_name -> expiry time for green (progress) / red (failure) flash
         self._flash_green: dict[str, float] = {}
         self._flash_red: dict[str, float] = {}
+        # worker_cmd -> {"label": str, "status": str, "order": int}
+        # status: "idle" | "active" | "completed" | "error"
+        self._worker_states: dict[str, dict[str, Any]] = {}
 
     def __enter__(self) -> PipelineDashboard:
         self._layout = Layout()
         self._layout.split_column(
             Layout(name="status", minimum_size=6),
+            Layout(name="workers", minimum_size=4),
             Layout(name="log", ratio=1, minimum_size=8),
         )
         self._live = Live(
@@ -63,6 +68,27 @@ class PipelineDashboard:
             self._live.stop()
             self._live = None
         self._layout = None
+
+    def set_worker_status(self, worker_cmd: str, label: str, status: str) -> None:
+        """
+        Set the status of a worker. Creates the entry if it doesn't exist (preserving
+        insertion order). Refreshes the display.
+
+        status: "idle" | "active" | "completed" | "error"
+        """
+        if worker_cmd not in self._worker_states:
+            self._worker_states[worker_cmd] = {
+                "label": label,
+                "status": status,
+                "order": len(self._worker_states),
+            }
+        else:
+            self._worker_states[worker_cmd]["label"] = label
+            self._worker_states[worker_cmd]["status"] = status
+
+        if self._live is not None and self._layout is not None:
+            self._layout["workers"].update(self._render_workers())
+            self._live.refresh()
 
     def update(
         self,
@@ -109,6 +135,7 @@ class PipelineDashboard:
 
         if self._live is not None and self._layout is not None:
             self._layout["status"].update(self._render_status())
+            self._layout["workers"].update(self._render_workers())
             self._layout["log"].update(self._render_log())
             self._live.refresh()
 
@@ -164,6 +191,27 @@ class PipelineDashboard:
             title=Text.from_markup(header),
             border_style="blue",
         )
+
+    def _render_workers(self) -> Panel:
+        """Build workers section: compact table showing each worker's current status."""
+        table = Table(show_header=False, box=None, padding=(0, 2))
+        table.add_column("Worker", style="bold")
+        table.add_column("Status")
+
+        for state in sorted(self._worker_states.values(), key=lambda s: s["order"]):
+            label = state["label"]
+            status = state["status"]
+            if status == "active":
+                status_text = Text("● active", style="green")
+            elif status == "completed":
+                status_text = Text("✓ completed", style="white")
+            elif status == "error":
+                status_text = Text("✗ error", style="red")
+            else:
+                status_text = Text("idle", style="dim")
+            table.add_row(label, status_text)
+
+        return Panel(table, title="[bold]Workers[/]", border_style="dim")
 
     def _render_log(self) -> Panel:
         """Build log panel from last LOG_LINES_MAX lines."""
