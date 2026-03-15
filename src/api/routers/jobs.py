@@ -189,21 +189,23 @@ def complete_job(
         thumbnail_key = data.get("thumbnail_key")
         width = data.get("width")
         height = data.get("height")
-        if proxy_key is None or thumbnail_key is None or width is None or height is None:
-            raise HTTPException(
-                status_code=400,
-                detail="proxy_key, thumbnail_key, width, height required for proxy jobs",
+        if (
+            proxy_key is not None
+            and thumbnail_key is not None
+            and width is not None
+            and height is not None
+        ):
+            if job.asset_id is None:
+                raise HTTPException(status_code=400, detail="Job has no asset_id")
+            asset_repo = AssetRepository(session)
+            asset_repo.update_proxy(
+                job.asset_id,
+                proxy_key=proxy_key,
+                thumbnail_key=thumbnail_key,
+                width=width,
+                height=height,
             )
-        if job.asset_id is None:
-            raise HTTPException(status_code=400, detail="Job has no asset_id")
-        asset_repo = AssetRepository(session)
-        asset_repo.update_proxy(
-            job.asset_id,
-            proxy_key=proxy_key,
-            thumbnail_key=thumbnail_key,
-            width=width,
-            height=height,
-        )
+        # Else: skipped (e.g. video proxy deferred) — just mark job completed, no asset update
     elif job.job_type == "video-preview":
         video_preview_key = data.get("video_preview_key")
         if video_preview_key is None:
