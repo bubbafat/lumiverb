@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import pathlib
 import subprocess
 import sys
 import threading
@@ -73,8 +74,8 @@ def _resolve_root_path(libraries: list[dict[str, Any]], library_name: str | None
 
 
 def _lumiverb_cmd() -> list[str]:
-    """Executable for lumiverb CLI (same Python, -m or script)."""
-    return [sys.executable, "-m", "src.cli.main"]
+    """Resolve the lumiverb entry-point script alongside the running Python executable."""
+    return [str(pathlib.Path(sys.executable).parent / "lumiverb")]
 
 
 def _run_status_json(library_name: str) -> dict[str, Any]:
@@ -87,8 +88,11 @@ def _run_status_json(library_name: str) -> dict[str, Any]:
         timeout=120,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"status --output json failed: {result.stderr or result.stdout}")
-    return json.loads(result.stdout)
+        raise RuntimeError(f"status --output json failed (rc={result.returncode}): {result.stderr or result.stdout}")
+    stdout = result.stdout.strip()
+    if not stdout:
+        raise RuntimeError(f"status --output json produced no output; stderr: {result.stderr.strip()!r}")
+    return json.loads(stdout)
 
 
 def _all_worker_stages(media_type: str) -> list[PipelineStage]:
