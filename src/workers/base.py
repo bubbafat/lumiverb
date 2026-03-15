@@ -120,6 +120,7 @@ class BaseWorker:
                             failed=failed,
                         )
                     logger.info("completed job_id=%s", job_id)
+                    print(f"{self.job_type} ✓ {job.get('rel_path', job_id)}", flush=True)
                 except Exception as e:
                     logger.exception("failed job_id=%s error=%s", job_id, e)
                     self.fail_job(job_id, str(e))
@@ -130,6 +131,7 @@ class BaseWorker:
                             done=processed,
                             failed=failed,
                         )
+                    print(f"{self.job_type} ✗ {job.get('rel_path', job_id)}: {e}", flush=True)
 
         if not self._suppress_base_progress:
             self._console.print(

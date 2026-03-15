@@ -212,6 +212,7 @@ class PipelineSupervisor:
         self._skip_scan = skip_scan
         self._heartbeat_stop = threading.Event()
         self._heartbeat_thread: threading.Thread | None = None
+        self._status_poll_thread: threading.Thread | None = None
         self._current_proc: subprocess.Popen | None = None
 
     def _terminate_current_proc(self) -> None:
@@ -250,6 +251,29 @@ class PipelineSupervisor:
                 self._lock_repo.heartbeat(self.tenant_id)
             except Exception as e:
                 _log.warning("Pipeline heartbeat failed: %s", e)
+
+    def _fetch_stages(self) -> list[dict[str, Any]]:
+        """Fetch current stage counts and return as a flat list suitable for dashboard.update()."""
+        if self._libraries is not None:
+            data = _run_status_json_tenant()
+            flat: list[dict[str, Any]] = []
+            for lib_data in data.get("libraries", []):
+                lib_name = lib_data.get("library", "")
+                for stage in lib_data.get("stages", []):
+                    flat.append({**stage, "library_name": lib_name})
+            return flat
+        else:
+            data = _run_status_json(self.library_name)
+            return data.get("stages", [])
+
+    def _status_poll_loop(self) -> None:
+        """Background thread: refresh dashboard stage counts every 10s while workers are running."""
+        while not self._heartbeat_stop.wait(10):
+            try:
+                stages = self._fetch_stages()
+                self._dashboard_update(stages)
+            except Exception as e:
+                _log.debug("Background status poll failed: %s", e)
 
     def _run_scan(self) -> None:
         cmd = _lumiverb_cmd() + ["scan", "--library", self.library_name]
@@ -354,6 +378,8 @@ class PipelineSupervisor:
         self._heartbeat_stop.clear()
         self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
         self._heartbeat_thread.start()
+        self._status_poll_thread = threading.Thread(target=self._status_poll_loop, daemon=True)
+        self._status_poll_thread.start()
 
         # Pre-populate worker status as idle so the dashboard shows the full picture immediately.
         if not self._skip_scan:
@@ -409,6 +435,9 @@ class PipelineSupervisor:
             if self._heartbeat_thread is not None:
                 self._heartbeat_thread.join(timeout=35)
             self._heartbeat_thread = None
+            if self._status_poll_thread is not None:
+                self._status_poll_thread.join(timeout=15)
+            self._status_poll_thread = None
 
     def _run_tenant(self) -> None:
         """Tenant-wide pipeline loop: scan all libraries, poll status across all, run workers without --library."""
@@ -416,6 +445,8 @@ class PipelineSupervisor:
         self._heartbeat_stop.clear()
         self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
         self._heartbeat_thread.start()
+        self._status_poll_thread = threading.Thread(target=self._status_poll_loop, daemon=True)
+        self._status_poll_thread.start()
 
         if not self._skip_scan:
             self._dashboard_set_worker_status("scan", "Scan", "idle")
@@ -487,3 +518,6 @@ class PipelineSupervisor:
             if self._heartbeat_thread is not None:
                 self._heartbeat_thread.join(timeout=35)
             self._heartbeat_thread = None
+            if self._status_poll_thread is not None:
+                self._status_poll_thread.join(timeout=15)
+            self._status_poll_thread = None
