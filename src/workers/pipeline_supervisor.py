@@ -166,6 +166,23 @@ class PipelineSupervisor:
         self._skip_scan = skip_scan
         self._heartbeat_stop = threading.Event()
         self._heartbeat_thread: threading.Thread | None = None
+        self._current_proc: subprocess.Popen | None = None
+
+    def _terminate_current_proc(self) -> None:
+        """Terminate the current subprocess if any (e.g. on CTRL+C)."""
+        if self._current_proc is None:
+            return
+        try:
+            self._current_proc.terminate()
+            try:
+                self._current_proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self._current_proc.kill()
+                self._current_proc.wait(timeout=5)
+        except Exception as e:
+            _log.warning("Error terminating subprocess: %s", e)
+        finally:
+            self._current_proc = None
 
     def _dashboard_update(self, stages: list[dict[str, Any]], log_line: str | None = None) -> None:
         if self._dashboard is None:
@@ -192,13 +209,17 @@ class PipelineSupervisor:
             stderr=subprocess.STDOUT,
             text=True,
         )
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            line = line.rstrip("\n")
-            self._dashboard_update([], log_line=line)
-        proc.wait()
-        if proc.returncode != 0:
-            _log.warning("Scan exited with code %s", proc.returncode)
+        self._current_proc = proc
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                line = line.rstrip("\n")
+                self._dashboard_update([], log_line=line)
+            proc.wait()
+            if proc.returncode != 0:
+                _log.warning("Scan exited with code %s", proc.returncode)
+        finally:
+            self._current_proc = None
 
     def _run_workers(self, stages: list[PipelineStage]) -> None:
         for stage in stages:
@@ -218,13 +239,17 @@ class PipelineSupervisor:
                 stderr=subprocess.STDOUT,
                 text=True,
             )
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                line = line.rstrip("\n")
-                self._dashboard_update([], log_line=line)
-            proc.wait()
-            if proc.returncode != 0:
-                _log.warning("Worker %s exited with code %s", stage.worker_cmd, proc.returncode)
+            self._current_proc = proc
+            try:
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    line = line.rstrip("\n")
+                    self._dashboard_update([], log_line=line)
+                proc.wait()
+                if proc.returncode != 0:
+                    _log.warning("Worker %s exited with code %s", stage.worker_cmd, proc.returncode)
+            finally:
+                self._current_proc = None
 
     def run(self) -> None:
         """
@@ -279,6 +304,7 @@ class PipelineSupervisor:
                 self._run_workers(to_run)
                 # Loop immediately to re-poll (no sleep) so we pick up new pending work
         finally:
+            self._terminate_current_proc()
             self._heartbeat_stop.set()
             if self._heartbeat_thread is not None:
                 self._heartbeat_thread.join(timeout=35)
