@@ -15,7 +15,8 @@ from rich.text import Text
 
 # Flash duration in seconds
 FLASH_DURATION = 2.0
-LOG_LINES_MAX = 20
+# Internal ring buffer size — larger than any realistic terminal
+LOG_BUFFER_MAX = 500
 
 
 class PipelineDashboard:
@@ -36,7 +37,7 @@ class PipelineDashboard:
         self._layout: Layout | None = None
         # stages: list of {"name", "label", "done", "pending", "failed"}
         self._stages: list[dict[str, Any]] = []
-        self._log_lines: list[str] = []
+        self._log_lines: list[str] = []  # ring buffer, capped at LOG_BUFFER_MAX
         self._status_warning = False
         # Previous counts per stage name for flash detection
         self._prev_counts: dict[str, dict[str, int]] = {}
@@ -128,8 +129,8 @@ class PipelineDashboard:
 
         if log_line is not None:
             self._log_lines.append(log_line)
-            if len(self._log_lines) > LOG_LINES_MAX:
-                self._log_lines = self._log_lines[-LOG_LINES_MAX:]
+            if len(self._log_lines) > LOG_BUFFER_MAX:
+                self._log_lines = self._log_lines[-LOG_BUFFER_MAX:]
             if "Status poll failed" in log_line:
                 self._status_warning = True
 
@@ -252,10 +253,10 @@ class PipelineDashboard:
         return Panel(table, title="[bold]Workers[/]", border_style="dim")
 
     def _render_log(self) -> Panel:
-        """Build log panel from last LOG_LINES_MAX lines."""
-        content = "\n".join(self._log_lines) if self._log_lines else "(no output yet)"
-        return Panel(
-            content,
-            title="[bold]Log[/] (last {} lines)".format(LOG_LINES_MAX),
-            border_style="dim",
-        )
+        """Fill the log panel exactly: show as many lines as the panel can hold."""
+        # Total terminal height minus top panel and 2 lines for the log panel's own border.
+        top_size = self._layout["top"].size if self._layout is not None else 8
+        available = max(1, self._console.size.height - (top_size or 0) - 2)
+        lines = self._log_lines[-available:] if self._log_lines else ["(no output yet)"]
+        content = "\n".join(lines)
+        return Panel(content, title="[bold]Log[/]", border_style="dim")
