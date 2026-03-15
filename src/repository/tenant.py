@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import socket
 from datetime import datetime, timedelta
 
 from sqlalchemy import and_, func, insert, or_, text
@@ -26,6 +28,16 @@ from src.models.tenant import (
     WorkerJob,
 )
 from ulid import ULID
+
+
+class PipelineLockHeldError(Exception):
+    """Raised when try_acquire finds a lock held by another process with a fresh heartbeat."""
+
+    def __init__(self, hostname: str, pid: int, started_at: datetime) -> None:
+        self.hostname = hostname
+        self.pid = pid
+        self.started_at = started_at
+        super().__init__(f"Pipeline lock held by {hostname} pid={pid} since {started_at}")
 
 
 class LibraryRepository:
@@ -1245,6 +1257,119 @@ class WorkerJobRepository:
                 }
             for r in rows
         ], total)
+
+
+class PipelineLockRepository:
+    """Repository for pipeline_locks table (raw SQL, no model). One logical lock per tenant."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def try_acquire(self, tenant_id: str, lock_timeout_minutes: int = 5) -> bool:
+        """
+        Acquire the pipeline lock for the tenant if no row exists or the existing lock is stale.
+        Return True on success. Raise PipelineLockHeldError if another process holds a fresh lock.
+        """
+        now = utcnow()
+        stale_threshold = now - timedelta(minutes=lock_timeout_minutes)
+        row = self._session.execute(
+            text(
+                """
+                SELECT lock_id, hostname, pid, started_at, heartbeat_at
+                FROM pipeline_locks
+                WHERE tenant_id = :tenant_id
+                """
+            ),
+            {"tenant_id": tenant_id},
+        ).fetchone()
+        if row is None:
+            lock_id = "lock_" + str(ULID())
+            self._session.execute(
+                text(
+                    """
+                    INSERT INTO pipeline_locks (lock_id, tenant_id, hostname, pid, started_at, heartbeat_at)
+                    VALUES (:lock_id, :tenant_id, :hostname, :pid, :started_at, :heartbeat_at)
+                    """
+                ),
+                {
+                    "lock_id": lock_id,
+                    "tenant_id": tenant_id,
+                    "hostname": socket.gethostname(),
+                    "pid": os.getpid(),
+                    "started_at": now,
+                    "heartbeat_at": now,
+                },
+            )
+            self._session.commit()
+            return True
+        _lock_id, hostname, pid, started_at, heartbeat_at = row
+        if heartbeat_at is not None and heartbeat_at > stale_threshold:
+            raise PipelineLockHeldError(hostname, pid, started_at)
+        lock_id = "lock_" + str(ULID())
+        self._session.execute(
+            text(
+                """
+                UPDATE pipeline_locks
+                SET lock_id = :lock_id, hostname = :hostname, pid = :pid,
+                    started_at = :started_at, heartbeat_at = :heartbeat_at
+                WHERE tenant_id = :tenant_id
+                """
+            ),
+            {
+                "lock_id": lock_id,
+                "tenant_id": tenant_id,
+                "hostname": socket.gethostname(),
+                "pid": os.getpid(),
+                "started_at": now,
+                "heartbeat_at": now,
+            },
+        )
+        self._session.commit()
+        return True
+
+    def force_acquire(self, tenant_id: str) -> None:
+        """Delete any existing lock for the tenant and insert a new one."""
+        now = utcnow()
+        self._session.execute(
+            text("DELETE FROM pipeline_locks WHERE tenant_id = :tenant_id"),
+            {"tenant_id": tenant_id},
+        )
+        lock_id = "lock_" + str(ULID())
+        self._session.execute(
+            text(
+                """
+                INSERT INTO pipeline_locks (lock_id, tenant_id, hostname, pid, started_at, heartbeat_at)
+                VALUES (:lock_id, :tenant_id, :hostname, :pid, :started_at, :heartbeat_at)
+                """
+            ),
+            {
+                "lock_id": lock_id,
+                "tenant_id": tenant_id,
+                "hostname": socket.gethostname(),
+                "pid": os.getpid(),
+                "started_at": now,
+                "heartbeat_at": now,
+            },
+        )
+        self._session.commit()
+
+    def heartbeat(self, tenant_id: str) -> None:
+        """Update heartbeat_at to now for the tenant's lock."""
+        self._session.execute(
+            text(
+                "UPDATE pipeline_locks SET heartbeat_at = NOW() WHERE tenant_id = :tenant_id"
+            ),
+            {"tenant_id": tenant_id},
+        )
+        self._session.commit()
+
+    def release(self, tenant_id: str) -> None:
+        """Remove the lock row for the tenant."""
+        self._session.execute(
+            text("DELETE FROM pipeline_locks WHERE tenant_id = :tenant_id"),
+            {"tenant_id": tenant_id},
+        )
+        self._session.commit()
 
 
 class SearchSyncQueueRepository:
