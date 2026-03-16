@@ -806,7 +806,7 @@ class AssetRepository:
             if job_type == "ai_vision":
                 # ai_vision runs only on image proxies (video uses video-vision).
                 conditions.append("a.proxy_key IS NOT NULL")
-                conditions.append("a.media_type LIKE 'image/%'")
+                conditions.append("a.media_type LIKE 'image%'")
             elif job_type == "embed":
                 conditions.append("a.proxy_key IS NOT NULL")
             elif job_type in ("video-index", "video-preview", "video-vision"):
@@ -834,7 +834,7 @@ class AssetRepository:
                 # Ensure we never enqueue ai_vision for assets without a proxy_key
                 # (e.g. when video proxy generation is deferred).
                 conditions.append("a.proxy_key IS NOT NULL")
-                conditions.append("a.media_type LIKE 'image/%'")
+                conditions.append("a.media_type LIKE 'image%'")
                 conditions.append(
                     """
                     NOT EXISTS (
