@@ -13,8 +13,6 @@ from rich.table import Table
 from rich.text import Text
 
 
-# Flash duration in seconds
-FLASH_DURATION = 2.0
 # Braille spinner frames — cycles at the Live refresh rate (4 Hz)
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
@@ -53,9 +51,11 @@ class PipelineDashboard:
         self._status_warning = False
         # Previous counts per flash key for flash detection
         self._prev_counts: dict[str, dict[str, int]] = {}
-        # flash_key -> expiry time for green (progress) / red (failure) flash
-        self._flash_green: dict[str, float] = {}
-        self._flash_red: dict[str, float] = {}
+        # Green/red flash: sets of flash_keys that made progress/failed in the most
+        # recent update. Cleared and rebuilt on every status update, so indicators
+        # persist for exactly one update cycle (~10 s).
+        self._flash_green: set[str] = set()
+        self._flash_red: set[str] = set()
         # worker_cmd -> {"label": str, "status": str, "order": int}
         # status: "idle" | "active" | "completed" | "error"
         self._worker_states: dict[str, dict[str, Any]] = {}
@@ -141,6 +141,8 @@ class PipelineDashboard:
 
         if stages:
             self._status_warning = False
+            new_flash_green: set[str] = set()
+            new_flash_red: set[str] = set()
             for s in stages:
                 name = s.get("name", "")
                 library_name = s.get("library_name", "")
@@ -153,15 +155,13 @@ class PipelineDashboard:
                 prev_pending = prev.get("pending", 0)
                 prev_failed = prev.get("failed", 0)
                 if pending < prev_pending or done > prev_done:
-                    self._flash_green[flash_key] = now + FLASH_DURATION
+                    new_flash_green.add(flash_key)
                 if failed > prev_failed:
-                    self._flash_red[flash_key] = now + FLASH_DURATION
+                    new_flash_red.add(flash_key)
                 self._prev_counts[flash_key] = {"done": done, "pending": pending, "failed": failed}
             self._stages = stages
-
-        # Expire old flashes
-        self._flash_green = {k: v for k, v in self._flash_green.items() if v > now}
-        self._flash_red = {k: v for k, v in self._flash_red.items() if v > now}
+            self._flash_green = new_flash_green
+            self._flash_red = new_flash_red
 
         if self._live is not None and self._layout is not None:
             self._layout.size = self._top_height()
@@ -204,7 +204,7 @@ class PipelineDashboard:
             flash_key = name
             label = s.get("label", name)
             pending, done, failed = s.get("pending", 0), s.get("done", 0), s.get("failed", 0)
-            style = self._flash_style(flash_key, now)
+            style = self._flash_style(flash_key)
             if style:
                 table.add_row(
                     f"[{style}]{label}[/]",
@@ -283,7 +283,7 @@ class PipelineDashboard:
                 flash_key = f"{lib_name}:{name}"
                 label = s.get("label", name)
                 pending, done, failed = s.get("pending", 0), s.get("done", 0), s.get("failed", 0)
-                style = self._flash_style(flash_key, now)
+                style = self._flash_style(flash_key)
                 indent = "  "
                 if style:
                     table.add_row(
@@ -307,10 +307,10 @@ class PipelineDashboard:
             )
         return Panel(table, title=Text.from_markup(header), border_style="blue")
 
-    def _flash_style(self, flash_key: str, now: float) -> str:
-        if self._flash_green.get(flash_key, 0) > now:
+    def _flash_style(self, flash_key: str) -> str:
+        if flash_key in self._flash_green:
             return "green"
-        if self._flash_red.get(flash_key, 0) > now:
+        if flash_key in self._flash_red:
             return "red"
         return ""
 
