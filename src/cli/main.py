@@ -765,12 +765,12 @@ def worker_video_vision(
 # Shell alias: function lumi-search-sync() { lumiverb worker search-sync --library "$1" --once; }
 @worker_app.command("search-sync")
 def worker_search_sync(
-    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
+    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name. Omit to run across all libraries.")] = None,
     once: Annotated[bool, typer.Option("--once", help="Process one batch then exit.")] = False,
     force_resync: Annotated[bool, typer.Option("--force-resync", help="Re-enqueue all assets before syncing.")] = False,
     path: Annotated[str | None, typer.Option("--path", "-p", help="Optional subpath to scope sync.")] = None,
 ) -> None:
-    """Run the search sync worker."""
+    """Run the search sync worker. Omit --library to sync all libraries."""
     import time
 
     from src.cli.progress import UnifiedProgress, UnifiedProgressSpec
@@ -781,127 +781,155 @@ def worker_search_sync(
     from src.workers.search_sync import SearchSyncWorker
     from src.core.io_utils import normalize_path_prefix
 
+    if force_resync and library is None:
+        console.print("[red]--force-resync requires --library[/red]")
+        raise typer.Exit(1)
+    if path and library is None:
+        console.print("[red]--path requires --library[/red]")
+        raise typer.Exit(1)
+
     path_prefix = normalize_path_prefix(path)
 
     client = LumiverbClient()
-    library_id = _resolve_library_id(client, library)
     ctx = client.get("/v1/tenant/context").json()
     tenant_id = ctx["tenant_id"]
 
+    # Build the list of (library_id, library_name) pairs to sync.
+    if library is not None:
+        library_id = _resolve_library_id(client, library)
+        libraries_to_sync = [(library_id, library)]
+    else:
+        all_libraries = client.get("/v1/libraries").json()
+        libraries_to_sync = [(lib["library_id"], lib["name"]) for lib in all_libraries]
+
     with get_tenant_session(tenant_id) as session:
-        if force_resync:
-            queue_repo = SearchSyncQueueRepository(session)
+        quickwit = QuickwitClient()
+
+        def _sync_library(lib_id: str, lib_name: str) -> dict:
+            if force_resync:
+                queue_repo = SearchSyncQueueRepository(session)
+                spec = UnifiedProgressSpec(
+                    label=f"Enqueuing {lib_name} for resync",
+                    unit="assets",
+                    counters=[],
+                    total=None,
+                )
+                with UnifiedProgress(console, spec) as bar:
+                    def _progress(completed: int, total: int) -> None:
+                        bar.update(completed=completed, total=total)
+
+                    asset_ids = queue_repo.enqueue_all_for_library(
+                        lib_id,
+                        path_prefix=path_prefix,
+                        progress_callback=_progress,
+                    )
+                if asset_ids:
+                    console.print(f"Re-enqueued {len(asset_ids):,} assets for resync.")
+                else:
+                    console.print(
+                        "No assets to re-enqueue (library has no online, non-trashed assets for this path)."
+                    )
+
+            worker = SearchSyncWorker(
+                session=session,
+                library_id=lib_id,
+                quickwit=quickwit,
+                path_prefix=path_prefix,
+            )
+            pending = worker.pending_count()
+            if pending == 0 and once:
+                console.print(f"No pending items in search_sync_queue for {lib_name}.")
+                return {"synced": 0, "skipped": 0, "batches": 0}
+
+            total_synced = 0
+            total_skipped = 0
+            total_batches = 0
+            base_synced = 0
+            base_skipped = 0
+
+            label = f"Syncing {lib_name}" if len(libraries_to_sync) > 1 else "Syncing search index"
             spec = UnifiedProgressSpec(
-                label="Enqueuing assets for resync",
+                label=label,
                 unit="assets",
-                counters=[],
-                total=None,
+                counters=["synced", "skipped"],
+                total=pending,
             )
             with UnifiedProgress(console, spec) as bar:
-                def _progress(completed: int, total: int) -> None:
-                    bar.update(completed=completed, total=total)
 
-                asset_ids = queue_repo.enqueue_all_for_library(
-                    library_id,
-                    path_prefix=path_prefix,
-                    progress_callback=_progress,
-                )
-            if asset_ids:
-                console.print(f"Re-enqueued {len(asset_ids):,} assets for resync.")
-            else:
-                console.print(
-                    "No assets to re-enqueue (library has no online, non-trashed assets for this path)."
-                )
-
-        quickwit = QuickwitClient()
-        worker = SearchSyncWorker(
-            session=session,
-            library_id=library_id,
-            quickwit=quickwit,
-            path_prefix=path_prefix,
-        )
-        pending = worker.pending_count()
-        if pending == 0 and once:
-            console.print("No pending items in search_sync_queue.")
-            return
-
-        total_synced = 0
-        total_skipped = 0
-        total_batches = 0
-        base_synced = 0
-        base_skipped = 0
-
-        spec = UnifiedProgressSpec(
-            label="Syncing search index",
-            unit="assets",
-            counters=["synced", "skipped"],
-            total=pending,
-        )
-        with UnifiedProgress(console, spec) as bar:
-
-            def _on_batch(synced: int, skipped: int, batches: int) -> None:
-                bar.update(
-                    completed=base_synced + base_skipped + synced + skipped,
-                    synced=base_synced + synced,
-                    skipped=base_skipped + skipped,
-                )
-
-            if once:
-                result = worker.run_once(progress_callback=_on_batch)
-                total_synced = result["synced"]
-                total_skipped = result["skipped"]
-                total_batches = result["batches"]
-                bar.update(
-                    completed=total_synced + total_skipped,
-                    synced=total_synced,
-                    skipped=total_skipped,
-                )
-            else:
-                settings = get_settings()
-                while True:
-                    result = worker.run_once(progress_callback=_on_batch)
-                    s, sk, b = result["synced"], result["skipped"], result["batches"]
-                    total_synced += s
-                    total_skipped += sk
-                    total_batches += b
-                    base_synced += s
-                    base_skipped += sk
-                    completed = total_synced + total_skipped
+                def _on_batch(synced: int, skipped: int, batches: int) -> None:
                     bar.update(
-                        completed=completed,
+                        completed=base_synced + base_skipped + synced + skipped,
+                        synced=base_synced + synced,
+                        skipped=base_skipped + skipped,
+                    )
+
+                if once:
+                    result = worker.run_once(progress_callback=_on_batch)
+                    total_synced = result["synced"]
+                    total_skipped = result["skipped"]
+                    total_batches = result["batches"]
+                    bar.update(
+                        completed=total_synced + total_skipped,
                         synced=total_synced,
                         skipped=total_skipped,
                     )
-
-                    if s + sk == 0:
-                        # Queue empty; refresh total in case new work arrived
-                        pending = worker.pending_count()
-                        if pending > 0:
-                            bar.update(
-                                completed=completed,
-                                total=completed + pending,
-                                synced=total_synced,
-                                skipped=total_skipped,
-                            )
-                        time.sleep(settings.worker_idle_poll_seconds)
-                    elif completed >= pending:
-                        # Caught up; refresh total for any newly enqueued work
-                        new_pending = worker.pending_count()
-                        pending = completed + new_pending
+                else:
+                    settings = get_settings()
+                    while True:
+                        result = worker.run_once(progress_callback=_on_batch)
+                        s, sk, b = result["synced"], result["skipped"], result["batches"]
+                        total_synced += s
+                        total_skipped += sk
+                        total_batches += b
+                        base_synced += s
+                        base_skipped += sk
+                        completed = total_synced + total_skipped
                         bar.update(
                             completed=completed,
-                            total=pending,
                             synced=total_synced,
                             skipped=total_skipped,
                         )
+
+                        if s + sk == 0:
+                            # Queue empty; refresh total in case new work arrived
+                            pending = worker.pending_count()
+                            if pending > 0:
+                                bar.update(
+                                    completed=completed,
+                                    total=completed + pending,
+                                    synced=total_synced,
+                                    skipped=total_skipped,
+                                )
+                            time.sleep(settings.worker_idle_poll_seconds)
+                        elif completed >= pending:
+                            # Caught up; refresh total for any newly enqueued work
+                            new_pending = worker.pending_count()
+                            pending = completed + new_pending
+                            bar.update(
+                                completed=completed,
+                                total=pending,
+                                synced=total_synced,
+                                skipped=total_skipped,
+                            )
+
+            return {"synced": total_synced, "skipped": total_skipped, "batches": total_batches}
+
+        grand_synced = 0
+        grand_skipped = 0
+        grand_batches = 0
+        for lib_id, lib_name in libraries_to_sync:
+            result = _sync_library(lib_id, lib_name)
+            grand_synced += result["synced"]
+            grand_skipped += result["skipped"]
+            grand_batches += result["batches"]
 
         if quickwit.enabled:
             table = Table(show_header=True)
             table.add_column("Metric", style="dim")
             table.add_column("Count", justify="right")
-            table.add_row("Synced", str(total_synced))
-            table.add_row("Skipped", str(total_skipped))
-            table.add_row("Batches", str(total_batches))
+            table.add_row("Synced", str(grand_synced))
+            table.add_row("Skipped", str(grand_skipped))
+            table.add_row("Batches", str(grand_batches))
             console.print(table)
         else:
             console.print("Quickwit disabled; no assets indexed.")
