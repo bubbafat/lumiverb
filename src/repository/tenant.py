@@ -1070,8 +1070,12 @@ class WorkerJobRepository:
         self,
         job_type: str,
         library_id: str | None = None,
+        path_prefix: str | None = None,
     ) -> int:
-        """Count jobs with status pending or claimed. Same filters as claim_next (job_type, optional library_id)."""
+        """Count jobs with status pending or claimed.
+
+        Same filters as claim_next (job_type, optional library_id and path_prefix).
+        """
         stmt = (
             select(func.count())
             .select_from(WorkerJob)
@@ -1080,9 +1084,14 @@ class WorkerJobRepository:
                 WorkerJob.status.in_(["pending", "claimed"]),
             )
         )
-        if library_id is not None:
+        if library_id is not None or path_prefix is not None:
             stmt = stmt.join(Asset, WorkerJob.asset_id == Asset.asset_id)
+        if library_id is not None:
             stmt = stmt.where(Asset.library_id == library_id)
+        if path_prefix:
+            normalised = normalize_path_prefix(path_prefix)
+            if normalised:
+                stmt = stmt.where(Asset.rel_path.like(normalised.rstrip("/") + "/%"))
         result = self._session.execute(stmt)
         return int(result.scalar() or 0)
 
@@ -1092,6 +1101,7 @@ class WorkerJobRepository:
         worker_id: str,
         lease_minutes: int,
         library_id: str | None = None,
+        path_prefix: str | None = None,
     ) -> WorkerJob | None:
         """Claim next pending (or expired claimed) job with FOR UPDATE SKIP LOCKED. Return None if none.
 
@@ -1107,9 +1117,14 @@ class WorkerJobRepository:
                 ),
             )
         )
-        if library_id is not None:
+        if library_id is not None or path_prefix is not None:
             stmt = stmt.join(Asset, WorkerJob.asset_id == Asset.asset_id)
+        if library_id is not None:
             stmt = stmt.where(Asset.library_id == library_id)
+        if path_prefix:
+            normalised = normalize_path_prefix(path_prefix)
+            if normalised:
+                stmt = stmt.where(Asset.rel_path.like(normalised.rstrip("/") + "/%"))
         stmt = (
             stmt.order_by(WorkerJob.priority, WorkerJob.created_at)
             .limit(1)

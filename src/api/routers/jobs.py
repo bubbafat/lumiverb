@@ -73,6 +73,7 @@ def get_next_job(
     job_type: str,
     session: Annotated[Session, Depends(get_tenant_session)],
     library_id: str | None = None,
+    path_prefix: str | None = None,
 ) -> Response | dict[str, Any]:
     """
     Claim next pending job of type. Returns 204 if none available.
@@ -86,6 +87,7 @@ def get_next_job(
         worker_id=worker_id,
         lease_minutes=settings.worker_lease_minutes,
         library_id=library_id,
+        path_prefix=path_prefix,
     )
     if job is None:
         return Response(status_code=204)
@@ -134,13 +136,18 @@ def get_pending_count(
     job_type: str,
     session: Annotated[Session, Depends(get_tenant_session)],
     library_id: str | None = None,
+    path_prefix: str | None = None,
 ) -> PendingCountResponse:
     """
     Count pending/claimed jobs of type. Same filters as GET /next.
     Used by workers for progress display (total work remaining).
     """
     job_repo = WorkerJobRepository(session)
-    count = job_repo.pending_count(job_type=job_type, library_id=library_id)
+    count = job_repo.pending_count(
+        job_type=job_type,
+        library_id=library_id,
+        path_prefix=path_prefix,
+    )
     return PendingCountResponse(pending=count)
 
 
