@@ -17,6 +17,14 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
+# Maps completed stage name → job types to enqueue next.
+# search_sync is populated via the search_sync_queue by the ai_vision/video-vision
+# completion handlers on the API side, so it doesn't need explicit supervisor enqueuing.
+_DOWNSTREAM: dict[str, list[str]] = {
+    "proxy": ["ai_vision", "embed"],
+    "video-index": ["video-vision", "video-preview"],
+}
+
 
 class PathUnreachableError(Exception):
     """Raised when the library root_path is not reachable (e.g. not a directory or missing)."""
@@ -315,6 +323,30 @@ class PipelineSupervisor:
         """Like _run_workers but without --library (workers claim from all libraries)."""
         self._run_workers_concurrent(stages, library_name=None, path_prefix=None)
 
+    def _enqueue_downstream(self, completed: list[PipelineStage], library_names: list[str]) -> None:
+        """
+        After a batch of workers completes, enqueue any job types that depend on them.
+        library_names: list of library names to enqueue for (one entry in single-lib mode).
+        """
+        to_enqueue: list[str] = []
+        seen: set[str] = set()
+        for stage in completed:
+            for job_type in _DOWNSTREAM.get(stage.name, []):
+                if job_type not in seen:
+                    seen.add(job_type)
+                    to_enqueue.append(job_type)
+        if not to_enqueue:
+            return
+        for job_type in to_enqueue:
+            for lib_name in library_names:
+                cmd = _lumiverb_cmd() + ["enqueue", "--job-type", job_type, "--library", lib_name]
+                self._dashboard_update([], log_line=f"Enqueueing {job_type} for {lib_name}...")
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                if result.returncode != 0:
+                    _log.warning("Enqueue %s failed: %s", job_type, result.stderr or result.stdout)
+                else:
+                    _log.debug("Enqueued %s for %s: %s", job_type, lib_name, result.stdout.strip())
+
     def _run_workers_concurrent(
         self,
         stages: list[PipelineStage],
@@ -429,6 +461,7 @@ class PipelineSupervisor:
                     continue
 
                 self._run_workers(to_run)
+                self._enqueue_downstream(to_run, library_names=[self.library_name])
                 # Loop immediately to re-poll (no sleep) so we pick up new pending work
         finally:
             self._terminate_current_proc()
@@ -516,6 +549,8 @@ class PipelineSupervisor:
                     continue
 
                 self._run_workers_tenant(to_run)
+                lib_names = [lib["library_name"] for lib in self._libraries]
+                self._enqueue_downstream(to_run, library_names=lib_names)
         finally:
             self._terminate_current_proc()
             self._heartbeat_stop.set()
