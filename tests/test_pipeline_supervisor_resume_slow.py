@@ -42,6 +42,55 @@ def _make_supervisor(**overrides: Any) -> PipelineSupervisor:
     return PipelineSupervisor(**defaults)
 
 
+@pytest.mark.fast
+def test_supervisor_does_not_spawn_video_preview_for_image_media_type() -> None:
+    """When media_type='image', supervisor should never spawn video-preview worker.
+
+    This covers a safety invariant: even if the status JSON reports pending
+    work for the video-preview stage (e.g. due to misclassified assets or
+    stale data), an image-only pipeline run should not start video workers.
+    """
+    spawned_workers: list[str] = []
+
+    def fake_popen(cmd: list[str], **kwargs: Any) -> MagicMock:  # noqa: ARG001
+        if "worker" in cmd:
+            idx = cmd.index("worker")
+            spawned_workers.append(cmd[idx + 1])
+        proc = MagicMock()
+        proc.stdout = iter([])
+        proc.returncode = 0
+        proc.wait.return_value = 0
+        return proc
+
+    # Status JSON reports only a video-preview stage as pending.
+    status_with_video_preview_pending: dict[str, Any] = {
+        "stages": [
+            {"name": "video-preview", "pending": 10, "completed": 0, "failed": 0},
+        ]
+    }
+
+    def status_side_effect(library_name: str) -> dict[str, Any]:  # noqa: ARG001
+        return status_with_video_preview_pending
+
+    supervisor = _make_supervisor(media_type="image", skip_scan=True, once=True)
+
+    with (
+        patch(
+            "src.workers.pipeline_supervisor._run_status_json",
+            side_effect=status_side_effect,
+        ),
+        patch(
+            "src.workers.pipeline_supervisor.subprocess.Popen",
+            side_effect=fake_popen,
+        ),
+    ):
+        supervisor.run()
+
+    # No video workers should be spawned when running an image-only pipeline.
+    assert "video-preview" not in spawned_workers
+    assert "video-index" not in spawned_workers
+
+
 @pytest.mark.slow
 def test_supervisor_runs_vision_and_embed_for_proxy_ready_assets() -> None:
     """
