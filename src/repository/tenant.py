@@ -763,7 +763,10 @@ class AssetRepository:
                 params["taken_before"] = filter.taken_before
 
         if filter.retry_failed:
-            # Only assets with a failed job of this type; exclude pending/claimed/completed
+            # Only assets with a failed job of this type; exclude those actively
+            # being worked (pending/claimed). Old completed records are intentionally
+            # allowed — --force re-runs leave historical completed rows behind, and
+            # retry_failed should still be able to reset a newer failed job.
             conditions.append(
                 """
                 EXISTS (
@@ -780,7 +783,7 @@ class AssetRepository:
                     SELECT 1 FROM worker_jobs w
                     WHERE w.asset_id = a.asset_id
                       AND w.job_type = :job_type
-                      AND w.status IN ('pending', 'claimed', 'completed')
+                      AND w.status IN ('pending', 'claimed')
                 )
                 """
             )
