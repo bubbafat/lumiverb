@@ -330,7 +330,7 @@ def fail_job(
 
 
 # ---------------------------------------------------------------------------
-# List jobs (for tests / debugging)
+# List jobs (for tests / debugging / admin UI)
 # ---------------------------------------------------------------------------
 
 
@@ -340,14 +340,22 @@ class JobListItem(BaseModel):
     asset_id: str | None
     status: str
     priority: int
+    worker_id: str | None
+    fail_count: int
+    error_message: str | None
+    created_at: str
+    claimed_at: str | None
+    completed_at: str | None
 
 
 @router.get("", response_model=list[JobListItem])
 def list_jobs(
     session: Annotated[Session, Depends(get_tenant_session)],
     library_id: str | None = None,
+    status: str | None = None,
+    limit: int = 200,
 ) -> list[JobListItem]:
-    """List jobs, optionally filtered by library_id (via asset)."""
+    """List jobs, optionally filtered by library_id (via asset), status, with limit."""
     from sqlmodel import select
     from src.models.tenant import Asset, WorkerJob
     if library_id:
@@ -358,6 +366,9 @@ def list_jobs(
         )
     else:
         stmt = select(WorkerJob)
+    if status:
+        stmt = stmt.where(WorkerJob.status == status)
+    stmt = stmt.order_by(WorkerJob.created_at.desc()).limit(limit)  # type: ignore[union-attr]
     jobs = list(session.exec(stmt).all())
     return [
         JobListItem(
@@ -366,6 +377,12 @@ def list_jobs(
             asset_id=j.asset_id,
             status=j.status,
             priority=j.priority,
+            worker_id=j.worker_id,
+            fail_count=j.fail_count,
+            error_message=j.error_message,
+            created_at=j.created_at.isoformat(),
+            claimed_at=j.claimed_at.isoformat() if j.claimed_at else None,
+            completed_at=j.completed_at.isoformat() if j.completed_at else None,
         )
         for j in jobs
     ]

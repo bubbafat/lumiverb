@@ -230,8 +230,13 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
 
       <div className="border-t border-gray-800" />
 
-      <div className="px-3 py-3">
-        <div className="flex items-center justify-between gap-2 text-xs text-gray-400">
+      <div className="px-2 py-2">
+        <Link
+          to="/admin"
+          className={`flex items-center justify-between gap-2 rounded-lg px-2 py-2 text-xs text-gray-400 transition-colors duration-150 hover:bg-gray-800/80 ${
+            location.pathname === "/admin" ? "bg-indigo-600/20 text-indigo-300" : ""
+          }`}
+        >
           <div className="flex items-center gap-2">
             {showLabels ? (
               <>
@@ -256,7 +261,7 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
               </span>
             )}
           </div>
-        </div>
+        </Link>
       </div>
 
       <div className="border-t border-gray-800" />

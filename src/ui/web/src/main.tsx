@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import AppShell from "./components/AppShell";
+import AdminPage from "./pages/AdminPage";
 import BrowsePage from "./pages/BrowsePage";
 import LibrariesPage from "./pages/LibrariesPage";
 import "./index.css";
@@ -24,6 +25,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/" element={<AppShell />}>
             <Route index element={<LibrariesPage />} />
             <Route path="libraries/:libraryId/browse" element={<BrowsePage />} />
+            <Route path="admin" element={<AdminPage />} />
           </Route>
         </Routes>
       </BrowserRouter>

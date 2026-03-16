@@ -93,8 +93,11 @@ export interface JobListItem {
   status: string;
   priority: number;
   asset_id: string | null;
+  worker_id: string | null;
+  fail_count: number;
+  error_message: string | null;
   created_at: string;
-  started_at: string | null;
+  claimed_at: string | null;
   completed_at: string | null;
 }
 
