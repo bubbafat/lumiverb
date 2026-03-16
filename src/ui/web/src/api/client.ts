@@ -177,6 +177,10 @@ export function proxyUrl(assetId: string): string {
   return `/v1/assets/${assetId}/proxy`;
 }
 
+export async function getJobStats(): Promise<import("./types").JobStatsResponse> {
+  return apiFetch<import("./types").JobStatsResponse>("/jobs/stats");
+}
+
 export async function listJobs(params: {
   status?: string;
   limit?: number;

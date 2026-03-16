@@ -330,6 +330,53 @@ def fail_job(
 
 
 # ---------------------------------------------------------------------------
+# Job stats (aggregate counts for admin UI)
+# ---------------------------------------------------------------------------
+
+
+class JobStatRow(BaseModel):
+    job_type: str
+    pending: int
+    claimed: int
+    failed: int
+
+
+class JobStatsResponse(BaseModel):
+    rows: list[JobStatRow]
+    total_pending: int
+    total_claimed: int
+    total_failed: int
+
+
+@router.get("/stats", response_model=JobStatsResponse)
+def get_job_stats(
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> JobStatsResponse:
+    """Aggregate pending/claimed/failed counts per job type across all libraries."""
+    job_repo = WorkerJobRepository(session)
+    raw = job_repo.pipeline_status_tenant()
+    by_type: dict[str, dict[str, int]] = {}
+    for r in raw:
+        jt = r["job_type"]
+        st = r["status"]
+        if st not in ("pending", "claimed", "failed"):
+            continue
+        if jt not in by_type:
+            by_type[jt] = {"pending": 0, "claimed": 0, "failed": 0}
+        by_type[jt][st] += r["count"]
+    rows = [
+        JobStatRow(job_type=jt, pending=c["pending"], claimed=c["claimed"], failed=c["failed"])
+        for jt, c in sorted(by_type.items())
+    ]
+    return JobStatsResponse(
+        rows=rows,
+        total_pending=sum(r.pending for r in rows),
+        total_claimed=sum(r.claimed for r in rows),
+        total_failed=sum(r.failed for r in rows),
+    )
+
+
+# ---------------------------------------------------------------------------
 # List jobs (for tests / debugging / admin UI)
 # ---------------------------------------------------------------------------
 
@@ -355,7 +402,8 @@ def list_jobs(
     status: str | None = None,
     limit: int = 200,
 ) -> list[JobListItem]:
-    """List jobs, optionally filtered by library_id (via asset), status, with limit."""
+    """List jobs, optionally filtered by library_id (via asset), status, with limit.
+    By default excludes completed jobs; pass status=completed to see them."""
     from sqlmodel import select
     from src.models.tenant import Asset, WorkerJob
     if library_id:
@@ -368,6 +416,8 @@ def list_jobs(
         stmt = select(WorkerJob)
     if status:
         stmt = stmt.where(WorkerJob.status == status)
+    else:
+        stmt = stmt.where(WorkerJob.status != "completed")
     stmt = stmt.order_by(WorkerJob.created_at.desc()).limit(limit)  # type: ignore[union-attr]
     jobs = list(session.exec(stmt).all())
     return [

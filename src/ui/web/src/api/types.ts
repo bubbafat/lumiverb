@@ -101,6 +101,20 @@ export interface JobListItem {
   completed_at: string | null;
 }
 
+export interface JobStatRow {
+  job_type: string;
+  pending: number;
+  claimed: number;
+  failed: number;
+}
+
+export interface JobStatsResponse {
+  rows: JobStatRow[];
+  total_pending: number;
+  total_claimed: number;
+  total_failed: number;
+}
+
 export interface SimilarHit {
   asset_id: string;
   rel_path: string;

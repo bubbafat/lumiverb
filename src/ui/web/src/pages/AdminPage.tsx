@@ -1,18 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import { listLibraries, listJobs } from "../api/client";
-import type { JobListItem, LibraryListItem } from "../api/types";
+import { useState, useEffect } from "react";
+import { listLibraries, listJobs, getJobStats } from "../api/client";
+import type { JobListItem, JobStatsResponse, LibraryListItem } from "../api/types";
 
 const POLL_INTERVAL = 10_000;
 
-const JOB_TYPES = [
-  "proxy",
-  "video-preview",
-  "exif",
-  "ai_vision",
-  "embed",
-  "video-index",
-  "video-vision",
-] as const;
 
 function relativeTime(iso: string | null): string {
   if (!iso) return "—";
@@ -81,94 +73,61 @@ function LibraryRow({ lib }: { lib: LibraryListItem }) {
   );
 }
 
-function jobCountsByType(jobs: JobListItem[]) {
-  const counts: Record<string, { pending: number; claimed: number; failed: number }> = {};
-  for (const jt of JOB_TYPES) {
-    counts[jt] = { pending: 0, claimed: 0, failed: 0 };
-  }
-  for (const j of jobs) {
-    if (!counts[j.job_type]) counts[j.job_type] = { pending: 0, claimed: 0, failed: 0 };
-    if (j.status === "pending") counts[j.job_type].pending++;
-    else if (j.status === "claimed") counts[j.job_type].claimed++;
-    else if (j.status === "failed") counts[j.job_type].failed++;
-  }
-  return counts;
-}
-
-function WorkerSummary({ jobs }: { jobs: JobListItem[] }) {
-  const pending = jobs.filter((j) => j.status === "pending").length;
-  const claimed = jobs.filter((j) => j.status === "claimed").length;
-  const failed = jobs.filter((j) => j.status === "failed").length;
-  const counts = jobCountsByType(jobs);
-  const activeTypes = Object.entries(counts).filter(
-    ([, c]) => c.pending + c.claimed + c.failed > 0,
-  );
+function WorkerSummary({ stats }: { stats: JobStatsResponse }) {
+  const { total_pending, total_claimed, total_failed, rows } = stats;
+  const activeRows = rows.filter((r) => r.pending + r.claimed + r.failed > 0);
 
   return (
     <div className="space-y-4">
       {/* Top-line counts */}
       <div className="grid grid-cols-3 gap-3">
         {[
-          { label: "Pending", value: pending, cls: "text-gray-200" },
+          { label: "Pending", value: total_pending, cls: "text-gray-200" },
           {
             label: "Running",
-            value: claimed,
-            cls: claimed > 0 ? "text-amber-300" : "text-gray-200",
+            value: total_claimed,
+            cls: total_claimed > 0 ? "text-amber-300" : "text-gray-200",
           },
           {
             label: "Failed",
-            value: failed,
-            cls: failed > 0 ? "text-red-400" : "text-gray-200",
+            value: total_failed,
+            cls: total_failed > 0 ? "text-red-400" : "text-gray-200",
           },
         ].map(({ label, value, cls }) => (
           <div
             key={label}
             className="rounded-lg border border-gray-700/50 bg-gray-900/50 px-4 py-3 text-center"
           >
-            <div className={`text-2xl font-semibold ${cls}`}>{value}</div>
+            <div className={`text-2xl font-semibold ${cls}`}>{value.toLocaleString()}</div>
             <div className="mt-0.5 text-xs text-gray-500">{label}</div>
           </div>
         ))}
       </div>
 
       {/* Breakdown by type */}
-      {activeTypes.length > 0 && (
+      {activeRows.length > 0 && (
         <div className="rounded-lg border border-gray-700/50 bg-gray-900/50 overflow-hidden">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-700/50">
-                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">
-                  Job type
-                </th>
-                <th className="px-4 py-2 text-right text-xs font-medium text-gray-500">
-                  Pending
-                </th>
-                <th className="px-4 py-2 text-right text-xs font-medium text-gray-500">
-                  Running
-                </th>
-                <th className="px-4 py-2 text-right text-xs font-medium text-gray-500">
-                  Failed
-                </th>
+                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Job type</th>
+                <th className="px-4 py-2 text-right text-xs font-medium text-gray-500">Pending</th>
+                <th className="px-4 py-2 text-right text-xs font-medium text-gray-500">Running</th>
+                <th className="px-4 py-2 text-right text-xs font-medium text-gray-500">Failed</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-800/50">
-              {activeTypes.map(([jt, c]) => (
-                <tr key={jt}>
-                  <td className="px-4 py-2 font-mono text-xs text-gray-300">
-                    {jt}
-                  </td>
+              {activeRows.map((r) => (
+                <tr key={r.job_type}>
+                  <td className="px-4 py-2 font-mono text-xs text-gray-300">{r.job_type}</td>
                   <td className="px-4 py-2 text-right text-gray-400">
-                    {c.pending || "—"}
+                    {r.pending ? r.pending.toLocaleString() : "—"}
                   </td>
-                  <td
-                    className={`px-4 py-2 text-right ${c.claimed > 0 ? "text-amber-300" : "text-gray-400"}`}
-                  >
-                    {c.claimed || "—"}
+                  <td className={`px-4 py-2 text-right ${r.claimed > 0 ? "text-amber-300" : "text-gray-400"}`}>
+                    {r.claimed ? r.claimed.toLocaleString() : "—"}
                   </td>
-                  <td
-                    className={`px-4 py-2 text-right ${c.failed > 0 ? "text-red-400" : "text-gray-400"}`}
-                  >
-                    {c.failed || "—"}
+                  <td className={`px-4 py-2 text-right ${r.failed > 0 ? "text-red-400" : "text-gray-400"}`}>
+                    {r.failed ? r.failed.toLocaleString() : "—"}
                   </td>
                 </tr>
               ))}
@@ -264,13 +223,25 @@ export default function AdminPage() {
     refetchInterval: POLL_INTERVAL,
   });
 
-  const { data: jobs, isLoading: jobsLoading, dataUpdatedAt: jobsUpdated } = useQuery<JobListItem[]>({
+  const { data: stats, isLoading: statsLoading, dataUpdatedAt: statsUpdated } = useQuery<JobStatsResponse>({
+    queryKey: ["admin", "job-stats"],
+    queryFn: () => getJobStats(),
+    refetchInterval: POLL_INTERVAL,
+  });
+
+  const { data: jobs, isLoading: jobsLoading } = useQuery<JobListItem[]>({
     queryKey: ["admin", "jobs"],
-    queryFn: () => listJobs({ limit: 500 }),
+    queryFn: () => listJobs({ limit: 200 }),
     refetchInterval: POLL_INTERVAL,
   });
 
   const activeLibraries = libraries?.filter((l) => l.status !== "trashed") ?? [];
+
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   function lastUpdated(ts: number) {
     if (!ts) return null;
@@ -323,22 +294,26 @@ export default function AdminPage() {
             title="Workers"
             subtitle="Job queue status across all job types"
           />
-          {lastUpdated(jobsUpdated)}
+          {lastUpdated(statsUpdated)}
         </div>
-        {jobsLoading ? (
+        {statsLoading ? (
           <div className="h-32 rounded-lg border border-gray-700/50 bg-gray-900/50 animate-pulse" />
-        ) : (
+        ) : stats ? (
           <>
-            <WorkerSummary jobs={jobs ?? []} />
+            <WorkerSummary stats={stats} />
             <div>
               <h3 className="mb-2 text-sm font-medium text-gray-400">
                 Currently running
               </h3>
-              <RunningJobs jobs={jobs ?? []} />
+              {jobsLoading ? (
+                <div className="h-16 rounded-lg border border-gray-700/50 bg-gray-900/50 animate-pulse" />
+              ) : (
+                <RunningJobs jobs={jobs ?? []} />
+              )}
             </div>
             <FailedJobs jobs={jobs ?? []} />
           </>
-        )}
+        ) : null}
       </section>
     </div>
   );
