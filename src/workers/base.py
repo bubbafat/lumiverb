@@ -8,6 +8,7 @@ from rich.console import Console
 
 from src.cli.progress import UnifiedProgress, UnifiedProgressSpec
 from src.core.config import get_settings
+from src.workers.output_events import emit_event
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ class BaseWorker:
         library_id: str | None = None,
         path_prefix: str | None = None,
         suppress_base_progress: bool = False,
+        output_mode: str = "human",
     ) -> None:
         self._client = client
         self._once = once
@@ -36,6 +38,12 @@ class BaseWorker:
         self._path_prefix = path_prefix
         self._console = Console()
         self._suppress_base_progress = suppress_base_progress
+        self._output_mode = output_mode
+
+    def _emit_event(self, event: str, **fields: object) -> None:
+        """Emit a structured event in jsonl mode. event: start|batch|complete|error|warning."""
+        payload = {"event": event, "stage": self.job_type, **fields}
+        emit_event(self._output_mode, payload)
 
     def _pending_count(self) -> int:
         """GET /v1/jobs/pending — count of pending/claimed jobs for progress total."""
@@ -86,7 +94,14 @@ class BaseWorker:
         settings = get_settings()
         processed = 0
         failed = 0
+        last_rel_path = ""
         pending = self._pending_count()
+        use_jsonl = self._output_mode == "jsonl"
+        self._emit_event(
+            "start",
+            library_id=self._library_id or "",
+            path_prefix=self._path_prefix or "",
+        )
         spec = UnifiedProgressSpec(
             label=f"Processing {self.job_type} jobs",
             unit="jobs",
@@ -95,7 +110,7 @@ class BaseWorker:
         )
         progress_ctx = (
             nullcontext()
-            if self._suppress_base_progress
+            if (self._suppress_base_progress or use_jsonl)
             else UnifiedProgress(self._console, spec)
         )
         with progress_ctx as bar:
@@ -116,6 +131,7 @@ class BaseWorker:
                         job.get("job_type"),
                         job.get("asset_id"),
                     )
+                    last_rel_path = job.get("rel_path", "") or last_rel_path
                     result = self.process(job)
                     self.complete_job(job_id, result or {})
                     processed += 1
@@ -126,7 +142,15 @@ class BaseWorker:
                             failed=failed,
                         )
                     logger.info("completed job_id=%s", job_id)
-                    print(f"{self.job_type} ✓ {job.get('rel_path', job_id)}", flush=True)
+                    if not use_jsonl:
+                        print(f"{self.job_type} ✓ {job.get('rel_path', job_id)}", flush=True)
+                    self._emit_event(
+                        "batch",
+                        processed=processed,
+                        failed=failed,
+                        library_id=self._library_id or "",
+                        rel_path=last_rel_path,
+                    )
                 except Exception as e:
                     logger.exception("failed job_id=%s error=%s", job_id, e)
                     self.fail_job(job_id, str(e))
@@ -137,9 +161,18 @@ class BaseWorker:
                             done=processed,
                             failed=failed,
                         )
-                    print(f"{self.job_type} ✗ {job.get('rel_path', job_id)}: {e}", flush=True)
+                    if not use_jsonl:
+                        print(f"{self.job_type} ✗ {job.get('rel_path', job_id)}: {e}", flush=True)
+                    self._emit_event(
+                        "error",
+                        message=str(e),
+                        rel_path=job.get("rel_path", ""),
+                        processed=processed,
+                        failed=failed,
+                    )
 
-        if not self._suppress_base_progress:
+        self._emit_event("complete", processed=processed, failed=failed)
+        if not use_jsonl and not self._suppress_base_progress:
             self._console.print(
                 f"Done: {processed:,} succeeded, {failed:,} failed"
             )

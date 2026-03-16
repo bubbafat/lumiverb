@@ -7,6 +7,7 @@ from typing import Iterable
 from sqlmodel import Session
 
 from src.core.config import get_settings
+from src.workers.output_events import emit_event
 from src.core.io_utils import normalize_path_prefix
 from src.core.utils import utcnow
 from src.models.registry import model_version_for_provenance
@@ -50,6 +51,7 @@ class SearchSyncWorker:
         quickwit: QuickwitClient | None = None,
         batch_size: int = 100,
         path_prefix: str | None = None,
+        output_mode: str = "human",
     ) -> None:
         self._session = session
         self._library_id = library_id
@@ -60,12 +62,21 @@ class SearchSyncWorker:
         self._library_repo = LibraryRepository(session)
         self._queue_repo = SearchSyncQueueRepository(session)
         self._quickwit = quickwit or QuickwitClient()
+        # output_mode: "human" (default) or "jsonl" for structured streaming events.
+        self._output_mode = output_mode
 
     def pending_count(self) -> int:
         """Return number of unsynced rows in search_sync_queue for this library/path."""
         return self._queue_repo.pending_count(
             library_id=self._library_id,
             path_prefix=self._path_prefix,
+        )
+
+    def _emit_event(self, event: str, **fields: object) -> None:
+        """Emit a structured event in jsonl mode; no-op for human mode. Uses shared contract."""
+        emit_event(
+            self._output_mode,
+            {"event": event, "stage": "search_sync", **fields},
         )
 
     def run_once(
@@ -99,6 +110,12 @@ class SearchSyncWorker:
         self._quickwit.ensure_scene_index_for_library(self._library_id)
 
         settings = get_settings()
+
+        self._emit_event(
+            "start",
+            library_id=self._library_id,
+            path_prefix=self._path_prefix or "",
+        )
 
         while True:
             batch = self._queue_repo.claim_batch(
@@ -185,8 +202,18 @@ class SearchSyncWorker:
             skipped = sum(1 for v in asset_status.values() if v == "skipped")
             if cb:
                 cb(synced, skipped, batches)
+            self._emit_event(
+                "batch",
+                library_id=self._library_id,
+                path_prefix=self._path_prefix or "",
+                synced=synced,
+                skipped=skipped,
+                batches=batches,
+            )
 
-        return {"synced": synced, "skipped": skipped, "batches": batches}
+        summary = {"synced": synced, "skipped": skipped, "batches": batches}
+        self._emit_event("complete", library_id=self._library_id, **summary)
+        return summary
 
     def _build_document(self, asset: Asset, meta: AssetMetadata) -> dict:
         """

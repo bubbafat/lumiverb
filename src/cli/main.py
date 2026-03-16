@@ -468,6 +468,10 @@ def worker_proxy(
     once: bool = typer.Option(False, "--once", help="Process all queued jobs then exit."),
     concurrency: int = typer.Option(1, "--concurrency", help="Number of parallel workers."),
     library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
+    output: Annotated[
+        str,
+        typer.Option("--output", help="Output mode: human (default) or jsonl for structured events."),
+    ] = "human",
 ) -> None:
     """Generate proxies and thumbnails for pending image assets."""
     from src.storage.local import LocalStorage
@@ -488,6 +492,7 @@ def worker_proxy(
         concurrency=concurrency,
         once=once,
         library_id=library_id,
+        output_mode=output,
     )
     worker.run()
 
@@ -496,13 +501,17 @@ def worker_proxy(
 def worker_exif(
     library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
     once: Annotated[bool, typer.Option("--once")] = False,
+    output: Annotated[
+        str,
+        typer.Option("--output", help="Output mode: human (default) or jsonl for structured events."),
+    ] = "human",
 ) -> None:
     """Run the EXIF metadata worker."""
     from src.workers.exif_worker import ExifWorker
 
     client = LumiverbClient()
     library_id = _resolve_library_id(client, library) if library else None
-    worker = ExifWorker(client=client, once=once, library_id=library_id)
+    worker = ExifWorker(client=client, once=once, library_id=library_id, output_mode=output)
     worker.run()
 
 
@@ -510,6 +519,10 @@ def worker_exif(
 def worker_vision(
     library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
     once: Annotated[bool, typer.Option("--once")] = False,
+    output: Annotated[
+        str,
+        typer.Option("--output", help="Output mode: human (default) or jsonl for structured events."),
+    ] = "human",
 ) -> None:
     """Run the AI vision worker (Moondream descriptions and tags)."""
     from src.storage.local import get_storage
@@ -523,6 +536,7 @@ def worker_vision(
         storage=storage,
         once=once,
         library_id=library_id,
+        output_mode=output,
     )
     worker.run()
 
@@ -533,6 +547,10 @@ def worker_video_preview(
     once: Annotated[bool, typer.Option("--once", help="Process queue until empty then exit.")] = False,
     concurrency: Annotated[int, typer.Option("--concurrency", help="Number of parallel workers.")] = 1,
     path: Annotated[str | None, typer.Option("--path", "-p", help="Optional subpath to scope jobs.")] = None,
+    output: Annotated[
+        str,
+        typer.Option("--output", help="Output mode: human (default) or jsonl for structured events."),
+    ] = "human",
 ) -> None:
     """Run the video preview worker (short MP4 previews for video assets)."""
     from src.storage.local import LocalStorage
@@ -553,6 +571,7 @@ def worker_video_preview(
         once=once,
         library_id=library_id,
         path_prefix=path_prefix,
+        output_mode=output,
     )
     worker.run()
 
@@ -561,6 +580,10 @@ def worker_video_preview(
 def worker_embed(
     library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
     once: Annotated[bool, typer.Option("--once", help="Process queue until empty then exit.")] = False,
+    output: Annotated[
+        str,
+        typer.Option("--output", help="Output mode: human (default) or jsonl for structured events."),
+    ] = "human",
 ) -> None:
     """Run the embedding worker (CLIP + Moondream vectors for similarity search)."""
     from src.storage.local import get_storage
@@ -574,6 +597,7 @@ def worker_embed(
         storage=storage,
         once=once,
         library_id=library_id,
+        output_mode=output,
     )
     worker.run()
 
@@ -582,6 +606,10 @@ def worker_embed(
 def worker_video_index(
     library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
     once: Annotated[bool, typer.Option("--once", help="Process queue until empty then exit.")] = False,
+    output: Annotated[
+        str,
+        typer.Option("--output", help="Output mode: human (default) or jsonl for structured events."),
+    ] = "human",
 ) -> None:
     """Run the video index worker (scene detection for video assets)."""
     import threading
@@ -597,82 +625,94 @@ def worker_video_index(
     jobs_failed = 0
     _lock = threading.Lock()
 
-    with Progress(
-        SpinnerColumn(),
-        BarColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        TextColumn("  "),
-        TextColumn("{task.fields[detail]}"),
-        console=console,
-        refresh_per_second=10,
-    ) as progress:
-        job_task = progress.add_task(
-            "Processing video-index jobs",
-            total=None,
-            detail="",
-        )
-        scan_task = progress.add_task(
-            "",
-            total=100,
-            completed=0,
-            visible=False,
-            detail="",
-        )
-
-        def on_progress(event: dict) -> None:
-            nonlocal jobs_done, jobs_failed
-            kind = event.get("event")
-            rel_path = event.get("rel_path", "")
-            filename = _Path(rel_path).name if rel_path else ""
-            duration = event.get("video_duration_sec") or 0.0
-
-            with _lock:
-                if kind == "chunk_claimed":
-                    start_ts = event["start_ts"]
-                    end_ts = event["end_ts"]
-                    progress.update(
-                        scan_task,
-                        visible=True,
-                        total=100,
-                        completed=0,
-                        description=f"  [cyan]{filename}[/cyan]",
-                        detail=f"scanning {start_ts:.0f}s – {end_ts:.0f}s",
-                    )
-
-                elif kind == "frame_scanned":
-                    _log.debug("frame_scanned: duration=%r event=%r", duration, event)
-                    pts = event["pts"]
-                    start_ts = event["start_ts"]
-                    end_ts = event["end_ts"]
-                    chunk_duration = max(end_ts - start_ts, 1.0)
-                    elapsed = max(pts - start_ts, 0.0)
-                    pct = min(elapsed / chunk_duration, 1.0)
-                    video_pct = (pts / duration * 100) if duration > 0 else 0.0
-                    progress.update(
-                        scan_task,
-                        completed=int(pct * 100),
-                        detail=f"{elapsed:.0f}s / {chunk_duration:.0f}s  ({video_pct:.0f}% of scene)",
-                    )
-
-                elif kind == "chunk_complete":
-                    end_ts = event["end_ts"]
-                    video_pct = (end_ts / duration * 100) if duration > 0 else 0.0
-                    progress.update(scan_task, visible=False, detail="")
-                    progress.update(
-                        job_task,
-                        detail=f"last chunk to {end_ts:.0f}s  ({video_pct:.0f}% of video)",
-                    )
-
+    if output == "jsonl":
         worker = VideoIndexWorker(
             client=client,
             once=once,
             library_id=library_id,
-            progress_callback=on_progress,
+            progress_callback=None,
             suppress_base_progress=True,
+            output_mode=output,
         )
         worker.run()
+    else:
+        with Progress(
+            SpinnerColumn(),
+            BarColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            TextColumn("  "),
+            TextColumn("{task.fields[detail]}"),
+            console=console,
+            refresh_per_second=10,
+        ) as progress:
+            job_task = progress.add_task(
+                "Processing video-index jobs",
+                total=None,
+                detail="",
+            )
+            scan_task = progress.add_task(
+                "",
+                total=100,
+                completed=0,
+                visible=False,
+                detail="",
+            )
 
-    console.print(f"Done: {jobs_done:,} succeeded, {jobs_failed:,} failed")
+            def on_progress(event: dict) -> None:
+                nonlocal jobs_done, jobs_failed
+                kind = event.get("event")
+                rel_path = event.get("rel_path", "")
+                filename = _Path(rel_path).name if rel_path else ""
+                duration = event.get("video_duration_sec") or 0.0
+
+                with _lock:
+                    if kind == "chunk_claimed":
+                        start_ts = event["start_ts"]
+                        end_ts = event["end_ts"]
+                        progress.update(
+                            scan_task,
+                            visible=True,
+                            total=100,
+                            completed=0,
+                            description=f"  [cyan]{filename}[/cyan]",
+                            detail=f"scanning {start_ts:.0f}s – {end_ts:.0f}s",
+                        )
+
+                    elif kind == "frame_scanned":
+                        _log.debug("frame_scanned: duration=%r event=%r", duration, event)
+                        pts = event["pts"]
+                        start_ts = event["start_ts"]
+                        end_ts = event["end_ts"]
+                        chunk_duration = max(end_ts - start_ts, 1.0)
+                        elapsed = max(pts - start_ts, 0.0)
+                        pct = min(elapsed / chunk_duration, 1.0)
+                        video_pct = (pts / duration * 100) if duration > 0 else 0.0
+                        progress.update(
+                            scan_task,
+                            completed=int(pct * 100),
+                            detail=f"{elapsed:.0f}s / {chunk_duration:.0f}s  ({video_pct:.0f}% of scene)",
+                        )
+
+                    elif kind == "chunk_complete":
+                        end_ts = event["end_ts"]
+                        video_pct = (end_ts / duration * 100) if duration > 0 else 0.0
+                        progress.update(scan_task, visible=False, detail="")
+                        progress.update(
+                            job_task,
+                            detail=f"last chunk to {end_ts:.0f}s  ({video_pct:.0f}% of video)",
+                        )
+
+            worker = VideoIndexWorker(
+                client=client,
+                once=once,
+                library_id=library_id,
+                progress_callback=on_progress,
+                suppress_base_progress=True,
+                output_mode=output,
+            )
+            worker.run()
+
+        console.print(f"Done: {jobs_done:,} succeeded, {jobs_failed:,} failed")
 
 
 @worker_app.command("video-vision")
@@ -680,6 +720,10 @@ def worker_video_vision(
     library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
     once: Annotated[bool, typer.Option("--once", help="Process queue until empty then exit.")] = False,
     path: Annotated[str | None, typer.Option("--path", "-p", help="Optional subpath to scope jobs.")] = None,
+    output: Annotated[
+        str,
+        typer.Option("--output", help="Output mode: human (default) or jsonl for structured events."),
+    ] = "human",
 ) -> None:
     """Run the video vision worker (AI scene description for video assets)."""
     import threading
@@ -693,79 +737,92 @@ def worker_video_vision(
     console = Console()
     _lock = threading.Lock()
 
-    with Progress(
-        SpinnerColumn(),
-        BarColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        TextColumn("  "),
-        TextColumn("{task.fields[detail]}"),
-        console=console,
-        refresh_per_second=10,
-    ) as progress:
-        job_task = progress.add_task(
-            "Processing video-vision jobs",
-            total=None,
-            detail="",
+    if output == "jsonl":
+        worker = VideoVisionWorker(
+            client=client,
+            once=once,
+            library_id=library_id,
+            path_prefix=path_prefix,
+            progress_callback=None,
+            suppress_base_progress=True,
+            output_mode=output,
         )
-        scene_task = progress.add_task(
-            "",
-            total=100,
-            completed=0,
-            visible=False,
-            detail="",
-        )
+        worker.run()
+    else:
+        with Progress(
+            SpinnerColumn(),
+            BarColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            TextColumn("  "),
+            TextColumn("{task.fields[detail]}"),
+            console=console,
+            refresh_per_second=10,
+        ) as progress:
+            job_task = progress.add_task(
+                "Processing video-vision jobs",
+                total=None,
+                detail="",
+            )
+            scene_task = progress.add_task(
+                "",
+                total=100,
+                completed=0,
+                visible=False,
+                detail="",
+            )
 
-        def on_progress(event: dict) -> None:
-            kind = event.get("event")
-            rel_path = event.get("rel_path", "")
-            filename = _Path(rel_path).name if rel_path else ""
+            def on_progress(event: dict) -> None:
+                kind = event.get("event")
+                rel_path = event.get("rel_path", "")
+                filename = _Path(rel_path).name if rel_path else ""
 
-            with _lock:
-                if kind == "job_started":
-                    total = event["total_scenes"]
-                    progress.update(
-                        scene_task,
+                with _lock:
+                    if kind == "job_started":
+                        total = event["total_scenes"]
+                        progress.update(
+                            scene_task,
                             visible=True,
                             total=total,
                             completed=0,
                             description=f"  [cyan]{filename}[/cyan]",
                             detail=f"0 / {total} scenes",
-                    )
+                        )
 
-                elif kind == "scene_started":
-                    scene_idx = event["scene_index"]
-                    total = event["total_scenes"]
-                    start_ms = event["start_ms"]
-                    end_ms = event["end_ms"]
-                    progress.update(
-                        scene_task,
-                        completed=scene_idx,
-                        detail=f"{scene_idx + 1} / {total} scenes  ({start_ms // 1000}s – {end_ms // 1000}s)",
-                    )
+                    elif kind == "scene_started":
+                        scene_idx = event["scene_index"]
+                        total = event["total_scenes"]
+                        start_ms = event["start_ms"]
+                        end_ms = event["end_ms"]
+                        progress.update(
+                            scene_task,
+                            completed=scene_idx,
+                            detail=f"{scene_idx + 1} / {total} scenes  ({start_ms // 1000}s – {end_ms // 1000}s)",
+                        )
 
-                elif kind == "scene_complete":
-                    scene_idx = event["scene_index"]
-                    total = event["total_scenes"]
-                    progress.update(
-                        scene_task,
-                        completed=scene_idx + 1,
-                        detail=f"{scene_idx + 1} / {total} scenes",
-                    )
-                    if scene_idx + 1 >= total:
-                        progress.update(scene_task, visible=False, detail="")
-                        progress.update(job_task, detail=f"{filename} · {total} scenes done")
+                    elif kind == "scene_complete":
+                        scene_idx = event["scene_index"]
+                        total = event["total_scenes"]
+                        progress.update(
+                            scene_task,
+                            completed=scene_idx + 1,
+                            detail=f"{scene_idx + 1} / {total} scenes",
+                        )
+                        if scene_idx + 1 >= total:
+                            progress.update(scene_task, visible=False, detail="")
+                            progress.update(job_task, detail=f"{filename} · {total} scenes done")
 
-        worker = VideoVisionWorker(
-        client=client,
-        once=once,
-        library_id=library_id,
-        path_prefix=path_prefix,
-            progress_callback=on_progress,
-            suppress_base_progress=True,
-        )
-        worker.run()
+            worker = VideoVisionWorker(
+                client=client,
+                once=once,
+                library_id=library_id,
+                path_prefix=path_prefix,
+                progress_callback=on_progress,
+                suppress_base_progress=True,
+                output_mode=output,
+            )
+            worker.run()
 
-    console.print("Done.")
+        console.print("Done.")
 
 
 # Shell alias: function lumi-search-sync() { lumiverb worker search-sync --library "$1" --once; }
@@ -775,6 +832,13 @@ def worker_search_sync(
     once: Annotated[bool, typer.Option("--once", help="Process one batch then exit.")] = False,
     force_resync: Annotated[bool, typer.Option("--force-resync", help="Re-enqueue all assets before syncing.")] = False,
     path: Annotated[str | None, typer.Option("--path", "-p", help="Optional subpath to scope sync.")] = None,
+    output: Annotated[
+        str,
+        typer.Option(
+            "--output",
+            help="Output mode: human (default) or jsonl for structured events.",
+        ),
+    ] = "human",
 ) -> None:
     """Run the search sync worker. Omit --library to sync all libraries."""
     import time
@@ -841,6 +905,7 @@ def worker_search_sync(
                 library_id=lib_id,
                 quickwit=quickwit,
                 path_prefix=path_prefix,
+                output_mode=output,
             )
             pending = worker.pending_count()
             if pending == 0 and once:

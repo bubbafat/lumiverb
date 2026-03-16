@@ -27,6 +27,7 @@ class VideoPreviewWorker(BaseWorker):
         once: bool = False,
         library_id: str | None = None,
         path_prefix: str | None = None,
+        output_mode: str = "human",
     ) -> None:
         super().__init__(
             client,
@@ -34,6 +35,7 @@ class VideoPreviewWorker(BaseWorker):
             once=once,
             library_id=library_id,
             path_prefix=path_prefix,
+            output_mode=output_mode,
         )
         self._storage = storage
         self._tenant_id = tenant_id

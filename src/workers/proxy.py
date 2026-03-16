@@ -98,8 +98,15 @@ class ProxyWorker(BaseWorker):
         concurrency: int = 1,
         once: bool = False,
         library_id: str | None = None,
+        output_mode: str = "human",
     ) -> None:
-        super().__init__(client, concurrency=concurrency, once=once, library_id=library_id)
+        super().__init__(
+            client,
+            concurrency=concurrency,
+            once=once,
+            library_id=library_id,
+            output_mode=output_mode,
+        )
         self._storage = storage
         self._tenant_id = tenant_id
 

@@ -407,7 +407,7 @@ class PipelineSupervisor:
             return
 
         def _spawn(stage: PipelineStage) -> tuple[PipelineStage, subprocess.Popen]:
-            cmd = _lumiverb_cmd() + ["worker", stage.worker_cmd, "--once"]
+            cmd = _lumiverb_cmd() + ["worker", stage.worker_cmd, "--once", "--output", "jsonl"]
             if library_name:
                 cmd += ["--library", library_name]
             # All workers must respect optional --path scoping; each worker
@@ -421,11 +421,66 @@ class PipelineSupervisor:
                 self._current_procs.append(proc)
             return stage, proc
 
+        def _handle_worker_event(stage: PipelineStage, event: dict) -> None:
+            """Translate structured worker events (start|batch|complete|error|warning) into dashboard log lines."""
+            kind = event.get("event")
+            label = stage.label
+            if kind == "start":
+                lib_id = event.get("library_id") or ""
+                path = event.get("path_prefix") or ""
+                suffix = f" library={lib_id}" if lib_id else ""
+                if path:
+                    suffix += f" path_prefix={path}"
+                self._dashboard_update([], log_line=f"[{label}] start{suffix}")
+            elif kind in ("batch", "complete"):
+                # Support both job-style (processed, failed) and search_sync-style (synced, skipped, batches).
+                processed = event.get("processed")
+                failed = event.get("failed")
+                synced = event.get("synced")
+                skipped = event.get("skipped")
+                batches = event.get("batches")
+                 # Optional context fields.
+                rel_path = event.get("rel_path") or ""
+                phase = "complete" if kind == "complete" else "batch"
+                if processed is not None and failed is not None:
+                    suffix = f" · last={rel_path}" if rel_path else ""
+                    self._dashboard_update(
+                        [],
+                        log_line=f"[{label}] {phase}: processed={processed:,} failed={failed:,}{suffix}",
+                    )
+                elif synced is not None and skipped is not None:
+                    self._dashboard_update(
+                        [],
+                        log_line=f"[{label}] {phase}: synced={synced:,} skipped={skipped:,} batches={batches or 0:,}",
+                    )
+                else:
+                    self._dashboard_update([], log_line=f"[{label}] {phase}: {event}")
+            elif kind in ("error", "warning"):
+                msg = event.get("message", "")
+                rel_path = event.get("rel_path", "")
+                part = f" {rel_path}" if rel_path else ""
+                self._dashboard_update(
+                    [],
+                    log_line=f"[{label}] {kind}{part}: {msg}",
+                )
+            else:
+                self._dashboard_update([], log_line=f"[{label}] {event}")
+
         def _drain(stage: PipelineStage, proc: subprocess.Popen) -> None:
             assert proc.stdout is not None
             prefix = f"[{stage.label}] "
             for line in proc.stdout:
-                self._dashboard_update([], log_line=prefix + line.rstrip("\n"))
+                line = line.rstrip("\n")
+                # Prefer structured JSONL events when available; fall back to plain text.
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    self._dashboard_update([], log_line=prefix + line)
+                else:
+                    if isinstance(obj, dict) and "event" in obj:
+                        _handle_worker_event(stage, obj)
+                    else:
+                        self._dashboard_update([], log_line=prefix + line)
             proc.wait()
             with self._procs_lock:
                 if proc in self._current_procs:
