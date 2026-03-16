@@ -1100,7 +1100,7 @@ def status(
         typer.Option("--output", "-o", help="Output format: table (default) or json."),
     ] = "table",
 ) -> None:
-    """Show pipeline status: asset counts by stage (proxy, EXIF, vision, search sync) with done/pending/failed breakdown."""
+    """Show pipeline status: asset counts by stage (proxy, EXIF, vision, search sync) with done/inflight/pending/failed breakdown, plus active worker count."""
     from src.core.database import get_tenant_session
     from src.repository.tenant import AssetRepository, SearchSyncQueueRepository, WorkerJobRepository
 
@@ -1139,23 +1139,27 @@ def status(
         if tenant_wide:
             job_rows_all = job_repo.pipeline_status_tenant()
             ssq_rows_all = ssq_repo.search_sync_pipeline_status_tenant()
+            active_workers = job_repo.active_worker_count()
         else:
             lib_id = target_libraries[0]["library_id"]
             job_rows_all = [{"library_id": lib_id, **r} for r in job_repo.pipeline_status(lib_id)]
             ssq_rows_all = [{"library_id": lib_id, **r} for r in ssq_repo.search_sync_pipeline_status(lib_id)]
+            active_workers = job_repo.active_worker_count(library_id=lib_id)
 
-    # Build per-library pivot: library_id -> stage -> {done, pending, failed}
+    # Build per-library pivot: library_id -> stage -> {done, inflight, pending, failed}
     per_lib_pivot: dict[str, dict[str, dict[str, int]]] = {lib["library_id"]: {} for lib in target_libraries}
     for r in job_rows_all:
         lid, jt = r["library_id"], r["job_type"]
         if lid not in per_lib_pivot:
             continue
         if jt not in per_lib_pivot[lid]:
-            per_lib_pivot[lid][jt] = {"done": 0, "pending": 0, "failed": 0}
+            per_lib_pivot[lid][jt] = {"done": 0, "inflight": 0, "pending": 0, "failed": 0}
         sv, count = r["status"], r["count"]
         if sv == "completed":
             per_lib_pivot[lid][jt]["done"] += count
-        elif sv in ("pending", "claimed"):
+        elif sv == "claimed":
+            per_lib_pivot[lid][jt]["inflight"] += count
+        elif sv == "pending":
             per_lib_pivot[lid][jt]["pending"] += count
         elif sv == "failed":
             per_lib_pivot[lid][jt]["failed"] += count
@@ -1165,11 +1169,13 @@ def status(
         if lid not in per_lib_pivot:
             continue
         if "search_sync" not in per_lib_pivot[lid]:
-            per_lib_pivot[lid]["search_sync"] = {"done": 0, "pending": 0, "failed": 0}
+            per_lib_pivot[lid]["search_sync"] = {"done": 0, "inflight": 0, "pending": 0, "failed": 0}
         sv, count = r["status"], r["count"]
         if sv == "synced":
             per_lib_pivot[lid]["search_sync"]["done"] += count
-        elif sv in ("pending", "processing"):
+        elif sv == "processing":
+            per_lib_pivot[lid]["search_sync"]["inflight"] += count
+        elif sv == "pending":
             per_lib_pivot[lid]["search_sync"]["pending"] += count
 
     def _lib_stages(pivot: dict[str, dict[str, int]]) -> list[dict]:
@@ -1178,16 +1184,18 @@ def status(
                 "name": s,
                 "label": JOB_TYPE_DISPLAY.get(s, s),
                 "done": pivot[s]["done"],
+                "inflight": pivot[s]["inflight"],
                 "pending": pivot[s]["pending"],
                 "failed": pivot[s]["failed"],
             }
             for s in STAGE_ORDER
-            if s in pivot and (pivot[s]["done"] + pivot[s]["pending"] + pivot[s]["failed"] > 0)
+            if s in pivot and (pivot[s]["done"] + pivot[s]["inflight"] + pivot[s]["pending"] + pivot[s]["failed"] > 0)
         ]
 
     if output == "json":
         if tenant_wide:
             payload: dict = {
+                "workers": active_workers,
                 "libraries": [
                     {
                         "library": lib_by_id[lid].get("name", lid),
@@ -1196,7 +1204,7 @@ def status(
                         "stages": _lib_stages(pivot),
                     }
                     for lid, pivot in per_lib_pivot.items()
-                ]
+                ],
             }
         else:
             lib_id = target_libraries[0]["library_id"]
@@ -1205,6 +1213,7 @@ def status(
                 "library": lib_obj.get("name", lib_id),
                 "library_id": lib_id,
                 "total_assets": lib_totals[lib_id],
+                "workers": active_workers,
                 "stages": _lib_stages(per_lib_pivot[lib_id]),
             }
         print(_json.dumps(payload, ensure_ascii=False))
@@ -1212,12 +1221,13 @@ def status(
 
     if tenant_wide:
         total_all = sum(lib_totals.values())
-        console.print(f"Total assets (all libraries): {total_all:,}")
+        console.print(f"Total assets (all libraries): {total_all:,}  Active workers: {active_workers}")
         console.print()
         table = Table(show_header=True)
         table.add_column("Library", style="bold")
         table.add_column("Stage", style="bold")
         table.add_column("Done", justify="right")
+        table.add_column("Inflight", justify="right")
         table.add_column("Pending", justify="right")
         table.add_column("Failed", justify="right")
         for lib in target_libraries:
@@ -1225,23 +1235,24 @@ def status(
             lib_name = lib.get("name", lid)
             stages = _lib_stages(per_lib_pivot[lid])
             for s in stages:
-                table.add_row(lib_name, s["label"], f"{s['done']:,}", f"{s['pending']:,}", f"{s['failed']:,}")
+                table.add_row(lib_name, s["label"], f"{s['done']:,}", f"{s['inflight']:,}", f"{s['pending']:,}", f"{s['failed']:,}")
         console.print(table)
     else:
         lib_id = target_libraries[0]["library_id"]
         lib_obj = target_libraries[0]
         lib_name = lib_obj.get("name", lib_id)
         console.print(f"Library: {lib_name}  ({lib_id})")
-        console.print(f"Total assets: {lib_totals[lib_id]:,}")
+        console.print(f"Total assets: {lib_totals[lib_id]:,}  Active workers: {active_workers}")
         console.print()
         table = Table(show_header=True)
         table.add_column("Stage", style="bold")
         table.add_column("Done", justify="right")
+        table.add_column("Inflight", justify="right")
         table.add_column("Pending", justify="right")
         table.add_column("Failed", justify="right")
         stages = _lib_stages(per_lib_pivot[lib_id])
         for s in stages:
-            table.add_row(s["label"], f"{s['done']:,}", f"{s['pending']:,}", f"{s['failed']:,}")
+            table.add_row(s["label"], f"{s['done']:,}", f"{s['inflight']:,}", f"{s['pending']:,}", f"{s['failed']:,}")
         console.print(table)
 
         pivot = per_lib_pivot[lib_id]

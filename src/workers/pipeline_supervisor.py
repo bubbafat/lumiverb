@@ -259,15 +259,14 @@ class PipelineSupervisor:
         with self._procs_lock:
             self._current_procs.clear()
 
-    def _dashboard_update(self, stages: list[dict[str, Any]], log_line: str | None = None) -> None:
+    def _dashboard_update(self, stages: list[dict[str, Any]], log_line: str | None = None, workers: int = 0) -> None:
         if log_line is not None:
             self._write_log_line(log_line)
         if self._dashboard is None:
             return
         update = getattr(self._dashboard, "update", None)
         if callable(update):
-            # The dashboard no longer renders a log panel; it only needs stage data.
-            update(stages, None)
+            update(stages, None, workers)
 
     def _dashboard_set_worker_status(self, worker_cmd: str, label: str, status: str) -> None:
         if self._dashboard is None:
@@ -475,7 +474,7 @@ class PipelineSupervisor:
                     continue
 
                 stages_payload = data.get("stages", [])
-                self._dashboard_update(stages_payload, log_line=None)
+                self._dashboard_update(stages_payload, log_line=None, workers=data.get("workers", 0))
 
                 pending = _stages_with_pending(stages_payload)
                 if not pending:
@@ -572,7 +571,7 @@ class PipelineSupervisor:
                         if stage.get("pending", 0) > 0:
                             pending_names.add(stage["name"])
 
-                self._dashboard_update(flat_stages, log_line=None)
+                self._dashboard_update(flat_stages, log_line=None, workers=data.get("workers", 0))
 
                 if not pending_names:
                     if self._once:

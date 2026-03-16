@@ -40,6 +40,7 @@ def test_pipeline_status_groups_correctly() -> None:
         {"job_type": "proxy", "status": "failed", "count": 10},
         {"job_type": "exif", "status": "completed", "count": 100},
     ]
+    mock_job_repo.active_worker_count.return_value = 0
 
     mock_ssq_repo = MagicMock()
     mock_ssq_repo.search_sync_pipeline_status.return_value = []
@@ -202,6 +203,7 @@ def test_status_hint_shows_worst_failure_type() -> None:
         {"job_type": "proxy", "status": "failed", "count": 2},
         {"job_type": "ai_vision", "status": "failed", "count": 50},
     ]
+    mock_job_repo.active_worker_count.return_value = 0
 
     mock_ssq_repo = MagicMock()
     mock_ssq_repo.search_sync_pipeline_status.return_value = []

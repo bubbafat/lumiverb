@@ -44,7 +44,7 @@ def _provision_tenant_db(tenant_url: str, project_root: str) -> None:
     env = os.environ.copy()
     env["ALEMBIC_TENANT_URL"] = tenant_url
     result = subprocess.run(
-        [sys.executable, "-m", "alembic", "-c", "alembic-tenant.ini", "upgrade", "head"],
+        [sys.executable, "-m", "alembic", "-c", "alembic-tenant.ini", "upgrade", "heads"],
         cwd=project_root,
         env=env,
         capture_output=True,

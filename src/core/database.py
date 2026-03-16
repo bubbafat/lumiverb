@@ -64,7 +64,7 @@ _SAFE_TENANT_ID = re.compile(r"^[a-zA-Z0-9_]+$")
 def provision_tenant_database(tenant_id: str) -> None:
     """
     Create the tenant database if it doesn't exist, enable pgvector, and run
-    alembic -c alembic-tenant.ini upgrade head against it.
+    alembic -c alembic-tenant.ini upgrade heads against it.
     Raises on failure.
     """
     if not _SAFE_TENANT_ID.match(tenant_id):
@@ -106,7 +106,7 @@ def provision_tenant_database(tenant_id: str) -> None:
     env["ALEMBIC_TENANT_URL"] = tenant_url
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     result = subprocess.run(
-        [sys.executable, "-m", "alembic", "-c", "alembic-tenant.ini", "upgrade", "head"],
+        [sys.executable, "-m", "alembic", "-c", "alembic-tenant.ini", "upgrade", "heads"],
         cwd=project_root,
         env=env,
         capture_output=True,
@@ -114,5 +114,5 @@ def provision_tenant_database(tenant_id: str) -> None:
     )
     if result.returncode != 0:
         raise RuntimeError(
-            f"alembic upgrade head failed for tenant {tenant_id}: {result.stderr or result.stdout}"
+            f"alembic upgrade heads failed for tenant {tenant_id}: {result.stderr or result.stdout}"
         )

@@ -48,6 +48,7 @@ class PipelineDashboard:
         self._layout: Layout | None = None
         # stages: list of {"name", "label", "done", "pending", "failed"[, "library_name"]}
         self._stages: list[dict[str, Any]] = []
+        self._active_workers: int = 0
         self._status_warning = False
         # Previous counts per flash key for flash detection
         self._prev_counts: dict[str, dict[str, int]] = {}
@@ -127,12 +128,14 @@ class PipelineDashboard:
         self,
         stages: list[dict[str, Any]],
         log_line: str | None = None,
+        workers: int = 0,
     ) -> None:
         """
         Update dashboard state and refresh the display.
 
         - If log_line contains "Status poll failed", set warning indicator.
         - If stages is non-empty, update stored stages, clear warning, and apply flash logic.
+        - workers: number of DB-level active workers (distinct worker_ids active in last 60s).
         """
         if log_line is not None and "Status poll failed" in log_line:
             self._status_warning = True
@@ -146,20 +149,24 @@ class PipelineDashboard:
                 library_name = s.get("library_name", "")
                 flash_key = f"{library_name}:{name}" if library_name else name
                 done = s.get("done", 0)
+                inflight = s.get("inflight", 0)
                 pending = s.get("pending", 0)
                 failed = s.get("failed", 0)
                 prev = self._prev_counts.get(flash_key, {})
                 prev_done = prev.get("done", 0)
                 prev_pending = prev.get("pending", 0)
+                prev_inflight = prev.get("inflight", 0)
                 prev_failed = prev.get("failed", 0)
-                if pending < prev_pending or done > prev_done:
+                if pending < prev_pending or inflight < prev_inflight or done > prev_done:
                     new_flash_green.add(flash_key)
                 if failed > prev_failed:
                     new_flash_red.add(flash_key)
-                self._prev_counts[flash_key] = {"done": done, "pending": pending, "failed": failed}
+                self._prev_counts[flash_key] = {"done": done, "inflight": inflight, "pending": pending, "failed": failed}
             self._stages = stages
             self._flash_green = new_flash_green
             self._flash_red = new_flash_red
+
+        self._active_workers = workers
 
         if self._live is not None and self._layout is not None:
             self._layout.size = self._top_height()
@@ -193,6 +200,7 @@ class PipelineDashboard:
     def _render_status_single_lib(self) -> RenderableType:
         table = Table(show_header=True, header_style="bold")
         table.add_column("Stage", style="bold")
+        table.add_column("Inflight", justify="right")
         table.add_column("Pending", justify="right")
         table.add_column("Done", justify="right")
         table.add_column("Failed", justify="right")
@@ -201,19 +209,20 @@ class PipelineDashboard:
             name = s.get("name", "")
             flash_key = name
             label = s.get("label", name)
-            pending, done, failed = s.get("pending", 0), s.get("done", 0), s.get("failed", 0)
+            inflight, pending, done, failed = s.get("inflight", 0), s.get("pending", 0), s.get("done", 0), s.get("failed", 0)
             style = self._flash_style(flash_key)
             if style:
                 table.add_row(
                     f"[{style}]{label}[/]",
+                    f"[{style}]{inflight:,}[/]",
                     f"[{style}]{pending:,}[/]",
                     f"[{style}]{done:,}[/]",
                     f"[{style}]{failed:,}[/]",
                 )
             else:
-                table.add_row(label, f"{pending:,}", f"{done:,}", f"{failed:,}")
+                table.add_row(label, f"{inflight:,}", f"{pending:,}", f"{done:,}", f"{failed:,}")
 
-        header = f"[bold]Library: {self.library_name}[/]  Total assets: {self.total_assets:,}"
+        header = f"[bold]Library: {self.library_name}[/]  Total: {self.total_assets:,}  Workers: {self._active_workers}"
         if self._status_warning:
             return Group(
                 Panel(
@@ -238,6 +247,7 @@ class PipelineDashboard:
 
         table = Table(show_header=True, header_style="bold", show_edge=True)
         table.add_column("Stage", style="bold")
+        table.add_column("Inflight", justify="right")
         table.add_column("Pending", justify="right")
         table.add_column("Done", justify="right")
         table.add_column("Failed", justify="right")
@@ -275,26 +285,27 @@ class PipelineDashboard:
                 lib_header.append(lib_name, style="dim")
 
             # Library header row — Stage column holds the library name, counts blank
-            table.add_row(lib_header, "", "", "")
+            table.add_row(lib_header, "", "", "", "")
 
             for s in stages:
                 name = s.get("name", "")
                 flash_key = f"{lib_name}:{name}"
                 label = s.get("label", name)
-                pending, done, failed = s.get("pending", 0), s.get("done", 0), s.get("failed", 0)
+                inflight, pending, done, failed = s.get("inflight", 0), s.get("pending", 0), s.get("done", 0), s.get("failed", 0)
                 style = self._flash_style(flash_key)
                 indent = "  "
                 if style:
                     table.add_row(
                         f"[{style}]{indent}{label}[/]",
+                        f"[{style}]{inflight:,}[/]",
                         f"[{style}]{pending:,}[/]",
                         f"[{style}]{done:,}[/]",
                         f"[{style}]{failed:,}[/]",
                     )
                 else:
-                    table.add_row(f"{indent}{label}", f"{pending:,}", f"{done:,}", f"{failed:,}")
+                    table.add_row(f"{indent}{label}", f"{inflight:,}", f"{pending:,}", f"{done:,}", f"{failed:,}")
 
-        header = f"[bold]All Libraries[/]  Total assets: {self.total_assets:,}"
+        header = f"[bold]All Libraries[/]  Total: {self.total_assets:,}  Workers: {self._active_workers}"
         if self._status_warning:
             return Group(
                 Panel(

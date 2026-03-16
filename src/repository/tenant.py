@@ -784,6 +784,16 @@ class AssetRepository:
                 )
                 """
             )
+            # Keep enqueue eligibility invariants even for retries.
+            # Otherwise --retry-failed can resurrect permanently-invalid work.
+            if job_type == "ai_vision":
+                # ai_vision runs only on image proxies (video uses video-vision).
+                conditions.append("a.proxy_key IS NOT NULL")
+                conditions.append("a.media_type LIKE 'image/%'")
+            elif job_type == "embed":
+                conditions.append("a.proxy_key IS NOT NULL")
+            elif job_type in ("video-index", "video-preview", "video-vision"):
+                conditions.append("a.media_type = 'video'")
         elif not force:
             conditions.append(
                 """
@@ -803,6 +813,11 @@ class AssetRepository:
             elif job_type == "exif":
                 conditions.append("a.exif_extracted_at IS NULL")
             elif job_type == "ai_vision":
+                # ai_vision runs only on image proxies (video uses video-vision).
+                # Ensure we never enqueue ai_vision for assets without a proxy_key
+                # (e.g. when video proxy generation is deferred).
+                conditions.append("a.proxy_key IS NOT NULL")
+                conditions.append("a.media_type LIKE 'image/%'")
                 conditions.append(
                     """
                     NOT EXISTS (
@@ -1211,6 +1226,45 @@ class WorkerJobRepository:
             """),
         ).fetchall()
         return [{"library_id": r.library_id, "job_type": r.job_type, "status": r.status, "count": r.count} for r in rows]
+
+    def active_worker_count(self, library_id: str | None = None) -> int:
+        """
+        Count distinct workers active in the last 60 seconds.
+        A worker is active if it:
+          - Currently holds a claimed job with a valid lease, OR
+          - Claimed or completed/failed a job within the last 60 seconds.
+        Optionally scoped to a specific library.
+        """
+        if library_id:
+            rows = self._session.execute(
+                text("""
+                    SELECT COUNT(DISTINCT wj.worker_id)::int
+                    FROM worker_jobs wj
+                    JOIN assets a ON a.asset_id = wj.asset_id
+                    WHERE a.library_id = :library_id
+                      AND wj.worker_id IS NOT NULL
+                      AND (
+                          (wj.status = 'claimed' AND wj.lease_expires_at > NOW())
+                          OR wj.claimed_at > NOW() - INTERVAL '60 seconds'
+                          OR wj.completed_at > NOW() - INTERVAL '60 seconds'
+                      )
+                """),
+                {"library_id": library_id},
+            ).fetchone()
+        else:
+            rows = self._session.execute(
+                text("""
+                    SELECT COUNT(DISTINCT worker_id)::int
+                    FROM worker_jobs
+                    WHERE worker_id IS NOT NULL
+                      AND (
+                          (status = 'claimed' AND lease_expires_at > NOW())
+                          OR claimed_at > NOW() - INTERVAL '60 seconds'
+                          OR completed_at > NOW() - INTERVAL '60 seconds'
+                      )
+                """),
+            ).fetchone()
+        return rows[0] if rows else 0
 
     def list_failures(
         self,

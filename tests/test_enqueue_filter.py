@@ -293,3 +293,150 @@ def test_enqueue_missing_proxy(filter_test_env: tuple[str, str, str]) -> None:
             ).fetchall()
         ]
         assert set(enqueued_ids) == set(ids_without_proxy)
+
+
+@pytest.mark.slow
+def test_enqueue_ai_vision_requires_image_proxy(filter_test_env: tuple[str, str, str]) -> None:
+    """
+    Regression: ai_vision jobs must only be enqueued for image assets that have proxy_key set.
+
+    This prevents a failure mode where video proxy generation is deferred (proxy job completes
+    without setting proxy_key), but downstream enqueue still schedules ai_vision.
+    """
+    tenant_url, _api_key, _tenant_id = filter_test_env
+
+    engine = get_engine_for_url(tenant_url)
+    with Session(engine) as session:
+        lib_repo = LibraryRepository(session)
+        library = lib_repo.create(
+            name="AiVisionProxyReq_" + secrets.token_urlsafe(6),
+            root_path="/ai-vision-proxy-req",
+        )
+        library_id = library.library_id
+
+        now = datetime.now(timezone.utc)
+        image_asset_id = "ast_" + str(ULID())
+        video_asset_id = "ast_" + str(ULID())
+        session.execute(
+            insert(Asset),
+            [
+                {
+                    "asset_id": image_asset_id,
+                    "library_id": library_id,
+                    "rel_path": "img.jpg",
+                    "file_size": 1000,
+                    "media_type": "image/jpeg",
+                    "status": "proxied",
+                    "availability": "online",
+                    "proxy_key": f"proxy/{image_asset_id}.jpg",
+                    "thumbnail_key": f"thumb/{image_asset_id}.jpg",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+                {
+                    # Video asset with no proxy_key (e.g. proxy deferred)
+                    "asset_id": video_asset_id,
+                    "library_id": library_id,
+                    "rel_path": "vid.mov",
+                    "file_size": 2000,
+                    "media_type": "video/quicktime",
+                    "status": "pending",
+                    "availability": "online",
+                    "proxy_key": None,
+                    "thumbnail_key": None,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            ],
+        )
+        session.commit()
+
+        spec = AssetFilterSpec(library_id=library_id)
+        n = enqueue_jobs_for_filter(session, spec, "ai_vision", force=False)
+        assert n == 1
+
+        enqueued = session.execute(
+            text(
+                "SELECT w.asset_id FROM worker_jobs w "
+                "JOIN assets a ON a.asset_id = w.asset_id "
+                "WHERE w.job_type = 'ai_vision' AND w.status = 'pending' AND a.library_id = :lib"
+            ),
+            {"lib": library_id},
+        ).fetchall()
+        assert {r[0] for r in enqueued} == {image_asset_id}
+
+
+@pytest.mark.slow
+def test_retry_failed_ai_vision_does_not_reenqueue_invalid_assets(filter_test_env: tuple[str, str, str]) -> None:
+    """
+    Regression: --retry-failed must not re-enqueue permanently invalid ai_vision jobs.
+
+    In particular, failed ai_vision jobs for:
+    - video assets, or
+    - image assets with NULL proxy_key
+    must remain ineligible even when retry_failed=True.
+    """
+    tenant_url, _api_key, _tenant_id = filter_test_env
+
+    engine = get_engine_for_url(tenant_url)
+    with Session(engine) as session:
+        lib_repo = LibraryRepository(session)
+        library = lib_repo.create(
+            name="RetryFailedAiVision_" + secrets.token_urlsafe(6),
+            root_path="/retry-failed-ai-vision",
+        )
+        library_id = library.library_id
+
+        now = datetime.now(timezone.utc)
+        bad_img_id = "ast_" + str(ULID())
+        bad_vid_id = "ast_" + str(ULID())
+        session.execute(
+            insert(Asset),
+            [
+                {
+                    "asset_id": bad_img_id,
+                    "library_id": library_id,
+                    "rel_path": "bad_img.jpg",
+                    "file_size": 1000,
+                    "media_type": "image/jpeg",
+                    "status": "pending",
+                    "availability": "online",
+                    "proxy_key": None,
+                    "thumbnail_key": None,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+                {
+                    "asset_id": bad_vid_id,
+                    "library_id": library_id,
+                    "rel_path": "bad_vid.mov",
+                    "file_size": 2000,
+                    "media_type": "video/quicktime",
+                    "status": "pending",
+                    "availability": "online",
+                    "proxy_key": None,
+                    "thumbnail_key": None,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            ],
+        )
+        session.commit()
+
+        # Seed historical failed jobs (what retry_failed looks for).
+        session.execute(
+            text(
+                """
+                INSERT INTO worker_jobs (job_id, job_type, asset_id, status, priority, created_at, completed_at, error_message)
+                VALUES
+                  (:j1, 'ai_vision', :a1, 'failed', 10, :now, :now, 'prior failure'),
+                  (:j2, 'ai_vision', :a2, 'failed', 10, :now, :now, 'prior failure')
+                """
+            ),
+            {"j1": "job_" + str(ULID()), "j2": "job_" + str(ULID()), "a1": bad_img_id, "a2": bad_vid_id, "now": now},
+        )
+        session.commit()
+
+        spec = AssetFilterSpec(library_id=library_id, retry_failed=True)
+        n = enqueue_jobs_for_filter(session, spec, "ai_vision", force=False)
+        assert n == 0
