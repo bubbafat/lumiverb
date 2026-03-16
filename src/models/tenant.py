@@ -39,7 +39,7 @@ class Library(SQLModel, table=True):
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
-    vision_model_id: str = Field(default="moondream", nullable=False)
+    vision_model_id: str = Field(default="", nullable=False)
 
 
 class Scan(SQLModel, table=True):

@@ -17,7 +17,7 @@ router = APIRouter(prefix="/v1/libraries", tags=["libraries"])
 class CreateLibraryRequest(BaseModel):
     name: str
     root_path: str
-    vision_model_id: str = "moondream"
+    vision_model_id: str = ""
 
 
 class LibraryUpdateRequest(BaseModel):
@@ -40,7 +40,7 @@ class LibraryListItem(BaseModel):
     scan_status: str
     last_scan_at: str | None
     status: str = "active"
-    vision_model_id: str = "moondream"
+    vision_model_id: str = ""
 
 
 class EmptyTrashResponse(BaseModel):
@@ -62,11 +62,6 @@ def create_library(
     Create a library. Name must be unique for this tenant.
     Returns 409 if a library with the same name already exists.
     """
-    if not body.vision_model_id.strip():
-        raise HTTPException(
-            status_code=422,
-            detail="vision_model_id cannot be empty",
-        )
     repo = LibraryRepository(session)
     existing = repo.get_by_name(body.name)
     if existing is not None:
@@ -130,11 +125,6 @@ def update_library(
     if library is None:
         raise HTTPException(status_code=404, detail="Library not found")
     if body.vision_model_id is not None:
-        if not body.vision_model_id.strip():
-            raise HTTPException(
-                status_code=422,
-                detail="vision_model_id cannot be empty",
-            )
         library.vision_model_id = body.vision_model_id
     if body.name is not None:
         library.name = body.name

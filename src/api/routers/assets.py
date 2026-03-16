@@ -11,7 +11,6 @@ from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session
 from src.core.io_utils import normalize_path_prefix
-from src.models.registry import model_version_for_provenance
 from src.repository.tenant import AssetMetadataRepository, AssetRepository, LibraryRepository, ScanRepository, WorkerJobRepository
 from src.storage.local import get_storage
 from src.core.utils import utcnow
@@ -298,7 +297,7 @@ def get_asset_by_path(
     library = lib_repo.get_by_id(asset.library_id)
     if library is not None:
         meta_repo = AssetMetadataRepository(session)
-        model_version = model_version_for_provenance(library.vision_model_id)
+        model_version = "1"
         meta = meta_repo.get(
             asset_id=asset.asset_id,
             model_id=library.vision_model_id,
@@ -342,7 +341,7 @@ def get_asset(
     library = lib_repo.get_by_id(asset.library_id)
     if library is not None:
         meta_repo = AssetMetadataRepository(session)
-        model_version = model_version_for_provenance(library.vision_model_id)
+        model_version = "1"
         meta = meta_repo.get(
             asset_id=asset.asset_id,
             model_id=library.vision_model_id,

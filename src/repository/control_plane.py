@@ -19,7 +19,13 @@ class TenantRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def create(self, name: str, plan: str = "free") -> Tenant:
+    def create(
+        self,
+        name: str,
+        plan: str = "free",
+        vision_api_url: str = "",
+        vision_api_key: str = "",
+    ) -> Tenant:
         """Generate tenant_id as ten_ + ulid(), insert, return the new Tenant."""
         tenant_id = "ten_" + str(ULID())
         tenant = Tenant(
@@ -27,6 +33,8 @@ class TenantRepository:
             name=name,
             plan=plan,
             status="active",
+            vision_api_url=vision_api_url,
+            vision_api_key=vision_api_key,
         )
         self._session.add(tenant)
         self._session.commit()

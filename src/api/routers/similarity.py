@@ -112,9 +112,7 @@ def find_similar(
             cameras=cameras_list,
         )
 
-    from src.models.registry import get_embedding_config
     from src.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
-    from src.workers.embeddings.moondream_provider import MODEL_VERSION as MD_VERSION
 
     asset_repo = AssetRepository(session)
     lib_repo = LibraryRepository(session)
@@ -126,23 +124,12 @@ def find_similar(
     if source.library_id != library_id:
         raise HTTPException(status_code=404, detail="Asset not in library")
 
-    library = lib_repo.get_by_id(library_id)
-    vision_model_id = library.vision_model_id if library else "moondream"
-    config = get_embedding_config(vision_model_id)
-
-    moondream_weight = config.moondream_weight
-    clip_weight = config.clip_weight
-
-    # Fetch top-(limit*3) candidates from each model for re-ranking pool
+    # Fetch top-(limit*3) candidates for re-ranking pool
     K = min(limit * 3, 100)
 
-    # CLIP candidates
     clip_emb = emb_repo.get(asset_id, "clip", CLIP_VERSION)
 
-    # Moondream candidates (only if moondream weight > 0)
-    md_emb = emb_repo.get(asset_id, "moondream", MD_VERSION) if moondream_weight > 0 else None
-
-    if clip_emb is None and md_emb is None:
+    if clip_emb is None:
         return SimilarityResponse(
             source_asset_id=asset_id,
             hits=[],
@@ -150,36 +137,18 @@ def find_similar(
             embedding_available=False,
         )
 
-    # Collect candidates from each available model
-    scores: dict[str, float] = {}  # asset_id -> weighted score
+    clip_candidates = emb_repo.find_similar(
+        library_id=library_id,
+        model_id="clip",
+        model_version=CLIP_VERSION,
+        vector=[float(x) for x in clip_emb.embedding_vector],
+        limit=K,
+        exclude_asset_id=asset_id,
+        scope=scope,
+    )
+    scores: dict[str, float] = {cand_id: dist for cand_id, dist in clip_candidates}
 
-    if clip_emb is not None:
-        clip_candidates = emb_repo.find_similar(
-            library_id=library_id,
-            model_id="clip",
-            model_version=CLIP_VERSION,
-            vector=[float(x) for x in clip_emb.embedding_vector],
-            limit=K,
-            exclude_asset_id=asset_id,
-            scope=scope,
-        )
-        for cand_id, dist in clip_candidates:
-            scores[cand_id] = scores.get(cand_id, 0.0) + clip_weight * dist
-
-    if md_emb is not None:
-        md_candidates = emb_repo.find_similar(
-            library_id=library_id,
-            model_id="moondream",
-            model_version=MD_VERSION,
-            vector=[float(x) for x in md_emb.embedding_vector],
-            limit=K,
-            exclude_asset_id=asset_id,
-            scope=scope,
-        )
-        for cand_id, dist in md_candidates:
-            scores[cand_id] = scores.get(cand_id, 0.0) + moondream_weight * dist
-
-    # Sort by weighted score ascending (lower = more similar), apply offset/limit
+    # Sort by score ascending (lower = more similar), apply offset/limit
     ranked = sorted(scores.items(), key=lambda x: x[1])[offset : offset + limit]
 
     if not ranked:

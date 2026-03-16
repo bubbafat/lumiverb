@@ -10,7 +10,6 @@ from src.core.config import get_settings
 from src.workers.output_events import emit_event
 from src.core.io_utils import normalize_path_prefix
 from src.core.utils import utcnow
-from src.models.registry import model_version_for_provenance
 from src.models.tenant import Asset, AssetMetadata, Library, VideoScene
 from src.repository.tenant import (
     AssetMetadataRepository,
@@ -165,8 +164,8 @@ class SearchSyncWorker:
                         continue
 
                     library = self._library_repo.get_by_id(asset.library_id)
-                    vision_model_id = library.vision_model_id if library else "moondream"
-                    model_version = model_version_for_provenance(vision_model_id)
+                    vision_model_id = library.vision_model_id if library else ""
+                    model_version = "1"
 
                     meta: AssetMetadata | None = self._meta_repo.get(
                         asset_id=asset.asset_id,
@@ -253,8 +252,8 @@ class SearchSyncWorker:
     def _build_scene_document(
         self, scene: VideoScene, asset: Asset, library: Library | None
     ) -> dict:
-        model_id = library.vision_model_id if library else "moondream"
-        model_version = model_version_for_provenance(model_id)
+        model_id = library.vision_model_id if library else ""
+        model_version = "1"
         indexed_at = int(utcnow().timestamp())
         return {
             "id": scene.scene_id,

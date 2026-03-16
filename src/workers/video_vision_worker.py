@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Callable
 
 from src.core.config import get_settings
-from src.models.registry import model_version_for_provenance
 from src.storage.local import LocalStorage
 from src.workers.base import BaseWorker
 from src.workers.captions.factory import get_caption_provider
@@ -43,7 +42,9 @@ class VideoVisionWorker(BaseWorker):
         video_indexed and enqueues asset-level sync on the server).
         """
         asset_id = job["asset_id"]
-        vision_model_id = job.get("vision_model_id", "moondream")
+        vision_model_id = job.get("vision_model_id", "")
+        vision_api_url = job.get("vision_api_url", "")
+        vision_api_key = job.get("vision_api_key") or None
 
         resp = self._client.get(f"/v1/video/{asset_id}/scenes")
         resp.raise_for_status()
@@ -61,8 +62,8 @@ class VideoVisionWorker(BaseWorker):
         settings = get_settings()
         storage = LocalStorage(data_dir=settings.data_dir)
 
-        provider = get_caption_provider(vision_model_id)
-        model_version = model_version_for_provenance(vision_model_id)
+        provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key)
+        model_version = "1"
 
         self._emit(
             {

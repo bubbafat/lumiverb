@@ -22,6 +22,8 @@ class CreateTenantRequest(BaseModel):
     name: str
     plan: str = "free"  # free | pro | enterprise
     email: str = ""
+    vision_api_url: str = ""
+    vision_api_key: str = ""
 
 
 class CreateTenantResponse(BaseModel):
@@ -35,6 +37,16 @@ class TenantListItem(BaseModel):
     name: str
     plan: str
     status: str
+
+
+class UpdateTenantRequest(BaseModel):
+    vision_api_url: str | None = None
+    vision_api_key: str | None = None
+
+
+class UpdateTenantResponse(BaseModel):
+    tenant_id: str
+    vision_api_url: str
 
 
 class CreateTenantKeyRequest(BaseModel):
@@ -69,7 +81,12 @@ def create_tenant(
     settings = get_settings()
 
     try:
-        tenant = tenant_repo.create(name=body.name, plan=body.plan)
+        tenant = tenant_repo.create(
+            name=body.name,
+            plan=body.plan,
+            vision_api_url=body.vision_api_url,
+            vision_api_key=body.vision_api_key,
+        )
         tenant_id = tenant.tenant_id
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create tenant: {e}") from e
@@ -151,6 +168,31 @@ def list_tenants(
         )
         for t in tenants
     ]
+
+
+@router.patch("/tenants/{tenant_id}", response_model=UpdateTenantResponse)
+def update_tenant(
+    tenant_id: str,
+    body: UpdateTenantRequest,
+    _: Annotated[None, Depends(require_admin)],
+    session: Annotated[Session, Depends(get_db_session)],
+) -> UpdateTenantResponse:
+    """Update tenant vision API config. Only provided fields are changed."""
+    tenant_repo = TenantRepository(session)
+    tenant = tenant_repo.get_by_id(tenant_id)
+    if tenant is None or tenant.status == "deleted":
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    if body.vision_api_url is not None:
+        tenant.vision_api_url = body.vision_api_url
+    if body.vision_api_key is not None:
+        tenant.vision_api_key = body.vision_api_key
+    session.add(tenant)
+    session.commit()
+    session.refresh(tenant)
+    return UpdateTenantResponse(
+        tenant_id=tenant.tenant_id,
+        vision_api_url=tenant.vision_api_url,
+    )
 
 
 @router.post("/tenants/{tenant_id}/keys", response_model=CreateTenantKeyResponse)

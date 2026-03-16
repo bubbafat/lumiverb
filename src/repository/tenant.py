@@ -46,7 +46,7 @@ class LibraryRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def create(self, name: str, root_path: str, vision_model_id: str = "moondream") -> Library:
+    def create(self, name: str, root_path: str, vision_model_id: str = "") -> Library:
         """Generate library_id as lib_ + ULID(), insert, return Library."""
         library_id = "lib_" + str(ULID())
         library = Library(

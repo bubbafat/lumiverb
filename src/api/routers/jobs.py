@@ -3,14 +3,15 @@
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlmodel import Session
 
-from src.api.dependencies import get_tenant_session
+from src.api.dependencies import get_db_session, get_tenant_session
 from src.core.config import get_settings
 from src.core import asset_status
 from src.models.filter import AssetFilterSpec
+from src.repository.control_plane import TenantRepository
 from src.repository.tenant import (
     AssetRepository,
     AssetEmbeddingRepository,
@@ -71,7 +72,9 @@ def enqueue_jobs(
 @router.get("/next", response_model=None)
 def get_next_job(
     job_type: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
+    cp_session: Annotated[Session, Depends(get_db_session)],
     library_id: str | None = None,
     path_prefix: str | None = None,
 ) -> Response | dict[str, Any]:
@@ -103,6 +106,10 @@ def get_next_job(
         job_repo.set_failed(job, "Library not found")
         raise HTTPException(status_code=404, detail="Library not found")
 
+    tenant_id = getattr(request.state, "tenant_id", None)
+    tenant_repo = TenantRepository(cp_session)
+    tenant = tenant_repo.get_by_id(tenant_id) if tenant_id else None
+
     result: dict[str, Any] = {
         "job_id": job.job_id,
         "job_type": job.job_type,
@@ -114,6 +121,8 @@ def get_next_job(
         "proxy_key": asset.proxy_key,
         "thumbnail_key": asset.thumbnail_key,
         "vision_model_id": library.vision_model_id,
+        "vision_api_url": tenant.vision_api_url if tenant else "",
+        "vision_api_key": tenant.vision_api_key if tenant else "",
     }
     if asset.duration_sec is not None:
         result["duration_sec"] = asset.duration_sec
@@ -242,7 +251,7 @@ def complete_job(
     elif job.job_type == "ai_vision":
         if job.asset_id is None:
             raise HTTPException(status_code=400, detail="Job has no asset_id")
-        model_id = data.get("model_id", "moondream")
+        model_id = data.get("model_id", "")
         model_version = data.get("model_version", "1")
         description = data.get("description", "")
         tags = data.get("tags", [])

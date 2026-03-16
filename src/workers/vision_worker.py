@@ -1,11 +1,10 @@
-"""AI vision worker. Uses caption provider abstraction for per-library model switching."""
+"""AI vision worker. Uses OpenAI-compatible caption provider."""
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
 
-from src.models.registry import model_version_for_provenance
 from src.storage.local import LocalStorage
 from src.workers.base import BaseWorker
 from src.workers.captions.factory import get_caption_provider
@@ -23,14 +22,20 @@ class VisionWorker(BaseWorker):
     def process(self, job: dict) -> dict:
         asset_id = job["asset_id"]
         proxy_key = job.get("proxy_key")
-        vision_model_id = job.get("vision_model_id", "moondream")
+        vision_model_id = job.get("vision_model_id", "")
+        vision_api_url = job.get("vision_api_url", "")
+        vision_api_key = job.get("vision_api_key") or None
 
         if not proxy_key:
             raise ValueError(f"No proxy_key in ai_vision job for asset {asset_id}")
+        if not vision_api_url:
+            raise ValueError(f"No vision_api_url configured for asset {asset_id}")
+        if not vision_model_id:
+            raise ValueError(f"No vision_model_id configured for asset {asset_id}")
 
         proxy_path = Path(self._storage.abs_path(proxy_key))
 
-        provider = get_caption_provider(vision_model_id)
+        provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key)
         result = provider.describe(proxy_path)
 
         if not result:
@@ -51,8 +56,7 @@ class VisionWorker(BaseWorker):
 
         return {
             "model_id": vision_model_id,
-            "model_version": model_version_for_provenance(vision_model_id),
+            "model_version": "1",
             "description": description,
             "tags": tags,
         }
-

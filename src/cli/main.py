@@ -13,7 +13,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from src.cli.client import LumiverbClient
-from src.cli.config import load_config, save_config
+from src.cli.config import get_admin_key, load_config, save_config
 from src.cli.scanner import scan_library
 from src.core.io_utils import normalize_path_prefix
 from src.core.logging_config import configure_logging
@@ -25,6 +25,8 @@ config_app = typer.Typer(help="Manage API URL and API key.")
 app.add_typer(config_app, name="config")
 library_app = typer.Typer(help="Create and list libraries.")
 app.add_typer(library_app, name="library")
+tenant_app = typer.Typer(help="Manage tenants (admin only).")
+app.add_typer(tenant_app, name="tenant")
 
 console = Console()
 
@@ -44,13 +46,16 @@ def _main() -> None:
 def config_set(
     api_url: Annotated[str | None, typer.Option("--api-url")] = None,
     api_key: Annotated[str | None, typer.Option("--api-key")] = None,
+    admin_key: Annotated[str | None, typer.Option("--admin-key")] = None,
 ) -> None:
-    """Set API URL and/or API key in ~/.lumiverb/config.json."""
+    """Set API URL, API key, and/or admin key in ~/.lumiverb/config.json."""
     cfg = load_config()
     if api_url is not None:
         cfg.api_url = api_url.rstrip("/")
     if api_key is not None:
         cfg.api_key = api_key
+    if admin_key is not None:
+        cfg.admin_key = admin_key
     save_config(cfg)
     console.print("[green]Config saved.[/green]")
 
@@ -64,6 +69,7 @@ def config_show() -> None:
     table.add_column("Value")
     table.add_row("api_url", cfg.api_url)
     table.add_row("api_key", escape("[set]") if cfg.api_key else escape("[not set]"))
+    table.add_row("admin_key", escape("[set]") if cfg.admin_key else escape("[not set]"))
     console.print(table)
 
 
@@ -106,7 +112,7 @@ def library_list() -> None:
             lib.get("name", ""),
             lib.get("root_path", ""),
             lib.get("scan_status", ""),
-            lib.get("vision_model_id", "moondream"),
+            lib.get("vision_model_id", ""),
             lib.get("last_scan_at") or "—",
         )
     console.print(table)
@@ -120,9 +126,7 @@ def library_set_model(
         typer.Option(
             "--model",
             "-m",
-            help='Model ID. Use "moondream" for local Moondream inference, '
-            'or any OpenAI-compatible model ID (e.g. "qwen3-visioncaption-2b", "llava:13b") '
-            "for remote inference via VISION_API_URL.",
+            help="OpenAI-compatible model ID (e.g. \"qwen3-visioncaption-2b\", \"llava:13b\").",
         ),
     ],
 ) -> None:
@@ -188,6 +192,60 @@ def library_empty_trash() -> None:
     data = empty_resp.json()
     n = data.get("deleted", 0)
     console.print(f"Deleted {n} libraries.")
+
+
+# ---------------------------------------------------------------------------
+# tenant
+# ---------------------------------------------------------------------------
+
+
+@tenant_app.command("list")
+def tenant_list(
+    admin_key: Annotated[str | None, typer.Option("--admin-key", help="Admin key (falls back to saved config).")] = None,
+) -> None:
+    """List all tenants."""
+    key = admin_key or get_admin_key()
+    if not key:
+        console.print("[red]Admin key required. Use --admin-key or run: lumiverb config set --admin-key <key>[/red]")
+        raise typer.Exit(1)
+    client = LumiverbClient(api_key_override=key)
+    resp = client.get("/v1/admin/tenants")
+    tenants = resp.json()
+    table = Table(title="Tenants")
+    table.add_column("ID", style="dim")
+    table.add_column("Name")
+    table.add_column("Plan")
+    table.add_column("Status")
+    for t in tenants:
+        table.add_row(t.get("tenant_id", ""), t.get("name", ""), t.get("plan", ""), t.get("status", ""))
+    console.print(table)
+
+
+@tenant_app.command("set-vision")
+def tenant_set_vision(
+    tenant_id: Annotated[str, typer.Option("--tenant-id", "-t", help="Tenant ID.")],
+    vision_api_url: Annotated[str | None, typer.Option("--vision-api-url", help="OpenAI-compatible vision API base URL.")] = None,
+    vision_api_key: Annotated[str | None, typer.Option("--vision-api-key", help="API key for the vision endpoint.")] = None,
+    admin_key: Annotated[str | None, typer.Option("--admin-key", help="Admin key (falls back to saved config).")] = None,
+) -> None:
+    """Set the vision API URL and/or key for a tenant."""
+    if vision_api_url is None and vision_api_key is None:
+        console.print("[red]Provide at least one of --vision-api-url or --vision-api-key.[/red]")
+        raise typer.Exit(1)
+    key = admin_key or get_admin_key()
+    if not key:
+        console.print("[red]Admin key required. Use --admin-key or run: lumiverb config set --admin-key <key>[/red]")
+        raise typer.Exit(1)
+    client = LumiverbClient(api_key_override=key)
+    body: dict = {}
+    if vision_api_url is not None:
+        body["vision_api_url"] = vision_api_url
+    if vision_api_key is not None:
+        body["vision_api_key"] = vision_api_key
+    resp = client.patch(f"/v1/admin/tenants/{tenant_id}", json=body)
+    data = resp.json()
+    console.print(f"[green]Tenant {data['tenant_id']} updated.[/green]")
+    console.print(f"  vision_api_url: {data['vision_api_url']}")
 
 
 # ---------------------------------------------------------------------------

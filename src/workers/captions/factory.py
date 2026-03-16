@@ -1,30 +1,19 @@
-"""Caption provider factory. Convention-based routing."""
+"""Caption provider factory."""
 
 from __future__ import annotations
 
 from src.workers.captions.base import CaptionProvider
+from src.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
 
-def get_caption_provider(vision_model_id: str) -> CaptionProvider:
-    """
-    Return the appropriate CaptionProvider for a vision_model_id.
-
-    Convention:
-        "moondream"    → MoondreamCaptionProvider (local SDK)
-        anything else  → OpenAICompatibleCaptionProvider
-                         (model=vision_model_id, url from settings)
-    """
-    if vision_model_id == "moondream":
-        from src.workers.captions.moondream_caption import MoondreamCaptionProvider
-
-        return MoondreamCaptionProvider()
-
-    from src.core.config import get_settings
-    from src.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
-
-    settings = get_settings()
+def get_caption_provider(
+    vision_model_id: str,
+    api_url: str,
+    api_key: str | None = None,
+) -> CaptionProvider:
+    """Return an OpenAI-compatible CaptionProvider for the given model."""
     return OpenAICompatibleCaptionProvider(
-        base_url=settings.vision_api_url,
+        base_url=api_url,
         model=vision_model_id,
-        api_key=settings.vision_api_key or None,
+        api_key=api_key or None,
     )

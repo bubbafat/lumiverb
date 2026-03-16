@@ -25,9 +25,6 @@ class Settings(BaseSettings):
     api_secret_key: str = ""
     admin_key: str = ""
 
-    # Moondream
-    moondream_station_endpoint: str = "http://localhost:2020/v1"
-
     # Workers
     worker_idle_poll_seconds: float = 5.0
     worker_lease_minutes: int = 10
@@ -44,12 +41,6 @@ class Settings(BaseSettings):
     # Embedding
     clip_model_name: str = "ViT-B-32"
     clip_pretrained: str = "openai"
-    embedding_moondream_weight: float = 0.3
-    embedding_clip_weight: float = 0.7
-
-    # Vision API (OpenAI-compatible endpoint for non-Moondream models)
-    vision_api_url: str = "http://localhost:1234/v1"
-    vision_api_key: str = ""  # Optional Bearer token for the vision API endpoint
 
     model_config = SettingsConfigDict(
         env_file=(".env", ".env.local"),

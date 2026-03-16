@@ -10,6 +10,7 @@ class CLIConfig(BaseModel):
 
     api_url: str = "http://localhost:8000"
     api_key: str = ""
+    admin_key: str = ""
 
 
 def _config_path() -> Path:
@@ -43,3 +44,8 @@ def get_api_url() -> str:
 def get_api_key() -> str:
     """Return configured API key."""
     return load_config().api_key
+
+
+def get_admin_key() -> str:
+    """Return configured admin key."""
+    return load_config().admin_key

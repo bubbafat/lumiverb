@@ -27,8 +27,8 @@
 Two-layer Postgres architecture:
 
 **Control plane DB** (shared, tiny):
-- `tenants` — tenant_id, name, plan, status, created_at
-- `api_keys` — key_hash, tenant_id, name, scopes, created_at  
+- `tenants` — tenant_id, name, plan, status, vision_api_url, vision_api_key, created_at
+- `api_keys` — key_hash, tenant_id, name, scopes, created_at
 - `tenant_db_routing` — tenant_id, connection_string, region
 
 **Tenant DB** (one per tenant, same Postgres instance):
@@ -59,7 +59,7 @@ Tenant resolution runs for every request except `/health` and `/v1/admin/*`: rea
 All under `/v1/jobs`; require tenant auth.
 
 - **POST /v1/jobs/enqueue** — Body: `{ "job_type", "filter", "force" }`. `filter` is an AssetFilterSpec: `library_id` (required), optional `asset_id`, `path_prefix`, `path_exact`, `mtime_after`, `mtime_before`, `missing_proxy`, `missing_thumbnail`, `retry_failed`. `force` (default false): if true, cancels existing pending/claimed jobs for matching assets then enqueues. `filter.retry_failed` (default false): if true, re-enqueues only assets with failed jobs (mutually exclusive with `force`). Returns `{ "enqueued" }` (count of jobs created).
-- **GET /v1/jobs/next** — Query: `job_type` (required), `library_id` (optional). Claims next pending job; returns 204 if none. On success returns `{ "job_id", "job_type", "asset_id", "rel_path", "media_type", "library_id", "root_path", "proxy_key", "thumbnail_key", "vision_model_id" }`. For video assets, also includes `"duration_sec"` (from asset.duration_sec or duration_ms/1000). 404 if asset or library not found (job is failed server-side).
+- **GET /v1/jobs/next** — Query: `job_type` (required), `library_id` (optional). Claims next pending job; returns 204 if none. On success returns `{ "job_id", "job_type", "asset_id", "rel_path", "media_type", "library_id", "root_path", "proxy_key", "thumbnail_key", "vision_model_id", "vision_api_url", "vision_api_key" }`. `vision_api_url` and `vision_api_key` come from the tenant record (control plane); workers use these to call the OpenAI-compatible vision API. For video assets, also includes `"duration_sec"` (from asset.duration_sec or duration_ms/1000). 404 if asset or library not found (job is failed server-side).
 - **GET /v1/jobs/pending** — Query: `job_type` (required), `library_id` (optional). Returns `{ "pending": N }` count of pending/claimed jobs. Same filters as `/next`. Used by workers for progress display (total work remaining).
 - **POST /v1/jobs/{job_id}/complete** — Body depends on job_type: **proxy** — `proxy_key`, `thumbnail_key`, `width`, `height` (or empty body to skip, e.g. video proxy deferred); **exif** — `sha256`, `exif`, `camera_make`, `camera_model`, `taken_at`, `gps_lat`, `gps_lon`; **ai_vision** — `model_id`, `model_version`, `description`, `tags`; **embed** — `embeddings`; **video-index** — no body (chunk work done via video API); **video-vision** — same as ai_vision; marks asset `video_indexed` true and enqueues search sync. Returns `{ "job_id", "status": "completed" }`. 404 if job not found, 409 if job not claimed.
 - **POST /v1/jobs/{job_id}/fail** — Body: `{ "error_message" }`. Marks job failed. Returns `{ "job_id", "status": "failed" }`.
@@ -84,7 +84,8 @@ All under `/v1/video`; require tenant auth. Used by the video-index worker to pr
 
 All under `/v1/libraries`; require tenant auth (middleware).
 
-- **POST /v1/libraries** — Body: `{ "name", "root_path" }`. Name must be unique per tenant (409 if duplicate). Returns `{ "library_id", "name", "root_path", "scan_status" }` (scan_status initially `"idle"`).
+- **POST /v1/libraries** — Body: `{ "name", "root_path", "vision_model_id" }` (`vision_model_id` optional, defaults to `""`). Name must be unique per tenant (409 if duplicate). Returns `{ "library_id", "name", "root_path", "scan_status", "vision_model_id" }` (scan_status initially `"idle"`).
+- **PATCH /v1/libraries/{library_id}** — Body: `{ "name", "vision_model_id" }` (both optional). Updates library name and/or vision model ID. Returns full library response.
 - **GET /v1/libraries** — Query: `include_trashed` (optional, default false). Returns list of libraries with `library_id`, `name`, `root_path`, `scan_status`, `last_scan_at`, `status` (`"active"` or `"trashed"`). Trashed libraries excluded unless `include_trashed=true`.
 - **DELETE /v1/libraries/{library_id}** — Soft delete: set library `status` to `"trashed"`, cancel pending/claimed worker jobs for its assets. Returns 204 on success, 404 if not found, 409 if already trashed.
 - **POST /v1/libraries/empty-trash** — Hard delete all trashed libraries for this tenant (cascade: worker_jobs, search_sync_queue, asset_metadata, video_scenes, assets, scans, libraries). Returns `{ "deleted": N }`.
@@ -113,8 +114,9 @@ All under `/v1/assets`; require tenant auth.
 
 Admin routes live under `/v1/admin` and require `Authorization: Bearer {ADMIN_KEY}` (not tenant API keys). If `ADMIN_KEY` is not set, admin routes return 500.
 
-- **POST /v1/admin/tenants** — Body: `{ "name", "plan": "free|pro|enterprise", "email" }`. Creates tenant, provisions tenant DB (pgvector + Alembic), creates routing row, creates default API key. Returns `{ "tenant_id", "api_key", "database": "provisioned" }`. On failure, cleans up and returns 500.
-- **GET /v1/admin/tenants** — Returns list of tenants with `tenant_id`, `name`, `plan`, `status` (no API keys).
+- **POST /v1/admin/tenants** — Body: `{ "name", "plan": "free|pro|enterprise", "email", "vision_api_url", "vision_api_key" }`. Creates tenant, provisions tenant DB (pgvector + Alembic), creates routing row, creates default API key. Returns `{ "tenant_id", "api_key", "database": "provisioned" }`. On failure, cleans up and returns 500.
+- **GET /v1/admin/tenants** — Returns list of tenants with `tenant_id`, `name`, `plan`, `status` (no API keys, no vision credentials).
+- **PATCH /v1/admin/tenants/{tenant_id}** — Body: `{ "vision_api_url", "vision_api_key" }` (both optional; only provided fields are updated). Updates tenant vision API config. Returns `{ "tenant_id", "vision_api_url" }`. 404 if tenant not found or deleted.
 - **POST /v1/admin/tenants/{tenant_id}/keys** — Body: `{ "name" }` (human-readable label). Creates new API key for tenant. Returns `{ "api_key", "name", "tenant_id" }`. Raw key returned once and never stored. 404 if tenant does not exist or is soft-deleted.
 - **GET /v1/admin/tenants/{tenant_id}/keys** — Returns list of key metadata: `name`, `tenant_id`, `created_at` (never raw keys). 404 if tenant does not exist or is soft-deleted.
 - **DELETE /v1/admin/tenants/{tenant_id}** — Soft delete: sets tenant status to `deleted`, revokes all API keys. Returns 204.
@@ -124,7 +126,7 @@ Admin routes live under `/v1/admin` and require `Authorization: Bearer {ADMIN_KE
 Workers are API-only: they never touch the database directly. They use the jobs API (same auth as CLI).
 
 - **Claim:** GET /v1/jobs/next?job_type=…&library_id=… → 204 if no work, else job payload.
-- **Complete:** POST /v1/jobs/{job_id}/complete with result body. Per job_type: **proxy** — `proxy_key`, `thumbnail_key`, `width`, `height` (or empty body to skip, e.g. video proxy deferred); **exif** — `sha256`, `exif`, `camera_make`, `camera_model`, `taken_at`, `gps_lat`, `gps_lon`; **ai_vision** — `model_id`, `model_version`, `description`, `tags`; **embed** — `embeddings`: list of `{ "model_id", "model_version", "vector" }`; **video-index** — no body (worker uses video chunk API, then calls complete when all chunks done); **video-vision** — same as ai_vision; sets asset `video_indexed` and enqueues search sync.
+- **Complete:** POST /v1/jobs/{job_id}/complete with result body. Per job_type: **proxy** — `proxy_key`, `thumbnail_key`, `width`, `height` (or empty body to skip, e.g. video proxy deferred); **exif** — `sha256`, `exif`, `camera_make`, `camera_model`, `taken_at`, `gps_lat`, `gps_lon`; **ai_vision** — `model_id`, `model_version`, `description`, `tags`; **embed** — `embeddings`: list of `{ "model_id", "model_version", "vector" }` (CLIP only — one entry per job); **video-index** — no body (worker uses video chunk API, then calls complete when all chunks done); **video-vision** — same as ai_vision; sets asset `video_indexed` and enqueues search sync.
 - **Fail:** POST /v1/jobs/{job_id}/fail with `{ "error_message" }`.
 
 Lease is server-managed (worker_id generated per claim). Expired leases are reclaimed on next poll. Worker types: `proxy`, `exif`, `ai_vision`, `embed`, `video-index`, `video-vision`. Type `face` is reserved for phase 2 — do not implement.
@@ -162,14 +164,17 @@ When adding a column or table to the tenant schema, always add a corresponding A
 ## Environment Variables
 
 ```
-DATABASE_CONTROL_URL=postgresql://...
-OBJECT_STORAGE_BACKEND=gcs|s3|b2|minio
-OBJECT_STORAGE_BUCKET=...
-OBJECT_STORAGE_CREDENTIALS=...
+CONTROL_PLANE_DATABASE_URL=postgresql://...
+TENANT_DATABASE_URL_TEMPLATE=postgresql://.../{tenant_id}
+STORAGE_PROVIDER=local|gcs|s3
+DATA_DIR=./data
 QUICKWIT_URL=http://quickwit:7280
-API_KEY_SALT=...
-ENVIRONMENT=development|production
+ADMIN_KEY=...
+API_SECRET_KEY=...
+APP_ENV=development|production
 ```
+
+Vision API config (`vision_api_url`, `vision_api_key`) is stored per-tenant in the control plane DB, not in environment variables. Set via `PATCH /v1/admin/tenants/{tenant_id}` or `lumiverb tenant set-vision`.
 
 ## What Not to Build
 
