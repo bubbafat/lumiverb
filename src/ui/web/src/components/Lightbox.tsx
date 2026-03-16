@@ -75,9 +75,11 @@ export function Lightbox({
     setShowSimilar(false);
   }, [asset.asset_id]);
 
-  const { url: proxyUrl, isLoading: proxyLoading } = useAuthenticatedImage(
+  const isVideo = asset.media_type === "video" || asset.media_type.startsWith("video/");
+
+  const { url: mediaUrl, isLoading: mediaLoading, generating } = useAuthenticatedImage(
     asset.asset_id,
-    "proxy",
+    isVideo ? "video-preview" : "proxy",
   );
   const { data: detail, isLoading: detailLoading } = useQuery({
     queryKey: ["asset", asset.asset_id],
@@ -131,21 +133,36 @@ export function Lightbox({
         {/* Left: image */}
         <div className="flex flex-1 items-center justify-center p-4 lg:p-8">
           <div className="relative flex max-h-full min-h-0 flex-1 items-center justify-center">
-            {proxyLoading ? (
+            {mediaLoading ? (
               <div className="flex h-64 w-64 items-center justify-center">
                 <div
                   className="h-12 w-12 animate-spin rounded-full border-2 border-white/30 border-t-white"
                   aria-hidden
                 />
               </div>
-            ) : proxyUrl ? (
+            ) : generating ? (
+              <div className="flex flex-col items-center gap-3 text-gray-400">
+                <svg className="h-12 w-12" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.277A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" />
+                </svg>
+                <span className="text-sm">Preview generating…</span>
+              </div>
+            ) : mediaUrl && isVideo ? (
+              <video
+                key={asset.asset_id}
+                src={mediaUrl}
+                controls
+                playsInline
+                className="max-h-[calc(100vh-4rem)] max-w-full"
+              />
+            ) : mediaUrl ? (
               <img
-                src={proxyUrl}
+                src={mediaUrl}
                 alt={filename}
                 className="max-h-[calc(100vh-4rem)] max-w-full object-contain"
               />
             ) : (
-              <div className="text-gray-500">Image unavailable</div>
+              <div className="text-gray-500">{isVideo ? "Preview unavailable" : "Image unavailable"}</div>
             )}
 
             {/* Navigation arrows */}

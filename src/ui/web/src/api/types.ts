@@ -72,6 +72,8 @@ export interface AssetDetail {
   status: string;
   proxy_key: string | null;
   thumbnail_key: string | null;
+  video_preview_key: string | null;
+  duration_sec: number | null;
   width: number | null;
   height: number | null;
   sha256: string | null;

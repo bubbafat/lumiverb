@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useState } from "react";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 import type { AssetPageItem } from "../api/types";
 
@@ -27,14 +27,23 @@ function AssetCellInner({ asset, onClick, aspectRatio }: AssetCellProps) {
     asset.asset_id,
     "thumbnail",
   );
+  const [hovered, setHovered] = useState(false);
   const filename = basename(asset.rel_path);
   const isVideo = asset.media_type === "video" || asset.media_type.startsWith("video/");
   const effectiveAspectRatio = aspectRatio ?? 4 / 3;
+
+  const { url: videoUrl } = useAuthenticatedImage(
+    asset.asset_id,
+    "video-preview",
+    { enabled: isVideo && hovered },
+  );
 
   return (
     <button
       type="button"
       onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       className="group relative w-full cursor-pointer overflow-hidden rounded-lg bg-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-gray-950"
       style={{ aspectRatio: String(effectiveAspectRatio) }}
     >
@@ -72,6 +81,17 @@ function AssetCellInner({ asset, onClick, aspectRatio }: AssetCellProps) {
             src={url}
             alt={filename}
             className="h-full w-full object-cover"
+          />
+        )}
+        {/* Muted hover preview for videos */}
+        {isVideo && videoUrl && (
+          <video
+            src={videoUrl}
+            autoPlay
+            muted
+            loop
+            playsInline
+            className="absolute inset-0 h-full w-full object-cover"
           />
         )}
       </div>
