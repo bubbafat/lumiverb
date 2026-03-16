@@ -7,6 +7,7 @@ unsupported codec), without relying on a real ffmpeg binary.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -19,7 +20,8 @@ from src.workers.video_preview_worker import VideoPreviewWorker
 def _job(root_path: str, rel_path: str, **extra) -> dict:
     return {
         "job_id": "job_test",
-        "asset_id": "ast_test",
+        # Must be a real-ish asset id because LocalStorage buckets by ULID.
+        "asset_id": "ast_01ARZ3NDEKTSV4RRFFQ69G5FAV",
         "library_id": "lib_test",
         "root_path": root_path,
         "rel_path": rel_path,
@@ -42,6 +44,8 @@ def test_video_preview_worker_raises_runtimeerror_when_ffmpeg_fails(tmp_path: Pa
     worker = VideoPreviewWorker(client=MagicMock(), storage=storage, tenant_id="t1")
 
     job = _job(str(tmp_path), "subdir/clip.mp4")
+    (tmp_path / "subdir").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "subdir" / "clip.mp4").write_bytes(b"not a real mp4, ffmpeg mocked")
 
     with patch("src.workers.video_preview_worker.subprocess.run") as mock_run:
         # Simulate ffmpeg exiting with non-zero status.
@@ -84,4 +88,32 @@ def test_video_preview_worker_handles_path_reuse_non_video_file(tmp_path: Path) 
 
         with pytest.raises(RuntimeError, match="ffmpeg failed"):
             worker.process(job)
+
+
+@pytest.mark.fast
+def test_video_preview_worker_retries_without_audio_when_first_attempt_fails(tmp_path: Path) -> None:
+    storage = LocalStorage(data_dir=str(tmp_path / "data"))
+    worker = VideoPreviewWorker(client=MagicMock(), storage=storage, tenant_id="t1")
+    job = _job(str(tmp_path), "subdir/clip.mov")
+    (tmp_path / "subdir").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "subdir" / "clip.mov").write_bytes(b"not a real mov, ffmpeg mocked")
+
+    with patch("src.workers.video_preview_worker.subprocess.run") as mock_run:
+        mock_run.side_effect = [
+            subprocess.CalledProcessError(
+                returncode=234,
+                cmd=["ffmpeg", "-c:a", "aac"],
+                output="",
+                stderr="audio decode error",
+            ),
+            MagicMock(returncode=0, stdout=b"", stderr=b""),
+        ]
+
+        result = worker.process(job)
+        assert "video_preview_key" in result
+
+        # Second attempt should include "-an" to disable audio.
+        assert mock_run.call_count == 2
+        second_cmd = mock_run.call_args_list[1].args[0]
+        assert "-an" in second_cmd
 

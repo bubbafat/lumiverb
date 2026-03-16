@@ -68,7 +68,7 @@ class VideoPreviewWorker(BaseWorker):
             "-t",
             str(PREVIEW_DURATION_SEC),
             "-vf",
-            f"scale=-2:'min({PREVIEW_MAX_HEIGHT},ih)'",
+            f"scale=-2:'min({PREVIEW_MAX_HEIGHT},ih)',format=yuv420p",
             "-c:v",
             "libx264",
             "-preset",
@@ -90,7 +90,52 @@ class VideoPreviewWorker(BaseWorker):
         try:
             subprocess.run(cmd, check=True, capture_output=True)
         except subprocess.CalledProcessError as exc:
-            raise RuntimeError(f"ffmpeg failed for {source_path}: {exc}") from exc
+            def _decode(raw: bytes | str | None) -> str:
+                if raw is None:
+                    return ""
+                if isinstance(raw, bytes):
+                    return raw.decode("utf-8", errors="replace")
+                return raw
+
+            first_stderr = _decode(getattr(exc, "stderr", None)).strip()
+
+            # Some camera/iPhone MOVs can fail due to the audio track; retry without audio.
+            no_audio_cmd: list[str] = []
+            skip_next = False
+            for tok in cmd:
+                if skip_next:
+                    skip_next = False
+                    continue
+                if tok in {"-c:a", "-ac", "-b:a"}:
+                    skip_next = True
+                    continue
+                if tok == "aac":
+                    # value for -c:a
+                    continue
+                no_audio_cmd.append(tok)
+
+            # Ensure audio disabled (in case an audio stream exists).
+            if "-an" not in no_audio_cmd:
+                try:
+                    idx = no_audio_cmd.index("-movflags")
+                except ValueError:
+                    idx = len(no_audio_cmd) - 1
+                no_audio_cmd.insert(idx, "-an")
+
+            try:
+                subprocess.run(no_audio_cmd, check=True, capture_output=True)
+                logger.warning(
+                    "ffmpeg preview succeeded only after no-audio retry for asset_id=%s source=%s",
+                    asset_id,
+                    source_path,
+                )
+            except subprocess.CalledProcessError as exc2:
+                second_stderr = _decode(getattr(exc2, "stderr", None)).strip()
+                raise RuntimeError(
+                    "ffmpeg failed for "
+                    f"{source_path} (exit {exc.returncode}): {first_stderr}\n"
+                    f"ffmpeg no-audio retry failed (exit {exc2.returncode}): {second_stderr}"
+                ) from exc2
 
         return {"video_preview_key": preview_key}
 
