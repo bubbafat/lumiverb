@@ -532,6 +532,7 @@ def worker_video_preview(
     library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
     once: Annotated[bool, typer.Option("--once", help="Process queue until empty then exit.")] = False,
     concurrency: Annotated[int, typer.Option("--concurrency", help="Number of parallel workers.")] = 1,
+    path: Annotated[str | None, typer.Option("--path", "-p", help="Optional subpath to scope jobs.")] = None,
 ) -> None:
     """Run the video preview worker (short MP4 previews for video assets)."""
     from src.storage.local import LocalStorage
@@ -542,6 +543,7 @@ def worker_video_preview(
     ctx = client.get("/v1/tenant/context").json()
     tenant_id = ctx["tenant_id"]
     library_id = _resolve_library_id(client, library) if library else None
+    path_prefix = normalize_path_prefix(path) if path else None
 
     worker = VideoPreviewWorker(
         client=client,
@@ -550,6 +552,7 @@ def worker_video_preview(
         concurrency=concurrency,
         once=once,
         library_id=library_id,
+        path_prefix=path_prefix,
     )
     worker.run()
 
@@ -676,6 +679,7 @@ def worker_video_index(
 def worker_video_vision(
     library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
     once: Annotated[bool, typer.Option("--once", help="Process queue until empty then exit.")] = False,
+    path: Annotated[str | None, typer.Option("--path", "-p", help="Optional subpath to scope jobs.")] = None,
 ) -> None:
     """Run the video vision worker (AI scene description for video assets)."""
     import threading
@@ -685,6 +689,7 @@ def worker_video_vision(
 
     client = LumiverbClient()
     library_id = _resolve_library_id(client, library) if library else None
+    path_prefix = normalize_path_prefix(path) if path else None
     console = Console()
     _lock = threading.Lock()
 
@@ -751,9 +756,10 @@ def worker_video_vision(
                         progress.update(job_task, detail=f"{filename} · {total} scenes done")
 
         worker = VideoVisionWorker(
-            client=client,
-            once=once,
-            library_id=library_id,
+        client=client,
+        once=once,
+        library_id=library_id,
+        path_prefix=path_prefix,
             progress_callback=on_progress,
             suppress_base_progress=True,
         )
@@ -990,6 +996,7 @@ def pipeline_run(
     once: Annotated[bool, typer.Option("--once", help="Run until queues are empty then exit.")] = False,
     skip_scan: Annotated[bool, typer.Option("--skip-scan", help="Skip initial scan.")] = False,
     force: Annotated[bool, typer.Option("--force", help="Force acquire lock (release existing holder).")] = False,
+    retry_failures: Annotated[bool, typer.Option("--retry-failures", help="After each scan, re-enqueue failed (non-blocked) jobs for all stages.")] = False,
     interval: Annotated[int, typer.Option("--interval", help="Seconds between poll cycles in continuous mode.")] = 60,
     lock_timeout: Annotated[
         int,
@@ -1077,6 +1084,7 @@ def pipeline_run(
             interval=interval,
             lock_timeout_minutes=lock_timeout,
             skip_scan=skip_scan,
+            retry_failures=retry_failures,
             libraries=supervisor_libraries,
         )
         supervisor.set_log_file(str(log_path))
@@ -1146,14 +1154,14 @@ def status(
             ssq_rows_all = [{"library_id": lib_id, **r} for r in ssq_repo.search_sync_pipeline_status(lib_id)]
             active_workers = job_repo.active_worker_count(library_id=lib_id)
 
-    # Build per-library pivot: library_id -> stage -> {done, inflight, pending, failed}
+    # Build per-library pivot: library_id -> stage -> {done, inflight, pending, failed, blocked}
     per_lib_pivot: dict[str, dict[str, dict[str, int]]] = {lib["library_id"]: {} for lib in target_libraries}
     for r in job_rows_all:
         lid, jt = r["library_id"], r["job_type"]
         if lid not in per_lib_pivot:
             continue
         if jt not in per_lib_pivot[lid]:
-            per_lib_pivot[lid][jt] = {"done": 0, "inflight": 0, "pending": 0, "failed": 0}
+            per_lib_pivot[lid][jt] = {"done": 0, "inflight": 0, "pending": 0, "failed": 0, "blocked": 0}
         sv, count = r["status"], r["count"]
         if sv == "completed":
             per_lib_pivot[lid][jt]["done"] += count
@@ -1163,13 +1171,15 @@ def status(
             per_lib_pivot[lid][jt]["pending"] += count
         elif sv == "failed":
             per_lib_pivot[lid][jt]["failed"] += count
+        elif sv == "blocked":
+            per_lib_pivot[lid][jt]["blocked"] += count
 
     for r in ssq_rows_all:
         lid = r["library_id"]
         if lid not in per_lib_pivot:
             continue
         if "search_sync" not in per_lib_pivot[lid]:
-            per_lib_pivot[lid]["search_sync"] = {"done": 0, "inflight": 0, "pending": 0, "failed": 0}
+            per_lib_pivot[lid]["search_sync"] = {"done": 0, "inflight": 0, "pending": 0, "failed": 0, "blocked": 0}
         sv, count = r["status"], r["count"]
         if sv == "synced":
             per_lib_pivot[lid]["search_sync"]["done"] += count
@@ -1187,9 +1197,10 @@ def status(
                 "inflight": pivot[s]["inflight"],
                 "pending": pivot[s]["pending"],
                 "failed": pivot[s]["failed"],
+                "blocked": pivot[s].get("blocked", 0),
             }
             for s in STAGE_ORDER
-            if s in pivot and (pivot[s]["done"] + pivot[s]["inflight"] + pivot[s]["pending"] + pivot[s]["failed"] > 0)
+            if s in pivot and (pivot[s]["done"] + pivot[s]["inflight"] + pivot[s]["pending"] + pivot[s]["failed"] + pivot[s].get("blocked", 0) > 0)
         ]
 
     if output == "json":
@@ -1230,12 +1241,14 @@ def status(
         table.add_column("Inflight", justify="right")
         table.add_column("Pending", justify="right")
         table.add_column("Failed", justify="right")
+        table.add_column("Blocked", justify="right")
         for lib in target_libraries:
             lid = lib["library_id"]
             lib_name = lib.get("name", lid)
             stages = _lib_stages(per_lib_pivot[lid])
             for s in stages:
-                table.add_row(lib_name, s["label"], f"{s['done']:,}", f"{s['inflight']:,}", f"{s['pending']:,}", f"{s['failed']:,}")
+                blocked = s.get("blocked", 0)
+                table.add_row(lib_name, s["label"], f"{s['done']:,}", f"{s['inflight']:,}", f"{s['pending']:,}", f"{s['failed']:,}", f"[red]{blocked:,}[/]" if blocked else "0")
         console.print(table)
     else:
         lib_id = target_libraries[0]["library_id"]
@@ -1250,19 +1263,21 @@ def status(
         table.add_column("Inflight", justify="right")
         table.add_column("Pending", justify="right")
         table.add_column("Failed", justify="right")
+        table.add_column("Blocked", justify="right")
         stages = _lib_stages(per_lib_pivot[lib_id])
         for s in stages:
-            table.add_row(s["label"], f"{s['done']:,}", f"{s['inflight']:,}", f"{s['pending']:,}", f"{s['failed']:,}")
+            blocked = s.get("blocked", 0)
+            table.add_row(s["label"], f"{s['done']:,}", f"{s['inflight']:,}", f"{s['pending']:,}", f"{s['failed']:,}", f"[red]{blocked:,}[/]" if blocked else "0")
         console.print(table)
 
         pivot = per_lib_pivot[lib_id]
-        failed_stages = [
-            (s["name"], s["failed"])
+        notable_stages = [
+            (s["name"], s["failed"] + s.get("blocked", 0))
             for s in stages
-            if s["failed"] > 0 and s["name"] != "search_sync"
+            if (s["failed"] + s.get("blocked", 0)) > 0 and s["name"] != "search_sync"
         ]
-        if failed_stages:
-            worst = max(failed_stages, key=lambda x: x[1])
+        if notable_stages:
+            worst = max(notable_stages, key=lambda x: x[1])
             hint_type = "vision" if worst[0] == "ai_vision" else worst[0]
             console.print(
                 f"\nRun 'lumiverb failures -l {lib_name} "

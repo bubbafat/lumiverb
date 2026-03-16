@@ -26,8 +26,15 @@ class VideoPreviewWorker(BaseWorker):
         concurrency: int = 1,
         once: bool = False,
         library_id: str | None = None,
+        path_prefix: str | None = None,
     ) -> None:
-        super().__init__(client, concurrency=concurrency, once=once, library_id=library_id)
+        super().__init__(
+            client,
+            concurrency=concurrency,
+            once=once,
+            library_id=library_id,
+            path_prefix=path_prefix,
+        )
         self._storage = storage
         self._tenant_id = tenant_id
 

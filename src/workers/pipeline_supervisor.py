@@ -202,6 +202,7 @@ class PipelineSupervisor:
         interval: int = 60,
         lock_timeout_minutes: int = 5,
         skip_scan: bool = False,
+        retry_failures: bool = False,
         libraries: list[dict[str, Any]] | None = None,
     ) -> None:
         # libraries: tenant-wide mode — list of {library_id, library_name, root_path}
@@ -219,6 +220,7 @@ class PipelineSupervisor:
         self._interval = interval
         self._lock_timeout_minutes = lock_timeout_minutes
         self._skip_scan = skip_scan
+        self._retry_failures = retry_failures
         self._heartbeat_stop = threading.Event()
         self._heartbeat_thread: threading.Thread | None = None
         self._status_poll_thread: threading.Thread | None = None
@@ -335,6 +337,32 @@ class PipelineSupervisor:
                 if proc in self._current_procs:
                     self._current_procs.remove(proc)
 
+    def _retry_failed_jobs(self, library_names: list[str]) -> None:
+        """
+        Re-enqueue failed (non-blocked) jobs for all stages and the given libraries.
+        Blocked jobs are skipped — they require --force to reset.
+        """
+        all_stages = _all_worker_stages(self._media_type)
+        for stage in all_stages:
+            for lib_name in library_names:
+                cmd = _lumiverb_cmd() + [
+                    "enqueue",
+                    "--job-type", stage.name,
+                    "--library", lib_name,
+                    "--retry-failed",
+                ]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                if result.returncode != 0:
+                    _log.warning(
+                        "retry-failed enqueue for %s/%s failed: %s",
+                        stage.name, lib_name, result.stderr or result.stdout,
+                    )
+                else:
+                    out = result.stdout.strip()
+                    if out:
+                        self._dashboard_update([], log_line=f"[Retry] {out}")
+                    _log.debug("retry-failed %s/%s: %s", stage.name, lib_name, out)
+
     def _run_workers(self, stages: list[PipelineStage]) -> None:
         """Spawn all stages concurrently; each drains stdout in its own thread."""
         self._run_workers_concurrent(stages, library_name=self.library_name, path_prefix=self._path_prefix)
@@ -382,6 +410,8 @@ class PipelineSupervisor:
             cmd = _lumiverb_cmd() + ["worker", stage.worker_cmd, "--once"]
             if library_name:
                 cmd += ["--library", library_name]
+            # All workers must respect optional --path scoping; each worker
+            # is responsible for interpreting the prefix appropriately.
             if path_prefix:
                 cmd += ["--path", path_prefix]
             _log.info("Running worker: %s", " ".join(cmd))
@@ -459,6 +489,9 @@ class PipelineSupervisor:
             catchup_stages = [s for s in _all_worker_stages(self._media_type) if s.name in _DOWNSTREAM]
             if catchup_stages:
                 self._enqueue_downstream(catchup_stages, library_names=[self.library_name])
+
+            if self._retry_failures:
+                self._retry_failed_jobs(library_names=[self.library_name])
 
             while True:
                 try:
@@ -551,6 +584,9 @@ class PipelineSupervisor:
             lib_names = [lib["library_name"] for lib in self._libraries]
             if catchup_stages:
                 self._enqueue_downstream(catchup_stages, library_names=lib_names)
+
+            if self._retry_failures:
+                self._retry_failed_jobs(library_names=lib_names)
 
             while True:
                 try:

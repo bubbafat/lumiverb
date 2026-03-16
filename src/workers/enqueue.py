@@ -96,8 +96,12 @@ def enqueue_jobs_for_filter(
         return 0
 
     if asset_filter.retry_failed:
-        job_repo.cancel_failed_for_assets(asset_ids, job_type)
-    elif force:
+        # Reset failed jobs back to pending, preserving fail_count so it keeps
+        # counting toward the block threshold. Blocked jobs are intentionally
+        # excluded — only --force can reset those.
+        return job_repo.reset_failed_to_pending(asset_ids, job_type)
+
+    if force:
         job_repo.cancel_pending_for_assets(asset_ids, job_type)
 
     now = datetime.now(timezone.utc)

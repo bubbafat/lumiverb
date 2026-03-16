@@ -1028,6 +1028,9 @@ class AssetEmbeddingRepository:
         return [(r.asset_id, float(r.distance)) for r in rows]
 
 
+FAILURE_BLOCK_THRESHOLD = 3
+
+
 class WorkerJobRepository:
     """Repository for worker_jobs table."""
 
@@ -1134,8 +1137,9 @@ class WorkerJobRepository:
         self._session.refresh(job)
 
     def set_failed(self, job: WorkerJob, error_message: str) -> None:
-        """Set job status to failed and error_message."""
-        job.status = "failed"
+        """Increment fail_count and set status to failed, or blocked once threshold is reached."""
+        job.fail_count = (job.fail_count or 0) + 1
+        job.status = "blocked" if job.fail_count >= FAILURE_BLOCK_THRESHOLD else "failed"
         job.completed_at = utcnow()
         job.error_message = error_message
         self._session.add(job)
@@ -1143,7 +1147,7 @@ class WorkerJobRepository:
         self._session.refresh(job)
 
     def cancel_pending_for_assets(self, asset_ids: list[str], job_type: str) -> int:
-        """Cancel pending/claimed jobs for given assets and job_type. Used by force enqueue."""
+        """Cancel pending/claimed/blocked jobs for given assets and job_type. Used by force enqueue."""
         if not asset_ids:
             return 0
         result = self._session.execute(
@@ -1152,7 +1156,7 @@ class WorkerJobRepository:
                 SET status = 'cancelled'
                 WHERE asset_id = ANY(:asset_ids)
                   AND job_type = :job_type
-                  AND status IN ('pending', 'claimed')
+                  AND status IN ('pending', 'claimed', 'blocked')
             """),
             {"asset_ids": asset_ids, "job_type": job_type},
         )
@@ -1160,13 +1164,38 @@ class WorkerJobRepository:
         return result.rowcount
 
     def cancel_failed_for_assets(self, asset_ids: list[str], job_type: str) -> int:
-        """Cancel failed jobs for given assets and job_type. Used by retry_failed enqueue."""
+        """Cancel failed jobs for given assets and job_type."""
         if not asset_ids:
             return 0
         result = self._session.execute(
             text("""
                 UPDATE worker_jobs
                 SET status = 'cancelled'
+                WHERE asset_id = ANY(:asset_ids)
+                  AND job_type = :job_type
+                  AND status = 'failed'
+            """),
+            {"asset_ids": asset_ids, "job_type": job_type},
+        )
+        self._session.commit()
+        return result.rowcount
+
+    def reset_failed_to_pending(self, asset_ids: list[str], job_type: str) -> int:
+        """
+        Reset failed (non-blocked) jobs back to pending, preserving fail_count so it
+        continues to count toward the block threshold. Used by the retry_failed enqueue path.
+        """
+        if not asset_ids:
+            return 0
+        result = self._session.execute(
+            text("""
+                UPDATE worker_jobs
+                SET status = 'pending',
+                    worker_id = NULL,
+                    claimed_at = NULL,
+                    lease_expires_at = NULL,
+                    completed_at = NULL,
+                    error_message = NULL
                 WHERE asset_id = ANY(:asset_ids)
                   AND job_type = :job_type
                   AND status = 'failed'

@@ -46,7 +46,7 @@ class PipelineDashboard:
         self._console = Console()
         self._live: Live | None = None
         self._layout: Layout | None = None
-        # stages: list of {"name", "label", "done", "pending", "failed"[, "library_name"]}
+        # stages: list of {"name", "label", "done", "pending", "failed", "blocked"[, "library_name"]}
         self._stages: list[dict[str, Any]] = []
         self._active_workers: int = 0
         self._status_warning = False
@@ -152,16 +152,18 @@ class PipelineDashboard:
                 inflight = s.get("inflight", 0)
                 pending = s.get("pending", 0)
                 failed = s.get("failed", 0)
+                blocked = s.get("blocked", 0)
                 prev = self._prev_counts.get(flash_key, {})
                 prev_done = prev.get("done", 0)
                 prev_pending = prev.get("pending", 0)
                 prev_inflight = prev.get("inflight", 0)
                 prev_failed = prev.get("failed", 0)
+                prev_blocked = prev.get("blocked", 0)
                 if pending < prev_pending or inflight < prev_inflight or done > prev_done:
                     new_flash_green.add(flash_key)
-                if failed > prev_failed:
+                if failed > prev_failed or blocked > prev_blocked:
                     new_flash_red.add(flash_key)
-                self._prev_counts[flash_key] = {"done": done, "inflight": inflight, "pending": pending, "failed": failed}
+                self._prev_counts[flash_key] = {"done": done, "inflight": inflight, "pending": pending, "failed": failed, "blocked": blocked}
             self._stages = stages
             self._flash_green = new_flash_green
             self._flash_red = new_flash_red
@@ -204,13 +206,16 @@ class PipelineDashboard:
         table.add_column("Pending", justify="right")
         table.add_column("Done", justify="right")
         table.add_column("Failed", justify="right")
+        table.add_column("Blocked", justify="right")
 
         for s in self._stages:
             name = s.get("name", "")
             flash_key = name
             label = s.get("label", name)
             inflight, pending, done, failed = s.get("inflight", 0), s.get("pending", 0), s.get("done", 0), s.get("failed", 0)
+            blocked = s.get("blocked", 0)
             style = self._flash_style(flash_key)
+            blocked_str = f"[red]{blocked:,}[/]" if blocked else "0"
             if style:
                 table.add_row(
                     f"[{style}]{label}[/]",
@@ -218,9 +223,10 @@ class PipelineDashboard:
                     f"[{style}]{pending:,}[/]",
                     f"[{style}]{done:,}[/]",
                     f"[{style}]{failed:,}[/]",
+                    f"[{style}]{blocked:,}[/]" if blocked else "0",
                 )
             else:
-                table.add_row(label, f"{inflight:,}", f"{pending:,}", f"{done:,}", f"{failed:,}")
+                table.add_row(label, f"{inflight:,}", f"{pending:,}", f"{done:,}", f"{failed:,}", blocked_str)
 
         header = f"[bold]Library: {self.library_name}[/]  Total: {self.total_assets:,}  Workers: {self._active_workers}"
         if self._status_warning:
@@ -251,6 +257,7 @@ class PipelineDashboard:
         table.add_column("Pending", justify="right")
         table.add_column("Done", justify="right")
         table.add_column("Failed", justify="right")
+        table.add_column("Blocked", justify="right")
 
         spinner_frame = _SPINNER[int(now * 8) % len(_SPINNER)]
         first = True
@@ -285,15 +292,17 @@ class PipelineDashboard:
                 lib_header.append(lib_name, style="dim")
 
             # Library header row — Stage column holds the library name, counts blank
-            table.add_row(lib_header, "", "", "", "")
+            table.add_row(lib_header, "", "", "", "", "")
 
             for s in stages:
                 name = s.get("name", "")
                 flash_key = f"{lib_name}:{name}"
                 label = s.get("label", name)
                 inflight, pending, done, failed = s.get("inflight", 0), s.get("pending", 0), s.get("done", 0), s.get("failed", 0)
+                blocked = s.get("blocked", 0)
                 style = self._flash_style(flash_key)
                 indent = "  "
+                blocked_str = f"[red]{blocked:,}[/]" if blocked else "0"
                 if style:
                     table.add_row(
                         f"[{style}]{indent}{label}[/]",
@@ -301,9 +310,10 @@ class PipelineDashboard:
                         f"[{style}]{pending:,}[/]",
                         f"[{style}]{done:,}[/]",
                         f"[{style}]{failed:,}[/]",
+                        f"[{style}]{blocked:,}[/]" if blocked else "0",
                     )
                 else:
-                    table.add_row(f"{indent}{label}", f"{inflight:,}", f"{pending:,}", f"{done:,}", f"{failed:,}")
+                    table.add_row(f"{indent}{label}", f"{inflight:,}", f"{pending:,}", f"{done:,}", f"{failed:,}", blocked_str)
 
         header = f"[bold]All Libraries[/]  Total: {self.total_assets:,}  Workers: {self._active_workers}"
         if self._status_warning:

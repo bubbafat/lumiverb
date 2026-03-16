@@ -275,6 +275,7 @@ class WorkerJob(SQLModel, table=True):
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
+    fail_count: int = Field(default=0, nullable=False)
     error_message: str | None = Field(default=None, nullable=True)
     created_at: datetime = Field(
         default_factory=utcnow,
