@@ -1643,6 +1643,54 @@ def enqueue(
     console.print(f"Enqueued {enqueued:,} {job_type} jobs.")
 
 
+@app.command("reset-video")
+def reset_video(
+    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation prompt.")] = False,
+    enqueue_after: Annotated[bool, typer.Option("--enqueue", help="Re-enqueue video-index jobs after reset.")] = True,
+) -> None:
+    """Reset the video indexing pipeline for a library.
+
+    Deletes all scenes and index chunks, clears the indexed flag on every video
+    asset, then optionally re-enqueues video-index so the pipeline reruns from
+    scratch with the current code.
+    """
+    client = LumiverbClient()
+    library_obj = _resolve_library(client, library)
+    library_id = library_obj["library_id"]
+
+    if not yes:
+        console.print(
+            f"[yellow]This will delete all video scenes and index chunks for library "
+            f"[bold]{library}[/bold] and clear the indexed flag on all video assets.[/yellow]"
+        )
+        confirmed = typer.confirm("Continue?", default=False)
+        if not confirmed:
+            raise typer.Abort()
+
+    resp = client.post("/v1/video/reset", params={"library_id": library_id})
+    data = resp.json()
+    console.print(
+        f"Reset complete: [bold]{data['scenes_deleted']:,}[/bold] scenes deleted, "
+        f"[bold]{data['chunks_deleted']:,}[/bold] chunks deleted, "
+        f"[bold]{data['assets_reset']:,}[/bold] assets reset, "
+        f"[bold]{data['scene_files_deleted']:,}[/bold] rep-frame files deleted, "
+        f"Quickwit scene index {'deleted' if data['quickwit_index_deleted'] else 'not present'}."
+    )
+
+    if enqueue_after:
+        enq_resp = client.post(
+            "/v1/jobs/enqueue",
+            json={
+                "job_type": "video-index",
+                "filter": {"library_id": library_id},
+                "force": False,
+            },
+        )
+        enqueued = enq_resp.json().get("enqueued", 0)
+        console.print(f"Enqueued [bold]{enqueued:,}[/bold] video-index jobs.")
+
+
 @app.command()
 def search(
     library: Annotated[str, typer.Option("--library", "-l", help="Library name")],

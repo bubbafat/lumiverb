@@ -1,6 +1,8 @@
 """Video chunk API: init chunks, claim next, complete, fail. All require tenant auth."""
 
+import shutil
 import uuid
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -16,6 +18,9 @@ from src.repository.tenant import (
     SearchSyncQueueRepository,
     WorkerJobRepository,
 )
+
+import logging
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/video", tags=["video"])
 
@@ -158,9 +163,23 @@ def complete_chunk(
     all_done = chunk_repo.all_chunks_complete(asset_id)
 
     if all_done and asset_id:
-        job_repo = WorkerJobRepository(session)
-        if not job_repo.has_pending_job("video-vision", asset_id):
-            job_repo.create("video-vision", asset_id)
+        scene_repo = VideoSceneRepository(session)
+        scene_count = len(scene_repo.get_scenes_for_asset(asset_id))
+        if scene_count > 0:
+            job_repo = WorkerJobRepository(session)
+            if not job_repo.has_pending_job("video-vision", asset_id):
+                job_repo.create("video-vision", asset_id)
+                session.commit()
+        else:
+            _log.info(
+                "No scenes produced for asset_id=%s after all chunks complete; "
+                "skipping video-vision and marking asset indexed directly",
+                asset_id,
+            )
+            asset_repo = AssetRepository(session)
+            asset_repo.set_video_indexed(asset_id)
+            queue_repo = SearchSyncQueueRepository(session)
+            queue_repo.enqueue(asset_id=asset_id, operation="upsert")
             session.commit()
 
     return ChunkCompleteResponse(
@@ -296,3 +315,70 @@ def enqueue_scene_sync(
     queue_repo = SearchSyncQueueRepository(session)
     queue_repo.enqueue(asset_id=body.asset_id, operation="upsert", scene_id=scene_id)
     return {"scene_id": scene_id, "status": "enqueued"}
+
+
+# ---------------------------------------------------------------------------
+# Reset video pipeline for a library
+# ---------------------------------------------------------------------------
+
+
+class VideoResetResponse(BaseModel):
+    library_id: str
+    scenes_deleted: int
+    chunks_deleted: int
+    assets_reset: int
+    quickwit_index_deleted: bool
+    scene_files_deleted: int
+
+
+@router.post("/reset", response_model=VideoResetResponse)
+def reset_video_pipeline(
+    library_id: str,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> VideoResetResponse:
+    """
+    Reset the video indexing pipeline for a library.
+    Deletes all scenes, chunks, and rep-frame files; clears the Quickwit scene
+    index; clears video_indexed on all video assets.
+    After this, re-enqueue video-index to reprocess from scratch.
+    """
+    from src.core.config import get_settings
+    from src.search.quickwit_client import QuickwitClient
+
+    scene_repo = VideoSceneRepository(session)
+    chunk_repo = VideoIndexChunkRepository(session)
+    asset_repo = AssetRepository(session)
+
+    scenes_deleted = scene_repo.delete_for_library(library_id)
+    chunks_deleted = chunk_repo.delete_for_library(library_id)
+    assets_reset = asset_repo.reset_video_indexed_for_library(library_id)
+
+    # Delete the Quickwit scene index (recreated on next search-sync run).
+    quickwit_index_deleted = QuickwitClient().delete_scene_index_for_library(library_id)
+
+    # Delete scene rep-frame files from the data dir.
+    tenant_id = getattr(request.state, "tenant_id", None)
+    scene_files_deleted = 0
+    if tenant_id:
+        settings = get_settings()
+        scenes_dir = Path(settings.data_dir) / tenant_id / library_id / "scenes"
+        if scenes_dir.exists():
+            files = list(scenes_dir.rglob("*.jpg"))
+            scene_files_deleted = len(files)
+            shutil.rmtree(scenes_dir, ignore_errors=True)
+
+    _log.info(
+        "Video pipeline reset for library_id=%s: scenes=%d chunks=%d assets=%d "
+        "quickwit=%s files=%d",
+        library_id, scenes_deleted, chunks_deleted, assets_reset,
+        quickwit_index_deleted, scene_files_deleted,
+    )
+    return VideoResetResponse(
+        library_id=library_id,
+        scenes_deleted=scenes_deleted,
+        chunks_deleted=chunks_deleted,
+        assets_reset=assets_reset,
+        quickwit_index_deleted=quickwit_index_deleted,
+        scene_files_deleted=scene_files_deleted,
+    )

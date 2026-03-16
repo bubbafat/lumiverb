@@ -144,6 +144,29 @@ class QuickwitClient:
                 f"Quickwit scene index create failed for {index_id}: {resp.status_code} {resp.text}"
             )
 
+    def delete_scene_index_for_library(self, library_id: str) -> bool:
+        """
+        Delete the scene index for a library entirely.
+        Returns True if deleted, False if it didn't exist. Raises on unexpected errors.
+        The index will be recreated automatically on the next search-sync run.
+        """
+        if not self._enabled:
+            logger.debug("Quickwit disabled; skipping delete_scene_index for library_id=%s", library_id)
+            return False
+        index_id = self.scene_index_id_for_library(library_id)
+        resp = requests.delete(
+            f"{self._base_url}/api/v1/indexes/{index_id}",
+            timeout=10,
+        )
+        if resp.status_code == 404:
+            return False
+        if resp.status_code not in (200, 202, 204):
+            raise RuntimeError(
+                f"Quickwit scene index delete failed for {index_id}: {resp.status_code} {resp.text}"
+            )
+        logger.info("Deleted Quickwit scene index %s", index_id)
+        return True
+
     def ingest_documents_for_library(
         self,
         library_id: str,

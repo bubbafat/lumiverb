@@ -321,7 +321,7 @@ class VideoIndexWorker(BaseWorker):
             scenes_raw = segmenter.segment()
 
             start_boundary_ms = int((work_order["start_ts"] - chunk_offset) * 1000)
-            filtered = [s for s in scenes_raw if s.end_ms > start_boundary_ms]
+            filtered = [s for s in scenes_raw if s.end_ms >= start_boundary_ms]
 
             scene_dicts = []
             for i, scene in enumerate(filtered):

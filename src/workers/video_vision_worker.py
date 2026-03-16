@@ -51,7 +51,11 @@ class VideoVisionWorker(BaseWorker):
         scenes = resp.json()["scenes"]
 
         if not scenes:
-            logger.info("No scenes for asset_id=%s; completing immediately", asset_id)
+            logger.warning(
+                "No scenes for asset_id=%s; video-vision job should not have been enqueued. "
+                "Completing without work.",
+                asset_id,
+            )
             return {
                 "model_id": vision_model_id,
                 "model_version": "",
