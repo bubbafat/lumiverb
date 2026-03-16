@@ -46,6 +46,7 @@ def _is_unchanged(asset: dict, local_file: dict, force: bool) -> bool:
         asset.get("file_size") == local_file["file_size"]
         and _normalize_mtime(asset.get("file_mtime"))
         == _normalize_mtime(local_file["file_mtime"])
+        and asset.get("media_type") == local_file["media_type"]
     )
 
 
@@ -282,6 +283,7 @@ def scan_library(
                                 "asset_id": asset["asset_id"],
                                 "file_size": local_file["file_size"],
                                 "file_mtime": local_file["file_mtime"],
+                                "media_type": local_file["media_type"],
                             })
                             updated_count += 1
                     else:

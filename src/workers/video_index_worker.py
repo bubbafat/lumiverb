@@ -53,6 +53,13 @@ class VideoIndexWorker(BaseWorker):
     def process(self, job: dict) -> dict:
         """Process a single video-index job. Returns {}; chunk work is done via video API."""
         asset_id = job["asset_id"]
+        if job.get("media_type") != "video":
+            logger.warning(
+                "video-index job for non-video asset asset_id=%s media_type=%r; skipping",
+                asset_id,
+                job.get("media_type"),
+            )
+            return {}
         root = Path(job["root_path"]).resolve()
         source = (root / job["rel_path"]).resolve()
         if not source.is_relative_to(root):

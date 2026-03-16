@@ -391,6 +391,7 @@ class AssetRepository:
         availability: str,
         status: str,
         last_scan_id: str,
+        media_type: str | None = None,
     ) -> Asset:
         """Update asset file_size, file_mtime, availability, status, last_scan_id."""
         asset = self._session.get(Asset, asset_id)
@@ -401,6 +402,8 @@ class AssetRepository:
         asset.availability = availability
         asset.status = status
         asset.last_scan_id = last_scan_id
+        if media_type is not None:
+            asset.media_type = media_type
         self._session.add(asset)
         self._session.commit()
         self._session.refresh(asset)

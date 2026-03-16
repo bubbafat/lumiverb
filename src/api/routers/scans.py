@@ -162,6 +162,7 @@ def batch_scan(
                 "asset_id": item.asset_id,
                 "file_size": item.file_size,
                 "file_mtime": item.file_mtime,
+                "media_type": item.media_type,
             })
         elif a == "missing" and item.asset_id:
             missing_ids.append(item.asset_id)
@@ -189,6 +190,7 @@ def batch_scan(
             availability="online",
             status="pending",
             last_scan_id=scan_id,
+            media_type=it.get("media_type"),
         )
         updated += 1
     missing = asset_repo.set_missing_bulk(missing_ids, scan_id) if missing_ids else 0
