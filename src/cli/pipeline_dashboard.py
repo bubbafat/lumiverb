@@ -134,8 +134,6 @@ class PipelineDashboard:
         - If log_line contains "Status poll failed", set warning indicator.
         - If stages is non-empty, update stored stages, clear warning, and apply flash logic.
         """
-        now = time.time()
-
         if log_line is not None and "Status poll failed" in log_line:
             self._status_warning = True
 
@@ -190,9 +188,9 @@ class PipelineDashboard:
 
         if has_library:
             return self._render_status_multi_lib(now)
-        return self._render_status_single_lib(now)
+        return self._render_status_single_lib()
 
-    def _render_status_single_lib(self, now: float) -> RenderableType:
+    def _render_status_single_lib(self) -> RenderableType:
         table = Table(show_header=True, header_style="bold")
         table.add_column("Stage", style="bold")
         table.add_column("Pending", justify="right")
@@ -253,9 +251,10 @@ class PipelineDashboard:
 
             total_pending = sum(s.get("pending", 0) for s in stages)
             total_failed = sum(s.get("failed", 0) for s in stages)
+            # Library is considered active if any of its stages flashed green
+            # in the most recent update cycle.
             lib_active = any(
-                self._flash_green.get(f"{lib_name}:{s.get('name', '')}", 0) > now
-                for s in stages
+                f"{lib_name}:{s.get('name', '')}" in self._flash_green for s in stages
             )
 
             if lib_active:
