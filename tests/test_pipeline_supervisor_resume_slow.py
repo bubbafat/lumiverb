@@ -83,6 +83,10 @@ def test_supervisor_does_not_spawn_video_preview_for_image_media_type() -> None:
             "src.workers.pipeline_supervisor.subprocess.Popen",
             side_effect=fake_popen,
         ),
+        patch(
+            "src.workers.pipeline_supervisor.subprocess.run",
+            return_value=MagicMock(returncode=0, stdout="", stderr=""),
+        ),
     ):
         supervisor.run()
 

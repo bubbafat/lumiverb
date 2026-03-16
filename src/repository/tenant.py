@@ -822,9 +822,10 @@ class AssetRepository:
                     )
                     """
                 )
-            elif job_type == "video-index":
+            elif job_type in ("video-index", "video-preview", "video-vision"):
                 conditions.append("a.media_type = 'video'")
-                conditions.append("a.video_indexed IS NOT TRUE")
+                if job_type == "video-index":
+                    conditions.append("a.video_indexed IS NOT TRUE")
 
         where = " AND ".join(conditions)
         from_clause = "FROM assets a JOIN libraries l ON l.library_id = a.library_id" if join_libraries else "FROM assets a"

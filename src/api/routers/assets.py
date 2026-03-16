@@ -378,7 +378,7 @@ def stream_or_enqueue_preview(
     if asset is None:
         raise HTTPException(status_code=404, detail="Asset not found")
 
-    if not asset.media_type.startswith("video/"):
+    if asset.media_type != "video":
         raise HTTPException(status_code=422, detail="Preview only supported for video assets")
 
     storage = get_storage()

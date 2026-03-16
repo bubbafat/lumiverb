@@ -486,6 +486,9 @@ class PipelineSupervisor:
 
                 to_run = _select_stages_to_run(pending, self._media_type)
                 if not to_run:
+                    # Pending work exists but none matches this media_type filter.
+                    if self._once:
+                        return
                     self._heartbeat_stop.wait(min(10, self._interval))
                     continue
 
@@ -580,6 +583,9 @@ class PipelineSupervisor:
                 mock_pending = [{"name": n} for n in pending_names]
                 to_run = _select_stages_to_run(mock_pending, self._media_type)
                 if not to_run:
+                    # Pending work exists but none matches this media_type filter.
+                    if self._once:
+                        return
                     self._heartbeat_stop.wait(min(10, self._interval))
                     continue
 

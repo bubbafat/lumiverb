@@ -36,7 +36,7 @@ class ExifWorker(BaseWorker):
         gps_lat, gps_lon = parse_gps(exif_data)
         taken_at = parse_taken_at(exif_data)
         media_type = job.get("media_type", "")
-        duration_sec = _parse_duration(exif_data, media_type == "video" or media_type.startswith("video/"))
+        duration_sec = _parse_duration(exif_data, media_type == "video")
 
         return {
             "sha256": sha256,
