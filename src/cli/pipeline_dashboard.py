@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from rich.console import Console, Group
+from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
@@ -17,6 +17,21 @@ from rich.text import Text
 FLASH_DURATION = 2.0
 # Internal ring buffer size — larger than any realistic terminal
 LOG_BUFFER_MAX = 500
+# Braille spinner frames — cycles at the Live refresh rate (4 Hz)
+_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+class _StatusRenderable:
+    """
+    Thin wrapper that calls dashboard._render_status() on every Rich Live refresh,
+    so the spinner animates at 4 Hz even between data updates.
+    """
+
+    def __init__(self, dashboard: PipelineDashboard) -> None:
+        self._dashboard = dashboard
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        yield self._dashboard._render_status()
 
 
 class PipelineDashboard:
@@ -35,13 +50,13 @@ class PipelineDashboard:
         self._console = Console()
         self._live: Live | None = None
         self._layout: Layout | None = None
-        # stages: list of {"name", "label", "done", "pending", "failed"}
+        # stages: list of {"name", "label", "done", "pending", "failed"[, "library_name"]}
         self._stages: list[dict[str, Any]] = []
         self._log_lines: list[str] = []  # ring buffer, capped at LOG_BUFFER_MAX
         self._status_warning = False
-        # Previous counts per stage name for flash detection
+        # Previous counts per flash key for flash detection
         self._prev_counts: dict[str, dict[str, int]] = {}
-        # stage_name -> expiry time for green (progress) / red (failure) flash
+        # flash_key -> expiry time for green (progress) / red (failure) flash
         self._flash_green: dict[str, float] = {}
         self._flash_red: dict[str, float] = {}
         # worker_cmd -> {"label": str, "status": str, "order": int}
@@ -59,6 +74,8 @@ class PipelineDashboard:
             Layout(name="workers"),
         )
         self._layout["top"].size = self._top_height()
+        # Use _StatusRenderable so the spinner animates on every Live refresh cycle.
+        self._layout["status"].update(_StatusRenderable(self))
         self._live = Live(
             self._layout,
             console=self._console,
@@ -121,7 +138,7 @@ class PipelineDashboard:
         """
         Update dashboard state and refresh the display.
 
-        - If log_line is set, append to log buffer (trimmed to LOG_LINES_MAX).
+        - If log_line is set, append to log buffer (trimmed to LOG_BUFFER_MAX).
         - If log_line contains "Status poll failed", set warning indicator.
         - If stages is non-empty, update stored stages, clear warning, and apply flash logic.
         """
@@ -160,25 +177,36 @@ class PipelineDashboard:
 
         if self._live is not None and self._layout is not None:
             self._layout["top"].size = self._top_height()
-            self._layout["status"].update(self._render_status())
+            # Status panel auto-renders via _StatusRenderable; no explicit update needed.
             self._layout["workers"].update(self._render_workers())
             self._layout["log"].update(self._render_log())
             self._live.refresh()
 
     def _top_height(self) -> int:
-        # Status panel: border (2) + table header + separator (2) + one row per stage
-        status_h = len(self._stages) + 4
-        # Workers panel: border (2) + one row per worker
+        has_library = any(s.get("library_name") for s in self._stages)
+        if has_library:
+            # Each library adds a header row + one row per stage + section separator
+            libs: dict[str, int] = {}
+            for s in self._stages:
+                lib = s.get("library_name", "")
+                libs[lib] = libs.get(lib, 0) + 1
+            status_h = len(libs) * 2 + sum(libs.values()) + 2  # headers + stages + border
+        else:
+            status_h = len(self._stages) + 4
         workers_h = len(self._worker_states) + 2
-        return max(status_h, workers_h) + 2  # +2 lines breathing room
+        return max(status_h, workers_h) + 2
 
-    def _render_status(self) -> Panel | Group:
-        """Build status section: table (and optional warning)."""
+    def _render_status(self) -> RenderableType:
+        """Build status section. Called on every Rich Live refresh so the spinner animates."""
         now = time.time()
         has_library = any(s.get("library_name") for s in self._stages)
-        table = Table(show_header=True, header_style="bold")
+
         if has_library:
-            table.add_column("Library", style="bold")
+            return self._render_status_multi_lib(now)
+        return self._render_status_single_lib(now)
+
+    def _render_status_single_lib(self, now: float) -> RenderableType:
+        table = Table(show_header=True, header_style="bold")
         table.add_column("Stage", style="bold")
         table.add_column("Pending", justify="right")
         table.add_column("Done", justify="right")
@@ -186,49 +214,118 @@ class PipelineDashboard:
 
         for s in self._stages:
             name = s.get("name", "")
-            library_name = s.get("library_name", "")
-            flash_key = f"{library_name}:{name}" if library_name else name
+            flash_key = name
             label = s.get("label", name)
-            pending = s.get("pending", 0)
-            done = s.get("done", 0)
-            failed = s.get("failed", 0)
-            if self._flash_green.get(flash_key, 0) > now:
-                style = "green"
-            elif self._flash_red.get(flash_key, 0) > now:
-                style = "red"
-            elif flash_key in self._flash_red:
-                style = "dim red"
-            else:
-                style = ""
-            p_str = f"{pending:,}"
-            d_str = f"{done:,}"
-            f_str = f"{failed:,}"
+            pending, done, failed = s.get("pending", 0), s.get("done", 0), s.get("failed", 0)
+            style = self._flash_style(flash_key, now)
             if style:
-                row = [f"[{style}]{label}[/]", f"[{style}]{p_str}[/]", f"[{style}]{d_str}[/]", f"[{style}]{f_str}[/]"]
-                if has_library:
-                    row = [f"[{style}]{library_name}[/]"] + row
-                table.add_row(*row)
+                table.add_row(
+                    f"[{style}]{label}[/]",
+                    f"[{style}]{pending:,}[/]",
+                    f"[{style}]{done:,}[/]",
+                    f"[{style}]{failed:,}[/]",
+                )
             else:
-                row = [label, p_str, d_str, f_str]
-                if has_library:
-                    row = [library_name] + row
-                table.add_row(*row)
+                table.add_row(label, f"{pending:,}", f"{done:,}", f"{failed:,}")
 
         header = f"[bold]Library: {self.library_name}[/]  Total assets: {self.total_assets:,}"
         if self._status_warning:
-            warning_panel = Panel(
-                "[yellow]⚠ Status poll failed — showing last known state[/]",
-                style="yellow",
-                border_style="yellow",
+            return Group(
+                Panel(
+                    "[yellow]⚠ Status poll failed — showing last known state[/]",
+                    style="yellow",
+                    border_style="yellow",
+                ),
+                table,
             )
-            return Group(warning_panel, table)
         if not self._stages:
             return Group(Text.from_markup(header), table)
-        return Panel(
-            table,
-            title=Text.from_markup(header),
-            border_style="blue",
-        )
+        return Panel(table, title=Text.from_markup(header), border_style="blue")
+
+    def _render_status_multi_lib(self, now: float) -> RenderableType:
+        # Group stages by library_name preserving order
+        libs: dict[str, list[dict[str, Any]]] = {}
+        for s in self._stages:
+            lib = s.get("library_name", "")
+            if lib not in libs:
+                libs[lib] = []
+            libs[lib].append(s)
+
+        table = Table(show_header=True, header_style="bold", show_edge=True)
+        table.add_column("Stage", style="bold")
+        table.add_column("Pending", justify="right")
+        table.add_column("Done", justify="right")
+        table.add_column("Failed", justify="right")
+
+        spinner_frame = _SPINNER[int(now * 8) % len(_SPINNER)]
+        first = True
+        for lib_name, stages in libs.items():
+            if not first:
+                table.add_section()
+            first = False
+
+            total_pending = sum(s.get("pending", 0) for s in stages)
+            total_failed = sum(s.get("failed", 0) for s in stages)
+            lib_active = any(
+                self._flash_green.get(f"{lib_name}:{s.get('name', '')}", 0) > now
+                for s in stages
+            )
+
+            if lib_active:
+                lib_header = Text()
+                lib_header.append(f"{spinner_frame} ", style="bold green")
+                lib_header.append(lib_name, style="bold green")
+            elif total_pending > 0:
+                lib_header = Text()
+                lib_header.append("○ ", style="dim")
+                lib_header.append(lib_name)
+            elif total_failed > 0:
+                lib_header = Text()
+                lib_header.append("⚠ ", style="bold red")
+                lib_header.append(lib_name, style="bold red")
+            else:
+                lib_header = Text()
+                lib_header.append("✓ ", style="dim green")
+                lib_header.append(lib_name, style="dim")
+
+            # Library header row — Stage column holds the library name, counts blank
+            table.add_row(lib_header, "", "", "")
+
+            for s in stages:
+                name = s.get("name", "")
+                flash_key = f"{lib_name}:{name}"
+                label = s.get("label", name)
+                pending, done, failed = s.get("pending", 0), s.get("done", 0), s.get("failed", 0)
+                style = self._flash_style(flash_key, now)
+                indent = "  "
+                if style:
+                    table.add_row(
+                        f"[{style}]{indent}{label}[/]",
+                        f"[{style}]{pending:,}[/]",
+                        f"[{style}]{done:,}[/]",
+                        f"[{style}]{failed:,}[/]",
+                    )
+                else:
+                    table.add_row(f"{indent}{label}", f"{pending:,}", f"{done:,}", f"{failed:,}")
+
+        header = f"[bold]All Libraries[/]  Total assets: {self.total_assets:,}"
+        if self._status_warning:
+            return Group(
+                Panel(
+                    "[yellow]⚠ Status poll failed — showing last known state[/]",
+                    style="yellow",
+                    border_style="yellow",
+                ),
+                table,
+            )
+        return Panel(table, title=Text.from_markup(header), border_style="blue")
+
+    def _flash_style(self, flash_key: str, now: float) -> str:
+        if self._flash_green.get(flash_key, 0) > now:
+            return "green"
+        if self._flash_red.get(flash_key, 0) > now:
+            return "red"
+        return ""
 
     def _render_workers(self) -> Panel:
         """Build workers section: compact table showing each worker's current status."""
