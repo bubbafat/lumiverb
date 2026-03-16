@@ -43,6 +43,8 @@ dependencies = [
     # Utilities
     "python-ulid>=2.0",
     "reverse_geocoder>=1.5",  # GPS → country/region/city
+    "torch>=2.10.0",
+    "open-clip-torch>=3.3.0",
 ]
 
 [project.scripts]

@@ -3,6 +3,8 @@
 from pathlib import Path
 from typing import Annotated
 
+from datetime import datetime, timezone
+
 import json as _json
 import logging
 import typer
@@ -965,6 +967,13 @@ def pipeline_run(
         int,
         typer.Option("--lock-timeout", help="Minutes after which a stale lock can be taken."),
     ] = 5,
+    log_file: Annotated[
+        str | None,
+        typer.Option(
+            "--log-file",
+            help="File to write pipeline logs to. Defaults to /tmp/pipeline.<utc_ms>.log.",
+        ),
+    ] = None,
 ) -> None:
     """Run the pipeline supervisor: acquire lock, optional scan, then poll status and run workers with a live dashboard."""
     from src.cli.pipeline_dashboard import PipelineDashboard
@@ -998,6 +1007,14 @@ def pipeline_run(
         ]
         dashboard_name = "(all libraries)"
 
+    if log_file is not None:
+        log_path = Path(log_file)
+    else:
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        log_path = Path(f"/tmp/pipeline.{now_ms}.log")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    console.print(f"Writing pipeline log to {log_path}")
+
     with get_tenant_session(tenant_id) as session:
         lock_repo = PipelineLockRepository(session)
         if force:
@@ -1018,7 +1035,7 @@ def pipeline_run(
         else:
             total_assets = asset_repo.count_by_library(library_id)
 
-        dashboard = PipelineDashboard(dashboard_name, total_assets)
+        dashboard = PipelineDashboard(dashboard_name, total_assets, str(log_path))
         supervisor = PipelineSupervisor(
             library_id=library_id,
             library_name=library_name,
@@ -1034,6 +1051,7 @@ def pipeline_run(
             skip_scan=skip_scan,
             libraries=supervisor_libraries,
         )
+        supervisor.set_log_file(str(log_path))
         try:
             with dashboard:
                 supervisor.run()

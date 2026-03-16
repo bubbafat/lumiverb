@@ -21,8 +21,8 @@ _log = logging.getLogger(__name__)
 # search_sync is populated via the search_sync_queue by the ai_vision/video-vision
 # completion handlers on the API side, so it doesn't need explicit supervisor enqueuing.
 _DOWNSTREAM: dict[str, list[str]] = {
-    "proxy": ["ai_vision", "embed"],
-    "video-index": ["video-vision", "video-preview"],
+    "proxy": ["ai_vision", "embed", "video-preview"],
+    "video-index": ["video-vision"],
 }
 
 
@@ -212,6 +212,7 @@ class PipelineSupervisor:
         self._client = client
         self._lock_repo = lock_repo
         self._dashboard = dashboard
+        self._log_file_path: str | None = None
         self._media_type = media_type
         self._path_prefix = path_prefix
         self._once = once
@@ -223,6 +224,23 @@ class PipelineSupervisor:
         self._status_poll_thread: threading.Thread | None = None
         self._current_procs: list[subprocess.Popen] = []
         self._procs_lock = threading.Lock()
+        self._log_lock = threading.Lock()
+
+    def set_log_file(self, path: str | None) -> None:
+        """Configure optional log file path for pipeline output."""
+        self._log_file_path = path
+
+    def _write_log_line(self, line: str) -> None:
+        """Append a single log line to the configured log file, if any."""
+        if not self._log_file_path:
+            return
+        try:
+            with self._log_lock:
+                with open(self._log_file_path, "a", encoding="utf-8") as f:
+                    f.write(line.rstrip("\n") + "\n")
+        except Exception:
+            # Logging failures should never crash the supervisor; they are best-effort.
+            _log.debug("Failed to write pipeline log line", exc_info=True)
 
     def _terminate_current_proc(self) -> None:
         """Terminate all running subprocesses (e.g. on CTRL+C)."""
@@ -242,11 +260,14 @@ class PipelineSupervisor:
             self._current_procs.clear()
 
     def _dashboard_update(self, stages: list[dict[str, Any]], log_line: str | None = None) -> None:
+        if log_line is not None:
+            self._write_log_line(log_line)
         if self._dashboard is None:
             return
         update = getattr(self._dashboard, "update", None)
         if callable(update):
-            update(stages, log_line)
+            # The dashboard no longer renders a log panel; it only needs stage data.
+            update(stages, None)
 
     def _dashboard_set_worker_status(self, worker_cmd: str, label: str, status: str) -> None:
         if self._dashboard is None:
@@ -432,6 +453,14 @@ class PipelineSupervisor:
                     raise PathUnreachableError(root_path)
                 self._run_scan()
 
+            # Catch-up: enqueue downstream jobs for assets that completed a prior stage
+            # in a previous run but whose downstream jobs were never queued (e.g. after
+            # a crash or restart).  enqueue is idempotent — it skips assets that already
+            # have a pending/claimed job — so this is always safe to run.
+            catchup_stages = [s for s in _all_worker_stages(self._media_type) if s.name in _DOWNSTREAM]
+            if catchup_stages:
+                self._enqueue_downstream(catchup_stages, library_names=[self.library_name])
+
             while True:
                 try:
                     data = _run_status_json(self.library_name)
@@ -514,6 +543,12 @@ class PipelineSupervisor:
                         with self._procs_lock:
                             if proc in self._current_procs:
                                 self._current_procs.remove(proc)
+
+            # Catch-up enqueue (same rationale as single-library mode above).
+            catchup_stages = [s for s in _all_worker_stages(self._media_type) if s.name in _DOWNSTREAM]
+            lib_names = [lib["library_name"] for lib in self._libraries]
+            if catchup_stages:
+                self._enqueue_downstream(catchup_stages, library_names=lib_names)
 
             while True:
                 try:

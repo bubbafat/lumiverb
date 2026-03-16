@@ -1,4 +1,4 @@
-"""Rich live dashboard for pipeline run: status table + worker status + log panel."""
+"""Rich live dashboard for pipeline run: status table + worker status."""
 
 from __future__ import annotations
 
@@ -15,8 +15,6 @@ from rich.text import Text
 
 # Flash duration in seconds
 FLASH_DURATION = 2.0
-# Internal ring buffer size — larger than any realistic terminal
-LOG_BUFFER_MAX = 500
 # Braille spinner frames — cycles at the Live refresh rate (4 Hz)
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
@@ -39,20 +37,19 @@ class PipelineDashboard:
     Context manager that runs a Rich Live display with:
     (1) Status table: Stage | Pending | Done | Failed, with flash on progress/failure
     (2) Workers table: Worker | Status (idle/active/completed/error)
-    (3) Log panel: last N lines of subprocess output.
 
     When status polling fails, keeps last known stages and shows a warning in the status section.
     """
 
-    def __init__(self, library_name: str, total_assets: int) -> None:
+    def __init__(self, library_name: str, total_assets: int, log_path: str | None = None) -> None:
         self.library_name = library_name
         self.total_assets = total_assets
+        self._log_path = log_path
         self._console = Console()
         self._live: Live | None = None
         self._layout: Layout | None = None
         # stages: list of {"name", "label", "done", "pending", "failed"[, "library_name"]}
         self._stages: list[dict[str, Any]] = []
-        self._log_lines: list[str] = []  # ring buffer, capped at LOG_BUFFER_MAX
         self._status_warning = False
         # Previous counts per flash key for flash detection
         self._prev_counts: dict[str, dict[str, int]] = {}
@@ -65,15 +62,11 @@ class PipelineDashboard:
 
     def __enter__(self) -> PipelineDashboard:
         self._layout = Layout()
-        self._layout.split_column(
-            Layout(name="top", minimum_size=6),
-            Layout(name="log", ratio=1, minimum_size=8),
-        )
-        self._layout["top"].split_row(
+        self._layout.split_row(
             Layout(name="status"),
             Layout(name="workers"),
         )
-        self._layout["top"].size = self._top_height()
+        self._layout.size = self._top_height()
         # Use _StatusRenderable so the spinner animates on every Live refresh cycle.
         self._layout["status"].update(_StatusRenderable(self))
         self._live = Live(
@@ -126,7 +119,7 @@ class PipelineDashboard:
                 state["ended_at"] = now
 
         if self._live is not None and self._layout is not None:
-            self._layout["top"].size = self._top_height()
+            self._layout.size = self._top_height()
             self._layout["workers"].update(self._render_workers())
             self._live.refresh()
 
@@ -138,18 +131,13 @@ class PipelineDashboard:
         """
         Update dashboard state and refresh the display.
 
-        - If log_line is set, append to log buffer (trimmed to LOG_BUFFER_MAX).
         - If log_line contains "Status poll failed", set warning indicator.
         - If stages is non-empty, update stored stages, clear warning, and apply flash logic.
         """
         now = time.time()
 
-        if log_line is not None:
-            self._log_lines.append(log_line)
-            if len(self._log_lines) > LOG_BUFFER_MAX:
-                self._log_lines = self._log_lines[-LOG_BUFFER_MAX:]
-            if "Status poll failed" in log_line:
-                self._status_warning = True
+        if log_line is not None and "Status poll failed" in log_line:
+            self._status_warning = True
 
         if stages:
             self._status_warning = False
@@ -176,10 +164,9 @@ class PipelineDashboard:
         self._flash_red = {k: v for k, v in self._flash_red.items() if v > now}
 
         if self._live is not None and self._layout is not None:
-            self._layout["top"].size = self._top_height()
+            self._layout.size = self._top_height()
             # Status panel auto-renders via _StatusRenderable; no explicit update needed.
             self._layout["workers"].update(self._render_workers())
-            self._layout["log"].update(self._render_log())
             self._live.refresh()
 
     def _top_height(self) -> int:
@@ -354,13 +341,11 @@ class PipelineDashboard:
                 status_text = Text("idle", style="dim")
             table.add_row(label, status_text)
 
-        return Panel(table, title="[bold]Workers[/]", border_style="dim")
+        if self._log_path:
+            # Add a dim footer row with the log file path.
+            table.add_row(
+                Text("Log file", style="dim"),
+                Text(self._log_path, style="dim"),
+            )
 
-    def _render_log(self) -> Panel:
-        """Fill the log panel exactly: show as many lines as the panel can hold."""
-        # Total terminal height minus top panel and 2 lines for the log panel's own border.
-        top_size = self._layout["top"].size if self._layout is not None else 8
-        available = max(1, self._console.size.height - (top_size or 0) - 2)
-        lines = self._log_lines[-available:] if self._log_lines else ["(no output yet)"]
-        content = "\n".join(lines)
-        return Panel(content, title="[bold]Log[/]", border_style="dim")
+        return Panel(table, title="[bold]Workers[/]", border_style="dim")

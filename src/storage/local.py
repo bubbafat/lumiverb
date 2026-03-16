@@ -52,6 +52,23 @@ class LocalStorage:
             f"/{asset_id}_{rep_frame_ms:010d}.jpg"
         )
 
+    def video_preview_key(
+        self, tenant_id: str, library_id: str, asset_id: str, rel_path: str
+    ) -> str:
+        """
+        Return the storage key for a generated MP4 video preview.
+
+        Uses the same bucketing scheme as proxies/thumbnails and preserves the
+        original stem from the relative path, but always uses `.mp4` as the
+        extension for the preview clip.
+        """
+        bucket = self._bucket_from_asset_id(asset_id)
+        original_stem = Path(rel_path).stem
+        return (
+            f"{tenant_id}/{library_id}/previews/{bucket:02d}/"
+            f"{asset_id}_{original_stem}.mp4"
+        )
+
     def abs_path(self, key: str) -> Path:
         return Path(self._data_dir) / key
 
