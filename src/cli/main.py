@@ -1461,7 +1461,7 @@ def scan(
             if normalised:
                 enqueue_filter["path_prefix"] = normalised
 
-        for job_type in ("proxy", "exif"):
+        for job_type in ("proxy", "exif", "video-index", "video-preview"):
             enqueue_resp = client.post(
                 "/v1/jobs/enqueue",
                 json={
