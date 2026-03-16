@@ -27,11 +27,13 @@ class BaseWorker:
         concurrency: int = 1,
         once: bool = False,
         library_id: str | None = None,
+        path_prefix: str | None = None,
         suppress_base_progress: bool = False,
     ) -> None:
         self._client = client
         self._once = once
         self._library_id = library_id
+        self._path_prefix = path_prefix
         self._console = Console()
         self._suppress_base_progress = suppress_base_progress
 
@@ -40,6 +42,8 @@ class BaseWorker:
         params: dict[str, str] = {"job_type": self.job_type}
         if self._library_id:
             params["library_id"] = self._library_id
+        if self._path_prefix:
+            params["path_prefix"] = self._path_prefix
         resp = self._client.get("/v1/jobs/pending", params=params)
         resp.raise_for_status()
         data = resp.json()
@@ -53,6 +57,8 @@ class BaseWorker:
         params: dict[str, str] = {"job_type": self.job_type}
         if self._library_id:
             params["library_id"] = self._library_id
+        if self._path_prefix:
+            params["path_prefix"] = self._path_prefix
         resp = self._client.get("/v1/jobs/next", params=params)
         if resp.status_code == 204:
             return None
