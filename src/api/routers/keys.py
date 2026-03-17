@@ -120,19 +120,30 @@ def revoke_key(
     with get_control_session() as session:
         repo = ApiKeyRepository(session)
 
-        # Enforce "last admin key" constraint.
-        admin_count = repo.count_admin_keys(tenant_id)
-        if admin_count <= 1:
-            # If there is only one admin key, prevent revoking it.
-            return _error_response(
-                409,
-                "last_admin_key",
-                "Cannot revoke the last remaining admin key for this tenant",
-            )
+        # Load the target key first so we can inspect is_admin.
+        target = repo.get_by_hash  # type: ignore[assignment]  # placeholder to satisfy type checkers
+        # Fetch by key_id and tenant_id directly via the session.
+        from sqlmodel import select
+        from src.models.control_plane import ApiKey
+
+        stmt = select(ApiKey).where(ApiKey.key_id == key_id, ApiKey.tenant_id == tenant_id)
+        target = session.exec(stmt).first()
+        if target is None or target.revoked_at is not None:
+            raise HTTPException(status_code=404, detail="Key not found")
+
+        # Enforce "last admin key" constraint only when revoking an admin key.
+        if getattr(target, "is_admin", False):
+            admin_count = repo.count_admin_keys(tenant_id)
+            if admin_count <= 1:
+                return _error_response(
+                    409,
+                    "last_admin_key",
+                    "Cannot revoke the last remaining admin key for this tenant",
+                )
 
         ok = repo.revoke(key_id=key_id, tenant_id=tenant_id)
         if not ok:
-            # For unknown or already-revoked keys, behave like a 404.
+            # Should not happen given the checks above; treat as 404.
             raise HTTPException(status_code=404, detail="Key not found")
 
     return None

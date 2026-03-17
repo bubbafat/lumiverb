@@ -130,7 +130,7 @@ def test_last_admin_key_cannot_be_revoked(keys_client: tuple[TestClient, str]) -
     client, api_key = keys_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
-    # Ensure there is exactly one admin key by revoking any non-admin keys.
+    # Ensure there is exactly one admin key.
     r_list = client.get("/v1/keys", headers=auth)
     assert r_list.status_code == 200
     keys = r_list.json()["keys"]
@@ -142,6 +142,32 @@ def test_last_admin_key_cannot_be_revoked(keys_client: tuple[TestClient, str]) -
     assert r.status_code == 409
     body = r.json()
     assert body.get("error", {}).get("code") == "last_admin_key"
+
+
+@pytest.mark.slow
+def test_non_admin_key_can_be_revoked_when_single_admin_exists(keys_client: tuple[TestClient, str]) -> None:
+    """Revoking a non-admin key succeeds even when there is only one admin key."""
+    client, api_key = keys_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+
+    # Create a non-admin key.
+    r_create = client.post(
+        "/v1/keys",
+        json={"label": "temp", "is_admin": False},
+        headers=auth,
+    )
+    assert r_create.status_code == 200
+    non_admin_id = r_create.json()["key_id"]
+
+    # There should still be exactly one admin key.
+    r_list = client.get("/v1/keys", headers=auth)
+    keys = r_list.json()["keys"]
+    admin_keys = [k for k in keys if k["is_admin"]]
+    assert len(admin_keys) == 1
+
+    # Revoking the non-admin key should succeed.
+    r_delete = client.delete(f"/v1/keys/{non_admin_id}", headers=auth)
+    assert r_delete.status_code == 204
 
 
 @pytest.mark.fast

@@ -113,9 +113,16 @@ def test_revoke_key(control_plane_session: Session) -> None:
     api_key, _ = key_repo.create(tenant_id=tenant.tenant_id, label="default", is_admin=True)
     ok = key_repo.revoke(api_key.key_id, tenant_id=tenant.tenant_id)
     assert ok is True
-    # Fetch and assert revoked_at set
-    fetched = key_repo.get_by_hash(api_key.key_hash)
-    assert fetched is None
+    # Fetch raw row and assert revoked_at set
+    from sqlalchemy import text as sa_text
+
+    with control_plane_session.connection() as conn:
+        row = conn.execute(
+            sa_text("SELECT revoked_at FROM api_keys WHERE key_id = :key_id"),
+            {"key_id": api_key.key_id},
+        ).fetchone()
+        assert row is not None
+        assert row[0] is not None
 
 
 @pytest.mark.slow
