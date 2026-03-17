@@ -56,5 +56,7 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
 
             request.state.tenant_id = api_key.tenant_id
             request.state.connection_string = routing.connection_string
+            request.state.key_id = api_key.key_id
+            request.state.is_admin = getattr(api_key, "is_admin", False)
 
         return await call_next(request)

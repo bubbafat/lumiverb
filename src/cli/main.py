@@ -14,6 +14,7 @@ from rich.table import Table
 
 from src.cli.client import LumiverbClient
 from src.cli.config import get_admin_key, load_config, save_config
+from src.cli.commands.keys import keys_app
 from src.cli.scanner import scan_library
 from src.core.io_utils import normalize_path_prefix
 from src.core.logging_config import configure_logging
@@ -25,6 +26,7 @@ config_app = typer.Typer(help="Manage API URL and API key.")
 app.add_typer(config_app, name="config")
 library_app = typer.Typer(help="Create and list libraries.")
 app.add_typer(library_app, name="library")
+app.add_typer(keys_app, name="keys")
 tenant_app = typer.Typer(help="Manage tenants (admin only).")
 app.add_typer(tenant_app, name="tenant")
 

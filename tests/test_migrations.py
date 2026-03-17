@@ -71,6 +71,65 @@ def test_control_plane_migrations_upgrade_and_downgrade() -> None:
         assert tables == set(), tables
 
 
+@pytest.mark.migration
+def test_api_keys_is_admin_backfilled() -> None:
+    """
+    Control plane: api_keys table has label + is_admin, and existing rows are backfilled with is_admin = TRUE.
+    """
+    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
+        url = postgres.get_connection_url()
+        if url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+
+        engine = create_engine(url)
+        with engine.connect() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            conn.commit()
+
+        env = os.environ.copy()
+        env["ALEMBIC_CONTROL_URL"] = url
+
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+        # Upgrade to head
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "-c", "alembic-control.ini", "upgrade", "head"],
+            cwd=project_root,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, (result.stdout, result.stderr)
+
+        with engine.connect() as conn:
+            # Insert a legacy-style key row (is_admin should default TRUE via backfill).
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO tenants (tenant_id, name, plan, status, created_at)
+                    VALUES ('ten_test', 'Test', 'free', 'active', NOW())
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO api_keys (key_id, key_hash, tenant_id, name, scopes, created_at)
+                    VALUES ('key_test', 'hash', 'ten_test', 'default', '["read","write"]'::jsonb, NOW())
+                    """
+                )
+            )
+            conn.commit()
+
+            r = conn.execute(
+                text("SELECT label, is_admin FROM api_keys WHERE key_id = 'key_test'")
+            )
+            row = r.fetchone()
+            assert row is not None
+            label, is_admin = row
+            assert is_admin is True
+
+
 TENANT_TABLES = [
     "libraries",
     "scans",

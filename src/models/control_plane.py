@@ -32,10 +32,13 @@ class ApiKey(SQLModel, table=True):
     key_hash: str = Field(nullable=False, unique=True)
     tenant_id: str = Field(foreign_key="tenants.tenant_id", nullable=False)
     name: str = Field(nullable=False)
+    # Optional human-readable label for the key. For new features, prefer label over name.
+    label: str | None = Field(default=None, nullable=True)
     scopes: list[str] = Field(
         default=["read", "write"],
         sa_column=Column(JSONB, nullable=False),
     )
+    is_admin: bool = Field(default=False, nullable=False)
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),

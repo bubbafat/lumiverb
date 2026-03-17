@@ -78,29 +78,44 @@ class ApiKeyRepository:
 
     @staticmethod
     def _hash_key(plaintext: str) -> str:
+        # Preserve existing SHA256 hashing scheme for compatibility.
         return hashlib.sha256(plaintext.encode()).hexdigest()
+
+    @staticmethod
+    def _generate_plaintext() -> str:
+        """
+        Generate plaintext key as lv_ + ULID() + random suffix.
+
+        ULID prefix ensures sortable, non-guessable IDs while keeping the
+        existing lv_ prefix for callers.
+        """
+        ulid_part = str(ULID())
+        random_part = secrets.token_urlsafe(16)
+        return f"lv_{ulid_part}_{random_part}"
 
     def create(
         self,
         tenant_id: str,
-        name: str,
-        scopes: list[str] | None = None,
+        label: str | None,
+        is_admin: bool,
     ) -> tuple[ApiKey, str]:
         """
-        Generate key as lv_ + secrets.token_urlsafe(32), store SHA256 hash,
-        return (ApiKey, plaintext_key). Plaintext is returned ONCE and never stored.
+        Create a new API key for a tenant.
+
+        Generates a new lv_ ULID-prefixed key, hashes it, inserts the row, and
+        returns (record, plaintext). Plaintext is returned ONCE and never stored.
         """
-        if scopes is None:
-            scopes = ["read", "write"]
-        plaintext = "lv_" + secrets.token_urlsafe(32)
+        plaintext = self._generate_plaintext()
         key_hash = self._hash_key(plaintext)
         key_id = "key_" + str(ULID())
         api_key = ApiKey(
             key_id=key_id,
             key_hash=key_hash,
             tenant_id=tenant_id,
-            name=name,
-            scopes=scopes,
+            name=label or "default",
+            label=label,
+            scopes=["read", "write"],
+            is_admin=is_admin,
         )
         self._session.add(api_key)
         self._session.commit()
@@ -120,17 +135,23 @@ class ApiKeyRepository:
         """Hash the plaintext and call get_by_hash."""
         return self.get_by_hash(self._hash_key(plaintext))
 
-    def revoke(self, key_id: str) -> ApiKey:
-        """Set revoked_at and return the key."""
+    def revoke(self, key_id: str, tenant_id: str | None = None) -> bool:
+        """
+        Set revoked_at for the given key_id (and optional tenant_id).
+
+        Returns False if not found or already revoked; True on successful revoke.
+        """
         stmt = select(ApiKey).where(ApiKey.key_id == key_id)
+        if tenant_id is not None:
+            stmt = stmt.where(ApiKey.tenant_id == tenant_id)
         api_key = self._session.exec(stmt).first()
-        if api_key is None:
-            raise ValueError(f"API key not found: {key_id}")
+        if api_key is None or api_key.revoked_at is not None:
+            return False
         api_key.revoked_at = utcnow()
         self._session.add(api_key)
         self._session.commit()
         self._session.refresh(api_key)
-        return api_key
+        return True
 
     def touch_last_used(self, key_id: str) -> None:
         """Update last_used_at. Best-effort; do not raise on failure."""
@@ -144,10 +165,34 @@ class ApiKeyRepository:
             except Exception:
                 self._session.rollback()
 
+    def list_by_tenant(self, tenant_id: str) -> list[ApiKey]:
+        """
+        List all non-revoked API keys for a tenant, ordered by created_at ASC.
+
+        Plaintext is never returned; only metadata.
+        """
+        stmt = (
+            select(ApiKey)
+            .where(ApiKey.tenant_id == tenant_id)
+            .where(ApiKey.revoked_at.is_(None))
+            .order_by(ApiKey.created_at.asc())
+        )
+        return list(self._session.exec(stmt).all())
+
     def list_by_tenant_id(self, tenant_id: str) -> list[ApiKey]:
-        """List all API keys for a tenant (for revoking all on delete)."""
+        """List all API keys for a tenant (including revoked)."""
         stmt = select(ApiKey).where(ApiKey.tenant_id == tenant_id)
         return list(self._session.exec(stmt).all())
+
+    def count_admin_keys(self, tenant_id: str) -> int:
+        """Return the number of non-revoked admin keys for a tenant."""
+        stmt = (
+            select(ApiKey)
+            .where(ApiKey.tenant_id == tenant_id)
+            .where(ApiKey.revoked_at.is_(None))
+            .where(ApiKey.is_admin.is_(True))
+        )
+        return len(list(self._session.exec(stmt).all()))
 
     def delete_by_tenant_id(self, tenant_id: str) -> None:
         """Delete all API keys for a tenant (for cleanup on provisioning failure)."""

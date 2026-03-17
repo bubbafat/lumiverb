@@ -47,3 +47,17 @@ def require_admin(
     token = authorization[7:].strip()
     if token != settings.admin_key:
         raise HTTPException(status_code=401, detail="Invalid admin key")
+
+
+def require_tenant_admin(request: Request) -> None:
+    """
+    Requires the resolved tenant API key to have is_admin=True.
+    Must be used on routes that already pass through TenantResolutionMiddleware.
+    Raises HTTP 403 if the key is not an admin key.
+    """
+    is_admin = getattr(request.state, "is_admin", None)
+    if is_admin is None:
+        # Middleware should have populated this; treat as server misconfiguration.
+        raise HTTPException(status_code=500, detail="Tenant admin context missing")
+    if not is_admin:
+        raise HTTPException(status_code=403, detail="Admin API key required for this operation")
