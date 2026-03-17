@@ -342,15 +342,18 @@ def batch_trash_assets(
 ) -> BatchTrashResponse:
     """Soft-delete multiple assets. Returns trashed and not_found lists. Quickwit delete is best-effort."""
     asset_repo = AssetRepository(session)
+    # Resolve library_id for Quickwit before trashing (get_by_ids only returns active assets).
+    active = asset_repo.get_by_ids(body.asset_ids)
+    library_by_id = {a.asset_id: a.library_id for a in active}
     trashed_ids, not_found_ids = asset_repo.trash_many(body.asset_ids)
     if trashed_ids:
         try:
             from src.search.quickwit_client import QuickwitClient
             qw = QuickwitClient()
-            assets = [asset_repo.get_by_id(aid) for aid in trashed_ids]
-            for a in assets:
-                if a is not None:
-                    qw.delete_documents_by_asset_id(a.library_id, a.asset_id)
+            for aid in trashed_ids:
+                lib_id = library_by_id.get(aid)
+                if lib_id:
+                    qw.delete_documents_by_asset_id(lib_id, aid)
         except Exception as e:
             logger.warning("Quickwit delete after batch trash failed: %s", e)
     return BatchTrashResponse(trashed=trashed_ids, not_found=not_found_ids)
@@ -396,16 +399,17 @@ def trash_asset(
 ) -> None:
     """Soft-delete a single asset. 404 if not found or already trashed. Quickwit delete is best-effort."""
     asset_repo = AssetRepository(session)
+    asset = asset_repo.get_by_id(asset_id)
+    library_id = asset.library_id if asset is not None else None
     ok = asset_repo.trash(asset_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Asset not found or already trashed")
-    try:
-        from src.search.quickwit_client import QuickwitClient
-        asset = asset_repo.get_by_id(asset_id)
-        if asset is not None:
-            QuickwitClient().delete_documents_by_asset_id(asset.library_id, asset_id)
-    except Exception as e:
-        logger.warning("Quickwit delete after trash failed for %s: %s", asset_id, e)
+    if library_id:
+        try:
+            from src.search.quickwit_client import QuickwitClient
+            QuickwitClient().delete_documents_by_asset_id(library_id, asset_id)
+        except Exception as e:
+            logger.warning("Quickwit delete after trash failed for %s: %s", asset_id, e)
 
 
 @router.post("/{asset_id}/restore", status_code=204)

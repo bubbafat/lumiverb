@@ -151,6 +151,8 @@ def test_api_keys_role_replaces_is_admin() -> None:
 
 TENANT_TABLES = [
     "libraries",
+    "library_path_filters",
+    "tenant_path_filter_defaults",
     "scans",
     "assets",
     "video_scenes",
@@ -196,7 +198,8 @@ def test_tenant_schema_upgrade_and_downgrade() -> None:
                 text(
                     "SELECT table_name FROM information_schema.tables "
                     "WHERE table_schema = 'public' AND table_name IN "
-                    "('libraries', 'scans', 'assets', 'video_scenes', 'video_index_chunks', "
+                    "('libraries', 'library_path_filters', 'tenant_path_filter_defaults', "
+                    "'scans', 'assets', 'video_scenes', 'video_index_chunks', "
                     "'asset_metadata', 'search_sync_queue', 'worker_jobs', 'system_metadata', "
                     "'faces', 'people', 'face_person_matches', 'pipeline_locks')"
                 )
@@ -239,7 +242,8 @@ def test_tenant_schema_upgrade_and_downgrade() -> None:
                 text(
                     "SELECT table_name FROM information_schema.tables "
                     "WHERE table_schema = 'public' AND table_name IN "
-                    "('libraries', 'scans', 'assets', 'video_scenes', 'video_index_chunks', "
+                    "('libraries', 'library_path_filters', 'tenant_path_filter_defaults', "
+                    "'scans', 'assets', 'video_scenes', 'video_index_chunks', "
                     "'asset_metadata', 'search_sync_queue', 'worker_jobs', 'system_metadata', "
                     "'faces', 'people', 'face_person_matches', 'pipeline_locks')"
                 )

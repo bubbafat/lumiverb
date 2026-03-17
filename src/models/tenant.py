@@ -42,6 +42,32 @@ class Library(SQLModel, table=True):
     vision_model_id: str = Field(default="", nullable=False)
 
 
+class LibraryPathFilter(SQLModel, table=True):
+    __tablename__ = "library_path_filters"
+
+    filter_id: str = Field(primary_key=True)
+    library_id: str = Field(foreign_key="libraries.library_id", nullable=False)
+    type: str = Field(nullable=False)  # "include" | "exclude"
+    pattern: str = Field(nullable=False)
+    created_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
+class TenantPathFilterDefault(SQLModel, table=True):
+    __tablename__ = "tenant_path_filter_defaults"
+
+    default_id: str = Field(primary_key=True)
+    tenant_id: str = Field(nullable=False)
+    type: str = Field(nullable=False)  # "include" | "exclude"
+    pattern: str = Field(nullable=False)
+    created_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
 class Scan(SQLModel, table=True):
     __tablename__ = "scans"
 

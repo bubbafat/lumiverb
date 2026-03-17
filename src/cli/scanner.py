@@ -12,6 +12,7 @@ from rich.console import Console
 from src.cli.progress import UnifiedProgress, UnifiedProgressSpec
 from src.core.file_extensions import SUPPORTED_EXTENSIONS, VIDEO_EXTENSIONS
 from src.core.io_utils import normalize_path_prefix
+from src.core.path_filter import PathFilter, is_path_included
 
 SCAN_PAGE_SIZE = 500
 SCAN_BATCH_SIZE = 500
@@ -50,8 +51,17 @@ def _is_unchanged(asset: dict, local_file: dict, force: bool) -> bool:
     )
 
 
-def _build_local_map(root_path: Path, walk_root: Path) -> dict[str, dict]:
-    """Walk filesystem and build rel_path -> {file_size, file_mtime, media_type} map."""
+def _build_local_map(
+    root_path: Path,
+    walk_root: Path,
+    path_filters: list[PathFilter] | None = None,
+) -> dict[str, dict]:
+    """Walk filesystem and build rel_path -> {file_size, file_mtime, media_type} map.
+
+    path_filters: None = skip filtering (all supported paths included).
+    [] = run through is_path_included; with no filters that includes everything.
+    Non-empty list = only paths passing is_path_included are included.
+    """
     local_map: dict[str, dict] = {}
     for p in walk_root.rglob("*"):
         if not p.is_file():
@@ -64,6 +74,8 @@ def _build_local_map(root_path: Path, walk_root: Path) -> dict[str, dict]:
         except ValueError:
             continue
         rel_path_str = str(rel_path).replace("\\", "/")
+        if path_filters is not None and not is_path_included(rel_path_str, path_filters):
+            continue
         media_type = "video" if ext in VIDEO_EXTENSIONS else "image"
         try:
             st = p.stat()
@@ -218,7 +230,22 @@ def scan_library(
                 error_message=err_msg,
             )
 
-        # Step 5: Build local map (no API calls)
+        # Step 4b: Load path filters once for this scan. None = API not called or failed
+        # (no filtering); [] = library has no filters (is_path_included allows all).
+        path_filters: list[PathFilter] | None = None
+        try:
+            resp = client.get(f"/v1/libraries/{library_id}/filters")
+            if resp.status_code == 200:
+                data = resp.json()
+                path_filters = []
+                for inc in data.get("includes", []):
+                    path_filters.append(PathFilter(type="include", pattern=inc["pattern"]))
+                for exc in data.get("excludes", []):
+                    path_filters.append(PathFilter(type="exclude", pattern=exc["pattern"]))
+        except Exception:
+            pass
+
+        # Step 5: Build local map (no API calls; path filters applied when present)
         spec = UnifiedProgressSpec(
             label="Building file map",
             unit="files",
@@ -226,7 +253,9 @@ def scan_library(
             total=None,
         )
         with UnifiedProgress(console, spec) as bar:
-            local_map = _build_local_map(library_root_resolved, walk_root_resolved)
+            local_map = _build_local_map(
+                library_root_resolved, walk_root_resolved, path_filters=path_filters
+            )
             n_files = len(local_map)
             bar.update(completed=n_files)
             bar.finish()

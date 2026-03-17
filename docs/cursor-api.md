@@ -33,6 +33,8 @@ Two-layer Postgres architecture:
 
 **Tenant DB** (one per tenant, same Postgres instance):
 - `libraries` — library_id, name, root_path, scan_status, created_at
+- `library_path_filters` — filter_id (lpf_+ULID), library_id FK, type (include|exclude), pattern, created_at. Controls which paths are ingested per library.
+- `tenant_path_filter_defaults` — default_id (tpfd_+ULID), tenant_id, type (include|exclude), pattern, created_at. Copied to new libraries at creation only.
 - `assets` — asset_id, library_id, sha256, file_path, file_size, media_type, width, height, duration_ms, duration_sec, captured_at, proxy_key, thumbnail_key, availability, video_indexed, created_at
 - `video_scenes` — scene_id, asset_id, start_ms, end_ms, rep_frame_ms, proxy_key, thumbnail_key, description, tags, sharpness_score, keep_reason, phash, created_at
 - `video_index_chunks` — chunk_id, asset_id, chunk_index, start_ms, end_ms, status, worker_id, claimed_at, lease_expires_at, completed_at, error_message, anchor_phash, scene_start_ms, created_at
@@ -84,11 +86,27 @@ All under `/v1/video`; require tenant auth. Used by the video-index worker to pr
 
 All under `/v1/libraries`; require tenant auth (middleware).
 
-- **POST /v1/libraries** — Body: `{ "name", "root_path", "vision_model_id" }` (`vision_model_id` optional, defaults to `""`). Name must be unique per tenant (409 if duplicate). Returns `{ "library_id", "name", "root_path", "scan_status", "vision_model_id" }` (scan_status initially `"idle"`).
+- **POST /v1/libraries** — Body: `{ "name", "root_path", "vision_model_id" }` (`vision_model_id` optional, defaults to `""`). Name must be unique per tenant (409 if duplicate). New libraries inherit the tenant's path filter defaults at creation time (subsequent changes to defaults do not affect existing libraries). Returns `{ "library_id", "name", "root_path", "scan_status", "vision_model_id" }` (scan_status initially `"idle"`).
 - **PATCH /v1/libraries/{library_id}** — Body: `{ "name", "vision_model_id" }` (both optional). Updates library name and/or vision model ID. Returns full library response.
 - **GET /v1/libraries** — Query: `include_trashed` (optional, default false). Returns list of libraries with `library_id`, `name`, `root_path`, `scan_status`, `last_scan_at`, `status` (`"active"` or `"trashed"`). Trashed libraries excluded unless `include_trashed=true`.
 - **DELETE /v1/libraries/{library_id}** — Soft delete: set library `status` to `"trashed"`, cancel pending/claimed worker jobs for its assets. Returns 204 on success, 404 if not found, 409 if already trashed.
-- **POST /v1/libraries/empty-trash** — Hard delete all trashed libraries for this tenant (cascade: worker_jobs, search_sync_queue, asset_metadata, video_scenes, assets, scans, libraries). Returns `{ "deleted": N }`.
+- **POST /v1/libraries/empty-trash** — Hard delete all trashed libraries for this tenant (cascade: worker_jobs, search_sync_queue, asset_metadata, video_scenes, assets, scans, library_path_filters, libraries). Returns `{ "deleted": N }`.
+
+## Library path filters API
+
+All under `/v1/libraries/{library_id}/filters`; require tenant auth and **admin** API key. Path filters control which files are included or excluded during library ingest (scanner). Patterns use `**`-style globs (case-insensitive); `**` matches across path segments. Validation rejects patterns containing `..` or null bytes.
+
+- **GET /v1/libraries/{library_id}/filters** — Returns `{ "includes": [{ "filter_id", "pattern", "created_at" }], "excludes": [...] }`. 404 if library not found.
+- **POST /v1/libraries/{library_id}/filters** — Body: `{ "type": "include"|"exclude", "pattern": "..." }`. Creates filter. Returns 201 with `{ "filter_id", "type", "pattern", "created_at" }`. 400 if pattern invalid, 404 if library not found.
+- **DELETE /v1/libraries/{library_id}/filters/{filter_id}** — Removes filter. Returns 204 on success, 404 if not found.
+
+## Tenant filter defaults API
+
+All under `/v1/tenant/filter-defaults`; require tenant auth and **admin** API key. Defaults are copied to each new library at creation time only.
+
+- **GET /v1/tenant/filter-defaults** — Returns `{ "includes": [{ "default_id", "pattern", "created_at" }], "excludes": [...] }`.
+- **POST /v1/tenant/filter-defaults** — Body: `{ "type": "include"|"exclude", "pattern": "..." }`. Creates default. Returns 201 with `{ "default_id", "type", "pattern", "created_at" }`. 400 if pattern invalid.
+- **DELETE /v1/tenant/filter-defaults/{default_id}** — Removes default. Returns 204 on success, 404 if not found.
 
 ## Scans API
 

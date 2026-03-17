@@ -21,8 +21,10 @@ from src.models.tenant import (
     AssetEmbedding,
     AssetMetadata,
     Library,
+    LibraryPathFilter,
     Scan,
     SearchSyncQueue,
+    TenantPathFilterDefault,
     VideoIndexChunk,
     VideoScene,
     WorkerJob,
@@ -162,6 +164,9 @@ class LibraryRepository:
         )
         self._session.execute(text("DELETE FROM assets WHERE library_id = :library_id"), params)
         self._session.execute(text("DELETE FROM scans WHERE library_id = :library_id"), params)
+        self._session.execute(
+            text("DELETE FROM library_path_filters WHERE library_id = :library_id"), params
+        )
         self._session.execute(text("DELETE FROM libraries WHERE library_id = :library_id"), params)
         self._session.commit()
 
@@ -184,6 +189,90 @@ class LibraryRepository:
         self._session.commit()
         self._session.refresh(library)
         return library
+
+
+class PathFilterRepository:
+    """Repository for library_path_filters and tenant_path_filter_defaults."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def list_for_library(self, library_id: str) -> list[LibraryPathFilter]:
+        """Return all path filters for a library."""
+        stmt = select(LibraryPathFilter).where(LibraryPathFilter.library_id == library_id)
+        return list(self._session.exec(stmt).all())
+
+    def add_for_library(self, library_id: str, type: str, pattern: str) -> LibraryPathFilter:
+        """Add a filter for a library. filter_id = lpf_ + ULID."""
+        filter_id = "lpf_" + str(ULID())
+        row = LibraryPathFilter(
+            filter_id=filter_id,
+            library_id=library_id,
+            type=type,
+            pattern=pattern,
+        )
+        self._session.add(row)
+        self._session.commit()
+        self._session.refresh(row)
+        return row
+
+    def delete_for_library(self, filter_id: str, library_id: str) -> bool:
+        """Delete a filter by id and library_id. Returns False if not found."""
+        stmt = select(LibraryPathFilter).where(
+            LibraryPathFilter.filter_id == filter_id,
+            LibraryPathFilter.library_id == library_id,
+        )
+        row = self._session.exec(stmt).first()
+        if row is None:
+            return False
+        self._session.delete(row)
+        self._session.commit()
+        return True
+
+    def list_defaults(self, tenant_id: str) -> list[TenantPathFilterDefault]:
+        """Return all tenant path filter defaults."""
+        stmt = select(TenantPathFilterDefault).where(
+            TenantPathFilterDefault.tenant_id == tenant_id
+        )
+        return list(self._session.exec(stmt).all())
+
+    def add_default(self, tenant_id: str, type: str, pattern: str) -> TenantPathFilterDefault:
+        """Add a tenant default. default_id = tpfd_ + ULID."""
+        default_id = "tpfd_" + str(ULID())
+        row = TenantPathFilterDefault(
+            default_id=default_id,
+            tenant_id=tenant_id,
+            type=type,
+            pattern=pattern,
+        )
+        self._session.add(row)
+        self._session.commit()
+        self._session.refresh(row)
+        return row
+
+    def delete_default(self, default_id: str, tenant_id: str) -> bool:
+        """Delete a tenant default by id and tenant_id. Returns False if not found."""
+        stmt = select(TenantPathFilterDefault).where(
+            TenantPathFilterDefault.default_id == default_id,
+            TenantPathFilterDefault.tenant_id == tenant_id,
+        )
+        row = self._session.exec(stmt).first()
+        if row is None:
+            return False
+        self._session.delete(row)
+        self._session.commit()
+        return True
+
+    def copy_defaults_to_library(self, tenant_id: str, library_id: str) -> int:
+        """Copy current tenant defaults into library_path_filters. Returns count copied. New filter_id ULIDs are generated."""
+        defaults = self.list_defaults(tenant_id)
+        if not defaults:
+            return 0
+        count = 0
+        for d in defaults:
+            self.add_for_library(library_id=library_id, type=d.type, pattern=d.pattern)
+            count += 1
+        return count
 
 
 class ScanRepository:
@@ -639,8 +728,8 @@ class AssetRepository:
 
     def permanently_delete(self, asset_ids: list[str]) -> int:
         """
-        Hard delete assets and all related rows in FK-safe order.
-        Returns count of deleted asset rows.
+        Hard delete trashed assets and all related rows in FK-safe order.
+        Only deletes rows where deleted_at IS NOT NULL. Returns count of deleted asset rows.
         """
         if not asset_ids:
             return 0
@@ -670,7 +759,9 @@ class AssetRepository:
             params,
         )
         result = self._session.execute(
-            text("DELETE FROM assets WHERE asset_id = ANY(:asset_ids) RETURNING asset_id"),
+            text(
+                "DELETE FROM assets WHERE asset_id = ANY(:asset_ids) AND deleted_at IS NOT NULL RETURNING asset_id"
+            ),
             params,
         )
         deleted_count = len(result.fetchall())

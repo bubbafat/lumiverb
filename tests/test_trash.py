@@ -136,10 +136,10 @@ def test_trash_asset_404_not_found(trash_api_client: tuple[TestClient, str, str,
 
 @pytest.mark.slow
 def test_trash_asset_404_already_trashed(trash_api_client: tuple[TestClient, str, str, list[str]]) -> None:
-    """DELETE /v1/assets/{id} twice: first 204, second 404."""
+    """DELETE /v1/assets/{id} twice: first 204, second 404. Use asset_ids[1] to avoid fixture ordering."""
     client, api_key, _library_id, asset_ids = trash_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
-    aid = asset_ids[0]
+    aid = asset_ids[1]
 
     r1 = client.delete(f"/v1/assets/{aid}", headers=auth)
     assert r1.status_code == 204
@@ -166,10 +166,10 @@ def test_restore_asset_204(trash_api_client: tuple[TestClient, str, str, list[st
 
 @pytest.mark.slow
 def test_restore_asset_404_not_trashed(trash_api_client: tuple[TestClient, str, str, list[str]]) -> None:
-    """POST /v1/assets/{id}/restore on non-trashed asset returns 404."""
+    """POST /v1/assets/{id}/restore on non-trashed asset returns 404. Use asset_ids[2] to avoid fixture ordering."""
     client, api_key, _library_id, asset_ids = trash_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
-    aid = asset_ids[0]
+    aid = asset_ids[2]
 
     r = client.post(f"/v1/assets/{aid}/restore", headers=auth)
     assert r.status_code == 404

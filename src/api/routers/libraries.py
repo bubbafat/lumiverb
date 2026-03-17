@@ -2,13 +2,13 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlmodel import Session
 from src.api.dependencies import get_tenant_session
 from src.core.io_utils import normalize_path_prefix
 from src.core.utils import utcnow
-from src.repository.tenant import AssetRepository, LibraryRepository
+from src.repository.tenant import AssetRepository, LibraryRepository, PathFilterRepository
 from src.workers.quickwit import purge_library_from_quickwit
 
 router = APIRouter(prefix="/v1/libraries", tags=["libraries"])
@@ -55,18 +55,24 @@ class DirectoryItem(BaseModel):
 
 @router.post("", response_model=LibraryResponse)
 def create_library(
+    request: Request,
     body: CreateLibraryRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> LibraryResponse:
     """
     Create a library. Name must be unique for this tenant.
     Returns 409 if a library with the same name already exists.
+    New libraries inherit tenant path filter defaults at creation time.
     """
     repo = LibraryRepository(session)
     existing = repo.get_by_name(body.name)
     if existing is not None:
         raise HTTPException(status_code=409, detail="A library with this name already exists")
     library = repo.create(name=body.name, root_path=body.root_path, vision_model_id=body.vision_model_id)
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if tenant_id:
+        path_filter_repo = PathFilterRepository(session)
+        path_filter_repo.copy_defaults_to_library(tenant_id=tenant_id, library_id=library.library_id)
     return LibraryResponse(
         library_id=library.library_id,
         name=library.name,
