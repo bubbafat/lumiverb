@@ -114,7 +114,7 @@ def create_tenant(
         api_key_row, plaintext_key = key_repo.create(
             tenant_id=tenant_id,
             label="default",
-            is_admin=True,
+            role="admin",
         )
     except Exception as e:
         _cleanup_tenant(tenant_id, tenant_repo, key_repo, routing_repo)
@@ -217,7 +217,7 @@ def create_tenant_key(
     api_key_row, plaintext_key = key_repo.create(
         tenant_id=tenant_id,
         label=body.name,
-        is_admin=True,
+        role="admin",
     )
     return CreateTenantKeyResponse(
         api_key=plaintext_key,

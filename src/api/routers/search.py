@@ -116,7 +116,8 @@ def search(
             image_hits = search_assets(session, library_id, q, limit=limit, offset=offset)
             source_parts.append("postgres")
 
-        # Enrich image hits
+        # Enrich image hits. Phase 0 finding: Quickwit returns hits without PG cross-check;
+        # get_by_ids uses active_assets so trashed assets are omitted — drop hits not in assets_by_id.
         if image_hits:
             asset_repo = AssetRepository(session)
             assets_by_id = {
@@ -133,6 +134,7 @@ def search(
                 if hit.get("tags") is None:
                     hit["tags"] = []
                 hit["type"] = "image"
+            image_hits = [h for h in image_hits if h["asset_id"] in assets_by_id]
 
     # --- Scene search ---
     if search_scenes and settings.quickwit_enabled:
@@ -151,7 +153,7 @@ def search(
             logger.warning("Quickwit scene search failed: %s", e)
             scene_hits = []
 
-        # Enrich scene hits
+        # Enrich scene hits; drop trashed (scene hit's asset not in active_assets).
         if scene_hits:
             asset_repo = AssetRepository(session)
             assets_by_id = {
@@ -172,6 +174,7 @@ def search(
                 if hit.get("tags") is None:
                     hit["tags"] = []
                 hit["type"] = "scene"
+            scene_hits = [h for h in scene_hits if h["asset_id"] in assets_by_id]
 
     # --- Apply optional path_prefix and tag filters after enrichment ---
     def _path_matches(rel_path: str | None) -> bool:

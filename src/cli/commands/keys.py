@@ -55,8 +55,7 @@ def keys_list() -> None:
     table.add_column("Created")
 
     for k in keys:
-        is_admin = bool(k.get("is_admin", False))
-        admin_flag = "✓" if is_admin else ""
+        admin_flag = "✓" if k.get("role") == "admin" else ""
         last_used_raw = k.get("last_used_at")
         created_raw = k.get("created_at", "")
         table.add_row(
@@ -73,13 +72,16 @@ def keys_list() -> None:
 @keys_app.command("create")
 def keys_create(
     label: Annotated[str | None, typer.Option("--label", help="Optional human-readable label for the key.")] = None,
-    admin: Annotated[bool, typer.Option("--admin", help="Create an admin key.")] = False,
+    role: Annotated[str, typer.Option("--role", help="Key role: admin or member.")] = "member",
 ) -> None:
     """Create a new API key for the current tenant."""
+    if role not in ("admin", "member"):
+        console.print("[red]Role must be 'admin' or 'member'.[/red]")
+        raise typer.Exit(1)
     client = LumiverbClient()
     resp = client.post(
         "/v1/keys",
-        json={"label": label, "is_admin": admin},
+        json={"label": label, "role": role},
     )
     data = resp.json()
     plaintext = data.get("plaintext", "")
@@ -91,8 +93,7 @@ def keys_create(
     table.add_column("Label")
     table.add_column("Admin", justify="center")
 
-    is_admin = bool(data.get("is_admin", False))
-    admin_flag = "✓" if is_admin else ""
+    admin_flag = "✓" if data.get("role") == "admin" else ""
     table.add_row(
         data.get("key_id", ""),
         data.get("label") or "",

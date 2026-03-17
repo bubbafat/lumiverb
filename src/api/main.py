@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 
 from src.api.middleware import TenantResolutionMiddleware
-from src.api.routers import admin, assets, jobs, keys, libraries, scans, tenant, video
+from src.api.routers import admin, assets, jobs, keys, libraries, scans, tenant, trash, video
 from src.api.routers.search import router as search_router
 from src.api.routers.similarity import router as similarity_router
 
@@ -17,6 +17,7 @@ app.include_router(scans.router)
 app.include_router(assets.router)
 app.include_router(video.router)
 app.include_router(keys.router)
+app.include_router(trash.router)
 app.include_router(search_router)
 app.include_router(similarity_router)
 

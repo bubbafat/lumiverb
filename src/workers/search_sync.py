@@ -148,10 +148,10 @@ class SearchSyncWorker:
                     sync_ids.append(row.sync_id)
                     asset_status[row.asset_id] = "synced"
                 else:
-                    # Existing asset document path — unchanged
+                    # Existing asset document path — skip trashed
                     asset = self._asset_repo.get_by_id(row.asset_id)
                     asset_id = row.asset_id
-                    if asset is None:
+                    if asset is None or getattr(asset, "deleted_at", None) is not None:
                         logger.warning(
                             "search_sync_queue row %s references missing asset_id=%s; marking synced",
                             row.sync_id,

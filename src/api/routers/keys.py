@@ -16,7 +16,7 @@ router = APIRouter(prefix="/v1/keys", tags=["keys"])
 class KeyItem(BaseModel):
     key_id: str
     label: str | None
-    is_admin: bool
+    role: str
     last_used_at: str | None
     created_at: str
 
@@ -27,13 +27,13 @@ class KeyListResponse(BaseModel):
 
 class CreateKeyRequest(BaseModel):
     label: str | None = None
-    is_admin: bool = False
+    role: str = "member"
 
 
 class CreateKeyResponse(BaseModel):
     key_id: str
     label: str | None
-    is_admin: bool
+    role: str
     plaintext: str
     created_at: str
 
@@ -57,7 +57,7 @@ def list_keys(request: Request) -> KeyListResponse:
             KeyItem(
                 key_id=k.key_id,
                 label=getattr(k, "label", None),
-                is_admin=getattr(k, "is_admin", False),
+                role=getattr(k, "role", "member"),
                 last_used_at=_iso(k.last_used_at),
                 created_at=_iso(k.created_at) or "",
             )
@@ -82,14 +82,14 @@ def create_key(
         api_key, plaintext = repo.create(
             tenant_id=tenant_id,
             label=body.label,
-            is_admin=body.is_admin,
+            role=body.role,
         )
 
     created_at = api_key.created_at.isoformat()
     return CreateKeyResponse(
         key_id=api_key.key_id,
         label=getattr(api_key, "label", None),
-        is_admin=getattr(api_key, "is_admin", False),
+        role=getattr(api_key, "role", "member"),
         plaintext=plaintext,
         created_at=created_at,
     )
@@ -120,9 +120,6 @@ def revoke_key(
     with get_control_session() as session:
         repo = ApiKeyRepository(session)
 
-        # Load the target key first so we can inspect is_admin.
-        target = repo.get_by_hash  # type: ignore[assignment]  # placeholder to satisfy type checkers
-        # Fetch by key_id and tenant_id directly via the session.
         from sqlmodel import select
         from src.models.control_plane import ApiKey
 
@@ -132,7 +129,7 @@ def revoke_key(
             raise HTTPException(status_code=404, detail="Key not found")
 
         # Enforce "last admin key" constraint only when revoking an admin key.
-        if getattr(target, "is_admin", False):
+        if getattr(target, "role", "member") == "admin":
             admin_count = repo.count_admin_keys(tenant_id)
             if admin_count <= 1:
                 return _error_response(

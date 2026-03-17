@@ -36,7 +36,7 @@ def search_assets(
             a.camera_model,
             COALESCE(m.data->>'description', '') AS description,
             COALESCE(m.data->'tags', '[]'::jsonb) AS tags
-        FROM assets a
+        FROM active_assets a
         LEFT JOIN LATERAL (
             SELECT data
             FROM asset_metadata

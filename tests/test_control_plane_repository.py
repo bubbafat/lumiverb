@@ -85,7 +85,7 @@ def test_create_api_key_returns_plaintext_once(control_plane_session: Session) -
     tenant_repo = TenantRepository(control_plane_session)
     key_repo = ApiKeyRepository(control_plane_session)
     tenant = tenant_repo.create(name="Acme", plan="free")
-    api_key, plaintext = key_repo.create(tenant_id=tenant.tenant_id, label="default", is_admin=True)
+    api_key, plaintext = key_repo.create(tenant_id=tenant.tenant_id, label="default", role="admin")
     assert plaintext.startswith("lv_")
     assert api_key.key_hash != plaintext
     assert len(api_key.key_hash) == 64  # SHA256 hex
@@ -97,7 +97,7 @@ def test_get_by_plaintext(control_plane_session: Session) -> None:
     tenant_repo = TenantRepository(control_plane_session)
     key_repo = ApiKeyRepository(control_plane_session)
     tenant = tenant_repo.create(name="Acme", plan="free")
-    api_key, plaintext = key_repo.create(tenant_id=tenant.tenant_id, label="default", is_admin=True)
+    api_key, plaintext = key_repo.create(tenant_id=tenant.tenant_id, label="default", role="admin")
     found = key_repo.get_by_plaintext(plaintext)
     assert found is not None
     assert found.key_id == api_key.key_id
@@ -110,7 +110,7 @@ def test_revoke_key(control_plane_session: Session) -> None:
     tenant_repo = TenantRepository(control_plane_session)
     key_repo = ApiKeyRepository(control_plane_session)
     tenant = tenant_repo.create(name="Acme", plan="free")
-    api_key, _ = key_repo.create(tenant_id=tenant.tenant_id, label="default", is_admin=True)
+    api_key, _ = key_repo.create(tenant_id=tenant.tenant_id, label="default", role="admin")
     ok = key_repo.revoke(api_key.key_id, tenant_id=tenant.tenant_id)
     assert ok is True
     # Fetch raw row and assert revoked_at set

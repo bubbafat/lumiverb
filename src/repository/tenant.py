@@ -29,6 +29,9 @@ from src.models.tenant import (
 )
 from ulid import ULID
 
+# Canonical view for non-trashed assets. Use in raw SQL (e.g. FROM active_assets).
+ACTIVE_ASSETS = "active_assets"
+
 
 class PipelineLockHeldError(Exception):
     """Raised when try_acquire finds a lock held by another process with a fresh heartbeat."""
@@ -458,10 +461,11 @@ class AssetRepository:
         return len(asset_ids)
 
     def mark_missing_for_scan(self, library_id: str, scan_id: str) -> int:
-        """Set availability='missing' for assets in library not seen in this scan (online only). Return count updated."""
+        """Set availability='missing' for active assets in library not seen in this scan (online only). Return count updated."""
         stmt = (
             select(Asset)
             .where(Asset.library_id == library_id)
+            .where(Asset.deleted_at.is_(None))
             .where(Asset.availability == "online")
             .where((Asset.last_scan_id != scan_id) | (Asset.last_scan_id.is_(None)))
         )
@@ -486,14 +490,20 @@ class AssetRepository:
         return list(self._session.exec(stmt).all())
 
     def list_by_library(self, library_id: str) -> list[Asset]:
-        """Return all assets in library."""
-        stmt = select(Asset).where(Asset.library_id == library_id)
+        """Return all active (non-trashed) assets in library."""
+        stmt = (
+            select(Asset)
+            .where(Asset.library_id == library_id)
+            .where(Asset.deleted_at.is_(None))
+        )
         return list(self._session.exec(stmt).all())
 
     def count_by_library(self, library_id: str) -> int:
-        """Return total asset count for library."""
+        """Return total active asset count for library."""
         result = self._session.execute(
-            text("SELECT COUNT(*)::int FROM assets WHERE library_id = :library_id"),
+            text(
+                "SELECT COUNT(*)::int FROM active_assets WHERE library_id = :library_id"
+            ),
             {"library_id": library_id},
         )
         return int(result.scalar() or 0)
@@ -536,7 +546,7 @@ class AssetRepository:
         where_sql = " AND ".join(conditions)
         id_sql = f"""
             SELECT a.asset_id
-            FROM assets a
+            FROM active_assets a
             LEFT JOIN LATERAL (
                 SELECT data->'tags' AS tags
                 FROM asset_metadata
@@ -552,24 +562,120 @@ class AssetRepository:
         asset_ids = [row[0] for row in result.all()]
         if not asset_ids:
             return []
-        assets_by_id = {
-            a.asset_id: a
-            for a in self._session.exec(select(Asset).where(Asset.asset_id.in_(asset_ids))).all()
-        }
+        stmt = (
+            select(Asset)
+            .where(Asset.asset_id.in_(asset_ids))
+            .where(Asset.deleted_at.is_(None))
+        )
+        assets_by_id = {a.asset_id: a for a in self._session.exec(stmt).all()}
         return [assets_by_id[aid] for aid in asset_ids if aid in assets_by_id]
 
     def list_rel_paths_for_library_non_deleted(self, library_id: str) -> list[str]:
-        """Return rel_path for all assets in library where status != 'deleted'."""
+        """Return rel_path for all active (non-trashed) assets in library."""
         stmt = (
             select(Asset.rel_path)
             .where(Asset.library_id == library_id)
-            .where(Asset.status != "deleted")
+            .where(Asset.deleted_at.is_(None))
         )
         return list(self._session.exec(stmt).all())
 
     def list_all(self) -> list[Asset]:
-        """Return all assets (all libraries)."""
-        return list(self._session.exec(select(Asset)).all())
+        """Return all active (non-trashed) assets (all libraries)."""
+        stmt = select(Asset).where(Asset.deleted_at.is_(None))
+        return list(self._session.exec(stmt).all())
+
+    def trash(self, asset_id: str) -> bool:
+        """Set deleted_at = now(). Returns False if not found or already trashed."""
+        asset = self._session.get(Asset, asset_id)
+        if asset is None or asset.deleted_at is not None:
+            return False
+        asset.deleted_at = utcnow()
+        self._session.add(asset)
+        self._session.commit()
+        return True
+
+    def trash_many(self, asset_ids: list[str]) -> tuple[list[str], list[str]]:
+        """Bulk trash. Returns (trashed_ids, not_found_ids)."""
+        if not asset_ids:
+            return [], []
+        now = utcnow()
+        result = self._session.execute(
+            text(
+                """
+                UPDATE assets SET deleted_at = :now
+                WHERE asset_id = ANY(:ids) AND deleted_at IS NULL
+                RETURNING asset_id
+                """
+            ),
+            {"now": now, "ids": asset_ids},
+        )
+        trashed = [row[0] for row in result.fetchall()]
+        not_found = [aid for aid in asset_ids if aid not in trashed]
+        self._session.commit()
+        return (trashed, not_found)
+
+    def restore(self, asset_id: str) -> bool:
+        """Clear deleted_at. Returns False if not found or not trashed."""
+        asset = self._session.get(Asset, asset_id)
+        if asset is None or asset.deleted_at is None:
+            return False
+        asset.deleted_at = None
+        self._session.add(asset)
+        self._session.commit()
+        return True
+
+    def list_trashed(
+        self,
+        asset_ids: list[str] | None = None,
+        trashed_before: datetime | None = None,
+    ) -> list[Asset]:
+        """Return trashed assets matching the given filters."""
+        stmt = select(Asset).where(Asset.deleted_at.isnot(None))
+        if asset_ids is not None:
+            stmt = stmt.where(Asset.asset_id.in_(asset_ids))
+        if trashed_before is not None:
+            stmt = stmt.where(Asset.deleted_at < trashed_before)
+        return list(self._session.exec(stmt).all())
+
+    def permanently_delete(self, asset_ids: list[str]) -> int:
+        """
+        Hard delete assets and all related rows in FK-safe order.
+        Returns count of deleted asset rows.
+        """
+        if not asset_ids:
+            return 0
+        params = {"asset_ids": asset_ids}
+        self._session.execute(
+            text("DELETE FROM worker_jobs WHERE asset_id = ANY(:asset_ids)"),
+            params,
+        )
+        self._session.execute(
+            text("DELETE FROM search_sync_queue WHERE asset_id = ANY(:asset_ids)"),
+            params,
+        )
+        self._session.execute(
+            text("DELETE FROM asset_metadata WHERE asset_id = ANY(:asset_ids)"),
+            params,
+        )
+        self._session.execute(
+            text("DELETE FROM asset_embeddings WHERE asset_id = ANY(:asset_ids)"),
+            params,
+        )
+        self._session.execute(
+            text("DELETE FROM video_scenes WHERE asset_id = ANY(:asset_ids)"),
+            params,
+        )
+        self._session.execute(
+            text("DELETE FROM video_index_chunks WHERE asset_id = ANY(:asset_ids)"),
+            params,
+        )
+        result = self._session.execute(
+            text("DELETE FROM assets WHERE asset_id = ANY(:asset_ids) RETURNING asset_id"),
+            params,
+        )
+        deleted_count = len(result.fetchall())
+        self._session.commit()
+        return deleted_count
 
     def update_proxy(
         self,
@@ -700,10 +806,14 @@ class AssetRepository:
         self._session.commit()
 
     def get_by_ids(self, asset_ids: list[str]) -> list[Asset]:
-        """Return assets for a list of asset_ids. Order not guaranteed."""
+        """Return active (non-trashed) assets for a list of asset_ids. Order not guaranteed."""
         if not asset_ids:
             return []
-        stmt = select(Asset).where(Asset.asset_id.in_(asset_ids))
+        stmt = (
+            select(Asset)
+            .where(Asset.asset_id.in_(asset_ids))
+            .where(Asset.deleted_at.is_(None))
+        )
         return list(self._session.exec(stmt).all())
 
     def query_for_enqueue(
@@ -860,7 +970,11 @@ class AssetRepository:
                     conditions.append("a.video_indexed IS NOT TRUE")
 
         where = " AND ".join(conditions)
-        from_clause = "FROM assets a JOIN libraries l ON l.library_id = a.library_id" if join_libraries else "FROM assets a"
+        from_clause = (
+            "FROM active_assets a JOIN libraries l ON l.library_id = a.library_id"
+            if join_libraries
+            else "FROM active_assets a"
+        )
         sql = f"SELECT a.asset_id {from_clause} WHERE {where} ORDER BY a.asset_id"
         rows = self._session.execute(text(sql), params).fetchall()
         return [row[0] for row in rows]
@@ -1651,7 +1765,7 @@ class SearchSyncQueueRepository:
         Returns the list of asset_ids enqueued.
         """
         sql = """
-            SELECT asset_id FROM assets
+            SELECT asset_id FROM active_assets
             WHERE library_id = :library_id
             AND availability = 'online'
             AND status != 'trashed'

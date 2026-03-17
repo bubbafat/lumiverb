@@ -28,7 +28,7 @@ Two-layer Postgres architecture:
 
 **Control plane DB** (shared, tiny):
 - `tenants` — tenant_id, name, plan, status, vision_api_url, vision_api_key, created_at
-- `api_keys` — key_hash, tenant_id, name, scopes, created_at
+- `api_keys` — key_hash, tenant_id, name, scopes, role (`admin`|`member`), created_at
 - `tenant_db_routing` — tenant_id, connection_string, region
 
 **Tenant DB** (one per tenant, same Postgres instance):
@@ -102,13 +102,20 @@ All under `/v1/scans`; require tenant auth.
 
 ## Assets API
 
-All under `/v1/assets`; require tenant auth.
+All under `/v1/assets`; require tenant auth. List/get endpoints return only active (non-trashed) assets.
 
-- **GET /v1/assets** — Query: `library_id` (optional). List assets; filter by library when provided. Returns list of `{ "asset_id", "library_id", "rel_path", "media_type", "status", "proxy_key", "thumbnail_key", "width", "height" }`.
-- **GET /v1/assets/page** — Query: `library_id` (required), `after` (cursor), `limit` (default 500, max 500). Keyset-paginated assets for bulk reconciliation. Returns list of `{ "asset_id", "rel_path", "file_size", "file_mtime", "sha256", "media_type" }`. Returns 204 if no results (end of pages).
-- **GET /v1/assets/{asset_id}** — Return single asset. 404 if not found.
+- **GET /v1/assets** — Query: `library_id` (optional). List active assets; filter by library when provided. Returns list of `{ "asset_id", "library_id", "rel_path", "media_type", "status", "proxy_key", "thumbnail_key", "width", "height" }`.
+- **GET /v1/assets/page** — Query: `library_id` (required), `after` (cursor), `limit` (default 500, max 500). Keyset-paginated active assets for bulk reconciliation. Returns list of `{ "asset_id", "rel_path", "file_size", "file_mtime", "sha256", "media_type" }`. Returns 204 if no results (end of pages).
+- **GET /v1/assets/{asset_id}** — Return single asset. 404 if not found or trashed.
+- **DELETE /v1/assets/{asset_id}** — Soft-delete (trash) a single asset. Sets `deleted_at`. Returns 204 on success, 404 if not found or already trashed. Quickwit delete is best-effort (log on failure).
+- **DELETE /v1/assets** — Body: `{ "asset_ids": ["ast_...", ...] }`. Soft-delete multiple assets. Returns `{ "trashed": [...], "not_found": [...] }`. Quickwit delete is best-effort.
+- **POST /v1/assets/{asset_id}/restore** — Restore a trashed asset (clear `deleted_at`). Returns 204 on success, 404 if not found or not trashed.
 - **POST /v1/assets/{asset_id}/thumbnail-key** — Body: `{ "thumbnail_key" }`. Records a thumbnail_key on the asset. Used by VideoIndexWorker after extracting the first frame of a video. Returns `{ "asset_id", "thumbnail_key" }`.
 - **POST /v1/assets/upsert** — Legacy single-file upsert. Prefer POST /v1/scans/{scan_id}/batch for bulk operations. Body: `{ "library_id", "rel_path", "file_size", "file_mtime" (ISO8601), "media_type", "scan_id", "force": false }`. Upserts by `(library_id, rel_path)`. Returns `{ "action": "added|updated|skipped" }`.
+
+## Trash API
+
+- **DELETE /v1/trash/empty** — Permanently delete trashed assets. Requires admin API key. Body: `{ "asset_ids": ["ast_..."] (optional), "trashed_before": "2026-01-01T00:00:00Z" (optional) }`. If both omitted, deletes all trashed. Scope: intersection when both provided. Deletes DB rows in FK-safe order, then best-effort proxy/thumbnail file removal and Quickwit delete. Returns `{ "deleted": N }`.
 
 ## Admin API
 

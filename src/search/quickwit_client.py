@@ -342,3 +342,38 @@ class QuickwitClient:
             )
         return results
 
+    def delete_documents_by_asset_id(self, library_id: str, asset_id: str) -> None:
+        """
+        Best-effort delete: create delete tasks for this asset in both asset and scene indexes.
+        Logs a warning on failure; does not raise. Used when soft-deleting or permanently deleting.
+        """
+        if not self._enabled:
+            return
+        # Quickwit query language: exact match on asset_id (text field with raw tokenizer).
+        query = f'asset_id:"{asset_id}"'
+        for index_id in (
+            self.index_id_for_library(library_id),
+            self.scene_index_id_for_library(library_id),
+        ):
+            try:
+                resp = requests.post(
+                    f"{self._base_url}/api/v1/{index_id}/delete-tasks",
+                    json={"query": query},
+                    timeout=10,
+                )
+                if resp.status_code not in (200, 201, 202):
+                    logger.warning(
+                        "Quickwit delete-tasks failed for %s asset_id=%s: %s %s",
+                        index_id,
+                        asset_id,
+                        resp.status_code,
+                        resp.text,
+                    )
+            except requests.RequestException as exc:
+                logger.warning(
+                    "Quickwit delete-tasks request failed for %s asset_id=%s: %s",
+                    index_id,
+                    asset_id,
+                    exc,
+                )
+

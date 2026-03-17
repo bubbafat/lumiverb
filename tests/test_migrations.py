@@ -72,9 +72,10 @@ def test_control_plane_migrations_upgrade_and_downgrade() -> None:
 
 
 @pytest.mark.migration
-def test_api_keys_is_admin_backfilled() -> None:
+def test_api_keys_role_replaces_is_admin() -> None:
     """
-    Control plane: api_keys table has label + is_admin, and existing rows are backfilled with is_admin = TRUE.
+    Control plane: migration c8d9e0f1a2b3 adds role, backfills from is_admin, drops is_admin.
+    Existing is_admin=TRUE rows get role='admin' after upgrade.
     """
     with PostgresContainer("pgvector/pgvector:pg16") as postgres:
         url = postgres.get_connection_url()
@@ -91,9 +92,17 @@ def test_api_keys_is_admin_backfilled() -> None:
 
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-        # Upgrade to head
+        # Upgrade to b7c8d9e0f1a2 (has is_admin)
         result = subprocess.run(
-            [sys.executable, "-m", "alembic", "-c", "alembic-control.ini", "upgrade", "head"],
+            [
+                sys.executable,
+                "-m",
+                "alembic",
+                "-c",
+                "alembic-control.ini",
+                "upgrade",
+                "b7c8d9e0f1a2",
+            ],
             cwd=project_root,
             env=env,
             capture_output=True,
@@ -102,7 +111,6 @@ def test_api_keys_is_admin_backfilled() -> None:
         assert result.returncode == 0, (result.stdout, result.stderr)
 
         with engine.connect() as conn:
-            # Insert a legacy-style key row (is_admin should default TRUE via backfill).
             conn.execute(
                 text(
                     """
@@ -114,20 +122,31 @@ def test_api_keys_is_admin_backfilled() -> None:
             conn.execute(
                 text(
                     """
-                    INSERT INTO api_keys (key_id, key_hash, tenant_id, name, scopes, created_at)
-                    VALUES ('key_test', 'hash', 'ten_test', 'default', '["read","write"]'::jsonb, NOW())
+                    INSERT INTO api_keys (key_id, key_hash, tenant_id, name, scopes, is_admin, created_at)
+                    VALUES ('key_test', 'hash', 'ten_test', 'default', '["read","write"]'::jsonb, TRUE, NOW())
                     """
                 )
             )
             conn.commit()
 
+        # Upgrade to head (role migration)
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "-c", "alembic-control.ini", "upgrade", "head"],
+            cwd=project_root,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, (result.stdout, result.stderr)
+
+        with engine.connect() as conn:
             r = conn.execute(
-                text("SELECT label, is_admin FROM api_keys WHERE key_id = 'key_test'")
+                text("SELECT role FROM api_keys WHERE key_id = 'key_test'")
             )
             row = r.fetchone()
             assert row is not None
-            label, is_admin = row
-            assert is_admin is True
+            (role,) = row
+            assert role == "admin"
 
 
 TENANT_TABLES = [
@@ -185,16 +204,26 @@ def test_tenant_schema_upgrade_and_downgrade() -> None:
             tables = {row[0] for row in r}
         assert set(TENANT_TABLES) == tables, tables
 
-        # Verify search_sync_latest view exists (from our migration)
+        # Verify search_sync_latest and active_assets views exist
         with engine.connect() as conn:
             r = conn.execute(
                 text(
                     "SELECT table_name FROM information_schema.views "
-                    "WHERE table_schema = 'public' AND table_name = 'search_sync_latest'"
+                    "WHERE table_schema = 'public' AND table_name IN ('search_sync_latest', 'active_assets')"
                 )
             )
             views = {row[0] for row in r}
         assert "search_sync_latest" in views, "search_sync_latest view should exist"
+        assert "active_assets" in views, "active_assets view should exist"
+        with engine.connect() as conn:
+            r = conn.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'assets' AND column_name = 'deleted_at'"
+                )
+            )
+            cols = [row[0] for row in r]
+        assert "deleted_at" in cols, "assets.deleted_at column should exist"
 
         result = subprocess.run(
             [sys.executable, "-m", "alembic", "-c", "alembic-tenant.ini", "downgrade", "base"],

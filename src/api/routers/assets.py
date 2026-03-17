@@ -1,5 +1,6 @@
-"""Assets API: upsert for scanner. All routes require tenant auth (middleware)."""
+"""Assets API: upsert for scanner, trash and restore. All routes require tenant auth (middleware)."""
 
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
@@ -14,6 +15,8 @@ from src.core.io_utils import normalize_path_prefix
 from src.repository.tenant import AssetMetadataRepository, AssetRepository, LibraryRepository, ScanRepository, WorkerJobRepository
 from src.storage.local import get_storage
 from src.core.utils import utcnow
+
+logger = logging.getLogger(__name__)
 
 
 PRIORITY_URGENT = 0
@@ -73,6 +76,15 @@ class AssetPageItem(BaseModel):
     taken_at: str | None = None  # ISO8601
     status: str = "pending"
     duration_sec: float | None = None
+
+
+class BatchTrashRequest(BaseModel):
+    asset_ids: list[str]
+
+
+class BatchTrashResponse(BaseModel):
+    trashed: list[str]
+    not_found: list[str]
 
 
 @router.get("/page", responses={204: {"description": "No assets (end of pages)"}})
@@ -139,7 +151,7 @@ def _stream_asset_file(
 ) -> StreamingResponse:
     asset_repo = AssetRepository(session)
     asset = asset_repo.get_by_id(asset_id)
-    if asset is None:
+    if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
 
     key = asset.proxy_key if size == "proxy" else asset.thumbnail_key
@@ -284,10 +296,10 @@ def get_asset_by_path(
     rel_path: str,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> AssetResponse:
-    """Return a single asset by library_id + rel_path. 404 if not found."""
+    """Return a single asset by library_id + rel_path. 404 if not found or trashed."""
     asset_repo = AssetRepository(session)
     asset = asset_repo.get_by_library_and_rel_path(library_id, rel_path)
-    if asset is None:
+    if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail=f"Asset not found: {rel_path}")
     response = _to_asset_response(asset)
     ai_description: str | None = None
@@ -317,10 +329,31 @@ def list_assets(
     session: Annotated[Session, Depends(get_tenant_session)],
     library_id: str | None = None,
 ) -> list[AssetResponse]:
-    """List assets, optionally filtered by library_id."""
+    """List active (non-trashed) assets, optionally filtered by library_id."""
     asset_repo = AssetRepository(session)
     assets = asset_repo.list_by_library(library_id) if library_id else asset_repo.list_all()
     return [_to_asset_response(a) for a in assets]
+
+
+@router.delete("", response_model=BatchTrashResponse)
+def batch_trash_assets(
+    body: BatchTrashRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> BatchTrashResponse:
+    """Soft-delete multiple assets. Returns trashed and not_found lists. Quickwit delete is best-effort."""
+    asset_repo = AssetRepository(session)
+    trashed_ids, not_found_ids = asset_repo.trash_many(body.asset_ids)
+    if trashed_ids:
+        try:
+            from src.search.quickwit_client import QuickwitClient
+            qw = QuickwitClient()
+            assets = [asset_repo.get_by_id(aid) for aid in trashed_ids]
+            for a in assets:
+                if a is not None:
+                    qw.delete_documents_by_asset_id(a.library_id, a.asset_id)
+        except Exception as e:
+            logger.warning("Quickwit delete after batch trash failed: %s", e)
+    return BatchTrashResponse(trashed=trashed_ids, not_found=not_found_ids)
 
 
 @router.get("/{asset_id}", response_model=AssetResponse)
@@ -328,10 +361,10 @@ def get_asset(
     asset_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> AssetResponse:
-    """Return a single asset by id. 404 if not found."""
+    """Return a single asset by id. 404 if not found or trashed."""
     asset_repo = AssetRepository(session)
     asset = asset_repo.get_by_id(asset_id)
-    if asset is None:
+    if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
     response = _to_asset_response(asset)
     ai_description: str | None = None
@@ -356,6 +389,37 @@ def get_asset(
     return response
 
 
+@router.delete("/{asset_id}", status_code=204)
+def trash_asset(
+    asset_id: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> None:
+    """Soft-delete a single asset. 404 if not found or already trashed. Quickwit delete is best-effort."""
+    asset_repo = AssetRepository(session)
+    ok = asset_repo.trash(asset_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Asset not found or already trashed")
+    try:
+        from src.search.quickwit_client import QuickwitClient
+        asset = asset_repo.get_by_id(asset_id)
+        if asset is not None:
+            QuickwitClient().delete_documents_by_asset_id(asset.library_id, asset_id)
+    except Exception as e:
+        logger.warning("Quickwit delete after trash failed for %s: %s", asset_id, e)
+
+
+@router.post("/{asset_id}/restore", status_code=204)
+def restore_asset(
+    asset_id: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> None:
+    """Restore a single trashed asset. 404 if not found or not trashed."""
+    asset_repo = AssetRepository(session)
+    ok = asset_repo.restore(asset_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Asset not found or not trashed")
+
+
 def _enqueue_video_preview_job_if_needed(
     session: Session,
     asset_id: str,
@@ -374,7 +438,7 @@ def stream_or_enqueue_preview(
 ):
     asset_repo = AssetRepository(session)
     asset = asset_repo.get_by_id(asset_id)
-    if asset is None:
+    if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
 
     if asset.media_type != "video":

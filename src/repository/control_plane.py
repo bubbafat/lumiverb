@@ -97,7 +97,7 @@ class ApiKeyRepository:
         self,
         tenant_id: str,
         label: str | None,
-        is_admin: bool,
+        role: str = "member",
     ) -> tuple[ApiKey, str]:
         """
         Create a new API key for a tenant.
@@ -115,7 +115,7 @@ class ApiKeyRepository:
             name=label or "default",
             label=label,
             scopes=["read", "write"],
-            is_admin=is_admin,
+            role=role,
         )
         self._session.add(api_key)
         self._session.commit()
@@ -190,7 +190,7 @@ class ApiKeyRepository:
             select(ApiKey)
             .where(ApiKey.tenant_id == tenant_id)
             .where(ApiKey.revoked_at.is_(None))
-            .where(ApiKey.is_admin.is_(True))
+            .where(ApiKey.role == "admin")
         )
         return len(list(self._session.exec(stmt).all()))
 

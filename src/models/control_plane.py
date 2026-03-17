@@ -38,7 +38,7 @@ class ApiKey(SQLModel, table=True):
         default=["read", "write"],
         sa_column=Column(JSONB, nullable=False),
     )
-    is_admin: bool = Field(default=False, nullable=False)
+    role: str = Field(default="member", nullable=False)
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
