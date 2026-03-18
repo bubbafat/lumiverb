@@ -177,6 +177,92 @@ export function proxyUrl(assetId: string): string {
   return `/v1/assets/${assetId}/proxy`;
 }
 
+export interface PathFilterItem {
+  filter_id: string;
+  pattern: string;
+  created_at: string;
+}
+
+export interface LibraryFiltersResponse {
+  includes: PathFilterItem[];
+  excludes: PathFilterItem[];
+}
+
+export interface TenantFilterDefaultItem {
+  default_id: string;
+  pattern: string;
+  created_at: string;
+}
+
+export interface TenantFilterDefaultsResponse {
+  includes: TenantFilterDefaultItem[];
+  excludes: TenantFilterDefaultItem[];
+}
+
+export interface CreatedFilterResponse {
+  filter_id: string;
+  type: string;
+  pattern: string;
+  created_at: string;
+}
+
+export interface CreatedTenantDefaultResponse {
+  default_id: string;
+  type: string;
+  pattern: string;
+  created_at: string;
+}
+
+export async function getLibraryFilters(
+  libraryId: string,
+): Promise<LibraryFiltersResponse> {
+  return apiFetch<LibraryFiltersResponse>(
+    `/libraries/${libraryId}/path-filters`,
+  );
+}
+
+export async function addLibraryFilter(
+  libraryId: string,
+  type: "include" | "exclude",
+  pattern: string,
+): Promise<CreatedFilterResponse> {
+  return apiFetch<CreatedFilterResponse>(
+    `/libraries/${libraryId}/path-filters`,
+    { method: "POST", body: { type, pattern } },
+  );
+}
+
+export async function deleteLibraryFilter(
+  libraryId: string,
+  filterId: string,
+): Promise<void> {
+  return apiFetch<void>(`/libraries/${libraryId}/path-filters/${filterId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function getTenantFilterDefaults(): Promise<TenantFilterDefaultsResponse> {
+  return apiFetch<TenantFilterDefaultsResponse>("/path-filter-defaults");
+}
+
+export async function addTenantFilterDefault(
+  type: "include" | "exclude",
+  pattern: string,
+): Promise<CreatedTenantDefaultResponse> {
+  return apiFetch<CreatedTenantDefaultResponse>("/path-filter-defaults", {
+    method: "POST",
+    body: { type, pattern },
+  });
+}
+
+export async function deleteTenantFilterDefault(
+  defaultId: string,
+): Promise<void> {
+  return apiFetch<void>(`/path-filter-defaults/${defaultId}`, {
+    method: "DELETE",
+  });
+}
+
 export async function getJobStats(): Promise<import("./types").JobStatsResponse> {
   return apiFetch<import("./types").JobStatsResponse>("/jobs/stats");
 }

@@ -6,6 +6,7 @@ import AppShell from "./components/AppShell";
 import AdminPage from "./pages/AdminPage";
 import BrowsePage from "./pages/BrowsePage";
 import LibrariesPage from "./pages/LibrariesPage";
+import LibrarySettingsPage from "./pages/LibrarySettingsPage";
 import "./index.css";
 
 const queryClient = new QueryClient({
@@ -25,6 +26,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/" element={<AppShell />}>
             <Route index element={<LibrariesPage />} />
             <Route path="libraries/:libraryId/browse" element={<BrowsePage />} />
+            <Route path="libraries/:libraryId/settings" element={<LibrarySettingsPage />} />
             <Route path="admin" element={<AdminPage />} />
           </Route>
         </Routes>

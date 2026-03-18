@@ -151,12 +151,20 @@ export default function LibrariesPage() {
                     </div>
                     <div className="flex flex-wrap items-center gap-3">
                       {lib.status !== "trashed" && (
-                        <Link
-                          to={`/libraries/${lib.library_id}/browse`}
-                          className="rounded-lg border border-gray-600 px-3 py-1.5 text-sm font-medium text-gray-300 transition-colors duration-150 hover:border-gray-500 hover:bg-gray-800/50"
-                        >
-                          Browse
-                        </Link>
+                        <>
+                          <Link
+                            to={`/libraries/${lib.library_id}/browse`}
+                            className="rounded-lg border border-gray-600 px-3 py-1.5 text-sm font-medium text-gray-300 transition-colors duration-150 hover:border-gray-500 hover:bg-gray-800/50"
+                          >
+                            Browse
+                          </Link>
+                          <Link
+                            to={`/libraries/${lib.library_id}/settings`}
+                            className="rounded-lg border border-gray-600 px-3 py-1.5 text-sm font-medium text-gray-300 transition-colors duration-150 hover:border-gray-500 hover:bg-gray-800/50"
+                          >
+                            Settings
+                          </Link>
+                        </>
                       )}
                       <Badge variant={scanStatusVariant(lib.scan_status)}>
                         {lib.scan_status}
