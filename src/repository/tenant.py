@@ -1664,7 +1664,7 @@ class PipelineLockRepository:
                 text(
                     """
                     INSERT INTO pipeline_locks (lock_id, tenant_id, hostname, pid, started_at, heartbeat_at)
-                    VALUES (:lock_id, :tenant_id, :hostname, :pid, :started_at, :heartbeat_at)
+                    VALUES (:lock_id, :tenant_id, :hostname, :pid, clock_timestamp(), clock_timestamp())
                     """
                 ),
                 {
@@ -1672,8 +1672,6 @@ class PipelineLockRepository:
                     "tenant_id": tenant_id,
                     "hostname": socket.gethostname(),
                     "pid": os.getpid(),
-                    "started_at": now,
-                    "heartbeat_at": now,
                 },
             )
             self._session.commit()
@@ -1687,7 +1685,7 @@ class PipelineLockRepository:
                 """
                 UPDATE pipeline_locks
                 SET lock_id = :lock_id, hostname = :hostname, pid = :pid,
-                    started_at = :started_at, heartbeat_at = :heartbeat_at
+                    started_at = clock_timestamp(), heartbeat_at = clock_timestamp()
                 WHERE tenant_id = :tenant_id
                 """
             ),
@@ -1696,8 +1694,6 @@ class PipelineLockRepository:
                 "tenant_id": tenant_id,
                 "hostname": socket.gethostname(),
                 "pid": os.getpid(),
-                "started_at": now,
-                "heartbeat_at": now,
             },
         )
         self._session.commit()
@@ -1705,7 +1701,6 @@ class PipelineLockRepository:
 
     def force_acquire(self, tenant_id: str) -> None:
         """Delete any existing lock for the tenant and insert a new one."""
-        now = utcnow()
         self._session.execute(
             text("DELETE FROM pipeline_locks WHERE tenant_id = :tenant_id"),
             {"tenant_id": tenant_id},
@@ -1715,7 +1710,7 @@ class PipelineLockRepository:
             text(
                 """
                 INSERT INTO pipeline_locks (lock_id, tenant_id, hostname, pid, started_at, heartbeat_at)
-                VALUES (:lock_id, :tenant_id, :hostname, :pid, :started_at, :heartbeat_at)
+                VALUES (:lock_id, :tenant_id, :hostname, :pid, clock_timestamp(), clock_timestamp())
                 """
             ),
             {
@@ -1723,17 +1718,19 @@ class PipelineLockRepository:
                 "tenant_id": tenant_id,
                 "hostname": socket.gethostname(),
                 "pid": os.getpid(),
-                "started_at": now,
-                "heartbeat_at": now,
             },
         )
         self._session.commit()
 
     def heartbeat(self, tenant_id: str) -> None:
-        """Update heartbeat_at to now for the tenant's lock."""
+        """Update heartbeat_at for the tenant's lock.
+
+        Use Postgres `clock_timestamp()` instead of `NOW()` so the value changes even
+        within long-lived transactions (important for monotonicity in tests).
+        """
         self._session.execute(
             text(
-                "UPDATE pipeline_locks SET heartbeat_at = NOW() WHERE tenant_id = :tenant_id"
+                "UPDATE pipeline_locks SET heartbeat_at = clock_timestamp() WHERE tenant_id = :tenant_id"
             ),
             {"tenant_id": tenant_id},
         )
