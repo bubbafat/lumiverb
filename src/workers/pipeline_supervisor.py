@@ -12,8 +12,20 @@ import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from typing import Protocol
+
 if TYPE_CHECKING:
-    from src.repository.tenant import PipelineLockRepository
+    pass
+
+
+class LockHeartbeatClient(Protocol):
+    """Duck-typed interface used by PipelineSupervisor for lock heartbeat.
+
+    Satisfied by both PipelineLockRepository (direct DB) and the API-based
+    client created in the CLI after Phase 2 migration.
+    """
+
+    def heartbeat(self, tenant_id: str) -> None: ...
 
 _log = logging.getLogger(__name__)
 
@@ -194,7 +206,7 @@ class PipelineSupervisor:
         library_name: str,
         tenant_id: str,
         client: Any,
-        lock_repo: PipelineLockRepository,
+        lock_repo: LockHeartbeatClient,
         dashboard: Any | None = None,
         media_type: str = "all",
         path_prefix: str | None = None,
