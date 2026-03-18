@@ -23,7 +23,7 @@ PHASH_THRESHOLD = 51
 PHASH_HASH_SIZE = 16
 TEMPORAL_CEILING_SEC = 30.0
 DEBOUNCE_SEC = 3.0
-SKIP_SECS_BEST = 2.0  # skip frames in the first N seconds of a scene when picking the sharpest
+SKIP_FRAMES_BEST = 2  # skip first N frames of a scene when picking the sharpest representative
 
 
 class SceneKeepReason(str, Enum):
@@ -67,6 +67,14 @@ def _frame_sharpness(raw: RawFrame) -> float:
     return float(cv2.Laplacian(gray, cv2.CV_64F, ksize=3).var())
 
 
+def _select_best(candidates: list[tuple[float, float]]) -> tuple[float, float]:
+    """Select (pts, sharpness) from scene candidates, skipping first SKIP_FRAMES_BEST if possible."""
+    if not candidates:
+        return 0.0, -1.0
+    pool = candidates[SKIP_FRAMES_BEST:] if len(candidates) > SKIP_FRAMES_BEST else candidates
+    return max(pool, key=lambda c: c[1])
+
+
 def _hamming_hex(a: str, b: str) -> int:
     """Hamming distance between two hex phash strings."""
     if not a or not b or len(a) != len(b):
@@ -103,29 +111,27 @@ class SceneSegmenter:
         scenes: list[Scene] = []
         anchor_phash = self._anchor_phash
         scene_start_pts = self._scene_start_ts
-        best_bytes: bytes | None = None
-        best_pts: float | None = None
-        best_sharpness: float = -1.0
+        scene_candidates: list[tuple[float, float]] = []  # (pts, sharpness) for current scene
         last_raw: RawFrame | None = None
         had_frames = False
 
-        for i, raw in enumerate(self._frames):
+        for raw in self._frames:
             had_frames = True
             last_raw = raw
             pts = raw.pts
+            sharpness = _frame_sharpness(raw)
+
             if scene_start_pts is None:
                 scene_start_pts = pts
                 anchor_phash = _frame_to_phash(raw)
-                best_sharpness = _frame_sharpness(raw)
-                best_pts = pts
-                best_bytes = raw.bytes
+                scene_candidates = [(pts, sharpness)]
                 continue
+
             elapsed = pts - scene_start_pts
             frame_phash = _frame_to_phash(raw)
-            sharpness = _frame_sharpness(raw)
 
             trigger: SceneKeepReason | None = None
-            if scene_start_pts is not None and elapsed >= TEMPORAL_CEILING_SEC:
+            if elapsed >= TEMPORAL_CEILING_SEC:
                 trigger = SceneKeepReason.temporal
             elif (
                 anchor_phash is not None
@@ -136,9 +142,9 @@ class SceneSegmenter:
                     trigger = SceneKeepReason.phash
 
             if trigger is not None:
-                # Close current scene
-                rep_pts = best_pts if best_pts is not None else pts
-                rep_ms = int(round(rep_pts * 1000))
+                # Close current scene using buffered candidates (trigger frame excluded)
+                best_pts, best_sharpness = _select_best(scene_candidates)
+                rep_ms = int(round(best_pts * 1000))
                 start_ms = int(round((scene_start_pts or 0) * 1000))
                 end_ms = int(round(pts * 1000))
                 anchor_for_next = frame_phash if frame_phash else anchor_phash
@@ -152,28 +158,22 @@ class SceneSegmenter:
                         phash=anchor_for_next,
                     )
                 )
-                # Start new scene
+                # Start new scene with trigger frame
                 scene_start_pts = pts
                 anchor_phash = frame_phash
-                best_bytes = raw.bytes
-                best_pts = pts
-                best_sharpness = sharpness
+                scene_candidates = [(pts, sharpness)]
                 continue
 
-            # In-scene: update best frame (skip opening seconds to avoid transitions)
-            if elapsed > SKIP_SECS_BEST and sharpness > best_sharpness:
-                best_sharpness = sharpness
-                best_bytes = raw.bytes
-                best_pts = pts
+            # In-scene: buffer this frame as a candidate
+            scene_candidates.append((pts, sharpness))
+
         if not had_frames:
             return []
 
         # Close final scene (forced)
         if scene_start_pts is not None:
-            rep_pts = best_pts if best_pts is not None else (
-                last_raw.pts if last_raw else 0
-            )
-            rep_ms = int(round(rep_pts * 1000))
+            best_pts, best_sharpness = _select_best(scene_candidates)
+            rep_ms = int(round(best_pts * 1000))
             start_ms = int(round(scene_start_pts * 1000))
             end_pts = last_raw.pts if last_raw else scene_start_pts
             end_ms = int(round(end_pts * 1000))
@@ -189,7 +189,6 @@ class SceneSegmenter:
                 )
             )
             self.next_anchor_phash = last_phash or anchor_phash
-            # No continuing scene after forced close
             self.next_scene_start_ms = None
         else:
             self.next_anchor_phash = anchor_phash

@@ -12,6 +12,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Queue
@@ -22,6 +23,7 @@ logger = _log
 
 OUT_WIDTH = 480
 PTS_QUEUE_TIMEOUT = 10.0
+PTS_QUEUE_POLL_INTERVAL = 0.5
 
 
 class SyncError(Exception):
@@ -171,17 +173,23 @@ class VideoScanner:
                             frame_size,
                         )
                     break
-                try:
-                    pts = pts_queue.get(timeout=PTS_QUEUE_TIMEOUT)
-                except Empty:
-                    exit_code = proc.poll()
-                    if exit_code is not None:
+                deadline = time.monotonic() + PTS_QUEUE_TIMEOUT
+                pts = None
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
                         raise SyncError(
-                            f"FFmpeg exited with code {exit_code} before PTS arrived"
+                            f"PTS did not arrive within {PTS_QUEUE_TIMEOUT}s (FFmpeg may have hung)"
                         )
-                    raise SyncError(
-                        f"PTS did not arrive within {PTS_QUEUE_TIMEOUT}s (FFmpeg may have hung)"
-                    )
+                    try:
+                        pts = pts_queue.get(timeout=min(PTS_QUEUE_POLL_INTERVAL, remaining))
+                        break
+                    except Empty:
+                        exit_code = proc.poll()
+                        if exit_code is not None:
+                            raise SyncError(
+                                f"FFmpeg exited with code {exit_code} before PTS arrived"
+                            )
                 if pts > end_ts:
                     break
                 yield RawFrame(
