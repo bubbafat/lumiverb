@@ -1137,6 +1137,16 @@ class AssetRepository:
                 conditions.append("a.media_type = 'video'")
                 if job_type in ("video-index", "video-vision"):
                     conditions.append("a.video_indexed IS NOT TRUE")
+        else:
+            # force=True: skip dedup/completion guards, but still enforce
+            # job-type invariants so e.g. video-index is never created for images.
+            if job_type == "ai_vision":
+                conditions.append("a.proxy_key IS NOT NULL")
+                conditions.append("a.media_type LIKE 'image%'")
+            elif job_type == "embed":
+                conditions.append("a.proxy_key IS NOT NULL")
+            elif job_type in ("video-index", "video-preview", "video-vision"):
+                conditions.append("a.media_type = 'video'")
 
         where = " AND ".join(conditions)
         from_clause = (

@@ -164,10 +164,18 @@ def _stream_asset_file(
     storage = get_storage()
     path = storage.abs_path(key)
     if not path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"{size.capitalize()} file not found on disk",
-        )
+        # Stale key: file was lost. Clear it and re-enqueue so the worker regenerates it.
+        if size == "thumbnail":
+            asset.thumbnail_key = None
+            if asset.media_type == "video":
+                job_repo = WorkerJobRepository(session)
+                if not job_repo.has_pending_job("video-index", asset_id):
+                    job_repo.create(job_type="video-index", asset_id=asset_id, priority=PRIORITY_URGENT)
+        else:
+            asset.proxy_key = None
+        session.add(asset)
+        session.commit()
+        return JSONResponse({"status": "generating"}, status_code=202)
 
     filename = Path(asset.rel_path).stem + ".jpg"
 
