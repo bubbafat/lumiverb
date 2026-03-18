@@ -92,7 +92,7 @@ class LumiverbClient:
         """DELETE request; on non-2xx prints error envelope and exits 1."""
         url = f"{self._base_url}{path}" if path.startswith("/") else f"{self._base_url}/{path}"
         with httpx.Client() as client:
-            response = client.delete(url, headers=self._headers(), timeout=120.0, **kwargs)
+            response = client.request("DELETE", url, headers=self._headers(), timeout=120.0, **kwargs)
             return self._handle_response(response)
 
     def raw(self, method: str, path: str, **kwargs: object) -> httpx.Response:
