@@ -1,5 +1,6 @@
 """Typer CLI entry point: config, library create/list, scan (stub)."""
 
+from enum import Enum
 from pathlib import Path
 from typing import Annotated
 
@@ -1114,13 +1115,19 @@ def _resolve_job_type(job_type: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+class MediaType(str, Enum):
+    image = "image"
+    video = "video"
+    all = "all"
+
+
 @pipeline_app.command("run")
 def pipeline_run(
     library: Annotated[str | None, typer.Option("--library", "-l", help="Library name. Omit to run across all libraries.")] = None,
     media_type: Annotated[
-        str,
+        MediaType,
         typer.Option("--media-type", help="Run image, video, or all stages."),
-    ] = "all",
+    ] = MediaType.all,
     path: Annotated[
         str | None,
         typer.Option("--path", "-p", help="Optional subpath to scope scan and workers (single-library mode only)."),
@@ -1198,7 +1205,7 @@ def pipeline_run(
 
         asset_repo = AssetRepository(session)
         if supervisor_libraries is not None:
-            total_assets = sum(asset_repo.count_by_library(lib["library_id"]) for lib in all_libraries)
+            total_assets = asset_repo.count_all_for_libraries([lib["library_id"] for lib in all_libraries])
         else:
             total_assets = asset_repo.count_by_library(library_id)
 

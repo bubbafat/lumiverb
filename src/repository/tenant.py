@@ -7,7 +7,7 @@ import os
 import socket
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, column, func, insert, or_, text
+from sqlalchemy import and_, bindparam, column, func, insert, or_, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.sql import text as sa_text
 from sqlmodel import Session, select
@@ -617,6 +617,16 @@ class AssetRepository:
             ),
             {"library_id": library_id},
         )
+        return int(result.scalar() or 0)
+
+    def count_all_for_libraries(self, library_ids: list[str]) -> int:
+        """Return total active asset count across all given libraries in a single query."""
+        if not library_ids:
+            return 0
+        stmt = text(
+            "SELECT COUNT(*)::int FROM active_assets WHERE library_id IN :library_ids"
+        ).bindparams(bindparam("library_ids", expanding=True))
+        result = self._session.execute(stmt, {"library_ids": library_ids})
         return int(result.scalar() or 0)
 
     def page_by_library(
