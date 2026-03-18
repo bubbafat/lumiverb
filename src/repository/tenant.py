@@ -547,10 +547,10 @@ class AssetRepository:
                         deleted_at = NULL,
                         updated_at = :now
                     FROM unnest(
-                        :asset_ids::text[],
-                        :file_sizes::bigint[],
-                        :file_mtimes::timestamptz[],
-                        :media_types::text[]
+                        CAST(:asset_ids AS text[]),
+                        CAST(:file_sizes AS bigint[]),
+                        CAST(:file_mtimes AS timestamptz[]),
+                        CAST(:media_types AS text[])
                     ) AS v(asset_id, file_size, file_mtime, media_type)
                     WHERE a.asset_id = v.asset_id
                     """
