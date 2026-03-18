@@ -83,8 +83,36 @@ All under `/v1/jobs`; require tenant auth.
 - **POST /v1/jobs/{job_id}/fail** — Body: `{ "error_message" }`. Marks job failed. Returns `{ "job_id", "status": "failed" }`.
 - **GET /v1/jobs** — Query: `library_id` (optional). List jobs; filter by library when provided. Returns list of `{ "job_id", "job_type", "asset_id", "status" }`.
 - **GET /v1/jobs/{job_id}/status** — Returns `{ "job_id", "status", "error_message" }`. 404 if not found.
+- **GET /v1/jobs/failures** — Query: `library_id` (required), `job_type` (required), `path_prefix` (optional), `limit` (optional, default 20). Returns `{ "rows": [{ "rel_path", "error_message", "failed_at" }], "total_count" }`. Most recent failed job per asset, ordered by `rel_path`. `failed_at` is ISO 8601 or null.
 
 Valid `job_type` values: `proxy`, `exif`, `ai_vision`, `embed`, `video-index`, `video-vision`. For `video-index`, the worker claims one job per asset, then uses the video chunk API to claim and complete 30-second chunks; when all chunks are done the server enqueues a `video-vision` job for that asset.
+
+## Pipeline API
+
+All under `/v1/pipeline`; require tenant auth. These endpoints allow the CLI to operate the pipeline supervisor without direct database access, enabling the databases to be hosted remotely.
+
+### Lock
+
+One lock per tenant. The lock_id returned on acquire must be stored by the supervisor and supplied on release to prevent a crashed-then-restarted process from accidentally releasing a lock reacquired by a newer instance.
+
+- **POST /v1/pipeline/lock/acquire** — Body: `{ "lock_timeout_minutes": 5, "force": false }`. Acquires the pipeline lock. Returns `{ "lock_id", "tenant_id" }` on success. Returns 409 with `{ "code": "lock_held", "message": "...", "details": { "hostname", "pid", "started_at" } }` if a fresh lock is held by another process and `force=false`. `force=true` overwrites any existing lock unconditionally.
+- **POST /v1/pipeline/lock/heartbeat** — No body. Updates `heartbeat_at` for the tenant's lock. Returns 204. Call every ~30s from the supervisor's background thread to keep the lock fresh.
+- **POST /v1/pipeline/lock/release** — Body: `{ "lock_id": "lock_..." }` (optional). Deletes the lock for this tenant. If `lock_id` is provided, the lock is only deleted when the stored `lock_id` matches — a stale `lock_id` is a no-op. Returns 204.
+
+### Status
+
+- **GET /v1/pipeline/status** — Query: `library_id` (optional). Returns pipeline stage counts in the same shape as `lumiverb status --output json`.
+  - With `library_id`: `{ "library", "library_id", "total_assets", "workers", "stages": [{ "name", "label", "done", "inflight", "pending", "failed", "blocked" }] }`. 404 if library not found.
+  - Without `library_id` (tenant-wide): `{ "workers", "libraries": [{ "library", "library_id", "total_assets", "stages": [...] }] }`.
+  - Stage names: `proxy`, `exif`, `ai_vision`, `search_sync`, `embed`, `video-index`, `video-vision`, `video-preview`. Only stages with non-zero total counts are included.
+
+## Search Sync API
+
+All under `/v1/search-sync`; require tenant auth. These endpoints drive Quickwit indexing server-side so that CLI/worker processes do not need direct Quickwit or DB access.
+
+- **GET /v1/search-sync/pending** — Query: `library_id` (required), `path_prefix` (optional). Returns `{ "count": N }` — number of rows in `search_sync_queue` that are pending or have an expired processing lease. Matches the scope of `process-batch`.
+- **POST /v1/search-sync/process-batch** — Body: `{ "library_id", "path_prefix": null, "batch_size": 100 }`. Claims one batch from the queue using `FOR UPDATE SKIP LOCKED`, builds Quickwit documents server-side, ingests them, and marks the rows synced. Returns `{ "processed": bool, "synced": int, "skipped": int }`. `processed=false` means the queue was empty (no rows claimed). `synced` = assets ingested; `skipped` = assets with missing metadata or missing asset record. Call in a loop until `processed=false`. 404 if library not found.
+- **POST /v1/search-sync/resync** — Body: `{ "library_id", "path_prefix": null }`. Re-enqueues all active (non-trashed) assets for the library into `search_sync_queue` (equivalent to `--force-resync`). Returns `{ "enqueued": N }`. 404 if library not found.
 
 ## Video chunk API
 
