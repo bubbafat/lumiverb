@@ -21,6 +21,10 @@ logger = logging.getLogger(__name__)
 PROXY_LONG_EDGE = 2048
 # TIFFs use Pillow instead of libvips to avoid libtiff's 50MB cumulative allocation cap.
 TIFF_EXTENSIONS = {".tif", ".tiff"}
+# Heuristic guard for the Pillow fallback path.
+# Pillow may decode the full pixel array before resizing, which can OOM on very large TIFFs.
+# We fail after a failed pyvips attempt to keep best-effort behavior for "normal" TIFFs.
+TIFF_MAX_PIXELS = 25_000_000  # ~25MP
 PROXY_JPEG_QUALITY = 75
 THUMBNAIL_LONG_EDGE = 256
 THUMBNAIL_JPEG_QUALITY = 80
@@ -32,6 +36,68 @@ def _pil_to_vips(pil_image: "PILImage.Image") -> pyvips.Image:
     arr = np.asarray(pil_image, dtype=np.uint8)
     height, width, bands = arr.shape
     return pyvips.Image.new_from_memory(arr.tobytes(), width, height, bands, "uchar")
+
+
+def _load_tiff_proxy_image(
+    source_path: Path,
+    *,
+    width_orig: int,
+    height_orig: int,
+) -> pyvips.Image:
+    """
+    Best-effort TIFF proxy generation.
+
+    Primary path: pyvips with sequential access hint.
+    Fallback: Pillow + numpy -> pyvips when pyvips fails.
+
+    Pillow fallback is guarded by a max pixel-count heuristic to avoid OOM.
+    """
+    pixel_count = width_orig * height_orig
+    max_dim = max(width_orig, height_orig)
+
+    # 1) Try pyvips first for best-effort behavior.
+    try:
+        vips_img = pyvips.Image.new_from_file(
+            str(source_path),
+            access=pyvips.enums.Access.SEQUENTIAL,
+            fail_on=pyvips.enums.FailOn.NONE,
+        )
+        if max_dim > PROXY_LONG_EDGE:
+            proxy_img = vips_img.thumbnail_image(
+                PROXY_LONG_EDGE,
+                height=PROXY_LONG_EDGE,
+                size=pyvips.enums.Size.DOWN,
+            )
+        else:
+            proxy_img = vips_img  # already smaller than proxy size — use as-is
+
+        # Materialize the proxy so thumbnailing does not re-trigger a second source pass.
+        return proxy_img.copy_memory()
+    except Exception as e:
+        logger.debug(
+            "pyvips TIFF proxy failed; falling back to Pillow: %s (%dx%d, %d px)",
+            e,
+            width_orig,
+            height_orig,
+            pixel_count,
+            exc_info=True,
+        )
+
+    # 2) Guard before Pillow decodes/resizes.
+    if pixel_count > TIFF_MAX_PIXELS:
+        raise RuntimeError(
+            "TIFF too large to proxy safely: "
+            f"{width_orig}x{height_orig} = {pixel_count} pixels "
+            f"(limit={TIFF_MAX_PIXELS})."
+        )
+
+    pil_img = PILImage.open(source_path)
+    try:
+        if max_dim > PROXY_LONG_EDGE:
+            pil_img.thumbnail((PROXY_LONG_EDGE, PROXY_LONG_EDGE), PILImage.LANCZOS)
+        return _pil_to_vips(pil_img)
+    finally:
+        pil_img.close()
 
 
 def _load_raw_image(source_path: Path) -> tuple[pyvips.Image, bool]:
@@ -159,13 +225,16 @@ class ProxyWorker(BaseWorker):
                 proxy_img = img  # already smaller than proxy size — use as-is
 
         elif ext in TIFF_EXTENSIONS:
-            # TIFF: use Pillow to avoid libvips/libtiff 50MB cumulative allocation cap.
-            # thumbnail() modifies in-place (no second full-res copy in memory).
+            # TIFF: best-effort pyvips first (with sequential access hint), fall back to Pillow,
+            # but guard Pillow's full-decode path against OOM on huge TIFFs.
             pil_img = PILImage.open(source_path)
             width_orig, height_orig = pil_img.size
-            if max(width_orig, height_orig) > PROXY_LONG_EDGE:
-                pil_img.thumbnail((PROXY_LONG_EDGE, PROXY_LONG_EDGE), PILImage.LANCZOS)
-            proxy_img = _pil_to_vips(pil_img)
+            pil_img.close()
+            proxy_img = _load_tiff_proxy_image(
+                source_path,
+                width_orig=width_orig,
+                height_orig=height_orig,
+            )
             from_thumb = False
 
         else:
