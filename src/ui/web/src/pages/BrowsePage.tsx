@@ -1,4 +1,4 @@
-import { useMemo, useRef, useEffect, useState, useCallback } from "react";
+import { useMemo, useRef, useEffect, useState, useCallback, useLayoutEffect } from "react";
 import { useParams, Link, useSearchParams } from "react-router-dom";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -27,6 +27,8 @@ export default function BrowsePage() {
   const activeTag = searchParams.get("tag");
   const parentEl = useScrollContainer();
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const isFetchingNextPageRef = useRef(false);
+  const hasNextPageRef = useRef(false);
   const [containerWidth, setContainerWidth] = useState(0);
   const [lightboxAsset, setLightboxAsset] = useState<AssetPageItem | null>(null);
   const [errorDismissed, setErrorDismissed] = useState(false);
@@ -87,20 +89,19 @@ export default function BrowsePage() {
 
   const flatAssets = useMemo(() => {
     if (isSearchMode) {
-      return (searchQuery.data?.hits ?? [])
-        .filter((h) => h.type === "image")
-        .map((h) => ({
-          asset_id: h.asset_id,
-          rel_path: h.rel_path,
-          file_size: 0,
-          file_mtime: null,
-          sha256: null,
-          media_type: "image/jpeg",
-          width: null,
-          height: null,
-          taken_at: null,
-          status: "indexed",
-        }));
+      return (searchQuery.data?.hits ?? []).map((h) => ({
+        asset_id: h.asset_id,
+        rel_path: h.rel_path,
+        file_size: h.file_size ?? 0,
+        file_mtime: null,
+        sha256: null,
+        media_type: h.media_type ?? "image/jpeg",
+        width: h.width ?? null,
+        height: h.height ?? null,
+        taken_at: null,
+        status: "indexed",
+        duration_sec: h.duration_sec ?? null,
+      }));
     }
     if (!browseQuery.data?.pages) return [];
     return browseQuery.data.pages.flatMap((p) => p ?? []);
@@ -163,18 +164,28 @@ export default function BrowsePage() {
     return () => ro.disconnect();
   }, [parentEl]);
 
+  useLayoutEffect(() => {
+    isFetchingNextPageRef.current = isFetchingNextPage;
+  }, [isFetchingNextPage]);
+
+  useLayoutEffect(() => {
+    hasNextPageRef.current = hasNextPage;
+  }, [hasNextPage]);
+
   useEffect(() => {
     const sentinel = sentinelRef.current;
-    if (!sentinel || !hasNextPage || isFetchingNextPage || !parentEl) return;
+    if (!sentinel || !parentEl) return;
     const io = new IntersectionObserver(
       (entries) => {
-        if (entries[0]?.isIntersecting) fetchNextPage();
+        if (entries[0]?.isIntersecting && hasNextPageRef.current && !isFetchingNextPageRef.current) {
+          fetchNextPage();
+        }
       },
       { root: parentEl, rootMargin: "200px", threshold: 0 },
     );
     io.observe(sentinel);
     return () => io.disconnect();
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage, parentEl]);
+  }, [fetchNextPage, parentEl]);
 
   const handleAssetClick = useCallback((asset: AssetPageItem) => {
     setLightboxAsset(asset);

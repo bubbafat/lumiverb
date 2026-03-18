@@ -44,6 +44,10 @@ class SearchHit(BaseModel):
     # Image-only fields
     camera_make: str | None = None
     camera_model: str | None = None
+    media_type: str | None = None
+    file_size: int | None = None
+    width: int | None = None
+    height: int | None = None
 
     # Scene-only fields
     scene_id: str | None = None
@@ -131,6 +135,10 @@ def search(
                     hit["proxy_key"] = asset.proxy_key
                     hit["camera_make"] = asset.camera_make
                     hit["camera_model"] = asset.camera_model
+                    hit["media_type"] = asset.media_type
+                    hit["file_size"] = asset.file_size
+                    hit["width"] = asset.width
+                    hit["height"] = asset.height
                 if hit.get("tags") is None:
                     hit["tags"] = []
                 hit["type"] = "image"

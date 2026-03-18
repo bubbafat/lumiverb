@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useState, useRef } from "react";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 import type { AssetPageItem } from "../api/types";
 
@@ -28,6 +28,7 @@ function AssetCellInner({ asset, onClick, aspectRatio }: AssetCellProps) {
     "thumbnail",
   );
   const [hovered, setHovered] = useState(false);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const filename = basename(asset.rel_path);
   const isVideo = asset.media_type === "video" || asset.media_type.startsWith("video/");
   const effectiveAspectRatio = aspectRatio ?? 4 / 3;
@@ -42,8 +43,16 @@ function AssetCellInner({ asset, onClick, aspectRatio }: AssetCellProps) {
     <button
       type="button"
       onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      onMouseEnter={() => {
+        hoverTimerRef.current = setTimeout(() => setHovered(true), 200);
+      }}
+      onMouseLeave={() => {
+        if (hoverTimerRef.current) {
+          clearTimeout(hoverTimerRef.current);
+          hoverTimerRef.current = null;
+        }
+        setHovered(false);
+      }}
       className="group relative w-full cursor-pointer overflow-hidden rounded-lg bg-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-gray-950"
       style={{ aspectRatio: String(effectiveAspectRatio) }}
     >

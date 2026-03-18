@@ -55,6 +55,10 @@ export interface SearchHit {
   scene_id: string | null;
   start_ms: number | null;
   end_ms: number | null;
+  media_type: string | null;
+  file_size: number | null;
+  width: number | null;
+  height: number | null;
 }
 
 export interface SearchResponse {
@@ -121,6 +125,10 @@ export interface SimilarHit {
   thumbnail_key: string | null;
   proxy_key: string | null;
   distance: number;
+  media_type: string | null;
+  file_size: number | null;
+  width: number | null;
+  height: number | null;
 }
 
 export interface SimilarityResponse {

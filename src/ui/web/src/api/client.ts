@@ -105,34 +105,20 @@ export async function listDirectories(
   );
 }
 
-/** Paginated assets for a library. Returns null on 204 (end of pages). */
+/** Paginated assets for a library. Returns null/undefined on 204 (end of pages). */
 export async function pageAssets(
   libraryId: string,
   after?: string,
   limit = 100,
   pathPrefix?: string,
-   tag?: string,
+  tag?: string,
 ): Promise<AssetPageItem[] | null> {
   const params = new URLSearchParams({ library_id: libraryId });
   if (after) params.set("after", after);
   params.set("limit", String(limit));
   if (pathPrefix) params.set("path_prefix", pathPrefix);
   if (tag) params.set("tag", tag);
-  const res = await fetch(`/v1/assets/page?${params}`, {
-    headers: authHeaders(),
-  });
-  if (!res.ok) {
-    let message = res.statusText;
-    try {
-      const json = (await res.json()) as { error?: { message?: string } };
-      message = json?.error?.message ?? message;
-    } catch {
-      // ignore
-    }
-    throw new ApiError(res.status, message);
-  }
-  if (res.status === 204) return null;
-  return res.json() as Promise<AssetPageItem[]>;
+  return apiFetch<AssetPageItem[] | null>(`/assets/page?${params}`);
 }
 
 export async function searchAssets(params: {

@@ -24,6 +24,10 @@ class SimilarHit(BaseModel):
     thumbnail_key: str | None
     proxy_key: str | None
     distance: float  # cosine distance, lower = more similar
+    media_type: str | None = None
+    file_size: int | None = None
+    width: int | None = None
+    height: int | None = None
 
 
 class SimilarityResponse(BaseModel):
@@ -171,6 +175,10 @@ def find_similar(
                 thumbnail_key=asset.thumbnail_key,
                 proxy_key=asset.proxy_key,
                 distance=score,
+                media_type=asset.media_type,
+                file_size=asset.file_size,
+                width=asset.width,
+                height=asset.height,
             )
         )
 
@@ -244,6 +252,10 @@ def search_by_image(
             thumbnail_key=asset.thumbnail_key,
             proxy_key=asset.proxy_key,
             distance=dist,
+            media_type=asset.media_type,
+            file_size=asset.file_size,
+            width=asset.width,
+            height=asset.height,
         )
         for cand_id, dist in candidates
         if (asset := assets_by_id.get(cand_id)) is not None

@@ -99,6 +99,8 @@ export function Lightbox({
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
+      const el = document.activeElement as HTMLElement | null;
+      if (el?.tagName === "INPUT" || el?.tagName === "TEXTAREA" || el?.isContentEditable) return;
       if (e.key === "Escape") onClose();
       if (e.key === "ArrowLeft" && hasPrev) onNavigate(currentIndex - 1);
       if (e.key === "ArrowRight" && hasNext) onNavigate(currentIndex + 1);
@@ -403,14 +405,15 @@ export function Lightbox({
                                   onSimilarClick({
                                     asset_id: hit.asset_id,
                                     rel_path: hit.rel_path,
-                                    file_size: 0,
+                                    file_size: hit.file_size ?? 0,
                                     file_mtime: null,
                                     sha256: null,
-                                    media_type: "image/jpeg",
-                                    width: null,
-                                    height: null,
+                                    media_type: hit.media_type ?? "image/jpeg",
+                                    width: hit.width ?? null,
+                                    height: hit.height ?? null,
                                     taken_at: null,
                                     status: "indexed",
+                                    duration_sec: null,
                                   });
                                 }
                               }}
