@@ -7,12 +7,13 @@ from datetime import datetime, timezone
 
 import json as _json
 import logging
+import sys
 import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from src.cli.client import LumiverbClient
+from src.cli.client import LumiverbAPIError, LumiverbClient
 from src.cli.config import get_admin_key, load_config, save_config
 from src.cli.commands.keys import keys_app
 from src.cli.scanner import (
@@ -1230,6 +1231,9 @@ def pipeline_run(
         finally:
             lock_repo.release(tenant_id)
 
+        if once and supervisor.had_worker_failure:
+            raise typer.Exit(1)
+
 
 @app.command("status")
 def status(
@@ -2083,4 +2087,8 @@ def similar_image(
 
 def main() -> None:
     """Entry point for the lumiverb script."""
-    app()
+    try:
+        app()
+    except LumiverbAPIError:
+        # Error message already printed to stderr by the client; just exit non-zero.
+        sys.exit(1)

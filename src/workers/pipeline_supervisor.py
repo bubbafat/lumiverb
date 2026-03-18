@@ -227,6 +227,12 @@ class PipelineSupervisor:
         self._current_procs: list[subprocess.Popen] = []
         self._procs_lock = threading.Lock()
         self._log_lock = threading.Lock()
+        self._had_worker_failure = False
+
+    @property
+    def had_worker_failure(self) -> bool:
+        """True if any worker subprocess exited non-zero during this run."""
+        return self._had_worker_failure
 
     def set_log_file(self, path: str | None) -> None:
         """Configure optional log file path for pipeline output."""
@@ -487,6 +493,7 @@ class PipelineSupervisor:
                     self._current_procs.remove(proc)
             if proc.returncode != 0:
                 _log.warning("Worker %s exited with code %s", stage.worker_cmd, proc.returncode)
+                self._had_worker_failure = True
                 self._dashboard_set_worker_status(stage.worker_cmd, stage.label, "error")
             else:
                 self._dashboard_set_worker_status(stage.worker_cmd, stage.label, "idle")

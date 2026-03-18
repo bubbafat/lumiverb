@@ -9,6 +9,30 @@ import httpx
 from src.cli.config import get_api_key, get_api_url
 
 
+class LumiverbAPIError(Exception):
+    """Raised when the API returns a non-2xx response. The error message is printed to stderr before raising."""
+
+    def __init__(self, code: str, message: str, status_code: int) -> None:
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+        super().__init__(f"[{code}]: {message}")
+
+
+def _print_and_raise(response: httpx.Response) -> None:
+    """Parse the error envelope, print to stderr, then raise LumiverbAPIError."""
+    try:
+        data = response.json()
+        error = data.get("error", {})
+        message = error.get("message", response.text or str(response.status_code))
+        code = error.get("code", "unknown")
+    except Exception:
+        message = response.text or f"HTTP {response.status_code}"
+        code = "unknown"
+    print(f"Error [{code}]: {message}", file=sys.stderr)
+    raise LumiverbAPIError(code, message, response.status_code)
+
+
 class LumiverbClient:
     """HTTP client that uses CLI config for base_url and Authorization header."""
 
@@ -25,18 +49,10 @@ class LumiverbClient:
     def _handle_response(self, response: httpx.Response) -> httpx.Response:
         if 200 <= response.status_code < 300:
             return response
-        try:
-            data = response.json()
-            error = data.get("error", {})
-            message = error.get("message", response.text or str(response.status_code))
-            code = error.get("code", "unknown")
-            print(f"Error [{code}]: {message}", file=sys.stderr)
-        except Exception:
-            print(response.text or f"HTTP {response.status_code}", file=sys.stderr)
-        sys.exit(1)
+        _print_and_raise(response)
 
     def get(self, path: str, **kwargs: object) -> httpx.Response:
-        """GET request; on non-2xx prints error envelope and exits 1."""
+        """GET request; on non-2xx prints error envelope and raises LumiverbAPIError."""
         url = f"{self._base_url}{path}" if path.startswith("/") else f"{self._base_url}/{path}"
         with httpx.Client() as client:
             response = client.get(url, headers=self._headers(), timeout=120.0, **kwargs)
@@ -50,7 +66,7 @@ class LumiverbClient:
         For 2xx responses, the caller can consume the body as a stream.
         A 404 response is yielded to the caller without exiting, so commands can
         handle "not found" gracefully. Other non-2xx responses are printed and
-        cause process exit 1.
+        raise LumiverbAPIError.
         """
         url = f"{self._base_url}{path}" if path.startswith("/") else f"{self._base_url}/{path}"
         with httpx.Client() as client:
@@ -64,32 +80,24 @@ class LumiverbClient:
                     return
 
                 # Non-2xx, non-404: mirror _handle_response behavior.
-                try:
-                    data = response.json()
-                    error = data.get("error", {})
-                    message = error.get("message", response.text or str(response.status_code))
-                    code = error.get("code", "unknown")
-                    print(f"Error [{code}]: {message}", file=sys.stderr)
-                except Exception:
-                    print(response.text or f"HTTP {response.status_code}", file=sys.stderr)
-                sys.exit(1)
+                _print_and_raise(response)
 
     def post(self, path: str, **kwargs: object) -> httpx.Response:
-        """POST request; on non-2xx prints error envelope and exits 1."""
+        """POST request; on non-2xx prints error envelope and raises LumiverbAPIError."""
         url = f"{self._base_url}{path}" if path.startswith("/") else f"{self._base_url}/{path}"
         with httpx.Client() as client:
             response = client.post(url, headers=self._headers(), timeout=120.0, **kwargs)
             return self._handle_response(response)
 
     def patch(self, path: str, **kwargs: object) -> httpx.Response:
-        """PATCH request; on non-2xx prints error envelope and exits 1."""
+        """PATCH request; on non-2xx prints error envelope and raises LumiverbAPIError."""
         url = f"{self._base_url}{path}" if path.startswith("/") else f"{self._base_url}/{path}"
         with httpx.Client() as client:
             response = client.patch(url, headers=self._headers(), timeout=120.0, **kwargs)
             return self._handle_response(response)
 
     def delete(self, path: str, **kwargs: object) -> httpx.Response:
-        """DELETE request; on non-2xx prints error envelope and exits 1."""
+        """DELETE request; on non-2xx prints error envelope and raises LumiverbAPIError."""
         url = f"{self._base_url}{path}" if path.startswith("/") else f"{self._base_url}/{path}"
         with httpx.Client() as client:
             response = client.request("DELETE", url, headers=self._headers(), timeout=120.0, **kwargs)
