@@ -73,7 +73,7 @@ def search(
     library_id: str,
     q: str = Query(min_length=1, max_length=500),
     limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, le=1000),
     media_type: MediaType = Query(default="all"),
     path_prefix: str | None = None,
     tag: str | None = None,
