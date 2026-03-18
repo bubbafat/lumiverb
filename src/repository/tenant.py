@@ -1255,7 +1255,7 @@ class AssetEmbeddingRepository:
                 SELECT ae.asset_id,
                        ae.embedding_vector <=> CAST(:vec AS vector) AS distance
                 FROM asset_embeddings ae
-                JOIN assets a ON a.asset_id = ae.asset_id
+                JOIN active_assets a ON a.asset_id = ae.asset_id
                 WHERE {where}
                 ORDER BY distance ASC
                 LIMIT :limit OFFSET :offset
@@ -1520,7 +1520,7 @@ class WorkerJobRepository:
                 text("""
                     SELECT COUNT(DISTINCT wj.worker_id)::int
                     FROM worker_jobs wj
-                    JOIN assets a ON a.asset_id = wj.asset_id
+                    JOIN active_assets a ON a.asset_id = wj.asset_id
                     WHERE a.library_id = :library_id
                       AND wj.worker_id IS NOT NULL
                       AND (
@@ -1583,7 +1583,7 @@ class WorkerJobRepository:
                     wj.asset_id,
                     wj.status
                 FROM worker_jobs wj
-                JOIN assets a ON a.asset_id = wj.asset_id
+                JOIN active_assets a ON a.asset_id = wj.asset_id
                 WHERE a.library_id = :library_id
                   AND wj.job_type = :job_type
                   {path_filter}
@@ -1605,7 +1605,7 @@ class WorkerJobRepository:
                     wj.error_message,
                     wj.completed_at
                 FROM worker_jobs wj
-                JOIN assets a ON a.asset_id = wj.asset_id
+                JOIN active_assets a ON a.asset_id = wj.asset_id
                 WHERE a.library_id = :library_id
                   AND wj.job_type = :job_type
                   {path_filter}
@@ -1819,7 +1819,7 @@ class SearchSyncQueueRepository:
             WITH candidates AS (
                 SELECT ssl.sync_id, ssl.asset_id
                 FROM search_sync_latest ssl
-                JOIN assets a ON a.asset_id = ssl.asset_id
+                JOIN active_assets a ON a.asset_id = ssl.asset_id
                 WHERE ssl.status = 'pending'
                    OR (ssl.status = 'processing'
                        AND ssl.processing_started_at < NOW() - (:lease_interval)::interval)
@@ -1964,7 +1964,7 @@ class SearchSyncQueueRepository:
             text("""
                 SELECT ssl.status, COUNT(*)::int as count
                 FROM search_sync_latest ssl
-                JOIN assets a ON a.asset_id = ssl.asset_id
+                JOIN active_assets a ON a.asset_id = ssl.asset_id
                 WHERE a.library_id = :library_id
                 GROUP BY ssl.status
             """),
@@ -1978,7 +1978,7 @@ class SearchSyncQueueRepository:
             text("""
                 SELECT a.library_id, ssl.status, COUNT(*)::int as count
                 FROM search_sync_latest ssl
-                JOIN assets a ON a.asset_id = ssl.asset_id
+                JOIN active_assets a ON a.asset_id = ssl.asset_id
                 GROUP BY a.library_id, ssl.status
             """),
         ).fetchall()
@@ -1992,7 +1992,7 @@ class SearchSyncQueueRepository:
         sql = """
             SELECT COUNT(*)
             FROM search_sync_latest ssl
-            JOIN assets a ON a.asset_id = ssl.asset_id
+            JOIN active_assets a ON a.asset_id = ssl.asset_id
             WHERE ssl.status = 'pending'
         """
         params: dict = {}
