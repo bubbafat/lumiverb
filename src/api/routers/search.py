@@ -94,6 +94,12 @@ def search(
     search_images = media_type in ("image", "all")
     search_scenes = media_type in ("video", "all")
 
+    # Fetch enough results from each index so that after merging and global
+    # sorting we can correctly slice [offset:offset+limit]. Passing offset
+    # directly to both indices independently would skip globally-relevant
+    # results from whichever index doesn't have them at that rank.
+    fetch_limit = offset + limit
+
     # --- Image search ---
     if search_images:
         if settings.quickwit_enabled:
@@ -104,8 +110,8 @@ def search(
                 image_hits = qw.search(
                     library_id=library_id,
                     query=q,
-                    max_hits=limit,
-                    start_offset=offset,
+                    max_hits=fetch_limit,
+                    start_offset=0,
                 )
                 source_parts.append("quickwit")
             except Exception as e:
@@ -117,7 +123,7 @@ def search(
         if not image_hits and (not settings.quickwit_enabled or settings.quickwit_fallback_to_postgres):
             from src.search.postgres_search import search_assets
 
-            image_hits = search_assets(session, library_id, q, limit=limit, offset=offset)
+            image_hits = search_assets(session, library_id, q, limit=fetch_limit, offset=0)
             source_parts.append("postgres")
 
         # Enrich image hits. Phase 0 finding: Quickwit returns hits without PG cross-check;
@@ -153,8 +159,8 @@ def search(
             scene_hits = qw.search_scenes(
                 library_id=library_id,
                 query=q,
-                max_hits=limit,
-                start_offset=offset,
+                max_hits=fetch_limit,
+                start_offset=0,
             )
             source_parts.append("quickwit_scenes")
         except Exception as e:
@@ -221,8 +227,8 @@ def search(
     all_hits: list[dict] = list(seen_images.values()) + scene_hits
     all_hits.sort(key=lambda h: h["score"], reverse=True)
 
-    # Apply limit after merge (pre-merge each index already fetched `limit` hits)
-    all_hits = all_hits[:limit]
+    # Apply global offset+limit after merge so cross-index ranking is correct.
+    all_hits = all_hits[offset : offset + limit]
 
     # Build typed hits
     typed_hits: list[SearchHit] = [

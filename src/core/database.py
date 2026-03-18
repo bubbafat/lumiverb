@@ -116,3 +116,21 @@ def provision_tenant_database(tenant_id: str) -> None:
         raise RuntimeError(
             f"alembic upgrade heads failed for tenant {tenant_id}: {result.stderr or result.stdout}"
         )
+
+
+def deprovision_tenant_database(tenant_id: str) -> None:
+    """Drop the physical tenant database. No-op if it doesn't exist. Raises on unexpected errors."""
+    if not _SAFE_TENANT_ID.match(tenant_id):
+        raise ValueError(f"Invalid tenant_id for database drop: {tenant_id!r}")
+
+    settings = get_settings()
+    tenant_url = settings.tenant_database_url_template.format(tenant_id=tenant_id)
+    url_obj = make_url(tenant_url)
+    postgres_url = str(url_obj.set(database="control_plane"))
+
+    engine = create_engine(postgres_url, isolation_level="AUTOCOMMIT")
+    safe_name = tenant_id.replace('"', '""')
+    db_name_quoted = f'"{safe_name}"'
+    with engine.connect() as conn:
+        conn.execute(text(f"DROP DATABASE IF EXISTS {db_name_quoted}"))
+    engine.dispose()

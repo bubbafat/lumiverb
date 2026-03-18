@@ -521,6 +521,52 @@ class AssetRepository:
         self._session.refresh(asset)
         return asset
 
+    def update_for_scan_bulk(self, items: list[dict], scan_id: str) -> int:
+        """Bulk update assets for a scan. Each item: asset_id, file_size, file_mtime (datetime|None), media_type (str|None).
+        Sets availability='online', status='pending', last_scan_id, deleted_at=NULL. Returns count updated."""
+        if not items:
+            return 0
+        now = utcnow()
+        for batch_start in range(0, len(items), 500):
+            batch = items[batch_start : batch_start + 500]
+            asset_ids = [it["asset_id"] for it in batch]
+            file_sizes = [it["file_size"] for it in batch]
+            file_mtimes = [it.get("file_mtime") for it in batch]
+            media_types = [it.get("media_type") for it in batch]
+            self._session.execute(
+                text(
+                    """
+                    UPDATE assets AS a
+                    SET
+                        file_size = v.file_size,
+                        file_mtime = v.file_mtime,
+                        media_type = COALESCE(v.media_type, a.media_type),
+                        availability = 'online',
+                        status = 'pending',
+                        last_scan_id = :scan_id,
+                        deleted_at = NULL,
+                        updated_at = :now
+                    FROM unnest(
+                        :asset_ids::text[],
+                        :file_sizes::bigint[],
+                        :file_mtimes::timestamptz[],
+                        :media_types::text[]
+                    ) AS v(asset_id, file_size, file_mtime, media_type)
+                    WHERE a.asset_id = v.asset_id
+                    """
+                ),
+                {
+                    "scan_id": scan_id,
+                    "now": now,
+                    "asset_ids": asset_ids,
+                    "file_sizes": file_sizes,
+                    "file_mtimes": file_mtimes,
+                    "media_types": media_types,
+                },
+            )
+        self._session.commit()
+        return len(items)
+
     def touch_for_scan(self, asset_id: str, last_scan_id: str) -> Asset:
         """Update last_scan_id and availability='online' only (for skipped)."""
         asset = self._session.get(Asset, asset_id)

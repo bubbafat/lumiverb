@@ -175,24 +175,22 @@ def batch_scan(
             })
 
     skipped = asset_repo.touch_for_scan_bulk(skip_ids, scan_id) if skip_ids else 0
-    for it in update_items:
-        file_mtime_dt: datetime | None = None
-        if it.get("file_mtime"):
-            try:
-                fm = it["file_mtime"].replace("Z", "+00:00")
-                file_mtime_dt = datetime.fromisoformat(fm)
-            except (ValueError, TypeError):
-                pass
-        asset_repo.update_for_scan(
-            asset_id=it["asset_id"],
-            file_size=it["file_size"],
-            file_mtime=file_mtime_dt,
-            availability="online",
-            status="pending",
-            last_scan_id=scan_id,
-            media_type=it.get("media_type"),
-        )
-        updated += 1
+    if update_items:
+        parsed: list[dict] = []
+        for it in update_items:
+            file_mtime_dt: datetime | None = None
+            if it.get("file_mtime"):
+                try:
+                    file_mtime_dt = datetime.fromisoformat(it["file_mtime"].replace("Z", "+00:00"))
+                except (ValueError, TypeError):
+                    pass
+            parsed.append({
+                "asset_id": it["asset_id"],
+                "file_size": it["file_size"],
+                "file_mtime": file_mtime_dt,
+                "media_type": it.get("media_type"),
+            })
+        updated = asset_repo.update_for_scan_bulk(parsed, scan_id)
     missing = asset_repo.set_missing_bulk(missing_ids, scan_id) if missing_ids else 0
     added = asset_repo.create_or_update_for_scan_bulk(
         library_id=scan.library_id,

@@ -453,9 +453,12 @@ def stream_or_enqueue_preview(
     if asset.video_preview_key:
         path = storage.abs_path(asset.video_preview_key)
         if path.exists():
-            asset.video_preview_last_accessed_at = utcnow()
-            session.add(asset)
-            session.commit()
+            now = utcnow()
+            last = asset.video_preview_last_accessed_at
+            if last is None or (now - last).total_seconds() > 300:
+                asset.video_preview_last_accessed_at = now
+                session.add(asset)
+                session.commit()
             return _stream_file_with_range(path, request, media_type="video/mp4")
 
         # File is missing on disk – clear key and re-enqueue.

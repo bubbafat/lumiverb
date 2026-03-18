@@ -8,7 +8,7 @@ from sqlmodel import Session
 
 from src.api.dependencies import get_db_session, require_admin
 from src.core.config import get_settings
-from src.core.database import provision_tenant_database
+from src.core.database import deprovision_tenant_database, provision_tenant_database
 from src.repository.control_plane import (
     ApiKeyRepository,
     TenantDbRoutingRepository,
@@ -147,6 +147,10 @@ def _cleanup_tenant(
         pass
     try:
         tenant_repo.delete(tenant_id)
+    except Exception:
+        pass
+    try:
+        deprovision_tenant_database(tenant_id)
     except Exception:
         pass
 
