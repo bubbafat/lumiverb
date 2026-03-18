@@ -99,23 +99,21 @@ def create_key(
 def revoke_key(
     key_id: str,
     request: Request,
-    _: Annotated[None, Depends(require_tenant_admin)],
 ) -> None:
     """
     Revoke a key for the current tenant.
 
     Rules:
     1. A key cannot revoke itself (409).
-    2. The last admin key cannot be revoked (409, code=last_admin_key).
+    2. The last admin key cannot be revoked (409, code=last_admin_key) — checked
+       before the admin-role gate so that the constraint is visible regardless of
+       the caller's role.
+    3. Only admin keys may revoke other keys (403).
     """
     tenant_id = getattr(request.state, "tenant_id", None)
     current_key_id = getattr(request.state, "key_id", None)
     if not tenant_id or not current_key_id:
         raise HTTPException(status_code=500, detail="Tenant context missing")
-
-    if key_id == current_key_id:
-        # Cannot revoke the key used for this request.
-        raise HTTPException(status_code=409, detail="A key cannot revoke itself")
 
     with get_control_session() as session:
         repo = ApiKeyRepository(session)
@@ -128,7 +126,8 @@ def revoke_key(
         if target is None or target.revoked_at is not None:
             raise HTTPException(status_code=404, detail="Key not found")
 
-        # Enforce "last admin key" constraint only when revoking an admin key.
+        # 1. Check "last admin key" before the role gate so that this hard
+        #    constraint surfaces as 409 regardless of the caller's role.
         if getattr(target, "role", "member") == "admin":
             admin_count = repo.count_admin_keys(tenant_id)
             if admin_count <= 1:
@@ -137,6 +136,15 @@ def revoke_key(
                     "last_admin_key",
                     "Cannot revoke the last remaining admin key for this tenant",
                 )
+
+        # 2. Enforce admin-only after the last_admin_key constraint check.
+        caller_role = getattr(request.state, "role", None)
+        if caller_role != "admin":
+            raise HTTPException(status_code=403, detail="Admin API key required")
+
+        # 3. A key cannot revoke itself.
+        if key_id == current_key_id:
+            raise HTTPException(status_code=409, detail="A key cannot revoke itself")
 
         ok = repo.revoke(key_id=key_id, tenant_id=tenant_id)
         if not ok:

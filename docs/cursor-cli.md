@@ -39,3 +39,12 @@ Entry point: `lumiverb = "src.cli:main"` (setuptools); `main()` invokes the Type
 Shell alias (one-shot sync): `function lumi-search-sync() { lumiverb worker search-sync --library "$1" --once; }`
 
 Output: Rich tables for list; green success for create; errors handled by client (stderr + exit 1).
+
+## Soft-delete and the active_assets view
+
+The CLI is an API client and never queries the DB directly, so it is not subject to the soft-delete rules below. However, any CLI code that interprets asset data from API responses must treat missing assets (404) as trashed — do not assume a 404 is an error.
+
+The API server enforces these rules (see `docs/cursor-api.md` for the full contract):
+- All asset reads go through the `active_assets` view (`deleted_at IS NULL`).
+- Scanning a file that was previously trashed **restores** it (same `asset_id`, `deleted_at` cleared). It does not create a new record and does not leave a zombie (updated but still trashed).
+- `search_sync_queue.pending_count()` counts both `pending` and expired-`processing` rows to match what `claim_batch()` will actually process. Showing only `pending` produces a misleading progress total when rows are stuck after an interrupted sync run.

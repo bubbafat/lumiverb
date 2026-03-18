@@ -246,6 +246,10 @@ def test_vision_worker_openai_provider_called(caption_slow_env: tuple, tmp_path:
     vis_job = next_vis.json()
     assert vis_job.get("vision_model_id") == model_id
 
+    # Provide a non-empty vision_api_url so the worker's validation passes;
+    # the actual URL is irrelevant because describe() is fully mocked below.
+    vis_job["vision_api_url"] = "http://mock-vision-server/"
+
     mock_result = {"description": "Mocked description", "tags": ["mock", "vision"]}
     with patch(
         "src.workers.captions.openai_caption.OpenAICompatibleCaptionProvider.describe",

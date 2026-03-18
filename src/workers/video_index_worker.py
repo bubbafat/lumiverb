@@ -292,24 +292,49 @@ class VideoIndexWorker(BaseWorker):
                     work_order["start_ts"],
                     work_order["end_ts"],
                 )
-                t = 0.0
-                while t < scan_end:
-                    frame_path = tmpdir / f"{asset_id}_fallback_{int((t + chunk_offset) * 1000)}.jpg"
-                    if extract_video_frame(proxy_path, frame_path, timestamp=t):
-                        img = Image.open(frame_path).convert("RGB")
+                fallback_dir = tmpdir / f"{asset_id}_fallback_{work_order['chunk_index']}"
+                fallback_dir.mkdir(exist_ok=True)
+                fps_val = 1.0 / DEBOUNCE_SEC
+                fallback_cmd = [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-i",
+                    str(proxy_path),
+                    "-vf",
+                    f"fps={fps_val}",
+                    "-qscale:v",
+                    "2",
+                    str(fallback_dir / "frame_%05d.jpg"),
+                ]
+                result = subprocess.run(fallback_cmd, capture_output=True)
+                if result.returncode == 0:
+                    for idx, frame_file in enumerate(sorted(fallback_dir.glob("frame_*.jpg"))):
+                        t = idx * DEBOUNCE_SEC
+                        img = Image.open(frame_file).convert("RGB")
                         w, h = img.size
                         raw_bytes = img.tobytes()
-                        collected.append(
-                            RawFrame(bytes=raw_bytes, pts=t, width=w, height=h)
-                        )
-                        frame_path.unlink(missing_ok=True)
+                        collected.append(RawFrame(bytes=raw_bytes, pts=t, width=w, height=h))
+                        frame_file.unlink(missing_ok=True)
                         if frame_callback:
                             frame_callback(
                                 t + chunk_offset,
                                 work_order["start_ts"],
                                 work_order["end_ts"],
                             )
-                    t += DEBOUNCE_SEC
+                else:
+                    logger.warning(
+                        "Fallback frame extraction failed for chunk %s (exit %d): %s",
+                        work_order["chunk_id"],
+                        result.returncode,
+                        result.stderr.decode(errors="replace") if result.stderr else "",
+                    )
+                try:
+                    fallback_dir.rmdir()
+                except OSError:
+                    pass
 
             if not collected:
                 logger.warning(

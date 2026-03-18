@@ -220,7 +220,7 @@ def test_search_sync_worker_drains_queue_and_marks_synced(search_sync_env: tuple
         f"/v1/jobs/{vis_job['job_id']}/complete",
         json={
             "model_id": "moondream",
-            "model_version": "2",
+            "model_version": "1",
             "description": "A bright red square.",
             "tags": ["red", "square"],
         },
@@ -280,5 +280,5 @@ def test_search_sync_worker_drains_queue_and_marks_synced(search_sync_env: tuple
     assert doc["tags"] == ["red", "square"]
     # Provenance comes from asset_metadata (library's vision model)
     assert doc["model_id"] == "moondream"
-    assert doc["model_version"] == "2"
+    assert doc["model_version"] == "1"
 

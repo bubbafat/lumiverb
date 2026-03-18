@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -111,26 +112,45 @@ def parse_gps(exif: dict) -> tuple[float | None, float | None]:
             return None, None
         lat = float(lat)
         lon = float(lon)
-        if lat_ref == "S":
+        if lat_ref == "S" and lat > 0:
             lat = -lat
-        if lon_ref == "W":
+        if lon_ref == "W" and lon > 0:
             lon = -lon
         return lat, lon
     except (TypeError, ValueError):
         return None, None
 
 
+_SUBSEC_RE = re.compile(r"\.\d+")
+
+# Formats tried in order after stripping sub-seconds and timezone.
+_TAKEN_AT_FORMATS = [
+    "%Y:%m:%d %H:%M:%S",  # standard EXIF
+    "%Y-%m-%dT%H:%M:%S",  # ISO 8601
+    "%Y-%m-%d %H:%M:%S",  # space-separated ISO
+]
+
+
 def parse_taken_at(exif: dict) -> datetime | None:
     """
     Parse DateTimeOriginal or CreateDate from EXIF dict.
     Returns UTC datetime or None.
-    exiftool returns dates as "YYYY:MM:DD HH:MM:SS" strings.
+    Handles sub-second precision and timezone offsets from various camera manufacturers.
     """
     raw = exif.get("DateTimeOriginal") or exif.get("CreateDate")
     if not raw:
         return None
-    try:
-        dt = datetime.strptime(str(raw), "%Y:%m:%d %H:%M:%S")
-        return dt.replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
+    s = _SUBSEC_RE.sub("", str(raw).strip())
+    # Try with a trailing timezone offset (%z handles ±HH:MM in Python 3.7+)
+    for fmt in _TAKEN_AT_FORMATS:
+        for candidate in (s, s.replace(" ", "T")):
+            for suffix in ("", "%z"):
+                try:
+                    dt = datetime.strptime(candidate, fmt + suffix)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    return dt
+                except ValueError:
+                    continue
+    logger.debug("Could not parse taken_at from %r", raw)
+    return None

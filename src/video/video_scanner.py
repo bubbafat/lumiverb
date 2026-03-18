@@ -174,6 +174,11 @@ class VideoScanner:
                 try:
                     pts = pts_queue.get(timeout=PTS_QUEUE_TIMEOUT)
                 except Empty:
+                    exit_code = proc.poll()
+                    if exit_code is not None:
+                        raise SyncError(
+                            f"FFmpeg exited with code {exit_code} before PTS arrived"
+                        )
                     raise SyncError(
                         f"PTS did not arrive within {PTS_QUEUE_TIMEOUT}s (FFmpeg may have hung)"
                     )

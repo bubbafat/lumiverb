@@ -138,10 +138,16 @@ class ProxyWorker(BaseWorker):
         ext = source_path.suffix.lower()
 
         if ext in RAW_EXTENSIONS:
-            # RAW: existing path unchanged
             img, from_thumb = _load_raw_image(source_path)
-            width_orig = img.width
-            height_orig = img.height
+            if from_thumb:
+                # Embedded JPEG was used for speed; read true sensor dimensions from RAW headers.
+                with rawpy.imread(str(source_path)) as _raw:
+                    _s = _raw.sizes
+                    width_orig = _s.iwidth
+                    height_orig = _s.iheight
+            else:
+                width_orig = img.width
+                height_orig = img.height
 
             if max(width_orig, height_orig) > PROXY_LONG_EDGE:
                 proxy_img = img.thumbnail_image(
@@ -153,16 +159,12 @@ class ProxyWorker(BaseWorker):
                 proxy_img = img  # already smaller than proxy size — use as-is
 
         elif ext in TIFF_EXTENSIONS:
-            # TIFF: use Pillow to avoid libvips/libtiff 50MB cumulative allocation cap
+            # TIFF: use Pillow to avoid libvips/libtiff 50MB cumulative allocation cap.
+            # thumbnail() modifies in-place (no second full-res copy in memory).
             pil_img = PILImage.open(source_path)
             width_orig, height_orig = pil_img.size
-
-            scale = PROXY_LONG_EDGE / max(width_orig, height_orig)
-            if scale < 1.0:
-                new_w = int(width_orig * scale)
-                new_h = int(height_orig * scale)
-                pil_img = pil_img.resize((new_w, new_h), PILImage.LANCZOS)
-
+            if max(width_orig, height_orig) > PROXY_LONG_EDGE:
+                pil_img.thumbnail((PROXY_LONG_EDGE, PROXY_LONG_EDGE), PILImage.LANCZOS)
             proxy_img = _pil_to_vips(pil_img)
             from_thumb = False
 

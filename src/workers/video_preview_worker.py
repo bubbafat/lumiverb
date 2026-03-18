@@ -108,28 +108,32 @@ class VideoPreviewWorker(BaseWorker):
 
             first_stderr = _decode(getattr(exc, "stderr", None)).strip()
 
-            # Some camera/iPhone MOVs can fail due to the audio track; retry without audio.
-            no_audio_cmd: list[str] = []
-            skip_next = False
-            for tok in cmd:
-                if skip_next:
-                    skip_next = False
-                    continue
-                if tok in {"-c:a", "-ac", "-b:a"}:
-                    skip_next = True
-                    continue
-                if tok == "aac":
-                    # value for -c:a
-                    continue
-                no_audio_cmd.append(tok)
-
-            # Ensure audio disabled (in case an audio stream exists).
-            if "-an" not in no_audio_cmd:
-                try:
-                    idx = no_audio_cmd.index("-movflags")
-                except ValueError:
-                    idx = len(no_audio_cmd) - 1
-                no_audio_cmd.insert(idx, "-an")
+            # Some camera/iPhone MOVs fail due to a broken audio track; retry without audio.
+            no_audio_cmd = [
+                "ffmpeg",
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-ss",
+                "0",
+                "-i",
+                str(source_path),
+                "-t",
+                str(PREVIEW_DURATION_SEC),
+                "-vf",
+                f"scale=-2:'min({PREVIEW_MAX_HEIGHT},ih)',format=yuv420p",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "28",
+                "-an",
+                "-movflags",
+                "+faststart",
+                str(preview_path),
+            ]
 
             try:
                 subprocess.run(no_audio_cmd, check=True, capture_output=True)

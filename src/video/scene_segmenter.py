@@ -23,7 +23,7 @@ PHASH_THRESHOLD = 51
 PHASH_HASH_SIZE = 16
 TEMPORAL_CEILING_SEC = 30.0
 DEBOUNCE_SEC = 3.0
-SKIP_FRAMES_BEST = 2
+SKIP_SECS_BEST = 2.0  # skip frames in the first N seconds of a scene when picking the sharpest
 
 
 class SceneKeepReason(str, Enum):
@@ -106,7 +106,6 @@ class SceneSegmenter:
         best_bytes: bytes | None = None
         best_pts: float | None = None
         best_sharpness: float = -1.0
-        frames_since_start = 0
         last_raw: RawFrame | None = None
         had_frames = False
 
@@ -120,12 +119,10 @@ class SceneSegmenter:
                 best_sharpness = _frame_sharpness(raw)
                 best_pts = pts
                 best_bytes = raw.bytes
-                frames_since_start = 1
                 continue
             elapsed = pts - scene_start_pts
             frame_phash = _frame_to_phash(raw)
             sharpness = _frame_sharpness(raw)
-            frames_since_start += 1
 
             trigger: SceneKeepReason | None = None
             if scene_start_pts is not None and elapsed >= TEMPORAL_CEILING_SEC:
@@ -161,11 +158,10 @@ class SceneSegmenter:
                 best_bytes = raw.bytes
                 best_pts = pts
                 best_sharpness = sharpness
-                frames_since_start = 1
                 continue
 
-            # In-scene: update best frame (skip first SKIP_FRAMES_BEST)
-            if frames_since_start > SKIP_FRAMES_BEST and sharpness > best_sharpness:
+            # In-scene: update best frame (skip opening seconds to avoid transitions)
+            if elapsed > SKIP_SECS_BEST and sharpness > best_sharpness:
                 best_sharpness = sharpness
                 best_bytes = raw.bytes
                 best_pts = pts

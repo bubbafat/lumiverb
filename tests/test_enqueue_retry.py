@@ -204,7 +204,7 @@ def test_enqueue_retry_failed_only_retries_failed_jobs(
         n = enqueue_jobs_for_filter(session, spec, "proxy", force=False)
         assert n == 1, "Only the asset with failed job should be enqueued"
 
-        # Asset with failed job: old job cancelled, new pending created
+        # Asset with failed job: reset in-place to pending (fail_count preserved)
         failed_jobs = session.execute(
             text(
                 "SELECT status FROM worker_jobs WHERE asset_id = :aid AND job_type = 'proxy' ORDER BY created_at"
@@ -212,8 +212,7 @@ def test_enqueue_retry_failed_only_retries_failed_jobs(
             {"aid": asset_failed},
         ).fetchall()
         statuses = [r[0] for r in failed_jobs]
-        assert "cancelled" in statuses, "Old failed job should be cancelled"
-        assert "pending" in statuses, "New pending job should be created"
+        assert statuses == ["pending"], f"Failed job should be reset to pending, got {statuses}"
 
         # Asset with completed job: untouched (no new job)
         completed_count = session.execute(

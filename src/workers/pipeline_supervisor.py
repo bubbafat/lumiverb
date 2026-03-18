@@ -21,7 +21,7 @@ _log = logging.getLogger(__name__)
 # search_sync is populated via the search_sync_queue by the ai_vision/video-vision
 # completion handlers on the API side, so it doesn't need explicit supervisor enqueuing.
 _DOWNSTREAM: dict[str, list[str]] = {
-    "proxy": ["ai_vision", "embed", "video-preview"],
+    "proxy": ["ai_vision", "embed", "video-preview", "video-index"],
     "video-index": ["video-vision"],
 }
 

@@ -49,10 +49,17 @@ class VisionWorker(BaseWorker):
         tags = [t.strip() for t in raw_tags if isinstance(t, str) and t.strip()]
 
         if not description and not tags:
-            raise RuntimeError(
-                f"Caption provider {vision_model_id!r} returned empty description and tags "
-                f"for asset {asset_id}"
+            logger.info(
+                "Caption provider %r returned empty description and tags for asset %s; accepting as complete",
+                vision_model_id,
+                asset_id,
             )
+            return {
+                "model_id": vision_model_id,
+                "model_version": "1",
+                "description": "",
+                "tags": [],
+            }
 
         return {
             "model_id": vision_model_id,

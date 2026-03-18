@@ -456,6 +456,7 @@ class AssetRepository:
                 "availability": "online",
                 "last_scan_id": scan_id,
                 "updated_at": now,
+                "deleted_at": None,  # restore if previously trashed
             },
         )
         self._session.execute(stmt)
@@ -499,7 +500,11 @@ class AssetRepository:
         last_scan_id: str,
         media_type: str | None = None,
     ) -> Asset:
-        """Update asset file_size, file_mtime, availability, status, last_scan_id."""
+        """Update asset file_size, file_mtime, availability, status, last_scan_id.
+
+        Also clears deleted_at: a file present on disk during a scan is by definition
+        active, so this implicitly restores a previously-trashed asset.
+        """
         asset = self._session.get(Asset, asset_id)
         if asset is None:
             raise ValueError(f"Asset not found: {asset_id}")
@@ -508,6 +513,7 @@ class AssetRepository:
         asset.availability = availability
         asset.status = status
         asset.last_scan_id = last_scan_id
+        asset.deleted_at = None
         if media_type is not None:
             asset.media_type = media_type
         self._session.add(asset)
@@ -580,15 +586,17 @@ class AssetRepository:
         return len(assets)
 
     def get_by_id(self, asset_id: str) -> Asset | None:
-        """Return asset by id or None."""
-        return self._session.get(Asset, asset_id)
+        """Return active (non-trashed) asset by id or None."""
+        stmt = select(Asset).where(Asset.asset_id == asset_id).where(Asset.deleted_at.is_(None))
+        return self._session.exec(stmt).first()
 
     def list_pending_by_library(self, library_id: str) -> list[Asset]:
-        """Return all assets in library with status='pending'."""
+        """Return all active (non-trashed) assets in library with status='pending'."""
         stmt = (
             select(Asset)
             .where(Asset.library_id == library_id)
             .where(Asset.status == "pending")
+            .where(Asset.deleted_at.is_(None))
         )
         return list(self._session.exec(stmt).all())
 
@@ -1984,18 +1992,26 @@ class SearchSyncQueueRepository:
         ).fetchall()
         return [{"library_id": r.library_id, "status": r.status, "count": r.count} for r in rows]
 
-    def pending_count(self, library_id: str | None = None, path_prefix: str | None = None) -> int:
+    def pending_count(
+        self,
+        library_id: str | None = None,
+        path_prefix: str | None = None,
+        lease_minutes: int = 5,
+    ) -> int:
         """
-        Count distinct assets whose latest sync state is 'pending'.
-        Uses search_sync_latest view for accurate per-asset counts.
+        Count rows that claim_batch() will process: 'pending' rows plus 'processing'
+        rows whose lease has expired. Matches claim_batch scope so the progress bar
+        total accurately reflects the work about to be done.
         """
         sql = """
             SELECT COUNT(*)
             FROM search_sync_latest ssl
             JOIN active_assets a ON a.asset_id = ssl.asset_id
             WHERE ssl.status = 'pending'
+               OR (ssl.status = 'processing'
+                   AND ssl.processing_started_at < NOW() - (:lease_interval)::interval)
         """
-        params: dict = {}
+        params: dict = {"lease_interval": f"{lease_minutes} minutes"}
         if library_id:
             sql += " AND a.library_id = :library_id"
             params["library_id"] = library_id

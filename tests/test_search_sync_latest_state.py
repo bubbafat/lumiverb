@@ -177,7 +177,7 @@ def test_search_sync_worker_counts_assets_not_rows(tenant_db_session: Session, t
         text(
             """
             INSERT INTO asset_metadata (metadata_id, asset_id, model_id, model_version, data, generated_at)
-            VALUES (:meta_id, :asset_id, 'moondream', '2', '{"description": "test", "tags": []}'::jsonb, NOW())
+            VALUES (:meta_id, :asset_id, 'moondream', '1', '{"description": "test", "tags": []}'::jsonb, NOW())
             ON CONFLICT (asset_id, model_id, model_version) DO NOTHING
             """
         ),

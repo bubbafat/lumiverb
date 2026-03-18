@@ -61,14 +61,15 @@ class SearchSyncWorker:
         self._library_repo = LibraryRepository(session)
         self._queue_repo = SearchSyncQueueRepository(session)
         self._quickwit = quickwit or QuickwitClient()
-        # output_mode: "human" (default) or "jsonl" for structured streaming events.
         self._output_mode = output_mode
+        self._lease_minutes = get_settings().search_sync_lease_minutes
 
     def pending_count(self) -> int:
-        """Return number of unsynced rows in search_sync_queue for this library/path."""
+        """Return number of rows claim_batch() will process (pending + expired-processing)."""
         return self._queue_repo.pending_count(
             library_id=self._library_id,
             path_prefix=self._path_prefix,
+            lease_minutes=self._lease_minutes,
         )
 
     def _emit_event(self, event: str, **fields: object) -> None:
@@ -108,8 +109,6 @@ class SearchSyncWorker:
         self._quickwit.ensure_index_for_library(self._library_id)
         self._quickwit.ensure_scene_index_for_library(self._library_id)
 
-        settings = get_settings()
-
         self._emit_event(
             "start",
             library_id=self._library_id,
@@ -121,7 +120,7 @@ class SearchSyncWorker:
                 self._batch_size,
                 library_id=self._library_id,
                 path_prefix=self._path_prefix,
-                lease_minutes=settings.search_sync_lease_minutes,
+                lease_minutes=self._lease_minutes,
             )
             if not batch:
                 break
@@ -148,10 +147,10 @@ class SearchSyncWorker:
                     sync_ids.append(row.sync_id)
                     asset_status[row.asset_id] = "synced"
                 else:
-                    # Existing asset document path — skip trashed
+                    # Existing asset document path — get_by_id returns None for trashed assets
                     asset = self._asset_repo.get_by_id(row.asset_id)
                     asset_id = row.asset_id
-                    if asset is None or getattr(asset, "deleted_at", None) is not None:
+                    if asset is None:
                         logger.warning(
                             "search_sync_queue row %s references missing asset_id=%s; marking synced",
                             row.sync_id,

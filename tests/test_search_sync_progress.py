@@ -21,7 +21,7 @@ def test_pending_count_with_library_filter() -> None:
     assert count == 42
     mock_session.execute.assert_called_once()
     args, kwargs = mock_session.execute.call_args
-    assert args[1] == {"library_id": "lib_abc123"}
+    assert args[1] == {"lease_interval": "5 minutes", "library_id": "lib_abc123"}
     stmt = str(args[0]) if hasattr(args[0], "text") else str(args[0])
     assert "search_sync_latest" in stmt or "JOIN assets" in stmt
 

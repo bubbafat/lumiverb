@@ -116,13 +116,12 @@ def test_revoke_key(control_plane_session: Session) -> None:
     # Fetch raw row and assert revoked_at set
     from sqlalchemy import text as sa_text
 
-    with control_plane_session.connection() as conn:
-        row = conn.execute(
-            sa_text("SELECT revoked_at FROM api_keys WHERE key_id = :key_id"),
-            {"key_id": api_key.key_id},
-        ).fetchone()
-        assert row is not None
-        assert row[0] is not None
+    row = control_plane_session.execute(
+        sa_text("SELECT revoked_at FROM api_keys WHERE key_id = :key_id"),
+        {"key_id": api_key.key_id},
+    ).fetchone()
+    assert row is not None
+    assert row[0] is not None
 
 
 @pytest.mark.slow

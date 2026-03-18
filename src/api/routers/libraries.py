@@ -3,7 +3,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlmodel import Session
 from src.api.dependencies import get_tenant_session
 from src.core.io_utils import normalize_path_prefix
@@ -17,12 +17,19 @@ router = APIRouter(prefix="/v1/libraries", tags=["libraries"])
 class CreateLibraryRequest(BaseModel):
     name: str
     root_path: str
-    vision_model_id: str = ""
+    vision_model_id: str = "moondream"
 
 
 class LibraryUpdateRequest(BaseModel):
     name: str | None = None
     vision_model_id: str | None = None
+
+    @field_validator("vision_model_id")
+    @classmethod
+    def vision_model_id_not_empty(cls, v: str | None) -> str | None:
+        if v is not None and not v:
+            raise ValueError("vision_model_id must not be empty")
+        return v
 
 
 class LibraryResponse(BaseModel):

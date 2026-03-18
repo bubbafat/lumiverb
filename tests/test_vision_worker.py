@@ -33,10 +33,12 @@ def test_vision_worker_raises_on_empty_description_and_tags(tmp_path: Path) -> N
         mock_provider.describe.return_value = {"description": "   ", "tags": ["", "  ", "\n"]}
         mock_factory.return_value = mock_provider
 
-        with pytest.raises(RuntimeError) as excinfo:
-            worker.process(job)
+        # Empty description/tags no longer raises; worker accepts and returns an empty payload.
+        result = worker.process(job)
 
-    assert "empty description and tags" in str(excinfo.value)
+    assert result["description"] == ""
+    assert result["tags"] == []
+    assert result["model_id"] == "moondream"
 
 import json
 import os
@@ -349,6 +351,11 @@ def test_missing_ai_filter(vision_worker_env: tuple, tmp_path: Path) -> None:
                 "generated_at": datetime.now(timezone.utc),
                 "data": json.dumps({"description": "already", "tags": []}),
             },
+        )
+        # ai_vision enqueue requires proxy_key IS NOT NULL; set a synthetic key for both assets.
+        conn.execute(
+            text("UPDATE assets SET proxy_key = 'proxies/' || asset_id WHERE library_id = :lib_id"),
+            {"lib_id": library["library_id"]},
         )
         conn.commit()
     engine.dispose()

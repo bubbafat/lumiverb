@@ -48,6 +48,22 @@ Two-layer Postgres architecture:
 
 pgvector extension is enabled at provisioning time. The `vector(512)` columns exist from day one but are nullable and unpopulated until phase 2 workers run. Do not query these columns in phase 1 code.
 
+### Soft delete — always use `active_assets`
+
+Assets are soft-deleted via `deleted_at` (set by trash operations). The `active_assets` view is defined as:
+
+```sql
+SELECT * FROM assets WHERE deleted_at IS NULL
+```
+
+**Non-negotiable rules — enforced by tests in `tests/test_soft_delete_invariants.py`:**
+
+1. **Never query `FROM assets` directly** in any read path that should return live assets. Always use `FROM active_assets` in raw SQL, or add `.where(Asset.deleted_at.is_(None))` in ORM queries.
+2. **`AssetRepository.get_by_id()` returns `None` for trashed assets.** Do not use `session.get(Asset, id)` as a substitute — it bypasses the filter.
+3. **`get_by_library_and_rel_path()` intentionally returns trashed assets** because the scan upsert path needs to detect them to avoid a unique-constraint violation on `(library_id, rel_path)`. It is the only read method that does this. All callers must check `deleted_at` explicitly, or call a write method (`update_for_scan`, `create_or_update_for_scan_bulk`) that clears it.
+4. **Scan write methods clear `deleted_at` unconditionally.** Both `update_for_scan` and the `ON CONFLICT DO UPDATE` in `create_or_update_for_scan_bulk` set `deleted_at = NULL`. A file present on disk during a scan is by definition active — this is the correct restore behaviour.
+5. **`search_sync_queue.pending_count()` must include expired-processing rows**, matching the scope of `claim_batch()`. Using only `status = 'pending'` produces a misleading count when rows are stuck in `processing` after an interrupted run.
+
 When writing queries, always use the tenant DB session, not the control plane session. The middleware resolves this from the API key before the route handler runs.
 
 Tenant resolution runs for every request except `/health` and `/v1/admin/*`: reads `Authorization: Bearer <token>`, validates via control plane `ApiKeyRepository.get_by_plaintext`, touches `last_used_at`, looks up `TenantDbRouting` for the connection string, and stores `tenant_id` and `connection_string` in `request.state`. Use the `get_tenant_session` dependency in route handlers to obtain a tenant DB session.
