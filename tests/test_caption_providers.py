@@ -4,13 +4,6 @@ import pytest
 
 
 @pytest.mark.fast
-def test_moondream_provider_id():
-    from src.workers.captions.moondream_caption import MoondreamCaptionProvider
-
-    assert MoondreamCaptionProvider().provider_id == "moondream"
-
-
-@pytest.mark.fast
 def test_openai_provider_id():
     from src.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
@@ -21,20 +14,15 @@ def test_openai_provider_id():
 
 
 @pytest.mark.fast
-def test_factory_returns_moondream():
-    from src.workers.captions.factory import get_caption_provider
-    from src.workers.captions.moondream_caption import MoondreamCaptionProvider
-
-    p = get_caption_provider("moondream")
-    assert isinstance(p, MoondreamCaptionProvider)
-
-
-@pytest.mark.fast
 def test_factory_returns_openai_compatible():
     from src.workers.captions.factory import get_caption_provider
     from src.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
-    p = get_caption_provider("qwen3-visioncaption-2b")
+    p = get_caption_provider(
+        vision_model_id="qwen3-visioncaption-2b",
+        api_url="http://localhost:1234/v1",
+        api_key=None,
+    )
     assert isinstance(p, OpenAICompatibleCaptionProvider)
     assert p._model == "qwen3-visioncaption-2b"
 
@@ -44,7 +32,11 @@ def test_factory_arbitrary_model_id():
     from src.workers.captions.factory import get_caption_provider
     from src.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
-    p = get_caption_provider("llava:13b")
+    p = get_caption_provider(
+        vision_model_id="llava:13b",
+        api_url="http://localhost:1234/v1",
+        api_key=None,
+    )
     assert isinstance(p, OpenAICompatibleCaptionProvider)
     assert p._model == "llava:13b"
 
@@ -59,14 +51,12 @@ def test_openai_strips_thinking_blocks():
 
 
 @pytest.mark.fast
-def test_embedding_config_moondream():
+def test_embedding_config_moondream_is_clip():
     from src.models.registry import get_embedding_config
 
     config = get_embedding_config("moondream")
-    assert config.embedding_provider == "moondream"
+    assert config.embedding_provider == "clip"
     assert config.embedding_dim == 512
-    assert config.moondream_weight == 0.3
-    assert config.clip_weight == 0.7
 
 
 @pytest.mark.fast
@@ -76,17 +66,6 @@ def test_embedding_config_default_fallback():
     config = get_embedding_config("qwen3-visioncaption-2b")
     assert config.embedding_provider == "clip"
     assert config.embedding_dim == 512
-    assert config.moondream_weight == 0.0
-    assert config.clip_weight == 1.0
-
-
-@pytest.mark.fast
-def test_model_version_for_provenance():
-    from src.models.registry import model_version_for_provenance
-
-    assert model_version_for_provenance("moondream") == "2"
-    assert model_version_for_provenance("qwen3-visioncaption-2b") == "1"
-    assert model_version_for_provenance("llava:13b") == "1"
 
 
 @pytest.mark.fast
@@ -132,3 +111,35 @@ def test_openai_provider_omits_auth_header_when_no_api_key() -> None:
         p._chat("data:image/jpeg;base64,abc", "describe this")
         headers = mock_post.call_args.kwargs.get("headers", {})
         assert "Authorization" not in headers
+
+
+@pytest.mark.fast
+def test_openai_provider_retries_once_on_empty_completion(tmp_path) -> None:
+    from unittest.mock import MagicMock, patch
+
+    from PIL import Image
+
+    from src.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+
+    img_path = tmp_path / "img.jpg"
+    Image.new("RGB", (16, 16), color=(255, 0, 0)).save(img_path)
+
+    p = OpenAICompatibleCaptionProvider("http://localhost:1234/v1", "gpt-4o", api_key=None)
+
+    empty_resp = MagicMock()
+    empty_resp.ok = True
+    empty_resp.raise_for_status = MagicMock()
+    empty_resp.json.return_value = {"choices": [{"message": {"content": ""}}]}
+
+    ok_resp = MagicMock()
+    ok_resp.ok = True
+    ok_resp.raise_for_status = MagicMock()
+    ok_resp.json.return_value = {
+        "choices": [{"message": {"content": '{"description": "hi", "tags": ["a"]}'}}]
+    }
+
+    with patch("requests.post", side_effect=[empty_resp, ok_resp]) as mock_post:
+        out = p.describe(img_path)
+
+    assert out == {"description": "hi", "tags": ["a"]}
+    assert mock_post.call_count == 2

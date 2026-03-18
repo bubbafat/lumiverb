@@ -18,6 +18,8 @@ def test_vision_worker_raises_on_empty_description_and_tags(tmp_path: Path) -> N
         "asset_id": "asset-1",
         "proxy_key": "proxies/asset-1.jpg",
         "vision_model_id": "moondream",
+        "vision_api_url": "http://localhost:1234/v1",
+        "vision_api_key": None,
     }
 
     # Create an empty file to satisfy LocalStorage path resolution if accessed.
@@ -25,7 +27,7 @@ def test_vision_worker_raises_on_empty_description_and_tags(tmp_path: Path) -> N
     proxy_path.parent.mkdir(parents=True, exist_ok=True)
     proxy_path.touch()
 
-    with patch("src.workers.captions.factory.get_caption_provider") as mock_factory:
+    with patch("src.workers.vision_worker.get_caption_provider") as mock_factory:
         mock_provider = MagicMock()
         # Whitespace-only description and tags – should be treated as empty overall.
         mock_provider.describe.return_value = {"description": "   ", "tags": ["", "  ", "\n"]}

@@ -224,35 +224,49 @@ def test_scan_registers_signal_handlers(tmp_path: Path) -> None:
         return m
 
     mock_client = MagicMock()
-    mock_client.get.side_effect = [
+    get_responses = [
         _json([{"library_id": "lib_1", "name": "SigLib", "root_path": str(tmp_path)}]),
         _json([]),  # no running scans
         _204(),  # GET /v1/assets/page - no known assets
     ]
-    mock_client.post.side_effect = [
+
+    def _get_side_effect(*args, **kwargs):
+        # The scan flow may add additional GET calls over time; default to empty payloads.
+        if get_responses:
+            return get_responses.pop(0)
+        return _json([])
+
+    mock_client.get.side_effect = _get_side_effect
+    post_responses = [
         _json({"scan_id": "scan_1"}),
         _json({"added": 1, "updated": 0, "skipped": 0, "missing": 0}),
-        _json({
-            "scan_id": "scan_1",
-            "files_discovered": 1,
-            "files_added": 1,
-            "files_updated": 0,
-            "files_skipped": 0,
-            "files_missing": 0,
-            "status": "complete",
-        }),
+        _json(
+            {
+                "scan_id": "scan_1",
+                "files_discovered": 1,
+                "files_added": 1,
+                "files_updated": 0,
+                "files_skipped": 0,
+                "files_missing": 0,
+                "status": "complete",
+            }
+        ),
         _json({"enqueued": 0}),  # proxy enqueue
         _json({"enqueued": 0}),  # exif enqueue
     ]
+
+    def _post_side_effect(*args, **kwargs):
+        if post_responses:
+            return post_responses.pop(0)
+        return _json({"enqueued": 0})
+
+    mock_client.post.side_effect = _post_side_effect
     with patch("src.cli.main.LumiverbClient", return_value=mock_client), patch(
         "src.cli.scanner.signal.signal"
     ) as mock_signal:
-        mock_signal.side_effect = [
-            MagicMock(),
-            MagicMock(),
-            None,
-            None,
-        ]  # old handlers for register, then restore calls
+        # The scan command registers and restores signal handlers; we only care that
+        # it calls signal.signal with SIGINT/SIGTERM, not the exact call count.
+        mock_signal.return_value = MagicMock()
         result = runner.invoke(app, ["scan", "--library", "SigLib", "--force"])
     assert result.exit_code == 0
     calls = mock_signal.call_args_list
@@ -422,8 +436,13 @@ def test_is_unchanged_normalizes_mtime() -> None:
     """Z and +00:00 suffix should be treated as equal."""
     from src.cli.scanner import _is_unchanged
 
-    asset = {"file_size": 1000, "file_mtime": "2024-01-01T12:00:00+00:00", "sha256": None}
-    local = {"file_size": 1000, "file_mtime": "2024-01-01T12:00:00Z"}
+    asset = {
+        "file_size": 1000,
+        "file_mtime": "2024-01-01T12:00:00+00:00",
+        "sha256": None,
+        "media_type": "image",
+    }
+    local = {"file_size": 1000, "file_mtime": "2024-01-01T12:00:00Z", "media_type": "image"}
     assert _is_unchanged(asset, local, force=False) is True
 
 

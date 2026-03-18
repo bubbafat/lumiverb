@@ -12,6 +12,7 @@ import io
 import json
 import logging
 import re
+import time
 from pathlib import Path
 
 import requests
@@ -74,9 +75,18 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
     def describe(self, proxy_path: Path) -> dict:
+        """
+        Returns {} on failure.
+
+        If the OpenAI-compatible endpoint returns an empty/invalid body, retry once before
+        giving up. This prevents spuriously failing jobs when the inference service
+        intermittently returns an empty completion.
+        """
         if not proxy_path.exists():
             logger.warning("Proxy not found: %s", proxy_path)
             return {}
+
+        # Precompute request inputs once; on retry we only re-call the API.
         try:
             img = Image.open(proxy_path)
             max_edge = 1024
@@ -86,33 +96,51 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             img.save(buf, format="JPEG", quality=75)
             image_b64 = base64.b64encode(buf.getvalue()).decode()
             data_url = f"data:image/jpeg;base64,{image_b64}"
-
-            prompt = (
-                "Describe this image in 2-3 sentences, being specific about "
-                "the subject, setting, and mood. Then provide 5-10 descriptive "
-                "tags. Respond only with valid JSON in this exact format:\n"
-                '{"description": "...", "tags": ["tag1", "tag2", ...]}'
-            )
-            raw = self._chat(data_url, prompt)
-
-            # Strip markdown code fences if present
-            clean = raw.strip()
-            if clean.startswith("```"):
-                clean = re.sub(r"^```[a-z]*\n?", "", clean)
-                clean = re.sub(r"\n?```$", "", clean)
-                clean = clean.strip()
-
-            json_str = self._extract_first_json_object(clean)
-            if not json_str:
-                raise ValueError(f"No JSON object found in response: {clean[:100]!r}")
-            parsed = json.loads(json_str)
-            description = parsed.get("description", "").strip()
-            tags = [t.strip() for t in parsed.get("tags", []) if t.strip()]
-            return {"description": description, "tags": tags}
-
         except Exception as e:  # noqa: BLE001
             logger.warning("OpenAI-compatible caption failed for %s: %s", proxy_path, e)
             return {}
+
+        prompt = (
+            "Describe this image in 2-3 sentences, being specific about "
+            "the subject, setting, and mood. Then provide 5-10 descriptive "
+            "tags. Respond only with valid JSON in this exact format:\n"
+            '{"description": "...", "tags": ["tag1", "tag2", ...]}'
+        )
+
+        last_error: Exception | None = None
+        for attempt in (1, 2):
+            try:
+                raw = self._chat(data_url, prompt)
+
+                # Strip markdown code fences if present
+                clean = raw.strip()
+                if not clean:
+                    raise ValueError("Empty completion content")
+                if clean.startswith("```"):
+                    clean = re.sub(r"^```[a-z]*\n?", "", clean)
+                    clean = re.sub(r"\n?```$", "", clean)
+                    clean = clean.strip()
+
+                json_str = self._extract_first_json_object(clean)
+                if not json_str:
+                    raise ValueError(f"No JSON object found in response: {clean[:100]!r}")
+                parsed = json.loads(json_str)
+                description = parsed.get("description", "").strip()
+                tags = [t.strip() for t in parsed.get("tags", []) if t.strip()]
+                return {"description": description, "tags": tags}
+            except Exception as e:  # noqa: BLE001
+                last_error = e
+                if attempt == 1:
+                    # Brief backoff: helps with transient empty responses.
+                    time.sleep(0.2)
+                    continue
+                logger.warning("OpenAI-compatible caption failed for %s: %s", proxy_path, e)
+                return {}
+
+        logger.warning(
+            "OpenAI-compatible caption failed for %s: %s", proxy_path, last_error or "unknown"
+        )
+        return {}
 
     def _chat(self, data_url: str, prompt: str) -> str:
         payload = {
