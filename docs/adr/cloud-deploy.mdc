@@ -1,0 +1,943 @@
+# ADR: Cloud Deploy — Thick-Client API Foundation
+
+## Status
+Accepted
+
+## Context
+
+Lumiverb is being extended to support a split deployment model:
+
+- **Server** (cloud-hosted, e.g. DigitalOcean): runs the FastAPI, PostgreSQL, Quickwit, and object storage. Accessible from anywhere.
+- **Client** (local, e.g. Mac Studio): has direct access to the NAS (source files) and a locally-hosted LLM (e.g. LM Studio). Never exposes the LLM or source files to the cloud.
+
+The motivation is **AI isolation**: the cloud server must never have a path to the local LLM or source files. AI inference runs locally. Results are submitted to the cloud API.
+
+### What is broken today in a cloud deployment
+
+The current workers assume they share a filesystem with the server:
+
+- `ProxyWorker` reads source files from `root_path/rel_path` (requires NAS access — fine, client has it) and **writes** proxies to `LocalStorage.write(proxy_key, ...)` which writes to the server's `DATA_DIR` (broken: client can't write to server disk).
+- `VisionWorker` reads proxies via `LocalStorage.abs_path(proxy_key)` (broken: client can't read from server disk).
+
+### Goal of this ADR
+
+Define the server-side API additions that make a remote thick client *possible* in the future, without requiring a one-shot rewrite. The existing single-host deployment continues to work unchanged after every phase. Worker refactoring to *use* these new APIs is deferred to a follow-on effort.
+
+### What is NOT in scope
+
+- SQLite local caching on the client
+- Refactoring existing workers to use the new upload/download endpoints
+- Eliminating the double-bandwidth problem (client uploads proxy → server stores → server serves back to client for vision)
+- Search sync consolidation
+- Rate limiting
+
+---
+
+## System Overview: Current Flows
+
+### Authentication
+
+All `/v1/` routes require `Authorization: Bearer <api_key>`. The `TenantResolutionMiddleware` resolves the tenant from the key and attaches `request.state.connection_string` and `request.state.tenant_id`. `get_tenant_session` (FastAPI dependency) uses that connection string. All new endpoints in this ADR use `get_tenant_session` and are therefore automatically secured by the same mechanism.
+
+### Scan flow (current)
+
+1. CLI `lumiverb scan` runs `ScanWorker` on the client machine.
+2. Worker walks the library root on the local filesystem (NAS), finds image/video files.
+3. For each file: `POST /v1/assets/upsert` with `{library_id, rel_path, file_size, file_mtime, media_type, scan_id}`.
+4. Server upserts the asset record in Postgres and enqueues a `proxy` job.
+5. **Before:** `asset.proxy_key = null`, `asset.thumbnail_key = null`, `asset.status = "pending"`.
+6. **After scan:** asset row exists, `status = "pending"`, no proxy yet.
+
+### Proxy flow (current)
+
+1. `ProxyWorker` claims a `proxy` job: `GET /v1/jobs/next?job_type=proxy`.
+2. Server returns `{job_id, asset_id, rel_path, media_type, root_path, library_id, ...}`.
+3. Worker reads source file from `root / rel_path` on the local filesystem.
+4. Worker generates JPEG proxy (2048px long edge) and thumbnail (256px) in memory using pyvips/rawpy.
+5. Worker calls `self._storage.write(proxy_key, proxy_bytes)` — writes **directly** to server's `DATA_DIR`.
+6. Worker calls `POST /v1/jobs/{job_id}/complete` with `{proxy_key, thumbnail_key, width, height}`.
+7. Server writes `asset.proxy_key`, `asset.thumbnail_key`, `asset.width`, `asset.height` to Postgres.
+8. **How the proxy worker knows the upload succeeded:** `LocalStorage.write()` raises an exception on failure (atomic rename). The job is only completed if `write()` succeeds. If it throws, the worker calls `fail_job`.
+9. **After:** `asset.proxy_key` is set. `asset.proxy_sha256` does not exist yet (this ADR adds it).
+
+### AI vision flow (current)
+
+1. `VisionWorker` claims an `ai_vision` job.
+2. Server returns `{job_id, asset_id, proxy_key, vision_model_id, vision_api_url, vision_api_key, ...}`.
+3. Worker resolves the proxy file: `Path(self._storage.abs_path(proxy_key))` — **reads directly from server's DATA_DIR**.
+4. Worker sends the proxy image to the vision API (local LLM or remote OpenAI-compatible endpoint).
+5. Worker calls `POST /v1/jobs/{job_id}/complete` with `{model_id, model_version, description, tags}`.
+6. Server upserts `AssetMetadata` and enqueues a `SearchSyncQueue` row (`operation = "upsert"`).
+7. `search-sync process-batch` drains the queue, posting documents to Quickwit.
+
+### Video preview flow (current)
+
+1. `VideoPreviewWorker` claims a `video-preview` job.
+2. Worker reads source video from local filesystem, generates a 10-second MP4 clip.
+3. Worker writes clip to `self._storage.write(video_preview_key, ...)` — direct to server's `DATA_DIR`.
+4. Worker calls `POST /v1/jobs/{job_id}/complete` with `{video_preview_key}`.
+5. Server writes `asset.video_preview_key`.
+
+### Video scene rep frame flow (current)
+
+1. `VideoIndexWorker` processes chunks of a video, running scene segmentation.
+2. For each scene, it extracts a representative frame as a JPEG and writes it to `LocalStorage` using `scene_rep_key(...)`.
+3. `POST /v1/video/chunks/{chunk_id}/complete` with scene data including the `thumbnail_key` for each scene.
+4. Server persists `VideoScene` rows. `VideoScene.proxy_key` and `VideoScene.thumbnail_key` store the storage keys. No hash is tracked.
+
+---
+
+## Target: New APIs
+
+### Authentication (unchanged)
+
+All new endpoints are tenant-scoped and use `get_tenant_session`. No new auth mechanism. Same `Authorization: Bearer <api_key>` header required on every request.
+
+### New endpoint: Upload artifact
+
+```
+POST /v1/assets/{asset_id}/artifacts/{artifact_type}
+Content-Type: multipart/form-data
+
+Fields:
+  file: <binary JPEG or MP4>
+  width: int (optional, images only)
+  height: int (optional, images only)
+```
+
+**`artifact_type`** values: `proxy`, `thumbnail`, `video_preview`
+
+**Server behavior:**
+1. Validate `asset_id` belongs to tenant. Return 404 if not found or soft-deleted.
+2. Validate `artifact_type` is one of the allowed values.
+3. Determine the storage key using the same `LocalStorage` key generators already in use.
+4. Stream the upload to disk in fixed-size chunks (64 KB), updating a `hashlib.sha256` hasher incrementally with each chunk and writing each chunk directly to a temp file. At no point is the full payload held in memory. The temp file is atomically renamed to the final path after all chunks are received, matching the pattern already used by `LocalStorage.write()`. Track total bytes during the loop; if the limit is exceeded, delete the temp file and return 413.
+5. Write the storage key and SHA-256 to Postgres in a single DB commit. Storage write happens **before** the DB commit. If the DB commit fails, the storage file is orphaned (acceptable — GC can clean up). If storage write fails, the DB is never updated (safe).
+6. For `proxy`: update `asset.proxy_key` and `asset.proxy_sha256` (and `asset.width`, `asset.height` if provided).
+7. For `thumbnail`: update `asset.thumbnail_key` and `asset.thumbnail_sha256`.
+8. For `video_preview`: update `asset.video_preview_key` (no hash column needed for previews).
+
+**Response:**
+```json
+{ "key": "tenant1/lib1/proxies/07/ast_01JXXX_photo.jpg", "sha256": "abc123..." }
+```
+
+**Errors:** 404 (asset not found), 400 (invalid artifact_type), 413 (file too large — server enforces reasonable limit).
+
+---
+
+### New endpoint: Download artifact
+
+```
+GET /v1/assets/{asset_id}/artifacts/{artifact_type}
+```
+
+**`artifact_type`** values: `proxy`, `thumbnail`, `video_preview`
+
+**Server behavior:**
+1. Validate `asset_id` belongs to tenant. Return 404 if not found or soft-deleted.
+2. Look up the storage key from the asset row (`proxy_key`, `thumbnail_key`, or `video_preview_key`).
+3. If the key is null (artifact not yet generated), return 404 with `{"error": {"code": "artifact_not_ready", "message": "Artifact has not been generated yet"}}`.
+4. Read bytes from `LocalStorage.abs_path(key)`. If file is missing on disk, return 404 with `{"error": {"code": "artifact_missing", "message": "Artifact file not found on storage"}}`.
+5. Return the file as `FileResponse` with correct Content-Type (`image/jpeg` for proxy/thumbnail, `video/mp4` for preview).
+
+**Response:** Binary file stream, `Content-Type: image/jpeg` or `video/mp4`.
+
+---
+
+### New endpoint: Batch state check
+
+```
+POST /v1/assets/state-check
+
+Body:
+{
+  "asset_ids": ["ast_01JX...", "ast_01JY...", ...]
+}
+```
+
+**Constraints:** Maximum 500 asset IDs per request.
+
+**Server behavior:**
+1. Look up all provided `asset_ids` that belong to the tenant (ignore IDs from other tenants — return them as `not_found`).
+2. For each found asset, return its deletion status and current proxy hash.
+3. Include soft-deleted assets in the response (the client needs to know to evict them from cache).
+4. Asset IDs not found in the DB at all are returned with `deleted: true` and `proxy_sha256: null`.
+
+**Response:**
+```json
+{
+  "assets": [
+    { "asset_id": "ast_01JX...", "deleted": false, "proxy_sha256": "abc123..." },
+    { "asset_id": "ast_01JY...", "deleted": true,  "proxy_sha256": null },
+    { "asset_id": "ast_01JZ...", "deleted": false, "proxy_sha256": null }
+  ]
+}
+```
+
+`proxy_sha256: null` means the proxy exists but no hash has been recorded yet (pre-Phase 1 asset or proxy not yet generated). A future thick client must treat `null` as "unknown" — it can still use its cached copy but cannot verify it.
+
+---
+
+### New endpoint: Submit AI vision results
+
+```
+POST /v1/assets/{asset_id}/vision
+
+Body:
+{
+  "model_id": "moondream2",
+  "model_version": "1",
+  "description": "...",
+  "tags": ["landscape", "sunset"],
+  "client_proxy_sha256": "abc123..."   ← optional
+}
+```
+
+**Server behavior:**
+1. Validate `asset_id` belongs to tenant. Return 404 if not found or soft-deleted.
+2. If `client_proxy_sha256` is provided **and** `asset.proxy_sha256` is non-null:
+   - Compare the two values. If they differ, return `409 Conflict` with `{"error": {"code": "proxy_hash_mismatch", "message": "Client proxy does not match server proxy. Re-download the proxy and retry."}}`.
+   - If `asset.proxy_sha256` is null (pre-Phase 1 or proxy not yet generated), skip the check entirely — backwards compatibility.
+3. Upsert `AssetMetadata` with `{model_id, model_version, data: {description, tags}}`. This is identical to the existing `ai_vision` job-complete path.
+4. Enqueue a `SearchSyncQueue` row (`operation = "upsert"`) for the asset. Same as existing path.
+5. Set `asset.status = "described"`. Same as existing path.
+6. Return `{ "asset_id": "...", "status": "described" }`.
+
+**This endpoint does not require a job to be claimed.** It is a direct result submission, usable by any authenticated client that has run inference locally.
+
+**The existing `POST /v1/jobs/{job_id}/complete` endpoint for `ai_vision` jobs is unchanged.** Both paths write to `AssetMetadata` and enqueue search sync. A future migration can deprecate the job-complete path, but that is out of scope.
+
+---
+
+## Schema Changes
+
+### `assets` table — two new nullable columns
+
+```sql
+ALTER TABLE assets ADD COLUMN proxy_sha256     TEXT;
+ALTER TABLE assets ADD COLUMN thumbnail_sha256 TEXT;
+```
+
+Both default to `NULL`. No NOT NULL constraint. Existing rows remain unchanged.
+
+### `video_scenes` table — one new nullable column
+
+```sql
+ALTER TABLE video_scenes ADD COLUMN rep_frame_sha256 TEXT;
+```
+
+Defaults to `NULL`.
+
+### Migration file
+
+Create `src/models/migrations/add_artifact_sha256.sql` (or equivalent Alembic revision). No data backfill required — hashes will populate for newly generated artifacts only.
+
+---
+
+## Changes to Existing Code
+
+### `AssetRepository.update_proxy()`
+
+Add optional `proxy_sha256: str | None = None` and `thumbnail_sha256: str | None = None` parameters. If provided (non-None), write them to the asset row alongside `proxy_key`, `thumbnail_key`, `width`, and `height`.
+
+### `POST /v1/jobs/{job_id}/complete` — proxy job type
+
+Read two new optional fields from the request body: `proxy_sha256` and `thumbnail_sha256`. Pass them to `AssetRepository.update_proxy()`. If absent, the columns are left unchanged (null or whatever they were). **No breaking change.**
+
+### `ProxyWorker.process()`
+
+After generating `proxy_bytes` and `thumb_bytes` in memory (before calling `self._storage.write()`), compute:
+
+```python
+import hashlib
+proxy_sha256 = hashlib.sha256(proxy_bytes).hexdigest()
+thumbnail_sha256 = hashlib.sha256(thumb_bytes).hexdigest()
+```
+
+Include both in the returned dict alongside `proxy_key`, `thumbnail_key`, `width`, `height`. The server will store them via the updated job-complete handler.
+
+### `VideoScene` chunk-complete endpoint and `VideoIndexWorker`
+
+When the video index worker extracts a scene rep frame and writes it to storage, it computes:
+
+```python
+rep_frame_sha256 = hashlib.sha256(rep_frame_bytes).hexdigest()
+```
+
+Include `rep_frame_sha256` per scene in the `POST /v1/video/chunks/{chunk_id}/complete` payload. The server stores it on `VideoScene.rep_frame_sha256`. The chunk-complete schema accepts this as an optional field; existing callers without it are unaffected.
+
+---
+
+## Impact on the CLI
+
+**No CLI commands change.** The CLI runs workers via the existing `BaseWorker` mechanism. The changes in this ADR are:
+
+- `ProxyWorker` gains two extra fields in its `complete_job` payload (Phase 1). No command-line interface changes.
+- New API endpoints are added. Workers do not call them yet. A future refactor will point workers at these endpoints when running in remote mode.
+
+The CLI's API client (`LumiverbClient`) requires no changes for this ADR. The new endpoints are available to any authenticated caller.
+
+**Future consideration (not in scope):** A `--remote` flag or environment variable that switches `ProxyWorker` to use `POST /v1/assets/{asset_id}/artifacts/proxy` instead of `LocalStorage.write()`, and switches `VisionWorker` to download via `GET /v1/assets/{asset_id}/artifacts/proxy` instead of `LocalStorage.abs_path()`. That is a separate ADR.
+
+---
+
+## Impact on the Web UI
+
+None. The web UI reads assets, thumbnails, and proxies through existing read endpoints. It does not call upload, state-check, or vision submission endpoints. No web UI changes are required.
+
+---
+
+## Search Sync
+
+No changes. The existing `SearchSyncQueue` outbox pattern is preserved. The new `POST /v1/assets/{asset_id}/vision` endpoint enqueues a row into `search_sync_queue` exactly as the current `ai_vision` job-complete path does. The `search-sync process-batch` command continues to drain the queue in batches and post to Quickwit. This keeps write amplification under control regardless of which path is used to submit vision results.
+
+---
+
+## Phased Implementation Plan
+
+Each phase is independently implementable, testable, and leaves the system fully operational.
+
+---
+
+### Phase 1 — Schema and Hash Capture
+
+**Goal:** Record SHA-256 hashes of generated artifacts in the database. No behavior change for existing callers. Hashes become available for future integrity checking.
+
+**Cursor prompt:**
+
+```
+You are implementing Phase 1 of the cloud-deploy thick-client API foundation for Lumiverb.
+
+## Goal
+Add SHA-256 hash columns to the database and populate them when proxies are generated.
+No existing behavior changes. All existing tests must continue to pass.
+
+## Files to modify
+
+### 1. Create Alembic migration
+File: `alembic/versions/` — create a new revision using `alembic revision --autogenerate`
+or create manually. The migration must:
+  - ADD COLUMN proxy_sha256 TEXT to the assets table (nullable, no default)
+  - ADD COLUMN thumbnail_sha256 TEXT to the assets table (nullable, no default)
+  - ADD COLUMN rep_frame_sha256 TEXT to the video_scenes table (nullable, no default)
+  - Downgrade must DROP those columns.
+
+### 2. src/models/tenant.py — Asset model
+Add to the Asset class:
+  proxy_sha256: str | None = Field(default=None, nullable=True)
+  thumbnail_sha256: str | None = Field(default=None, nullable=True)
+
+### 3. src/models/tenant.py — VideoScene model
+Add to the VideoScene class:
+  rep_frame_sha256: str | None = Field(default=None, nullable=True)
+
+### 4. src/repository/tenant.py — AssetRepository.update_proxy()
+Find the update_proxy method. Add two optional parameters:
+  proxy_sha256: str | None = None
+  thumbnail_sha256: str | None = None
+If either is provided (non-None), include it in the SQL update. If None, do not overwrite existing value (use COALESCE or conditional logic — prefer only setting it when non-None).
+
+### 5. src/api/routers/jobs.py — proxy job-complete handler
+In the `complete_job` endpoint, in the `if job.job_type == "proxy":` block:
+After reading proxy_key, thumbnail_key, width, height from `data`, also read:
+  proxy_sha256 = data.get("proxy_sha256")        # str | None
+  thumbnail_sha256 = data.get("thumbnail_sha256")  # str | None
+Pass both to asset_repo.update_proxy(). The existing call signature will be extended
+with these two optional kwargs.
+
+### 6. src/workers/proxy.py — ProxyWorker.process()
+After generating proxy_bytes and thumb_bytes (before writing to storage):
+  import hashlib
+  proxy_sha256 = hashlib.sha256(proxy_bytes).hexdigest()
+  thumbnail_sha256 = hashlib.sha256(thumb_bytes).hexdigest()
+Add both to the returned dict:
+  return {
+      "proxy_key": proxy_key,
+      "thumbnail_key": thumbnail_key,
+      "width": width_orig,
+      "height": height_orig,
+      "proxy_sha256": proxy_sha256,
+      "thumbnail_sha256": thumbnail_sha256,
+  }
+
+### 7. src/api/routers/video.py — chunk complete handler
+Find where VideoScene rows are created in the chunk-complete endpoint. The scene dicts
+submitted by the worker include proxy_key and thumbnail_key per scene.
+
+In the VideoIndexWorker (src/workers/video_index_worker.py), rep frames are currently
+written with `shutil.copy2(rep_path, dest)` — the bytes are never held in memory, so
+there is no `rep_frame_bytes` variable to hash. Do NOT attempt to hash after the copy
+using the dest path alone, as that would require a separate file read.
+
+Instead, change the rep frame write to go through storage.write() which requires the
+bytes in memory. Replace the shutil.copy2 call with:
+  rep_frame_bytes = rep_path.read_bytes()
+  rep_frame_sha256 = hashlib.sha256(rep_frame_bytes).hexdigest()
+  self._storage.write(scene_rep_key, rep_frame_bytes)
+  rep_path.unlink(missing_ok=True)
+
+This mirrors what storage.write() does internally (atomic write via .tmp rename) and
+gives you the bytes in memory to hash. The rep_path is a temp file, so reading it into
+memory is safe — it is small (a single JPEG frame, typically < 1 MB).
+
+Include rep_frame_sha256 in the scene dict submitted to the chunk-complete endpoint.
+
+In the chunk-complete API handler, when creating VideoScene objects, read
+`rep_frame_sha256` from the scene dict (optional, default None) and set it on the
+VideoScene instance.
+
+## Verification
+- Run existing proxy worker tests. The returned dict now includes proxy_sha256 and
+  thumbnail_sha256. Tests that assert on the returned dict shape should be updated to
+  allow (not require) these new fields.
+- After running the proxy worker against a test library, query:
+    SELECT asset_id, proxy_sha256, thumbnail_sha256 FROM assets WHERE proxy_key IS NOT NULL;
+  All recently processed assets should have non-null sha256 values.
+- Assets with proxy_key already set but processed before this migration will have
+  proxy_sha256 = null. This is expected and correct.
+- The system must remain fully operational: scan, proxy, exif, ai_vision, and
+  search-sync must all continue to work exactly as before.
+```
+
+---
+
+### Phase 2 — Artifact Upload Endpoint
+
+**Goal:** Provide a path for clients to upload artifacts (proxy, thumbnail, video preview) directly through the API rather than by writing to the shared filesystem. The existing proxy worker is unchanged; it continues to write directly to storage. This endpoint is additive only.
+
+**Cursor prompt:**
+
+```
+You are implementing Phase 2 of the cloud-deploy thick-client API foundation for Lumiverb.
+Phase 1 (hash columns) is already complete.
+
+## Goal
+Add POST /v1/assets/{asset_id}/artifacts/{artifact_type} endpoint.
+This allows a remote client to upload an artifact file, have the server store it,
+compute its SHA-256, and record both in Postgres. No existing endpoints or workers change.
+
+## Artifact types
+artifact_type must be one of: proxy, thumbnail, video_preview
+
+## New file to create
+src/api/routers/artifacts.py
+
+```python
+"""Artifact upload and download endpoints. Require tenant auth."""
+
+import hashlib
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+from sqlmodel import Session
+
+from src.api.dependencies import get_tenant_session
+from src.repository.tenant import AssetRepository
+from src.storage.local import get_storage
+
+router = APIRouter(prefix="/v1/assets", tags=["artifacts"])
+
+ALLOWED_TYPES = {"proxy", "thumbnail", "video_preview"}
+UPLOAD_CHUNK_SIZE = 64 * 1024          # 64 KB read buffer — keeps memory flat under concurrency
+MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB hard ceiling
+
+
+class ArtifactUploadResponse(BaseModel):
+    key: str
+    sha256: str
+
+
+@router.post("/{asset_id}/artifacts/{artifact_type}", response_model=ArtifactUploadResponse)
+async def upload_artifact(
+    asset_id: str,
+    artifact_type: str,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    file: UploadFile = File(...),
+    width: int | None = Form(default=None),
+    height: int | None = Form(default=None),
+) -> ArtifactUploadResponse:
+    ...
+```
+
+## Endpoint logic
+
+1. Validate artifact_type is in ALLOWED_TYPES. Return 400 if not.
+
+2. Load asset from DB via AssetRepository. The tenant context is already resolved by
+   get_tenant_session. Return 404 if asset is None or asset.deleted_at is not None.
+
+3. Determine the storage key. Use get_storage() from src/storage/local.py.
+   tenant_id is available as request.state.tenant_id.
+   Pass asset.rel_path as the last argument for all three types — the key generators
+   only use Path(x).stem internally, so rel_path and filename are equivalent, but
+   using rel_path consistently avoids ambiguity:
+   - For proxy:         storage.proxy_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
+   - For thumbnail:     storage.thumbnail_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
+   - For video_preview: storage.video_preview_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
+
+4. Stream the upload to disk. Do NOT call await file.read() without a size argument —
+   that buffers the entire file. Instead, read in UPLOAD_CHUNK_SIZE chunks, hash and
+   write each chunk as it arrives, then atomic-rename. This keeps memory usage flat
+   regardless of file size or number of concurrent uploads.
+
+   storage = get_storage()
+   path = storage.abs_path(key)
+   path.parent.mkdir(parents=True, exist_ok=True)
+   tmp_path = path.with_name(path.name + ".tmp")
+   hasher = hashlib.sha256()
+   total_bytes = 0
+
+   try:
+       with open(tmp_path, "wb") as f:
+           while True:
+               chunk = await file.read(UPLOAD_CHUNK_SIZE)
+               if not chunk:
+                   break
+               total_bytes += len(chunk)
+               if total_bytes > MAX_UPLOAD_BYTES:
+                   raise HTTPException(status_code=413, detail="File too large")
+               hasher.update(chunk)
+               f.write(chunk)
+       tmp_path.rename(path)   # atomic on POSIX; matches LocalStorage.write() pattern
+   except HTTPException:
+       tmp_path.unlink(missing_ok=True)
+       raise
+   except Exception:
+       tmp_path.unlink(missing_ok=True)
+       raise HTTPException(status_code=500, detail="Failed to write artifact to storage")
+
+   sha256 = hasher.hexdigest()
+
+5. Update the asset in Postgres.
+
+   IMPORTANT — commit ownership: every method in AssetRepository calls
+   self._session.commit() internally. Do NOT add an outer session.commit() call in the
+   endpoint. The storage write (step 4) completes before the repository call, which is
+   the correct ordering: storage first, then DB.
+
+   Add two new repository methods to AssetRepository in src/repository/tenant.py:
+
+   def set_proxy_artifact(
+       self, asset_id: str, key: str, sha256: str,
+       width: int | None, height: int | None
+   ) -> None:
+       """Set proxy_key and proxy_sha256. Width/height updated only if non-None.
+       Does NOT touch thumbnail_key. Does NOT change asset.status — status
+       transitions (PROXY_READY etc.) are the job-complete path's responsibility,
+       not the upload endpoint's."""
+       asset = self._session.get(Asset, asset_id)
+       if asset is None:
+           raise ValueError(f"Asset not found: {asset_id}")
+       asset.proxy_key = key
+       asset.proxy_sha256 = sha256
+       if width is not None:
+           asset.width = width
+       if height is not None:
+           asset.height = height
+       asset.updated_at = utcnow()
+       self._session.add(asset)
+       self._session.commit()
+
+   def set_thumbnail_artifact(self, asset_id: str, key: str, sha256: str) -> None:
+       """Set thumbnail_key and thumbnail_sha256. Does NOT touch proxy_key or status."""
+       asset = self._session.get(Asset, asset_id)
+       if asset is None:
+           raise ValueError(f"Asset not found: {asset_id}")
+       asset.thumbnail_key = key
+       asset.thumbnail_sha256 = sha256
+       asset.updated_at = utcnow()
+       self._session.add(asset)
+       self._session.commit()
+
+   For video_preview: AssetRepository.set_video_preview(asset_id, video_preview_key=key)
+   already exists and self-commits. No sha256 column for previews. Use it as-is.
+
+   Do NOT use the existing update_proxy() method from the upload endpoint. That method
+   always sets all four fields (proxy_key, thumbnail_key, width, height) and always
+   sets status = PROXY_READY. Calling it from an upload of just the proxy artifact
+   would overwrite thumbnail_key with whatever is currently on the asset (potentially
+   null) and incorrectly advance status before the thumbnail is ready.
+
+6. Return ArtifactUploadResponse(key=key, sha256=sha256)
+
+## Register the router
+In src/api/main.py (or wherever routers are registered), add:
+  from src.api.routers.artifacts import router as artifacts_router
+  app.include_router(artifacts_router)
+
+## Important: route ordering
+The new route POST /v1/assets/{asset_id}/artifacts/{artifact_type} must be registered
+BEFORE any catch-all asset routes to avoid routing conflicts. Check existing asset router
+prefix and adjust include_router order if needed.
+
+## Verification
+Use curl or httpx to:
+  curl -X POST http://localhost:8000/v1/assets/{asset_id}/artifacts/proxy \
+    -H "Authorization: Bearer <key>" \
+    -F "file=@/path/to/proxy.jpg"
+Expected: 200 with {"key": "...", "sha256": "..."}
+Check DB: SELECT proxy_key, proxy_sha256 FROM assets WHERE asset_id = '...'
+Both columns should be set.
+
+Attempt with artifact_type=invalid: expect 400.
+Attempt with wrong asset_id: expect 404.
+Existing proxy worker flow (writing to storage directly + job-complete) must still work.
+```
+
+---
+
+### Phase 3 — Artifact Download Endpoint
+
+**Goal:** Allow a remote client to download a stored artifact (proxy, thumbnail, video preview) by asset ID. Required for future remote vision workers that cannot read from the server's filesystem directly.
+
+**Cursor prompt:**
+
+```
+You are implementing Phase 3 of the cloud-deploy thick-client API foundation for Lumiverb.
+Phases 1 and 2 are complete.
+
+## Goal
+Add GET /v1/assets/{asset_id}/artifacts/{artifact_type} endpoint.
+Returns the binary file for the requested artifact type.
+Additive only — no existing endpoints or workers change.
+
+## Add to src/api/routers/artifacts.py
+
+```python
+from fastapi.responses import Response
+
+ARTIFACT_CONTENT_TYPES = {
+    "proxy": "image/jpeg",
+    "thumbnail": "image/jpeg",
+    "video_preview": "video/mp4",
+}
+
+
+@router.get("/{asset_id}/artifacts/{artifact_type}")
+async def download_artifact(
+    asset_id: str,
+    artifact_type: str,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> Response:
+    ...
+```
+
+## Endpoint logic
+
+1. Validate artifact_type is in ALLOWED_TYPES. Return 400 if not.
+
+2. Load asset from DB. Return 404 if not found or soft-deleted.
+
+3. Resolve the storage key from the asset:
+   - proxy:         key = asset.proxy_key
+   - thumbnail:     key = asset.thumbnail_key
+   - video_preview: key = asset.video_preview_key
+   If key is None: raise HTTPException(404, detail={"error": {"code": "artifact_not_ready",
+     "message": "Artifact has not been generated yet"}})
+
+4. storage = get_storage()
+   path = storage.abs_path(key)
+   If not path.exists(): raise HTTPException(404, detail={"error": {"code": "artifact_missing",
+     "message": "Artifact file not found on storage"}})
+
+5. Read the file: data = path.read_bytes()
+
+6. content_type = ARTIFACT_CONTENT_TYPES[artifact_type]
+   Return Response(content=data, media_type=content_type)
+   Set Content-Disposition header to suggest a filename:
+     filename = Path(key).name
+     headers = {"Content-Disposition": f'inline; filename="{filename}"'}
+   Return Response(content=data, media_type=content_type, headers=headers)
+
+## Notes on streaming vs full read
+For simplicity, read the full file into memory. Proxy JPEGs are at most ~2-3 MB.
+Video previews may be larger — if FileResponse from starlette is preferred for
+video_preview type (to support range requests), use:
+  from fastapi.responses import FileResponse
+  return FileResponse(path=str(path), media_type="video/mp4", filename=filename)
+Use FileResponse for video_preview and Response for proxy/thumbnail.
+
+## Note on access control
+This endpoint uses get_tenant_session, which accepts any valid tenant API key
+(member or admin role). That means any key-holder can download full-resolution
+proxies directly. This is a conscious design choice: the client that uploads proxies
+needs to be able to retrieve them, and the existing architecture has no lower-privilege
+read-only key tier. Document this in a comment in the endpoint. If a read-only role
+is introduced in a future phase, this endpoint should be reviewed to add role gating.
+
+## Verification
+After Phase 2 upload test, download the same asset:
+  curl -H "Authorization: Bearer <key>" \
+    http://localhost:8000/v1/assets/{asset_id}/artifacts/proxy \
+    -o /tmp/downloaded_proxy.jpg
+Compare SHA-256 of downloaded file to the sha256 returned by the upload endpoint.
+They must match.
+
+Request for asset with no proxy_key: expect 404 with code artifact_not_ready.
+Request for asset where file was deleted from disk: expect 404 with code artifact_missing.
+Existing read paths (thumbnails served to web UI) are unaffected.
+```
+
+---
+
+### Phase 4 — Batch State-Check Endpoint
+
+**Goal:** Allow a client to check the current state of a batch of assets — whether they have been deleted and what proxy hash the server holds. This is the pre-flight validation step for a future local cache.
+
+**Cursor prompt:**
+
+```
+You are implementing Phase 4 of the cloud-deploy thick-client API foundation for Lumiverb.
+Phases 1, 2, and 3 are complete.
+
+## Goal
+Add POST /v1/assets/state-check endpoint.
+Returns per-asset: soft-delete status and current proxy_sha256.
+Additive only — no existing endpoints or workers change.
+
+## IMPORTANT: route registration order
+POST /v1/assets/state-check MUST be registered before POST /v1/assets/{asset_id}/...
+routes to prevent FastAPI from matching "state-check" as an asset_id.
+Check the order routers are registered in main.py and ensure the assets router includes
+this route at a path that won't conflict. Adding to src/api/routers/assets.py at the
+top of the file (before parametric routes) is the safest approach.
+
+## Add to src/api/routers/assets.py
+
+```python
+class StateCheckRequest(BaseModel):
+    asset_ids: list[str]
+
+    @field_validator("asset_ids")   # Pydantic v2 — NOT @validator (that is v1 syntax)
+    @classmethod
+    def max_ids(cls, v: list[str]) -> list[str]:
+        if len(v) > 500:
+            raise ValueError("Maximum 500 asset_ids per request")
+        if len(v) == 0:
+            raise ValueError("asset_ids must not be empty")
+        return v
+
+
+class AssetStateItem(BaseModel):
+    asset_id: str
+    deleted: bool
+    proxy_sha256: str | None
+
+
+class StateCheckResponse(BaseModel):
+    assets: list[AssetStateItem]
+
+
+@router.post("/state-check", response_model=StateCheckResponse)
+def state_check(
+    body: StateCheckRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> StateCheckResponse:
+    ...
+```
+
+Make sure `field_validator` is imported from pydantic: `from pydantic import BaseModel, field_validator`
+
+## Endpoint logic
+
+1. body.asset_ids is validated by @field_validator (non-empty, max 500). No extra
+   check needed in the handler body.
+
+2. Query Postgres via AssetRepository.get_states() (defined below).
+
+   CRITICAL: Do NOT use AssetRepository.get_by_id() or get_by_ids() here. Both methods
+   silently filter out soft-deleted assets (WHERE deleted_at IS NULL). Using them would
+   cause soft-deleted assets to appear as "not found" instead of "deleted: true",
+   which is wrong — the client would never learn to evict them from its cache.
+   get_states() must issue a raw SELECT with no deleted_at filter.
+
+3. Build a dict keyed by asset_id from query results.
+
+4. For each asset_id in body.asset_ids:
+   - If found: deleted = (asset.deleted_at is not None), proxy_sha256 = asset.proxy_sha256
+   - If not found in DB at all: deleted = True, proxy_sha256 = None
+     (treat unknown IDs as deleted to prompt client eviction)
+
+5. Return StateCheckResponse with one AssetStateItem per input asset_id,
+   in the same order as the input list.
+
+## Add to AssetRepository in src/repository/tenant.py
+
+```python
+def get_states(self, asset_ids: list[str]) -> dict[str, dict]:
+    """Fetch deleted status and proxy_sha256 for a list of asset_ids.
+    Returns dict keyed by asset_id. IDs not present in DB are not included.
+    Deliberately includes soft-deleted assets — callers must not add a
+    deleted_at IS NULL filter here."""
+    from sqlmodel import select
+    stmt = (
+        select(Asset.asset_id, Asset.deleted_at, Asset.proxy_sha256)
+        .where(Asset.asset_id.in_(asset_ids))
+        # NO .where(Asset.deleted_at.is_(None)) — soft-deleted rows must be included
+    )
+    rows = self._session.exec(stmt).all()
+    return {
+        row.asset_id: {
+            "deleted": row.deleted_at is not None,
+            "proxy_sha256": row.proxy_sha256,
+        }
+        for row in rows
+    }
+```
+
+## Verification
+POST /v1/assets/state-check with:
+  {"asset_ids": ["ast_existing_active", "ast_existing_deleted", "ast_does_not_exist"]}
+
+Expected response:
+  {"assets": [
+    {"asset_id": "ast_existing_active",  "deleted": false, "proxy_sha256": "<hash or null>"},
+    {"asset_id": "ast_existing_deleted", "deleted": true,  "proxy_sha256": "<hash or null>"},
+    {"asset_id": "ast_does_not_exist",   "deleted": true,  "proxy_sha256": null}
+  ]}
+
+POST with 501 IDs: expect 400 (validator triggers).
+POST with empty list: expect 400.
+```
+
+---
+
+### Phase 5 — Vision Submission Endpoint
+
+**Goal:** Provide a dedicated endpoint for clients to submit AI vision results directly, with optional proxy hash validation for optimistic concurrency. This decouples AI result submission from the job queue, enabling a future remote AI worker.
+
+**Cursor prompt:**
+
+```
+You are implementing Phase 5 of the cloud-deploy thick-client API foundation for Lumiverb.
+Phases 1–4 are complete.
+
+## Goal
+Add POST /v1/assets/{asset_id}/vision endpoint.
+Accepts AI description + tags plus an optional client_proxy_sha256 for integrity checking.
+If the hash is provided and doesn't match the server's stored hash, return 409.
+On success, writes AssetMetadata and enqueues SearchSyncQueue — identical to the
+existing ai_vision job-complete path.
+The existing POST /v1/jobs/{job_id}/complete for ai_vision jobs is unchanged.
+
+## Add to src/api/routers/assets.py (or a new routers/vision.py — your choice)
+
+```python
+class VisionSubmitRequest(BaseModel):
+    model_id: str
+    model_version: str = "1"
+    description: str
+    tags: list[str] = []
+    client_proxy_sha256: str | None = None
+
+
+class VisionSubmitResponse(BaseModel):
+    asset_id: str
+    status: str
+
+
+@router.post("/{asset_id}/vision", response_model=VisionSubmitResponse)
+def submit_vision(
+    asset_id: str,
+    body: VisionSubmitRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> VisionSubmitResponse:
+    ...
+```
+
+## Endpoint logic
+
+1. Load asset from DB. Return 404 if not found or deleted_at is not None.
+
+2. Optimistic concurrency check:
+   If body.client_proxy_sha256 is not None AND asset.proxy_sha256 is not None:
+     If body.client_proxy_sha256 != asset.proxy_sha256:
+       raise HTTPException(
+           status_code=409,
+           detail={
+               "error": {
+                   "code": "proxy_hash_mismatch",
+                   "message": "Client proxy does not match server proxy. "
+                              "Re-download the proxy and retry."
+               }
+           }
+       )
+   If asset.proxy_sha256 is None (pre-Phase 1 or no proxy yet), skip the check.
+   If body.client_proxy_sha256 is None, skip the check (caller opted out).
+
+3. Upsert AssetMetadata:
+   meta_repo = AssetMetadataRepository(session)
+   meta_repo.upsert(
+       asset_id=asset_id,
+       model_id=body.model_id,
+       model_version=body.model_version,
+       data={"description": body.description, "tags": body.tags},
+   )
+
+4. Enqueue search sync:
+   queue_repo = SearchSyncQueueRepository(session)
+   queue_repo.enqueue(asset_id=asset_id, operation="upsert")
+
+5. Set asset status:
+   asset_repo = AssetRepository(session)
+   asset_repo.set_status(asset_id, "described")   # uses asset_status.DESCRIBED constant
+
+   No outer session.commit() needed. meta_repo.upsert(), queue_repo.enqueue(), and
+   asset_repo.set_status() each call self._session.commit() internally — this is the
+   consistent pattern across all repository methods in this codebase.
+
+6. Return VisionSubmitResponse(asset_id=asset_id, status="described")
+
+## Verification
+
+### Happy path (no hash)
+POST /v1/assets/{asset_id}/vision
+  {"model_id": "moondream2", "model_version": "1", "description": "a sunset", "tags": ["landscape"]}
+Expected: 200 {"asset_id": "...", "status": "described"}
+Check DB: SELECT data FROM asset_metadata WHERE asset_id = '...'
+Check search_sync_queue: SELECT * FROM search_sync_queue WHERE asset_id = '...' ORDER BY created_at DESC LIMIT 1
+
+### Happy path (hash matches)
+Run after Phase 1 has populated proxy_sha256 for an asset.
+Look up the hash: SELECT proxy_sha256 FROM assets WHERE asset_id = '...';
+POST with client_proxy_sha256 = that hash.
+Expected: 200
+
+### Conflict (hash mismatch)
+POST with client_proxy_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+Expected: 409 with code proxy_hash_mismatch
+
+### Hash check skipped when server has no hash
+Find an asset where proxy_sha256 IS NULL.
+POST with any client_proxy_sha256.
+Expected: 200 (check skipped because server hash is null)
+
+### Existing ai_vision job-complete still works
+Run the full existing worker test suite. The existing POST /v1/jobs/{job_id}/complete
+for ai_vision must be unaffected.
+```
+
+---
+
+## Summary Table
+
+| Phase | What changes | Backward compatible |
+|-------|-------------|---------------------|
+| 1 | Schema (3 new nullable columns) + hash computed in ProxyWorker + stored via job-complete | Yes — columns nullable, new fields optional |
+| 2 | New endpoint: `POST /v1/assets/{asset_id}/artifacts/{type}` | Yes — additive |
+| 3 | New endpoint: `GET /v1/assets/{asset_id}/artifacts/{type}` | Yes — additive |
+| 4 | New endpoint: `POST /v1/assets/state-check` | Yes — additive |
+| 5 | New endpoint: `POST /v1/assets/{asset_id}/vision` | Yes — additive; job-complete unchanged |
+
+After all five phases, a remote thick client can:
+1. Upload proxies via Phase 2
+2. Download proxies for local AI inference via Phase 3
+3. Verify its cache before inference via Phase 4
+4. Submit AI results with integrity checking via Phase 5
+
+The existing single-host deployment is unchanged throughout.
