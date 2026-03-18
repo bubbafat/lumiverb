@@ -79,6 +79,36 @@ class SearchSyncWorker:
             {"event": event, "stage": "search_sync", **fields},
         )
 
+    def process_one_batch(self) -> dict[str, int | bool]:
+        """
+        Claim and process exactly one batch from the queue.
+
+        Returns {"processed": bool, "synced": int, "skipped": int}.
+        processed=False means the queue was empty (no work claimed).
+
+        Used by the API endpoint POST /v1/search-sync/process-batch so the server
+        can drive sync without the CLI needing direct DB or Quickwit access.
+        """
+        if not self._quickwit.enabled:
+            return {"processed": False, "synced": 0, "skipped": 0}
+
+        self._quickwit.ensure_index_for_library(self._library_id)
+        self._quickwit.ensure_scene_index_for_library(self._library_id)
+
+        batch = self._queue_repo.claim_batch(
+            self._batch_size,
+            library_id=self._library_id,
+            path_prefix=self._path_prefix,
+            lease_minutes=self._lease_minutes,
+        )
+        if not batch:
+            return {"processed": False, "synced": 0, "skipped": 0}
+
+        batch_status, _ = self._ingest_one_batch(batch)
+        synced = sum(1 for v in batch_status.values() if v == "synced")
+        skipped = sum(1 for v in batch_status.values() if v == "skipped")
+        return {"processed": True, "synced": synced, "skipped": skipped}
+
     def run_once(
         self,
         progress_callback: object | None = None,
@@ -95,7 +125,8 @@ class SearchSyncWorker:
           (missing asset or no metadata)
         - batches: number of claim batches processed
         """
-        asset_status: dict[str, str] = {}
+        # Global asset_status tracks deduplication across batches: "synced" wins over "skipped".
+        global_asset_status: dict[str, str] = {}
         synced = 0
         skipped = 0
         batches = 0
@@ -126,78 +157,15 @@ class SearchSyncWorker:
                 break
             batches += 1
 
-            docs: list[dict] = []
-            scene_docs: list[dict] = []
-            sync_ids: list[str] = []
+            batch_status, _ = self._ingest_one_batch(batch)
 
-            library = self._library_repo.get_by_id(self._library_id)
-            scene_repo = VideoSceneRepository(self._session)
-            for row in batch:
-                if row.scene_id:
-                    # Scene document path
-                    scene = scene_repo.get_by_id(row.scene_id)
-                    asset = self._asset_repo.get_by_id(row.asset_id)
-                    if scene is None or asset is None:
-                        sync_ids.append(row.sync_id)
-                        if asset_status.get(row.asset_id) != "synced":
-                            asset_status[row.asset_id] = "skipped"
-                        continue
-                    scene_doc = self._build_scene_document(scene, asset, library)
-                    scene_docs.append(scene_doc)
-                    sync_ids.append(row.sync_id)
-                    asset_status[row.asset_id] = "synced"
-                else:
-                    # Existing asset document path — get_by_id returns None for trashed assets
-                    asset = self._asset_repo.get_by_id(row.asset_id)
-                    asset_id = row.asset_id
-                    if asset is None:
-                        logger.warning(
-                            "search_sync_queue row %s references missing asset_id=%s; marking synced",
-                            row.sync_id,
-                            row.asset_id,
-                        )
-                        sync_ids.append(row.sync_id)
-                        # Only mark skipped if we haven't already marked this asset as synced.
-                        if asset_status.get(asset_id) != "synced":
-                            asset_status[asset_id] = "skipped"
-                        continue
+            # Merge into global tracker: "synced" takes priority over "skipped".
+            for asset_id, status in batch_status.items():
+                if status == "synced" or global_asset_status.get(asset_id) != "synced":
+                    global_asset_status[asset_id] = status
 
-                    library = self._library_repo.get_by_id(asset.library_id)
-                    vision_model_id = library.vision_model_id if library else ""
-                    model_version = "1"
-
-                    meta: AssetMetadata | None = self._meta_repo.get(
-                        asset_id=asset.asset_id,
-                        model_id=vision_model_id,
-                        model_version=model_version,
-                    )
-                    if meta is None:
-                        logger.debug(
-                            "No AI metadata for asset_id=%s model=%s version=%s; skipping",
-                            asset.asset_id,
-                            vision_model_id,
-                            model_version,
-                        )
-                        sync_ids.append(row.sync_id)
-                        if asset_status.get(asset_id) != "synced":
-                            asset_status[asset_id] = "skipped"
-                        continue
-
-                    doc = self._build_document(asset, meta)
-                    docs.append(doc)
-                    sync_ids.append(row.sync_id)
-                    asset_status[asset_id] = "synced"
-
-            if docs:
-                self._quickwit.ingest_documents_for_library(self._library_id, docs)
-            if scene_docs:
-                self._quickwit.ingest_scene_documents_for_library(self._library_id, scene_docs)
-
-            if sync_ids:
-                self._queue_repo.mark_synced(sync_ids)
-
-            synced = sum(1 for v in asset_status.values() if v == "synced")
-            skipped = sum(1 for v in asset_status.values() if v == "skipped")
+            synced = sum(1 for v in global_asset_status.values() if v == "synced")
+            skipped = sum(1 for v in global_asset_status.values() if v == "skipped")
             if cb:
                 cb(synced, skipped, batches)
             self._emit_event(
@@ -212,6 +180,86 @@ class SearchSyncWorker:
         summary = {"synced": synced, "skipped": skipped, "batches": batches}
         self._emit_event("complete", library_id=self._library_id, **summary)
         return summary
+
+    def _ingest_one_batch(
+        self, batch: list
+    ) -> tuple[dict[str, str], list[str]]:
+        """
+        Build docs for a claimed batch, ingest to Quickwit, and mark rows synced.
+
+        Returns (asset_status, sync_ids) where asset_status maps asset_id →
+        "synced"|"skipped" for the assets in this batch.
+        """
+        asset_status: dict[str, str] = {}
+        docs: list[dict] = []
+        scene_docs: list[dict] = []
+        sync_ids: list[str] = []
+
+        library = self._library_repo.get_by_id(self._library_id)
+        scene_repo = VideoSceneRepository(self._session)
+        for row in batch:
+            if row.scene_id:
+                # Scene document path
+                scene = scene_repo.get_by_id(row.scene_id)
+                asset = self._asset_repo.get_by_id(row.asset_id)
+                if scene is None or asset is None:
+                    sync_ids.append(row.sync_id)
+                    if asset_status.get(row.asset_id) != "synced":
+                        asset_status[row.asset_id] = "skipped"
+                    continue
+                scene_doc = self._build_scene_document(scene, asset, library)
+                scene_docs.append(scene_doc)
+                sync_ids.append(row.sync_id)
+                asset_status[row.asset_id] = "synced"
+            else:
+                # Asset document path — get_by_id returns None for trashed assets
+                asset = self._asset_repo.get_by_id(row.asset_id)
+                asset_id = row.asset_id
+                if asset is None:
+                    logger.warning(
+                        "search_sync_queue row %s references missing asset_id=%s; marking synced",
+                        row.sync_id,
+                        row.asset_id,
+                    )
+                    sync_ids.append(row.sync_id)
+                    if asset_status.get(asset_id) != "synced":
+                        asset_status[asset_id] = "skipped"
+                    continue
+
+                lib = self._library_repo.get_by_id(asset.library_id)
+                vision_model_id = lib.vision_model_id if lib else ""
+                model_version = "1"
+
+                meta: AssetMetadata | None = self._meta_repo.get(
+                    asset_id=asset.asset_id,
+                    model_id=vision_model_id,
+                    model_version=model_version,
+                )
+                if meta is None:
+                    logger.debug(
+                        "No AI metadata for asset_id=%s model=%s version=%s; skipping",
+                        asset.asset_id,
+                        vision_model_id,
+                        model_version,
+                    )
+                    sync_ids.append(row.sync_id)
+                    if asset_status.get(asset_id) != "synced":
+                        asset_status[asset_id] = "skipped"
+                    continue
+
+                doc = self._build_document(asset, meta)
+                docs.append(doc)
+                sync_ids.append(row.sync_id)
+                asset_status[asset_id] = "synced"
+
+        if docs:
+            self._quickwit.ingest_documents_for_library(self._library_id, docs)
+        if scene_docs:
+            self._quickwit.ingest_scene_documents_for_library(self._library_id, scene_docs)
+        if sync_ids:
+            self._queue_repo.mark_synced(sync_ids)
+
+        return asset_status, sync_ids
 
     def _build_document(self, asset: Asset, meta: AssetMetadata) -> dict:
         """

@@ -330,6 +330,54 @@ def fail_job(
 
 
 # ---------------------------------------------------------------------------
+# Failures listing
+# ---------------------------------------------------------------------------
+
+
+class FailureRow(BaseModel):
+    rel_path: str
+    error_message: str
+    failed_at: str | None
+
+
+class FailuresResponse(BaseModel):
+    rows: list[FailureRow]
+    total_count: int
+
+
+@router.get("/failures", response_model=FailuresResponse)
+def list_failures(
+    library_id: str,
+    job_type: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    path_prefix: str | None = None,
+    limit: int = 20,
+) -> FailuresResponse:
+    """
+    List failed jobs for a library and job type.
+    Returns the most recent failed job per asset, ordered by rel_path.
+    """
+    job_repo = WorkerJobRepository(session)
+    rows, total_count = job_repo.list_failures(
+        library_id=library_id,
+        job_type=job_type,
+        path_prefix=path_prefix,
+        limit=limit,
+    )
+    return FailuresResponse(
+        rows=[
+            FailureRow(
+                rel_path=r["rel_path"],
+                error_message=r["error_message"] or "",
+                failed_at=r["failed_at"].isoformat() if r["failed_at"] else None,
+            )
+            for r in rows
+        ],
+        total_count=total_count,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Job stats (aggregate counts for admin UI)
 # ---------------------------------------------------------------------------
 
