@@ -17,6 +17,38 @@ from src.core.database import _engines
 from tests.conftest import _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 
+def _create_asset_for_test(client: TestClient, auth: dict[str, str], library_id: str, rel_path: str) -> str:
+    """Create a new asset in library and return its asset_id (order-independent for module fixtures)."""
+    r_scan = client.post(
+        "/v1/scans",
+        json={"library_id": library_id, "status": "running"},
+        headers=auth,
+    )
+    assert r_scan.status_code == 200, (r_scan.status_code, r_scan.text)
+    scan_id = r_scan.json()["scan_id"]
+
+    r_up = client.post(
+        "/v1/assets/upsert",
+        json={
+            "library_id": library_id,
+            "rel_path": rel_path,
+            "file_size": 1234,
+            "file_mtime": "2025-01-01T12:00:00Z",
+            "media_type": "image/jpeg",
+            "scan_id": scan_id,
+        },
+        headers=auth,
+    )
+    assert r_up.status_code == 200, (r_up.status_code, r_up.text)
+    r_by_path = client.get(
+        "/v1/assets/by-path",
+        params={"library_id": library_id, "rel_path": rel_path},
+        headers=auth,
+    )
+    assert r_by_path.status_code == 200, (r_by_path.status_code, r_by_path.text)
+    return r_by_path.json()["asset_id"]
+
+
 @pytest.fixture(scope="module")
 def trash_api_client() -> tuple[TestClient, str, str, list[str]]:
     """Control + tenant DB; one tenant, one library, three assets. Yields (client, api_key, library_id, asset_ids)."""
@@ -180,10 +212,13 @@ def test_batch_trash(trash_api_client: tuple[TestClient, str, str, list[str]]) -
     """DELETE /v1/assets with body returns trashed and not_found."""
     client, api_key, _library_id, asset_ids = trash_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
-    existing, other = asset_ids[0], asset_ids[1]
+    # Create fresh assets to avoid ordering dependence on module-scoped fixture.
+    existing = _create_asset_for_test(client, auth, _library_id, f"batch_{os.urandom(4).hex()}.jpg")
+    other = _create_asset_for_test(client, auth, _library_id, f"batch_{os.urandom(4).hex()}.jpg")
     nonexistent = "ast_00000000000000000000000000"
 
-    r = client.delete(
+    r = client.request(
+        "DELETE",
         "/v1/assets",
         json={"asset_ids": [existing, nonexistent, other]},
         headers=auth,
@@ -211,7 +246,7 @@ def test_empty_trash_requires_admin(trash_api_client: tuple[TestClient, str, str
 
     client.delete(f"/v1/assets/{asset_ids[0]}", headers=auth_admin)
 
-    r = client.delete("/v1/trash/empty", json={}, headers=auth_member)
+    r = client.request("DELETE", "/v1/trash/empty", json={}, headers=auth_member)
     assert r.status_code == 403
 
 
@@ -224,9 +259,10 @@ def test_empty_trash_returns_count(trash_api_client: tuple[TestClient, str, str,
     for aid in asset_ids[:2]:
         client.delete(f"/v1/assets/{aid}", headers=auth)
 
-    r = client.delete("/v1/trash/empty", json={}, headers=auth)
+    r = client.request("DELETE", "/v1/trash/empty", json={}, headers=auth)
     assert r.status_code == 200
-    assert r.json()["deleted"] == 2
+    # Module-scoped fixture: other tests may have trashed assets already.
+    assert r.json()["deleted"] >= 2
 
 
 @pytest.mark.slow
@@ -234,7 +270,7 @@ def test_trashed_asset_absent_from_list(trash_api_client: tuple[TestClient, str,
     """After trash, asset does not appear in GET /v1/assets."""
     client, api_key, library_id, asset_ids = trash_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
-    aid = asset_ids[0]
+    aid = _create_asset_for_test(client, auth, library_id, f"list_{os.urandom(4).hex()}.jpg")
 
     r_before = client.get("/v1/assets", params={"library_id": library_id}, headers=auth)
     assert r_before.status_code == 200
@@ -254,14 +290,14 @@ def test_trashed_asset_absent_from_search(trash_api_client: tuple[TestClient, st
     """Trashed asset does not appear in search results (postgres fallback uses active_assets)."""
     client, api_key, library_id, asset_ids = trash_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
-    aid = asset_ids[0]
+    aid = _create_asset_for_test(client, auth, library_id, f"search_{os.urandom(4).hex()}.jpg")
 
     # Use postgres fallback by disabling Quickwit
     orig = os.environ.get("QUICKWIT_ENABLED")
     try:
         os.environ["QUICKWIT_ENABLED"] = "false"
         get_settings.cache_clear()
-
+ 
         r_before = client.get(
             "/v1/search",
             params={"library_id": library_id, "q": "jpg"},
@@ -280,6 +316,7 @@ def test_trashed_asset_absent_from_search(trash_api_client: tuple[TestClient, st
         assert r_after.status_code == 200
         hits_after = {h["asset_id"] for h in r_after.json()["hits"]}
         assert aid not in hits_after
+        assert aid in hits_before
     finally:
         if orig is not None:
             os.environ["QUICKWIT_ENABLED"] = orig

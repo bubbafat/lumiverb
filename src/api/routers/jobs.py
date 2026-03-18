@@ -405,12 +405,20 @@ def list_jobs(
     """List jobs, optionally filtered by library_id (via asset), status, with limit.
     By default excludes completed jobs; pass status=completed to see them."""
     from sqlmodel import select
-    from src.models.tenant import Asset, WorkerJob
+    from sqlalchemy import column
+    from sqlalchemy.sql import text as sa_text
+    from src.models.tenant import WorkerJob
+
+    active_a = (
+        sa_text("SELECT asset_id, library_id FROM active_assets")
+        .columns(column("asset_id"), column("library_id"))
+        .subquery("active_a")
+    )
     if library_id:
         stmt = (
             select(WorkerJob)
-            .join(Asset, WorkerJob.asset_id == Asset.asset_id)
-            .where(Asset.library_id == library_id)
+            .join(active_a, WorkerJob.asset_id == active_a.c.asset_id)
+            .where(active_a.c.library_id == library_id)
         )
     else:
         stmt = select(WorkerJob)

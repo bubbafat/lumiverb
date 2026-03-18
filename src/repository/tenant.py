@@ -7,8 +7,9 @@ import os
 import socket
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, func, insert, or_, text
+from sqlalchemy import and_, column, func, insert, or_, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.sql import text as sa_text
 from sqlmodel import Session, select
 
 from src.core.io_utils import normalize_path_prefix
@@ -33,6 +34,19 @@ from ulid import ULID
 
 # Canonical view for non-trashed assets. Use in raw SQL (e.g. FROM active_assets).
 ACTIVE_ASSETS = "active_assets"
+
+
+def _active_assets_subquery():
+    # active_assets is a DB view, not a SQLModel table.
+    return (
+        sa_text("SELECT asset_id, library_id, rel_path FROM active_assets")
+        .columns(
+            column("asset_id"),
+            column("library_id"),
+            column("rel_path"),
+        )
+        .subquery("active_a")
+    )
 
 
 class PipelineLockHeldError(Exception):
@@ -1306,14 +1320,14 @@ class WorkerJobRepository:
                 WorkerJob.status.in_(["pending", "claimed"]),
             )
         )
-        if library_id is not None or path_prefix is not None:
-            stmt = stmt.join(Asset, WorkerJob.asset_id == Asset.asset_id)
+        active_a = _active_assets_subquery()
+        stmt = stmt.join(active_a, WorkerJob.asset_id == active_a.c.asset_id)
         if library_id is not None:
-            stmt = stmt.where(Asset.library_id == library_id)
+            stmt = stmt.where(active_a.c.library_id == library_id)
         if path_prefix:
             normalised = normalize_path_prefix(path_prefix)
             if normalised:
-                stmt = stmt.where(Asset.rel_path.like(normalised.rstrip("/") + "/%"))
+                stmt = stmt.where(active_a.c.rel_path.like(normalised.rstrip("/") + "/%"))
         result = self._session.execute(stmt)
         return int(result.scalar() or 0)
 
@@ -1339,18 +1353,18 @@ class WorkerJobRepository:
                 ),
             )
         )
-        if library_id is not None or path_prefix is not None:
-            stmt = stmt.join(Asset, WorkerJob.asset_id == Asset.asset_id)
+        active_a = _active_assets_subquery()
+        stmt = stmt.join(active_a, WorkerJob.asset_id == active_a.c.asset_id)
         if library_id is not None:
-            stmt = stmt.where(Asset.library_id == library_id)
+            stmt = stmt.where(active_a.c.library_id == library_id)
         if path_prefix:
             normalised = normalize_path_prefix(path_prefix)
             if normalised:
-                stmt = stmt.where(Asset.rel_path.like(normalised.rstrip("/") + "/%"))
+                stmt = stmt.where(active_a.c.rel_path.like(normalised.rstrip("/") + "/%"))
         stmt = (
             stmt.order_by(WorkerJob.priority, WorkerJob.created_at)
             .limit(1)
-            .with_for_update(skip_locked=True)
+            .with_for_update(of=WorkerJob, skip_locked=True)
         )
         job = self._session.exec(stmt).first()
         if job is None:
@@ -1456,7 +1470,7 @@ class WorkerJobRepository:
                         wj.job_type,
                         wj.status
                     FROM worker_jobs wj
-                    JOIN assets a ON a.asset_id = wj.asset_id
+                    JOIN active_assets a ON a.asset_id = wj.asset_id
                     WHERE a.library_id = :library_id
                     ORDER BY wj.asset_id, wj.job_type, wj.created_at DESC
                 )
@@ -1482,7 +1496,7 @@ class WorkerJobRepository:
                         wj.job_type,
                         wj.status
                     FROM worker_jobs wj
-                    JOIN assets a ON a.asset_id = wj.asset_id
+                    JOIN active_assets a ON a.asset_id = wj.asset_id
                     ORDER BY wj.asset_id, wj.job_type, wj.created_at DESC
                 )
                 SELECT library_id, job_type, status, COUNT(*)::int as count

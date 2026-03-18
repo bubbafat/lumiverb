@@ -48,7 +48,7 @@ def enqueue_proxy_jobs(session: Session, library_id: str) -> int:
     Returns count of jobs enqueued.
     """
     stmt = text("""
-        SELECT a.asset_id FROM assets a
+        SELECT a.asset_id FROM active_assets a
         WHERE a.library_id = :library_id
           AND a.status = 'pending'
           AND NOT EXISTS (

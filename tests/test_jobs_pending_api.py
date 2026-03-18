@@ -7,7 +7,7 @@ import pytest
 
 @pytest.mark.fast
 def test_pending_count_with_library_filter() -> None:
-    """pending_count with library_id filters by library via JOIN assets."""
+    """pending_count with library_id filters by library via JOIN active_assets."""
     from src.repository.tenant import WorkerJobRepository
 
     mock_session = MagicMock()
@@ -23,7 +23,7 @@ def test_pending_count_with_library_filter() -> None:
     args = mock_session.execute.call_args[0]
     stmt = str(args[0]).lower()
     assert "worker_jobs" in stmt
-    assert "assets" in stmt
+    assert "active_assets" in stmt
     assert "library_id" in stmt
 
 
