@@ -316,8 +316,9 @@ No existing behavior changes. All existing tests must continue to pass.
 ## Files to modify
 
 ### 1. Create Alembic migration
-File: `alembic/versions/` — create a new revision using `alembic revision --autogenerate`
-or create manually. The migration must:
+File: `migrations/tenant/versions/` — create a new revision using
+`alembic -c alembic-tenant.ini revision --autogenerate` or create manually.
+The migration must:
   - ADD COLUMN proxy_sha256 TEXT to the assets table (nullable, no default)
   - ADD COLUMN thumbnail_sha256 TEXT to the assets table (nullable, no default)
   - ADD COLUMN rep_frame_sha256 TEXT to the video_scenes table (nullable, no default)
@@ -468,7 +469,11 @@ async def upload_artifact(
 1. Validate artifact_type is in ALLOWED_TYPES. Return 400 if not.
 
 2. Load asset from DB via AssetRepository. The tenant context is already resolved by
-   get_tenant_session. Return 404 if asset is None or asset.deleted_at is not None.
+   get_tenant_session. Return 404 if asset is None.
+   NOTE: get_by_id() already filters WHERE deleted_at IS NULL, so a soft-deleted asset
+   returns None and produces a 404 — the deleted_at check never fires. This is intentional:
+   uploading artifacts onto a deleted asset is undesirable and 404 is the correct response.
+   The code reaches 404 via the None path, not the deleted_at branch, and that is fine.
 
 3. Determine the storage key. Use get_storage() from src/storage/local.py.
    tenant_id is available as request.state.tenant_id.
@@ -774,7 +779,8 @@ def get_states(self, asset_ids: list[str]) -> dict[str, dict]:
     Returns dict keyed by asset_id. IDs not present in DB are not included.
     Deliberately includes soft-deleted assets — callers must not add a
     deleted_at IS NULL filter here."""
-    from sqlmodel import select
+    # NOTE: import select at module level in tenant.py alongside other sqlmodel imports,
+    # not here inside the method — local imports are inconsistent with the rest of the file.
     stmt = (
         select(Asset.asset_id, Asset.deleted_at, Asset.proxy_sha256)
         .where(Asset.asset_id.in_(asset_ids))
@@ -890,6 +896,11 @@ def submit_vision(
    No outer session.commit() needed. meta_repo.upsert(), queue_repo.enqueue(), and
    asset_repo.set_status() each call self._session.commit() internally — this is the
    consistent pattern across all repository methods in this codebase.
+   INTENTIONAL DESIGN NOTE: these three commits are independent. If enqueue() succeeds
+   and set_status() throws, the search_sync_queue row exists but the asset status is not
+   updated. This is the same pattern used in the existing complete_job handler for
+   ai_vision and is accepted behavior — do not add a single-transaction wrapper here,
+   as that would break the commit-ownership contract of the repository layer.
 
 6. Return VisionSubmitResponse(asset_id=asset_id, status="described")
 
