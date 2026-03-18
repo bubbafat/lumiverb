@@ -81,7 +81,8 @@ def acquire_lock(
         if body.force:
             lock_id = lock_repo.force_acquire(tenant_id)
         else:
-            lock_id = lock_repo.try_acquire(tenant_id, lock_timeout_minutes=body.lock_timeout_minutes)
+            lock_repo.try_acquire(tenant_id, lock_timeout_minutes=body.lock_timeout_minutes)
+            lock_id = lock_repo.get_lock_id(tenant_id)
     except PipelineLockHeldError as e:
         raise HTTPException(
             status_code=409,

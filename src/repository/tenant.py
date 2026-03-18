@@ -1707,10 +1707,10 @@ class PipelineLockRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def try_acquire(self, tenant_id: str, lock_timeout_minutes: int = 5) -> str:
+    def try_acquire(self, tenant_id: str, lock_timeout_minutes: int = 5) -> bool:
         """
         Acquire the pipeline lock for the tenant if no row exists or the existing lock is stale.
-        Return the lock_id on success. Raise PipelineLockHeldError if another process holds a fresh lock.
+        Return True on success. Raise PipelineLockHeldError if another process holds a fresh lock.
         """
         now = utcnow()
         stale_threshold = now - timedelta(minutes=lock_timeout_minutes)
@@ -1741,7 +1741,7 @@ class PipelineLockRepository:
                 },
             )
             self._session.commit()
-            return lock_id
+            return True
         _lock_id, hostname, pid, started_at, heartbeat_at = row
         if heartbeat_at is not None and heartbeat_at > stale_threshold:
             raise PipelineLockHeldError(hostname, pid, started_at)
@@ -1763,7 +1763,17 @@ class PipelineLockRepository:
             },
         )
         self._session.commit()
-        return lock_id
+        return True
+
+    def get_lock_id(self, tenant_id: str) -> str:
+        """Return the current pipeline lock_id for the tenant."""
+        row = self._session.execute(
+            text("SELECT lock_id FROM pipeline_locks WHERE tenant_id = :tenant_id"),
+            {"tenant_id": tenant_id},
+        ).fetchone()
+        if row is None:
+            raise RuntimeError(f"No pipeline lock row exists for tenant_id={tenant_id!r}")
+        return row[0]
 
     def force_acquire(self, tenant_id: str) -> str:
         """Delete any existing lock for the tenant and insert a new one. Returns the new lock_id."""
