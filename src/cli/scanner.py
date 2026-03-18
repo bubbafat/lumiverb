@@ -16,6 +16,7 @@ from src.core.path_filter import PathFilter, is_path_included
 
 SCAN_PAGE_SIZE = 500
 SCAN_BATCH_SIZE = 500
+APPLY_FILTERS_BATCH_SIZE = 200
 
 console = Console()
 
@@ -49,6 +50,60 @@ def _is_unchanged(asset: dict, local_file: dict, force: bool) -> bool:
         == _normalize_mtime(local_file["file_mtime"])
         and asset.get("media_type") == local_file["media_type"]
     )
+
+
+def _load_path_filters(client: object, library_id: str) -> list[PathFilter] | None:
+    """Fetch library path filters from the API.
+
+    Returns None on failure, [] if the library has no filters configured,
+    or a non-empty list of PathFilter objects.
+    """
+    try:
+        resp = client.get(f"/v1/libraries/{library_id}/filters")  # type: ignore[attr-defined]
+        if resp.status_code == 200:
+            data = resp.json()
+            filters: list[PathFilter] = []
+            for inc in data.get("includes", []):
+                filters.append(PathFilter(type="include", pattern=inc["pattern"]))
+            for exc in data.get("excludes", []):
+                filters.append(PathFilter(type="exclude", pattern=exc["pattern"]))
+            return filters
+    except Exception:
+        pass
+    return None
+
+
+def fetch_filter_candidates(
+    client: object,
+    library_id: str,
+    path_filters: list[PathFilter],
+) -> list[dict]:
+    """Page through all active assets and return those that fail the current filter set.
+
+    Each returned item is {"asset_id": str, "rel_path": str}.
+    """
+    candidates: list[dict] = []
+    cursor: str | None = None
+    while True:
+        params: dict = {"library_id": library_id, "limit": SCAN_PAGE_SIZE}
+        if cursor:
+            params["after"] = cursor
+        resp = client.raw("GET", "/v1/assets/page", params=params)  # type: ignore[attr-defined]
+        if resp.status_code == 204:
+            break
+        if resp.status_code != 200:
+            break
+        page = resp.json()
+        if not page:
+            break
+        for asset in page:
+            rel_path = asset["rel_path"]
+            if not is_path_included(rel_path, path_filters):
+                candidates.append({"asset_id": asset["asset_id"], "rel_path": rel_path})
+        cursor = page[-1]["asset_id"]
+        if len(page) < SCAN_PAGE_SIZE:
+            break
+    return candidates
 
 
 def _build_local_map(
@@ -232,18 +287,7 @@ def scan_library(
 
         # Step 4b: Load path filters once for this scan. None = API not called or failed
         # (no filtering); [] = library has no filters (is_path_included allows all).
-        path_filters: list[PathFilter] | None = None
-        try:
-            resp = client.get(f"/v1/libraries/{library_id}/filters")
-            if resp.status_code == 200:
-                data = resp.json()
-                path_filters = []
-                for inc in data.get("includes", []):
-                    path_filters.append(PathFilter(type="include", pattern=inc["pattern"]))
-                for exc in data.get("excludes", []):
-                    path_filters.append(PathFilter(type="exclude", pattern=exc["pattern"]))
-        except Exception:
-            pass
+        path_filters: list[PathFilter] | None = _load_path_filters(client, library_id)
 
         # Step 5: Build local map (no API calls; path filters applied when present)
         spec = UnifiedProgressSpec(

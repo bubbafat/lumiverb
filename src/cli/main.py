@@ -15,7 +15,13 @@ from rich.table import Table
 from src.cli.client import LumiverbClient
 from src.cli.config import get_admin_key, load_config, save_config
 from src.cli.commands.keys import keys_app
-from src.cli.scanner import scan_library
+from src.cli.scanner import (
+    APPLY_FILTERS_BATCH_SIZE,
+    SCAN_PAGE_SIZE,
+    _load_path_filters,
+    fetch_filter_candidates,
+    scan_library,
+)
 from src.core.io_utils import normalize_path_prefix
 from src.core.logging_config import configure_logging
 
@@ -1491,6 +1497,20 @@ def scan(
     library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
     path: Annotated[str | None, typer.Option("--path", "-p", help="Optional subpath.")] = None,
     force: Annotated[bool, typer.Option("--force", "-f", help="Force rescan.")] = False,
+    apply_filters: Annotated[
+        bool,
+        typer.Option(
+            "--apply-filters",
+            help="After scan, trash existing assets that no longer pass the current filter set.",
+        ),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Show which assets would be trashed by --apply-filters without making changes.",
+        ),
+    ] = False,
 ) -> None:
     """Scan a library for media files."""
     client = LumiverbClient()
@@ -1535,6 +1555,66 @@ def scan(
 
     if result.status != "complete":
         raise typer.Exit(1)
+
+    if apply_filters or dry_run:
+        _run_apply_filters(client, match["library_id"], dry_run=dry_run)
+
+
+def _run_apply_filters(client: LumiverbClient, library_id: str, *, dry_run: bool) -> None:
+    """Apply current library filters to existing assets, trashing those that no longer match."""
+    from src.cli.progress import UnifiedProgress, UnifiedProgressSpec
+
+    # Step 1: Load current filters
+    path_filters = _load_path_filters(client, library_id)
+    if not path_filters:
+        console.print("No filters configured for this library. Nothing to apply.")
+        return
+
+    # Step 2: Fetch all active assets and collect candidates that fail the filter set
+    spec = UnifiedProgressSpec(label="Evaluating filters", unit="assets", counters=[], total=None)
+    with UnifiedProgress(console, spec) as bar:
+        candidates = fetch_filter_candidates(client, library_id, path_filters)
+        bar.update(completed=len(candidates))
+        bar.finish()
+
+    # Step 3: Dry run output
+    if dry_run:
+        if candidates:
+            tbl = Table(title="Dry run: assets that would be trashed")
+            tbl.add_column("Asset ID")
+            tbl.add_column("Path")
+            for c in candidates:
+                tbl.add_row(c["asset_id"], c["rel_path"])
+            console.print(tbl)
+        console.print(
+            f"Dry run: {len(candidates):,} asset(s) would be trashed. "
+            "Run with --apply-filters to apply."
+        )
+        return
+
+    # Step 4: Apply
+    if not candidates:
+        console.print("All existing assets pass the current filters. Nothing to trash.")
+        return
+
+    confirmed = typer.confirm(
+        f"Trash {len(candidates):,} asset(s) matching current exclude filters?"
+    )
+    if not confirmed:
+        console.print("Aborted.")
+        raise typer.Exit(0)
+
+    trashed = 0
+    for i in range(0, len(candidates), APPLY_FILTERS_BATCH_SIZE):
+        batch = candidates[i : i + APPLY_FILTERS_BATCH_SIZE]
+        asset_ids = [c["asset_id"] for c in batch]
+        client.delete("/v1/assets", json={"asset_ids": asset_ids})
+        trashed += len(batch)
+
+    # TODO: cancel pending worker jobs for trashed assets — no dedicated endpoint exists yet;
+    # workers check active_assets at claim time and will skip them.
+
+    console.print(f"Trashed {trashed:,} asset(s).")
 
 
 @app.command()
