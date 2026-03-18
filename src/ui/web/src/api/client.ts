@@ -217,7 +217,7 @@ export async function getLibraryFilters(
   libraryId: string,
 ): Promise<LibraryFiltersResponse> {
   return apiFetch<LibraryFiltersResponse>(
-    `/libraries/${libraryId}/path-filters`,
+    `/libraries/${libraryId}/filters`,
   );
 }
 
@@ -227,7 +227,7 @@ export async function addLibraryFilter(
   pattern: string,
 ): Promise<CreatedFilterResponse> {
   return apiFetch<CreatedFilterResponse>(
-    `/libraries/${libraryId}/path-filters`,
+    `/libraries/${libraryId}/filters`,
     { method: "POST", body: { type, pattern } },
   );
 }
@@ -236,7 +236,7 @@ export async function deleteLibraryFilter(
   libraryId: string,
   filterId: string,
 ): Promise<void> {
-  return apiFetch<void>(`/libraries/${libraryId}/path-filters/${filterId}`, {
+  return apiFetch<void>(`/libraries/${libraryId}/filters/${filterId}`, {
     method: "DELETE",
   });
 }
