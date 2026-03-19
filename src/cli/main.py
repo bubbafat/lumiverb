@@ -533,9 +533,9 @@ def download(
 
 @worker_app.command("proxy")
 def worker_proxy(
+    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
     once: bool = typer.Option(False, "--once", help="Process all queued jobs then exit."),
     concurrency: int = typer.Option(1, "--concurrency", help="Number of parallel workers."),
-    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
     output: Annotated[
         str,
         typer.Option("--output", help="Output mode: human (default) or jsonl for structured events."),
