@@ -207,6 +207,10 @@ class SearchSyncWorker:
                     if asset_status.get(row.asset_id) != "synced":
                         asset_status[row.asset_id] = "skipped"
                     continue
+                assert asset.library_id == self._library_id, (
+                    f"scene row {row.sync_id}: asset {asset.asset_id} belongs to library "
+                    f"{asset.library_id}, not {self._library_id} — cross-library claim leak"
+                )
                 scene_doc = self._build_scene_document(scene, asset, library)
                 scene_docs.append(scene_doc)
                 sync_ids.append(row.sync_id)
@@ -226,6 +230,10 @@ class SearchSyncWorker:
                         asset_status[asset_id] = "skipped"
                     continue
 
+                assert asset.library_id == self._library_id, (
+                    f"asset row {row.sync_id}: asset {asset.asset_id} belongs to library "
+                    f"{asset.library_id}, not {self._library_id} — cross-library claim leak"
+                )
                 lib = self._library_repo.get_by_id(asset.library_id)
                 vision_model_id = lib.vision_model_id if lib else ""
                 model_version = "1"
