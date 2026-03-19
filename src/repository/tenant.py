@@ -1912,9 +1912,9 @@ class SearchSyncQueueRepository:
                 SELECT ssl.sync_id, ssl.asset_id
                 FROM search_sync_latest ssl
                 JOIN active_assets a ON a.asset_id = ssl.asset_id
-                WHERE ssl.status = 'pending'
+                WHERE (ssl.status = 'pending'
                    OR (ssl.status = 'processing'
-                       AND ssl.processing_started_at < NOW() - (:lease_interval)::interval)
+                       AND ssl.processing_started_at < NOW() - (:lease_interval)::interval))
                 {library_filter}
                 {path_filter}
                 ORDER BY ssl.created_at
@@ -2091,9 +2091,9 @@ class SearchSyncQueueRepository:
             SELECT COUNT(*)
             FROM search_sync_latest ssl
             JOIN active_assets a ON a.asset_id = ssl.asset_id
-            WHERE ssl.status = 'pending'
+            WHERE (ssl.status = 'pending'
                OR (ssl.status = 'processing'
-                   AND ssl.processing_started_at < NOW() - (:lease_interval)::interval)
+                   AND ssl.processing_started_at < NOW() - (:lease_interval)::interval))
         """
         params: dict = {"lease_interval": f"{lease_minutes} minutes"}
         if library_id:
