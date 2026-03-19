@@ -385,10 +385,6 @@ class PipelineSupervisor:
         """Spawn all stages concurrently; each drains stdout in its own thread."""
         self._run_workers_concurrent(stages, library_name=self.library_name, path_prefix=self._path_prefix)
 
-    def _run_workers_tenant(self, stages: list[PipelineStage]) -> None:
-        """Like _run_workers but without --library (workers claim from all libraries)."""
-        self._run_workers_concurrent(stages, library_name=None, path_prefix=None)
-
     def _enqueue_downstream(self, completed: list[PipelineStage], library_names: list[str]) -> None:
         """
         After a batch of workers completes, enqueue any job types that depend on them.
@@ -417,7 +413,7 @@ class PipelineSupervisor:
         self,
         stages: list[PipelineStage],
         *,
-        library_name: str | None,
+        library_name: str,
         path_prefix: str | None,
     ) -> None:
         """Spawn all stages in parallel; wait for all to finish."""
@@ -425,9 +421,7 @@ class PipelineSupervisor:
             return
 
         def _spawn(stage: PipelineStage) -> tuple[PipelineStage, subprocess.Popen]:
-            cmd = _lumiverb_cmd() + ["worker", stage.worker_cmd, "--once", "--output", "jsonl"]
-            if library_name:
-                cmd += ["--library", library_name]
+            cmd = _lumiverb_cmd() + ["worker", stage.worker_cmd, "--once", "--output", "jsonl", "--library", library_name]
             # All workers must respect optional --path scoping; each worker
             # is responsible for interpreting the prefix appropriately.
             if path_prefix:
@@ -671,36 +665,40 @@ class PipelineSupervisor:
                     self._heartbeat_stop.wait(min(60, self._interval))
                     continue
 
-                # Flatten per-library stages for dashboard; aggregate pending names for worker selection
+                # Flatten per-library stages for dashboard; build per-library pending map
                 flat_stages: list[dict[str, Any]] = []
-                pending_names: set[str] = set()
+                per_lib_pending: dict[str, set[str]] = {}
                 for lib_data in data.get("libraries", []):
                     lib_name = lib_data.get("library", "")
                     for stage in lib_data.get("stages", []):
                         flat_stages.append({**stage, "library_name": lib_name})
                         if stage.get("pending", 0) > 0:
-                            pending_names.add(stage["name"])
+                            per_lib_pending.setdefault(lib_name, set()).add(stage["name"])
 
                 self._dashboard_update(flat_stages, log_line=None, workers=data.get("workers", 0))
 
-                if not pending_names:
+                if not per_lib_pending:
                     if self._once:
                         return
                     self._heartbeat_stop.wait(self._interval)
                     continue
 
-                mock_pending = [{"name": n} for n in pending_names]
-                to_run = _select_stages_to_run(mock_pending, self._media_type)
-                if not to_run:
+                any_matched = False
+                for lib_name, pending_names in per_lib_pending.items():
+                    mock_pending = [{"name": n} for n in pending_names]
+                    to_run = _select_stages_to_run(mock_pending, self._media_type)
+                    if not to_run:
+                        continue
+                    any_matched = True
+                    self._run_workers_concurrent(to_run, library_name=lib_name, path_prefix=None)
+                    self._enqueue_downstream(to_run, library_names=[lib_name])
+
+                if not any_matched:
                     # Pending work exists but none matches this media_type filter.
                     if self._once:
                         return
                     self._heartbeat_stop.wait(min(10, self._interval))
                     continue
-
-                self._run_workers_tenant(to_run)
-                lib_names = [lib["library_name"] for lib in self._libraries]
-                self._enqueue_downstream(to_run, library_names=lib_names)
         finally:
             self._terminate_current_proc()
             self._heartbeat_stop.set()

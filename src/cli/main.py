@@ -535,7 +535,7 @@ def download(
 def worker_proxy(
     once: bool = typer.Option(False, "--once", help="Process all queued jobs then exit."),
     concurrency: int = typer.Option(1, "--concurrency", help="Number of parallel workers."),
-    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
+    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
     output: Annotated[
         str,
         typer.Option("--output", help="Output mode: human (default) or jsonl for structured events."),
@@ -551,7 +551,7 @@ def worker_proxy(
     ctx = client.get("/v1/tenant/context").json()
     tenant_id = ctx["tenant_id"]
 
-    library_id: str | None = _resolve_library_id(client, library) if library else None
+    library_id: str = _resolve_library_id(client, library)
 
     worker = ProxyWorker(
         client=client,
@@ -567,7 +567,7 @@ def worker_proxy(
 
 @worker_app.command("exif")
 def worker_exif(
-    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
+    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
     once: Annotated[bool, typer.Option("--once")] = False,
     output: Annotated[
         str,
@@ -578,14 +578,14 @@ def worker_exif(
     from src.workers.exif_worker import ExifWorker
 
     client = LumiverbClient()
-    library_id = _resolve_library_id(client, library) if library else None
+    library_id = _resolve_library_id(client, library)
     worker = ExifWorker(client=client, once=once, library_id=library_id, output_mode=output)
     worker.run()
 
 
 @worker_app.command("vision")
 def worker_vision(
-    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
+    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
     once: Annotated[bool, typer.Option("--once")] = False,
     output: Annotated[
         str,
@@ -598,7 +598,7 @@ def worker_vision(
 
     client = LumiverbClient()
     storage = get_storage()
-    library_id = _resolve_library_id(client, library) if library else None
+    library_id = _resolve_library_id(client, library)
     worker = VisionWorker(
         client=client,
         storage=storage,
@@ -611,7 +611,7 @@ def worker_vision(
 
 @worker_app.command("video-preview")
 def worker_video_preview(
-    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
+    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
     once: Annotated[bool, typer.Option("--once", help="Process queue until empty then exit.")] = False,
     concurrency: Annotated[int, typer.Option("--concurrency", help="Number of parallel workers.")] = 1,
     path: Annotated[str | None, typer.Option("--path", "-p", help="Optional subpath to scope jobs.")] = None,
@@ -628,7 +628,7 @@ def worker_video_preview(
     storage = LocalStorage()
     ctx = client.get("/v1/tenant/context").json()
     tenant_id = ctx["tenant_id"]
-    library_id = _resolve_library_id(client, library) if library else None
+    library_id = _resolve_library_id(client, library)
     path_prefix = normalize_path_prefix(path) if path else None
 
     worker = VideoPreviewWorker(
@@ -646,7 +646,7 @@ def worker_video_preview(
 
 @worker_app.command("embed")
 def worker_embed(
-    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
+    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
     once: Annotated[bool, typer.Option("--once", help="Process queue until empty then exit.")] = False,
     output: Annotated[
         str,
@@ -659,7 +659,7 @@ def worker_embed(
 
     client = LumiverbClient()
     storage = get_storage()
-    library_id = _resolve_library_id(client, library) if library else None
+    library_id = _resolve_library_id(client, library)
     worker = EmbedWorker(
         client=client,
         storage=storage,
@@ -672,7 +672,7 @@ def worker_embed(
 
 @worker_app.command("video-index")
 def worker_video_index(
-    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
+    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
     once: Annotated[bool, typer.Option("--once", help="Process queue until empty then exit.")] = False,
     output: Annotated[
         str,
@@ -686,7 +686,7 @@ def worker_video_index(
     from src.workers.video_index_worker import VideoIndexWorker
 
     client = LumiverbClient()
-    library_id = _resolve_library_id(client, library) if library else None
+    library_id = _resolve_library_id(client, library)
     console = Console()
 
     jobs_done = 0
@@ -785,7 +785,7 @@ def worker_video_index(
 
 @worker_app.command("video-vision")
 def worker_video_vision(
-    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
+    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
     once: Annotated[bool, typer.Option("--once", help="Process queue until empty then exit.")] = False,
     path: Annotated[str | None, typer.Option("--path", "-p", help="Optional subpath to scope jobs.")] = None,
     output: Annotated[
@@ -800,7 +800,7 @@ def worker_video_vision(
     from src.workers.video_vision_worker import VideoVisionWorker
 
     client = LumiverbClient()
-    library_id = _resolve_library_id(client, library) if library else None
+    library_id = _resolve_library_id(client, library)
     path_prefix = normalize_path_prefix(path) if path else None
     console = Console()
     _lock = threading.Lock()
@@ -896,7 +896,7 @@ def worker_video_vision(
 # Shell alias: function lumi-search-sync() { lumiverb worker search-sync --library "$1" --once; }
 @worker_app.command("search-sync")
 def worker_search_sync(
-    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name. Omit to run across all libraries.")] = None,
+    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
     once: Annotated[bool, typer.Option("--once", help="Process one batch then exit.")] = False,
     force_resync: Annotated[bool, typer.Option("--force-resync", help="Re-enqueue all assets before syncing.")] = False,
     path: Annotated[str | None, typer.Option("--path", "-p", help="Optional subpath to scope sync.")] = None,
@@ -908,34 +908,18 @@ def worker_search_sync(
         ),
     ] = "human",
 ) -> None:
-    """Run the search sync worker. Omit --library to sync all libraries."""
+    """Run the search sync worker for a library."""
     from src.core.database import get_tenant_session
     from src.core.io_utils import normalize_path_prefix
     from src.search.quickwit_client import QuickwitClient
     from src.workers.search_sync import SearchSyncWorker
 
-    if force_resync and library is None:
-        console.print("[red]--force-resync requires --library[/red]")
-        raise typer.Exit(1)
-    if path and library is None:
-        console.print("[red]--path requires --library[/red]")
-        raise typer.Exit(1)
-
     path_prefix = normalize_path_prefix(path)
 
     client = LumiverbClient()
-
-    # Ensure tenant context is fetched first (tests rely on this call order).
     ctx = client.get("/v1/tenant/context").json()
     tenant_id = ctx["tenant_id"]
-
-    # Build the list of (library_id, library_name) pairs to sync.
-    if library is not None:
-        library_id = _resolve_library_id(client, library)
-        libraries_to_sync = [(library_id, library)]
-    else:
-        all_libraries = client.get("/v1/libraries").json()
-        libraries_to_sync = [(lib["library_id"], lib["name"]) for lib in all_libraries]
+    library_id = _resolve_library_id(client, library)
 
     grand_synced = 0
     grand_skipped = 0
@@ -943,35 +927,32 @@ def worker_search_sync(
 
     quickwit = QuickwitClient()
     with get_tenant_session(tenant_id) as session:
-        for lib_id, lib_name in libraries_to_sync:
-            if force_resync:
-                body: dict[str, object] = {"library_id": lib_id}
-                if path_prefix:
-                    body["path_prefix"] = path_prefix
-                # Best-effort: re-enqueue via API so it matches server semantics.
-                resync_resp = client.post("/v1/search-sync/resync", json=body)
-                resync_resp.raise_for_status()
-                n = resync_resp.json().get("enqueued", 0)
-                if n:
-                    console.print(f"Re-enqueued {n:,} assets for resync.")
+        if force_resync:
+            body: dict[str, object] = {"library_id": library_id}
+            if path_prefix:
+                body["path_prefix"] = path_prefix
+            resync_resp = client.post("/v1/search-sync/resync", json=body)
+            resync_resp.raise_for_status()
+            n = resync_resp.json().get("enqueued", 0)
+            if n:
+                console.print(f"Re-enqueued {n:,} assets for resync.")
 
-            worker = SearchSyncWorker(
-                session=session,
-                library_id=lib_id,
-                quickwit=quickwit,
-                path_prefix=path_prefix,
-                output_mode=output,
-            )
+        worker = SearchSyncWorker(
+            session=session,
+            library_id=library_id,
+            quickwit=quickwit,
+            path_prefix=path_prefix,
+            output_mode=output,
+        )
 
-            pending = worker.pending_count()
-            if pending == 0 and once:
-                console.print(f"No pending items in search_sync_queue for {lib_name}.")
-                continue
-
+        pending = worker.pending_count()
+        if pending == 0 and once:
+            console.print(f"No pending items in search_sync_queue for {library}.")
+        else:
             result = worker.run_once()
-            grand_synced += int(result["synced"])
-            grand_skipped += int(result["skipped"])
-            grand_batches += int(result["batches"])
+            grand_synced = int(result["synced"])
+            grand_skipped = int(result["skipped"])
+            grand_batches = int(result["batches"])
 
     table = Table(show_header=True)
     table.add_column("Metric", style="dim")
