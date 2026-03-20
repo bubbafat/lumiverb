@@ -255,11 +255,11 @@ def test_vision_worker_openai_provider_called(caption_slow_env: tuple, tmp_path:
         "src.workers.captions.openai_caption.OpenAICompatibleCaptionProvider.describe",
         return_value=mock_result,
     ):
-        from src.storage.local import get_storage
         from src.workers.vision_worker import VisionWorker
 
-        storage = get_storage()
-        worker = VisionWorker(client=MagicMock(), storage=storage, once=True)
+        artifact_store = MagicMock()
+        artifact_store.read_artifact.return_value = b"\xff\xd8\xff" + b"\x00" * 10
+        worker = VisionWorker(client=MagicMock(), artifact_store=artifact_store, once=True)
         payload = worker.process(vis_job)
         assert payload["model_id"] == model_id
         assert payload["model_version"] == "1"
