@@ -399,6 +399,16 @@ VideoScene instance.
   proxy_sha256 = null. This is expected and correct.
 - The system must remain fully operational: scan, proxy, exif, ai_vision, and
   search-sync must all continue to work exactly as before.
+- Automated pytest coverage (see `tests/`):
+  - `tests/test_proxy_worker.py::test_proxy_worker_processes_image`: assert returned dict includes
+    `proxy_sha256` and `thumbnail_sha256` (each is a 64-char hex string), and assert the DB asset row
+    has non-null `proxy_sha256` / `thumbnail_sha256` after job completion.
+  - `tests/test_jobs_api.py`: add/extend `test_complete_proxy_job_with_hashes` and
+    `test_complete_proxy_job_without_hashes` (backward compatibility).
+  - `tests/test_video_api.py`: extend `test_complete_chunk` to assert optional `rep_frame_sha256` per scene
+    is accepted and persisted on the `VideoScene` row; also assert omission still works.
+  - `tests/test_migrations.py`: verify after tenant upgrade the new hash columns exist and are nullable,
+    and after downgrade they are removed.
 ```
 
 ---
@@ -591,6 +601,18 @@ Both columns should be set.
 Attempt with artifact_type=invalid: expect 400.
 Attempt with wrong asset_id: expect 404.
 Existing proxy worker flow (writing to storage directly + job-complete) must still work.
+- Automated pytest coverage (see `tests/`):
+  - New file: `tests/test_artifact_upload.py`
+    - Upload tests for `proxy`, `thumbnail`, and `video_preview` that assert:
+      - DB columns and stored `sha256` are set correctly.
+      - The file is written to local storage.
+    - Auth/tenant/isolation tests: invalid `artifact_type`, unknown asset, soft-deleted asset, wrong tenant,
+      missing auth.
+    - Behavioral subtleties:
+      - Re-upload overwrites sha256 (idempotent write).
+      - Proxy upload does NOT advance `asset.status` (status is job-complete responsibility).
+      - Thumbnail upload does NOT overwrite `proxy_key` / `proxy_sha256`.
+      - Existing proxy worker flow remains unchanged after the new endpoint is registered.
 ```
 
 ---
@@ -686,6 +708,17 @@ They must match.
 Request for asset with no proxy_key: expect 404 with code artifact_not_ready.
 Request for asset where file was deleted from disk: expect 404 with code artifact_missing.
 Existing read paths (thumbnails served to web UI) are unaffected.
+- Automated pytest coverage (see `tests/`):
+  - New file: `tests/test_artifact_download.py`
+    - Roundtrip SHA256 tests for proxy/thumbnail/video_preview (upload then download; downloaded bytes sha256
+      must match upload response).
+    - 404 error-code tests:
+      - No key stored -> `artifact_not_ready`
+      - Key stored but file deleted from disk -> `artifact_missing`
+    - Request validation/auth/tenant tests: invalid type, unknown asset, soft-deleted asset, missing auth,
+      and tenant isolation.
+    - Content-type assertions: proxy/thumbnail return `image/jpeg`, preview returns `video/mp4`.
+    - Route-collision regression: existing `GET /v1/assets/{id}/thumbnail` remains functional.
 ```
 
 ---
@@ -809,6 +842,15 @@ Expected response:
 
 POST with 501 IDs: expect 400 (validator triggers).
 POST with empty list: expect 400.
+- Automated pytest coverage (see `tests/`):
+  - New file: `tests/test_state_check.py`
+    - Active vs soft-deleted vs unknown asset mapping.
+    - Mixed batch mapping returns correct per-asset results.
+    - Response order matches input order.
+    - Validation: empty list -> 400, 501 IDs -> 400, exactly 500 -> 200.
+    - Auth + tenant isolation (IDs from another tenant are treated as deleted).
+    - Route-order trap regression: POST `/v1/assets/state-check` must not be matched as `asset_id="state-check"`.
+    - Null proxy hash case: asset exists but has `proxy_sha256: null` and `deleted: false`.
 ```
 
 ---
@@ -931,6 +973,15 @@ Expected: 200 (check skipped because server hash is null)
 ### Existing ai_vision job-complete still works
 Run the full existing worker test suite. The existing POST /v1/jobs/{job_id}/complete
 for ai_vision must be unaffected.
+- Automated pytest coverage (see `tests/`):
+  - New file: `tests/test_vision_submit.py`
+    - Happy paths with and without `client_proxy_sha256`.
+    - Hash mismatch -> 409 with code `proxy_hash_mismatch`.
+    - Skip check when server hash is null.
+    - Upsert semantics overwrite existing `(model_id, model_version)` results.
+    - Enqueue search sync and set asset status to `described`.
+    - 404s for unknown and soft-deleted assets, 401 for missing auth.
+    - Ensure existing `POST /v1/jobs/{job_id}/complete` for `ai_vision` remains unchanged.
 ```
 
 ---
