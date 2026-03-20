@@ -72,6 +72,17 @@ Tenant resolution runs for every request except `/health` and `/v1/admin/*`: rea
 
 - **GET /v1/tenant/context** — Tenant auth required. Returns `{ "tenant_id" }` only. Used by CLI/worker for storage path computation. Workers must not have direct DB access; they use the jobs API only.
 
+## Tenant Upgrade API
+
+All routes under `/v1/tenant/upgrade` require tenant auth and **tenant admin** role (`require_tenant_admin`). These endpoints run idempotent, tenant-scoped upgrade steps (schema migrations and/or data backfills) in a fixed order.
+
+- **GET /v1/tenant/upgrade/status** — Returns `{ has_work, steps_total, done_steps, completed_steps, pending_steps, skipped_steps, failed_steps, next_pending_step_id, remaining_pending_step_ids, steps }` where each step includes `step_id`, `version`, `display_name`, and `status` (`pending|skipped|completed|failed`).
+- **POST /v1/tenant/upgrade/execute** — Body: `{ "max_steps": 1, "step_id": null, "force": false }`.
+  - With `step_id=null`, runs up to `max_steps` pending steps in order.
+  - With `step_id` set, runs only that step if it is pending.
+  - Without `force`, the server refuses to run a targeted step when any preceding step is still `pending` or `failed`.
+  - Returns `{ ran_steps, steps_completed_now, has_work_after, remaining_pending_step_ids, total_steps, done_steps, completed_steps, failed_steps }`.
+
 ## Jobs API
 
 All under `/v1/jobs`; require tenant auth.

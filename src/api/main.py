@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from src.api.middleware import TenantResolutionMiddleware
 from src.api.routers import admin, assets, jobs, keys, libraries, path_filters, scans, tenant, trash, video
+from src.api.routers.upgrade import router as upgrade_router
 from src.api.routers.pipeline import router as pipeline_router
 from src.api.routers.search import router as search_router
 from src.api.routers.search_sync import router as search_sync_router
@@ -25,6 +26,7 @@ app.include_router(keys.router)
 app.include_router(trash.router)
 app.include_router(search_router)
 app.include_router(similarity_router)
+app.include_router(upgrade_router)
 
 
 @app.get("/health")
