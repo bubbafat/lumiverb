@@ -7,6 +7,7 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session
 
@@ -24,6 +25,12 @@ ALLOWED_ARTIFACT_TYPES = {"proxy", "thumbnail", "video_preview"}
 # TODO: enforce per-type limits once remote worker uploads are in place.
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # 100 MB absolute ceiling
 UPLOAD_CHUNK_SIZE = 64 * 1024  # 64 KB read buffer
+
+CONTENT_TYPES: dict[str, str] = {
+    "proxy": "image/jpeg",
+    "thumbnail": "image/jpeg",
+    "video_preview": "video/mp4",
+}
 
 
 class ArtifactUploadResponse(BaseModel):
@@ -104,3 +111,53 @@ async def upload_artifact(
         asset_repo.set_video_preview(asset_id, video_preview_key=key)
 
     return ArtifactUploadResponse(key=key, sha256=sha256)
+
+
+@router.get("/{asset_id}/artifacts/{artifact_type}")
+def download_artifact(
+    asset_id: str,
+    artifact_type: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> StreamingResponse:
+    """Download a proxy, thumbnail, or video_preview artifact for an asset.
+
+    Returns the raw file bytes with the correct Content-Type. 404 if the artifact
+    key is not yet set (artifact_not_ready) or the file is missing on disk (artifact_missing).
+    """
+    if artifact_type not in ALLOWED_ARTIFACT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"artifact_type must be one of: {', '.join(sorted(ALLOWED_ARTIFACT_TYPES))}",
+        )
+
+    asset = AssetRepository(session).get_by_id(asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    if artifact_type == "proxy":
+        key = asset.proxy_key
+    elif artifact_type == "thumbnail":
+        key = asset.thumbnail_key
+    else:  # video_preview
+        key = asset.video_preview_key
+
+    if key is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "artifact_not_ready", "message": "Artifact has not been generated yet"},
+        )
+
+    storage: LocalStorage = get_storage()
+    path = storage.abs_path(key)
+    if not path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "artifact_missing", "message": "Artifact file not found on storage"},
+        )
+
+    def _iter():
+        with open(path, "rb") as f:
+            while chunk := f.read(UPLOAD_CHUNK_SIZE):
+                yield chunk
+
+    return StreamingResponse(_iter(), media_type=CONTENT_TYPES[artifact_type])

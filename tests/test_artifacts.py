@@ -1,8 +1,11 @@
-"""Tests for POST /v1/assets/{asset_id}/artifacts/{artifact_type} (Phase 2).
+"""Tests for artifact upload (Phase 2) and download (Phase 3) endpoints.
+
+  POST /v1/assets/{asset_id}/artifacts/{artifact_type}
+  GET  /v1/assets/{asset_id}/artifacts/{artifact_type}
 
 All tests are slow (testcontainers Postgres).  A single module-scoped fixture
 spins up the two Postgres containers and provisions a tenant + library + image
-asset that most tests share.  Tests that need a fresh or trashed asset create
+asset that most tests share.  Tests that need a fresh or isolated asset create
 those resources themselves using the live client.
 """
 
@@ -457,3 +460,157 @@ def test_upload_soft_deleted_asset_returns_404(artifact_env) -> None:
         files={"file": ("proxy.jpg", _make_jpeg(), "image/jpeg")},
     )
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: Download tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_download_proxy_returns_bytes(artifact_env) -> None:
+    """Upload a proxy then download it — content and content-type must match."""
+    auth, _, _, asset_id, _, _, _ = artifact_env
+    content = _make_jpeg(300)
+
+    auth.post(
+        f"/v1/assets/{asset_id}/artifacts/proxy",
+        files={"file": ("proxy.jpg", content, "image/jpeg")},
+    )
+
+    r = auth.get(f"/v1/assets/{asset_id}/artifacts/proxy")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/jpeg"
+    assert r.content == content
+
+
+@pytest.mark.slow
+def test_download_thumbnail_returns_bytes(artifact_env) -> None:
+    auth, _, _, asset_id, _, _, _ = artifact_env
+    content = _make_jpeg(64)
+
+    auth.post(
+        f"/v1/assets/{asset_id}/artifacts/thumbnail",
+        files={"file": ("thumb.jpg", content, "image/jpeg")},
+    )
+
+    r = auth.get(f"/v1/assets/{asset_id}/artifacts/thumbnail")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/jpeg"
+    assert r.content == content
+
+
+@pytest.mark.slow
+def test_download_video_preview_returns_bytes(artifact_env) -> None:
+    auth, _, library_id, _, _, _, _ = artifact_env
+
+    r_scan = auth.post("/v1/scans", json={"library_id": library_id, "status": "running"})
+    scan_id = r_scan.json()["scan_id"]
+    rel_path = f"dl_clip_{secrets.token_hex(4)}.mp4"
+    auth.post(
+        "/v1/assets/upsert",
+        json={
+            "library_id": library_id,
+            "rel_path": rel_path,
+            "file_size": 5000,
+            "file_mtime": "2025-01-01T12:00:00Z",
+            "media_type": "video/mp4",
+            "scan_id": scan_id,
+        },
+    )
+    r_vid = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
+    video_asset_id = r_vid.json()["asset_id"]
+
+    mp4_content = b"FTYP" + secrets.token_bytes(512)
+    auth.post(
+        f"/v1/assets/{video_asset_id}/artifacts/video_preview",
+        files={"file": ("preview.mp4", mp4_content, "video/mp4")},
+    )
+
+    r = auth.get(f"/v1/assets/{video_asset_id}/artifacts/video_preview")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "video/mp4"
+    assert r.content == mp4_content
+
+
+@pytest.mark.slow
+def test_download_proxy_not_ready_returns_404(artifact_env) -> None:
+    """Asset with no proxy uploaded returns 404 with artifact_not_ready code."""
+    auth, _, library_id, _, _, _, _ = artifact_env
+
+    r_scan = auth.post("/v1/scans", json={"library_id": library_id, "status": "running"})
+    scan_id = r_scan.json()["scan_id"]
+    rel_path = f"fresh_{secrets.token_hex(4)}.jpg"
+    auth.post(
+        "/v1/assets/upsert",
+        json={
+            "library_id": library_id,
+            "rel_path": rel_path,
+            "file_size": 100,
+            "file_mtime": "2025-01-01T00:00:00Z",
+            "media_type": "image/jpeg",
+            "scan_id": scan_id,
+        },
+    )
+    r_a = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
+    fresh_id = r_a.json()["asset_id"]
+
+    r = auth.get(f"/v1/assets/{fresh_id}/artifacts/proxy")
+    assert r.status_code == 404
+    assert r.json()["detail"]["code"] == "artifact_not_ready"
+
+
+@pytest.mark.slow
+def test_download_proxy_file_missing_returns_404(artifact_env) -> None:
+    """Key set in DB but file deleted from disk → 404 with artifact_missing code."""
+    auth, _, library_id, _, storage, _, _ = artifact_env
+
+    # Use a fresh asset so deleting the file doesn't affect other tests.
+    r_scan = auth.post("/v1/scans", json={"library_id": library_id, "status": "running"})
+    scan_id = r_scan.json()["scan_id"]
+    rel_path = f"missing_{secrets.token_hex(4)}.jpg"
+    auth.post(
+        "/v1/assets/upsert",
+        json={
+            "library_id": library_id,
+            "rel_path": rel_path,
+            "file_size": 100,
+            "file_mtime": "2025-01-01T00:00:00Z",
+            "media_type": "image/jpeg",
+            "scan_id": scan_id,
+        },
+    )
+    r_a = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
+    isolated_id = r_a.json()["asset_id"]
+
+    r_up = auth.post(
+        f"/v1/assets/{isolated_id}/artifacts/proxy",
+        files={"file": ("proxy.jpg", _make_jpeg(), "image/jpeg")},
+    )
+    key = r_up.json()["key"]
+    storage.abs_path(key).unlink()  # remove file, leave key in DB
+
+    r = auth.get(f"/v1/assets/{isolated_id}/artifacts/proxy")
+    assert r.status_code == 404
+    assert r.json()["detail"]["code"] == "artifact_missing"
+
+
+@pytest.mark.slow
+def test_download_invalid_type_returns_400(artifact_env) -> None:
+    auth, _, _, asset_id, _, _, _ = artifact_env
+    r = auth.get(f"/v1/assets/{asset_id}/artifacts/original")
+    assert r.status_code == 400
+
+
+@pytest.mark.slow
+def test_download_unknown_asset_returns_404(artifact_env) -> None:
+    auth, _, _, _, _, _, _ = artifact_env
+    r = auth.get("/v1/assets/ast_nonexistent_000000000000/artifacts/proxy")
+    assert r.status_code == 404
+
+
+@pytest.mark.slow
+def test_download_missing_auth_returns_401(artifact_env) -> None:
+    _, raw_client, _, asset_id, _, _, _ = artifact_env
+    r = raw_client.get(f"/v1/assets/{asset_id}/artifacts/proxy")
+    assert r.status_code == 401
