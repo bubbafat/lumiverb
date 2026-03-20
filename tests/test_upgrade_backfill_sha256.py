@@ -198,9 +198,9 @@ def _insert_asset(conn, *, asset_id: str, library_id: str, proxy_key: str | None
         text(
             """
             INSERT INTO assets
-              (asset_id, library_id, rel_path, file_size, media_type, status)
+              (asset_id, library_id, rel_path, availability, file_size, media_type, status, created_at, updated_at)
             VALUES
-              (:asset_id, :library_id, :rel_path, 0, 'image', 'proxy_ready')
+              (:asset_id, :library_id, :rel_path, 'online', 0, 'image', 'proxy_ready', NOW(), NOW())
             """
         ),
         {
@@ -225,8 +225,10 @@ def _insert_library(conn, *, library_id: str) -> None:
     conn.execute(
         text(
             """
-            INSERT INTO libraries (library_id, name, root_path)
-            VALUES (:id, :name, '/tmp')
+            INSERT INTO libraries
+              (library_id, name, root_path, scan_status, status, vision_model_id, created_at, updated_at)
+            VALUES
+              (:id, :name, '/tmp', 'idle', 'active', 'moondream', NOW(), NOW())
             ON CONFLICT DO NOTHING
             """
         ),
@@ -377,8 +379,10 @@ def test_scene_rep_backfill_writes_correct_sha256(backfill_db, tmp_path: Path) -
         conn.execute(
             text(
                 """
-                INSERT INTO assets (asset_id, library_id, rel_path, file_size, media_type, status)
-                VALUES (:aid, :lid, 'clip.mp4', 0, 'video', 'pending')
+                INSERT INTO assets
+                  (asset_id, library_id, rel_path, availability, file_size, media_type, status, created_at, updated_at)
+                VALUES
+                  (:aid, :lid, 'clip.mp4', 'online', 0, 'video', 'pending', NOW(), NOW())
                 """
             ),
             {"aid": asset_id, "lid": lib_id},
@@ -387,8 +391,8 @@ def test_scene_rep_backfill_writes_correct_sha256(backfill_db, tmp_path: Path) -
             text(
                 """
                 INSERT INTO video_scenes
-                  (scene_id, asset_id, scene_index, start_ms, end_ms, rep_frame_ms, proxy_key)
-                VALUES (:sid, :aid, 0, 0, 5000, 2500, :pk)
+                  (scene_id, asset_id, scene_index, start_ms, end_ms, rep_frame_ms, proxy_key, created_at)
+                VALUES (:sid, :aid, 0, 0, 5000, 2500, :pk, NOW())
                 """
             ),
             {"sid": scene_id, "aid": asset_id, "pk": proxy_key},
