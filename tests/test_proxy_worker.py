@@ -1,10 +1,10 @@
 """Proxy worker tests: API-only. Process image, skip video, missing file. Use TestClient + testcontainers."""
 
+import hashlib
 import os
 import secrets
-import hashlib
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,9 +17,103 @@ from src.api.main import app
 from src.cli.scanner import scan_library
 from src.core.config import get_settings
 from src.core.database import _engines
+from src.storage.artifact_store import ArtifactRef, LocalArtifactStore
 from src.storage.local import LocalStorage
 from src.workers.proxy import ProxyWorker
 from tests.conftest import _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
+
+
+# ---------------------------------------------------------------------------
+# Fast unit tests
+# ---------------------------------------------------------------------------
+
+TENANT_ID = "tnt_test"
+LIBRARY_ID = "lib_test"
+ASSET_ID = "ast_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+REL_PATH = "photos/test.jpg"
+
+
+@pytest.mark.fast
+def test_proxy_worker_process_calls_write_artifact_for_both(tmp_path: Path) -> None:
+    """process() calls write_artifact for proxy and thumbnail; return dict uses ref keys/sha256."""
+    artifact_store = MagicMock()
+    proxy_ref = ArtifactRef(key="tnt/lib/proxies/07/ast_photo.jpg", sha256="abc123")
+    thumb_ref = ArtifactRef(key="tnt/lib/thumbnails/07/ast_photo.jpg", sha256="def456")
+    artifact_store.write_artifact.side_effect = [proxy_ref, thumb_ref]
+
+    img = Image.new("RGB", (200, 150), color=(100, 150, 200))
+    src = tmp_path / "photos" / "test.jpg"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    img.save(src, "JPEG")
+
+    worker = ProxyWorker(client=MagicMock(), artifact_store=artifact_store, once=True)
+    job = {
+        "job_id": "job-1",
+        "asset_id": ASSET_ID,
+        "library_id": LIBRARY_ID,
+        "rel_path": REL_PATH,
+        "root_path": str(tmp_path),
+        "media_type": "image",
+    }
+    result = worker.process(job)
+
+    assert result["proxy_key"] == proxy_ref.key
+    assert result["thumbnail_key"] == thumb_ref.key
+    assert result["proxy_sha256"] == proxy_ref.sha256
+    assert result["thumbnail_sha256"] == thumb_ref.sha256
+    assert result["width"] == 200
+    assert result["height"] == 150
+
+    proxy_call, thumb_call = artifact_store.write_artifact.call_args_list
+    assert proxy_call[0][0] == "proxy"
+    assert proxy_call[0][1] == ASSET_ID
+    assert proxy_call[1]["library_id"] == LIBRARY_ID
+    assert proxy_call[1]["rel_path"] == REL_PATH
+    assert proxy_call[1]["width"] == 200
+    assert proxy_call[1]["height"] == 150
+    assert thumb_call[0][0] == "thumbnail"
+    assert thumb_call[0][1] == ASSET_ID
+
+
+@pytest.mark.fast
+def test_proxy_worker_local_store_writes_files(tmp_path: Path) -> None:
+    """LocalArtifactStore integration: proxy and thumbnail files land on disk."""
+    storage = LocalStorage(data_dir=str(tmp_path))
+    artifact_store = LocalArtifactStore(storage=storage, tenant_id=TENANT_ID)
+
+    img = Image.new("RGB", (100, 80), color=(0, 255, 0))
+    src = tmp_path / "green.jpg"
+    img.save(src, "JPEG")
+
+    worker = ProxyWorker(client=MagicMock(), artifact_store=artifact_store, once=True)
+    job = {
+        "job_id": "job-2",
+        "asset_id": ASSET_ID,
+        "library_id": LIBRARY_ID,
+        "rel_path": "green.jpg",
+        "root_path": str(tmp_path),
+        "media_type": "image",
+    }
+    result = worker.process(job)
+
+    proxy_path = tmp_path / result["proxy_key"]
+    thumb_path = tmp_path / result["thumbnail_key"]
+    assert proxy_path.exists()
+    assert thumb_path.exists()
+    assert result["proxy_sha256"] == hashlib.sha256(proxy_path.read_bytes()).hexdigest()
+    assert result["thumbnail_sha256"] == hashlib.sha256(thumb_path.read_bytes()).hexdigest()
+
+
+@pytest.mark.fast
+def test_proxy_worker_skips_video_fast(tmp_path: Path) -> None:
+    artifact_store = MagicMock()
+    worker = ProxyWorker(client=MagicMock(), artifact_store=artifact_store, once=True)
+    result = worker.process({
+        "job_id": "job-3", "asset_id": ASSET_ID, "library_id": LIBRARY_ID,
+        "rel_path": "clip.mp4", "root_path": str(tmp_path), "media_type": "video",
+    })
+    assert result == {}
+    artifact_store.write_artifact.assert_not_called()
 
 
 @pytest.fixture(scope="module")
@@ -107,10 +201,10 @@ def test_proxy_worker_processes_image(proxy_worker_env, tmp_path: Path) -> None:
 
     data_dir = str(tmp_path / "data")
     worker_client = _AuthClient(client, api_key)
+    _storage = LocalStorage(data_dir=data_dir)
     worker = ProxyWorker(
         client=worker_client,
-        storage=LocalStorage(data_dir=data_dir),
-        tenant_id=tenant_id,
+        artifact_store=LocalArtifactStore(storage=_storage, tenant_id=tenant_id),
         once=True,
     )
     worker.run()
@@ -217,8 +311,10 @@ def test_proxy_worker_skips_video(proxy_worker_env, tmp_path: Path) -> None:
     worker_client = _AuthClient(client, api_key)
     worker = ProxyWorker(
         client=worker_client,
-        storage=LocalStorage(data_dir=str(tmp_path / "data")),
-        tenant_id=tenant_id,
+        artifact_store=LocalArtifactStore(
+            storage=LocalStorage(data_dir=str(tmp_path / "data")),
+            tenant_id=tenant_id,
+        ),
         once=True,
     )
     worker.run()
@@ -305,8 +401,10 @@ def test_proxy_worker_missing_file(proxy_worker_env, tmp_path: Path) -> None:
     worker_client = _AuthClient(client, api_key)
     worker = ProxyWorker(
         client=worker_client,
-        storage=LocalStorage(data_dir=str(tmp_path / "data")),
-        tenant_id=tenant_id,
+        artifact_store=LocalArtifactStore(
+            storage=LocalStorage(data_dir=str(tmp_path / "data")),
+            tenant_id=tenant_id,
+        ),
         once=True,
     )
     worker.run()

@@ -33,8 +33,7 @@ def _job(root_path: str, rel_path: str, **extra) -> dict:
 
 @pytest.mark.fast
 def test_proxy_worker_rejects_traversal(tmp_path: Path) -> None:
-    storage = LocalStorage(data_dir=str(tmp_path / "data"))
-    worker = ProxyWorker(client=MagicMock(), storage=storage, tenant_id="t1")
+    worker = ProxyWorker(client=MagicMock(), artifact_store=MagicMock())
     with pytest.raises(ValueError, match="rel_path escapes"):
         worker.process(_job(str(tmp_path), "../../etc/passwd"))
 
@@ -69,8 +68,7 @@ def test_video_index_worker_rejects_traversal(tmp_path: Path) -> None:
 @pytest.mark.fast
 def test_proxy_worker_allows_nested_valid_path(tmp_path: Path) -> None:
     """A nested rel_path within root passes traversal check; raises FileNotFoundError after."""
-    storage = LocalStorage(data_dir=str(tmp_path / "data"))
-    worker = ProxyWorker(client=MagicMock(), storage=storage, tenant_id="t1")
+    worker = ProxyWorker(client=MagicMock(), artifact_store=MagicMock())
     with pytest.raises(FileNotFoundError):
         worker.process(_job(str(tmp_path), "subdir/photo.jpg"))
 

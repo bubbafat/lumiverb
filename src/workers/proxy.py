@@ -5,7 +5,6 @@ has a hardcoded 50MB cumulative allocation cap that fails on large/panorama TIFF
 """
 
 import logging
-import hashlib
 from pathlib import Path
 
 import numpy as np
@@ -15,7 +14,6 @@ from PIL import Image as PILImage
 
 from src.core.file_extensions import RAW_EXTENSIONS
 from src.storage.artifact_store import ArtifactStore
-from src.storage.local import LocalStorage
 from src.workers.base import BaseWorker
 
 logger = logging.getLogger(__name__)
@@ -161,13 +159,11 @@ class ProxyWorker(BaseWorker):
     def __init__(
         self,
         client: object,
-        storage: LocalStorage,
-        tenant_id: str,
+        artifact_store: ArtifactStore,
         concurrency: int = 1,
         once: bool = False,
         library_id: str | None = None,
         output_mode: str = "human",
-        artifact_store: ArtifactStore | None = None,
     ) -> None:
         super().__init__(
             client,
@@ -176,8 +172,6 @@ class ProxyWorker(BaseWorker):
             library_id=library_id,
             output_mode=output_mode,
         )
-        self._storage = storage
-        self._tenant_id = tenant_id
         self._artifact_store = artifact_store
 
     def process(self, job: dict) -> dict:
@@ -197,13 +191,6 @@ class ProxyWorker(BaseWorker):
             raise ValueError(f"rel_path escapes library root: {rel_path!r}")
         if not source_path.exists():
             raise FileNotFoundError(f"Source file not found: {source_path}")
-
-        proxy_key = self._storage.proxy_key(
-            self._tenant_id, library_id, asset_id, rel_path
-        )
-        thumbnail_key = self._storage.thumbnail_key(
-            self._tenant_id, library_id, asset_id, rel_path
-        )
 
         ext = source_path.suffix.lower()
 
@@ -266,8 +253,11 @@ class ProxyWorker(BaseWorker):
 
         # Generate proxy (resize down only — never upscale)
         proxy_bytes = proxy_img.write_to_buffer(".jpg[Q=%d]" % PROXY_JPEG_QUALITY)
-        proxy_sha256 = hashlib.sha256(proxy_bytes).hexdigest()
-        self._storage.write(proxy_key, proxy_bytes)
+        proxy_ref = self._artifact_store.write_artifact(
+            "proxy", asset_id, proxy_bytes,
+            library_id=library_id, rel_path=rel_path,
+            width=width_orig, height=height_orig,
+        )
 
         # Generate thumbnail FROM PROXY — not from source
         # proxy_img is already the right size or smaller; no need to reload source
@@ -277,17 +267,19 @@ class ProxyWorker(BaseWorker):
             size=pyvips.enums.Size.DOWN,
         )
         thumb_bytes = thumb_img.write_to_buffer(".jpg[Q=%d]" % THUMBNAIL_JPEG_QUALITY)
-        thumbnail_sha256 = hashlib.sha256(thumb_bytes).hexdigest()
-        self._storage.write(thumbnail_key, thumb_bytes)
+        thumb_ref = self._artifact_store.write_artifact(
+            "thumbnail", asset_id, thumb_bytes,
+            library_id=library_id, rel_path=rel_path,
+        )
 
         if from_thumb:
             logger.debug("Used embedded JPEG for %s", source_path.name)
 
         return {
-            "proxy_key": proxy_key,
-            "thumbnail_key": thumbnail_key,
-            "proxy_sha256": proxy_sha256,
-            "thumbnail_sha256": thumbnail_sha256,
+            "proxy_key": proxy_ref.key,
+            "thumbnail_key": thumb_ref.key,
+            "proxy_sha256": proxy_ref.sha256,
+            "thumbnail_sha256": thumb_ref.sha256,
             "width": width_orig,
             "height": height_orig,
         }

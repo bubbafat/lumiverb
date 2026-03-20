@@ -624,13 +624,11 @@ def worker_proxy(
 
     worker = ProxyWorker(
         client=client,
-        storage=storage,
-        tenant_id=tenant_id,
+        artifact_store=artifact_store,
         concurrency=concurrency,
         once=once,
         library_id=library_id,
         output_mode=output,
-        artifact_store=artifact_store,
     )
     worker.run()
 
