@@ -8,7 +8,6 @@ import pytest
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from src.storage.local import LocalStorage
 from src.workers.exif_worker import ExifWorker
 from src.workers.proxy import ProxyWorker
 from src.workers.video_index_worker import VideoIndexWorker
@@ -47,8 +46,7 @@ def test_exif_worker_rejects_traversal(tmp_path: Path) -> None:
 
 @pytest.mark.fast
 def test_video_preview_worker_rejects_traversal(tmp_path: Path) -> None:
-    storage = LocalStorage(data_dir=str(tmp_path / "data"))
-    worker = VideoPreviewWorker(client=MagicMock(), storage=storage, tenant_id="t1")
+    worker = VideoPreviewWorker(client=MagicMock(), artifact_store=MagicMock())
     with pytest.raises(ValueError, match="rel_path escapes"):
         worker.process(_job(str(tmp_path), "../../etc/passwd", media_type="video"))
 
@@ -82,8 +80,7 @@ def test_exif_worker_allows_nested_valid_path(tmp_path: Path) -> None:
 
 @pytest.mark.fast
 def test_video_preview_worker_allows_nested_valid_path(tmp_path: Path) -> None:
-    storage = LocalStorage(data_dir=str(tmp_path / "data"))
-    worker = VideoPreviewWorker(client=MagicMock(), storage=storage, tenant_id="t1")
+    worker = VideoPreviewWorker(client=MagicMock(), artifact_store=MagicMock())
     with pytest.raises(FileNotFoundError):
         worker.process(_job(str(tmp_path), "subdir/clip.mp4", media_type="video"))
 

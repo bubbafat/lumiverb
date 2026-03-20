@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import tempfile
 from pathlib import Path
 
 from src.storage.artifact_store import ArtifactStore
-from src.storage.local import LocalStorage
 from src.workers.base import BaseWorker, BlockJob
 
 logger = logging.getLogger(__name__)
@@ -22,14 +22,12 @@ class VideoPreviewWorker(BaseWorker):
     def __init__(
         self,
         client: object,
-        storage: LocalStorage,
-        tenant_id: str,
+        artifact_store: ArtifactStore,
         concurrency: int = 1,
         once: bool = False,
         library_id: str | None = None,
         path_prefix: str | None = None,
         output_mode: str = "human",
-        artifact_store: ArtifactStore | None = None,
     ) -> None:
         super().__init__(
             client,
@@ -39,8 +37,6 @@ class VideoPreviewWorker(BaseWorker):
             path_prefix=path_prefix,
             output_mode=output_mode,
         )
-        self._storage = storage
-        self._tenant_id = tenant_id
         self._artifact_store = artifact_store
 
     def process(self, job: dict) -> dict:
@@ -63,15 +59,25 @@ class VideoPreviewWorker(BaseWorker):
         if not source_path.exists():
             raise FileNotFoundError(f"Source file not found: {source_path}")
 
-        preview_key = self._storage.video_preview_key(
-            self._tenant_id,
-            library_id,
-            asset_id,
-            rel_path,
-        )
-        preview_path = self._storage.abs_path(preview_key)
-        preview_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            preview_path = Path(tmpdir) / f"{asset_id}_preview.mp4"
+            self._run_ffmpeg(source_path, preview_path, asset_id=asset_id)
+            if not preview_path.exists():
+                raise RuntimeError(
+                    f"ffmpeg finished without writing preview output for asset {asset_id}: {source_path}"
+                )
+            preview_bytes = preview_path.read_bytes()
 
+        preview_ref = self._artifact_store.write_artifact(
+            "video_preview",
+            asset_id,
+            preview_bytes,
+            library_id=library_id,
+            rel_path=rel_path,
+        )
+        return {"video_preview_key": preview_ref.key}
+
+    def _run_ffmpeg(self, source_path: Path, preview_path: Path, *, asset_id: str) -> None:
         # Build ffmpeg command to extract first PREVIEW_DURATION_SEC seconds,
         # re-encoding to H.264/AAC in MP4 container with a modest resolution.
         cmd = [
@@ -159,6 +165,4 @@ class VideoPreviewWorker(BaseWorker):
                     f"{source_path} (exit {exc.returncode}): {first_stderr}\n"
                     f"ffmpeg no-audio retry failed (exit {exc2.returncode}): {second_stderr}"
                 ) from exc2
-
-        return {"video_preview_key": preview_key}
 

@@ -724,14 +724,12 @@ def worker_video_preview(
 
     worker = VideoPreviewWorker(
         client=client,
-        storage=storage,
-        tenant_id=tenant_id,
+        artifact_store=artifact_store,
         concurrency=concurrency,
         once=once,
         library_id=library_id,
         path_prefix=path_prefix,
         output_mode=output,
-        artifact_store=artifact_store,
     )
     worker.run()
 

@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.storage.local import LocalStorage
+from src.storage.artifact_store import ArtifactRef
 from src.workers.video_preview_worker import VideoPreviewWorker
 
 
@@ -40,8 +40,8 @@ def test_video_preview_worker_raises_runtimeerror_when_ffmpeg_fails(tmp_path: Pa
     ffmpeg returns a failure exit code (e.g. 69) and we surface that as a
     RuntimeError rather than crashing the process.
     """
-    storage = LocalStorage(data_dir=str(tmp_path / "data"))
-    worker = VideoPreviewWorker(client=MagicMock(), storage=storage, tenant_id="t1")
+    artifact_store = MagicMock()
+    worker = VideoPreviewWorker(client=MagicMock(), artifact_store=artifact_store)
 
     job = _job(str(tmp_path), "subdir/clip.mp4")
     (tmp_path / "subdir").mkdir(parents=True, exist_ok=True)
@@ -58,6 +58,7 @@ def test_video_preview_worker_raises_runtimeerror_when_ffmpeg_fails(tmp_path: Pa
 
         with pytest.raises(RuntimeError, match="ffmpeg failed"):
             worker.process(job)
+        artifact_store.write_artifact.assert_not_called()
 
 
 @pytest.mark.fast
@@ -74,8 +75,8 @@ def test_video_preview_worker_handles_path_reuse_non_video_file(tmp_path: Path) 
     source = root / "DSC00001.ARW"
     source.write_bytes(b"not a real video file")
 
-    storage = LocalStorage(data_dir=str(tmp_path / "data"))
-    worker = VideoPreviewWorker(client=MagicMock(), storage=storage, tenant_id="t1")
+    artifact_store = MagicMock()
+    worker = VideoPreviewWorker(client=MagicMock(), artifact_store=artifact_store)
     job = _job(str(root), "DSC00001.ARW")
 
     with patch("src.workers.video_preview_worker.subprocess.run") as mock_run:
@@ -92,28 +93,65 @@ def test_video_preview_worker_handles_path_reuse_non_video_file(tmp_path: Path) 
 
 @pytest.mark.fast
 def test_video_preview_worker_retries_without_audio_when_first_attempt_fails(tmp_path: Path) -> None:
-    storage = LocalStorage(data_dir=str(tmp_path / "data"))
-    worker = VideoPreviewWorker(client=MagicMock(), storage=storage, tenant_id="t1")
+    artifact_store = MagicMock()
+    artifact_store.write_artifact.return_value = ArtifactRef(
+        key="t1/lib_test/previews/ab/ast_01ARZ3NDEKTSV4RRFFQ69G5FAV_clip.mp4",
+        sha256="abc123",
+    )
+    worker = VideoPreviewWorker(client=MagicMock(), artifact_store=artifact_store)
     job = _job(str(tmp_path), "subdir/clip.mov")
     (tmp_path / "subdir").mkdir(parents=True, exist_ok=True)
     (tmp_path / "subdir" / "clip.mov").write_bytes(b"not a real mov, ffmpeg mocked")
 
     with patch("src.workers.video_preview_worker.subprocess.run") as mock_run:
-        mock_run.side_effect = [
-            subprocess.CalledProcessError(
-                returncode=234,
-                cmd=["ffmpeg", "-c:a", "aac"],
-                output="",
-                stderr="audio decode error",
-            ),
-            MagicMock(returncode=0, stdout=b"", stderr=b""),
-        ]
+        calls = {"n": 0}
+
+        def _run_side_effect(cmd, check, capture_output):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise subprocess.CalledProcessError(
+                    returncode=234,
+                    cmd=["ffmpeg", "-c:a", "aac"],
+                    output="",
+                    stderr="audio decode error",
+                )
+            Path(cmd[-1]).write_bytes(b"fake mp4 bytes")
+            return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+        mock_run.side_effect = _run_side_effect
 
         result = worker.process(job)
         assert "video_preview_key" in result
+        artifact_store.write_artifact.assert_called_once()
+        assert result["video_preview_key"] == "t1/lib_test/previews/ab/ast_01ARZ3NDEKTSV4RRFFQ69G5FAV_clip.mp4"
+        write_call = artifact_store.write_artifact.call_args
+        assert write_call.args[0] == "video_preview"
+        assert write_call.args[1] == "ast_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+        assert write_call.kwargs["library_id"] == "lib_test"
+        assert write_call.kwargs["rel_path"] == "subdir/clip.mov"
 
         # Second attempt should include "-an" to disable audio.
         assert mock_run.call_count == 2
+        first_cmd = mock_run.call_args_list[0].args[0]
         second_cmd = mock_run.call_args_list[1].args[0]
+        assert str(tmp_path / "data") not in first_cmd[-1]
+        assert str(tmp_path / "data") not in second_cmd[-1]
+        assert first_cmd[-1] == second_cmd[-1]
+        assert not Path(first_cmd[-1]).exists()
         assert "-an" in second_cmd
+
+
+@pytest.mark.fast
+def test_video_preview_worker_raises_when_ffmpeg_writes_no_output_file(tmp_path: Path) -> None:
+    artifact_store = MagicMock()
+    worker = VideoPreviewWorker(client=MagicMock(), artifact_store=artifact_store)
+    job = _job(str(tmp_path), "subdir/clip.mov")
+    (tmp_path / "subdir").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "subdir" / "clip.mov").write_bytes(b"not a real mov, ffmpeg mocked")
+
+    with patch("src.workers.video_preview_worker.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+        with pytest.raises(RuntimeError, match="without writing preview output"):
+            worker.process(job)
+        artifact_store.write_artifact.assert_not_called()
 

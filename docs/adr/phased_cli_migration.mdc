@@ -10,7 +10,7 @@ In Progress
 | 1 | ArtifactStore protocol + LocalArtifactStore + RemoteArtifactStore + worker injection | Complete |
 | 2 | Migrate VisionWorker + EmbedWorker reads (abs_path → read_artifact) | Complete |
 | 3 | Migrate ProxyWorker writes (storage.write → write_artifact) | Complete |
-| 4 | Migrate VideoPreviewWorker writes (ffmpeg → tmp file → upload) | Pending |
+| 4 | Migrate VideoPreviewWorker writes (ffmpeg → tmp file → upload) | Complete |
 | 5a | API: add `scene_rep` artifact type to upload/download endpoints | Pending |
 | 5b | Migrate VideoIndexWorker + VideoVisionWorker | Pending |
 
