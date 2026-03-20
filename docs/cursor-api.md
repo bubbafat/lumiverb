@@ -72,6 +72,14 @@ Tenant resolution runs for every request except `/health` and `/v1/admin/*`: rea
 
 - **GET /v1/tenant/context** — Tenant auth required. Returns `{ "tenant_id" }` only. Used by CLI/worker for storage path computation. Workers must not have direct DB access; they use the jobs API only.
 
+## Tenant Maintenance API
+
+All routes under `/v1/tenant/maintenance` require tenant auth and **tenant admin** role (`require_tenant_admin`). Maintenance mode is stored as a JSON value in `system_metadata` under the key `maintenance_mode`. When active, `GET /v1/jobs/next` returns 204 immediately so workers idle without claiming jobs.
+
+- **GET /v1/tenant/maintenance/status** — Returns `{ active, message, started_at }`.
+- **POST /v1/tenant/maintenance/start** — Body: `{ "message": "..." }`. Enables maintenance mode. Returns `{ active: true, message, started_at }`.
+- **POST /v1/tenant/maintenance/end** — No body. Clears maintenance mode. Returns `{ active: false }`.
+
 ## Tenant Upgrade API
 
 All routes under `/v1/tenant/upgrade` require tenant auth and **tenant admin** role (`require_tenant_admin`). These endpoints run idempotent, tenant-scoped upgrade steps (schema migrations and/or data backfills) in a fixed order.

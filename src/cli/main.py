@@ -276,6 +276,66 @@ admin_tenants_app = typer.Typer(help="Manage tenants.")
 admin_app.add_typer(admin_tenants_app, name="tenants")
 
 
+# ---------------------------------------------------------------------------
+# admin maintenance
+# ---------------------------------------------------------------------------
+
+
+@admin_app.command("maintenance")
+def admin_maintenance(
+    start: Annotated[
+        bool,
+        typer.Option("--start", help="Enable maintenance mode."),
+    ] = False,
+    end: Annotated[
+        bool,
+        typer.Option("--end", help="Disable maintenance mode."),
+    ] = False,
+    message: Annotated[
+        str,
+        typer.Option("--message", "-m", help="Reason shown in status (used with --start)."),
+    ] = "",
+) -> None:
+    """Show, enable, or disable tenant maintenance mode.
+
+    With no flags: show current status.
+    With --start [--message '...']: enable maintenance mode (workers stop claiming jobs).
+    With --end: disable maintenance mode.
+    """
+    if start and end:
+        console.print("[red]--start and --end are mutually exclusive.[/red]")
+        raise typer.Exit(1)
+
+    client = LumiverbClient()
+
+    if start:
+        resp = client.post("/v1/tenant/maintenance/start", json={"message": message})
+        data = resp.json()
+        console.print(f"[yellow]Maintenance mode enabled.[/yellow]")
+        if data.get("message"):
+            console.print(f"  Message:    {data['message']}")
+        console.print(f"  Started at: {data.get('started_at', '')}")
+        return
+
+    if end:
+        client.post("/v1/tenant/maintenance/end", json={})
+        console.print("[green]Maintenance mode disabled. Workers will resume claiming jobs.[/green]")
+        return
+
+    # No flags — show status.
+    resp = client.get("/v1/tenant/maintenance/status")
+    data = resp.json()
+    active = data.get("active", False)
+    if active:
+        console.print(f"[yellow]Maintenance mode: ACTIVE[/yellow]")
+        if data.get("message"):
+            console.print(f"  Message:    {data['message']}")
+        if data.get("started_at"):
+            console.print(f"  Started at: {data['started_at']}")
+    else:
+        console.print("[green]Maintenance mode: inactive[/green]")
+
+
 def _require_admin_key(
     admin_key: str | None,
 ) -> str:
@@ -2083,6 +2143,16 @@ def upgrade(
     from src.cli.progress import UnifiedProgress, UnifiedProgressSpec
 
     client = LumiverbClient()
+
+    if not dry_run:
+        maint_resp = client.get("/v1/tenant/maintenance/status")
+        maint = maint_resp.json()
+        if not maint.get("active"):
+            console.print("[red]Maintenance mode is not active.[/red]")
+            console.print("Enable it first:")
+            console.print("  lumiverb admin maintenance --start --message 'Upgrading'")
+            raise typer.Exit(1)
+
     status_resp = client.get("/v1/tenant/upgrade/status")
     status = status_resp.json()
 

@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.api.dependencies import get_db_session, get_tenant_session
+from src.api.routers.maintenance import get_maintenance_state
 from src.core.config import get_settings
 from src.core import asset_status
 from src.models.filter import AssetFilterSpec
@@ -82,6 +83,9 @@ def get_next_job(
     Claim next pending job of type. Returns 204 if none available.
     Returns job payload with asset and library info for processing.
     """
+    if get_maintenance_state(session).get("active"):
+        return Response(status_code=204)
+
     settings = get_settings()
     worker_id = f"api_{uuid.uuid4().hex[:12]}"
     job_repo = WorkerJobRepository(session)
