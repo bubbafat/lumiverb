@@ -903,6 +903,43 @@ class AssetRepository:
         self._session.add(asset)
         self._session.commit()
 
+    def set_proxy_artifact(
+        self,
+        asset_id: str,
+        key: str,
+        sha256: str,
+        width: int | None,
+        height: int | None,
+    ) -> None:
+        """Set proxy_key and proxy_sha256. Width/height updated only if non-None.
+
+        Does NOT touch thumbnail_key or advance asset.status — status transitions
+        are the job-complete path's responsibility, not the upload endpoint's.
+        """
+        asset = self._session.get(Asset, asset_id)
+        if asset is None:
+            raise ValueError(f"Asset not found: {asset_id}")
+        asset.proxy_key = key
+        asset.proxy_sha256 = sha256
+        if width is not None:
+            asset.width = width
+        if height is not None:
+            asset.height = height
+        asset.updated_at = utcnow()
+        self._session.add(asset)
+        self._session.commit()
+
+    def set_thumbnail_artifact(self, asset_id: str, key: str, sha256: str) -> None:
+        """Set thumbnail_key and thumbnail_sha256. Does NOT touch proxy_key or status."""
+        asset = self._session.get(Asset, asset_id)
+        if asset is None:
+            raise ValueError(f"Asset not found: {asset_id}")
+        asset.thumbnail_key = key
+        asset.thumbnail_sha256 = sha256
+        asset.updated_at = utcnow()
+        self._session.add(asset)
+        self._session.commit()
+
     def set_video_indexed(self, asset_id: str) -> None:
         """Set asset.video_indexed = True. Used when video-vision job completes."""
         asset = self._session.get(Asset, asset_id)

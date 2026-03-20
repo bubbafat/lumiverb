@@ -63,11 +63,12 @@ Each tenant gets a dedicated Postgres database on the same Postgres instance (sc
 
 ```
 libraries         — library_id, name, root_path, scan_status, created_at
-assets            — asset_id, library_id, sha256, file_path, file_size, 
+assets            — asset_id, library_id, sha256, file_path, file_size,
                     media_type, width, height, duration_ms, captured_at,
-                    proxy_key, thumbnail_key, availability, created_at
+                    proxy_key, proxy_sha256, thumbnail_key, thumbnail_sha256,
+                    availability, created_at
 video_scenes      — scene_id, asset_id, start_ms, end_ms, rep_frame_ms,
-                    proxy_key, thumbnail_key
+                    proxy_key, thumbnail_key, rep_frame_sha256
 asset_metadata    — asset_id, exif_json, sharpness_score, face_count,
                     ai_description, ai_description_at,
                     embedding_vector vector(512)  -- nullable, populated phase 2

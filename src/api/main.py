@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from src.api.middleware import TenantResolutionMiddleware
 from src.api.routers import admin, assets, jobs, keys, libraries, path_filters, scans, tenant, trash, video
+from src.api.routers.artifacts import router as artifacts_router
 from src.api.routers.maintenance import router as maintenance_router
 from src.api.routers.upgrade import router as upgrade_router
 from src.api.routers.pipeline import router as pipeline_router
@@ -21,6 +22,7 @@ app.include_router(search_sync_router)
 app.include_router(path_filters.router)
 app.include_router(libraries.router)
 app.include_router(scans.router)
+app.include_router(artifacts_router)
 app.include_router(assets.router)
 app.include_router(video.router)
 app.include_router(keys.router)
