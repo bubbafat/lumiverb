@@ -10,7 +10,7 @@ Accepted
 | 1 | Schema (3 hash columns) + hash capture in ProxyWorker + VideoIndexWorker | Complete |
 | 2 | Artifact upload endpoint (`POST /v1/assets/{asset_id}/artifacts/{type}`) | Complete |
 | 3 | Artifact download endpoint (`GET /v1/assets/{asset_id}/artifacts/{type}`) | Complete |
-| 4 | Batch state-check endpoint (`POST /v1/assets/state-check`) | Pending |
+| 4 | Batch state-check endpoint (`POST /v1/assets/state-check`) | Complete |
 | 5 | Vision submission endpoint (`POST /v1/assets/{asset_id}/vision`) | Pending |
 
 ## Context

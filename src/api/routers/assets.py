@@ -7,7 +7,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session
@@ -87,6 +87,29 @@ class BatchTrashResponse(BaseModel):
     not_found: list[str]
 
 
+class StateCheckRequest(BaseModel):
+    asset_ids: list[str]
+
+    @field_validator("asset_ids")
+    @classmethod
+    def max_ids(cls, v: list[str]) -> list[str]:
+        if len(v) == 0:
+            raise ValueError("asset_ids must not be empty")
+        if len(v) > 500:
+            raise ValueError("Maximum 500 asset_ids per request")
+        return v
+
+
+class AssetStateItem(BaseModel):
+    asset_id: str
+    deleted: bool
+    proxy_sha256: str | None
+
+
+class StateCheckResponse(BaseModel):
+    assets: list[AssetStateItem]
+
+
 @router.get("/page", responses={204: {"description": "No assets (end of pages)"}})
 def page_assets(
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -141,6 +164,29 @@ def page_assets(
         )
         for a in assets
     ]
+
+
+@router.post("/state-check", response_model=StateCheckResponse)
+def state_check(
+    body: StateCheckRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> StateCheckResponse:
+    """Return deletion status and proxy_sha256 for a batch of asset IDs.
+
+    Includes soft-deleted assets (client needs to evict them from cache).
+    Asset IDs not found in the DB are returned with deleted=True, proxy_sha256=None.
+    Maximum 500 IDs per request.
+    """
+    states = AssetRepository(session).get_states(body.asset_ids)
+    items = [
+        AssetStateItem(
+            asset_id=aid,
+            deleted=states[aid]["deleted"] if aid in states else True,
+            proxy_sha256=states[aid]["proxy_sha256"] if aid in states else None,
+        )
+        for aid in body.asset_ids
+    ]
+    return StateCheckResponse(assets=items)
 
 
 def _stream_asset_file(

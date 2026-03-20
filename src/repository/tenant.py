@@ -1032,6 +1032,28 @@ class AssetRepository:
         )
         return list(self._session.exec(stmt).all())
 
+    def get_states(self, asset_ids: list[str]) -> dict[str, dict]:
+        """Fetch deleted status and proxy_sha256 for a list of asset_ids.
+
+        Returns dict keyed by asset_id. IDs not present in DB are not included.
+        Deliberately includes soft-deleted assets — callers must not add a
+        deleted_at IS NULL filter here.
+        """
+        if not asset_ids:
+            return {}
+        stmt = (
+            select(Asset.asset_id, Asset.deleted_at, Asset.proxy_sha256)
+            .where(Asset.asset_id.in_(asset_ids))
+        )
+        rows = self._session.exec(stmt).all()
+        return {
+            row.asset_id: {
+                "deleted": row.deleted_at is not None,
+                "proxy_sha256": row.proxy_sha256,
+            }
+            for row in rows
+        }
+
     def query_for_enqueue(
         self,
         filter: AssetFilterSpec,
