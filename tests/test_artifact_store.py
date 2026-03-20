@@ -253,7 +253,10 @@ def test_remote_read_artifact() -> None:
     )
 
     assert result == SAMPLE_BYTES
-    mock_client.get.assert_called_once_with(f"/v1/assets/{ASSET_ID}/artifacts/proxy")
+    mock_client.get.assert_called_once_with(
+        f"/v1/assets/{ASSET_ID}/artifacts/proxy",
+        params=None,
+    )
 
 
 def test_remote_read_artifact_uses_asset_id_and_type_not_key() -> None:
@@ -270,7 +273,41 @@ def test_remote_read_artifact_uses_asset_id_and_type_not_key() -> None:
         artifact_type="thumbnail",
     )
 
-    mock_client.get.assert_called_once_with("/v1/assets/ast_SPECIFIC_ASSET/artifacts/thumbnail")
+    mock_client.get.assert_called_once_with(
+        "/v1/assets/ast_SPECIFIC_ASSET/artifacts/thumbnail",
+        params=None,
+    )
+
+
+def test_remote_read_artifact_scene_rep_includes_rep_frame_ms() -> None:
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.content = b"scene-bytes"
+    mock_client.get.return_value = mock_response
+
+    store = RemoteArtifactStore(client=mock_client)
+    result = store.read_artifact(
+        "ignored-scene-key.jpg",
+        asset_id=ASSET_ID,
+        artifact_type="scene_rep",
+        rep_frame_ms=12345,
+    )
+
+    assert result == b"scene-bytes"
+    mock_client.get.assert_called_once_with(
+        f"/v1/assets/{ASSET_ID}/artifacts/scene_rep",
+        params={"rep_frame_ms": 12345},
+    )
+
+
+def test_remote_read_artifact_scene_rep_requires_rep_frame_ms() -> None:
+    store = RemoteArtifactStore(client=MagicMock())
+    with pytest.raises(ValueError, match="rep_frame_ms"):
+        store.read_artifact(
+            "ignored-scene-key.jpg",
+            asset_id=ASSET_ID,
+            artifact_type="scene_rep",
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -58,12 +58,14 @@ class ArtifactStore(Protocol):
         *,
         asset_id: str,
         artifact_type: str,
+        rep_frame_ms: int | None = None,
     ) -> bytes:
         """Read artifact bytes.
 
         key is the opaque storage key (e.g. "t1/lib1/proxies/07/ast_01JX_photo.jpg").
         asset_id and artifact_type are used by RemoteArtifactStore to call the correct
         API endpoint; LocalArtifactStore uses key directly and ignores the hints.
+        For scene_rep in remote mode, rep_frame_ms is required.
         """
         ...
 
@@ -112,8 +114,9 @@ class LocalArtifactStore:
         *,
         asset_id: str,
         artifact_type: str,
+        rep_frame_ms: int | None = None,
     ) -> bytes:
-        # asset_id and artifact_type are unused in local mode; key resolves directly.
+        # asset_id / artifact_type / rep_frame_ms are unused in local mode.
         return self._storage.abs_path(key).read_bytes()
 
 
@@ -159,9 +162,15 @@ class RemoteArtifactStore:
         *,
         asset_id: str,
         artifact_type: str,
+        rep_frame_ms: int | None = None,
     ) -> bytes:
         # key is unused in remote mode; the download endpoint is addressed by asset_id + type.
-        resp = self._client.get(f"/v1/assets/{asset_id}/artifacts/{artifact_type}")
+        params: dict[str, int] | None = None
+        if artifact_type == "scene_rep":
+            if rep_frame_ms is None:
+                raise ValueError("rep_frame_ms is required for scene_rep artifacts")
+            params = {"rep_frame_ms": rep_frame_ms}
+        resp = self._client.get(f"/v1/assets/{asset_id}/artifacts/{artifact_type}", params=params)
         return resp.content
 
 

@@ -10,12 +10,11 @@ and processes the asset in 30-second chunks using the video chunk API:
 
 Scene segmentation is performed locally using VideoScanner + SceneSegmenter,
 and high-resolution representative frames are extracted from the full source
-via FFmpeg into LocalStorage using scene_rep_key().
+via FFmpeg and persisted via ArtifactStore.
 """
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import shutil
 import subprocess
@@ -24,9 +23,7 @@ from pathlib import Path
 from typing import Callable
 
 from PIL import Image
-from src.core.config import get_settings
 from src.storage.artifact_store import ArtifactStore
-from src.storage.local import LocalStorage
 from src.video.clip_extractor import (
     extract_video_frame,
     probe_video_duration,
@@ -79,10 +76,8 @@ class VideoIndexWorker(BaseWorker):
                 f"Failed to init video chunks for asset {asset_id}: HTTP {resp.status_code} {resp.text}"
             )
 
-        settings = get_settings()
-        storage = LocalStorage(data_dir=settings.data_dir)
-        tenant_ctx = self._request("GET", "/v1/tenant/context").json()
-        tenant_id = tenant_ctx["tenant_id"]
+        if self._artifact_store is None:
+            raise ValueError("artifact_store is required for VideoIndexWorker")
         library_id = job["library_id"]
 
         tmpdir = Path(tempfile.mkdtemp())
@@ -90,12 +85,19 @@ class VideoIndexWorker(BaseWorker):
             # Thumbnail: extract frame at 0, write to storage, then record thumbnail_key on asset.
             thumb_path = tmpdir / f"{asset_id}_thumb.jpg"
             if extract_video_frame(source, thumb_path, timestamp=0.0) and thumb_path.exists():
-                original_filename = Path(job["rel_path"]).name
-                key = storage.thumbnail_key(tenant_id, library_id, asset_id, original_filename)
-                dest = storage.abs_path(key)
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(thumb_path, dest)
-                resp = self._request("POST", f"/v1/assets/{asset_id}/thumbnail-key", json={"thumbnail_key": key})
+                thumb_bytes = thumb_path.read_bytes()
+                ref = self._artifact_store.write_artifact(
+                    "thumbnail",
+                    asset_id,
+                    thumb_bytes,
+                    library_id=library_id,
+                    rel_path=job["rel_path"],
+                )
+                resp = self._request(
+                    "POST",
+                    f"/v1/assets/{asset_id}/thumbnail-key",
+                    json={"thumbnail_key": ref.key},
+                )
                 if resp.status_code // 100 != 2:
                     logger.warning(
                         "Failed to record thumbnail_key for asset %s: HTTP %s",
@@ -155,10 +157,9 @@ class VideoIndexWorker(BaseWorker):
                         work_order=work_order,
                         chunk_offset=chunk_start,
                         tmpdir=tmpdir,
-                        storage=storage,
-                        tenant_id=tenant_id,
                         library_id=library_id,
                         asset_id=asset_id,
+                        rel_path=job["rel_path"],
                         frame_callback=lambda pts, s, e, _dur=duration_sec: self._emit(
                             {
                                 "event": "frame_scanned",
@@ -247,10 +248,9 @@ class VideoIndexWorker(BaseWorker):
         chunk_offset: float,
         work_order: dict,
         tmpdir: Path,
-        storage: LocalStorage,
-        tenant_id: str,
         library_id: str,
         asset_id: str,
+        rel_path: str,
         frame_callback: Callable[[float, float, float], None] | None = None,
     ) -> None:
         """Run scene detection on chunk, extract rep frames, complete or fail chunk."""
@@ -362,24 +362,26 @@ class VideoIndexWorker(BaseWorker):
                 abs_end_ms = scene.end_ms + chunk_offset_ms
                 rep_path = tmpdir / f"{asset_id}_{abs_rep_ms}.jpg"
                 extract_video_frame(source, rep_path, timestamp=abs_rep_ms / 1000.0)
-                key = storage.scene_rep_key(
-                    tenant_id=tenant_id,
+                rep_frame_bytes = rep_path.read_bytes()
+                if self._artifact_store is None:
+                    raise ValueError("artifact_store is required for VideoIndexWorker")
+                ref = self._artifact_store.write_artifact(
+                    "scene_rep",
+                    asset_id,
+                    rep_frame_bytes,
                     library_id=library_id,
-                    asset_id=asset_id,
+                    rel_path=rel_path,
                     rep_frame_ms=abs_rep_ms,
                 )
-                rep_frame_bytes = rep_path.read_bytes()
-                rep_frame_sha256 = hashlib.sha256(rep_frame_bytes).hexdigest()
-                storage.write(key, rep_frame_bytes)
                 rep_path.unlink(missing_ok=True)
                 scene_dicts.append({
                     "scene_index": i,
                     "start_ms": abs_start_ms,
                     "end_ms": abs_end_ms,
                     "rep_frame_ms": abs_rep_ms,
-                    "rep_frame_sha256": rep_frame_sha256,
+                    "rep_frame_sha256": ref.sha256,
                     "proxy_key": None,
-                    "thumbnail_key": key,
+                    "thumbnail_key": ref.key,
                     "description": None,
                     "tags": None,
                     "sharpness_score": getattr(scene, "sharpness_score", None),

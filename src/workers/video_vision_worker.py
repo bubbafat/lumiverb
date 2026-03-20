@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import logging
+import tempfile
 from pathlib import Path
 from typing import Callable
 
-from src.core.config import get_settings
 from src.storage.artifact_store import ArtifactStore
-from src.storage.local import LocalStorage
 from src.workers.base import BaseWorker, BlockJob
 from src.workers.captions.factory import get_caption_provider
 
@@ -68,8 +67,8 @@ class VideoVisionWorker(BaseWorker):
                 "tags": [],
             }
 
-        settings = get_settings()
-        storage = LocalStorage(data_dir=settings.data_dir)
+        if self._artifact_store is None:
+            raise ValueError("artifact_store is required for VideoVisionWorker")
 
         provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key)
         model_version = "1"
@@ -95,12 +94,23 @@ class VideoVisionWorker(BaseWorker):
                 logger.warning("Scene %s has no thumbnail_key; skipping vision", scene_id)
                 continue
 
-            rep_path = Path(storage.abs_path(thumbnail_key))
-            if not rep_path.exists():
+            rep_frame_ms = scene.get("rep_frame_ms")
+            if rep_frame_ms is None:
+                logger.warning("Scene %s has no rep_frame_ms; skipping vision", scene_id)
+                continue
+
+            try:
+                rep_bytes = self._artifact_store.read_artifact(
+                    thumbnail_key,
+                    asset_id=asset_id,
+                    artifact_type="scene_rep",
+                    rep_frame_ms=rep_frame_ms,
+                )
+            except Exception:
                 logger.warning(
-                    "Rep frame not found at %s for scene %s; skipping",
-                    rep_path,
+                    "Rep frame unavailable for scene %s (asset %s); skipping",
                     scene_id,
+                    asset_id,
                 )
                 continue
 
@@ -115,7 +125,13 @@ class VideoVisionWorker(BaseWorker):
                 }
             )
 
-            result = provider.describe(rep_path)
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmpf:
+                tmpf.write(rep_bytes)
+                tmp_path = Path(tmpf.name)
+            try:
+                result = provider.describe(tmp_path)
+            finally:
+                tmp_path.unlink(missing_ok=True)
             if not result:
                 logger.warning("Caption provider returned empty result for scene %s", scene_id)
                 continue
