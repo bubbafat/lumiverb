@@ -16,12 +16,11 @@ def test_vision_worker_no_proxy():
     """VisionWorker.process raises ValueError when proxy_key is None."""
     from unittest.mock import MagicMock
 
-    from src.storage.local import LocalStorage
     from src.workers.vision_worker import VisionWorker
 
     worker = VisionWorker(
         client=MagicMock(),
-        storage=MagicMock(spec=LocalStorage),
+        artifact_store=MagicMock(),
         once=True,
     )
     with pytest.raises(ValueError, match="proxy_key"):

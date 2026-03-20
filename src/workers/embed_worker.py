@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import logging
+import tempfile
 from pathlib import Path
 
 from src.storage.artifact_store import ArtifactStore
-from src.storage.local import LocalStorage
 from src.workers.base import BaseWorker, BlockJob
 from src.workers.embeddings.clip_provider import CLIPEmbeddingProvider, MODEL_VERSION as CLIP_VERSION
 
@@ -19,12 +19,10 @@ class EmbedWorker(BaseWorker):
     def __init__(
         self,
         client: object,
-        storage: LocalStorage,
-        artifact_store: ArtifactStore | None = None,
+        artifact_store: ArtifactStore,
         **kwargs: object,
     ) -> None:
         super().__init__(client=client, **kwargs)
-        self._storage = storage
         self._artifact_store = artifact_store
         self._clip: CLIPEmbeddingProvider | None = None
 
@@ -43,12 +41,22 @@ class EmbedWorker(BaseWorker):
         if not proxy_key:
             raise BlockJob(f"No proxy_key for asset {asset_id} — proxy must complete before embed can run")
 
-        proxy_path = Path(self._storage.abs_path(proxy_key))
-        if not proxy_path.exists():
-            raise FileNotFoundError(f"Proxy file not found: {proxy_path}")
+        try:
+            proxy_bytes = self._artifact_store.read_artifact(
+                proxy_key, asset_id=asset_id, artifact_type="proxy"
+            )
+        except Exception as e:
+            raise BlockJob(f"Could not read proxy for asset {asset_id}: {e}") from e
+
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            tmp.write(proxy_bytes)
+            tmp_path = Path(tmp.name)
 
         clip_provider = self._get_clip()
-        clip_vec = clip_provider.embed(proxy_path)
+        try:
+            clip_vec = clip_provider.embed(tmp_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
 
         return {
             "embeddings": [

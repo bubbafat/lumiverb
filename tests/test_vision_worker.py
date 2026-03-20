@@ -3,15 +3,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.storage.local import LocalStorage
 from src.workers.vision_worker import VisionWorker
 
 
 @pytest.mark.fast
-def test_vision_worker_raises_on_empty_description_and_tags(tmp_path: Path) -> None:
+def test_vision_worker_raises_on_empty_description_and_tags() -> None:
     client = MagicMock()
-    storage = LocalStorage(data_dir=str(tmp_path))
-    worker = VisionWorker(client=client, storage=storage, once=True)
+    artifact_store = MagicMock()
+    artifact_store.read_artifact.return_value = b"\xff\xd8\xff" + b"\x00" * 10
+    worker = VisionWorker(client=client, artifact_store=artifact_store, once=True)
 
     job = {
         "job_id": "job-1",
@@ -21,11 +21,6 @@ def test_vision_worker_raises_on_empty_description_and_tags(tmp_path: Path) -> N
         "vision_api_url": "http://localhost:1234/v1",
         "vision_api_key": None,
     }
-
-    # Create an empty file to satisfy LocalStorage path resolution if accessed.
-    proxy_path = Path(storage.abs_path(job["proxy_key"]))
-    proxy_path.parent.mkdir(parents=True, exist_ok=True)
-    proxy_path.touch()
 
     with patch("src.workers.vision_worker.get_caption_provider") as mock_factory:
         mock_provider = MagicMock()
@@ -39,6 +34,41 @@ def test_vision_worker_raises_on_empty_description_and_tags(tmp_path: Path) -> N
     assert result["description"] == ""
     assert result["tags"] == []
     assert result["model_id"] == "moondream"
+
+
+@pytest.mark.fast
+def test_vision_worker_temp_file_cleaned_up() -> None:
+    """Temp file is removed even when describe() raises."""
+    client = MagicMock()
+    artifact_store = MagicMock()
+    artifact_store.read_artifact.return_value = b"\xff\xd8\xff" + b"\x00" * 10
+    worker = VisionWorker(client=client, artifact_store=artifact_store, once=True)
+
+    job = {
+        "job_id": "job-2",
+        "asset_id": "asset-2",
+        "proxy_key": "proxies/asset-2.jpg",
+        "vision_model_id": "moondream",
+        "vision_api_url": "http://localhost:1234/v1",
+        "vision_api_key": None,
+    }
+
+    captured_tmp: list[Path] = []
+
+    def _record_and_raise(path: Path) -> None:
+        captured_tmp.append(path)
+        raise RuntimeError("describe failed")
+
+    with patch("src.workers.vision_worker.get_caption_provider") as mock_factory:
+        mock_provider = MagicMock()
+        mock_provider.describe.side_effect = _record_and_raise
+        mock_factory.return_value = mock_provider
+
+        with pytest.raises(RuntimeError, match="describe failed"):
+            worker.process(job)
+
+    assert len(captured_tmp) == 1
+    assert not captured_tmp[0].exists()
 
 import json
 import os

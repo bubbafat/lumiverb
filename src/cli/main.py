@@ -685,7 +685,6 @@ def worker_vision(
 
     worker = VisionWorker(
         client=client,
-        storage=storage,
         artifact_store=artifact_store,
         once=once,
         library_id=library_id,
@@ -771,7 +770,6 @@ def worker_embed(
 
     worker = EmbedWorker(
         client=client,
-        storage=storage,
         artifact_store=artifact_store,
         once=once,
         library_id=library_id,

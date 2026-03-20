@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import logging
+import tempfile
 from pathlib import Path
 
 from src.storage.artifact_store import ArtifactStore
-from src.storage.local import LocalStorage
 from src.workers.base import BaseWorker, BlockJob
 from src.workers.captions.factory import get_caption_provider
 
@@ -19,12 +19,10 @@ class VisionWorker(BaseWorker):
     def __init__(
         self,
         client: object,
-        storage: LocalStorage,
-        artifact_store: ArtifactStore | None = None,
+        artifact_store: ArtifactStore,
         **kwargs: object,
     ) -> None:
         super().__init__(client=client, **kwargs)
-        self._storage = storage
         self._artifact_store = artifact_store
 
     def process(self, job: dict) -> dict:
@@ -51,10 +49,18 @@ class VisionWorker(BaseWorker):
         if not vision_model_id:
             raise ValueError(f"No vision_model_id configured for asset {asset_id}")
 
-        proxy_path = Path(self._storage.abs_path(proxy_key))
+        proxy_bytes = self._artifact_store.read_artifact(
+            proxy_key, asset_id=asset_id, artifact_type="proxy"
+        )
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            tmp.write(proxy_bytes)
+            tmp_path = Path(tmp.name)
 
         provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key)
-        result = provider.describe(proxy_path)
+        try:
+            result = provider.describe(tmp_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
 
         if not result:
             raise RuntimeError(
