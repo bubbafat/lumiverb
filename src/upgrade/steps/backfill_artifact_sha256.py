@@ -176,7 +176,7 @@ class BackfillSceneRepSha256Step:
         row = ctx.session.exec(
             text(
                 "SELECT COUNT(*) FROM video_scenes"
-                " WHERE proxy_key IS NOT NULL AND rep_frame_sha256 IS NULL"
+                " WHERE thumbnail_key IS NOT NULL AND rep_frame_sha256 IS NULL"
             )
         ).first()
         return bool(row and row[0] > 0)
@@ -189,8 +189,8 @@ class BackfillSceneRepSha256Step:
 
         while True:
             query = (
-                "SELECT scene_id, proxy_key FROM video_scenes"
-                " WHERE proxy_key IS NOT NULL AND rep_frame_sha256 IS NULL"
+                "SELECT scene_id, thumbnail_key FROM video_scenes"
+                " WHERE thumbnail_key IS NOT NULL AND rep_frame_sha256 IS NULL"
             )
             params: dict = {"limit": _BATCH_SIZE}
             if skip_ids:
@@ -204,11 +204,11 @@ class BackfillSceneRepSha256Step:
             if not rows:
                 break
 
-            for scene_id, proxy_key in rows:
-                sha256 = _hash_file(storage.abs_path(proxy_key))
+            for scene_id, rep_key in rows:
+                sha256 = _hash_file(storage.abs_path(rep_key))
                 if sha256 is None:
                     logger.warning(
-                        "scene rep file missing for scene %s: %s", scene_id, proxy_key
+                        "scene rep file missing for scene %s: %s", scene_id, rep_key
                     )
                     missing += 1
                     skip_ids.add(scene_id)
