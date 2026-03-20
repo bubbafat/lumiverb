@@ -11,8 +11,9 @@ from pydantic import BaseModel, field_validator
 from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session
+from src.core import asset_status
 from src.core.io_utils import normalize_path_prefix
-from src.repository.tenant import AssetMetadataRepository, AssetRepository, LibraryRepository, ScanRepository, WorkerJobRepository
+from src.repository.tenant import AssetMetadataRepository, AssetRepository, LibraryRepository, ScanRepository, SearchSyncQueueRepository, WorkerJobRepository
 from src.storage.local import get_storage
 from src.core.utils import utcnow
 
@@ -108,6 +109,19 @@ class AssetStateItem(BaseModel):
 
 class StateCheckResponse(BaseModel):
     assets: list[AssetStateItem]
+
+
+class VisionSubmitRequest(BaseModel):
+    model_id: str
+    model_version: str = "1"
+    description: str
+    tags: list[str] = []
+    client_proxy_sha256: str | None = None
+
+
+class VisionSubmitResponse(BaseModel):
+    asset_id: str
+    status: str
 
 
 @router.get("/page", responses={204: {"description": "No assets (end of pages)"}})
@@ -476,6 +490,46 @@ def restore_asset(
     ok = asset_repo.restore(asset_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Asset not found or not trashed")
+
+
+@router.post("/{asset_id}/vision", response_model=VisionSubmitResponse)
+def submit_vision(
+    asset_id: str,
+    body: VisionSubmitRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> VisionSubmitResponse:
+    """Submit AI vision results for an asset with optional proxy hash validation.
+
+    If client_proxy_sha256 is provided and the server has a stored hash, they must
+    match — otherwise 409. If the server hash is null (pre-Phase 1 or no proxy yet),
+    the check is skipped for backwards compatibility.
+    """
+    asset = AssetRepository(session).get_by_id(asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    if body.client_proxy_sha256 is not None and asset.proxy_sha256 is not None:
+        if body.client_proxy_sha256 != asset.proxy_sha256:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": {
+                        "code": "proxy_hash_mismatch",
+                        "message": "Client proxy does not match server proxy. Re-download the proxy and retry.",
+                    }
+                },
+            )
+
+    AssetMetadataRepository(session).upsert(
+        asset_id=asset_id,
+        model_id=body.model_id,
+        model_version=body.model_version,
+        data={"description": body.description, "tags": body.tags},
+    )
+    SearchSyncQueueRepository(session).enqueue(asset_id=asset_id, operation="upsert")
+    AssetRepository(session).set_status(asset_id, asset_status.DESCRIBED)
+
+    return VisionSubmitResponse(asset_id=asset_id, status="described")
 
 
 def _enqueue_video_preview_job_if_needed(
