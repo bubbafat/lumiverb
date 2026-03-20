@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from src.storage.artifact_store import ArtifactStore
 from src.storage.local import LocalStorage
 from src.workers.base import BaseWorker, BlockJob
 from src.workers.captions.factory import get_caption_provider
@@ -15,9 +16,16 @@ logger = logging.getLogger(__name__)
 class VisionWorker(BaseWorker):
     job_type = "ai_vision"
 
-    def __init__(self, client: object, storage: LocalStorage, **kwargs: object) -> None:
+    def __init__(
+        self,
+        client: object,
+        storage: LocalStorage,
+        artifact_store: ArtifactStore | None = None,
+        **kwargs: object,
+    ) -> None:
         super().__init__(client=client, **kwargs)
         self._storage = storage
+        self._artifact_store = artifact_store
 
     def process(self, job: dict) -> dict:
         asset_id = job["asset_id"]

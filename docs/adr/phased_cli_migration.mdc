@@ -1,0 +1,893 @@
+# ADR: Phased CLI Worker Migration — Artifact Store Abstraction
+
+## Status
+In Progress
+
+## Implementation Progress
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 1 | ArtifactStore protocol + LocalArtifactStore + RemoteArtifactStore + worker injection | Complete |
+| 2 | Migrate VisionWorker + EmbedWorker reads (abs_path → read_artifact) | Pending |
+| 3 | Migrate ProxyWorker writes (storage.write → write_artifact) | Pending |
+| 4 | Migrate VideoPreviewWorker writes (ffmpeg → tmp file → upload) | Pending |
+| 5a | API: add `scene_rep` artifact type to upload/download endpoints | Pending |
+| 5b | Migrate VideoIndexWorker + VideoVisionWorker | Pending |
+
+---
+
+## Context
+
+### Background
+
+All five phases of `docs/adr/cloud-deploy.mdc` are complete. The server now has:
+- `POST /v1/assets/{asset_id}/artifacts/{type}` — artifact upload
+- `GET  /v1/assets/{asset_id}/artifacts/{type}` — artifact download
+- `POST /v1/assets/state-check` — batch state check
+- `POST /v1/assets/{asset_id}/vision` — direct vision submission
+
+This ADR covers the client side: migrating CLI workers off direct filesystem access so
+they can run on a machine that has no access to the server's `DATA_DIR` (e.g., a local Mac
+Studio running against a cloud-hosted API).
+
+### The deployment model
+
+```
+Client (Mac Studio / NAS machine)          Server (DigitalOcean / GCP)
+  - Has access to source files                - Runs FastAPI + PostgreSQL + Quickwit
+  - Has locally-hosted LLM (LM Studio)        - Has DATA_DIR for artifacts
+  - Runs all CLI workers                      - Accessible over HTTPS
+  - NO access to server DATA_DIR              - NO access to local LLM or source files
+```
+
+Workers must never assume `storage.abs_path(key)` resolves to a readable local path, nor
+that `storage.write(key, data)` can persist to server storage. In the cloud deployment,
+both operations must go through the HTTP API.
+
+### Who currently touches the filesystem
+
+| Worker | Direct read of source file | LocalStorage.write() | LocalStorage.abs_path() read |
+|--------|---------------------------|---------------------|------------------------------|
+| **ProxyWorker** | `{root}/{rel_path}` (NAS — stays local) | `proxy_key`, `thumbnail_key` | — |
+| **VisionWorker** | — | — | `proxy_key` |
+| **EmbedWorker** | — | — | `proxy_key` |
+| **ExifWorker** | `{root}/{rel_path}` (NAS — stays local) | — | — |
+| **VideoPreviewWorker** | `{root}/{rel_path}` (NAS — stays local) | `video_preview_key` (via ffmpeg) | — |
+| **VideoIndexWorker** | `{root}/{rel_path}` (NAS — stays local) | `thumbnail_key`, N × `scene_rep_key` | — |
+| **VideoVisionWorker** | — | — | `thumbnail_key` (scene rep frames) |
+
+Source file reads (NAS access) remain on the client and **never** route through the API.
+Only artifact reads and writes are migrated.
+
+### What is NOT in scope
+
+- ExifWorker — reads source files only; no artifact reads or writes; no change needed.
+- SearchSyncWorker — database + Quickwit only; no filesystem involvement.
+- Single-host behavior — `LUMIVERB_ARTIFACT_STORE=local` (the default) must leave all
+  existing behavior completely unchanged. All existing tests must continue to pass in local mode.
+- Worker transport, retry, or supervisor behavior.
+- The ffmpeg command itself in VideoPreviewWorker — only how the resulting MP4 reaches storage changes.
+- `CaptionProvider.describe()` interface — providers continue to accept `Path`; workers that
+  download bytes in remote mode write to a temp file and clean up after use.
+
+---
+
+## Design: ArtifactStore Protocol
+
+Create `src/storage/artifact_store.py` defining a protocol that both local and remote
+implementations satisfy. Workers receive an `ArtifactStore` via constructor injection.
+The CLI command factories select the implementation based on the `LUMIVERB_ARTIFACT_STORE`
+env var or the `--remote-storage` flag.
+
+```python
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import Protocol
+
+
+@dataclass
+class ArtifactRef:
+    key: str        # storage key (e.g. "t1/lib1/proxies/07/ast_01JX_photo.jpg")
+    sha256: str     # hex digest of the bytes written
+
+
+class ArtifactStore(Protocol):
+    def write_artifact(
+        self,
+        artifact_type: str,        # "proxy" | "thumbnail" | "video_preview" | "scene_rep"
+        asset_id: str,
+        data: bytes,
+        *,
+        library_id: str,           # used by LocalArtifactStore for key generation
+        rel_path: str,             # used by LocalArtifactStore for key generation (proxy/thumbnail/preview)
+        rep_frame_ms: int | None = None,  # required for artifact_type == "scene_rep"
+        width: int | None = None,
+        height: int | None = None,
+    ) -> ArtifactRef: ...
+
+    def read_artifact(self, key: str) -> bytes: ...
+```
+
+### LocalArtifactStore
+
+Wraps the existing `LocalStorage`. Computes keys using the same generators already in use.
+Writes/reads directly to `DATA_DIR`. Requires `tenant_id` at construction time (already
+available at worker startup via `GET /v1/tenant/context`).
+
+```python
+class LocalArtifactStore:
+    def __init__(self, storage: LocalStorage, tenant_id: str) -> None: ...
+
+    def write_artifact(self, artifact_type, asset_id, data, *, library_id, rel_path,
+                       rep_frame_ms=None, width=None, height=None) -> ArtifactRef:
+        # Compute key using storage.proxy_key / thumbnail_key / video_preview_key / scene_rep_key
+        # Call storage.write(key, data)  — atomic rename, as today
+        # Compute sha256 of data (already computed by workers in Phase 1; passed through)
+        # Return ArtifactRef(key=key, sha256=sha256)
+
+    def read_artifact(self, key: str) -> bytes:
+        return self._storage.abs_path(key).read_bytes()
+```
+
+### RemoteArtifactStore
+
+Uses `LumiverbClient` to call the artifact upload/download endpoints added in phases 2 and 3
+of the cloud-deploy ADR. The client is already auth-aware.
+
+```python
+class RemoteArtifactStore:
+    def __init__(self, client: LumiverbClient) -> None: ...
+
+    def write_artifact(self, artifact_type, asset_id, data, *, library_id, rel_path,
+                       rep_frame_ms=None, width=None, height=None) -> ArtifactRef:
+        # POST /v1/assets/{asset_id}/artifacts/{artifact_type}
+        # multipart: file=data, width=width, height=height
+        # For scene_rep: also include rep_frame_ms form field
+        # Parse response: {"key": "...", "sha256": "..."}
+        # Return ArtifactRef(key=..., sha256=...)
+
+    def read_artifact(self, key: str) -> bytes:
+        # GET /v1/assets/{asset_id}/artifacts/{artifact_type}
+        # artifact_type and asset_id are decoded from the key format
+        # NOTE: key format encodes enough info; see Phase 2 for details
+```
+
+**Note on read_artifact in remote mode**: The download API is keyed by `asset_id` and
+`artifact_type`, not by raw storage key. The `RemoteArtifactStore.read_artifact()` method
+accepts the same opaque storage key as the local implementation and maps it to the correct
+API call. The storage key format encodes all needed information:
+`{tenant_id}/{library_id}/{type_dir}/{bucket}/{asset_id}_{stem}.ext`
+
+However, round-tripping from key back to asset_id + artifact_type is fragile. A cleaner
+alternative: `read_artifact` accepts the key plus optional `(asset_id, artifact_type)` hints.
+Workers that call `read_artifact` already have the job dict which contains `asset_id` and
+`proxy_key`. The remote implementation uses `asset_id` from context rather than parsing the key.
+
+**Preferred interface refinement for read_artifact**:
+
+```python
+def read_artifact(self, key: str, *, asset_id: str, artifact_type: str) -> bytes: ...
+```
+
+This allows the remote implementation to call `GET /v1/assets/{asset_id}/artifacts/{artifact_type}`
+directly. The local implementation ignores the hints and uses `key` as-is. Workers already have
+all three values in the job dict or can derive them from context.
+
+### Mode selection
+
+**Environment variable**: `LUMIVERB_ARTIFACT_STORE=local` (default) or `LUMIVERB_ARTIFACT_STORE=remote`.
+
+**CLI flag**: `--remote-storage` on all worker commands that touch artifacts
+(`worker proxy`, `worker vision`, `worker embed`, `worker video-preview`, `worker video-index`,
+`worker video-vision`). When passed, overrides the env var. Defaults to local.
+
+**Factory function** in `src/storage/artifact_store.py`:
+
+```python
+def get_artifact_store(
+    mode: str,                        # "local" | "remote"
+    storage: LocalStorage | None,
+    client: LumiverbClient | None,
+    tenant_id: str | None,
+) -> ArtifactStore:
+    if mode == "remote":
+        if client is None:
+            raise ValueError("client is required for remote artifact store")
+        return RemoteArtifactStore(client=client)
+    else:
+        if storage is None or tenant_id is None:
+            raise ValueError("storage and tenant_id required for local artifact store")
+        return LocalArtifactStore(storage=storage, tenant_id=tenant_id)
+```
+
+---
+
+## Phase 1 — ArtifactStore Abstraction Layer
+
+**Goal**: Define the protocol, implement both stores, inject into workers. No worker behavior
+changes in local mode. All existing tests pass. Remote mode is wired up but not yet callable
+end-to-end (workers still write/read via the right abstraction, but actual upload/download is
+now handled by the implementations).
+
+### Files to create
+
+#### `src/storage/artifact_store.py`
+
+Contains:
+- `ArtifactRef` dataclass (key, sha256)
+- `ArtifactStore` Protocol
+- `LocalArtifactStore` class
+- `RemoteArtifactStore` class
+- `get_artifact_store()` factory
+
+`LocalArtifactStore.write_artifact()` logic:
+1. Compute key using the appropriate `LocalStorage` key generator based on `artifact_type`.
+2. Call `storage.write(key, data)` — identical to what workers do today.
+3. Compute sha256: `hashlib.sha256(data).hexdigest()`.
+4. Return `ArtifactRef(key=key, sha256=sha256)`.
+
+`LocalArtifactStore.read_artifact()` logic:
+1. Return `storage.abs_path(key).read_bytes()`.
+
+`RemoteArtifactStore.write_artifact()` logic:
+1. POST to `/v1/assets/{asset_id}/artifacts/{artifact_type}` as multipart form.
+2. Include `file` (binary), `width` (optional), `height` (optional), `rep_frame_ms` (optional, scene_rep only).
+3. Parse `{"key": "...", "sha256": "..."}` from response.
+4. Return `ArtifactRef(key=key, sha256=sha256)`.
+
+`RemoteArtifactStore.read_artifact()` logic:
+1. GET `/v1/assets/{asset_id}/artifacts/{artifact_type}`.
+2. Return `response.content` (raw bytes).
+
+### Files to modify
+
+#### Worker constructors — inject ArtifactStore
+
+All workers that currently accept `storage: LocalStorage` need an updated signature.
+Replace `storage: LocalStorage` with `artifact_store: ArtifactStore` in:
+- `ProxyWorker.__init__`
+- `VisionWorker.__init__`
+- `EmbedWorker.__init__`
+- `VideoPreviewWorker.__init__`
+
+`VideoIndexWorker` and `VideoVisionWorker` currently instantiate `LocalStorage` internally
+(`storage = LocalStorage(data_dir=settings.data_dir)`). They do not receive it as a
+constructor argument. Add `artifact_store: ArtifactStore` to their constructors.
+
+**Do NOT yet change `process()` methods** — that happens in phases 2–5. Workers continue
+using `self._storage` internally during this phase. The constructor stores both for the
+transition:
+
+```python
+# Transition state: both present until process() is migrated in later phases
+def __init__(self, ..., artifact_store: ArtifactStore, storage: LocalStorage | None = None, ...):
+    self._artifact_store = artifact_store
+    self._storage = storage  # retained for process() until phase completes
+```
+
+Actually, cleaner: keep the `storage` parameter on workers in Phase 1 so that all
+existing CLI command factories continue to pass it. Add `artifact_store` as an additional
+optional parameter. CLI factory code is updated in phases 2–5 as each worker is migrated.
+Use a type alias `_LegacyStorage = LocalStorage` to mark the old field internally.
+
+#### `src/cli/main.py` — worker command factories
+
+For each worker command, read `LUMIVERB_ARTIFACT_STORE` env var and `--remote-storage` flag.
+Build the `ArtifactStore` using `get_artifact_store()`. Pass it to the worker constructor.
+The `storage` parameter continues to be passed alongside for the transition period.
+
+Add `--remote-storage` flag to:
+- `worker proxy`
+- `worker vision`
+- `worker embed`
+- `worker video-preview`
+- `worker video-index`
+- `worker video-vision`
+
+### Verification
+
+```
+# Local mode (no change in behavior)
+LUMIVERB_ARTIFACT_STORE=local lumiverb worker proxy --library mylib --once
+
+# Remote mode (wired up, phase 2+ needed for full end-to-end)
+LUMIVERB_ARTIFACT_STORE=remote lumiverb worker proxy --library mylib --once
+# Workers will call write_artifact → RemoteArtifactStore.write_artifact()
+# but this only takes effect after phases 2-5 migrate process() methods.
+```
+
+### Tests
+
+**New file: `tests/test_artifact_store.py`**
+- `LocalArtifactStore.write_artifact(proxy, ...)` writes correct key path, returns sha256.
+- `LocalArtifactStore.write_artifact(thumbnail, ...)` writes correct key path.
+- `LocalArtifactStore.write_artifact(video_preview, ...)` writes correct key path.
+- `LocalArtifactStore.write_artifact(scene_rep, ..., rep_frame_ms=...)` writes correct key path.
+- `LocalArtifactStore.read_artifact(key)` returns bytes written earlier (roundtrip test).
+- `RemoteArtifactStore.write_artifact(proxy, ...)` calls correct API endpoint with correct multipart fields; asserts returned ArtifactRef matches mock response.
+- `RemoteArtifactStore.read_artifact(key, asset_id=..., artifact_type=...)` calls correct API endpoint; asserts returned bytes match mock response.
+- `get_artifact_store("local", ...)` returns `LocalArtifactStore`.
+- `get_artifact_store("remote", ...)` returns `RemoteArtifactStore`.
+- `get_artifact_store("remote", client=None, ...)` raises `ValueError`.
+
+### Doc updates
+
+**`docs/cursor-cli.md`**: Add section "Artifact Store Mode" explaining `LUMIVERB_ARTIFACT_STORE=local|remote` env var and `--remote-storage` flag. Note which worker commands accept it.
+
+---
+
+## Phase 2 — Migrate Read Workers (VisionWorker, EmbedWorker)
+
+**Goal**: VisionWorker and EmbedWorker stop calling `storage.abs_path(key)` directly.
+In remote mode they download proxy bytes via the API. In local mode behavior is unchanged.
+
+### Current behavior
+
+**VisionWorker.process()**:
+```python
+proxy_path = Path(self._storage.abs_path(proxy_key))
+provider = get_caption_provider(...)
+result = provider.describe(proxy_path)
+```
+
+**EmbedWorker.process()**:
+```python
+proxy_path = Path(self._storage.abs_path(proxy_key))
+if not proxy_path.exists():
+    raise FileNotFoundError(...)
+clip_provider = self._get_clip()
+clip_vec = clip_provider.embed(proxy_path)
+```
+
+### Target behavior
+
+Both workers use `self._artifact_store.read_artifact(key, asset_id=asset_id, artifact_type="proxy")`.
+In both local and remote modes, the result is `bytes`. Workers write to a temp file and
+pass the `Path` to the provider (avoids changing `CaptionProvider.describe()` and
+`CLIPEmbeddingProvider.embed()` interfaces):
+
+```python
+import tempfile
+
+proxy_bytes = self._artifact_store.read_artifact(
+    proxy_key, asset_id=asset_id, artifact_type="proxy"
+)
+with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+    tmp.write(proxy_bytes)
+    tmp_path = Path(tmp.name)
+try:
+    result = provider.describe(tmp_path)
+finally:
+    tmp_path.unlink(missing_ok=True)
+```
+
+**Note**: In local mode `LocalArtifactStore.read_artifact()` reads from disk and returns
+bytes, which are then written to a second temp file. This adds one redundant copy in local
+mode. **This is acceptable**: the extra copy is negligible for JPEG files (< 3 MB).
+Optimizing the local path to skip the copy is a future cleanup, not required now.
+
+### Files to modify
+
+#### `src/workers/vision_worker.py`
+- Remove `storage: LocalStorage` constructor parameter.
+- Add `artifact_store: ArtifactStore` (already injected from Phase 1).
+- In `process()`: replace `Path(self._storage.abs_path(proxy_key))` with temp-file pattern above.
+
+#### `src/workers/embed_worker.py`
+- Same changes as VisionWorker.
+- Remove the `proxy_path.exists()` check: in remote mode there is no local path. Instead,
+  handle `FileNotFoundError` / HTTP 404 from `read_artifact` and re-raise as `BlockJob`:
+  ```python
+  try:
+      proxy_bytes = self._artifact_store.read_artifact(proxy_key, asset_id=asset_id, artifact_type="proxy")
+  except Exception as e:
+      raise BlockJob(f"Could not read proxy for asset {asset_id}: {e}") from e
+  ```
+
+#### `src/cli/main.py`
+- Remove `storage` parameter from `VisionWorker(...)` and `EmbedWorker(...)` constructor calls.
+- These workers no longer need `storage` after Phase 2.
+
+### Verification
+
+```bash
+# Local mode — identical to current behavior
+lumiverb worker vision --library mylib --once
+
+# Remote mode — downloads proxy from server, passes to LLM
+LUMIVERB_ARTIFACT_STORE=remote lumiverb worker vision --library mylib --once
+```
+
+Check that proxy_path used for caption is a temp file, not the original DATA_DIR path.
+In remote mode: wipe DATA_DIR on the client, run vision worker — must still succeed.
+
+### Tests
+
+**Update `tests/test_vision_worker.py`**:
+- Replace `storage=MockLocalStorage(...)` with `artifact_store=MockLocalArtifactStore(...)`.
+- Add test: `artifact_store` in remote mode downloads bytes and passes them to caption provider.
+- Verify temp file is cleaned up after `process()`.
+
+**Update `tests/test_embed_worker.py`**:
+- Same structure as vision worker tests.
+- Add test: missing proxy → `BlockJob` raised (not `FileNotFoundError`).
+- Add test: temp file cleanup on exception in `embed()`.
+
+### Doc updates
+
+**`docs/cursor-cli.md`**: Update VisionWorker and EmbedWorker descriptions to note they no
+longer require `storage`; they depend only on `artifact_store` for proxy access.
+
+---
+
+## Phase 3 — Migrate ProxyWorker Writes
+
+**Goal**: ProxyWorker stops calling `self._storage.write()` directly. In remote mode,
+proxy and thumbnail bytes are uploaded to the server via the artifact API. The keys returned
+from the upload are used in `complete_job` as before.
+
+### Current behavior
+
+```python
+proxy_key = self._storage.proxy_key(tenant_id, library_id, asset_id, rel_path)
+thumbnail_key = self._storage.thumbnail_key(tenant_id, library_id, asset_id, rel_path)
+
+proxy_bytes = proxy_img.write_to_buffer(...)
+proxy_sha256 = hashlib.sha256(proxy_bytes).hexdigest()
+self._storage.write(proxy_key, proxy_bytes)
+
+thumb_bytes = thumb_img.write_to_buffer(...)
+thumbnail_sha256 = hashlib.sha256(thumb_bytes).hexdigest()
+self._storage.write(thumbnail_key, thumb_bytes)
+
+return {
+    "proxy_key": proxy_key,
+    "thumbnail_key": thumbnail_key,
+    "proxy_sha256": proxy_sha256,
+    "thumbnail_sha256": thumbnail_sha256,
+    "width": width_orig,
+    "height": height_orig,
+}
+```
+
+### Target behavior
+
+```python
+proxy_bytes = proxy_img.write_to_buffer(...)
+proxy_ref = self._artifact_store.write_artifact(
+    "proxy", asset_id, proxy_bytes,
+    library_id=library_id, rel_path=rel_path,
+    width=width_orig, height=height_orig,
+)
+
+thumb_bytes = thumb_img.write_to_buffer(...)
+thumb_ref = self._artifact_store.write_artifact(
+    "thumbnail", asset_id, thumb_bytes,
+    library_id=library_id, rel_path=rel_path,
+)
+
+return {
+    "proxy_key": proxy_ref.key,
+    "thumbnail_key": thumb_ref.key,
+    "proxy_sha256": proxy_ref.sha256,
+    "thumbnail_sha256": thumb_ref.sha256,
+    "width": width_orig,
+    "height": height_orig,
+}
+```
+
+Note: `LocalArtifactStore.write_artifact()` computes `hashlib.sha256(data).hexdigest()`
+internally. Workers no longer call `hashlib.sha256()` directly — it lives in the store.
+
+### Files to modify
+
+#### `src/workers/proxy.py`
+- Remove `storage: LocalStorage` constructor parameter, `tenant_id: str`.
+- Add `artifact_store: ArtifactStore`.
+- Remove all direct `LocalStorage` usage.
+- Replace the two `self._storage.write()` calls with `write_artifact()` as shown above.
+- Remove the manual `hashlib.sha256()` calls (now inside the store).
+
+#### `src/cli/main.py`
+- Remove `storage=storage` and `tenant_id=tenant_id` from `ProxyWorker(...)` call.
+- Pass `artifact_store=get_artifact_store(mode, storage, client, tenant_id)`.
+
+### Verification
+
+```bash
+# Local mode — must be byte-for-byte identical to before (same key paths, same files on disk)
+lumiverb worker proxy --library mylib --once
+
+# Remote mode — files appear in server DATA_DIR (not local), DB updated
+LUMIVERB_ARTIFACT_STORE=remote lumiverb worker proxy --library mylib --once
+# On the client machine: no proxy files appear in local DATA_DIR.
+# On the server: SELECT proxy_key, proxy_sha256 FROM assets WHERE library_id='...' shows populated values.
+```
+
+### Tests
+
+**Update `tests/test_proxy_worker.py`**:
+- Replace `storage=MockLocalStorage(...)` with `artifact_store=MockArtifactStore(...)`.
+- Assert `write_artifact("proxy", ...)` and `write_artifact("thumbnail", ...)` are called with correct `asset_id`, `library_id`, `rel_path`, `width`, `height`.
+- Assert returned dict uses keys from `ArtifactRef.key` and sha256 from `ArtifactRef.sha256`.
+- Assert `LocalArtifactStore` path: files end up at correct `DATA_DIR` paths.
+- Assert `RemoteArtifactStore` path: correct multipart POST is sent; keys from response used in `complete_job`.
+- Existing tests that check sha256 in returned dict still pass.
+
+### Doc updates
+
+**`docs/cursor-cli.md`**: Update ProxyWorker description — no longer requires `tenant_id`
+or `storage` directly; these are encapsulated in `ArtifactStore`.
+
+---
+
+## Phase 4 — Migrate VideoPreviewWorker Writes
+
+**Goal**: VideoPreviewWorker stops writing MP4 directly to `DATA_DIR` via ffmpeg. In remote
+mode, ffmpeg writes to a temp file, then the worker uploads and cleans up. In local mode
+the temp file IS the final destination (atomic rename already handled by OS; no separate
+upload step, but we still write to tmp first then rename for consistency, or we can keep the
+existing direct ffmpeg output path as-is since local mode must not change behavior — see note).
+
+### Current behavior
+
+```python
+preview_key = self._storage.video_preview_key(tenant_id, library_id, asset_id, rel_path)
+preview_path = self._storage.abs_path(preview_key)
+preview_path.parent.mkdir(parents=True, exist_ok=True)
+# ffmpeg writes directly to preview_path
+subprocess.run([..., str(preview_path)], check=True, ...)
+return {"video_preview_key": preview_key}
+```
+
+### Target behavior
+
+The key behavioral difference in remote mode: ffmpeg cannot write to a server path.
+The worker writes to a local temp path, then uses `write_artifact` to persist.
+
+```python
+import tempfile
+
+with tempfile.TemporaryDirectory() as tmpdir:
+    tmp_preview = Path(tmpdir) / f"{asset_id}_preview.mp4"
+    # pass tmp_preview to ffmpeg instead of storage.abs_path(preview_key)
+    self._run_ffmpeg(source_path, tmp_preview)
+    preview_bytes = tmp_preview.read_bytes()
+
+ref = self._artifact_store.write_artifact(
+    "video_preview", asset_id, preview_bytes,
+    library_id=library_id, rel_path=rel_path,
+)
+return {"video_preview_key": ref.key}
+```
+
+**Memory note**: Video previews are up to 10 seconds at 720p. Typical size: 2–8 MB (h264,
+veryfast, crf 28). Reading into memory is acceptable. If this ever becomes a concern, a
+streaming upload is a future optimization.
+
+**Local mode behavior change**: Unlike before, the MP4 is written to a temp file first,
+then read into memory, then written to `DATA_DIR` via `LocalArtifactStore.write_artifact()`.
+This adds one extra file copy in local mode. This is acceptable — preview generation is
+already the most expensive step; the copy overhead is negligible. The final result in
+`DATA_DIR` is identical.
+
+### Files to modify
+
+#### `src/workers/video_preview_worker.py`
+- Remove `storage: LocalStorage` and `tenant_id: str` from constructor.
+- Add `artifact_store: ArtifactStore`.
+- Extract ffmpeg invocation into a private `_run_ffmpeg(source, dest) -> None` method.
+- Replace direct `storage.abs_path()` + `mkdir` + ffmpeg call with the temp-file pattern above.
+- Remove `storage.video_preview_key()` call (key computed by store now).
+
+#### `src/cli/main.py`
+- Remove `storage=storage` and `tenant_id=tenant_id` from `VideoPreviewWorker(...)`.
+- Pass `artifact_store=get_artifact_store(mode, storage, client, tenant_id)`.
+
+### Verification
+
+```bash
+# Local mode — final MP4 at same DATA_DIR path as before
+lumiverb worker video-preview --library mylib --once
+sha256sum /data/tenant1/lib1/previews/07/ast_01JX_video.mp4  # must match reference
+
+# Remote mode — MP4 uploaded to server, not present locally
+LUMIVERB_ARTIFACT_STORE=remote lumiverb worker video-preview --library mylib --once
+# On client: ls /data/.../previews/ → empty
+# On server: SELECT video_preview_key FROM assets WHERE ... shows populated
+```
+
+### Tests
+
+**Update `tests/test_video_preview_worker.py`**:
+- Mock `artifact_store.write_artifact` instead of `storage.write`.
+- Assert ffmpeg is invoked with a temp path, not a `DATA_DIR` path.
+- Assert `write_artifact("video_preview", ...)` called with correct args.
+- Assert returned `video_preview_key` matches `ArtifactRef.key` from mock.
+- Assert temp file is cleaned up after success and on ffmpeg failure.
+- Assert no-audio retry path still calls `write_artifact` on success.
+
+### Doc updates
+
+**`docs/cursor-cli.md`**: Update VideoPreviewWorker description — requires `artifact_store`
+only; `storage` and `tenant_id` removed from constructor.
+
+---
+
+## Phase 5a — API: Add `scene_rep` Artifact Type
+
+**Goal**: Extend the artifact upload and download endpoints to support scene representative
+frames. `VideoIndexWorker` produces many scene rep frames per video (one per detected scene);
+each needs a server-side storage key that encodes `rep_frame_ms` for uniqueness.
+
+### Why a new artifact type
+
+The existing artifact types (`proxy`, `thumbnail`, `video_preview`) are addressed by
+`asset_id` + `artifact_type` — there is one of each per asset. Scene rep frames are
+addressed by `asset_id` + `rep_frame_ms` — there are N per asset. Encoding `rep_frame_ms`
+as an additional form field on the existing endpoint is the cleanest extension: no new
+route needed, consistent with the existing multipart upload pattern.
+
+**Rejected alternative**: Inline upload as part of `POST /v1/video/chunks/{chunk_id}/complete`.
+This would make the chunk-complete payload a large multipart form with potentially dozens of
+binary fields, complicating the chunk API. Not pursued.
+
+### Server-side changes
+
+#### `src/api/routers/artifacts.py`
+
+Add `"scene_rep"` to `ALLOWED_TYPES`:
+```python
+ALLOWED_TYPES = {"proxy", "thumbnail", "video_preview", "scene_rep"}
+```
+
+Add `rep_frame_ms: int | None = Form(default=None)` to `upload_artifact()` signature.
+
+Key generation for `scene_rep`:
+```python
+if artifact_type == "scene_rep":
+    if rep_frame_ms is None:
+        raise HTTPException(400, detail="rep_frame_ms is required for scene_rep artifacts")
+    key = storage.scene_rep_key(tenant_id, asset.library_id, asset_id, rep_frame_ms)
+```
+
+No new DB column is written for `scene_rep` uploads via this endpoint — the `thumbnail_key`
+on `VideoScene` rows is set via the chunk-complete API. The upload endpoint stores the file
+and returns the key; the worker passes that key in the chunk-complete payload. **The artifact
+upload endpoint does not update `VideoScene.thumbnail_key` directly.** That remains the
+chunk-complete handler's responsibility, preserving the existing data flow.
+
+The download endpoint requires no changes — it resolves the file path from the raw key using
+`storage.abs_path(key)`, which works for any key type.
+
+#### `src/repository/tenant.py`
+
+No repository changes needed for Phase 5a. Scene rep key storage on `VideoScene` remains
+via the existing chunk-complete path.
+
+### Tests
+
+**Update `tests/test_artifact_upload.py`**:
+- Add `scene_rep` upload test: asserts file written at correct `scenes/` path.
+- Assert 400 when `scene_rep` is requested without `rep_frame_ms`.
+- Assert `rep_frame_ms` is not accepted for `proxy`/`thumbnail`/`video_preview` (no-op — field is ignored for other types, which is acceptable given the optional form field).
+
+**Update `tests/test_artifact_download.py`**:
+- Add `scene_rep` download roundtrip: upload then download, sha256 must match.
+
+### Doc updates
+
+**`docs/cursor-api.md`**: Update the artifact upload endpoint description to include
+`scene_rep` as a valid `artifact_type` and document the `rep_frame_ms` form field requirement
+for that type.
+
+---
+
+## Phase 5b — Migrate VideoIndexWorker + VideoVisionWorker
+
+**Goal**: Both workers stop using `LocalStorage` directly.
+- `VideoIndexWorker` uploads thumbnail and scene rep frames via `artifact_store`.
+- `VideoVisionWorker` downloads scene rep frames via `artifact_store`.
+
+### VideoIndexWorker current behavior
+
+**Thumbnail** (one per video):
+```python
+key = storage.thumbnail_key(tenant_id, library_id, asset_id, original_filename)
+dest = storage.abs_path(key)
+dest.parent.mkdir(parents=True, exist_ok=True)
+shutil.copy2(thumb_path, dest)          # ← direct filesystem write
+self._request("POST", f"/v1/assets/{asset_id}/thumbnail-key", json={"thumbnail_key": key})
+```
+
+**Scene rep frames** (N per video, one per scene):
+```python
+key = storage.scene_rep_key(tenant_id, library_id, asset_id, rep_frame_ms)
+rep_frame_bytes = rep_path.read_bytes()
+rep_frame_sha256 = hashlib.sha256(rep_frame_bytes).hexdigest()
+storage.write(key, rep_frame_bytes)     # ← direct filesystem write
+rep_path.unlink(missing_ok=True)
+scene_dicts.append({"thumbnail_key": key, "rep_frame_sha256": rep_frame_sha256, ...})
+```
+
+### VideoIndexWorker target behavior
+
+**Thumbnail**:
+```python
+thumb_bytes = thumb_path.read_bytes()
+original_filename = Path(job["rel_path"]).name
+ref = self._artifact_store.write_artifact(
+    "thumbnail", asset_id, thumb_bytes,
+    library_id=library_id, rel_path=original_filename,
+)
+self._request("POST", f"/v1/assets/{asset_id}/thumbnail-key", json={"thumbnail_key": ref.key})
+```
+
+**Scene rep frames**:
+```python
+rep_frame_bytes = rep_path.read_bytes()
+ref = self._artifact_store.write_artifact(
+    "scene_rep", asset_id, rep_frame_bytes,
+    library_id=library_id, rel_path=job["rel_path"],
+    rep_frame_ms=abs_rep_ms,
+)
+rep_path.unlink(missing_ok=True)
+scene_dicts.append({
+    "thumbnail_key": ref.key,
+    "rep_frame_sha256": ref.sha256,
+    ...
+})
+```
+
+Note: `write_artifact` for `scene_rep` in remote mode calls the new endpoint from Phase 5a.
+The `sha256` field on `ArtifactRef` comes from the server response in remote mode and from a
+local hash computation in local mode — both paths populate `rep_frame_sha256` correctly.
+
+The `LocalArtifactStore.write_artifact("thumbnail", ...)` replaces the `shutil.copy2()` call;
+it calls `storage.write(key, data)` internally, which does the same atomic write.
+
+### VideoIndexWorker constructor changes
+
+Remove internal `LocalStorage` instantiation:
+```python
+# Before (in process()):
+settings = get_settings()
+storage = LocalStorage(data_dir=settings.data_dir)
+tenant_ctx = self._request("GET", "/v1/tenant/context").json()
+tenant_id = tenant_ctx["tenant_id"]
+```
+
+Add `artifact_store: ArtifactStore` to constructor. The CLI factory builds it
+(already has tenant_id from `GET /v1/tenant/context`).
+
+### VideoVisionWorker current behavior
+
+```python
+settings = get_settings()
+storage = LocalStorage(data_dir=settings.data_dir)   # ← instantiated inline, not injected
+...
+rep_path = Path(storage.abs_path(thumbnail_key))
+if not rep_path.exists():
+    logger.warning("Rep frame not found at %s for scene %s; skipping", ...)
+    continue
+result = provider.describe(rep_path)
+```
+
+### VideoVisionWorker target behavior
+
+```python
+try:
+    rep_bytes = self._artifact_store.read_artifact(
+        thumbnail_key, asset_id=asset_id, artifact_type="scene_rep"
+    )
+except Exception as e:
+    logger.warning("Could not read rep frame for scene %s: %s; skipping", scene_id, e)
+    continue
+
+with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+    tmp.write(rep_bytes)
+    tmp_path = Path(tmp.name)
+try:
+    result = provider.describe(tmp_path)
+finally:
+    tmp_path.unlink(missing_ok=True)
+```
+
+Note: `thumbnail_key` on `VideoScene` rows is actually a `scene_rep_key` path (stored under
+`scenes/`). The key passed to `read_artifact` must resolve correctly. In local mode, it
+resolves via `storage.abs_path(key)`. In remote mode, the worker needs both the key and the
+`(asset_id, artifact_type)` hint — `artifact_type="scene_rep"` and `asset_id` from the job.
+
+### VideoVisionWorker constructor changes
+
+Remove internal `LocalStorage` instantiation. Add `artifact_store: ArtifactStore` to
+constructor (consistent with all other workers after migration).
+
+### Files to modify
+
+- `src/workers/video_index_worker.py`: constructor + `process()` + `_process_chunk()`
+- `src/workers/video_vision_worker.py`: constructor + `process()`
+- `src/cli/main.py`: `VideoIndexWorker` and `VideoVisionWorker` factory sections
+
+### Verification
+
+```bash
+# Local mode — scene rep frames at same paths as before; sha256 in DB matches
+lumiverb worker video-index --library mylib --once
+sqlite3 /db/tenant.db "SELECT thumbnail_key, rep_frame_sha256 FROM video_scenes LIMIT 5;"
+# Files must exist at those thumbnail_key paths in DATA_DIR
+
+# Remote mode — scene rep frames stored server-side only
+LUMIVERB_ARTIFACT_STORE=remote lumiverb worker video-index --library mylib --once
+# On client: no scene files in local DATA_DIR
+# On server: video_scenes.thumbnail_key and rep_frame_sha256 populated
+
+# Vision in remote mode — downloads rep frame from server, runs LLM
+LUMIVERB_ARTIFACT_STORE=remote lumiverb worker video-vision --library mylib --once
+```
+
+### Tests
+
+**Update `tests/test_video_index_worker.py`**:
+- Replace any `LocalStorage` mock with `MockArtifactStore`.
+- Assert `write_artifact("thumbnail", ...)` called once for the video thumbnail.
+- Assert `write_artifact("scene_rep", ..., rep_frame_ms=N)` called once per detected scene.
+- Assert `thumbnail_key` in each scene dict equals `ArtifactRef.key` from mock.
+- Assert `rep_frame_sha256` in each scene dict equals `ArtifactRef.sha256` from mock.
+- Assert temp files are cleaned up after chunk processing.
+
+**Update `tests/test_video_vision_worker.py`**:
+- Replace `LocalStorage` usage with `MockArtifactStore`.
+- Assert `read_artifact("thumbnail_key", asset_id=..., artifact_type="scene_rep")` called per scene.
+- Assert temp file is cleaned up after each scene's `describe()` call.
+- Assert a missing rep frame (exception from `read_artifact`) is logged as warning and scene is skipped, not raising.
+
+### Doc updates
+
+**`docs/cursor-cli.md`**: Update VideoIndexWorker and VideoVisionWorker descriptions to
+reflect `artifact_store` injection. Remove mentions of internal `LocalStorage` instantiation.
+
+---
+
+## Cross-Cutting Requirements
+
+### Every phase must satisfy
+
+1. **`LUMIVERB_ARTIFACT_STORE=local` is the default.** No behavior change from current behavior when env var is absent or set to `local`. All existing tests must pass without modification.
+
+2. **Remote mode leaves no local artifacts.** When `LUMIVERB_ARTIFACT_STORE=remote`, workers must not write any artifact files to the local filesystem. Source files (NAS reads) are the only local filesystem access permitted.
+
+3. **Error handling is symmetric.** Any error from `write_artifact` or `read_artifact` (network error, 4xx/5xx from server, disk full) propagates as an exception and triggers `fail_job` via the existing `BaseWorker` exception handler. No silent swallowing.
+
+4. **Atomicity contract preserved.** `LocalArtifactStore.write_artifact()` uses `storage.write()` which does `.tmp` + rename. `RemoteArtifactStore.write_artifact()` relies on the server's atomic write (the upload endpoint already does `.tmp` + rename).
+
+5. **No double-bandwidth in local mode.** The `LocalArtifactStore` implementation never makes any HTTP calls. It reads/writes disk directly.
+
+6. **`complete_job` payloads are structurally unchanged.** Workers return the same dict keys as before. Only the source of the values (local key computation vs. server-returned key) changes. The job handlers on the server side require no modification.
+
+7. **Tests updated alongside code.** Each phase specifies which test files to update. Tests must cover both `LocalArtifactStore` and `RemoteArtifactStore` paths for every modified worker.
+
+### Doc update checklist
+
+At the end of each phase, both doc files must be updated before marking the phase Complete:
+
+- **`docs/cursor-cli.md`**: Reflect constructor changes, new flags, new env var. Remove mentions of `storage: LocalStorage` and `tenant_id` parameters that were removed from worker constructors.
+- **`docs/cursor-api.md`**: Update artifact endpoint descriptions when the artifact type list changes (Phase 5a adds `scene_rep`). Keep `rep_frame_ms` field documented.
+
+---
+
+## Summary Table
+
+| Phase | Workers affected | What changes | New API needed? | Backward compatible? |
+|-------|-----------------|--------------|-----------------|----------------------|
+| 1 | All | Abstraction layer + constructor injection | No | Yes — local mode unchanged |
+| 2 | VisionWorker, EmbedWorker | `abs_path()` → `read_artifact()` + temp file | No | Yes |
+| 3 | ProxyWorker | `storage.write()` → `write_artifact()` | No | Yes |
+| 4 | VideoPreviewWorker | ffmpeg → tmp → `write_artifact()` | No | Yes |
+| 5a | Server only | Add `scene_rep` artifact type | Yes — upload endpoint | Yes |
+| 5b | VideoIndexWorker, VideoVisionWorker | All storage calls → `artifact_store` | No (Phase 5a provides it) | Yes |
+
+After all phases, a worker running on a client machine with no access to the server's `DATA_DIR`
+can process every job type. Source file access (RAW decoding, EXIF extraction, video transcoding)
+remains local — no source files are transmitted to the server. The existing single-host deployment
+is unchanged throughout.

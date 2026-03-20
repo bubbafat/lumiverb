@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from src.storage.artifact_store import ArtifactStore
 from src.storage.local import LocalStorage
 from src.workers.base import BaseWorker, BlockJob
 from src.workers.embeddings.clip_provider import CLIPEmbeddingProvider, MODEL_VERSION as CLIP_VERSION
@@ -15,9 +16,16 @@ logger = logging.getLogger(__name__)
 class EmbedWorker(BaseWorker):
     job_type = "embed"
 
-    def __init__(self, client: object, storage: LocalStorage, **kwargs: object) -> None:
+    def __init__(
+        self,
+        client: object,
+        storage: LocalStorage,
+        artifact_store: ArtifactStore | None = None,
+        **kwargs: object,
+    ) -> None:
         super().__init__(client=client, **kwargs)
         self._storage = storage
+        self._artifact_store = artifact_store
         self._clip: CLIPEmbeddingProvider | None = None
 
     def _get_clip(self) -> CLIPEmbeddingProvider:

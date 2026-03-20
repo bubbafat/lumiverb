@@ -25,6 +25,7 @@ from typing import Callable
 
 from PIL import Image
 from src.core.config import get_settings
+from src.storage.artifact_store import ArtifactStore
 from src.storage.local import LocalStorage
 from src.video.clip_extractor import (
     extract_video_frame,
@@ -46,10 +47,12 @@ class VideoIndexWorker(BaseWorker):
         once: bool = False,
         library_id: str | None = None,
         progress_callback: Callable[[dict], None] | None = None,
+        artifact_store: ArtifactStore | None = None,
         **kwargs: object,
     ) -> None:
         super().__init__(client=client, once=once, library_id=library_id, **kwargs)
         self._progress_callback = progress_callback
+        self._artifact_store = artifact_store
 
     def process(self, job: dict) -> dict:
         """Process a single video-index job. Returns {}; chunk work is done via video API."""

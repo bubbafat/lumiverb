@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Callable
 
 from src.core.config import get_settings
+from src.storage.artifact_store import ArtifactStore
 from src.storage.local import LocalStorage
 from src.workers.base import BaseWorker, BlockJob
 from src.workers.captions.factory import get_caption_provider
@@ -23,10 +24,12 @@ class VideoVisionWorker(BaseWorker):
         once: bool = False,
         library_id: str | None = None,
         progress_callback: Callable[[dict], None] | None = None,
+        artifact_store: ArtifactStore | None = None,
         **kwargs: object,
     ) -> None:
         super().__init__(client=client, once=once, library_id=library_id, **kwargs)
         self._progress_callback = progress_callback
+        self._artifact_store = artifact_store
 
     def _emit(self, event: dict) -> None:
         if self._progress_callback:

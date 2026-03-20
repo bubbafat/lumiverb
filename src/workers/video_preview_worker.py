@@ -6,6 +6,7 @@ import logging
 import subprocess
 from pathlib import Path
 
+from src.storage.artifact_store import ArtifactStore
 from src.storage.local import LocalStorage
 from src.workers.base import BaseWorker, BlockJob
 
@@ -28,6 +29,7 @@ class VideoPreviewWorker(BaseWorker):
         library_id: str | None = None,
         path_prefix: str | None = None,
         output_mode: str = "human",
+        artifact_store: ArtifactStore | None = None,
     ) -> None:
         super().__init__(
             client,
@@ -39,6 +41,7 @@ class VideoPreviewWorker(BaseWorker):
         )
         self._storage = storage
         self._tenant_id = tenant_id
+        self._artifact_store = artifact_store
 
     def process(self, job: dict) -> dict:
         asset_id = job["asset_id"]
