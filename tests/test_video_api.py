@@ -1,6 +1,7 @@
 """API tests for video chunk API: init, claim, complete, fail, scenes, update scene vision."""
 
 import os
+import hashlib
 from unittest.mock import patch
 
 import pytest
@@ -17,11 +18,11 @@ from tests.conftest import _ensure_psycopg2, _provision_tenant_db, _run_control_
 
 
 @pytest.fixture(scope="module")
-def video_api_client() -> tuple[TestClient, str, str, str]:
+def video_api_client() -> tuple[TestClient, str, str, str, str]:
     """
     Two testcontainers Postgres; provision tenant DB; create library, upsert video asset,
     init chunks via POST /v1/video/{asset_id}/chunks.
-    Yields (client, api_key, library_id, asset_id).
+    Yields (client, api_key, library_id, asset_id, tenant_url).
     """
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with PostgresContainer("pgvector/pgvector:pg16") as control_postgres:
@@ -113,15 +114,15 @@ def video_api_client() -> tuple[TestClient, str, str, str]:
                 assert r_init.status_code == 200
                 assert r_init.json()["chunk_count"] >= 1
 
-                yield client, api_key, library_id, asset_id
+                yield client, api_key, library_id, asset_id, tenant_url
 
         _engines.clear()
 
 
 @pytest.mark.slow
-def test_init_chunks(video_api_client: tuple[TestClient, str, str, str]) -> None:
+def test_init_chunks(video_api_client: tuple[TestClient, str, str, str, str]) -> None:
     """POST /v1/video/{asset_id}/chunks with {duration_sec} returns {chunk_count, already_initialized} with 200."""
-    client, api_key, library_id, asset_id = video_api_client
+    client, api_key, library_id, asset_id, _tenant_url = video_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
     # Init again is idempotent - already_initialized will be True
@@ -138,9 +139,9 @@ def test_init_chunks(video_api_client: tuple[TestClient, str, str, str]) -> None
 
 
 @pytest.mark.slow
-def test_claim_next_chunk(video_api_client: tuple[TestClient, str, str, str]) -> None:
+def test_claim_next_chunk(video_api_client: tuple[TestClient, str, str, str, str]) -> None:
     """After init, GET /v1/video/{asset_id}/chunks/next returns 200 with chunk or 204 if none pending."""
-    client, api_key, _, asset_id = video_api_client
+    client, api_key, _, asset_id, _tenant_url = video_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
     r = client.get(f"/v1/video/{asset_id}/chunks/next", headers=auth)
@@ -155,9 +156,9 @@ def test_claim_next_chunk(video_api_client: tuple[TestClient, str, str, str]) ->
 
 
 @pytest.mark.slow
-def test_complete_chunk(video_api_client: tuple[TestClient, str, str, str]) -> None:
+def test_complete_chunk(video_api_client: tuple[TestClient, str, str, str, str]) -> None:
     """Claim chunk, POST /v1/video/chunks/{chunk_id}/complete with scene data; assert 200."""
-    client, api_key, _, asset_id = video_api_client
+    client, api_key, _, asset_id, tenant_url = video_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
     r_claim = client.get(f"/v1/video/{asset_id}/chunks/next", headers=auth)
@@ -167,6 +168,9 @@ def test_complete_chunk(video_api_client: tuple[TestClient, str, str, str]) -> N
     chunk = r_claim.json()
     chunk_id = chunk["chunk_id"]
     worker_id = chunk["worker_id"]
+
+    rep_frame_bytes = b"rep-frame-test:" + chunk_id.encode("utf-8")
+    rep_frame_sha256 = hashlib.sha256(rep_frame_bytes).hexdigest()
 
     r = client.post(
         f"/v1/video/chunks/{chunk_id}/complete",
@@ -180,6 +184,7 @@ def test_complete_chunk(video_api_client: tuple[TestClient, str, str, str]) -> N
                     "rep_frame_ms": 2500,
                     "description": "A scene",
                     "tags": ["test"],
+                    "rep_frame_sha256": rep_frame_sha256,
                 }
             ],
             "next_anchor_phash": "abc123",
@@ -192,11 +197,27 @@ def test_complete_chunk(video_api_client: tuple[TestClient, str, str, str]) -> N
     assert body["chunk_id"] == chunk_id
     assert body["scenes_saved"] == 1
 
+    engine = create_engine(tenant_url)
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT rep_frame_sha256 FROM video_scenes "
+                    "WHERE asset_id = :asset_id AND rep_frame_sha256 = :sha"
+                ),
+                {"asset_id": asset_id, "sha": rep_frame_sha256},
+            ).fetchone()
+    finally:
+        engine.dispose()
+
+    assert row is not None
+    assert row[0] == rep_frame_sha256
+
 
 @pytest.mark.slow
-def test_fail_chunk(video_api_client: tuple[TestClient, str, str, str]) -> None:
+def test_fail_chunk(video_api_client: tuple[TestClient, str, str, str, str]) -> None:
     """Claim chunk, POST /v1/video/chunks/{chunk_id}/fail with error; assert 200."""
-    client, api_key, _, asset_id = video_api_client
+    client, api_key, _, asset_id, _tenant_url = video_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
     r_claim = client.get(f"/v1/video/{asset_id}/chunks/next", headers=auth)
@@ -219,9 +240,9 @@ def test_fail_chunk(video_api_client: tuple[TestClient, str, str, str]) -> None:
 
 
 @pytest.mark.slow
-def test_get_scenes_empty(video_api_client: tuple[TestClient, str, str, str]) -> None:
+def test_get_scenes_empty(video_api_client: tuple[TestClient, str, str, str, str]) -> None:
     """GET /v1/video/{asset_id}/scenes on asset with no completed scenes returns empty list."""
-    client, api_key, library_id, asset_id = video_api_client
+    client, api_key, library_id, asset_id, _tenant_url = video_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
     # Create a second video asset with no chunks completed
@@ -259,9 +280,9 @@ def test_get_scenes_empty(video_api_client: tuple[TestClient, str, str, str]) ->
 
 
 @pytest.mark.slow
-def test_get_scenes_after_completion(video_api_client: tuple[TestClient, str, str, str]) -> None:
+def test_get_scenes_after_completion(video_api_client: tuple[TestClient, str, str, str, str]) -> None:
     """Complete a chunk with scene payloads, then GET /v1/video/{asset_id}/scenes returns those scenes."""
-    client, api_key, library_id, asset_id = video_api_client
+    client, api_key, library_id, asset_id, _tenant_url = video_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
     # Use a fresh asset to avoid interference
@@ -330,9 +351,9 @@ def test_get_scenes_after_completion(video_api_client: tuple[TestClient, str, st
 
 
 @pytest.mark.slow
-def test_update_scene_vision(video_api_client: tuple[TestClient, str, str, str]) -> None:
+def test_update_scene_vision(video_api_client: tuple[TestClient, str, str, str, str]) -> None:
     """PATCH /v1/video/scenes/{scene_id} with {model_id, model_version, description, tags} returns updated scene."""
-    client, api_key, library_id, asset_id = video_api_client
+    client, api_key, library_id, asset_id, _tenant_url = video_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
     # Ensure we have a scene
@@ -434,9 +455,9 @@ def test_update_scene_vision(video_api_client: tuple[TestClient, str, str, str])
 
 
 @pytest.mark.slow
-def test_video_api_requires_auth(video_api_client: tuple[TestClient, str, str, str]) -> None:
+def test_video_api_requires_auth(video_api_client: tuple[TestClient, str, str, str, str]) -> None:
     """Missing Authorization header on video endpoint returns 401."""
-    client, _, _, asset_id = video_api_client
+    client, _, _, asset_id, _tenant_url = video_api_client
 
     r = client.get(f"/v1/video/{asset_id}/scenes")
     assert r.status_code == 401

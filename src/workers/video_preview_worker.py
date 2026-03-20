@@ -42,8 +42,13 @@ class VideoPreviewWorker(BaseWorker):
 
     def process(self, job: dict) -> dict:
         asset_id = job["asset_id"]
-        if job.get("media_type") != "video":
-            raise BlockJob(f"video-preview requires a video asset; got media_type={job.get('media_type')!r} for asset {asset_id}")
+        # Job_type already implies the kind of work to do, but tolerate common
+        # MIME-style values (e.g. `video/mp4`) from upstream producers.
+        media_type = job.get("media_type")
+        if media_type and media_type != "video" and not str(media_type).startswith("video/"):
+            raise BlockJob(
+                f"video-preview requires a video asset; got media_type={media_type!r} for asset {asset_id}"
+            )
         rel_path = job["rel_path"]
         root_path = job["root_path"]
         library_id = job["library_id"]

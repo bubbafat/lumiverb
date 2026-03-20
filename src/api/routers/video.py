@@ -116,6 +116,7 @@ class SceneResult(BaseModel):
     start_ms: int
     end_ms: int
     rep_frame_ms: int
+    rep_frame_sha256: str | None = None
     proxy_key: str | None = None
     thumbnail_key: str | None = None
     description: str | None = None

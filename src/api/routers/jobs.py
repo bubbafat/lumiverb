@@ -205,6 +205,8 @@ def complete_job(
         thumbnail_key = data.get("thumbnail_key")
         width = data.get("width")
         height = data.get("height")
+        proxy_sha256 = data.get("proxy_sha256")
+        thumbnail_sha256 = data.get("thumbnail_sha256")
         if (
             proxy_key is not None
             and thumbnail_key is not None
@@ -220,6 +222,8 @@ def complete_job(
                 thumbnail_key=thumbnail_key,
                 width=width,
                 height=height,
+                proxy_sha256=proxy_sha256,
+                thumbnail_sha256=thumbnail_sha256,
             )
         # Else: skipped (e.g. video proxy deferred) — just mark job completed, no asset update
     elif job.job_type == "video-preview":

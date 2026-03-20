@@ -15,6 +15,7 @@ via FFmpeg into LocalStorage using scene_rep_key().
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import shutil
 import subprocess
@@ -364,15 +365,16 @@ class VideoIndexWorker(BaseWorker):
                     asset_id=asset_id,
                     rep_frame_ms=abs_rep_ms,
                 )
-                dest = storage.abs_path(key)
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(rep_path, dest)
+                rep_frame_bytes = rep_path.read_bytes()
+                rep_frame_sha256 = hashlib.sha256(rep_frame_bytes).hexdigest()
+                storage.write(key, rep_frame_bytes)
                 rep_path.unlink(missing_ok=True)
                 scene_dicts.append({
                     "scene_index": i,
                     "start_ms": abs_start_ms,
                     "end_ms": abs_end_ms,
                     "rep_frame_ms": abs_rep_ms,
+                    "rep_frame_sha256": rep_frame_sha256,
                     "proxy_key": None,
                     "thumbnail_key": key,
                     "description": None,

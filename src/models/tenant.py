@@ -120,7 +120,9 @@ class Asset(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
     proxy_key: str | None = Field(default=None, nullable=True)
+    proxy_sha256: str | None = Field(default=None, nullable=True)
     thumbnail_key: str | None = Field(default=None, nullable=True)
+    thumbnail_sha256: str | None = Field(default=None, nullable=True)
     exif: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
     exif_extracted_at: datetime | None = Field(
         default=None,
@@ -170,6 +172,7 @@ class VideoScene(SQLModel, table=True):
     start_ms: int = Field(nullable=False)
     end_ms: int = Field(nullable=False)
     rep_frame_ms: int = Field(nullable=False)
+    rep_frame_sha256: str | None = Field(default=None, nullable=True)
     proxy_key: str | None = Field(default=None, nullable=True)
     thumbnail_key: str | None = Field(default=None, nullable=True)
     description: str | None = Field(default=None, nullable=True)

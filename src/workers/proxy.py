@@ -5,6 +5,7 @@ has a hardcoded 50MB cumulative allocation cap that fails on large/panorama TIFF
 """
 
 import logging
+import hashlib
 from pathlib import Path
 
 import numpy as np
@@ -262,6 +263,7 @@ class ProxyWorker(BaseWorker):
 
         # Generate proxy (resize down only — never upscale)
         proxy_bytes = proxy_img.write_to_buffer(".jpg[Q=%d]" % PROXY_JPEG_QUALITY)
+        proxy_sha256 = hashlib.sha256(proxy_bytes).hexdigest()
         self._storage.write(proxy_key, proxy_bytes)
 
         # Generate thumbnail FROM PROXY — not from source
@@ -272,6 +274,7 @@ class ProxyWorker(BaseWorker):
             size=pyvips.enums.Size.DOWN,
         )
         thumb_bytes = thumb_img.write_to_buffer(".jpg[Q=%d]" % THUMBNAIL_JPEG_QUALITY)
+        thumbnail_sha256 = hashlib.sha256(thumb_bytes).hexdigest()
         self._storage.write(thumbnail_key, thumb_bytes)
 
         if from_thumb:
@@ -280,6 +283,8 @@ class ProxyWorker(BaseWorker):
         return {
             "proxy_key": proxy_key,
             "thumbnail_key": thumbnail_key,
+            "proxy_sha256": proxy_sha256,
+            "thumbnail_sha256": thumbnail_sha256,
             "width": width_orig,
             "height": height_orig,
         }

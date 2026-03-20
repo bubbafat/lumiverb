@@ -853,13 +853,23 @@ class AssetRepository:
         thumbnail_key: str,
         width: int,
         height: int,
+        proxy_sha256: str | None = None,
+        thumbnail_sha256: str | None = None,
     ) -> Asset:
-        """Update asset proxy_key, thumbnail_key, width, height, status='proxy_ready', updated_at."""
+        """
+        Update asset proxy_key, thumbnail_key, width, height, status='proxy_ready', updated_at.
+
+        If proxy_sha256/thumbnail_sha256 are provided (non-None), persist them too.
+        """
         asset = self._session.get(Asset, asset_id)
         if asset is None:
             raise ValueError(f"Asset not found: {asset_id}")
         asset.proxy_key = proxy_key
         asset.thumbnail_key = thumbnail_key
+        if proxy_sha256 is not None:
+            asset.proxy_sha256 = proxy_sha256
+        if thumbnail_sha256 is not None:
+            asset.thumbnail_sha256 = thumbnail_sha256
         asset.width = width
         asset.height = height
         asset.status = asset_status.PROXY_READY
@@ -2358,6 +2368,7 @@ class VideoIndexChunkRepository:
                 start_ms=s["start_ms"],
                 end_ms=s["end_ms"],
                 rep_frame_ms=s["rep_frame_ms"],
+                rep_frame_sha256=s.get("rep_frame_sha256"),
                 proxy_key=s.get("proxy_key"),
                 thumbnail_key=s.get("thumbnail_key"),
                 description=s.get("description"),

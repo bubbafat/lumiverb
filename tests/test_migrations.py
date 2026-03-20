@@ -228,6 +228,29 @@ def test_tenant_schema_upgrade_and_downgrade() -> None:
             cols = [row[0] for row in r]
         assert "deleted_at" in cols, "assets.deleted_at column should exist"
 
+        # Phase 1: new nullable SHA columns
+        with engine.connect() as conn:
+            r = conn.execute(
+                text(
+                    """
+                    SELECT table_name, column_name, is_nullable
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND (
+                        (table_name = 'assets' AND column_name IN ('proxy_sha256', 'thumbnail_sha256'))
+                        OR
+                        (table_name = 'video_scenes' AND column_name = 'rep_frame_sha256')
+                      )
+                    ORDER BY table_name, column_name
+                    """
+                )
+            )
+            rows = r.fetchall()
+
+        assert len(rows) == 3, rows
+        for table_name, column_name, is_nullable in rows:
+            assert is_nullable == "YES", f"{table_name}.{column_name} should be nullable"
+
         result = subprocess.run(
             [sys.executable, "-m", "alembic", "-c", "alembic-tenant.ini", "downgrade", "base"],
             cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

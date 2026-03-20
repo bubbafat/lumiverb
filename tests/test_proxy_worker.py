@@ -2,6 +2,7 @@
 
 import os
 import secrets
+import hashlib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -23,7 +24,7 @@ from tests.conftest import _AuthClient, _ensure_psycopg2, _provision_tenant_db, 
 
 @pytest.fixture(scope="module")
 def proxy_worker_env():
-    """Two testcontainers Postgres; create tenant; yield (TestClient, api_key, tenant_id)."""
+    """Two testcontainers Postgres; create tenant; yield (TestClient, api_key, tenant_id, tenant_url)."""
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with PostgresContainer("pgvector/pgvector:pg16") as control_postgres:
         control_url = _ensure_psycopg2(control_postgres.get_connection_url())
@@ -67,14 +68,14 @@ def proxy_worker_env():
                 session.commit()
 
             with TestClient(app) as client:
-                yield client, api_key, tenant_id
+                yield client, api_key, tenant_id, tenant_url
         _engines.clear()
 
 
 @pytest.mark.slow
 def test_proxy_worker_processes_image(proxy_worker_env, tmp_path: Path) -> None:
     """Worker generates proxy and thumbnail via API; job completes; asset has keys."""
-    client, api_key, tenant_id = proxy_worker_env
+    client, api_key, tenant_id, tenant_url = proxy_worker_env
     auth = _AuthClient(client, api_key)
 
     lib_name = "ProxyImage_" + secrets.token_urlsafe(4)
@@ -136,11 +137,33 @@ def test_proxy_worker_processes_image(proxy_worker_env, tmp_path: Path) -> None:
     storage = LocalStorage(data_dir=data_dir)
     assert storage.exists(asset["proxy_key"])
 
+    engine = create_engine(tenant_url)
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT proxy_sha256, thumbnail_sha256 FROM assets WHERE asset_id = :asset_id"
+                ),
+                {"asset_id": asset["asset_id"]},
+            ).fetchone()
+    finally:
+        engine.dispose()
+
+    assert row is not None
+    db_proxy_sha256, db_thumbnail_sha256 = row
+    assert db_proxy_sha256 is not None
+    assert db_thumbnail_sha256 is not None
+
+    proxy_sha256 = hashlib.sha256(storage.abs_path(asset["proxy_key"]).read_bytes()).hexdigest()
+    thumbnail_sha256 = hashlib.sha256(storage.abs_path(asset["thumbnail_key"]).read_bytes()).hexdigest()
+    assert db_proxy_sha256 == proxy_sha256
+    assert db_thumbnail_sha256 == thumbnail_sha256
+
 
 @pytest.mark.slow
 def test_proxy_worker_skips_video(proxy_worker_env, tmp_path: Path) -> None:
     """Video asset: worker completes job without setting proxy_key."""
-    client, api_key, tenant_id = proxy_worker_env
+    client, api_key, tenant_id, _tenant_url = proxy_worker_env
     auth = _AuthClient(client, api_key)
 
     lib_name = "ProxyVideo_" + secrets.token_urlsafe(4)
@@ -221,7 +244,7 @@ def test_proxy_worker_skips_video(proxy_worker_env, tmp_path: Path) -> None:
 @pytest.mark.slow
 def test_proxy_worker_missing_file(proxy_worker_env, tmp_path: Path) -> None:
     """Missing source file: worker claims job, fails it; job status is 'failed' with 'not found' in error."""
-    client, api_key, tenant_id = proxy_worker_env
+    client, api_key, tenant_id, _tenant_url = proxy_worker_env
 
     lib_name = "ProxyMissing_" + secrets.token_urlsafe(4)
     r = client.post(

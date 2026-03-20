@@ -170,6 +170,24 @@ def test_ai_vision_job_complete_stores_metadata(vision_worker_env: tuple, tmp_pa
     )
     assert complete_proxy.status_code == 200, (complete_proxy.status_code, complete_proxy.text)
 
+    # Backward compatibility: completing a proxy job without hash fields should
+    # leave the new SHA columns NULL.
+    engine = create_engine(tenant_url)
+    try:
+        with engine.connect() as conn:
+            sha_row = conn.execute(
+                text(
+                    "SELECT proxy_sha256, thumbnail_sha256 FROM assets WHERE asset_id = :asset_id"
+                ),
+                {"asset_id": asset_id},
+            ).fetchone()
+    finally:
+        engine.dispose()
+
+    assert sha_row is not None
+    assert sha_row[0] is None
+    assert sha_row[1] is None
+
     enq_vis = client.post(
         "/v1/jobs/enqueue",
         json={"job_type": "ai_vision", "filter": {"library_id": library["library_id"]}, "force": False},
