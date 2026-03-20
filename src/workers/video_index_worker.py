@@ -31,7 +31,7 @@ from src.video.clip_extractor import (
 )
 from src.video.scene_segmenter import DEBOUNCE_SEC, SceneSegmenter
 from src.video.video_scanner import RawFrame, VideoScanner
-from src.workers.base import BaseWorker
+from src.workers.base import BaseWorker, BlockJob
 
 logger = logging.getLogger(__name__)
 
@@ -54,12 +54,7 @@ class VideoIndexWorker(BaseWorker):
         """Process a single video-index job. Returns {}; chunk work is done via video API."""
         asset_id = job["asset_id"]
         if job.get("media_type") != "video":
-            logger.warning(
-                "video-index job for non-video asset asset_id=%s media_type=%r; skipping",
-                asset_id,
-                job.get("media_type"),
-            )
-            return {}
+            raise BlockJob(f"video-index requires a video asset; got media_type={job.get('media_type')!r} for asset {asset_id}")
         root = Path(job["root_path"]).resolve()
         source = (root / job["rel_path"]).resolve()
         if not source.is_relative_to(root):

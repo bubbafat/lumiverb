@@ -1471,6 +1471,16 @@ class WorkerJobRepository:
         self._session.commit()
         self._session.refresh(job)
 
+    def set_blocked(self, job: WorkerJob, error_message: str) -> None:
+        """Immediately set status to blocked without incrementing fail_count.
+        Used for permanent failures (e.g. wrong media type) that should never be retried."""
+        job.status = "blocked"
+        job.completed_at = utcnow()
+        job.error_message = error_message
+        self._session.add(job)
+        self._session.commit()
+        self._session.refresh(job)
+
     def cancel_pending_for_assets(self, asset_ids: list[str], job_type: str) -> int:
         """Cancel pending/claimed/blocked jobs for given assets and job_type. Used by force enqueue."""
         if not asset_ids:
@@ -1546,6 +1556,12 @@ class WorkerJobRepository:
                     FROM worker_jobs wj
                     JOIN active_assets a ON a.asset_id = wj.asset_id
                     WHERE a.library_id = :library_id
+                      AND wj.job_type != 'search_sync'
+                      AND (
+                          (wj.job_type IN ('ai_vision', 'embed') AND a.media_type LIKE 'image%')
+                          OR (wj.job_type IN ('video-vision', 'video-index', 'video-preview') AND a.media_type = 'video')
+                          OR wj.job_type NOT IN ('ai_vision', 'embed', 'video-vision', 'video-index', 'video-preview')
+                      )
                     ORDER BY wj.asset_id, wj.job_type, wj.created_at DESC
                 )
                 SELECT job_type, status, COUNT(*)::int as count
@@ -1571,6 +1587,12 @@ class WorkerJobRepository:
                         wj.status
                     FROM worker_jobs wj
                     JOIN active_assets a ON a.asset_id = wj.asset_id
+                    WHERE wj.job_type != 'search_sync'
+                      AND (
+                          (wj.job_type IN ('ai_vision', 'embed') AND a.media_type LIKE 'image%')
+                          OR (wj.job_type IN ('video-vision', 'video-index', 'video-preview') AND a.media_type = 'video')
+                          OR wj.job_type NOT IN ('ai_vision', 'embed', 'video-vision', 'video-index', 'video-preview')
+                      )
                     ORDER BY wj.asset_id, wj.job_type, wj.created_at DESC
                 )
                 SELECT library_id, job_type, status, COUNT(*)::int as count
@@ -1983,13 +2005,21 @@ class SearchSyncQueueRepository:
         for i in range(0, total, self.RESYNC_BATCH_SIZE):
             batch = asset_ids[i : i + self.RESYNC_BATCH_SIZE]
 
-            # Reset existing rows to pending
+            # Reset only the latest row per (asset_id, scene_id) to pending.
+            # Resetting all historical rows creates orphaned pending rows that
+            # are hidden by search_sync_latest but accumulate indefinitely.
             self._session.execute(
                 text(
                     """
-                    UPDATE search_sync_queue
+                    UPDATE search_sync_queue ssq
                     SET status = 'pending'
-                    WHERE asset_id = ANY(:asset_ids)
+                    WHERE ssq.asset_id = ANY(:asset_ids)
+                      AND ssq.sync_id IN (
+                          SELECT DISTINCT ON (asset_id, scene_id) sync_id
+                          FROM search_sync_queue
+                          WHERE asset_id = ANY(:asset_ids)
+                          ORDER BY asset_id, scene_id, created_at DESC
+                      )
                     """
                 ),
                 {"asset_ids": batch},

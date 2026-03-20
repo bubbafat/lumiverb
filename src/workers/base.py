@@ -4,6 +4,11 @@ import logging
 import time
 from contextlib import nullcontext
 
+
+class BlockJob(Exception):
+    """Raise from process() to immediately block the job (permanent failure, never retried).
+    Use for invariant violations like wrong media type — retrying would always fail."""
+
 from rich.console import Console
 
 from src.cli.progress import UnifiedProgress, UnifiedProgressSpec
@@ -81,6 +86,10 @@ class BaseWorker:
         """POST /v1/jobs/{job_id}/fail"""
         self._client.post(f"/v1/jobs/{job_id}/fail", json={"error_message": error_message})
 
+    def block_job(self, job_id: str, error_message: str) -> None:
+        """POST /v1/jobs/{job_id}/block — permanently block without incrementing fail_count."""
+        self._client.post(f"/v1/jobs/{job_id}/block", json={"error_message": error_message})
+
     def process(self, job: dict) -> dict | None:
         """
         Subclasses implement this. Receives job dict from claim_job.
@@ -150,6 +159,25 @@ class BaseWorker:
                         failed=failed,
                         library_id=self._library_id or "",
                         rel_path=last_rel_path,
+                    )
+                except BlockJob as e:
+                    logger.warning("blocking job_id=%s reason=%s", job_id, e)
+                    self.block_job(job_id, str(e))
+                    failed += 1
+                    if bar is not None:
+                        bar.update(
+                            completed=processed + failed,
+                            done=processed,
+                            failed=failed,
+                        )
+                    if not use_jsonl:
+                        print(f"{self.job_type} ⊘ {job.get('rel_path', job_id)}: {e}", flush=True)
+                    self._emit_event(
+                        "error",
+                        message=str(e),
+                        rel_path=job.get("rel_path", ""),
+                        processed=processed,
+                        failed=failed,
                     )
                 except Exception as e:
                     logger.exception("failed job_id=%s error=%s", job_id, e)

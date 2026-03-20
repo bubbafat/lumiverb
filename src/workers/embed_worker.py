@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 from src.storage.local import LocalStorage
-from src.workers.base import BaseWorker
+from src.workers.base import BaseWorker, BlockJob
 from src.workers.embeddings.clip_provider import CLIPEmbeddingProvider, MODEL_VERSION as CLIP_VERSION
 
 logger = logging.getLogger(__name__)
@@ -27,10 +27,13 @@ class EmbedWorker(BaseWorker):
 
     def process(self, job: dict) -> dict:
         asset_id = job["asset_id"]
+        media_type = job.get("media_type", "")
+        if not media_type.startswith("image"):
+            raise BlockJob(f"embed requires an image asset; got media_type={media_type!r} for asset {asset_id}")
         proxy_key = job.get("proxy_key")
 
         if not proxy_key:
-            raise ValueError(f"No proxy_key in embed job for asset {asset_id}")
+            raise BlockJob(f"No proxy_key for asset {asset_id} — proxy must complete before embed can run")
 
         proxy_path = Path(self._storage.abs_path(proxy_key))
         if not proxy_path.exists():

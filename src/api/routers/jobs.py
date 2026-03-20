@@ -329,6 +329,27 @@ def fail_job(
     return JobFailResponse(job_id=job_id, status="failed")
 
 
+@router.post("/{job_id}/block", response_model=JobFailResponse)
+def block_job(
+    job_id: str,
+    body: JobFailBody,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> JobFailResponse:
+    """Immediately block a job without incrementing fail_count.
+    Used for permanent failures (e.g. wrong media type) that should never be retried."""
+    job_repo = WorkerJobRepository(session)
+    job = job_repo.get_by_id(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != "claimed":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job not claimed (status={job.status})",
+        )
+    job_repo.set_blocked(job, body.error_message)
+    return JobFailResponse(job_id=job_id, status="blocked")
+
+
 # ---------------------------------------------------------------------------
 # Failures listing
 # ---------------------------------------------------------------------------

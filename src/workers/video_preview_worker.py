@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 from src.storage.local import LocalStorage
-from src.workers.base import BaseWorker
+from src.workers.base import BaseWorker, BlockJob
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,8 @@ class VideoPreviewWorker(BaseWorker):
 
     def process(self, job: dict) -> dict:
         asset_id = job["asset_id"]
+        if job.get("media_type") != "video":
+            raise BlockJob(f"video-preview requires a video asset; got media_type={job.get('media_type')!r} for asset {asset_id}")
         rel_path = job["rel_path"]
         root_path = job["root_path"]
         library_id = job["library_id"]

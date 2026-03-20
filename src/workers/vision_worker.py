@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 from src.storage.local import LocalStorage
-from src.workers.base import BaseWorker
+from src.workers.base import BaseWorker, BlockJob
 from src.workers.captions.factory import get_caption_provider
 
 logger = logging.getLogger(__name__)
@@ -21,13 +21,16 @@ class VisionWorker(BaseWorker):
 
     def process(self, job: dict) -> dict:
         asset_id = job["asset_id"]
+        media_type = job.get("media_type", "")
+        if not media_type.startswith("image"):
+            raise BlockJob(f"ai_vision requires an image asset; got media_type={media_type!r} for asset {asset_id}")
         proxy_key = job.get("proxy_key")
         vision_model_id = job.get("vision_model_id", "")
         vision_api_url = job.get("vision_api_url", "")
         vision_api_key = job.get("vision_api_key") or None
 
         if not proxy_key:
-            raise ValueError(f"No proxy_key in ai_vision job for asset {asset_id}")
+            raise BlockJob(f"No proxy_key for asset {asset_id} — proxy must complete before ai_vision can run")
         if not vision_api_url:
             raise ValueError(f"No vision_api_url configured for asset {asset_id}")
         if not vision_model_id:
