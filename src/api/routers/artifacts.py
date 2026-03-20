@@ -6,7 +6,7 @@ import hashlib
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/assets", tags=["artifacts"])
 
-ALLOWED_ARTIFACT_TYPES = {"proxy", "thumbnail", "video_preview"}
+ALLOWED_ARTIFACT_TYPES = {"proxy", "thumbnail", "video_preview", "scene_rep"}
 
 # Target limits (not yet enforced per type): proxy ≈ 1 MB, video_preview ≈ 20 MB.
 # TODO: enforce per-type limits once remote worker uploads are in place.
@@ -30,6 +30,7 @@ CONTENT_TYPES: dict[str, str] = {
     "proxy": "image/jpeg",
     "thumbnail": "image/jpeg",
     "video_preview": "video/mp4",
+    "scene_rep": "image/jpeg",
 }
 
 
@@ -47,8 +48,9 @@ async def upload_artifact(
     file: UploadFile = File(...),
     width: int | None = Form(default=None),
     height: int | None = Form(default=None),
+    rep_frame_ms: int | None = Form(default=None),
 ) -> ArtifactUploadResponse:
-    """Upload a proxy, thumbnail, or video_preview artifact for an asset.
+    """Upload a proxy, thumbnail, video_preview, or scene_rep artifact for an asset.
 
     Streams the upload to disk in chunks (never fully buffered in memory), computes
     SHA-256 incrementally, and atomic-renames the temp file into place. DB is updated
@@ -72,8 +74,14 @@ async def upload_artifact(
         key = storage.proxy_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
     elif artifact_type == "thumbnail":
         key = storage.thumbnail_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
-    else:  # video_preview
+    elif artifact_type == "video_preview":
         key = storage.video_preview_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
+    else:  # scene_rep
+        if rep_frame_ms is None:
+            raise HTTPException(
+                status_code=400, detail="rep_frame_ms is required for scene_rep artifacts"
+            )
+        key = storage.scene_rep_key(tenant_id, asset.library_id, asset_id, rep_frame_ms)
 
     path = storage.abs_path(key)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -117,9 +125,11 @@ async def upload_artifact(
 def download_artifact(
     asset_id: str,
     artifact_type: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
+    rep_frame_ms: int | None = Query(default=None),
 ) -> StreamingResponse:
-    """Download a proxy, thumbnail, or video_preview artifact for an asset.
+    """Download a proxy, thumbnail, video_preview, or scene_rep artifact for an asset.
 
     Returns the raw file bytes with the correct Content-Type. 404 if the artifact
     key is not yet set (artifact_not_ready) or the file is missing on disk (artifact_missing).
@@ -138,8 +148,16 @@ def download_artifact(
         key = asset.proxy_key
     elif artifact_type == "thumbnail":
         key = asset.thumbnail_key
-    else:  # video_preview
+    elif artifact_type == "video_preview":
         key = asset.video_preview_key
+    else:  # scene_rep
+        if rep_frame_ms is None:
+            raise HTTPException(
+                status_code=400, detail="rep_frame_ms is required for scene_rep artifacts"
+            )
+        tenant_id: str = request.state.tenant_id
+        storage: LocalStorage = get_storage()
+        key = storage.scene_rep_key(tenant_id, asset.library_id, asset_id, rep_frame_ms)
 
     if key is None:
         raise HTTPException(

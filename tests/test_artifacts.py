@@ -361,6 +361,72 @@ def test_upload_video_preview_writes_file_no_sha256_col(artifact_env) -> None:
 
 
 @pytest.mark.slow
+def test_upload_scene_rep_writes_file_to_scenes_path(artifact_env) -> None:
+    auth, _, library_id, _, storage, _, _ = artifact_env
+
+    # Create a video asset for scene representative frame uploads.
+    r_scan = auth.post("/v1/scans", json={"library_id": library_id, "status": "running"})
+    scan_id = r_scan.json()["scan_id"]
+    rel_path = f"scene_rep_{secrets.token_hex(4)}.mp4"
+    auth.post(
+        "/v1/assets/upsert",
+        json={
+            "library_id": library_id,
+            "rel_path": rel_path,
+            "file_size": 5000,
+            "file_mtime": "2025-01-01T12:00:00Z",
+            "media_type": "video/mp4",
+            "scan_id": scan_id,
+        },
+    )
+    r_vid = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
+    assert r_vid.status_code == 200, r_vid.text
+    video_asset_id = r_vid.json()["asset_id"]
+
+    content = _make_jpeg(96)
+    r = auth.post(
+        f"/v1/assets/{video_asset_id}/artifacts/scene_rep",
+        files={"file": ("scene.jpg", content, "image/jpeg")},
+        data={"rep_frame_ms": "12345"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "/scenes/" in body["key"]
+    assert body["sha256"] == _sha256(content)
+    assert storage.abs_path(body["key"]).exists()
+    assert storage.abs_path(body["key"]).read_bytes() == content
+
+
+@pytest.mark.slow
+def test_upload_scene_rep_requires_rep_frame_ms(artifact_env) -> None:
+    auth, _, library_id, _, _, _, _ = artifact_env
+
+    r_scan = auth.post("/v1/scans", json={"library_id": library_id, "status": "running"})
+    scan_id = r_scan.json()["scan_id"]
+    rel_path = f"scene_rep_missing_ms_{secrets.token_hex(4)}.mp4"
+    auth.post(
+        "/v1/assets/upsert",
+        json={
+            "library_id": library_id,
+            "rel_path": rel_path,
+            "file_size": 5000,
+            "file_mtime": "2025-01-01T12:00:00Z",
+            "media_type": "video/mp4",
+            "scan_id": scan_id,
+        },
+    )
+    r_vid = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
+    video_asset_id = r_vid.json()["asset_id"]
+
+    r = auth.post(
+        f"/v1/assets/{video_asset_id}/artifacts/scene_rep",
+        files={"file": ("scene.jpg", _make_jpeg(64), "image/jpeg")},
+    )
+    assert r.status_code == 400
+    assert "rep_frame_ms is required" in r.text
+
+
+@pytest.mark.slow
 def test_reupload_proxy_overwrites_sha256(artifact_env) -> None:
     """A second upload of the same artifact type replaces key, file, and sha256."""
     auth, _, _, asset_id, storage, tenant_url, _ = artifact_env
@@ -531,6 +597,46 @@ def test_download_video_preview_returns_bytes(artifact_env) -> None:
     assert r.status_code == 200
     assert r.headers["content-type"] == "video/mp4"
     assert r.content == mp4_content
+
+
+@pytest.mark.slow
+def test_download_scene_rep_returns_bytes(artifact_env) -> None:
+    auth, _, library_id, _, _, _, _ = artifact_env
+
+    r_scan = auth.post("/v1/scans", json={"library_id": library_id, "status": "running"})
+    scan_id = r_scan.json()["scan_id"]
+    rel_path = f"dl_scene_rep_{secrets.token_hex(4)}.mp4"
+    auth.post(
+        "/v1/assets/upsert",
+        json={
+            "library_id": library_id,
+            "rel_path": rel_path,
+            "file_size": 5000,
+            "file_mtime": "2025-01-01T12:00:00Z",
+            "media_type": "video/mp4",
+            "scan_id": scan_id,
+        },
+    )
+    r_vid = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
+    video_asset_id = r_vid.json()["asset_id"]
+
+    content = _make_jpeg(128)
+    rep_frame_ms = 7777
+    r_up = auth.post(
+        f"/v1/assets/{video_asset_id}/artifacts/scene_rep",
+        files={"file": ("scene.jpg", content, "image/jpeg")},
+        data={"rep_frame_ms": str(rep_frame_ms)},
+    )
+    assert r_up.status_code == 200, r_up.text
+
+    r = auth.get(
+        f"/v1/assets/{video_asset_id}/artifacts/scene_rep",
+        params={"rep_frame_ms": rep_frame_ms},
+    )
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/jpeg"
+    assert r.content == content
+    assert _sha256(r.content) == _sha256(content)
 
 
 @pytest.mark.slow
