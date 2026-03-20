@@ -54,6 +54,7 @@ class UnifiedProgressBar:
         self,
         completed: int,
         total: int | None = None,
+        description: str | None = None,
         **counter_values: int,
     ) -> None:
         """Update progress. Merges counter_values into internal counters."""
@@ -64,16 +65,15 @@ class UnifiedProgressBar:
             if k in self._counter_values:
                 self._counter_values[k] = v
         if self._use_progress:
-            fields: dict[str, str] = {
+            kwargs: dict = {
+                "completed": self._completed,
+                "total": self._total,
                 "unit_display": self._unit_display(),
                 "counters": self._counters_display(),
             }
-            self._progress.update(
-                self._task_id,
-                completed=self._completed,
-                total=self._total,
-                **fields,
-            )
+            if description is not None:
+                kwargs["description"] = description
+            self._progress.update(self._task_id, **kwargs)
 
     def finish(self) -> None:
         """Snap total to completed (makes indeterminate bar determinate)."""

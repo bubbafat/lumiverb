@@ -2231,19 +2231,23 @@ def upgrade(
                 console.print("Aborted.")
                 return
 
-    completed = done_steps
+    name_by_id = {s.get("step_id", ""): s.get("display_name", s.get("step_id", "")) for s in steps_info}
+    # pending_count is the denominator: skipped steps are not counted.
+    pending_count = len(pending_step_ids)
+    executed_steps = 0
     failed = 0
 
     spec = UnifiedProgressSpec(
         label="Upgrading tenant",
         unit="steps",
         counters=["done", "failed"],
-        total=steps_total,
+        total=pending_count,
     )
     with UnifiedProgress(console, spec) as bar:
-        bar.update(completed=completed + failed, done=completed, failed=failed)
-        executed_steps = 0
+        bar.update(completed=0, done=0, failed=0)
         if step_id is not None:
+            label = name_by_id.get(step_id, step_id)
+            bar.update(completed=0, description=f"{label}…", done=0, failed=0)
             resp = client.post(
                 "/v1/tenant/upgrade/execute",
                 json={"max_steps": 1, "step_id": step_id, "force": force},
@@ -2251,12 +2255,15 @@ def upgrade(
             data = resp.json()
             ran_steps = data.get("ran_steps", []) or []
             executed_steps += len(ran_steps)
-            completed = int(data.get("done_steps", data.get("completed_steps", completed)) or 0)
             failed = int(data.get("failed_steps", failed))
             has_work = bool(data.get("has_work_after", False))
-            bar.update(completed=completed + failed, done=completed, failed=failed)
+            bar.update(completed=executed_steps, done=executed_steps, failed=failed)
         else:
+            remaining = list(pending_step_ids)
             while has_work and (max_steps <= 0 or executed_steps < max_steps):
+                current_id = remaining[0] if remaining else None
+                label = name_by_id.get(current_id, current_id) if current_id else "Upgrading tenant"
+                bar.update(completed=executed_steps, description=f"{label}…", done=executed_steps, failed=failed)
                 resp = client.post(
                     "/v1/tenant/upgrade/execute",
                     json={"max_steps": 1},
@@ -2264,10 +2271,11 @@ def upgrade(
                 data = resp.json()
                 ran_steps = data.get("ran_steps", []) or []
                 executed_steps += len(ran_steps)
-                completed = int(data.get("done_steps", data.get("completed_steps", completed)) or 0)
+                if ran_steps and remaining:
+                    remaining.pop(0)
                 failed = int(data.get("failed_steps", failed))
                 has_work = bool(data.get("has_work_after", False))
-                bar.update(completed=completed + failed, done=completed, failed=failed)
+                bar.update(completed=executed_steps, done=executed_steps, failed=failed)
 
     if not has_work:
         console.print(f"Tenant upgrade: [green]completed[/green].")
