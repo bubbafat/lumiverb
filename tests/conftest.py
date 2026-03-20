@@ -11,6 +11,11 @@ import os
 import subprocess
 import sys
 
+# Use NullPool for all test engines so connections are never held idle.
+# This prevents "server closed the connection unexpectedly" errors that occur
+# when testcontainer Postgres stops before SQLAlchemy's pool flushes idle connections.
+os.environ.setdefault("SQLALCHEMY_NULLPOOL", "1")
+
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 

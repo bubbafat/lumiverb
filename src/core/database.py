@@ -10,6 +10,7 @@ from typing import Generator
 from sqlalchemy import text
 from sqlalchemy.engine import create_engine, make_url
 from sqlalchemy.engine.base import Engine
+from sqlalchemy.pool import NullPool
 from sqlmodel import Session
 
 from src.core.config import get_settings
@@ -18,12 +19,19 @@ from src.core.config import get_settings
 _engines: dict[str, Engine] = {}
 
 
+def _engine_kwargs() -> dict:
+    """Return create_engine kwargs — uses NullPool when SQLALCHEMY_NULLPOOL is set (e.g. tests)."""
+    if os.environ.get("SQLALCHEMY_NULLPOOL"):
+        return {"poolclass": NullPool}
+    return {"pool_pre_ping": True}
+
+
 def get_control_engine() -> Engine:
     """Return a cached SQLAlchemy engine for the control plane DB."""
     settings = get_settings()
     url = settings.control_plane_database_url
     if url not in _engines:
-        _engines[url] = create_engine(url, pool_pre_ping=True)
+        _engines[url] = create_engine(url, **_engine_kwargs())
     return _engines[url]
 
 
@@ -37,7 +45,7 @@ def get_tenant_engine(tenant_id: str) -> Engine:
 def get_engine_for_url(url: str) -> Engine:
     """Return a cached engine for the given database URL (e.g. from tenant_db_routing)."""
     if url not in _engines:
-        _engines[url] = create_engine(url, pool_pre_ping=True)
+        _engines[url] = create_engine(url, **_engine_kwargs())
     return _engines[url]
 
 
