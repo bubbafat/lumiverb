@@ -161,6 +161,15 @@ class LibraryRepository:
         self._session.execute(
             text(
                 """
+                DELETE FROM asset_embeddings
+                WHERE asset_id IN (SELECT asset_id FROM assets WHERE library_id = :library_id)
+                """
+            ),
+            params,
+        )
+        self._session.execute(
+            text(
+                """
                 DELETE FROM video_scenes
                 WHERE asset_id IN (SELECT asset_id FROM assets WHERE library_id = :library_id)
                 """
@@ -617,19 +626,18 @@ class AssetRepository:
 
     def mark_missing_for_scan(self, library_id: str, scan_id: str) -> int:
         """Set availability='missing' for active assets in library not seen in this scan (online only). Return count updated."""
-        stmt = (
-            select(Asset)
-            .where(Asset.library_id == library_id)
-            .where(Asset.deleted_at.is_(None))
-            .where(Asset.availability == "online")
-            .where((Asset.last_scan_id != scan_id) | (Asset.last_scan_id.is_(None)))
+        result = self._session.execute(
+            text("""
+                UPDATE assets
+                SET availability = 'missing'
+                WHERE library_id = :library_id
+                  AND deleted_at IS NULL
+                  AND availability = 'online'
+                  AND (last_scan_id != :scan_id OR last_scan_id IS NULL)
+            """),
+            {"library_id": library_id, "scan_id": scan_id},
         )
-        assets = list(self._session.exec(stmt).all())
-        for asset in assets:
-            asset.availability = "missing"
-            self._session.add(asset)
-        self._session.commit()
-        return len(assets)
+        return result.rowcount
 
     def get_by_id(self, asset_id: str) -> Asset | None:
         """Return active (non-trashed) asset by id or None."""
@@ -1170,11 +1178,9 @@ class AssetRepository:
                 )
                 """
             )
-            # Exclude already-processed assets for proxy/thumbnail/exif job types
+            # Exclude already-processed assets for proxy/exif job types
             if job_type == "proxy":
                 conditions.append("a.proxy_key IS NULL")
-            elif job_type == "thumbnail":
-                conditions.append("a.thumbnail_key IS NULL")
             elif job_type == "exif":
                 conditions.append("a.exif_extracted_at IS NULL")
             elif job_type == "ai_vision":
@@ -1444,6 +1450,36 @@ class WorkerJobRepository:
             .where(WorkerJob.status.in_(["pending", "claimed"]))
         )
         return self._session.exec(stmt).first() is not None
+
+    def try_create_unique(self, job_type: str, asset_id: str, priority: int = 10) -> bool:
+        """
+        Insert a pending job, ignoring conflicts on the active-job unique index.
+
+        The partial unique index uq_worker_jobs_one_active_per_type_asset ensures
+        only one pending/claimed job exists per (job_type, asset_id) at any time.
+        ON CONFLICT DO NOTHING makes concurrent callers idempotent without a
+        check-then-insert TOCTOU race.
+
+        Returns True if a new job was inserted, False if one already existed.
+        """
+        job_id = "job_" + str(ULID())
+        result = self._session.execute(
+            text(
+                """
+                INSERT INTO worker_jobs (job_id, job_type, asset_id, status, priority, fail_count, created_at)
+                VALUES (:job_id, :job_type, :asset_id, 'pending', :priority, 0, :now)
+                ON CONFLICT (job_type, asset_id) WHERE status = 'pending' OR status = 'claimed' DO NOTHING
+                """
+            ),
+            {
+                "job_id": job_id,
+                "job_type": job_type,
+                "asset_id": asset_id,
+                "priority": priority,
+                "now": utcnow(),
+            },
+        )
+        return result.rowcount == 1
 
     def pending_count(
         self,
@@ -1950,12 +1986,11 @@ class SearchSyncQueueRepository:
                 SELECT 1 FROM search_sync_queue
                 WHERE asset_id = :asset_id
                   AND (scene_id IS NOT DISTINCT FROM :scene_id)
-                  AND status = 'synced'
-                  AND created_at >= :created_at
+                  AND status IN ('pending', 'processing')
                 LIMIT 1
                 """
             ),
-            {"asset_id": asset_id, "scene_id": scene_id, "created_at": now},
+            {"asset_id": asset_id, "scene_id": scene_id},
         ).scalar()
         if exists:
             return None
@@ -2056,7 +2091,6 @@ class SearchSyncQueueRepository:
             SELECT asset_id FROM active_assets
             WHERE library_id = :library_id
             AND availability = 'online'
-            AND status != 'trashed'
         """
         params: dict = {"library_id": library_id}
         if path_prefix:
@@ -2354,26 +2388,38 @@ class VideoIndexChunkRepository:
     ) -> VideoIndexChunk | None:
         """
         Claim the next pending chunk for an asset (lowest chunk_index).
-        Also reclaims chunks whose lease has expired.
-        Returns None if no chunks available.
+        Also reclaims chunks whose lease has expired and resets failed chunks
+        back to pending so they are retried by the current video-index job.
+        Returns None if no claimable chunks remain.
         """
         now = utcnow()
         lease_expires = now + timedelta(minutes=self.LEASE_MINUTES)
 
-        # Reclaim expired leases
-        expired = self._session.exec(
+        # Reset expired-lease claimed chunks and previously-failed chunks back
+        # to pending.  Failed chunks must be retried rather than left stuck —
+        # all_chunks_complete returns False while any chunk is non-completed,
+        # which would permanently prevent video-vision from being enqueued.
+        # The outer video-index WorkerJob's fail_count provides the retry ceiling.
+        reclaimable = self._session.exec(
             select(VideoIndexChunk).where(
                 VideoIndexChunk.asset_id == asset_id,
-                VideoIndexChunk.status == "claimed",
-                VideoIndexChunk.lease_expires_at < now,
+                or_(
+                    and_(
+                        VideoIndexChunk.status == "claimed",
+                        VideoIndexChunk.lease_expires_at < now,
+                    ),
+                    VideoIndexChunk.status == "failed",
+                ),
             )
         ).all()
-        for chunk in expired:
+        for chunk in reclaimable:
             chunk.status = "pending"
             chunk.worker_id = None
             chunk.claimed_at = None
             chunk.lease_expires_at = None
             self._session.add(chunk)
+        if reclaimable:
+            self._session.flush()
 
         chunk = self._session.exec(
             select(VideoIndexChunk)
@@ -2383,6 +2429,7 @@ class VideoIndexChunkRepository:
             )
             .order_by(VideoIndexChunk.chunk_index)
             .limit(1)
+            .with_for_update(skip_locked=True)
         ).first()
 
         if chunk is None:

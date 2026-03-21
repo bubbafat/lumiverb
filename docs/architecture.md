@@ -64,19 +64,32 @@ Each tenant gets a dedicated Postgres database on the same Postgres instance (sc
 ```
 libraries         — library_id, name, root_path, scan_status, created_at
 assets            — asset_id, library_id, sha256, file_path, file_size,
-                    media_type, width, height, duration_ms, captured_at,
+                    media_type, width, height, duration_ms, duration_sec,
                     proxy_key, proxy_sha256, thumbnail_key, thumbnail_sha256,
-                    availability, created_at
+                    video_preview_key, video_indexed (bool),
+                    availability, status, created_at
 video_scenes      — scene_id, asset_id, start_ms, end_ms, rep_frame_ms,
-                    proxy_key, thumbnail_key, rep_frame_sha256
-asset_metadata    — asset_id, exif_json, sharpness_score, face_count,
-                    ai_description, ai_description_at,
-                    embedding_vector vector(512)  -- nullable, populated phase 2
-search_sync_queue — asset_id, scene_id, operation, status, created_at
-worker_jobs       — job_id, job_type, asset_id, status, worker_id,
-                    claimed_at, completed_at, error
+                    thumbnail_key, rep_frame_sha256, description, tags,
+                    sharpness_score, phash
+video_index_chunks — chunk_id, asset_id, chunk_index, start_ms, end_ms,
+                    status, worker_id, lease_expires_at, fail_count,
+                    anchor_phash, scene_start_ms
+asset_metadata    — asset_id, model_id, model_version, data (JSONB),
+                    created_at
+asset_embeddings  — embedding_id, asset_id, model_id, model_version,
+                    embedding_vector vector(512), created_at
+search_sync_queue — sync_id, asset_id, scene_id, operation, status,
+                    created_at, processing_started_at
+worker_jobs       — job_id, job_type, asset_id, status, priority,
+                    fail_count, worker_id, claimed_at, lease_expires_at,
+                    completed_at, error_message, created_at
 system_metadata   — key, value (schema version, last sync, etc.)
 ```
+
+**Key constraints:**
+- `worker_jobs`: partial unique index on `(job_type, asset_id) WHERE status IN ('pending', 'claimed')` — prevents duplicate active jobs per asset per type (enforces at the DB level; `try_create_unique` uses `ON CONFLICT ... DO NOTHING` for concurrent safety).
+- `search_sync_queue`: deduped at enqueue time — `enqueue()` skips insert if a `pending` or `processing` row already exists for the same `(asset_id, scene_id)`.
+- `video_index_chunks`: failed chunks are automatically reset to `pending` on the next `claim_next_chunk` call for the same asset, preventing permanent pipeline stalls after transient errors.
 
 **Phase 2 tables (schema created now, populated later):**
 
@@ -129,13 +142,21 @@ The local agent has no direct Postgres, Quickwit, or object storage access. The 
 Stateless worker processes. Can run anywhere with API access. Claim jobs from the work queue via lease-based claiming (prevents duplicate processing).
 
 **Worker types:**
-- `vision_worker` — runs Moondream against proxy images, generates AI descriptions
-- `video_worker` — scene segmentation, rep frame extraction, per-scene vision analysis
-- `embedding_worker` — generates embedding vectors for similarity search (future)
-- `metadata_worker` — sharpness scoring, face detection
+- `proxy_worker` — generates JPEG proxy (2048px) and thumbnail (400px) from source file; advances asset status to `proxy_ready`
+- `exif_worker` — extracts EXIF metadata, GPS, and duration from proxy; stores in `asset_metadata`
+- `vision_worker` (`ai_vision` job) — runs Moondream against image proxy, generates AI description and tags; enqueues search_sync
+- `embed_worker` (`embed` job) — generates embedding vectors for image assets
+- `video_index_worker` (`video-index` job) — chunks video, segments scenes, extracts rep frames, stores in `video_scenes`; triggers `video-vision` when all chunks complete
+- `video_vision_worker` (`video-vision` job) — describes each scene's rep frame; sets `video_indexed=true` on completion, enqueues search_sync
+- `video_preview_worker` (`video-preview` job) — generates a lower-resolution preview MP4; enqueues search_sync on completion
+- `search_sync_worker` (`search-sync`) — drains `search_sync_queue`, keeps Quickwit in sync with Postgres
 - `face_worker` — face detection, embedding generation, cluster assignment (phase 2)
 
-Workers poll the API for available jobs. They never access object storage directly for source files — they fetch proxies via the API.
+**Image pipeline stage order:** proxy → exif → ai_vision → embed → search_sync
+
+**Video pipeline stage order:** proxy → video-index (parallel: video-preview) → video-vision → search_sync
+
+Workers poll the API for available jobs via lease-based claiming (`FOR UPDATE SKIP LOCKED`). Permanent failures (wrong media type, missing required artifact) raise `BlockJob` to immediately block without retrying. Transient failures increment `fail_count`; jobs are blocked after 3 consecutive failures.
 
 ### 3.6 Search Engine (Quickwit)
 
@@ -177,12 +198,51 @@ Local filesystem
 
 ### 4.2 AI Processing Flow
 
+**Image pipeline:**
 ```
-vision_worker polls GET /jobs/claim?type=vision
-    → Fetches proxy via GET /assets/{id}/proxy
+proxy_worker claims video-index job
+    → Generates JPEG proxy (2048px) + thumbnail (400px) from source
+    → POST /v1/jobs/{id}/complete → API sets proxy_key, status=proxy_ready
+    → Supervisor enqueues: exif, ai_vision, embed
+
+exif_worker → extracts EXIF, duration, GPS
+    → POST /v1/jobs/{id}/complete
+
+vision_worker (ai_vision) → fetches proxy bytes from artifact store
     → Runs Moondream inference
-    → Posts result via POST /jobs/{id}/complete with ai_description
-    → API updates asset_metadata, enqueues search_sync
+    → POST /v1/jobs/{id}/complete → API writes asset_metadata, enqueues search_sync, sets status=described
+
+embed_worker → generates embedding vector
+    → POST /v1/jobs/{id}/complete → API writes asset_embeddings
+
+search_sync_worker → drains search_sync_queue, upserts Quickwit document
+```
+
+**Video pipeline:**
+```
+proxy_worker → generates video proxy frame (first frame), thumbnail
+    → Supervisor enqueues: video-index, video-preview (parallel)
+
+video_index_worker (video-index job):
+    → POST /v1/video/{asset_id}/chunks (init; idempotent)
+    → loop: GET /v1/video/{asset_id}/chunks/next (claim chunk; 204 when done)
+        → Transcode chunk to 720p proxy
+        → Run VideoScanner + SceneSegmenter
+        → Extract rep frames from source via FFmpeg → artifact store
+        → POST /v1/video/chunks/{chunk_id}/complete (with scene list)
+            → On last chunk complete: enqueue video-vision (ON CONFLICT DO NOTHING)
+
+video_vision_worker (video-vision job):
+    → GET /v1/video/{asset_id}/scenes
+    → For each scene: fetch rep frame bytes → Moondream → PATCH /v1/video/scenes/{id}
+    → POST /v1/video/scenes/{id}/sync per scene
+    → POST /v1/jobs/{id}/complete → API sets video_indexed=true, enqueues asset-level search_sync
+
+video_preview_worker (video-preview job):
+    → Generates preview MP4
+    → POST /v1/jobs/{id}/complete → API sets video_preview_key, enqueues search_sync
+
+search_sync_worker → drains search_sync_queue, upserts Quickwit documents for both asset and scene entries
 ```
 
 ### 4.3 Search Flow

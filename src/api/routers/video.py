@@ -168,9 +168,12 @@ def complete_chunk(
         scene_count = len(scene_repo.get_scenes_for_asset(asset_id))
         if scene_count > 0:
             job_repo = WorkerJobRepository(session)
-            if not job_repo.has_pending_job("video-vision", asset_id):
-                job_repo.create("video-vision", asset_id)
-                session.commit()
+            # Use try_create_unique to guard the TOCTOU race: two chunk completions
+            # arriving simultaneously could both pass a has_pending_job check before
+            # either inserts. The partial unique index (pending/claimed per job_type+asset_id)
+            # enforces at the DB level; we catch the conflict and treat it as success.
+            job_repo.try_create_unique("video-vision", asset_id)
+            session.commit()
         else:
             _log.info(
                 "No scenes produced for asset_id=%s after all chunks complete; "

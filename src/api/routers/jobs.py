@@ -241,6 +241,8 @@ def complete_job(
             raise HTTPException(status_code=400, detail="Job has no asset_id")
         asset_repo = AssetRepository(session)
         asset_repo.set_video_preview(job.asset_id, video_preview_key=video_preview_key)
+        queue_repo = SearchSyncQueueRepository(session)
+        queue_repo.enqueue(asset_id=job.asset_id, operation="upsert")
     elif job.job_type == "exif":
         if job.asset_id is None:
             raise HTTPException(status_code=400, detail="Job has no asset_id")

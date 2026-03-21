@@ -169,7 +169,7 @@ class VideoVisionWorker(BaseWorker):
         missing = [
             s["scene_id"]
             for s in refreshed
-            if not s.get("description") and s.get("thumbnail_key")
+            if s.get("description") is None and s.get("thumbnail_key")
         ]
         if missing:
             raise RuntimeError(

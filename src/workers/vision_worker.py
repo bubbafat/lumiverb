@@ -33,9 +33,7 @@ class VisionWorker(BaseWorker):
         vision_api_key = job.get("vision_api_key") or None
 
         if not proxy_key:
-            # Unit tests treat missing proxy_key as an invalid job payload.
-            # Use ValueError so the worker framework can mark it as permanent.
-            raise ValueError(f"proxy_key is required for asset {asset_id}")
+            raise BlockJob(f"proxy_key is required for asset {asset_id}")
 
         # If upstream provides media_type, validate it; otherwise tolerate missing
         # values (some unit tests enqueue jobs without media_type metadata).
