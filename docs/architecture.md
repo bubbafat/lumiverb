@@ -62,12 +62,15 @@ Each tenant gets a dedicated Postgres database on the same Postgres instance (sc
 **Core tables:**
 
 ```
-libraries         — library_id, name, root_path, scan_status, created_at
+libraries         — library_id, name, root_path, scan_status, last_scan_at,
+                    last_scan_error, status, created_at
 assets            — asset_id, library_id, sha256, file_path, file_size,
-                    media_type, width, height, duration_ms, duration_sec,
+                    media_type, width, height, duration_sec (canonical; duration_ms removed),
                     proxy_key, proxy_sha256, thumbnail_key, thumbnail_sha256,
                     video_preview_key, video_indexed (bool),
-                    availability, status, created_at
+                    availability, status, deleted_at, created_at
+                    NOTE: captured_at removed (was never populated; use taken_at)
+                    NOTE: duration_ms removed (consolidated into duration_sec)
 video_scenes      — scene_id, asset_id, start_ms, end_ms, rep_frame_ms,
                     thumbnail_key, rep_frame_sha256, description, tags,
                     sharpness_score, phash
@@ -86,10 +89,18 @@ worker_jobs       — job_id, job_type, asset_id, status, priority,
 system_metadata   — key, value (schema version, last sync, etc.)
 ```
 
+**Views:**
+- `active_assets` — non-trashed assets (deleted_at IS NULL). All pipeline queries use this view. Trashing a library sets deleted_at on all its assets, removing them from this view immediately.
+
 **Key constraints:**
 - `worker_jobs`: partial unique index on `(job_type, asset_id) WHERE status IN ('pending', 'claimed')` — prevents duplicate active jobs per asset per type (enforces at the DB level; `try_create_unique` uses `ON CONFLICT ... DO NOTHING` for concurrent safety).
-- `search_sync_queue`: deduped at enqueue time — `enqueue()` skips insert if a `pending` or `processing` row already exists for the same `(asset_id, scene_id)`.
+- `search_sync_queue`: atomic dedup via partial unique index `uq_ssq_pending_asset_scene` on `(asset_id, COALESCE(scene_id, '')) WHERE status IN ('pending', 'processing')` — `enqueue()` uses `ON CONFLICT DO NOTHING` for race-free deduplication.
 - `video_index_chunks`: failed chunks are automatically reset to `pending` on the next `claim_next_chunk` call for the same asset, preventing permanent pipeline stalls after transient errors.
+
+**Artifact lifecycle:**
+- When a library is trashed (`DELETE /v1/libraries/{id}`), all its assets get `deleted_at` set (soft-deleted) and all pending/processing `search_sync_queue` rows are set to `synced`. This ensures no further pipeline work runs on deleted content.
+- When a file changes on re-scan (size or mtime differs), artifact keys (`proxy_key`, `thumbnail_key`, `proxy_sha256`, `thumbnail_sha256`, `video_preview_key`) are cleared and the asset is reset to `pending`. The stale proxy/thumbnail endpoints return 202 and re-enqueue the appropriate job (`proxy` for images, `video-index` for videos).
+- On empty-trash (hard delete), artifact files in object storage are deleted best-effort, then DB rows are removed in FK-safe order.
 
 **Phase 2 tables (schema created now, populated later):**
 
@@ -235,8 +246,9 @@ video_index_worker (video-index job):
 video_vision_worker (video-vision job):
     → GET /v1/video/{asset_id}/scenes
     → For each scene: fetch rep frame bytes → Moondream → PATCH /v1/video/scenes/{id}
-    → POST /v1/video/scenes/{id}/sync per scene
-    → POST /v1/jobs/{id}/complete → API sets video_indexed=true, enqueues asset-level search_sync
+    → POST /v1/video/scenes/{id}/sync per scene (enqueues scene-level search_sync per scene)
+    → POST /v1/jobs/{id}/complete → API sets video_indexed=true
+      NOTE: asset-level search_sync is NOT enqueued here; scene-level syncs cover all content
 
 video_preview_worker (video-preview job):
     → Generates preview MP4

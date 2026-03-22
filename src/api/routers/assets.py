@@ -59,6 +59,7 @@ class AssetResponse(BaseModel):
     video_preview_key: str | None = None
     video_preview_generated_at: str | None = None  # ISO8601
     video_preview_last_accessed_at: str | None = None  # ISO8601
+    duration_sec: float | None = None
     ai_description: str | None = None
     ai_tags: list[str] = []
 
@@ -174,7 +175,7 @@ def page_assets(
             height=a.height,
             taken_at=a.taken_at.isoformat() if a.taken_at else None,
             status=a.status,
-            duration_sec=a.duration_sec or (a.duration_ms / 1000.0 if a.duration_ms else None),
+            duration_sec=a.duration_sec,
         )
         for a in assets
     ]
@@ -225,14 +226,20 @@ def _stream_asset_file(
     path = storage.abs_path(key)
     if not path.exists():
         # Stale key: file was lost. Clear it and re-enqueue so the worker regenerates it.
-        if size == "thumbnail":
+        job_repo = WorkerJobRepository(session)
+        if size == "proxy":
+            asset.proxy_key = None
+            if not job_repo.has_pending_job("proxy", asset_id):
+                job_repo.create(job_type="proxy", asset_id=asset_id, priority=PRIORITY_URGENT)
+        else:
+            # size == "thumbnail"
             asset.thumbnail_key = None
-            if asset.media_type == "video":
-                job_repo = WorkerJobRepository(session)
+            if asset.media_type.startswith("video"):
                 if not job_repo.has_pending_job("video-index", asset_id):
                     job_repo.create(job_type="video-index", asset_id=asset_id, priority=PRIORITY_URGENT)
-        else:
-            asset.proxy_key = None
+            else:
+                if not job_repo.has_pending_job("proxy", asset_id):
+                    job_repo.create(job_type="proxy", asset_id=asset_id, priority=PRIORITY_URGENT)
         session.add(asset)
         session.commit()
         return JSONResponse({"status": "generating"}, status_code=202)
@@ -335,6 +342,7 @@ def _to_asset_response(asset) -> AssetResponse:
         video_preview_last_accessed_at=asset.video_preview_last_accessed_at.isoformat()
         if asset.video_preview_last_accessed_at
         else None,
+        duration_sec=asset.duration_sec,
     )
 
 

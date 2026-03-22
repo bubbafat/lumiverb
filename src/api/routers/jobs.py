@@ -130,8 +130,6 @@ def get_next_job(
     }
     if asset.duration_sec is not None:
         result["duration_sec"] = asset.duration_sec
-    elif asset.duration_ms is not None:
-        result["duration_sec"] = asset.duration_ms / 1000.0
     return result
 
 
@@ -314,8 +312,6 @@ def complete_job(
             raise HTTPException(status_code=400, detail="Job has no asset_id")
         asset_repo = AssetRepository(session)
         asset_repo.set_video_indexed(job.asset_id)
-        queue_repo = SearchSyncQueueRepository(session)
-        queue_repo.enqueue(asset_id=job.asset_id, operation="upsert")
     job_repo.set_completed(job)
     return JobCompleteResponse(job_id=job_id, status="completed")
 

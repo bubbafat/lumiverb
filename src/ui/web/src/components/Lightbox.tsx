@@ -91,7 +91,7 @@ export function Lightbox({
     queryFn: () =>
       findSimilar({
         assetId: asset.asset_id,
-        libraryId: libraryId!,
+        libraryId: libraryId ?? "",
         limit: 20,
       }),
     enabled: showSimilar && !!libraryId,

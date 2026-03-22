@@ -57,6 +57,7 @@ export interface SearchHit {
   end_ms: number | null;
   media_type: string | null;
   file_size: number | null;
+  duration_sec?: number | null;
   width: number | null;
   height: number | null;
 }

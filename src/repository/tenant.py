@@ -120,6 +120,25 @@ class LibraryRepository:
             ),
             {"library_id": library_id},
         )
+        # Soft-delete all assets in this library
+        self._session.execute(
+            text(
+                "UPDATE assets SET deleted_at = :now WHERE library_id = :library_id AND deleted_at IS NULL"
+            ),
+            {"library_id": library_id, "now": utcnow()},
+        )
+        # Cancel pending/processing search_sync_queue rows for this library's assets.
+        # Use 'cancelled' (not 'synced') so status reports can distinguish intent.
+        self._session.execute(
+            text(
+                """
+                UPDATE search_sync_queue SET status = 'cancelled'
+                WHERE asset_id IN (SELECT asset_id FROM assets WHERE library_id = :library_id)
+                AND status IN ('pending', 'processing')
+                """
+            ),
+            {"library_id": library_id},
+        )
         library.status = "trashed"
         library.updated_at = utcnow()
         self._session.add(library)
@@ -199,15 +218,17 @@ class LibraryRepository:
         status: str,
         error: str | None = None,
     ) -> Library:
-        """Update scan_status; when status is 'complete' or 'error' also set last_scan_error and last_scan_at."""
+        """Update scan_status; when status is 'complete' also clears last_scan_error; when 'error' sets it."""
         library = self.get_by_id(library_id)
         if library is None:
             raise ValueError(f"Library not found: {library_id}")
         library.scan_status = status
         if status in ("complete", "error"):
             library.last_scan_at = utcnow()
-        if error is not None:
-            library.last_scan_error = error
+        if status == "complete":
+            library.last_scan_error = None  # always clear on success
+        elif status == "error" and error is not None:
+            library.last_scan_error = error  # only overwrite if message provided
         self._session.add(library)
         self._session.commit()
         self._session.refresh(library)
@@ -466,6 +487,11 @@ class AssetRepository:
                 "last_scan_id": scan_id,
                 "updated_at": now,
                 "deleted_at": None,  # restore if previously trashed
+                "proxy_key": None,
+                "thumbnail_key": None,
+                "proxy_sha256": None,
+                "thumbnail_sha256": None,
+                "video_preview_key": None,
             },
         )
         self._session.execute(stmt)
@@ -525,6 +551,13 @@ class AssetRepository:
         asset.deleted_at = None
         if media_type is not None:
             asset.media_type = media_type
+        # When resetting to pending (file changed), clear stale artifact keys
+        if status == asset_status.PENDING:
+            asset.proxy_key = None
+            asset.thumbnail_key = None
+            asset.proxy_sha256 = None
+            asset.thumbnail_sha256 = None
+            asset.video_preview_key = None
         self._session.add(asset)
         self._session.commit()
         self._session.refresh(asset)
@@ -554,7 +587,12 @@ class AssetRepository:
                         status = 'pending',
                         last_scan_id = :scan_id,
                         deleted_at = NULL,
-                        updated_at = :now
+                        updated_at = :now,
+                        proxy_key = NULL,
+                        thumbnail_key = NULL,
+                        proxy_sha256 = NULL,
+                        thumbnail_sha256 = NULL,
+                        video_preview_key = NULL
                     FROM unnest(
                         CAST(:asset_ids AS text[]),
                         CAST(:file_sizes AS bigint[]),
@@ -1166,7 +1204,7 @@ class AssetRepository:
             elif job_type == "embed":
                 conditions.append("a.proxy_key IS NOT NULL")
             elif job_type in ("video-index", "video-preview", "video-vision"):
-                conditions.append("a.media_type = 'video'")
+                conditions.append("a.media_type LIKE 'video%'")
         elif not force:
             conditions.append(
                 """
@@ -1209,7 +1247,7 @@ class AssetRepository:
                     """
                 )
             elif job_type in ("video-index", "video-preview", "video-vision"):
-                conditions.append("a.media_type = 'video'")
+                conditions.append("a.media_type LIKE 'video%'")
                 if job_type in ("video-index", "video-vision"):
                     conditions.append("a.video_indexed IS NOT TRUE")
         else:
@@ -1221,7 +1259,7 @@ class AssetRepository:
             elif job_type == "embed":
                 conditions.append("a.proxy_key IS NOT NULL")
             elif job_type in ("video-index", "video-preview", "video-vision"):
-                conditions.append("a.media_type = 'video'")
+                conditions.append("a.media_type LIKE 'video%'")
 
         where = " AND ".join(conditions)
         from_clause = (
@@ -1972,40 +2010,30 @@ class SearchSyncQueueRepository:
         scene_id: str | None = None,
     ) -> SearchSyncQueue | None:
         """
-        Insert a new row into search_sync_queue.
+        Atomically insert a new row into search_sync_queue using ON CONFLICT DO NOTHING.
 
-        sync_id is generated as ssq_ + ULID(). Returns None and skips insert if
-        a synced row already exists for this (asset_id, scene_id) with
-        created_at >= the new row's created_at (avoids creating a stale pending
-        row that would be hidden by search_sync_latest).
+        The partial unique index uq_ssq_pending_asset_scene ensures only one
+        pending/processing row exists per (asset_id, scene_id) at any time.
+        ON CONFLICT DO NOTHING makes concurrent callers idempotent without the
+        TOCTOU race of a SELECT-then-INSERT pattern.
+
+        Returns the inserted row, or None if a pending/processing row already existed.
         """
         now = utcnow()
-        exists = self._session.execute(
-            text(
-                """
-                SELECT 1 FROM search_sync_queue
-                WHERE asset_id = :asset_id
-                  AND (scene_id IS NOT DISTINCT FROM :scene_id)
-                  AND status IN ('pending', 'processing')
-                LIMIT 1
-                """
-            ),
-            {"asset_id": asset_id, "scene_id": scene_id},
-        ).scalar()
-        if exists:
-            return None
-        sync = SearchSyncQueue(
-            sync_id="ssq_" + str(ULID()),
+        sync_id = "ssq_" + str(ULID())
+        stmt = pg_insert(SearchSyncQueue).values(
+            sync_id=sync_id,
             asset_id=asset_id,
             scene_id=scene_id,
             operation=operation,
             status="pending",
             created_at=now,
-        )
-        self._session.add(sync)
+        ).on_conflict_do_nothing()
+        self._session.execute(stmt)
         self._session.commit()
-        self._session.refresh(sync)
-        return sync
+        # Return the row only if our insert actually went through
+        row = self._session.get(SearchSyncQueue, sync_id)
+        return row  # None if conflict (already pending/processing)
 
     def claim_batch(
         self,
@@ -2259,6 +2287,27 @@ class SearchSyncQueueRepository:
         )
         self._session.commit()
         # SQLAlchemy's rowcount can be -1 on some drivers; coerce to int >= 0
+        try:
+            return int(result.rowcount or 0)
+        except Exception:
+            return 0
+
+    def reset_to_pending(self, sync_ids: list[str]) -> int:
+        """Reset processing rows back to pending (e.g. after a transient Quickwit failure).
+
+        Clears processing_started_at so the rows are immediately eligible for reclaiming.
+        Returns the number of rows updated.
+        """
+        if not sync_ids:
+            return 0
+        result = self._session.execute(
+            text(
+                "UPDATE search_sync_queue SET status = 'pending', processing_started_at = NULL "
+                "WHERE sync_id = ANY(:ids)"
+            ),
+            {"ids": sync_ids},
+        )
+        self._session.commit()
         try:
             return int(result.rowcount or 0)
         except Exception:

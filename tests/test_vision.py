@@ -13,9 +13,10 @@ def test_describe_image_missing_file(tmp_path):
 
 @pytest.mark.fast
 def test_vision_worker_no_proxy():
-    """VisionWorker.process raises ValueError when proxy_key is None."""
+    """VisionWorker.process raises BlockJob when proxy_key is None."""
     from unittest.mock import MagicMock
 
+    from src.workers.base import BlockJob
     from src.workers.vision_worker import VisionWorker
 
     worker = VisionWorker(
@@ -23,6 +24,6 @@ def test_vision_worker_no_proxy():
         artifact_store=MagicMock(),
         once=True,
     )
-    with pytest.raises(ValueError, match="proxy_key"):
+    with pytest.raises(BlockJob, match="proxy_key"):
         worker.process({"asset_id": "ast_123", "proxy_key": None})
 

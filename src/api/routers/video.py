@@ -88,9 +88,7 @@ def claim_next_chunk(
 
     asset = asset_repo.get_by_id(asset_id)
     total_chunks = chunk_repo.chunk_count(asset_id)
-    video_duration_sec = (asset.duration_sec if asset and asset.duration_sec is not None else 0.0) or (
-        asset.duration_ms / 1000.0 if asset and asset.duration_ms is not None else 0.0
-    )
+    video_duration_sec = asset.duration_sec if asset and asset.duration_sec is not None else 0.0
 
     return ChunkWorkOrder(
         chunk_id=chunk.chunk_id,

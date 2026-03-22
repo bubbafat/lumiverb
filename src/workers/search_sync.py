@@ -260,10 +260,22 @@ class SearchSyncWorker:
                 sync_ids.append(row.sync_id)
                 asset_status[asset_id] = "synced"
 
-        if docs:
-            self._quickwit.ingest_documents_for_library(self._library_id, docs)
-        if scene_docs:
-            self._quickwit.ingest_scene_documents_for_library(self._library_id, scene_docs)
+        try:
+            if docs:
+                self._quickwit.ingest_documents_for_library(self._library_id, docs)
+            if scene_docs:
+                self._quickwit.ingest_scene_documents_for_library(self._library_id, scene_docs)
+        except Exception as exc:
+            logger.warning(
+                "Quickwit ingest failed for library %s; resetting %d rows to pending: %s",
+                self._library_id,
+                len(sync_ids),
+                exc,
+            )
+            if sync_ids:
+                self._queue_repo.reset_to_pending(sync_ids)
+            return {}, []
+
         if sync_ids:
             self._queue_repo.mark_synced(sync_ids)
 
@@ -320,8 +332,7 @@ class SearchSyncWorker:
             "end_ms": scene.end_ms,
             "rep_frame_ms": scene.rep_frame_ms,
             "thumbnail_key": scene.thumbnail_key,
-            "duration_sec": asset.duration_sec
-            or (asset.duration_ms / 1000.0 if asset.duration_ms else None),
+            "duration_sec": asset.duration_sec,
             "description": scene.description or "",
             "tags": scene.tags or [],
             "sharpness_score": scene.sharpness_score,

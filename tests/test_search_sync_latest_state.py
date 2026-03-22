@@ -157,18 +157,33 @@ def test_search_sync_worker_counts_assets_not_rows(tenant_db_session: Session, t
     session = tenant_db_session
     _ensure_library_asset(session, lib_id, asset_id, "photo.jpg")
 
-    # Insert 3 queue rows for same asset (simulating retries / force-resyncs)
-    for _ in range(3):
+    # Insert 2 historical (already-synced) rows and 1 pending row for same asset.
+    # Simulates retries / force-resyncs: the constraint only allows one pending/processing
+    # row per asset+scene at a time, so completed retries are in 'synced' status.
+    # Use older timestamps for synced rows so search_sync_latest (ORDER BY created_at DESC)
+    # always selects the current pending row as the most recent.
+    for i in range(2):
         sync_id = "ssq_" + secrets.token_urlsafe(8)
         session.execute(
             text(
                 """
                 INSERT INTO search_sync_queue (sync_id, asset_id, operation, status, created_at)
-                VALUES (:sync_id, :asset_id, 'index', 'pending', NOW())
+                VALUES (:sync_id, :asset_id, 'index', 'synced', NOW() - INTERVAL '1 hour' * :offset)
                 """
             ),
-            {"sync_id": sync_id, "asset_id": asset_id},
+            {"sync_id": sync_id, "asset_id": asset_id, "offset": i + 1},
         )
+    # One current pending row (most recent)
+    sync_id = "ssq_" + secrets.token_urlsafe(8)
+    session.execute(
+        text(
+            """
+            INSERT INTO search_sync_queue (sync_id, asset_id, operation, status, created_at)
+            VALUES (:sync_id, :asset_id, 'index', 'pending', NOW())
+            """
+        ),
+        {"sync_id": sync_id, "asset_id": asset_id},
+    )
     session.commit()
 
     # Need asset_metadata for worker to actually sync

@@ -113,12 +113,7 @@ class Asset(SQLModel, table=True):
     media_type: str = Field(nullable=False)
     width: int | None = Field(default=None, nullable=True)
     height: int | None = Field(default=None, nullable=True)
-    duration_ms: int | None = Field(default=None, nullable=True)
     duration_sec: float | None = Field(default=None, nullable=True)
-    captured_at: datetime | None = Field(
-        default=None,
-        sa_column=Column(DateTime(timezone=True), nullable=True),
-    )
     proxy_key: str | None = Field(default=None, nullable=True)
     proxy_sha256: str | None = Field(default=None, nullable=True)
     thumbnail_key: str | None = Field(default=None, nullable=True)

@@ -179,9 +179,7 @@ def search(
                 if asset:
                     hit["rel_path"] = asset.rel_path
                     hit["proxy_key"] = asset.proxy_key
-                    hit["duration_sec"] = asset.duration_sec or (
-                        asset.duration_ms / 1000.0 if asset.duration_ms else None
-                    )
+                    hit["duration_sec"] = asset.duration_sec
                 hit["start_ms"] = int(hit.get("start_ms") or 0)
                 hit["end_ms"] = int(hit.get("end_ms") or 0)
                 hit["rep_frame_ms"] = int(hit.get("rep_frame_ms") or 0)
