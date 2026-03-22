@@ -20,7 +20,7 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.add_column(
         "libraries",
-        sa.Column("is_public", sa.Boolean(), nullable=False, server_default="false"),
+        sa.Column("is_public", sa.Boolean(), nullable=False, server_default=sa.text("FALSE")),
     )
 
 

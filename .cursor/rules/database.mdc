@@ -24,7 +24,7 @@ alwaysApply: false
 - Run `uv run alembic -c alembic-control.ini upgrade head` for control plane migrations.
 
 ## Two-Database Architecture
-- Control plane DB: tenants, api_keys, tenant_db_routing — never stores media metadata.
+- Control plane DB: tenants, api_keys, tenant_db_routing, public_libraries — never stores media metadata.
 - Tenant DB: libraries, assets, video_scenes, asset_metadata, worker_jobs, search_sync_queue.
 - Always use the tenant DB session in route handlers — middleware resolves it from the API key.
 - Never cross-query between control plane and tenant DB in the same transaction.

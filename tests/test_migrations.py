@@ -38,16 +38,16 @@ def test_control_plane_migrations_upgrade_and_downgrade() -> None:
         )
         assert result.returncode == 0, (result.stdout, result.stderr)
 
-        # Assert all three tables exist
+        # Assert all four tables exist
         with engine.connect() as conn:
             r = conn.execute(
                 text(
                     "SELECT table_name FROM information_schema.tables "
-                    "WHERE table_schema = 'public' AND table_name IN ('tenants', 'api_keys', 'tenant_db_routing')"
+                    "WHERE table_schema = 'public' AND table_name IN ('tenants', 'api_keys', 'tenant_db_routing', 'public_libraries')"
                 )
             )
             tables = {row[0] for row in r}
-        assert tables == {"tenants", "api_keys", "tenant_db_routing"}, tables
+        assert tables == {"tenants", "api_keys", "tenant_db_routing", "public_libraries"}, tables
 
         # Downgrade to base
         result = subprocess.run(
@@ -59,12 +59,12 @@ def test_control_plane_migrations_upgrade_and_downgrade() -> None:
         )
         assert result.returncode == 0, (result.stdout, result.stderr)
 
-        # Assert all three tables are gone
+        # Assert all four tables are gone
         with engine.connect() as conn:
             r = conn.execute(
                 text(
                     "SELECT table_name FROM information_schema.tables "
-                    "WHERE table_schema = 'public' AND table_name IN ('tenants', 'api_keys', 'tenant_db_routing')"
+                    "WHERE table_schema = 'public' AND table_name IN ('tenants', 'api_keys', 'tenant_db_routing', 'public_libraries')"
                 )
             )
             tables = {row[0] for row in r}
