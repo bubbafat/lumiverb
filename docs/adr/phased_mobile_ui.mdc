@@ -1,0 +1,570 @@
+# ADR: Phased Mobile UI Improvements
+
+## Status
+Planned
+
+## Implementation Progress
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 1 | Navigation overhaul — bottom tab bar + sidebar drawer overlay | Planned |
+| 2 | Responsive grid — dynamic column count, breakpoint dead-zone fix | Planned |
+| 3 | Touch targets, lightbox mobile layout, modal sizing | Planned |
+| 4 | Polish — safe areas, reduced motion, admin table cards | Planned |
+
+---
+
+## Context
+
+### Background
+
+The web UI was built desktop-first. The layout, navigation, and grid assumptions all stem from
+a design where horizontal space is abundant and mouse interaction is precise. The result is an
+app that is difficult to use on phones and tablets:
+
+- The sidebar permanently occupies 48–256px of horizontal space on every screen size.
+- There is a single layout breakpoint at 500px; screens between 500px and ~700px (phone
+  landscape, small tablet) get the desktop justified-layout which is tuned for wide viewports.
+- The mobile grid is hardcoded to 2 columns regardless of device width.
+- Interactive elements (sidebar nav links, directory tree chevrons) are 28–32px — below the
+  44px minimum touch target size recommended by Apple and Google.
+- The Admin page renders data tables with fixed column widths that overflow on narrow screens.
+- No safe-area insets are applied, so content renders under the iPhone home indicator.
+- No `prefers-reduced-motion` support.
+
+### Current layout structure
+
+```
+AppShell
+├── <div class="flex h-screen overflow-hidden">
+│   ├── <div class="w-12 | w-64">          ← always present, pushes content
+│   │   └── Sidebar
+│   └── <main class="flex-1 overflow-auto">
+│       └── <Outlet />                      ← LibrariesPage | BrowsePage | AdminPage
+```
+
+On a 390px phone with the sidebar expanded: `390 - 256 = 134px` of usable content width.
+On a 390px phone with the sidebar collapsed: `390 - 48 = 342px` of usable content width.
+Neither state is acceptable for a primary browsing interface.
+
+### What is NOT in scope
+
+- Dark/light mode toggle — the app is always dark; this is a separate feature request.
+- Authentication / login flows — Phase 5 per the main project plan.
+- Offline / PWA support — not targeted.
+- Native mobile apps (iOS / Android) — this ADR covers the web UI only.
+- Responsive API pagination — the API returns the same page size regardless of client; no
+  change needed to the server.
+- Accessibility audit beyond touch targets — WCAG compliance is a separate workstream.
+- Any changes to the Python API or CLI.
+
+---
+
+## Design Decisions
+
+### Navigation pattern: bottom tab bar on mobile, sidebar on desktop
+
+The standard mobile navigation pattern (iOS HIG, Material Design) places primary destinations
+in a fixed bottom bar. This gives thumbs easy access to all top-level routes without covering
+content. On `md:` and above (768px), the existing sidebar is retained unchanged.
+
+Primary destinations (4 tabs):
+- **Libraries** — `/` (home icon)
+- **Browse** — `/libraries/:libraryId/browse` (grid icon; visible when a library is active)
+- **Admin** — `/admin` (wrench icon)
+- **Settings** — `/libraries/:libraryId/settings` (gear icon; visible when a library is active)
+
+When no library is selected, Browse and Settings tabs are hidden (or disabled + dimmed).
+
+### Sidebar as slide-over drawer on mobile
+
+The directory-tree sidebar inside BrowsePage is a secondary navigation surface. On small
+screens it renders as a full-height slide-over drawer (overlays content, does not push it) with
+a semi-transparent backdrop. Tapping the backdrop dismisses it. The trigger is a menu button
+in the page header. On `md:` and above the current side-by-side layout is retained.
+
+### Grid column count: continuous, not binary
+
+Replace the single `MOBILE_BREAKPOINT = 500` / `MOBILE_COLUMNS = 2` constants with a
+continuous formula:
+
+```typescript
+const MIN_CELL_WIDTH = 150; // px — smallest acceptable cell on any screen
+const columns = Math.max(2, Math.floor(containerWidth / MIN_CELL_WIDTH));
+```
+
+This produces:
+- 390px container → 2 columns (195px each)
+- 600px container → 4 columns (150px each)
+- 768px container → 5 columns (153px each)
+- 1024px+ → justified layout (unchanged)
+
+The 500px binary switch is replaced by a single threshold: use justified layout above 700px,
+fixed-column grid at or below 700px. 700px captures phones in landscape and small tablets as
+"mobile grid" territory without the dead zone.
+
+---
+
+## Phase 1 — Navigation Overhaul
+
+**Goal**: Replace the always-present sidebar with a bottom tab bar on small screens. On `md:`
+and above, everything looks and works exactly as today. No changes to routing, API calls, or
+page components.
+
+### Files to create
+
+#### `src/ui/web/src/components/BottomNav.tsx`
+
+A fixed bottom bar (`fixed bottom-0 inset-x-0`) rendered only on screens narrower than `md:`.
+Uses `pb-safe` (Tailwind safe-area plugin) for iPhone home indicator.
+
+Structure:
+```tsx
+<nav className="fixed bottom-0 inset-x-0 z-40 flex border-t border-gray-800
+                bg-gray-950 pb-safe md:hidden">
+  {/* z-40 — sits above page content but below the z-50 drawer and its backdrop */}
+  {tabs.map(tab => (
+    <NavLink
+      key={tab.to}
+      to={tab.to}
+      className={({ isActive }) =>
+        `flex flex-1 flex-col items-center gap-1 py-3 text-xs
+         ${isActive ? "text-indigo-400" : "text-gray-400"}`
+      }
+    >
+      <tab.Icon className="h-5 w-5" />
+      {tab.label}
+    </NavLink>
+  ))}
+</nav>
+```
+
+Tabs array is built from current route params: `libraryId` from `useParams()`. Browse and
+Settings tabs include `libraryId` in their `to` path and are rendered conditionally (hidden,
+not disabled, when no library is active — they simply don't appear in `tabs` if `!libraryId`).
+
+#### `src/ui/web/src/components/DrawerOverlay.tsx`
+
+Reusable slide-over wrapper. Accepts `open`, `onClose`, and `children`. Renders:
+- A fixed full-screen semi-transparent backdrop (`bg-black/50 z-50`) that calls `onClose`
+  on click.
+- A fixed full-height panel (`z-50`) that slides in from the left (`translate-x-0` when open,
+  `-translate-x-full` when closed), `transition-transform duration-200`.
+
+**Stacking order**: `BottomNav` is `z-40`; `DrawerOverlay` (backdrop + panel) is `z-50`.
+This ensures the open drawer sits above the bottom bar, preventing the nav from stealing taps
+through the backdrop. While the drawer is open the bottom bar is visually covered.
+
+**Accessibility note**: For a first pass the drawer is pointer/touch only. A follow-up should
+add a focus trap (e.g. `focus-trap-react`), `Escape` key to close, and restore focus to the
+menu button on close. Defer explicitly rather than leaving it unaddressed.
+
+```tsx
+interface DrawerOverlayProps {
+  open: boolean;
+  onClose: () => void;
+  children: React.ReactNode;
+}
+```
+
+### Files to modify
+
+#### `src/ui/web/src/components/AppShell.tsx`
+
+Add `BottomNav` below `<Outlet />`. Add `pb-16 md:pb-0` to `<main>` so page content is not
+obscured by the bottom bar on mobile.
+
+Change the outer flex container to hide the sidebar `<div>` below `md:`:
+
+```tsx
+// Before
+<div className={`${sidebarWidth} transition-all duration-200`}>
+  <Sidebar ... />
+</div>
+
+// After
+<div className={`hidden md:block ${sidebarWidth} transition-all duration-200`}>
+  <Sidebar ... />
+</div>
+```
+
+The sidebar component itself is unchanged. On mobile it simply does not render.
+
+#### `src/ui/web/src/pages/BrowsePage.tsx`
+
+The in-page directory tree sidebar currently lives inside the BrowsePage layout. Wrap its
+container div with `DrawerOverlay` on mobile and a standard side column on `md:`. Add a
+`drawerOpen` state (default `false`) and a menu button in the page header that sets it.
+
+Header addition (mobile only):
+```tsx
+<button
+  className="md:hidden p-2 -ml-2 rounded-lg text-gray-400 hover:text-gray-100"
+  onClick={() => setDrawerOpen(true)}
+  aria-label="Open folder browser"
+>
+  <Bars3Icon className="h-5 w-5" />
+</button>
+```
+
+#### `tailwind.config.js`
+
+Add the `tailwindcss-safe-area` plugin to support `pb-safe` / `pt-safe`:
+
+```js
+import safeArea from "tailwindcss-safe-area";
+
+export default {
+  content: ["./index.html", "./src/**/*.{ts,tsx}"],
+  theme: { extend: {} },
+  plugins: [safeArea],
+};
+```
+
+Add `tailwindcss-safe-area` to `package.json` devDependencies.
+
+### Acceptance criteria
+
+- On a 390px viewport: bottom tab bar visible, sidebar invisible, content fills full width.
+- On a 768px+ viewport: sidebar visible, bottom tab bar invisible, behavior identical to today.
+- BrowsePage: tapping the menu button opens the directory tree as a drawer; tapping the
+  backdrop closes it.
+- All existing Vitest tests pass without modification.
+
+---
+
+## Phase 2 — Responsive Grid
+
+**Goal**: The media grid adapts column count continuously based on container width rather than
+snapping between 2-column and justified at a single 500px threshold. Screens between 500px and
+700px (phones in landscape, small tablets) get a properly-proportioned fixed-column grid
+instead of the desktop justified layout.
+
+### Files to modify
+
+#### `src/ui/web/src/pages/BrowsePage.tsx`
+
+Replace the three layout constants and the conditional in the `useMemo` that builds
+`virtualRows`:
+
+```typescript
+// Remove:
+const MOBILE_BREAKPOINT = 500;
+const MOBILE_COLUMNS = 2;
+const MOBILE_ROW_HEIGHT = 160;
+
+// Add:
+const FIXED_GRID_BREAKPOINT = 700;  // px — at or below this, use fixed-column grid
+const MIN_CELL_WIDTH = 150;          // px — drives dynamic column count
+const CELL_ASPECT_RATIO = 1.0;       // square cells in fixed-column mode
+```
+
+Column count derivation (inside the `useMemo`):
+
+```typescript
+if (containerWidth <= FIXED_GRID_BREAKPOINT) {
+  const columns = Math.max(2, Math.floor(containerWidth / MIN_CELL_WIDTH));
+  const cellWidth = Math.floor((containerWidth - ROW_GAP * (columns - 1)) / columns);
+  const rowHeight = Math.round(cellWidth * CELL_ASPECT_RATIO);
+  return buildFixedGridRows(groups, containerWidth, columns, rowHeight, ROW_GAP);
+}
+return buildVirtualRows(groups, containerWidth, TARGET_ROW_HEIGHT, ROW_GAP);
+```
+
+`MOBILE_ROW_HEIGHT` is no longer a constant — it is derived from cell width and aspect ratio,
+so cells are always square regardless of screen width.
+
+#### `src/ui/web/src/lib/virtualRows.ts`
+
+`buildFixedGridRows` currently accepts `columns: number` as a fixed parameter. No change to
+its signature is needed — the caller now passes the computed `columns` value.
+
+Verify: the function correctly handles the case where the last row has fewer assets than
+`columns`. If it does not (renders empty cells with visible backgrounds), add a guard:
+
+```typescript
+// In the row builder, when distributing items into rows:
+const isLastRow = rowIndex === Math.ceil(items.length / columns) - 1;
+const itemsInRow = isLastRow ? items.length % columns || columns : columns;
+```
+
+### Acceptance criteria
+
+- At 390px (portrait phone): 2 columns, cells ~192px wide, square.
+- At 600px (phone landscape): 4 columns, cells ~147px wide, square.
+- At 700px (small tablet portrait): 4 columns (last row of fixed-column mode).
+- At 701px: justified layout begins.
+- At 1024px+: justified layout, `TARGET_ROW_HEIGHT = 220`, unchanged.
+- Resizing the browser window transitions smoothly between all states.
+- No regression in the desktop justified layout or virtualization behavior.
+
+---
+
+## Phase 3 — Touch Targets, Lightbox, and Modal Sizing
+
+**Goal**: All interactive elements meet the 44px minimum touch target size. The lightbox image
+gets appropriate vertical space on mobile. Modals do not get squeezed on small phones.
+
+### Touch targets
+
+#### `src/ui/web/src/components/Sidebar.tsx`
+
+Nav link items: change `py-2` → `py-3` (48px height, meets target).
+
+```tsx
+// Before
+<Link className="... px-2 py-2 text-sm ...">
+
+// After
+<Link className="... px-2 py-3 text-sm ...">
+```
+
+Active/hover background styles are unchanged.
+
+#### `src/ui/web/src/components/DirectoryTree.tsx`
+
+Expand/collapse chevron buttons: change `h-7 w-6` → `h-10 w-10` with `p-2` to expand the
+hit area without changing the visible icon size:
+
+```tsx
+// Before
+<button type="button" className="flex h-7 w-6 shrink-0 items-center justify-center">
+  <ChevronIcon className="h-3 w-3" />
+</button>
+
+// After
+<button type="button" className="flex h-10 w-10 shrink-0 items-center justify-center p-2">
+  <ChevronIcon className="h-3 w-3" />
+</button>
+```
+
+The visual chevron size is unchanged; only the tap target grows.
+
+### Lightbox mobile layout
+
+#### `src/ui/web/src/components/Lightbox.tsx`
+
+**Image container minimum height**: On mobile the stacked layout (image above metadata) gives
+the image too little vertical space when the metadata panel is tall. Add `min-h-[50vh]` to the
+image container so it always occupies at least half the viewport height:
+
+```tsx
+// Before
+<div className="flex flex-1 items-center justify-center p-4 lg:p-8">
+
+// After
+<div className="flex flex-1 items-center justify-center p-4 lg:p-8 min-h-[50vh] lg:min-h-0">
+```
+
+`lg:min-h-0` removes the constraint on desktop where the flex row layout already handles
+proportions correctly.
+
+**Navigation arrows**: Increase tap area on mobile by changing `p-4` → `p-5` and adding
+`min-h-[44px] min-w-[44px]`:
+
+```tsx
+// Before
+<button className="absolute left-0 top-1/2 ... p-4">
+<button className="absolute right-0 top-1/2 ... p-4">
+
+// After
+<button className="absolute left-0 top-1/2 ... p-5 min-h-[44px] min-w-[44px]">
+<button className="absolute right-0 top-1/2 ... p-5 min-h-[44px] min-w-[44px]">
+```
+
+**Metadata panel collapsible on mobile**: The metadata panel currently always stacks below the
+image on mobile (correct direction), but it starts fully expanded. Add a `metaOpen` state
+(default `true`) with a toggle button visible only on mobile (`md:hidden`). When `!metaOpen`
+the panel collapses to just its header row (asset filename + toggle button) using
+`max-h-[3rem] overflow-hidden` vs `max-h-none`. This preserves the full panel on desktop with
+zero behavioral change above `md:`.
+
+```tsx
+const [metaOpen, setMetaOpen] = useState(true);
+
+// Panel wrapper:
+<div className={`
+  w-full overflow-y-auto border-t border-gray-700 bg-gray-900/50 p-6
+  lg:w-80 lg:border-l lg:border-t-0
+  transition-[max-height] duration-200
+  ${metaOpen ? "max-h-none" : "max-h-[3.5rem] overflow-hidden"} lg:max-h-none
+`}>
+  {/* Toggle button — mobile only */}
+  <button
+    className="flex w-full items-center justify-between md:hidden mb-4"
+    onClick={() => setMetaOpen(o => !o)}
+  >
+    <span className="text-sm font-medium text-gray-300">Details</span>
+    <ChevronUpIcon className={`h-4 w-4 transition-transform ${metaOpen ? "" : "rotate-180"}`} />
+  </button>
+  {/* ...existing metadata content... */}
+</div>
+```
+
+### Modal sizing
+
+#### `src/ui/web/src/components/Modal.tsx`
+
+Replace `max-w-md` with a responsive width that respects small viewports:
+
+```tsx
+// Before
+<div className="w-full max-w-md rounded-xl ...">
+
+// After
+<div className="w-[calc(100vw-2rem)] max-w-md rounded-xl ...">
+```
+
+Reduce padding on small screens:
+
+```tsx
+// Before
+<div className="p-6">
+
+// After
+<div className="p-4 sm:p-6">
+```
+
+### Acceptance criteria
+
+- All tap targets in Sidebar and DirectoryTree measure ≥ 44px in both dimensions (verify in
+  browser devtools device mode).
+- On a 390px phone, the lightbox image occupies at least 50% of the viewport height before
+  metadata begins.
+- The metadata panel can be collapsed and expanded via the Details toggle on mobile; on desktop
+  the toggle button is invisible and the panel is always fully expanded.
+- On a 320px viewport (SE-size phone), the modal does not overflow or clip its content.
+- No visual regressions at `md:` and above.
+
+---
+
+## Phase 4 — Polish: Safe Areas, Reduced Motion, Admin Table Cards
+
+**Goal**: The app respects OS-level accessibility preferences and renders correctly on devices
+with notches and home indicators. The Admin page is usable on mobile without horizontal
+scrolling.
+
+### Safe-area insets
+
+Phase 1 adds `tailwindcss-safe-area` and applies `pb-safe` to the bottom nav. Phase 4 audits
+the remaining surfaces:
+
+- **Lightbox close button** (`absolute right-4 top-4`): add `mt-safe mr-safe` so it does not
+  render under a Dynamic Island or notch in landscape.
+- **Lightbox nav arrows** (`absolute left-0` / `right-0`): add `ml-safe` / `mr-safe`.
+- **BrowsePage header**: add `pt-safe` if the header is ever positioned under the status bar
+  (relevant when switching to a full-screen media view in the future).
+
+These are utility class additions only — one to three characters per element.
+
+### Reduced motion
+
+Audit every `transition-*` and `animate-*` class in the codebase and prefix with
+`motion-reduce:transition-none` / `motion-reduce:animate-none` where the animation is
+decorative (not load-state indicators):
+
+| Component | Class to guard |
+|-----------|----------------|
+| `AppShell.tsx` | `transition-all duration-200` (sidebar width) |
+| `DrawerOverlay.tsx` | `transition-transform duration-200` (drawer slide) |
+| `Lightbox.tsx` | metadata panel `transition-[max-height]` |
+| `DirectoryTree.tsx` | any chevron rotation transitions |
+
+Loading spinners (`animate-spin`) and skeleton pulses (`animate-pulse`) are functional
+feedback — do not suppress them.
+
+### Admin page: stacked card view on mobile
+
+#### `src/ui/web/src/pages/AdminPage.tsx`
+
+The workers/jobs table has 5–6 columns with fixed widths that overflow at 390px. Replace the
+`<table>` with a responsive layout that renders as a table on `sm:` and above, and as stacked
+cards on smaller screens.
+
+Pattern: hide the `<thead>` and convert each `<tr>` into a card using CSS Grid with labeled
+rows. This avoids duplicating the JSX — the label text lives in a `data-label` attribute and
+is rendered via a CSS pseudo-element, or more simply, via an explicit label `<span>` that is
+hidden on `sm:`:
+
+```tsx
+{/* Wrapper: scrollable table on sm+, card list on mobile */}
+<div className="sm:overflow-x-auto">
+  <table className="w-full">
+    <thead className="hidden sm:table-header-group">
+      {/* ...existing thead... */}
+    </thead>
+    <tbody>
+      {jobs.map(job => (
+        <tr key={job.id}
+            className="flex flex-col gap-1 border-b border-gray-800 py-3
+                       sm:table-row sm:border-0 sm:py-0">
+          <td className="sm:px-4 sm:py-2">
+            <span className="text-xs text-gray-500 sm:hidden">Worker </span>
+            <span className="font-mono text-xs text-gray-400 truncate">
+              {job.worker_id ?? "—"}
+            </span>
+          </td>
+          {/* ...remaining cells, same pattern... */}
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>
+```
+
+The `sm:table-row` Tailwind class restores standard table row rendering above the breakpoint.
+The `<span className="text-xs text-gray-500 sm:hidden">` label spans are invisible on desktop.
+No data or query logic changes.
+
+**Browser caveat**: Switching a `<tr>` between `display: flex` (mobile) and `display: table-row`
+(desktop) is broadly supported but can produce layout artifacts in Safari iOS — particularly if
+any cell has `overflow: hidden` or explicit width constraints. Verify in Safari iOS during
+implementation. If the flex/table toggle fights back, the fallback is a separate mobile-only
+`<ul>` card list rendered alongside the `<table>` (each hidden via `sm:hidden` /
+`hidden sm:block`) — more JSX but zero browser compatibility risk.
+
+### Viewport meta verification
+
+#### `src/ui/web/index.html`
+
+Confirm the standard mobile viewport meta tag is present (it already exists as
+`initial-scale=1.0`, which is equivalent to `initial-scale=1` — no change needed):
+
+```html
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+```
+
+Without this tag, mobile browsers render the page at a desktop-emulated width (~980px) and
+scale it down, making all breakpoints useless. This is already correct; Phase 4 is a
+verification step only.
+
+### Acceptance criteria
+
+- On an iPhone 14 Pro (has Dynamic Island): lightbox close button and nav arrows do not
+  render behind the Dynamic Island cutout in landscape mode.
+- With "Reduce Motion" enabled in iOS/macOS Accessibility settings: sidebar slide animation,
+  drawer slide animation, and metadata panel height transition do not play.
+- Loading spinners and skeleton pulses continue to animate in reduce-motion mode.
+- Admin page on 390px phone: all job rows are readable as stacked cards with no horizontal
+  overflow; on 640px+ the table layout is restored.
+- `index.html` viewport meta tag confirmed present (already correct; no code change).
+
+---
+
+## Summary of File Changes
+
+| File | Phase | Change type |
+|------|-------|-------------|
+| `components/BottomNav.tsx` | 1 | **Create** |
+| `components/DrawerOverlay.tsx` | 1 | **Create** |
+| `components/AppShell.tsx` | 1 | Modify — hide sidebar below `md:`, add BottomNav, add `pb-16 md:pb-0` |
+| `pages/BrowsePage.tsx` | 1, 2 | Modify — drawer trigger in header; replace breakpoint constants |
+| `tailwind.config.js` | 1 | Modify — add safe-area plugin |
+| `package.json` | 1 | Modify — add `tailwindcss-safe-area` devDependency |
+| `src/ui/web/src/lib/virtualRows.ts` | 2 | Modify — guard last-row partial fill if needed |
+| `components/Sidebar.tsx` | 3 | Modify — `py-2` → `py-3` on nav links |
+| `components/DirectoryTree.tsx` | 3 | Modify — chevron button `h-7 w-6` → `h-10 w-10 p-2` |
+| `components/Lightbox.tsx` | 3, 4 | Modify — `min-h-[50vh]`, larger arrow targets, collapsible metadata, safe-area |
+| `components/Modal.tsx` | 3 | Modify — `w-[calc(100vw-2rem)]`, `p-4 sm:p-6` |
+| `pages/AdminPage.tsx` | 4 | Modify — stacked card rows below `sm:` |
+| `index.html` | 4 | Verify — viewport meta tag present |
