@@ -281,3 +281,133 @@ def test_delete_already_trashed_returns_409(libraries_client: tuple[TestClient, 
     client.delete(f"/v1/libraries/{library_id}", headers=auth)
     r_again = client.delete(f"/v1/libraries/{library_id}", headers=auth)
     assert r_again.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# is_public / public_libraries invariant tests
+# ---------------------------------------------------------------------------
+
+def _get_public_libraries_row(library_id: str):
+    """Return the public_libraries control plane row for library_id, or None."""
+    from src.core.database import get_control_session
+    from src.models.control_plane import PublicLibrary
+    with get_control_session() as session:
+        return session.get(PublicLibrary, library_id)
+
+
+@pytest.mark.slow
+def test_patch_is_public_true_inserts_control_plane_row(libraries_client: tuple[TestClient, str]) -> None:
+    """PATCH is_public=true: response has is_public=true and a row exists in public_libraries."""
+    client, api_key = libraries_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+    r = client.post("/v1/libraries", json={"name": "PubLib_" + __import__("secrets").token_urlsafe(6), "root_path": "/pub"}, headers=auth)
+    assert r.status_code == 200
+    library_id = r.json()["library_id"]
+    assert r.json()["is_public"] is False
+
+    r_patch = client.patch(f"/v1/libraries/{library_id}", json={"is_public": True}, headers=auth)
+    assert r_patch.status_code == 200
+    assert r_patch.json()["is_public"] is True
+
+    row = _get_public_libraries_row(library_id)
+    assert row is not None, "public_libraries row should exist after setting is_public=true"
+
+
+@pytest.mark.slow
+def test_patch_is_public_false_removes_control_plane_row(libraries_client: tuple[TestClient, str]) -> None:
+    """PATCH is_public=false: row removed from public_libraries."""
+    client, api_key = libraries_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+    r = client.post("/v1/libraries", json={"name": "PubLib2_" + __import__("secrets").token_urlsafe(6), "root_path": "/pub2"}, headers=auth)
+    library_id = r.json()["library_id"]
+
+    client.patch(f"/v1/libraries/{library_id}", json={"is_public": True}, headers=auth)
+    assert _get_public_libraries_row(library_id) is not None
+
+    r_patch = client.patch(f"/v1/libraries/{library_id}", json={"is_public": False}, headers=auth)
+    assert r_patch.status_code == 200
+    assert r_patch.json()["is_public"] is False
+    assert _get_public_libraries_row(library_id) is None
+
+
+@pytest.mark.slow
+def test_patch_toggle_invariant(libraries_client: tuple[TestClient, str]) -> None:
+    """Toggle is_public back and forth; control plane row matches each time."""
+    client, api_key = libraries_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+    r = client.post("/v1/libraries", json={"name": "Toggle_" + __import__("secrets").token_urlsafe(6), "root_path": "/tog"}, headers=auth)
+    library_id = r.json()["library_id"]
+
+    for is_public in [True, False, True, False]:
+        client.patch(f"/v1/libraries/{library_id}", json={"is_public": is_public}, headers=auth)
+        row = _get_public_libraries_row(library_id)
+        if is_public:
+            assert row is not None
+        else:
+            assert row is None
+
+
+@pytest.mark.slow
+def test_patch_no_is_public_does_not_touch_control_plane(libraries_client: tuple[TestClient, str]) -> None:
+    """PATCH with only name (no is_public) leaves public_libraries unchanged."""
+    client, api_key = libraries_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+    r = client.post("/v1/libraries", json={"name": "NoIsPub_" + __import__("secrets").token_urlsafe(6), "root_path": "/nip"}, headers=auth)
+    library_id = r.json()["library_id"]
+
+    client.patch(f"/v1/libraries/{library_id}", json={"is_public": True}, headers=auth)
+    assert _get_public_libraries_row(library_id) is not None
+
+    client.patch(f"/v1/libraries/{library_id}", json={"name": "RenamedLib"}, headers=auth)
+    assert _get_public_libraries_row(library_id) is not None, "name-only PATCH must not remove public_libraries row"
+
+
+@pytest.mark.slow
+def test_trash_public_library_removes_control_plane_row(libraries_client: tuple[TestClient, str]) -> None:
+    """DELETE (trash) a public library removes its public_libraries row."""
+    client, api_key = libraries_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+    r = client.post("/v1/libraries", json={"name": "TrashPub_" + __import__("secrets").token_urlsafe(6), "root_path": "/tp"}, headers=auth)
+    library_id = r.json()["library_id"]
+
+    client.patch(f"/v1/libraries/{library_id}", json={"is_public": True}, headers=auth)
+    assert _get_public_libraries_row(library_id) is not None
+
+    r_del = client.delete(f"/v1/libraries/{library_id}", headers=auth)
+    assert r_del.status_code == 204
+    assert _get_public_libraries_row(library_id) is None
+
+
+@pytest.mark.slow
+def test_hard_delete_public_library_removes_control_plane_row(libraries_client: tuple[TestClient, str]) -> None:
+    """empty-trash on a public library cleans up the public_libraries row."""
+    client, api_key = libraries_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+    r = client.post("/v1/libraries", json={"name": "HardPub_" + __import__("secrets").token_urlsafe(6), "root_path": "/hp"}, headers=auth)
+    library_id = r.json()["library_id"]
+
+    client.patch(f"/v1/libraries/{library_id}", json={"is_public": True}, headers=auth)
+    assert _get_public_libraries_row(library_id) is not None
+
+    # Trash the library WITHOUT using the DELETE endpoint so the CP row is not
+    # removed by the trash handler — exercise the empty-trash cleanup path directly.
+    from src.core.database import get_control_session
+    from src.repository.tenant import LibraryRepository as TenantLibraryRepo
+    from src.core.database import get_engine_for_url
+    from sqlmodel import Session as SqlSession
+    with get_control_session() as ctrl_session:
+        from src.repository.control_plane import TenantDbRoutingRepository
+        routing = TenantDbRoutingRepository(ctrl_session).get_by_tenant_id(
+            _get_public_libraries_row(library_id).tenant_id
+        )
+        tenant_url = routing.connection_string
+    engine = get_engine_for_url(tenant_url)
+    with SqlSession(engine) as tsession:
+        TenantLibraryRepo(tsession).trash(library_id)
+
+    # CP row still present (trash via repo bypassed the route handler)
+    assert _get_public_libraries_row(library_id) is not None
+
+    r_empty = client.post("/v1/libraries/empty-trash", headers=auth)
+    assert r_empty.status_code == 200
+    assert _get_public_libraries_row(library_id) is None

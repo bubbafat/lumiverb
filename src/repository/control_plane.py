@@ -9,7 +9,7 @@ from datetime import datetime
 from sqlmodel import Session, select
 
 from src.core.utils import utcnow
-from src.models.control_plane import ApiKey, Tenant, TenantDbRouting
+from src.models.control_plane import ApiKey, PublicLibrary, Tenant, TenantDbRouting
 from ulid import ULID
 
 
@@ -233,5 +233,30 @@ class TenantDbRoutingRepository:
         """Delete routing entry for tenant (for cleanup on provisioning failure)."""
         row = self.get_by_tenant_id(tenant_id)
         if row is not None:
+            self._session.delete(row)
+            self._session.commit()
+
+
+class PublicLibraryRepository:
+    """Repository for public_libraries control plane table."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def get(self, library_id: str) -> PublicLibrary | None:
+        return self._session.get(PublicLibrary, library_id)
+
+    def upsert(self, library_id: str, tenant_id: str, connection_string: str) -> None:
+        row = PublicLibrary(
+            library_id=library_id,
+            tenant_id=tenant_id,
+            connection_string=connection_string,
+        )
+        self._session.merge(row)
+        self._session.commit()
+
+    def delete(self, library_id: str) -> None:
+        row = self._session.get(PublicLibrary, library_id)
+        if row:
             self._session.delete(row)
             self._session.commit()
