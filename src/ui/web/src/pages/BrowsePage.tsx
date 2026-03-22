@@ -6,6 +6,8 @@ import { pageAssets, listLibraries, searchAssets } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
 import { Lightbox } from "../components/Lightbox";
 import { FilterBar } from "../components/FilterBar";
+import { DrawerOverlay } from "../components/DrawerOverlay";
+import { DirectoryTree } from "../components/DirectoryTree";
 import type { AssetPageItem } from "../api/types";
 import { useScrollContainer } from "../context/ScrollContainerContext";
 import { groupAssetsByDate } from "../lib/groupByDate";
@@ -32,6 +34,7 @@ export default function BrowsePage() {
   const [containerWidth, setContainerWidth] = useState(0);
   const [lightboxAsset, setLightboxAsset] = useState<AssetPageItem | null>(null);
   const [errorDismissed, setErrorDismissed] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   const isSearchMode = !!activeQ;
 
@@ -276,6 +279,23 @@ export default function BrowsePage() {
   return (
     <div className="flex flex-col gap-6 px-6 py-6">
       <div className="flex items-center gap-2 text-sm text-gray-400">
+        {/* Hamburger — mobile only; opens the directory tree drawer */}
+        <button
+          type="button"
+          className="md:hidden -ml-1 flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-gray-100"
+          onClick={() => setDrawerOpen(true)}
+          aria-label="Open folder browser"
+        >
+          <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden>
+            <path
+              d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
         <Link to="/" className="hover:text-gray-300">
           Libraries
         </Link>
@@ -288,6 +308,20 @@ export default function BrowsePage() {
           </>
         )}
       </div>
+
+      {/* Directory tree drawer — mobile only; on md+ the sidebar handles this */}
+      <DrawerOverlay open={drawerOpen} onClose={() => setDrawerOpen(false)}>
+        <div className="p-3">
+          <DirectoryTree
+            libraryId={libraryId}
+            activePath={pathPrefix ?? null}
+            onNavigate={(path) => {
+              setParam("path", path);
+              setDrawerOpen(false);
+            }}
+          />
+        </div>
+      </DrawerOverlay>
 
       <FilterBar
         q={activeQ}

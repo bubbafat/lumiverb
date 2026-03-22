@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Outlet } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
+import { BottomNav } from "./BottomNav";
 import { ScrollContainerContext } from "../context/ScrollContainerContext";
 
 const SIDEBAR_COLLAPSED_KEY = "lv_sidebar_collapsed";
@@ -23,20 +24,25 @@ export default function AppShell() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-gray-950 text-gray-100">
-      <div className={`${sidebarWidth} transition-all duration-200`}>
+      {/* Sidebar — hidden on mobile, visible on md+ */}
+      <div className={`hidden md:block ${sidebarWidth} transition-all duration-200 motion-reduce:transition-none`}>
         <Sidebar
           collapsed={collapsed}
           onToggleCollapsed={() => setCollapsed((prev) => !prev)}
         />
       </div>
       <ScrollContainerContext.Provider value={mainEl}>
+        {/* pb-safe-offset-16 — nav height (64px) + env(safe-area-inset-bottom).
+             Plain pb-16 undershoots on notched phones where the nav bar itself
+             also consumes the safe-area inset, hiding the last content row. */}
         <main
           ref={setMainEl}
-          className="flex-1 overflow-auto"
+          className="flex-1 overflow-auto pb-safe-offset-16 md:pb-0"
         >
           <Outlet />
         </main>
       </ScrollContainerContext.Provider>
+      <BottomNav />
     </div>
   );
 }

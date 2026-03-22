@@ -14,7 +14,7 @@ interface FilterSectionProps {
   title: string;
   subtitle: string;
   filters: PathFilterItem[];
-  onAdd: (pattern: string) => Promise<void>;
+  onAdd: (pattern: string) => Promise<unknown>;
   onDelete: (filterId: string) => void;
   isAdding: boolean;
   addError: string | null;

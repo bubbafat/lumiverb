@@ -25,6 +25,30 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # Cancel duplicate active jobs before adding the unique constraint.
+    # Keeps the best row per (job_type, asset_id): prefer 'claimed' over
+    # 'pending', then most-recently created.  Any extras are cancelled so
+    # they fall outside the partial index predicate and do not block it.
+    op.execute(
+        """
+        UPDATE worker_jobs
+        SET status = 'cancelled'
+        WHERE job_id IN (
+            SELECT job_id FROM (
+                SELECT job_id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY job_type, asset_id
+                           ORDER BY
+                               CASE status WHEN 'claimed' THEN 0 ELSE 1 END,
+                               created_at DESC
+                       ) AS rn
+                FROM worker_jobs
+                WHERE status = 'pending' OR status = 'claimed'
+            ) ranked
+            WHERE rn > 1
+        )
+        """
+    )
     op.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS uq_worker_jobs_one_active_per_type_asset

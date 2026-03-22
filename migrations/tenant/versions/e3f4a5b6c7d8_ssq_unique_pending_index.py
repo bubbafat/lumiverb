@@ -22,6 +22,27 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # Cancel duplicate active rows before adding the unique constraint.
+    # Keeps the most-recently created row per (asset_id, scene_id) pair;
+    # older duplicates are marked 'synced' so they fall outside the index predicate.
+    op.execute(
+        """
+        UPDATE search_sync_queue
+        SET status = 'synced'
+        WHERE sync_id IN (
+            SELECT sync_id FROM (
+                SELECT sync_id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY asset_id, COALESCE(scene_id, '')
+                           ORDER BY created_at DESC
+                       ) AS rn
+                FROM search_sync_queue
+                WHERE status IN ('pending', 'processing')
+            ) ranked
+            WHERE rn > 1
+        )
+        """
+    )
     op.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS uq_ssq_pending_asset_scene

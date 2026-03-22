@@ -68,11 +68,14 @@ The standard mobile navigation pattern (iOS HIG, Material Design) places primary
 in a fixed bottom bar. This gives thumbs easy access to all top-level routes without covering
 content. On `md:` and above (768px), the existing sidebar is retained unchanged.
 
-Primary destinations (4 tabs):
+Primary destinations (4 tabs, left to right):
 - **Libraries** — `/` (home icon)
 - **Browse** — `/libraries/:libraryId/browse` (grid icon; visible when a library is active)
-- **Admin** — `/admin` (wrench icon)
-- **Settings** — `/libraries/:libraryId/settings` (gear icon; visible when a library is active)
+- **Workers/Admin** — `/admin` (gear icon)
+- **Settings** — `/libraries/:libraryId/settings` (sliders icon; visible when a library is active)
+
+Note: the implementation uses a gear icon for Workers and a sliders icon for Settings, which
+visually distinguishes the two better than two gear icons would.
 
 When no library is selected, Browse and Settings tabs are hidden (or disabled + dimmed).
 
