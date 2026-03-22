@@ -60,6 +60,7 @@ export interface SearchHit {
   duration_sec?: number | null;
   width: number | null;
   height: number | null;
+  taken_at: string | null;
 }
 
 export interface SearchResponse {

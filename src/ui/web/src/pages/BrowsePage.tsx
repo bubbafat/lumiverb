@@ -6,20 +6,33 @@ import { pageAssets, listLibraries, searchAssets } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
 import { Lightbox } from "../components/Lightbox";
 import { FilterBar } from "../components/FilterBar";
+import { ZoomControl } from "../components/ZoomControl";
 import { DrawerOverlay } from "../components/DrawerOverlay";
 import { DirectoryTree } from "../components/DirectoryTree";
 import type { AssetPageItem } from "../api/types";
 import { useScrollContainer } from "../context/ScrollContainerContext";
 import { groupAssetsByDate } from "../lib/groupByDate";
 import { buildVirtualRows, buildFixedGridRows } from "../lib/virtualRows";
+import { useLocalStorage } from "../lib/useLocalStorage";
 import type { VirtualRowKind } from "../lib/virtualRows";
 
 const PAGE_SIZE = 100;
-const TARGET_ROW_HEIGHT = 220;
 const ROW_GAP = 4;
 const FIXED_GRID_BREAKPOINT = 700; // px — at or below this, use fixed-column grid
-const MIN_CELL_WIDTH = 150;        // px — drives dynamic column count
-const CELL_ASPECT_RATIO = 1.0;     // square cells in fixed-column mode
+
+const ZOOM_LEVELS = [
+  { justifiedHeight: 120, fixedCellWidth: 100 },
+  { justifiedHeight: 170, fixedCellWidth: 130 },
+  { justifiedHeight: 220, fixedCellWidth: 150 }, // default (index 2)
+  { justifiedHeight: 300, fixedCellWidth: 200 },
+  { justifiedHeight: 420, fixedCellWidth: 280 },
+] as const;
+
+const CELL_ASPECT_RATIO = 1.0;
+const SEARCH_RESULT_CAP = 500;
+
+type SortKey = "date" | "filename" | "score";
+type SortDir = "asc" | "desc";
 
 export default function BrowsePage() {
   const { libraryId } = useParams<{ libraryId: string }>();
@@ -27,6 +40,11 @@ export default function BrowsePage() {
   const pathPrefix = searchParams.get("path") ?? undefined;
   const activeQ = searchParams.get("q");
   const activeTag = searchParams.get("tag");
+  const dateFrom = searchParams.get("date_from") ?? undefined;
+  const dateTo = searchParams.get("date_to") ?? undefined;
+  const sortKey = (searchParams.get("sort") as SortKey | null) ?? "date";
+  const sortDir = (searchParams.get("dir") as SortDir | null) ?? "desc";
+
   const parentEl = useScrollContainer();
   const sentinelRef = useRef<HTMLDivElement>(null);
   const isFetchingNextPageRef = useRef(false);
@@ -35,8 +53,9 @@ export default function BrowsePage() {
   const [lightboxAsset, setLightboxAsset] = useState<AssetPageItem | null>(null);
   const [errorDismissed, setErrorDismissed] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [zoomLevel, setZoomLevel] = useLocalStorage("lv_grid_zoom", 2);
 
-  const isSearchMode = !!activeQ;
+  const isSearchMode = !!(activeQ || dateFrom);
 
   function setParam(key: string, value: string | null) {
     setSearchParams((prev) => {
@@ -46,6 +65,33 @@ export default function BrowsePage() {
       return next;
     });
   }
+
+  const handleChangeDateRange = useCallback(
+    (from: string | null, to: string | null) => {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        if (from) next.set("date_from", from);
+        else next.delete("date_from");
+        if (to) next.set("date_to", to);
+        else next.delete("date_to");
+        return next;
+      });
+    },
+    [setSearchParams],
+  );
+
+  const handleLightboxDateClick = useCallback(
+    (dateStr: string) => {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.set("date_from", dateStr);
+        next.set("date_to", dateStr);
+        return next;
+      });
+      setLightboxAsset(null);
+    },
+    [setSearchParams],
+  );
 
   const { data: libraries } = useQuery({
     queryKey: ["libraries", true],
@@ -78,14 +124,18 @@ export default function BrowsePage() {
       activeQ,
       pathPrefix ?? null,
       activeTag ?? null,
+      dateFrom ?? null,
+      dateTo ?? null,
     ],
     queryFn: () =>
       searchAssets({
         libraryId: libraryId!,
-        q: activeQ!,
+        q: activeQ ?? "",
         pathPrefix,
         tag: activeTag ?? undefined,
-        limit: 100,
+        dateFrom,
+        dateTo,
+        limit: SEARCH_RESULT_CAP,
       }),
     enabled: !!libraryId && isSearchMode,
   });
@@ -101,7 +151,7 @@ export default function BrowsePage() {
         media_type: h.media_type ?? "image/jpeg",
         width: h.width ?? null,
         height: h.height ?? null,
-        taken_at: null,
+        taken_at: h.taken_at ?? null,
         status: "indexed",
         duration_sec: h.duration_sec ?? null,
       }));
@@ -109,6 +159,31 @@ export default function BrowsePage() {
     if (!browseQuery.data?.pages) return [];
     return browseQuery.data.pages.flatMap((p) => p ?? []);
   }, [isSearchMode, searchQuery.data, browseQuery.data]);
+
+  // Sort in search mode (client-side, all results are loaded)
+  const sortedAssets = useMemo(() => {
+    if (!isSearchMode) return flatAssets;
+    const copy = [...flatAssets];
+    if (sortKey === "date") {
+      copy.sort((a, b) => {
+        const da = new Date(a.taken_at ?? a.file_mtime ?? "").getTime() || 0;
+        const db = new Date(b.taken_at ?? b.file_mtime ?? "").getTime() || 0;
+        return sortDir === "asc" ? da - db : db - da;
+      });
+    } else if (sortKey === "filename") {
+      copy.sort((a, b) => a.rel_path.localeCompare(b.rel_path));
+      if (sortDir === "desc") copy.reverse();
+    }
+    return copy;
+  }, [flatAssets, isSearchMode, sortKey, sortDir]);
+
+  // For relevance sort in search mode, use the original hit order (already sorted by score)
+  const displayAssets = useMemo(() => {
+    if (isSearchMode && sortKey === "score") {
+      return sortDir === "asc" ? [...flatAssets].reverse() : flatAssets;
+    }
+    return sortedAssets;
+  }, [sortedAssets, flatAssets, isSearchMode, sortKey, sortDir]);
 
   const isLoading = isSearchMode
     ? searchQuery.isLoading
@@ -121,40 +196,47 @@ export default function BrowsePage() {
   const error = isSearchMode ? searchQuery.error : browseQuery.error;
   const isError = isSearchMode ? searchQuery.isError : browseQuery.isError;
 
+  const searchTotal = searchQuery.data?.total ?? 0;
+  const isCapped = isSearchMode && searchTotal >= SEARCH_RESULT_CAP;
+
+  const browseCount = useMemo(() => {
+    if (isSearchMode) return 0;
+    return browseQuery.data?.pages.flatMap((p) => p ?? []).length ?? 0;
+  }, [isSearchMode, browseQuery.data]);
+
   const groups = useMemo(
-    () => groupAssetsByDate(flatAssets),
-    [flatAssets],
+    () => groupAssetsByDate(displayAssets),
+    [displayAssets],
   );
 
-  // Navigation order must match visual grid order (groups sorted date-desc, assets within each group in group order)
   const orderedAssets = useMemo(
     () => groups.flatMap((g) => g.assets),
     [groups],
   );
 
-  const virtualRows: VirtualRowKind[] = useMemo(
-    () => {
-      if (containerWidth <= 0) return [];
-      if (containerWidth <= FIXED_GRID_BREAKPOINT) {
-        const columns = Math.max(2, Math.floor(containerWidth / MIN_CELL_WIDTH));
-        const cellWidth = Math.floor((containerWidth - ROW_GAP * (columns - 1)) / columns);
-        const rowHeight = Math.round(cellWidth * CELL_ASPECT_RATIO);
-        return buildFixedGridRows(groups, containerWidth, columns, rowHeight, ROW_GAP);
-      }
-      return buildVirtualRows(groups, containerWidth, TARGET_ROW_HEIGHT, ROW_GAP);
-    },
-    [groups, containerWidth],
-  );
+  const zoom = ZOOM_LEVELS[zoomLevel] ?? ZOOM_LEVELS[2];
+
+  const virtualRows: VirtualRowKind[] = useMemo(() => {
+    if (containerWidth <= 0) return [];
+    if (containerWidth <= FIXED_GRID_BREAKPOINT) {
+      const columns = Math.max(2, Math.floor(containerWidth / zoom.fixedCellWidth));
+      const cellWidth = Math.floor(
+        (containerWidth - ROW_GAP * (columns - 1)) / columns,
+      );
+      const rowHeight = Math.round(cellWidth * CELL_ASPECT_RATIO);
+      return buildFixedGridRows(groups, containerWidth, columns, rowHeight, ROW_GAP);
+    }
+    return buildVirtualRows(groups, containerWidth, zoom.justifiedHeight, ROW_GAP);
+  }, [groups, containerWidth, zoom]);
 
   const rowVirtualizer = useVirtualizer({
     count: virtualRows.length,
     getScrollElement: () => parentEl,
     estimateSize: (index) =>
-      virtualRows[index]?.height ?? TARGET_ROW_HEIGHT + ROW_GAP,
+      virtualRows[index]?.height ?? zoom.justifiedHeight + ROW_GAP,
     overscan: 3,
   });
 
-  // Observe the scroll container for width changes.
   useEffect(() => {
     if (!parentEl) return;
     const ro = new ResizeObserver((entries) => {
@@ -177,7 +259,11 @@ export default function BrowsePage() {
     if (!sentinel || !parentEl) return;
     const io = new IntersectionObserver(
       (entries) => {
-        if (entries[0]?.isIntersecting && hasNextPageRef.current && !isFetchingNextPageRef.current) {
+        if (
+          entries[0]?.isIntersecting &&
+          hasNextPageRef.current &&
+          !isFetchingNextPageRef.current
+        ) {
           fetchNextPage();
         }
       },
@@ -199,7 +285,6 @@ export default function BrowsePage() {
     (index: number) => {
       const asset = orderedAssets[index];
       if (asset) setLightboxAsset(asset);
-      // Prefetch next page when within 20 assets of the end
       if (hasNextPage && !isFetchingNextPage && index >= orderedAssets.length - 20) {
         fetchNextPage();
       }
@@ -273,40 +358,44 @@ export default function BrowsePage() {
     );
   }
 
+
   return (
-    <div className="flex flex-col gap-6 px-6 py-6">
-      <div className="flex items-center gap-2 text-sm text-gray-400">
-        {/* Hamburger — mobile only; opens the directory tree drawer */}
-        <button
-          type="button"
-          className="md:hidden -ml-1 flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-gray-100"
-          onClick={() => setDrawerOpen(true)}
-          aria-label="Open folder browser"
-        >
-          <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden>
-            <path
-              d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"
-              stroke="currentColor"
-              strokeWidth="1.7"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button>
-        <Link to="/" className="hover:text-gray-300">
-          Libraries
-        </Link>
-        <span>/</span>
-        <span className="text-gray-300">{library.name}</span>
-        {pathPrefix && (
-          <>
-            <span>/</span>
-            <span className="text-gray-500">{pathPrefix}</span>
-          </>
-        )}
+    <div className="flex flex-col gap-4 px-6 py-6">
+      {/* Breadcrumb + zoom control */}
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-2 text-sm text-gray-400 min-w-0">
+          <button
+            type="button"
+            className="md:hidden -ml-1 flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-gray-100"
+            onClick={() => setDrawerOpen(true)}
+            aria-label="Open folder browser"
+          >
+            <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden>
+              <path
+                d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+          <Link to="/" className="hover:text-gray-300 shrink-0">
+            Libraries
+          </Link>
+          <span>/</span>
+          <span className="text-gray-300 truncate">{library.name}</span>
+          {pathPrefix && (
+            <>
+              <span>/</span>
+              <span className="text-gray-500 truncate">{pathPrefix}</span>
+            </>
+          )}
+        </div>
+        <ZoomControl value={zoomLevel} onChange={setZoomLevel} />
       </div>
 
-      {/* Directory tree drawer — mobile only; on md+ the sidebar handles this */}
+      {/* Directory tree drawer — mobile only */}
       <DrawerOverlay open={drawerOpen} onClose={() => setDrawerOpen(false)}>
         <div className="p-3">
           <DirectoryTree
@@ -320,14 +409,70 @@ export default function BrowsePage() {
         </div>
       </DrawerOverlay>
 
+      {/* Filter bar */}
       <FilterBar
         q={activeQ}
         tag={activeTag}
         path={pathPrefix ?? null}
+        dateFrom={dateFrom ?? null}
+        dateTo={dateTo ?? null}
         onChangeQ={(v) => setParam("q", v)}
         onChangeTag={(v) => setParam("tag", v)}
         onChangePath={(v) => setParam("path", v)}
+        onChangeDateRange={handleChangeDateRange}
       />
+
+      {/* Toolbar: status line + sort */}
+      {!isLoading && (
+        <div className="flex items-center justify-between gap-4">
+          <p className="text-xs text-gray-500">
+            {isSearchMode ? (
+              displayAssets.length === 0 ? null : (
+                <>
+                  {displayAssets.length.toLocaleString()}
+                  {isCapped ? `+ ` : " "}
+                  {displayAssets.length === 1 ? "result" : "results"}
+                  {isCapped && (
+                    <span className="ml-1 text-yellow-600">
+                      — narrow your filters to see more
+                    </span>
+                  )}
+                </>
+              )
+            ) : browseCount > 0 ? (
+              `${browseCount.toLocaleString()} photo${browseCount === 1 ? "" : "s"} · sorted by date taken`
+            ) : null}
+          </p>
+
+          {isSearchMode && displayAssets.length > 0 && (
+            <select
+              value={`${sortKey}-${sortDir}`}
+              onChange={(e) => {
+                const [key, dir] = e.target.value.split("-");
+                setSearchParams((prev) => {
+                  const next = new URLSearchParams(prev);
+                  if (key === "date" && dir === "desc") {
+                    next.delete("sort");
+                    next.delete("dir");
+                  } else {
+                    next.set("sort", key);
+                    next.set("dir", dir);
+                  }
+                  return next;
+                });
+              }}
+              className="rounded-md border border-gray-700 bg-gray-800 px-2 py-1 text-xs text-gray-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              aria-label="Sort results"
+            >
+              <option value="date-desc">Newest first</option>
+              <option value="date-asc">Oldest first</option>
+              <option value="filename-asc">Filename A–Z</option>
+              <option value="filename-desc">Filename Z–A</option>
+              {activeQ && <option value="score-desc">Most relevant</option>}
+            </select>
+          )}
+        </div>
+      )}
 
       {isLoading ? (
         <div className="flex gap-4">
@@ -339,12 +484,57 @@ export default function BrowsePage() {
             />
           ))}
         </div>
-      ) : flatAssets.length === 0 ? (
-        <div className="flex flex-col items-center justify-center rounded-lg border border-gray-700/50 bg-gray-900/50 py-16 text-center">
-          <p className="text-gray-400">
-            This library has no assets yet. Run a scan from the CLI to add
-            files.
-          </p>
+      ) : displayAssets.length === 0 ? (
+        <div className="flex flex-col items-center justify-center rounded-lg border border-gray-700/50 bg-gray-900/50 py-16 text-center px-6">
+          {isSearchMode || activeTag ? (
+            // Search/filter mode — no results
+            <>
+              <svg
+                className="mb-3 h-10 w-10 text-gray-600"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                aria-hidden
+              >
+                <circle cx="11" cy="11" r="7" />
+                <line x1="16.65" y1="16.65" x2="21" y2="21" />
+              </svg>
+              <p className="text-sm text-gray-400 mb-2">No results</p>
+              <ul className="text-xs text-gray-600 space-y-1">
+                {activeQ && <li>Try different search terms</li>}
+                {dateFrom && <li>Try a wider date range</li>}
+                {activeTag && <li>Remove the tag filter</li>}
+                {pathPrefix && <li>Browse a different folder</li>}
+              </ul>
+            </>
+          ) : pathPrefix ? (
+            // Browse mode, path filter active, empty folder
+            <p className="text-sm text-gray-400">No photos in this folder</p>
+          ) : (
+            <>
+              <svg
+                className="mb-3 h-10 w-10 text-gray-600"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                aria-hidden
+              >
+                <rect x="3" y="5" width="18" height="14" rx="2" />
+                <circle cx="8.5" cy="10.5" r="1.5" />
+                <path d="M21 15l-5-5L5 19" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <p className="text-sm text-gray-400">No photos yet</p>
+              <p className="mt-1 text-xs text-gray-600">
+                Trigger a scan from the{" "}
+                <Link to="/admin" className="underline hover:text-gray-400">
+                  Workers
+                </Link>{" "}
+                page
+              </p>
+            </>
+          )}
         </div>
       ) : (
         <div style={{ width: "100%" }}>
@@ -389,10 +579,7 @@ export default function BrowsePage() {
               let x = 0;
 
               return (
-                <div
-                  key={virtualItem.key}
-                  style={commonStyle}
-                >
+                <div key={virtualItem.key} style={commonStyle}>
                   <div
                     className="relative"
                     style={{
@@ -407,7 +594,8 @@ export default function BrowsePage() {
                       const left = x;
                       x += width + ROW_GAP;
 
-                      const aspectRatio = justifiedRow.widths[idx] / justifiedRow.height;
+                      const aspectRatio =
+                        justifiedRow.widths[idx] / justifiedRow.height;
 
                       return (
                         <div
@@ -434,7 +622,6 @@ export default function BrowsePage() {
             })}
           </div>
 
-          {/* Sentinel for infinite scroll */}
           <div ref={sentinelRef} className="h-4" />
 
           {isFetchingNextPage && (
@@ -459,6 +646,7 @@ export default function BrowsePage() {
             setParam("tag", tag);
             setLightboxAsset(null);
           }}
+          onDateClick={handleLightboxDateClick}
           libraryId={libraryId}
           onSimilarClick={(similarAsset) => {
             setLightboxAsset(similarAsset);

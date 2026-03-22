@@ -126,12 +126,16 @@ export async function searchAssets(params: {
   q: string;
   pathPrefix?: string;
   tag?: string;
+  dateFrom?: string;
+  dateTo?: string;
   limit?: number;
   offset?: number;
 }): Promise<SearchResponse> {
   const qs = new URLSearchParams({ library_id: params.libraryId, q: params.q });
   if (params.pathPrefix) qs.set("path_prefix", params.pathPrefix);
   if (params.tag) qs.set("tag", params.tag);
+  if (params.dateFrom) qs.set("date_from", params.dateFrom);
+  if (params.dateTo) qs.set("date_to", params.dateTo);
   if (params.limit) qs.set("limit", String(params.limit));
   if (params.offset) qs.set("offset", String(params.offset));
   return apiFetch<SearchResponse>(`/search?${qs.toString()}`);

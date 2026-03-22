@@ -1,16 +1,29 @@
 # ADR: Phased Desktop Web UI Improvements
 
 ## Status
-Pending
+Complete
 
 ## Implementation Progress
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | Date search — API extension, FilterBar date filter, clickable date in Lightbox | Pending |
-| 2 | Grid density control, browse sort, improved empty/loading states | Pending |
-| 3 | Lightbox polish — fullscreen, keyboard hints, GPS link, slideshow | Pending |
-| 4 | Library quick-switcher (command palette), keyboard shortcuts reference | Pending |
+| 1 | Date search — API extension, FilterBar date filter, clickable date in Lightbox | Complete |
+| 2 | Grid density control, browse sort, improved empty/loading states | Complete |
+| 3 | Lightbox polish — fullscreen, keyboard hints, GPS link, slideshow | Complete |
+| 4 | Library quick-switcher (command palette), keyboard shortcuts reference | Complete |
+
+## Implementation Notes (deviations from the plan)
+
+| Item | Plan | Actual |
+|------|------|--------|
+| `useLibraryName` hook (Phase 4) | New file `src/ui/web/src/hooks/useLibraryName.ts` | Inlined in `Sidebar.tsx` as `items.find(l => l.library_id === libraryId)?.name` — no separate hook needed |
+| "Go to library" in collapsed sidebar | Icon + tooltip | Button renders icon unconditionally; `title="Go to library (⌘K)"` provides tooltip when collapsed ✓ |
+| Browse status copy | `"{N} photos · sorted by date taken"` | Implemented as written ✓ |
+| Third empty state | "No photos in this folder" for path-only browse | Added as a third branch: `isSearchMode \|\| activeTag` → no-results hints; `pathPrefix` → folder message; else → no-photos-yet ✓ |
+| Date sort (text search) | Default "Newest first" sorts by `taken_at ?? file_mtime` | Implemented: `sortKey === "date"` sorts client-side by `new Date(taken_at ?? file_mtime)` ✓ |
+| `_date_in_range` in BM25+date mode | Filter on `COALESCE(taken_at, file_mtime)` | Fixed: enrichment stores `_file_mtime` on hit dict (popped before serialization); post-filter falls back to it ✓ |
+| Lightbox date click with `file_mtime` only | Show and click `file_mtime` when `taken_at` is null | Fixed: date row renders if `detail?.taken_at \|\| asset.file_mtime`; label changes to "File date"; click uses `(taken_at ?? file_mtime).slice(0, 10)` ✓ |
+| `_search_by_date` total | Returns `len(hits)` (page size) | Fixed: COUNT query runs first; `total=total_count` so capped-results banner triggers correctly ✓ |
 
 ---
 

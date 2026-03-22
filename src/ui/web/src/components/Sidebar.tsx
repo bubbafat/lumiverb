@@ -91,9 +91,10 @@ function ChevronToggleIcon({ collapsed }: { collapsed: boolean }) {
 export interface SidebarProps {
   collapsed: boolean;
   onToggleCollapsed: () => void;
+  onOpenPalette?: () => void;
 }
 
-export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
+export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette }: SidebarProps) {
   const { libraryId } = useParams<{ libraryId: string }>();
   const location = useLocation();
   const navigate = useNavigate();
@@ -151,7 +152,57 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
 
       <div className="border-t border-gray-800" />
 
+      {/* Go to library / command palette trigger */}
+      {onOpenPalette && (
+        <div className="px-2 pt-2">
+          <button
+            type="button"
+            onClick={onOpenPalette}
+            title="Go to library (⌘K)"
+            className="flex w-full items-center gap-2 rounded-lg border border-gray-700/50 bg-gray-800/50 px-2 py-1.5 text-xs text-gray-500 transition-colors hover:bg-gray-800 hover:text-gray-300"
+            aria-label="Open library switcher"
+          >
+            <svg
+              className="h-3.5 w-3.5 shrink-0"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+            >
+              <circle cx="11" cy="11" r="7" />
+              <line x1="16.65" y1="16.65" x2="21" y2="21" />
+            </svg>
+            {showLabels && (
+              <>
+                <span className="flex-1 text-left">Go to library</span>
+                <kbd className="font-mono text-[10px] text-gray-600">⌘K</kbd>
+              </>
+            )}
+          </button>
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto px-2 py-3">
+        {/* Active library context header */}
+        {libraryId && showLabels && (() => {
+          const activeName = items.find((l) => l.library_id === libraryId)?.name;
+          return activeName ? (
+            <div className="mb-2 px-2 py-1.5 border-b border-gray-800/60">
+              <p className="text-[10px] font-medium uppercase tracking-wider text-gray-600">
+                Current library
+              </p>
+              <p
+                className="mt-0.5 truncate text-xs font-medium text-gray-300"
+                title={activeName}
+              >
+                {activeName}
+              </p>
+            </div>
+          ) : null;
+        })()}
         <div className="space-y-1">
           {isLibrariesLoading ? (
             Array.from({ length: 3 }).map((_, i) => (
