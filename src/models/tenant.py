@@ -40,6 +40,7 @@ class Library(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
     vision_model_id: str = Field(default="", nullable=False)
+    is_public: bool = Field(default=False, nullable=False)
 
 
 class LibraryPathFilter(SQLModel, table=True):

@@ -7,7 +7,7 @@ Accepted
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | Schema: `libraries.is_public` + `public_libraries` control plane table | Pending |
+| 1 | Schema: `libraries.is_public` + `public_libraries` control plane table | Complete |
 | 2 | API: expose `is_public` on library endpoints; maintain control plane table on toggle | Pending |
 | 3 | Middleware: unauthenticated public library resolution | Pending |
 | 4 | Web UI: API key login page with localStorage persistence | Pending |

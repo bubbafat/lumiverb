@@ -63,3 +63,15 @@ class TenantDbRouting(SQLModel, table=True):
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
+
+
+class PublicLibrary(SQLModel, table=True):
+    __tablename__ = "public_libraries"
+
+    library_id: str = Field(primary_key=True)
+    tenant_id: str = Field(foreign_key="tenants.tenant_id", nullable=False)
+    connection_string: str = Field(nullable=False)
+    created_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
