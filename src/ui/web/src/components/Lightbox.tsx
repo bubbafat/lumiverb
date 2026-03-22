@@ -67,12 +67,14 @@ export function Lightbox({
   libraryId,
 }: LightboxProps) {
   const [showSimilar, setShowSimilar] = useState(false);
+  const [metaOpen, setMetaOpen] = useState(true);
   const currentIndex = assets.findIndex((a) => a.asset_id === asset.asset_id);
   const hasPrev = currentIndex > 0;
   const hasNext = (currentIndex >= 0 && currentIndex < assets.length - 1) || (currentIndex === assets.length - 1 && hasMore);
 
   useEffect(() => {
     setShowSimilar(false);
+    setMetaOpen(true);
   }, [asset.asset_id]);
 
   const isVideo = asset.media_type === "video" || asset.media_type.startsWith("video/");
@@ -133,7 +135,7 @@ export function Lightbox({
       {/* Two-column layout */}
       <div className="flex w-full flex-col lg:flex-row">
         {/* Left: image */}
-        <div className="flex flex-1 items-center justify-center p-4 lg:p-8">
+        <div className="flex flex-1 items-center justify-center p-4 lg:p-8 min-h-[50vh] lg:min-h-0">
           <div className="relative flex max-h-full min-h-0 flex-1 items-center justify-center">
             {mediaLoading ? (
               <div className="flex h-64 w-64 items-center justify-center">
@@ -172,7 +174,7 @@ export function Lightbox({
               <button
                 type="button"
                 onClick={() => onNavigate(currentIndex - 1)}
-                className="absolute left-0 top-1/2 -translate-y-1/2 rounded-full bg-white/10 p-4 text-white transition-colors hover:bg-white/20"
+                className="absolute left-0 top-1/2 -translate-y-1/2 rounded-full bg-white/10 p-5 min-h-[44px] min-w-[44px] text-white transition-colors hover:bg-white/20"
                 aria-label="Previous"
               >
                 <svg
@@ -194,7 +196,7 @@ export function Lightbox({
               <button
                 type="button"
                 onClick={() => onNavigate(currentIndex + 1)}
-                className="absolute right-0 top-1/2 -translate-y-1/2 rounded-full bg-white/10 p-4 text-white transition-colors hover:bg-white/20"
+                className="absolute right-0 top-1/2 -translate-y-1/2 rounded-full bg-white/10 p-5 min-h-[44px] min-w-[44px] text-white transition-colors hover:bg-white/20"
                 aria-label="Next"
               >
                 <svg
@@ -216,7 +218,24 @@ export function Lightbox({
         </div>
 
         {/* Right: metadata panel */}
-        <div className="w-full overflow-y-auto border-t border-gray-700 bg-gray-900/50 p-6 lg:w-80 lg:border-l lg:border-t-0">
+        <div className={`w-full border-t border-gray-700 bg-gray-900/50 p-4 lg:p-6 lg:w-80 lg:border-l lg:border-t-0 transition-[max-height] duration-200 ${metaOpen ? "overflow-y-auto max-h-none" : "max-h-[3.5rem] overflow-hidden"} lg:overflow-y-auto lg:max-h-none`}>
+          {/* Details toggle — mobile only */}
+          <button
+            type="button"
+            aria-expanded={metaOpen}
+            className="flex w-full items-center justify-between md:hidden mb-4"
+            onClick={() => setMetaOpen((o) => !o)}
+          >
+            <span className="text-sm font-medium text-gray-300">Details</span>
+            <svg
+              className={`h-4 w-4 text-gray-400 transition-transform ${metaOpen ? "" : "rotate-180"}`}
+              viewBox="0 0 24 24"
+              fill="none"
+              aria-hidden
+            >
+              <path d="M5 15l7-7 7 7" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
           <div className="space-y-4">
             {/* Section 1: Basic info */}
             <div>

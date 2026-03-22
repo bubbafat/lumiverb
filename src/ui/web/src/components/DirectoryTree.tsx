@@ -105,7 +105,7 @@ export function DirectoryTree({
                 type="button"
                 onClick={(e) => toggleExpand(node.path, e)}
                 aria-label={isExpanded ? "Collapse" : "Expand"}
-                className="flex h-7 w-6 shrink-0 items-center justify-center"
+                className="flex h-10 w-10 shrink-0 items-center justify-center p-2"
               >
                 {showChevron ? (
                   <svg

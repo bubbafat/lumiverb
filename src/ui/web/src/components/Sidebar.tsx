@@ -183,7 +183,7 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
                 <div key={lib.library_id}>
                   <Link
                     to={`/libraries/${lib.library_id}/browse`}
-                    className={`group flex items-center gap-2 rounded-lg px-2 py-2 text-sm transition-colors duration-150 ${
+                    className={`group flex items-center gap-2 rounded-lg px-2 py-3 text-sm transition-colors duration-150 ${
                       active && !activePath
                         ? "bg-indigo-600/30 text-indigo-200"
                         : "text-gray-300 hover:bg-gray-800/80"
@@ -215,7 +215,7 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
         <div className="mt-3">
           <Link
             to="/"
-            className={`flex items-center gap-2 rounded-lg px-2 py-2 text-sm transition-colors duration-150 ${
+            className={`flex items-center gap-2 rounded-lg px-2 py-3 text-sm transition-colors duration-150 ${
               isLibrariesRootActive
                 ? "bg-indigo-600/30 text-indigo-200"
                 : "text-gray-400 hover:bg-gray-800/80 hover:text-gray-200"
@@ -233,7 +233,7 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
       <div className="px-2 py-2">
         <Link
           to="/admin"
-          className={`flex items-center justify-between gap-2 rounded-lg px-2 py-2 text-xs text-gray-400 transition-colors duration-150 hover:bg-gray-800/80 ${
+          className={`flex items-center justify-between gap-2 rounded-lg px-2 py-3 text-xs text-gray-400 transition-colors duration-150 hover:bg-gray-800/80 ${
             location.pathname === "/admin" ? "bg-indigo-600/20 text-indigo-300" : ""
           }`}
         >
