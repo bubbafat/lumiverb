@@ -1,0 +1,890 @@
+# ADR: Production Deployment — VPS + Docker Compose
+
+## Status
+Accepted
+
+## Implementation Progress
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 1 | Split pyproject.toml deps into `api` base + `worker` extras | Pending |
+| 2 | Dockerfile for API image (multi-stage, lean) | Pending |
+| 3 | docker-compose.prod.yml (caddy, api, migrate, postgres, quickwit) | Pending |
+| 4 | Caddyfile (reverse proxy + static web UI serving) | Pending |
+| 5 | GitHub Actions CI/CD workflow (build → push → SSH deploy) | Pending |
+| 6 | Server provisioning runbook (Hetzner, one-time setup) | Pending |
+| 7 | Backup cron (pg_dump → object storage) | Pending |
+
+---
+
+## Build Sequence
+
+Execute steps in order. Each step has a clear completion criterion before proceeding to the next. These steps reference the detailed spec sections below (labelled "Phase 1–7") for file contents and exact commands.
+
+### Step 1 — Repo Changes (no server needed)
+
+All changes land in the repo. Nothing is deployed yet.
+
+**Steps:**
+1. Split `pyproject.toml`: move worker-only deps from `[project.dependencies]` to `[project.optional-dependencies] worker`. See Phase 1 section for the exact dep list.
+2. Create `.dockerignore` at project root. See Phase 2 section for contents.
+3. Create `Dockerfile` at project root. See Phase 2 section for full content.
+4. Create `docker-compose.prod.yml` at project root. See Phase 3 section for full content. Replace `GITHUB_ORG` placeholder with actual org/user.
+5. Create `caddy/Caddyfile`. See Phase 4 section for full content. Replace `lumiverb.example.com` with actual domain.
+
+**Verify locally before committing:**
+```bash
+# Confirm API image builds cleanly (no import errors from missing worker deps)
+docker build -t lumiverb-api:test .
+
+# Confirm the image starts and the health endpoint responds
+docker run --rm -e CONTROL_PLANE_DATABASE_URL=postgresql+psycopg2://x:x@localhost/x \
+  -e ADMIN_KEY=test -e DATA_DIR=/tmp -e QUICKWIT_URL=http://localhost:7280 \
+  -p 8000:8000 lumiverb-api:test &
+sleep 3 && curl -sf http://localhost:8000/health
+```
+
+The health check will fail to connect to Postgres (that's fine at this stage) — what you are verifying is that the image builds without errors and uvicorn starts up. If the image fails to import a module that was moved to `worker` extras, fix the import before proceeding.
+
+**Done when:** `docker build` completes with no errors and uvicorn starts in the test run.
+
+---
+
+### Step 2 — CI/CD Pipeline
+
+Add the GitHub Actions workflow. The first successful run proves images are being built and pushed to GHCR. The deploy step will fail (no server yet) — that is expected and acceptable at this phase.
+
+**Steps:**
+1. Create `.github/workflows/deploy.yml`. See Phase 5 section for full content.
+2. Add GitHub Actions secrets: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`. Set them to placeholder values for now so the workflow parses correctly. The deploy step will fail but the build and push steps must succeed.
+3. Push to `main`. Watch the Actions run.
+
+**Verify:**
+```bash
+# After the Actions run completes (build + push steps)
+docker pull ghcr.io/GITHUB_ORG/lumiverb-api:latest
+```
+
+**Done when:** The image is visible in the GitHub repository's Packages tab and `docker pull` succeeds.
+
+---
+
+### Step 3 — Server Provisioning
+
+One-time setup of the Hetzner VPS. Follow the Phase 6 section (Server Provisioning Runbook) step by step.
+
+**Checklist:**
+- [ ] CX32 provisioned, SSH access confirmed as root
+- [ ] Docker installed (`docker compose version` works)
+- [ ] `deploy` user created, added to `docker` group
+- [ ] `/opt/lumiverb/` created, owned by `deploy`
+- [ ] Deploy SSH keypair generated; public key in `/home/deploy/.ssh/authorized_keys`; private key stored as `DEPLOY_SSH_KEY` Actions secret
+- [ ] DNS A record for domain pointing at server IP (verify with `dig +short lumiverb.example.com`)
+- [ ] `docker-compose.prod.yml` and `caddy/Caddyfile` copied to `/opt/lumiverb/`
+- [ ] `scripts/` directory copied to `/opt/lumiverb/scripts/`
+- [ ] `/opt/lumiverb/.env` created with `POSTGRES_PASSWORD` and `ADMIN_KEY` (both `openssl rand -hex 32`)
+- [ ] GHCR authenticated on server (`docker login ghcr.io`)
+- [ ] Stack started: `docker compose -f docker-compose.prod.yml up -d`
+- [ ] TLS certificate provisioned (check `docker compose logs caddy`; look for `certificate obtained successfully`)
+
+**Verify:**
+```bash
+curl -sf https://lumiverb.example.com/health
+# Expected: {"status": "ok"} or similar — confirms Caddy TLS + API are up
+```
+
+**Done when:** HTTPS health check returns 200.
+
+---
+
+### Step 4 — First Tenant and End-to-End Deploy
+
+Prove the full loop: API is reachable, a tenant can be created, the CLI can connect, and a code push triggers an automatic deploy.
+
+**Steps:**
+1. Create the first tenant (see Phase 6, Step 10). Record the returned API key.
+2. Configure local CLI: `lumiverb config set --api-url https://lumiverb.example.com --api-key <key>`
+3. Smoke test: `lumiverb library list` should return an empty list without error.
+4. Update the `DEPLOY_HOST`, `DEPLOY_USER`, and `DEPLOY_SSH_KEY` Actions secrets with real values (if placeholders were used in Phase 2).
+5. Make a trivial code change (e.g. add a comment), push to `main`, and watch the Actions deploy run complete end-to-end including the migrate step.
+
+**Verify:**
+```bash
+# After the deploy Actions run completes
+lumiverb library list                          # CLI talks to remote API
+curl -sf https://lumiverb.example.com/         # Web UI loads (HTML response)
+curl -sf https://lumiverb.example.com/health   # API behind Caddy proxy (note: /health not /v1/health)
+```
+
+**Done when:** A push to `main` results in a fully automated deploy (build → push → migrate → restart → web reload) with no manual steps.
+
+---
+
+### Step 5 — Backups
+
+Install the backup cron. Verify a restore is possible before relying on it.
+
+**Steps:**
+1. Create `/opt/lumiverb/scripts/backup.sh` on the server (content in Phase 7 section).
+2. `chmod +x /opt/lumiverb/scripts/backup.sh`
+3. Run it once manually to verify it works: `/opt/lumiverb/scripts/backup.sh`
+4. Confirm the `.sql.gz` file appears in `/opt/lumiverb/backups/`.
+5. Install the cron job as the `deploy` user (`crontab -e`, add the 3 AM line from Phase 7).
+6. **Optional but strongly recommended**: test a restore to a throwaway Postgres container to confirm the backup is valid.
+
+```bash
+# Test restore (run on server, uses a throwaway container)
+BACKUP=$(ls -t /opt/lumiverb/backups/*.sql.gz | head -1)
+docker run --rm -e POSTGRES_PASSWORD=test -e POSTGRES_USER=app \
+  -e POSTGRES_DB=control_plane pgvector/pgvector:pg16 &
+sleep 5
+gunzip -c "$BACKUP" | docker exec -i <container_id> psql -U app -d control_plane
+```
+
+**Done when:** Backup file is created, cron is installed, and a test restore succeeds.
+
+---
+
+### Summary
+
+| Step | What you build | Verifiable outcome |
+|------|---------------|-------------------|
+| 1 | Repo files (pyproject split, Dockerfile, compose, Caddyfile) | `docker build` succeeds locally |
+| 2 | CI/CD pipeline | Image appears in GHCR Packages |
+| 3 | Live server (VPS provisioned, stack running) | `curl https://domain/health` returns 200 |
+| 4 | First tenant + automated deploy loop | Push to main deploys end-to-end |
+| 5 | Backups | Manual backup runs; test restore succeeds |
+
+---
+
+## Context
+
+The API and web UI are fully functional locally. The goal of this ADR is to define how the server side (FastAPI + Web UI + PostgreSQL + Quickwit) is deployed to a remote server and maintained over time via a repeatable CI/CD pipeline.
+
+### Why VPS + Docker Compose (not GCP Cloud Run yet)
+
+The architecture doc (architecture.md §11) targets GCP Cloud Run for cloud-hosted deployments at scale. That path is deferred to Phase 5 (self-service signups, multi-region). The constraints that drive that decision today:
+
+- **Quickwit is stateful.** It requires a persistent disk. Cloud Run has no persistent local storage; running Quickwit on Cloud Run requires additional GCS volume mounting complexity that adds no value at current scale.
+- **Ops simplicity.** A single VPS running Docker Compose is trivially debuggable. `docker compose logs`, `docker exec`, and `ssh` are sufficient for all operational needs at this stage.
+- **Self-hosted parity.** The production server and a user's self-hosted install run the same Compose stack. This validates the self-hosted experience and means every production fix benefits self-hosters.
+
+The path to Cloud Run (when warranted) is clean: the API is stateless, Postgres moves to Cloud SQL, object storage moves to GCS, Quickwit stays on a dedicated VM. This is a config change, not a code change.
+
+### Target Server
+
+**Hetzner CX32** — 4 vCPU, 8 GB RAM, 80 GB NVMe SSD, ~€17/month (Germany or US East). The heavy pyvips/rawpy/torch deps in the worker image make the CX22 (4 GB RAM) marginal; CX32 gives headroom for Quickwit's JVM and Postgres working together.
+
+Workers run **locally** (on the user's machine where source files live) and communicate with the remote server via the API. The server never runs Moondream inference or accesses source files.
+
+---
+
+## Architecture
+
+```
+                          ┌─── Hetzner CX32 ───────────────────────────────┐
+Internet ─── HTTPS ──→   │  Caddy (80/443)                                │
+                          │    /v1/*  → api:8000                           │
+                          │    /*     → /opt/lumiverb/web (static files)   │
+                          │                                                 │
+                          │  api        (FastAPI, port 8000)               │
+                          │  postgres   (pgvector:pg16, port 5432)         │
+                          │  quickwit   (0.8.1, port 7280 internal only)   │
+                          └────────────────────────────────────────────────┘
+
+Local machine (Mac Studio / NAS)
+  lumiverb CLI workers  ──── HTTPS ──→  API on server
+  Moondream (local LLM)
+  Source files (NAS)
+```
+
+Object storage for proxies/thumbnails: `LocalStorage` backed by `/opt/lumiverb/storage/` on the server's NVMe disk. This is a Docker bind-mount, not a volume, so files survive `docker compose down -v`. Upgradeable to GCS/S3 later via `STORAGE_BACKEND` env var.
+
+---
+
+## Phase 1: Split pyproject.toml Dependencies
+
+The current `pyproject.toml` bundles all deps — API, CLI, and worker — into `[project.dependencies]`. This creates a ~3 GB Docker image dominated by `torch` and `open-clip-torch`, none of which are needed by the API server.
+
+Move the following from `[project.dependencies]` to `[project.optional-dependencies] worker`:
+
+```toml
+[project.optional-dependencies]
+worker = [
+    "pillow>=10.0",
+    "rawpy>=0.26.1",
+    "pyvips>=3.1.1",
+    "imagehash>=4.3.0",
+    "opencv-python-headless>=4.8.0",
+    "requests>=2.25",
+    "moondream>=0.0.5",
+    "pyexiftool>=0.5",
+    "mediapipe>=0.10.0,<0.11",
+    "rapidfuzz>=3.0.0",
+    "reverse_geocoder>=1.5",
+    "torch>=2.10.0",
+    "open-clip-torch>=3.3.0",
+]
+```
+
+After this change:
+- `uv sync --frozen --no-dev` → installs API + CLI deps only (lean, ~300 MB image). uv does not install optional extras by default, so worker packages are excluded without any extra flags. This is the correct behavior for the API Docker image.
+- `uv sync --frozen --no-dev --extra worker` → installs everything (fat worker image, ~3 GB)
+- **Local dev workflow change required**: `uv sync` alone will no longer install worker extras. Update your local sync command (and any README/contributing notes) to `uv sync --all-extras` to restore the full dev environment with all worker packages.
+
+**Verification**: Confirm `src/api/main.py` and all imported modules under `src/api/` do not import any module in the `worker` extra list. The API only imports `fastapi`, `sqlmodel`, `alembic`, `pydantic`, `psycopg2`, `pgvector`, `python-ulid`, `PyYAML`, `uvicorn`, and standard library modules.
+
+---
+
+## Phase 2: Dockerfile
+
+File: `Dockerfile` (project root)
+
+```dockerfile
+# Build stage — install Python deps using uv
+FROM python:3.12-slim AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
+
+# Runtime stage — minimal image with only what's needed to run
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=builder /app/.venv /app/.venv
+COPY src/ src/
+COPY migrations/ migrations/
+COPY alembic-control.ini alembic-tenant.ini ./
+COPY scripts/ scripts/
+
+ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONPATH="/app"
+
+EXPOSE 8000
+
+CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+```
+
+**Notes:**
+- `--workers 2` is appropriate for the CX32. Increase to 4 if CPU becomes a bottleneck.
+- No `--reload` flag in production.
+- `uv` is copied into the runtime stage because `scripts/migrate.sh` uses `uv run alembic` and `uv run python` throughout. The venv is already on `PATH` so all Python imports resolve correctly; uv itself is needed as the process runner.
+- The `scripts/` directory is included so the `migrate` service profile can run `scripts/migrate.sh` from within the same image.
+- `.dockerignore` (create at project root) should exclude `.venv/`, `tests/`, `docs/`, `.git/`, `src/ui/`, `*.pyc`, `__pycache__/`.
+
+### .dockerignore
+
+File: `.dockerignore` (project root)
+
+```
+.venv/
+.git/
+.github/
+tests/
+docs/
+src/ui/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+.env
+.env.local
+*.egg-info/
+dist/
+```
+
+---
+
+## Phase 3: docker-compose.prod.yml
+
+File: `docker-compose.prod.yml` (project root, committed to git)
+
+This file is used **on the server** only. It is not used locally. The existing `docker-compose.yml` (dev infrastructure) remains unchanged.
+
+```yaml
+# Production stack. Runs on the VPS.
+# Usage:
+#   docker compose -f docker-compose.prod.yml up -d
+#   docker compose -f docker-compose.prod.yml run --rm migrate
+#   docker compose -f docker-compose.prod.yml pull api && docker compose -f docker-compose.prod.yml up -d api
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: lumiverb-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - /opt/lumiverb/web:/srv/web:ro
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  api:
+    image: ghcr.io/GITHUB_ORG/lumiverb-api:latest
+    container_name: lumiverb-api
+    environment:
+      CONTROL_PLANE_DATABASE_URL: "postgresql+psycopg2://app:${POSTGRES_PASSWORD}@postgres:5432/control_plane"
+      QUICKWIT_URL: "http://quickwit:7280"
+      DATA_DIR: "/data/storage"
+      ADMIN_KEY: "${ADMIN_KEY}"
+    volumes:
+      - storage_data:/data/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      quickwit:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  migrate:
+    image: ghcr.io/GITHUB_ORG/lumiverb-api:latest
+    container_name: lumiverb-migrate
+    command: ["bash", "scripts/migrate.sh"]
+    environment:
+      CONTROL_PLANE_DATABASE_URL: "postgresql+psycopg2://app:${POSTGRES_PASSWORD}@postgres:5432/control_plane"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - migrate
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: lumiverb-postgres
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      POSTGRES_DB: control_plane
+      POSTGRES_HOST_AUTH_METHOD: md5
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/docker/postgres-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./scripts/docker/02-pg-hba.sh:/docker-entrypoint-initdb.d/02-pg-hba.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d control_plane"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  quickwit:
+    image: quickwit/quickwit:0.8.1
+    container_name: lumiverb-quickwit
+    volumes:
+      - quickwit_data:/quickwit/qwdata
+    environment:
+      QW_ENABLE_OTLP_ENDPOINT: "false"
+    command: run
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:7280/health/livez || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  quickwit_data:
+  caddy_data:
+  caddy_config:
+  storage_data:
+```
+
+**`GITHUB_ORG` placeholder**: Replace with the actual GitHub organization/user name that owns the repository. The image name `ghcr.io/GITHUB_ORG/lumiverb-api` must match exactly what is pushed by CI.
+
+**`storage_data` volume**: This named Docker volume holds all proxy and thumbnail files. It survives `docker compose down` and `docker compose down` (without `-v`). Treat it as durable data. Do NOT run `docker compose down -v` in production.
+
+**Why `migrate` uses a profile**: Running migrations is an explicit deploy step, not something that happens automatically on container start. The `profiles: [migrate]` pattern means the migrate service is invisible to `docker compose up -d` and must be invoked deliberately with `docker compose run --rm migrate`. This prevents accidental migration runs and makes the migration step visible in CI logs.
+
+---
+
+## Phase 4: Caddyfile
+
+Directory: `caddy/` (project root, committed to git)
+File: `caddy/Caddyfile`
+
+```caddyfile
+# Replace lumiverb.example.com with the actual domain.
+lumiverb.example.com {
+
+    # API — proxy to FastAPI
+    handle /v1/* {
+        reverse_proxy api:8000
+    }
+
+    # Web UI — serve static files built by Vite
+    handle {
+        root * /srv/web
+        file_server
+        try_files {path} /index.html
+    }
+
+    # Security headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+
+    # Compress responses
+    encode gzip
+}
+```
+
+**How this maps to development**: In development, Vite's dev server handles the `/v1/*` proxy (`vite.config.ts` proxies to `localhost:8000`). In production, Caddy does the same job — serving static files and proxying API calls — without a Node process.
+
+**Static files path**: `/srv/web` inside the Caddy container maps to `/opt/lumiverb/web/` on the host (bind-mounted read-only). CI rsyncs the Vite `dist/` output here during deploy. Caddy picks up new files immediately without a restart.
+
+**Auto-HTTPS**: Caddy handles TLS certificate provisioning via Let's Encrypt automatically. The domain must resolve to the server's IP before the first `docker compose up`. Port 80 must be open for the ACME HTTP-01 challenge.
+
+---
+
+## Phase 5: GitHub Actions CI/CD Workflow
+
+File: `.github/workflows/deploy.yml`
+
+```yaml
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/lumiverb-api
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: src/ui/web/package-lock.json
+
+      - name: Build web UI
+        working-directory: src/ui/web
+        run: |
+          npm ci
+          npm run build
+        env:
+          VITE_API_KEY: ''   # not baked into the build; set at runtime via env or localStorage
+
+      - name: Deploy to server
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # Write SSH key and add server host key to known_hosts
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+
+          SSH="ssh -i ~/.ssh/deploy_key $DEPLOY_USER@$DEPLOY_HOST"
+          SCP="scp -i ~/.ssh/deploy_key"
+          COMPOSE="docker compose -f /opt/lumiverb/docker-compose.prod.yml"
+
+          # 1. Sync web UI static files to server
+          rsync -az --delete \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            src/ui/web/dist/ \
+            $DEPLOY_USER@$DEPLOY_HOST:/opt/lumiverb/web/
+
+          # 2. Pull new API image on server
+          $SSH "docker pull ghcr.io/${{ env.IMAGE_NAME }}:$IMAGE_TAG"
+          $SSH "docker tag ghcr.io/${{ env.IMAGE_NAME }}:$IMAGE_TAG ghcr.io/${{ env.IMAGE_NAME }}:latest"
+
+          # 3. Run migrations (exits 0 on success, fails pipeline on error)
+          $SSH "$COMPOSE run --rm migrate"
+
+          # 4. Restart API with new image
+          $SSH "$COMPOSE up -d --no-deps api"
+
+          # 5. Reload Caddy config (picks up new static files immediately)
+          $SSH "$COMPOSE exec caddy caddy reload --config /etc/caddy/Caddyfile"
+```
+
+### Required GitHub Actions Secrets
+
+| Secret | Value |
+|--------|-------|
+| `DEPLOY_HOST` | Server IP or hostname (e.g. `1.2.3.4` or `lumiverb.example.com`) |
+| `DEPLOY_USER` | SSH user on the server (e.g. `deploy`) |
+| `DEPLOY_SSH_KEY` | Private key corresponding to the deploy user's `authorized_keys` entry |
+
+`GITHUB_TOKEN` is automatically provided by Actions; no manual secret needed for GHCR push.
+
+### Deploy Order Rationale
+
+The deploy order — rsync web → pull image → migrate → restart API → reload Caddy — is deliberate:
+
+1. **Web files first**: if the deploy fails partway, the old API is still serving the new web UI. The web UI must be backwards-compatible with the previous API version (which it always is, since the API is additive).
+2. **Migrate before restart**: the new API starts with the schema it expects. Migrations are idempotent (`alembic upgrade head` is a no-op if already current).
+3. **`--no-deps` on API restart**: Caddy, Postgres, and Quickwit keep running without interruption.
+4. **Caddy reload last**: zero-downtime static file update; in-flight requests complete before reload.
+
+---
+
+## Phase 6: Server Provisioning Runbook
+
+This is a one-time setup. Execute in order.
+
+### 1. Provision the server
+
+Create a Hetzner CX32 instance:
+- Location: Ashburn, VA (US East) or Nuremberg (EU)
+- OS: Ubuntu 24.04 LTS
+- Add your personal SSH key during provisioning
+
+### 2. Install Docker
+
+```bash
+# As root on the server
+apt-get update
+apt-get install -y ca-certificates curl
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+  https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+  > /etc/apt/sources.list.d/docker.list
+apt-get update
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+```
+
+### 3. Create the deploy user and directory
+
+```bash
+# As root
+useradd -m -s /bin/bash deploy
+usermod -aG docker deploy
+
+mkdir -p /opt/lumiverb/web
+mkdir -p /opt/lumiverb/caddy
+chown -R deploy:deploy /opt/lumiverb
+```
+
+### 4. Add deploy SSH key
+
+Generate a deploy keypair (do this locally, not on the server):
+
+```bash
+ssh-keygen -t ed25519 -C "lumiverb-deploy" -f ~/.ssh/lumiverb_deploy -N ""
+```
+
+Add the public key to the server:
+
+```bash
+# On the server as root
+mkdir -p /home/deploy/.ssh
+echo "PUBLIC_KEY_CONTENT_HERE" >> /home/deploy/.ssh/authorized_keys
+chmod 700 /home/deploy/.ssh
+chmod 600 /home/deploy/.ssh/authorized_keys
+chown -R deploy:deploy /home/deploy/.ssh
+```
+
+Add the **private key** (`~/.ssh/lumiverb_deploy`) as the `DEPLOY_SSH_KEY` GitHub Actions secret.
+
+### 5. Configure DNS
+
+Point the domain (e.g. `lumiverb.example.com`) A record at the server IP. Wait for propagation before starting Caddy — Caddy will fail TLS provisioning if the domain doesn't resolve correctly.
+
+### 6. Place production files on the server
+
+From the repo root on your local machine:
+
+```bash
+# Copy the production compose file and Caddy config
+scp -i ~/.ssh/lumiverb_deploy docker-compose.prod.yml deploy@SERVER_IP:/opt/lumiverb/docker-compose.prod.yml
+scp -i ~/.ssh/lumiverb_deploy caddy/Caddyfile deploy@SERVER_IP:/opt/lumiverb/caddy/Caddyfile
+scp -i ~/.ssh/lumiverb_deploy -r scripts/ deploy@SERVER_IP:/opt/lumiverb/scripts/
+```
+
+### 7. Create the .env file on the server
+
+SSH to the server as `deploy` and create `/opt/lumiverb/.env`:
+
+```bash
+cat > /opt/lumiverb/.env << 'EOF'
+POSTGRES_PASSWORD=<generate with: openssl rand -hex 32>
+ADMIN_KEY=<generate with: openssl rand -hex 32>
+EOF
+chmod 600 /opt/lumiverb/.env
+```
+
+This file is never committed to git. It lives only on the server. Back it up securely (1Password, etc.).
+
+### 8. Authenticate Docker with GHCR on the server
+
+```bash
+# As deploy user on the server
+echo "GITHUB_TOKEN_VALUE" | docker login ghcr.io -u GITHUB_USERNAME --stdin
+```
+
+Use a GitHub Personal Access Token with `read:packages` scope. This allows the server to pull private images from GHCR.
+
+### 9. Start the stack
+
+```bash
+# As deploy user
+cd /opt/lumiverb
+docker compose -f docker-compose.prod.yml up -d
+```
+
+Caddy will provision a TLS certificate on first start. Check logs if it fails:
+```bash
+docker compose -f docker-compose.prod.yml logs caddy
+```
+
+### 10. Initialize the first tenant
+
+```bash
+# On the server — load env, run init script
+source /opt/lumiverb/.env
+export API_URL=https://lumiverb.example.com
+export ADMIN_KEY=$ADMIN_KEY
+
+# Wait for API to be healthy, then create default tenant
+curl -sf "$API_URL/health"
+curl -s -X POST \
+  -H "Authorization: Bearer $ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "default", "plan": "free"}' \
+  "$API_URL/v1/admin/tenants"
+```
+
+The response contains the tenant API key. Configure the local CLI:
+```bash
+lumiverb config set --api-url https://lumiverb.example.com --api-key <key from response>
+```
+
+---
+
+## Phase 7: Backup Strategy
+
+### What to back up
+
+Only Postgres is irreplaceable. Everything else is regenerable:
+- Object storage (proxies, thumbnails) → regenerable from source files via local agent
+- Quickwit index → regenerable via `search-sync`
+- AI descriptions → regenerable by re-running vision workers
+
+### pg_dump cron
+
+Create a backup script on the server at `/opt/lumiverb/scripts/backup.sh`:
+
+```bash
+#!/usr/bin/env bash
+# Nightly Postgres backup. Run via cron as deploy user.
+# Backs up control plane + all tenant databases to /opt/lumiverb/backups/
+set -euo pipefail
+
+BACKUP_DIR="/opt/lumiverb/backups"
+DATE=$(date +%Y%m%d_%H%M%S)
+KEEP_DAYS=14
+COMPOSE="docker compose -f /opt/lumiverb/docker-compose.prod.yml"
+
+mkdir -p "$BACKUP_DIR"
+
+# Control plane
+$COMPOSE exec -T postgres pg_dumpall -U app \
+  | gzip > "$BACKUP_DIR/all_databases_${DATE}.sql.gz"
+
+# Remove backups older than KEEP_DAYS
+find "$BACKUP_DIR" -name "*.sql.gz" -mtime +$KEEP_DAYS -delete
+
+echo "Backup complete: all_databases_${DATE}.sql.gz"
+```
+
+Install as a cron job (as the `deploy` user on the server):
+
+```bash
+chmod +x /opt/lumiverb/scripts/backup.sh
+crontab -e
+# Add: 0 3 * * * /opt/lumiverb/scripts/backup.sh >> /opt/lumiverb/backups/backup.log 2>&1
+```
+
+This runs at 3 AM daily. Backups are kept for 14 days, then deleted. The `/opt/lumiverb/backups/` directory sits on the server's NVMe disk. For offsite backup, add an `rclone` or `aws s3 cp` call at the end of the script to upload to an S3-compatible bucket.
+
+---
+
+## Environment Variable Reference
+
+All env vars consumed by the API. These must be set in `/opt/lumiverb/.env` (Docker Compose reads it automatically when the compose file is in the same directory).
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `POSTGRES_PASSWORD` | Yes | Postgres `app` user password. Used in `CONTROL_PLANE_DATABASE_URL`. |
+| `ADMIN_KEY` | Yes | Bearer token for `/v1/admin/*` routes. Keep private; used to provision tenants. |
+| `CONTROL_PLANE_DATABASE_URL` | Derived | Set in compose from `POSTGRES_PASSWORD`. Override only if using an external Postgres. |
+| `QUICKWIT_URL` | Derived | Set in compose to `http://quickwit:7280`. Override if using an external Quickwit. |
+| `DATA_DIR` | Derived | Set in compose to `/data/storage` (Docker volume path). Override only if changing storage backend. |
+
+---
+
+## Operational Runbook (Day-2 Operations)
+
+### View logs
+
+```bash
+# All services
+docker compose -f docker-compose.prod.yml logs -f
+
+# Just API
+docker compose -f docker-compose.prod.yml logs -f api
+
+# Just migrations (after a deploy)
+docker compose -f docker-compose.prod.yml logs migrate
+```
+
+### Run migrations manually
+
+```bash
+cd /opt/lumiverb
+docker compose -f docker-compose.prod.yml run --rm migrate
+```
+
+### Roll back to a previous API version
+
+The CI tags each image with the git SHA. To roll back:
+
+```bash
+# On the server
+docker pull ghcr.io/GITHUB_ORG/lumiverb-api:PREVIOUS_SHA
+docker tag ghcr.io/GITHUB_ORG/lumiverb-api:PREVIOUS_SHA ghcr.io/GITHUB_ORG/lumiverb-api:latest
+docker compose -f docker-compose.prod.yml up -d --no-deps api
+```
+
+Note: rolling back the API does NOT roll back migrations. Additive migrations (column adds, new tables, new indexes) are backwards-compatible with older API versions and require no action. Destructive migrations (column drops, table drops, type changes) are a different story: if the schema change cannot be reversed with a manual `ALTER TABLE`, a full database restore from the nightly backup is the only safe recovery path. Always prefer additive migrations and use multi-step deploys (add column → migrate data → drop old column in a later release) when removing fields.
+
+### Access Postgres directly
+
+```bash
+docker exec -it lumiverb-postgres psql -U app -d control_plane
+```
+
+### Restart a single service
+
+```bash
+docker compose -f docker-compose.prod.yml restart api
+docker compose -f docker-compose.prod.yml restart caddy
+```
+
+### Update Caddy config without downtime
+
+Edit `/opt/lumiverb/caddy/Caddyfile` on the server, then:
+
+```bash
+docker compose -f docker-compose.prod.yml exec caddy caddy reload --config /etc/caddy/Caddyfile
+```
+
+### Check storage disk usage
+
+```bash
+docker system df -v   # Docker volumes
+df -h /opt/lumiverb   # Host disk
+```
+
+### Full stack health check
+
+```bash
+curl -sf https://lumiverb.example.com/health
+curl -sf https://lumiverb.example.com/         # Web UI loads
+docker compose -f docker-compose.prod.yml ps   # All services Up
+```
+
+---
+
+## Future: Path to GCP Cloud Run
+
+When warranted (Phase 5 / self-service signups / multi-region), the migration is mechanical:
+
+| Component | Now (VPS) | Future (GCP) |
+|-----------|-----------|--------------|
+| API | Docker container, CX32 | Cloud Run service (same image) |
+| Postgres | Docker volume, CX32 | Cloud SQL for PostgreSQL (managed) |
+| Quickwit | Docker container, CX32 | Dedicated VM with persistent disk (Quickwit requires stateful disk; Cloud Run not suitable) |
+| Object storage | Local NVMe, Docker volume | Google Cloud Storage (`STORAGE_BACKEND=gcs`) |
+| Caddy | Docker container, CX32 | Cloud Load Balancer + managed SSL |
+| Web UI | Caddy static files | Cloud CDN or Firebase Hosting |
+
+No code changes required. The API reads `STORAGE_BACKEND`, `DATABASE_URL`, and `QUICKWIT_URL` from environment. The Dockerfile is already suitable for Cloud Run (stateless, port 8000, respects `PORT` env var if added).
+
+Migration steps at that time:
+1. `pg_dump` from Docker Postgres → restore to Cloud SQL
+2. Copy storage volume to GCS bucket (`rclone` or `gsutil`)
+3. Rebuild Quickwit index from scratch (it's regenerable via search-sync)
+4. Update env vars in Cloud Run service config
+5. Cut over DNS
+
+---
+
+## What Is NOT in Scope
+
+- Worker deployment to the server (workers run locally, on the machine where source files live)
+- Horizontal scaling (single-instance API is sufficient until well beyond initial launch)
+- Multi-tenant Quickwit isolation (single Quickwit instance serves all tenants; index names are prefixed by tenant_id)
+- Rate limiting (deferred to Phase 5 per architecture.md)
+- TLS client certificates or mTLS
+- Log aggregation beyond `docker compose logs` (add Loki/Grafana when debugging blind becomes a problem)
