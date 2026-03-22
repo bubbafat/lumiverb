@@ -1,0 +1,1069 @@
+# ADR: Phased Desktop Web UI Improvements
+
+## Status
+Pending
+
+## Implementation Progress
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 1 | Date search — API extension, FilterBar date filter, clickable date in Lightbox | Pending |
+| 2 | Grid density control, browse sort, improved empty/loading states | Pending |
+| 3 | Lightbox polish — fullscreen, keyboard hints, GPS link, slideshow | Pending |
+| 4 | Library quick-switcher (command palette), keyboard shortcuts reference | Pending |
+
+---
+
+## Context
+
+### Background
+
+The web UI is fully functional and mobile-optimized (post mobile ADR). The desktop experience
+is correct but does not yet leverage the desktop's surface area for discoverable, efficient
+browsing. Specific gaps:
+
+- **No date-based filtering.** Users cannot narrow results to "photos from last June" or
+  "everything I took on a specific day." The only filters are text query, tag, and path.
+  `taken_at` data is stored and grouped in the UI but never filterable.
+- **Grid density is fixed.** The `TARGET_ROW_HEIGHT = 220` constant is hardcoded. Power users
+  with large libraries want to see more thumbnails at once; users reviewing for selection want
+  to see fewer, larger images.
+- **Lightbox metadata is static.** The date in the Details panel is plain text. Clicking it
+  to pivot to "all photos from this day" is an obvious action that is impossible today.
+- **Library switching requires navigating away.** To move from Library A to Library B the user
+  must return to `/` (Libraries page), find Library B, and click Browse. There is no in-context
+  shortcut.
+- **No keyboard shortcut discoverability.** Arrow-key navigation and Escape work in the
+  lightbox, but there is no hint or reference. Users who do not discover them miss out.
+
+### What is NOT in scope
+
+- Dark/light mode toggle — always dark; separate feature.
+- Authentication / user management — Phase 5 of main project plan.
+- Offline / PWA support.
+- Native mobile apps.
+- AI description editing or tag editing — separate feature request.
+- WCAG full audit — date links and keyboard hints will be ARIA-labeled but a full audit is
+  a separate workstream.
+- Video timeline scrubbing — future feature.
+- Bulk selection / bulk tag operations — future feature.
+
+---
+
+## Design Decisions
+
+### Date filter architecture: API extension, not client-side filtering
+
+Filtering by date server-side is required because the browse mode uses cursor-based infinite
+scroll — the full dataset is never in memory simultaneously. Client-side filtering of an
+infinite scroll would silently omit matching assets beyond the loaded window.
+
+The minimal backend change: add `date_from` and `date_to` (ISO 8601 date strings, `YYYY-MM-DD`)
+as optional query parameters to `GET /v1/search`. The backend applies an inclusive range filter
+on `taken_at` (falling back to `file_mtime` for assets with no EXIF date).
+
+When a date filter is active in the UI, the browse mode switches to **search mode** (using
+`searchAssets`) even when the text query is empty. This reuses the existing dual-mode
+architecture without adding date filtering to the cursor-based page endpoint. The tradeoff is
+that date-filtered results do not support infinite scroll (they return up to the search limit),
+which is acceptable because a typical single-day result set is bounded.
+
+URL representation: `?date_from=2024-06-04&date_to=2024-06-04` (single day), or a range.
+These compose additively with existing `?q=&tag=&path=` params.
+
+### Grid zoom: single slider controls `TARGET_ROW_HEIGHT` / `MIN_CELL_WIDTH`
+
+A single zoom slider (5 notches: XS → XL) maps to specific `TARGET_ROW_HEIGHT` values for
+the justified desktop layout. On narrow screens (≤700px fixed-grid mode) the same slider maps
+to `MIN_CELL_WIDTH` breakpoints. One control works for both layout modes.
+
+Zoom level is persisted to `localStorage` as `lv_grid_zoom` (default: level 3 = 220px, current
+hardcoded value). This is a user preference, not a URL param — it does not affect shareable
+links.
+
+### Lightbox date click: URL navigation with preserved filters
+
+Clicking `taken_at` in the Lightbox navigates to the current URL with `date_from` and
+`date_to` set to the asset's date (time stripped, date only), then closes the lightbox. This
+preserves all other URL params (`q`, `tag`, `path`, `libraryId`) so the "scope" of the library
+and any active path or tag filters are maintained. The result: the user lands back in the grid
+view, filtered to that one day, still inside the same library and folder context.
+
+### Library quick-switcher: `⌘K` / `Ctrl+K` command palette
+
+A modal command palette (similar to VS Code's file switcher or Spotlight) provides the fastest
+path to switch libraries without navigating to the Libraries page. It renders a search-filtered
+list of all libraries. Selecting one navigates to `/libraries/:id/browse`. The palette is
+dismissed by Escape, backdrop click, or successful navigation.
+
+---
+
+## Phase 1 — Date Search
+
+**Goal**: Users can filter the media grid by a date or date range. Clicking the photo date in
+the Lightbox applies a single-day date filter instantly.
+
+### 1a — Backend: API date parameters
+
+**File**: `src/lumiverb/api/routers/search.py` (or equivalent search endpoint)
+
+Add two optional query params to `GET /v1/search`:
+
+```python
+date_from: str | None = Query(None, description="ISO date YYYY-MM-DD, inclusive lower bound on taken_at / file_mtime")
+date_to: str | None = Query(None, description="ISO date YYYY-MM-DD, inclusive upper bound")
+```
+
+Filter logic (SQLModel / SQLAlchemy):
+
+```python
+if date_from:
+    dt_from = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    # Use taken_at if available, fall back to file_mtime
+    query = query.filter(
+        func.coalesce(Asset.taken_at, Asset.file_mtime) >= dt_from
+    )
+if date_to:
+    dt_to = datetime.strptime(date_to, "%Y-%m-%d").replace(tzinfo=timezone.utc) \
+            + timedelta(days=1)  # exclusive upper bound (end of day)
+    query = query.filter(
+        func.coalesce(Asset.taken_at, Asset.file_mtime) < dt_to
+    )
+```
+
+The existing Quickwit full-text search layer is unchanged — date filtering is applied as a
+post-filter on the SQL result set (the search route already hydrates results from the DB after
+Quickwit returns matching asset IDs).
+
+### 1b — API client
+
+**File**: `src/ui/web/src/api/types.ts`
+
+Extend `SearchParams`:
+
+```typescript
+export interface SearchParams {
+  libraryId: string;
+  q: string;
+  pathPrefix?: string;
+  tag?: string;
+  dateFrom?: string;  // YYYY-MM-DD
+  dateTo?: string;    // YYYY-MM-DD
+  limit?: number;
+  offset?: number;
+}
+```
+
+**File**: `src/ui/web/src/api/client.ts`
+
+Pass new params in `searchAssets`:
+
+```typescript
+export async function searchAssets(params: SearchParams): Promise<SearchResponse> {
+  const url = new URL(`/v1/libraries/${params.libraryId}/search`, window.location.origin);
+  if (params.q) url.searchParams.set("q", params.q);
+  if (params.pathPrefix) url.searchParams.set("path_prefix", params.pathPrefix);
+  if (params.tag) url.searchParams.set("tag", params.tag);
+  if (params.dateFrom) url.searchParams.set("date_from", params.dateFrom);
+  if (params.dateTo) url.searchParams.set("date_to", params.dateTo);
+  if (params.limit) url.searchParams.set("limit", String(params.limit));
+  // ...fetch
+}
+```
+
+### 1c — FilterBar: date filter UI
+
+**File**: `src/ui/web/src/components/FilterBar.tsx`
+
+Add a date filter section between the search input and the chiclets. It is collapsed by
+default (shows only a calendar icon button). Clicking the button expands a row of preset
+chips and, optionally, a custom range:
+
+**Structure:**
+
+```
+[🔍 Search input          ] [📅]      ← calendar button toggles date filter row
+─────────────────────────────────────
+[Today] [Yesterday] [This week] [This month] [This year] [Custom ▸]
+─────────────────────────────────────
+Active chiclets: [🔍 landscape ×] [📅 Jun 4, 2024 ×]
+```
+
+**Preset definitions** (computed at render time, no external date library needed):
+
+```typescript
+function getDatePresets(): DatePreset[] {
+  const today = new Date();
+  const fmt = (d: Date) => d.toISOString().slice(0, 10); // YYYY-MM-DD
+  const startOf = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+  const todayStr = fmt(startOf(today));
+  const yday = new Date(today); yday.setDate(today.getDate() - 1);
+  const weekStart = new Date(today); weekStart.setDate(today.getDate() - today.getDay());
+  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+  const yearStart = new Date(today.getFullYear(), 0, 1);
+
+  return [
+    { label: "Today",      from: todayStr,          to: todayStr },
+    { label: "Yesterday",  from: fmt(startOf(yday)), to: fmt(startOf(yday)) },
+    { label: "This week",  from: fmt(weekStart),     to: todayStr },
+    { label: "This month", from: fmt(monthStart),    to: todayStr },
+    { label: "This year",  from: fmt(yearStart),     to: todayStr },
+  ];
+}
+```
+
+**Custom range:** Clicking "Custom ▸" expands two native `<input type="date">` fields
+(from / to). No third-party date picker library. Apply button sets the URL params.
+
+**Chiclet display logic:**
+
+```typescript
+function formatDateChiclet(from: string, to: string): string {
+  if (from === to) {
+    return new Date(from + "T00:00:00").toLocaleDateString("en-US", {
+      month: "short", day: "numeric", year: "numeric",
+    }); // "Jun 4, 2024"
+  }
+  // same month: "Jun 1 – 30, 2024"
+  // different month/year: "Jun 1, 2024 – Mar 22, 2026"
+  // ...abbreviated range
+}
+```
+
+**URL param contract:**
+- `?date_from=YYYY-MM-DD` and `?date_to=YYYY-MM-DD` always appear together.
+- Removing the chiclet removes both params.
+
+**FilterBar state additions:**
+
+```typescript
+const [searchParams, setSearchParams] = useSearchParams();
+const dateFrom = searchParams.get("date_from") ?? undefined;
+const dateTo   = searchParams.get("date_to")   ?? undefined;
+const [showDateRow, setShowDateRow] = useState(Boolean(dateFrom));
+```
+
+Calendar icon button shows an indigo dot indicator when a date filter is active.
+
+### 1d — BrowsePage: activate search mode when date filter is set
+
+**File**: `src/ui/web/src/pages/BrowsePage.tsx`
+
+Add `dateFrom` and `dateTo` to the URL param reads (alongside existing `q`, `tag`, `path`):
+
+```typescript
+const dateFrom = searchParams.get("date_from") ?? undefined;
+const dateTo   = searchParams.get("date_to")   ?? undefined;
+```
+
+Change the condition that selects browse mode vs search mode:
+
+```typescript
+// Before
+const isSearchMode = Boolean(activeQ);
+
+// After
+const isSearchMode = Boolean(activeQ || dateFrom);
+```
+
+Pass date params to `searchAssets`:
+
+```typescript
+const searchResult = useQuery({
+  queryKey: ["search", libraryId, activeQ, activeTag, pathPrefix, dateFrom, dateTo],
+  queryFn: () => searchAssets({
+    libraryId: libraryId!,
+    q: activeQ ?? "",
+    pathPrefix,
+    tag: activeTag,
+    dateFrom,
+    dateTo,
+    limit: 500,
+  }),
+  enabled: isSearchMode && Boolean(libraryId),
+});
+```
+
+The `limit: 500` ceiling is appropriate for single-day date filter results. For wide date
+ranges (e.g., "This year") results are capped at 500 with a `"Showing first 500 results —
+narrow your search to see more"` banner when `total > 500`.
+
+### 1e — Lightbox: clickable date
+
+**File**: `src/ui/web/src/components/Lightbox.tsx`
+
+The Lightbox receives an `onDateClick` callback prop. In the Details section, wrap the
+`taken_at` value in a `<button>`:
+
+```typescript
+interface LightboxProps {
+  // ...existing props
+  onDateClick?: (dateStr: string) => void; // dateStr = YYYY-MM-DD
+}
+```
+
+In the Details section:
+
+```tsx
+{detail.taken_at && (
+  <div className="flex justify-between">
+    <span className="text-gray-400">Taken</span>
+    {onDateClick ? (
+      <button
+        className="text-right text-gray-200 hover:text-indigo-400 hover:underline
+                   transition-colors cursor-pointer"
+        onClick={() => onDateClick(detail.taken_at!.slice(0, 10))}
+        title="Filter to this date"
+      >
+        {formatDate(detail.taken_at)}
+      </button>
+    ) : (
+      <span className="text-right text-gray-200">{formatDate(detail.taken_at)}</span>
+    )}
+  </div>
+)}
+```
+
+**BrowsePage wires up the callback:**
+
+```typescript
+const handleLightboxDateClick = useCallback((dateStr: string) => {
+  setSearchParams(prev => {
+    const next = new URLSearchParams(prev);
+    next.set("date_from", dateStr);
+    next.set("date_to", dateStr);
+    return next;
+  });
+  setLightboxIndex(null); // close lightbox
+}, [setSearchParams]);
+```
+
+The lightbox is closed and the grid re-renders filtered to that day, with all other params
+(library, path, tag, q) preserved.
+
+### Files changed in Phase 1
+
+| File | Change type |
+|------|-------------|
+| `src/lumiverb/api/routers/search.py` | Modify — add `date_from`, `date_to` params |
+| `src/ui/web/src/api/types.ts` | Modify — extend `SearchParams` |
+| `src/ui/web/src/api/client.ts` | Modify — pass date params in `searchAssets` |
+| `src/ui/web/src/components/FilterBar.tsx` | Modify — add date filter row + presets + chiclet |
+| `src/ui/web/src/pages/BrowsePage.tsx` | Modify — read date params, activate search mode |
+| `src/ui/web/src/components/Lightbox.tsx` | Modify — `onDateClick` prop, clickable date |
+
+### Acceptance criteria — Phase 1
+
+- Clicking "Today" in the FilterBar date presets shows only assets with `taken_at` (or
+  `file_mtime` fallback) matching today's date; chiclet reads "📅 Mar 22, 2026".
+- Clicking "This month" shows assets from March 1–22, 2026 (current date); chiclet reads
+  "📅 Mar 2026".
+- Custom range: entering from=2024-01-01 to=2024-12-31 and clicking Apply shows 2024 assets.
+- Removing the date chiclet returns to un-date-filtered browse/search.
+- In the Lightbox, the `taken_at` date is underlined on hover and shows a tooltip "Filter to
+  this date". Clicking it: lightbox closes, grid shows that day's assets, path/tag/q preserved.
+- When no `taken_at` is available, the date field shows `file_mtime` in the lightbox and
+  clicking it still works.
+- When `taken_at` is null AND `file_mtime` is null, no date field is shown in the lightbox
+  (unchanged from current behavior).
+- All existing Vitest tests pass. The `onDateClick` prop is optional so no call sites break.
+
+---
+
+## Phase 2 — Grid Density Control & Browse UX
+
+**Goal**: Desktop users can adjust how many thumbnails they see at once. Browse experience
+improvements: visible result counts, improved empty states, sort order for search results.
+
+### 2a — Grid zoom slider
+
+**File**: `src/ui/web/src/pages/BrowsePage.tsx`
+
+Replace the hardcoded `TARGET_ROW_HEIGHT = 220` with a value derived from a user-controlled
+zoom level stored in `localStorage`.
+
+**Zoom levels** (5 notches):
+
+```typescript
+const ZOOM_LEVELS = [
+  { label: "XS", justifiedHeight: 120, fixedCellWidth: 100 },
+  { label: "S",  justifiedHeight: 170, fixedCellWidth: 130 },
+  { label: "M",  justifiedHeight: 220, fixedCellWidth: 150 }, // ← current default
+  { label: "L",  justifiedHeight: 300, fixedCellWidth: 200 },
+  { label: "XL", justifiedHeight: 420, fixedCellWidth: 280 },
+] as const;
+
+const DEFAULT_ZOOM = 2; // index into ZOOM_LEVELS (0-based), so level "M"
+```
+
+**Persistence:**
+
+```typescript
+const [zoomLevel, setZoomLevel] = useLocalStorage("lv_grid_zoom", DEFAULT_ZOOM);
+// useLocalStorage: a thin custom hook — useState + localStorage.getItem/setItem
+```
+
+**ZoomControl component** (new file):
+
+**File**: `src/ui/web/src/components/ZoomControl.tsx`
+
+```tsx
+interface ZoomControlProps {
+  value: number;       // 0–4
+  onChange: (v: number) => void;
+}
+
+export function ZoomControl({ value, onChange }: ZoomControlProps) {
+  return (
+    <div className="flex items-center gap-2 select-none" title="Grid density">
+      <PhotoIcon className="h-3.5 w-3.5 text-gray-500" />
+      <input
+        type="range"
+        min={0}
+        max={4}
+        step={1}
+        value={value}
+        onChange={e => onChange(Number(e.target.value))}
+        className="w-20 accent-indigo-500 cursor-ew-resize"
+        aria-label="Grid zoom level"
+      />
+      <PhotoIcon className="h-5 w-5 text-gray-500" />
+    </div>
+  );
+}
+```
+
+Small `<PhotoIcon>` on the left, larger on the right, so the slider visually communicates
+"fewer large / more small" without labels. Rendered in the BrowsePage toolbar, right-aligned,
+desktop only (`hidden sm:flex`).
+
+**Integration in BrowsePage:**
+
+```typescript
+const targetRowHeight = ZOOM_LEVELS[zoomLevel].justifiedHeight;
+const minCellWidth    = ZOOM_LEVELS[zoomLevel].fixedCellWidth;
+// Replace the hardcoded constants with these variables in the useMemo
+```
+
+### 2b — Result count and status line
+
+**File**: `src/ui/web/src/pages/BrowsePage.tsx`
+
+Add a status line below the FilterBar (above the grid) showing:
+
+- Browse mode: `"{N} photos · sorted by date taken"` (N = total loaded so far, from the
+  infinite query data)
+- Search mode: `"{N} results"` or `"First 500 of {total} results — narrow your filters"` when
+  capped
+- While loading: skeleton placeholder (same `SkeletonRow` pattern)
+- Empty search: `"No results for "{q}" in {path}"` with suggestions
+
+```tsx
+function StatusLine({ mode, total, cap, query }: StatusLineProps) {
+  if (mode === "browse") {
+    return (
+      <p className="px-4 py-1 text-xs text-gray-500">
+        {total.toLocaleString()} {total === 1 ? "photo" : "photos"}
+      </p>
+    );
+  }
+  return (
+    <p className="px-4 py-1 text-xs text-gray-500">
+      {total === 0
+        ? <span>No results{query ? <> for <em className="text-gray-300">"{query}"</em></> : null}</span>
+        : <>{total.toLocaleString()} {cap ? `of ${cap.toLocaleString()}+ ` : ""}result{total !== 1 ? "s" : ""}</>
+      }
+    </p>
+  );
+}
+```
+
+### 2c — Search result sort control
+
+In search mode only (results are fully loaded at once), add a sort dropdown to the BrowsePage
+toolbar:
+
+```typescript
+type SortKey = "date" | "filename" | "score";
+type SortDir = "asc" | "desc";
+```
+
+- **Date** (default) — sorts by `taken_at ?? file_mtime` descending (newest first)
+- **Filename** — alphabetical on `rel_path`
+- **Relevance** — by BM25 `score` descending (only meaningful when a text query is active;
+  hidden/disabled when date-only filter)
+
+The sort is applied client-side in the `useMemo` that builds `virtualRows` (search results are
+already fully loaded). No backend change needed.
+
+URL param: `?sort=date&dir=desc` (preserved across navigation). Default values are omitted
+from the URL.
+
+```tsx
+{isSearchMode && (
+  <select
+    value={`${sort}-${dir}`}
+    onChange={e => { /* parse and setSearchParams */ }}
+    className="rounded-md bg-gray-800 border border-gray-700 px-2 py-1 text-xs text-gray-300
+               focus:outline-none focus:ring-1 focus:ring-indigo-500"
+    aria-label="Sort results"
+  >
+    <option value="date-desc">Newest first</option>
+    <option value="date-asc">Oldest first</option>
+    <option value="filename-asc">Filename A–Z</option>
+    <option value="filename-desc">Filename Z–A</option>
+    {hasTextQuery && <option value="score-desc">Most relevant</option>}
+  </select>
+)}
+```
+
+### 2d — Improved empty states
+
+**File**: `src/ui/web/src/pages/BrowsePage.tsx`
+
+Three distinct empty states (all currently show the same generic empty view):
+
+**1. No assets in library (browse mode, no filters):**
+```tsx
+<div className="flex flex-col items-center gap-3 py-24 text-gray-500">
+  <PhotoIcon className="h-12 w-12 opacity-30" />
+  <p className="text-sm">No photos yet</p>
+  <p className="text-xs text-gray-600">
+    Trigger a scan from the <Link to="/admin" className="underline hover:text-gray-400">Workers</Link> page
+  </p>
+</div>
+```
+
+**2. No results for active filters:**
+```tsx
+<div className="flex flex-col items-center gap-3 py-24 text-gray-500">
+  <MagnifyingGlassIcon className="h-12 w-12 opacity-30" />
+  <p className="text-sm">No results</p>
+  <ul className="text-xs text-gray-600 list-disc pl-4 space-y-1">
+    {activeQ && <li>Try different search terms</li>}
+    {dateFrom && <li>Try a wider date range</li>}
+    {activeTag && <li>Remove the tag filter</li>}
+    {pathPrefix && <li>Browse a different folder</li>}
+  </ul>
+</div>
+```
+
+**3. No assets in selected path (browse mode, path filter active):**
+```tsx
+<p className="text-sm text-gray-500 py-12 text-center">No photos in this folder</p>
+```
+
+### Files changed in Phase 2
+
+| File | Change type |
+|------|-------------|
+| `components/ZoomControl.tsx` | **Create** — zoom slider component |
+| `pages/BrowsePage.tsx` | Modify — zoom level, status line, sort, empty states |
+| `lib/useLocalStorage.ts` | **Create** — thin hook (or inline if already exists) |
+
+### Acceptance criteria — Phase 2
+
+- Zoom slider at XS shows ~8 columns on a 1440px display; XL shows ~3 columns.
+- Zoom level persists across page navigation and browser reload.
+- In browse mode the status line shows the loaded count (updates as more pages load).
+- In search mode (text query or date filter) the status line shows total result count.
+- When results > 500, the status line includes the capped-results warning.
+- Filename and date sort work correctly on search result sets.
+- Relevance sort option appears only when a text query (`activeQ`) is set.
+- All three empty state variants render in their correct conditions.
+
+---
+
+## Phase 3 — Lightbox Polish
+
+**Goal**: The lightbox becomes a first-class image viewer. Fullscreen mode, keyboard shortcut
+discoverability, GPS link, and an optional slideshow.
+
+### 3a — Fullscreen mode
+
+**File**: `src/ui/web/src/components/Lightbox.tsx`
+
+Add a fullscreen toggle button in the lightbox header (top-right, alongside the existing Close
+button). In fullscreen mode: the metadata panel is hidden, the image fills the entire screen.
+
+**Implementation:**
+
+```typescript
+const [isFullscreen, setIsFullscreen] = useState(false);
+
+// Sync with browser Fullscreen API
+useEffect(() => {
+  const onFsChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+  document.addEventListener("fullscreenchange", onFsChange);
+  return () => document.removeEventListener("fullscreenchange", onFsChange);
+}, []);
+
+const toggleFullscreen = () => {
+  if (!isFullscreen) {
+    lightboxRef.current?.requestFullscreen().catch(() => {
+      // Fallback: use CSS-only fullscreen (position:fixed + z-[9999])
+      setIsFullscreen(true);
+    });
+  } else {
+    document.exitFullscreen?.();
+  }
+};
+```
+
+Keyboard: `F` key triggers `toggleFullscreen`. Add to existing `onKeyDown` handler:
+
+```typescript
+case "f":
+case "F":
+  toggleFullscreen();
+  break;
+```
+
+Button appearance:
+
+```tsx
+<button
+  onClick={toggleFullscreen}
+  className="p-2 rounded-lg text-gray-400 hover:text-gray-100 hover:bg-gray-800/60"
+  aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+>
+  {isFullscreen
+    ? <ArrowsPointingInIcon className="h-5 w-5" />
+    : <ArrowsPointingOutIcon className="h-5 w-5" />
+  }
+</button>
+```
+
+In fullscreen, hide the metadata panel entirely:
+
+```tsx
+<div className={`
+  w-full overflow-y-auto border-t border-gray-700 bg-gray-900/50 p-6
+  lg:w-80 lg:border-l lg:border-t-0
+  ${isFullscreen ? "hidden" : ""}
+  ...existing classes
+`}>
+```
+
+### 3b — Keyboard hint overlay
+
+**File**: `src/ui/web/src/components/Lightbox.tsx`
+
+A fading hint bar at the bottom of the image area. Visible for 3 seconds after the lightbox
+opens or after any keyboard navigation, then fades out. Reappears when the user presses `?`.
+
+```typescript
+const [showHints, setShowHints] = useState(true);
+const hintTimerRef = useRef<number>();
+
+const resetHintTimer = useCallback(() => {
+  setShowHints(true);
+  clearTimeout(hintTimerRef.current);
+  hintTimerRef.current = window.setTimeout(() => setShowHints(false), 3000);
+}, []);
+
+useEffect(() => { resetHintTimer(); }, []); // show on open
+```
+
+Add to `onKeyDown`:
+```typescript
+case "?":
+  setShowHints(h => !h);
+  clearTimeout(hintTimerRef.current);
+  break;
+default:
+  resetHintTimer(); // any key use resets the timer
+```
+
+Hint bar markup:
+
+```tsx
+<div className={`
+  absolute bottom-12 inset-x-0 flex justify-center pointer-events-none
+  transition-opacity duration-500 motion-reduce:transition-none
+  ${showHints ? "opacity-100" : "opacity-0"}
+`}>
+  <div className="flex gap-4 rounded-lg bg-black/60 px-4 py-2 text-xs text-gray-400 backdrop-blur-sm">
+    <span><kbd className="font-mono">←/→</kbd> Navigate</span>
+    <span><kbd className="font-mono">Esc</kbd> Close</span>
+    <span><kbd className="font-mono">F</kbd> Fullscreen</span>
+    <span><kbd className="font-mono">Space</kbd> Slideshow</span>
+    <span><kbd className="font-mono">?</kbd> Toggle hints</span>
+  </div>
+</div>
+```
+
+`pointer-events-none` so the hint bar does not intercept clicks on the image or nav arrows.
+
+### 3c — GPS coordinates as map link
+
+**File**: `src/ui/web/src/components/Lightbox.tsx`
+
+Replace the plain GPS text with a link that opens the location in the user's default maps app.
+The `geo:` URI scheme works on iOS (Apple Maps) and Android (Google Maps) and falls back to an
+`https://maps.google.com` URL in browsers that do not handle `geo:`:
+
+```tsx
+{detail.gps_lat != null && detail.gps_lon != null && (
+  <div className="flex justify-between">
+    <span className="text-gray-400">GPS</span>
+    <a
+      href={`https://maps.google.com/?q=${detail.gps_lat},${detail.gps_lon}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-right text-indigo-400 hover:text-indigo-300 hover:underline"
+      title={`${formatGps(detail.gps_lat, detail.gps_lon)}`}
+    >
+      {formatGps(detail.gps_lat, detail.gps_lon)}
+    </a>
+  </div>
+)}
+```
+
+The `title` shows the raw coordinates; the link text is the same formatted string as today.
+
+### 3d — Slideshow mode
+
+**File**: `src/ui/web/src/components/Lightbox.tsx`
+
+Space bar starts / stops an auto-advance slideshow (3-second interval by default). A thin
+progress bar at the top of the lightbox animates from left to right over 3 seconds, then
+resets when the image advances.
+
+```typescript
+const [slideshowActive, setSlideshowActive] = useState(false);
+const slideshowRef = useRef<number>();
+
+useEffect(() => {
+  if (!slideshowActive) { clearInterval(slideshowRef.current); return; }
+  slideshowRef.current = window.setInterval(() => {
+    onNavigate(Math.min(currentIndex + 1, assets.length - 1));
+  }, 3000);
+  return () => clearInterval(slideshowRef.current);
+}, [slideshowActive, currentIndex, assets.length, onNavigate]);
+```
+
+Add to `onKeyDown`:
+```typescript
+case " ":
+  e.preventDefault(); // prevent page scroll
+  setSlideshowActive(a => !a);
+  break;
+```
+
+Progress bar (shown only while slideshow is running):
+
+```tsx
+{slideshowActive && (
+  <div className="absolute top-0 inset-x-0 h-0.5 bg-gray-800 z-10">
+    <div
+      key={currentIndex} // remounts = restarts animation on each advance
+      className="h-full bg-indigo-500 animate-[progress_3s_linear_forwards]
+                 motion-reduce:animate-none"
+    />
+  </div>
+)}
+```
+
+Add to `tailwind.config.js` theme extensions:
+
+```js
+keyframes: {
+  progress: {
+    from: { width: "0%" },
+    to:   { width: "100%" },
+  },
+},
+animation: {
+  // "progress" animation already referenced above
+},
+```
+
+Slideshow pauses automatically when the user manually navigates (prev/next arrow or arrow key).
+Update the `onNavigate` handler to call `setSlideshowActive(false)` when triggered manually.
+
+### Files changed in Phase 3
+
+| File | Change type |
+|------|-------------|
+| `components/Lightbox.tsx` | Modify — fullscreen, hints, GPS link, slideshow, progress bar |
+| `tailwind.config.js` | Modify — add `progress` keyframe |
+
+### Acceptance criteria — Phase 3
+
+- Pressing `F` in the lightbox enters fullscreen; `F` again or `Esc` exits. The fullscreen
+  button icon toggles between expand/contract arrows.
+- In fullscreen mode the metadata panel is hidden; only the image and nav arrows are visible.
+- On lightbox open, keyboard hints appear for 3 seconds then fade out. Pressing `?` toggles
+  them permanently on/off.
+- GPS coordinates are a tappable/clickable link; clicking opens Google Maps at the correct
+  location in a new tab.
+- Pressing `Space` starts slideshow; images advance every 3 seconds; a progress bar sweeps
+  across the top. Pressing `Space` again stops it. Manual next/prev navigation also stops it.
+- With `prefers-reduced-motion` active: the progress bar animation does not play; the hint
+  overlay does not fade (it is either visible or hidden without transition).
+
+---
+
+## Phase 4 — Library Quick-Switcher & Keyboard Reference
+
+**Goal**: Power users can switch libraries and discover keyboard shortcuts without navigating
+away from their current context.
+
+### 4a — Command palette (`⌘K` / `Ctrl+K`)
+
+#### `src/ui/web/src/components/CommandPalette.tsx` — Create
+
+A modal that appears over the current page. It fetches the library list and renders a
+search-filtered list of libraries. Keyboard-navigable (↑/↓ arrows, Enter to select, Esc to
+dismiss).
+
+```typescript
+interface CommandPaletteProps {
+  open: boolean;
+  onClose: () => void;
+}
+```
+
+**Structure:**
+
+```tsx
+// Full-screen backdrop
+<div className="fixed inset-0 z-50 flex items-start justify-center pt-24 px-4"
+     onClick={onClose}>
+
+  {/* Palette panel — stops propagation so clicks inside don't close */}
+  <div className="w-full max-w-lg rounded-xl bg-gray-900 border border-gray-700
+                  shadow-2xl overflow-hidden"
+       onClick={e => e.stopPropagation()}>
+
+    {/* Search input */}
+    <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-800">
+      <MagnifyingGlassIcon className="h-4 w-4 text-gray-500 shrink-0" />
+      <input
+        ref={inputRef}
+        autoFocus
+        placeholder="Go to library…"
+        className="flex-1 bg-transparent text-sm text-gray-100 placeholder-gray-500
+                   outline-none"
+        value={query}
+        onChange={e => setQuery(e.target.value)}
+      />
+      <kbd className="text-xs text-gray-600 font-mono">Esc</kbd>
+    </div>
+
+    {/* Results list */}
+    <ul className="max-h-72 overflow-y-auto py-2">
+      {filtered.map((lib, i) => (
+        <li key={lib.library_id}>
+          <button
+            className={`w-full text-left px-4 py-2.5 flex items-center gap-3 text-sm
+              ${i === activeIndex
+                ? "bg-indigo-600/30 text-indigo-300"
+                : "text-gray-300 hover:bg-gray-800"}`}
+            onClick={() => selectLibrary(lib)}
+          >
+            <BookOpenIcon className="h-4 w-4 text-gray-500 shrink-0" />
+            <span className="flex-1 truncate">{lib.name}</span>
+            <Badge status={lib.scan_status} />
+          </button>
+        </li>
+      ))}
+      {filtered.length === 0 && (
+        <li className="px-4 py-3 text-sm text-gray-500">No libraries match "{query}"</li>
+      )}
+    </ul>
+  </div>
+</div>
+```
+
+**Navigation logic:**
+
+```typescript
+// Keyboard handler on the input
+onKeyDown: (e) => {
+  if (e.key === "ArrowDown") { setActiveIndex(i => Math.min(i + 1, filtered.length - 1)); }
+  if (e.key === "ArrowUp")   { setActiveIndex(i => Math.max(i - 1, 0)); }
+  if (e.key === "Enter")     { selectLibrary(filtered[activeIndex]); }
+  if (e.key === "Escape")    { onClose(); }
+}
+```
+
+`selectLibrary` navigates to `/libraries/${lib.library_id}/browse` and calls `onClose`.
+
+**Filtering:** case-insensitive substring match on `lib.name`. No fuzzy matching (simple and
+predictable).
+
+#### `src/ui/web/src/components/AppShell.tsx` — Modify
+
+Add `CommandPalette` state and global keyboard listener:
+
+```typescript
+const [paletteOpen, setPaletteOpen] = useState(false);
+
+useEffect(() => {
+  const handler = (e: KeyboardEvent) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+      e.preventDefault();
+      setPaletteOpen(o => !o);
+    }
+  };
+  document.addEventListener("keydown", handler);
+  return () => document.removeEventListener("keydown", handler);
+}, []);
+```
+
+Render `<CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />` at the
+end of the AppShell return, outside the main scroll area so it overlays everything.
+
+Add a trigger button in the Sidebar header area (desktop) for discoverability:
+
+```tsx
+<button
+  onClick={() => setPaletteOpen(true)}
+  className="hidden md:flex w-full items-center gap-2 px-3 py-2 rounded-lg
+             text-xs text-gray-500 bg-gray-800/50 hover:bg-gray-800
+             border border-gray-700/50 transition-colors"
+  aria-label="Open library switcher"
+>
+  <MagnifyingGlassIcon className="h-3.5 w-3.5 shrink-0" />
+  <span className="flex-1 text-left">Go to library</span>
+  <kbd className="font-mono text-[10px] text-gray-600">⌘K</kbd>
+</button>
+```
+
+This button sits at the top of the Sidebar (above the library list), visible only on desktop.
+On mobile the Sidebar is hidden and `⌘K` still works globally via the `useEffect`.
+
+### 4b — Keyboard shortcuts reference modal
+
+#### `src/ui/web/src/components/KeyboardShortcuts.tsx` — Create
+
+A modal listing all keyboard shortcuts, triggered by pressing `?` from any non-input context.
+
+```typescript
+const SHORTCUT_GROUPS = [
+  {
+    label: "Navigation",
+    shortcuts: [
+      { keys: ["⌘", "K"], description: "Open library switcher" },
+      { keys: ["?"], description: "Show / hide this panel" },
+    ],
+  },
+  {
+    label: "Lightbox",
+    shortcuts: [
+      { keys: ["←", "→"], description: "Previous / next photo" },
+      { keys: ["Esc"], description: "Close lightbox" },
+      { keys: ["F"], description: "Toggle fullscreen" },
+      { keys: ["Space"], description: "Start / stop slideshow" },
+    ],
+  },
+] as const;
+```
+
+Rendered as a standard `<Modal>` (reuses existing Modal component). The `?` shortcut is
+registered in `AppShell` (not in Lightbox — Lightbox already has its own `?` handler for the
+hint overlay, and both independently manage their own state).
+
+**AppShell `?` handler** (global, not inside a text input):
+
+```typescript
+const handler = (e: KeyboardEvent) => {
+  if (e.key === "?" && !isInputFocused()) {
+    setShortcutsOpen(o => !o);
+  }
+};
+
+function isInputFocused(): boolean {
+  const tag = document.activeElement?.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+```
+
+### 4c — Sidebar "active library" context
+
+**File**: `src/ui/web/src/components/Sidebar.tsx`
+
+Currently, when browsing a library, the sidebar shows the library's DirectoryTree but there is
+no visible indication of which library is active (the name appears in the breadcrumb, not the
+sidebar). Add a library name header in the sidebar, visible when `libraryId` is set:
+
+```tsx
+{libraryId && libraryName && (
+  <div className="px-3 py-2 border-b border-gray-800">
+    <p className="text-xs text-gray-500 uppercase tracking-wider mb-0.5">Library</p>
+    <p className="text-sm font-medium text-gray-200 truncate" title={libraryName}>
+      {libraryName}
+    </p>
+  </div>
+)}
+```
+
+`libraryName` is passed as a new prop to Sidebar from AppShell, where it can be derived from
+the current route params and the cached library list query.
+
+**AppShell** passes `libraryName` to Sidebar:
+
+```typescript
+// In AppShell, derive library name from queryClient cache (already fetched by LibrariesPage)
+const libraryName = useLibraryName(libraryId); // see below
+```
+
+```typescript
+// New hook: src/ui/web/src/hooks/useLibraryName.ts
+export function useLibraryName(libraryId?: string): string | undefined {
+  const { data } = useQuery({
+    queryKey: ["libraries"],
+    queryFn: () => listLibraries(),
+    staleTime: 60_000,
+  });
+  return data?.find(l => l.library_id === libraryId)?.name;
+}
+```
+
+### Files changed in Phase 4
+
+| File | Change type |
+|------|-------------|
+| `components/CommandPalette.tsx` | **Create** — library quick-switcher modal |
+| `components/KeyboardShortcuts.tsx` | **Create** — shortcuts reference modal |
+| `hooks/useLibraryName.ts` | **Create** — derive library name from cache |
+| `components/AppShell.tsx` | Modify — ⌘K handler, ? handler, CommandPalette, KeyboardShortcuts, pass libraryName to Sidebar |
+| `components/Sidebar.tsx` | Modify — active library name header |
+
+### Acceptance criteria — Phase 4
+
+- Pressing `⌘K` (macOS) or `Ctrl+K` (Windows/Linux) from any page opens the command palette
+  over the current content.
+- Typing in the palette filters libraries by name (case-insensitive). Keyboard ↑/↓ moves
+  selection; Enter navigates to the highlighted library's browse page.
+- Clicking a library in the palette navigates to that library.
+- Clicking the backdrop or pressing `Esc` closes the palette without navigating.
+- Pressing `?` outside of a text input opens the shortcuts reference modal; `?` or `Esc` closes it.
+- When browsing a library, the sidebar shows the library name above the directory tree.
+- The "Go to library" button is visible in the collapsed sidebar on desktop (icon + tooltip only
+  when collapsed; full button with `⌘K` hint when expanded).
+- All existing tests pass.
+
+---
+
+## Summary of File Changes
+
+| File | Phase | Change type |
+|------|-------|-------------|
+| `src/lumiverb/api/routers/search.py` | 1 | Modify — `date_from`, `date_to` params |
+| `src/ui/web/src/api/types.ts` | 1 | Modify — extend `SearchParams` |
+| `src/ui/web/src/api/client.ts` | 1 | Modify — pass date params |
+| `src/ui/web/src/components/FilterBar.tsx` | 1 | Modify — date filter row, presets, chiclet |
+| `src/ui/web/src/pages/BrowsePage.tsx` | 1, 2 | Modify — date params, zoom, status line, sort, empty states |
+| `src/ui/web/src/components/Lightbox.tsx` | 1, 3 | Modify — `onDateClick`, fullscreen, hints, GPS link, slideshow |
+| `src/ui/web/src/components/ZoomControl.tsx` | 2 | **Create** — zoom slider |
+| `src/ui/web/src/lib/useLocalStorage.ts` | 2 | **Create** — localStorage hook |
+| `tailwind.config.js` | 3 | Modify — `progress` keyframe |
+| `src/ui/web/src/components/CommandPalette.tsx` | 4 | **Create** — library switcher |
+| `src/ui/web/src/components/KeyboardShortcuts.tsx` | 4 | **Create** — shortcuts reference |
+| `src/ui/web/src/hooks/useLibraryName.ts` | 4 | **Create** — library name from cache |
+| `src/ui/web/src/components/AppShell.tsx` | 4 | Modify — global hotkeys, palette, shortcut modal |
+| `src/ui/web/src/components/Sidebar.tsx` | 4 | Modify — active library name header |
