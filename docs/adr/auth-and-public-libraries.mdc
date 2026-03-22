@@ -1,0 +1,651 @@
+# ADR: Web UI Authentication and Public Library Sharing
+
+## Status
+Accepted
+
+## Implementation Progress
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 1 | Schema: `libraries.is_public` + `public_libraries` control plane table | Pending |
+| 2 | API: expose `is_public` on library endpoints; maintain control plane table on toggle | Pending |
+| 3 | Middleware: unauthenticated public library resolution | Pending |
+| 4 | Web UI: API key login page with localStorage persistence | Pending |
+| 5 | Web UI: public library browsing (unauthenticated share URLs) | Pending |
+
+---
+
+## Build Sequence
+
+Steps must be executed in order. Each step builds on the last.
+
+### Step 1 — Schema migrations
+
+Write and run two Alembic migrations (details in Phase 1):
+- Tenant migration: `ALTER TABLE libraries ADD COLUMN is_public BOOLEAN NOT NULL DEFAULT FALSE`
+- Control plane migration: `CREATE TABLE public_libraries (...)`
+
+**Done when:** `scripts/migrate.sh` runs cleanly with no errors against both DBs.
+
+---
+
+### Step 2 — API changes
+
+Extend the library model, PATCH endpoint, and response shapes (details in Phase 2). Extend the middleware to resolve public library requests without an API key (details in Phase 3).
+
+**Done when:**
+```bash
+# Toggle a library public (requires auth)
+curl -s -X PATCH http://localhost:8000/v1/libraries/{id} \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"is_public": true}'
+# → 200 with is_public: true in response
+
+# Fetch that library without auth
+curl -s http://localhost:8000/v1/libraries/{id}
+# → 200 (public library is accessible)
+
+# Fetch a private library without auth
+curl -s http://localhost:8000/v1/libraries/{other_id}
+# → 401 (middleware falls through; see "Response codes" note in Phase 3)
+```
+
+---
+
+### Step 3 — Web UI login page
+
+Build the login page and wire up localStorage-based key storage (details in Phase 4).
+
+**Done when:**
+- Visiting the app with no key in localStorage shows the login page
+- Entering a valid API key stores it and loads the app normally
+- Entering an invalid key shows an error
+- Logout clears the key and returns to the login page
+
+---
+
+### Step 4 — Web UI public library browsing
+
+Public share URLs work without login; private libraries require the login page (details in Phase 5).
+
+**Done when:**
+- A logged-in user can mark a library public and copy a share URL
+- Opening the share URL in an incognito window (no stored key) shows the library browse view with no login prompt
+- Attempting to open a private library URL in incognito redirects to the login page
+
+---
+
+## Context
+
+The web UI currently reads its API key from the `VITE_API_KEY` build-time env var. In the production deployment plan (`prod-deploy.mdc`), that var is set to empty string — meaning the deployed web UI has no usable auth and cannot make authenticated API calls at all. The server must not go live until this is resolved.
+
+Two capabilities are needed:
+
+1. **Login**: the primary user must be able to authenticate to the web UI at runtime without baking a secret into the JS bundle.
+2. **Public sharing**: specific libraries should be browsable without authentication via a shareable URL, while all other libraries remain private.
+
+### What is NOT in scope
+
+- Multi-user accounts, passwords, or sessions (Phase 5 Firebase Auth per architecture.md)
+- OAuth / SSO
+- Per-asset public access (public access is scoped to libraries, not individual assets)
+- Write access via public URLs (all unauthenticated access is read-only)
+- Rate limiting on public endpoints
+
+### Key constraint: tenant resolution
+
+Every tenant-scoped API route currently requires an `Authorization: Bearer` token which the `TenantResolutionMiddleware` uses to look up the tenant. For public library access, there is no token. The middleware must be extended to resolve the tenant from a `library_id` via a new `public_libraries` lookup table in the control plane.
+
+### Required documentation updates
+
+`docs/cursor-api.md` and `docs/architecture.md` both state that tenant context always comes from the API key and never from a URL parameter or request body. This ADR intentionally introduces a narrow exception: unauthenticated GET requests may resolve tenant context from `library_id` (path or query param) when a matching row exists in the `public_libraries` control plane table. Both docs must be updated with this exception once Phase 3 is implemented, or future implementers will treat it as a bug and remove it.
+
+---
+
+## Phase 1: Schema
+
+### Tenant migration — `libraries.is_public`
+
+New Alembic revision in `migrations/tenant/versions/`:
+
+```python
+def upgrade() -> None:
+    op.add_column(
+        "libraries",
+        sa.Column("is_public", sa.Boolean(), nullable=False, server_default="false"),
+    )
+
+def downgrade() -> None:
+    op.drop_column("libraries", "is_public")
+```
+
+Defaults to `false`. All existing libraries remain private.
+
+### Control plane migration — `public_libraries`
+
+New Alembic revision in `migrations/control/versions/`:
+
+```python
+def upgrade() -> None:
+    op.create_table(
+        "public_libraries",
+        sa.Column("library_id", sa.Text(), primary_key=True),
+        sa.Column("tenant_id", sa.Text(), sa.ForeignKey("tenants.tenant_id"), nullable=False),
+        sa.Column("connection_string", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False,
+                  server_default=sa.func.now()),
+    )
+
+def downgrade() -> None:
+    op.drop_table("public_libraries")
+```
+
+This table is the middleware's lookup index: given a `library_id`, it returns the tenant's `connection_string` without requiring an API key. The `connection_string` is denormalized here (also in `tenant_db_routing`) to avoid a second join in the hot path.
+
+**Invariant**: a row exists in `public_libraries` if and only if the corresponding `libraries.is_public = true` in the tenant DB. The API maintains this invariant when `is_public` is toggled.
+
+---
+
+## Phase 2: API Changes
+
+### New model in `src/models/control_plane.py`
+
+```python
+class PublicLibrary(SQLModel, table=True):
+    __tablename__ = "public_libraries"
+
+    library_id: str = Field(primary_key=True)
+    tenant_id: str = Field(foreign_key="tenants.tenant_id", nullable=False)
+    connection_string: str = Field(nullable=False)
+    created_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+```
+
+### New repository method in `src/repository/control_plane.py`
+
+Add to the existing control plane repository (or a new `PublicLibraryRepository`):
+
+```python
+class PublicLibraryRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def get(self, library_id: str) -> PublicLibrary | None:
+        return self._session.get(PublicLibrary, library_id)
+
+    def upsert(self, library_id: str, tenant_id: str, connection_string: str) -> None:
+        row = PublicLibrary(
+            library_id=library_id,
+            tenant_id=tenant_id,
+            connection_string=connection_string,
+        )
+        self._session.merge(row)
+        self._session.commit()
+
+    def delete(self, library_id: str) -> None:
+        row = self._session.get(PublicLibrary, library_id)
+        if row:
+            self._session.delete(row)
+            self._session.commit()
+```
+
+### Changes to `src/api/routers/libraries.py`
+
+**`LibraryUpdateRequest`** — add `is_public` field:
+
+```python
+class LibraryUpdateRequest(BaseModel):
+    name: str | None = None
+    vision_model_id: str | None = None
+    is_public: bool | None = None
+
+    @field_validator("vision_model_id")
+    @classmethod
+    def vision_model_id_not_empty(cls, v: str | None) -> str | None:
+        if v is not None and not v:
+            raise ValueError("vision_model_id must not be empty")
+        return v
+```
+
+**`LibraryResponse` and `LibraryListItem`** — add `is_public`:
+
+```python
+class LibraryResponse(BaseModel):
+    library_id: str
+    name: str
+    root_path: str
+    scan_status: str
+    vision_model_id: str
+    is_public: bool = False
+
+class LibraryListItem(BaseModel):
+    library_id: str
+    name: str
+    root_path: str
+    scan_status: str
+    last_scan_at: str | None
+    status: str = "active"
+    vision_model_id: str = ""
+    is_public: bool = False
+```
+
+**`PATCH /v1/libraries/{library_id}` handler** — handle `is_public` toggle and maintain the control plane index:
+
+```python
+@router.patch("/{library_id}", response_model=LibraryResponse)
+def update_library(
+    library_id: str,
+    request: Request,
+    body: LibraryUpdateRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> LibraryResponse:
+    repo = LibraryRepository(session)
+    library = repo.get_by_id(library_id)
+    if library is None:
+        raise HTTPException(status_code=404, detail="Library not found")
+
+    if body.vision_model_id is not None:
+        library.vision_model_id = body.vision_model_id
+    if body.name is not None:
+        library.name = body.name
+    if body.is_public is not None:
+        library.is_public = body.is_public
+
+    library.updated_at = utcnow()
+    session.add(library)
+    session.commit()
+    session.refresh(library)
+
+    # Maintain public_libraries control plane index
+    if body.is_public is not None:
+        tenant_id = request.state.tenant_id
+        connection_string = request.state.connection_string
+        with get_control_session() as ctrl_session:
+            pub_repo = PublicLibraryRepository(ctrl_session)
+            if library.is_public:
+                pub_repo.upsert(library_id, tenant_id, connection_string)
+            else:
+                pub_repo.delete(library_id)
+
+    return LibraryResponse(
+        library_id=library.library_id,
+        name=library.name,
+        root_path=library.root_path,
+        scan_status=library.scan_status,
+        vision_model_id=library.vision_model_id,
+        is_public=library.is_public,
+    )
+```
+
+Update all other `LibraryResponse` and `LibraryListItem` construction sites to include `is_public=library.is_public`.
+
+### Update `LibraryRepository` in `src/repository/tenant.py`
+
+The `libraries` table model (`src/models/tenant.py`) must gain the new column:
+
+```python
+is_public: bool = Field(default=False, nullable=False)
+```
+
+---
+
+## Phase 3: Middleware — Public Library Resolution
+
+Modify `src/api/middleware.py` to resolve unauthenticated requests for public libraries.
+
+### Which routes support public access
+
+All GET routes listed below are public-eligible when the library is public. Write operations (POST, PATCH, DELETE, PUT) are never public-eligible regardless of library visibility. Routes not in this list return 401 even for GET requests without auth.
+
+| Route | library_id source for middleware |
+|-------|----------------------------------|
+| `GET /v1/libraries/{library_id}` | path |
+| `GET /v1/libraries/{library_id}/directories` | path |
+| `GET /v1/assets/page?library_id=` | `library_id` query param |
+| `GET /v1/assets/{asset_id}` | `public_library_id` query param |
+| `GET /v1/assets/{asset_id}/artifacts/{type}` (proxy, thumbnail, video_preview) | `public_library_id` query param |
+| `GET /v1/search?library_id=` | `library_id` query param |
+| `GET /v1/similar?library_id=` | `library_id` query param |
+
+### Extracting the library_id for tenant resolution
+
+The middleware needs a `library_id` to look up the tenant in `public_libraries`. Resolution order (first non-empty wins):
+
+1. **URL path**: for routes starting with `/v1/libraries/`, extract `parts[3]`.
+2. **`library_id` query param**: used by `/v1/assets/page`, `/v1/search`, and `/v1/similar`, which already accept `library_id` as their scoping param — no new param needed for those routes.
+3. **`public_library_id` query param**: used only for `/v1/assets/{id}/...` routes where the asset id is in the path and the library context must be supplied explicitly. This name is intentionally distinct from `library_id` to make the public-access intent visible in logs and to avoid the middleware accidentally resolving tenant from legitimate `library_id` params on authenticated routes.
+
+The `public_library_id` param is **only** relevant on individual asset routes. Do not use it for search or asset-list routes — use `library_id` there.
+
+### Middleware logic
+
+Replace or extend `TenantResolutionMiddleware.dispatch()`:
+
+```python
+import re
+
+_PUBLIC_ELIGIBLE_PATH = re.compile(
+    r"^/v1/(libraries/[^/]+|assets/[^/]+|search|similar)"
+)
+
+
+def _extract_library_id_from_path(path: str) -> str | None:
+    """For /v1/libraries/{library_id}/... return the library_id, else None."""
+    parts = path.split("/")
+    # parts: ['', 'v1', 'libraries', '{library_id}', ...]
+    if len(parts) >= 4 and parts[2] == "libraries":
+        return parts[3] or None
+    return None
+
+
+class TenantResolutionMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if _skip_tenant_middleware(request.url.path):
+            return await call_next(request)
+
+        auth = request.headers.get("Authorization")
+
+        # --- Authenticated path (unchanged) ---
+        if auth and auth.startswith("Bearer "):
+            token = auth[7:].strip()
+            if not token:
+                return _error_response(401, "unauthorized", "Missing or invalid Authorization header")
+            with get_control_session() as session:
+                key_repo = ApiKeyRepository(session)
+                api_key = key_repo.get_by_plaintext(token)
+                if api_key is None:
+                    return _error_response(401, "unauthorized", "Invalid or revoked API key")
+                key_repo.touch_last_used(api_key.key_id)
+                routing_repo = TenantDbRoutingRepository(session)
+                routing = routing_repo.get_by_tenant_id(api_key.tenant_id)
+                if routing is None:
+                    return _error_response(500, "tenant_routing_missing", "Tenant database routing not found")
+                request.state.tenant_id = api_key.tenant_id
+                request.state.connection_string = routing.connection_string
+                request.state.key_id = api_key.key_id
+                request.state.role = getattr(api_key, "role", "member")
+                request.state.is_public_request = False
+            return await call_next(request)
+
+        # --- Unauthenticated path: attempt public library resolution ---
+        if request.method == "GET" and _PUBLIC_ELIGIBLE_PATH.match(request.url.path):
+            library_id = (
+                _extract_library_id_from_path(request.url.path)
+                or request.query_params.get("library_id")       # /search, /similar, /assets/page
+                or request.query_params.get("public_library_id")  # /assets/{id}/...
+            )
+            if library_id:
+                with get_control_session() as session:
+                    pub_repo = PublicLibraryRepository(session)
+                    pub = pub_repo.get(library_id)
+                if pub is not None:
+                    request.state.tenant_id = pub.tenant_id
+                    request.state.connection_string = pub.connection_string
+                    request.state.key_id = None
+                    request.state.role = "public"
+                    request.state.is_public_request = True
+                    return await call_next(request)
+
+        return _error_response(401, "unauthorized", "Missing or invalid Authorization header")
+```
+
+### Public request guard dependency
+
+For any route that must never be accessible via public access (e.g. write routes, admin routes), add a FastAPI dependency. This is a safety net — the middleware already blocks non-GET methods from reaching the public path, but the dependency makes the restriction explicit in route definitions where needed:
+
+```python
+# src/api/dependencies.py
+from fastapi import Request, HTTPException
+
+def require_auth(request: Request) -> None:
+    """Raise 403 if this is a public (unauthenticated) request."""
+    if getattr(request.state, "is_public_request", False):
+        raise HTTPException(status_code=403, detail="This operation requires authentication")
+```
+
+Apply to write routes that might otherwise be reachable in public mode. Since the middleware already gates on `request.method == "GET"`, this is defense-in-depth for any route that manages sensitive side-effects.
+
+### What public access can and cannot do
+
+| Operation | Public access |
+|-----------|--------------|
+| `GET /v1/libraries/{id}` | Allowed; handler verifies `library.is_public` |
+| `GET /v1/libraries/{id}/directories` | Allowed; handler verifies `library.is_public` |
+| `GET /v1/assets/page?library_id=` | Allowed; handler verifies library `is_public` |
+| `GET /v1/assets/{id}?public_library_id=` | Allowed; handler verifies asset belongs to the stated library and that library `is_public` |
+| `GET /v1/assets/{id}/thumbnail?public_library_id=` | Allowed; same verification (UI path used by `useAuthenticatedImage`) |
+| `GET /v1/assets/{id}/proxy?public_library_id=` | Allowed; same verification (UI path used by `useAuthenticatedImage`) |
+| `GET /v1/assets/{id}/preview?public_library_id=` | Allowed; same verification (UI path used by `useAuthenticatedImage` for video) |
+| `GET /v1/assets/{id}/artifacts/proxy?public_library_id=` | Allowed; same verification (download endpoint from cloud-deploy ADR) |
+| `GET /v1/assets/{id}/artifacts/thumbnail?public_library_id=` | Allowed; same verification |
+| `GET /v1/assets/{id}/artifacts/video_preview?public_library_id=` | Allowed; same verification |
+| `GET /v1/search?library_id=` | Allowed; handler verifies library `is_public` |
+| `GET /v1/similar?library_id=` | Allowed; handler verifies library `is_public` |
+| `GET /v1/libraries` (list all) | Blocked — 401 (no library_id to resolve from) |
+| Any POST / PATCH / DELETE | Blocked — middleware only allows GET into public path |
+
+### Handler-level `is_public` verification
+
+The middleware trusts the `public_libraries` control plane table, but route handlers must additionally verify `library.is_public` directly on the tenant DB row. This is defense-in-depth: it closes the window where a row exists in `public_libraries` but the tenant DB was manually edited, a migration partially applied, or the library was deleted and the control plane row orphaned.
+
+Add this check to every route handler that serves public requests. For library-context routes:
+
+```python
+if getattr(request.state, "is_public_request", False):
+    if not library.is_public:
+        raise HTTPException(status_code=404, detail="Not found")
+```
+
+For asset-context routes (where `public_library_id` is the param):
+
+```python
+if getattr(request.state, "is_public_request", False):
+    public_library_id = request.query_params.get("public_library_id")
+    if not public_library_id or asset.library_id != public_library_id:
+        raise HTTPException(status_code=403, detail="Asset does not belong to the requested public library")
+    # Also verify the library itself is still marked public
+    library = lib_repo.get_by_id(public_library_id)
+    if library is None or not library.is_public:
+        raise HTTPException(status_code=404, detail="Not found")
+```
+
+This prevents an attacker from using a known public library's resolved tenant session to access assets from a private library in the same tenant, and catches stale control plane entries.
+
+### Response codes for unauthenticated requests
+
+**Middleware returns 401** when no `public_libraries` row is found for the extracted `library_id`. This covers both "library is private" and "library_id doesn't exist" — the middleware cannot distinguish them without a tenant DB lookup, which requires knowing the tenant, which is circular (that's exactly what `public_libraries` solves). Returning 401 here is correct: it means "authentication required," not "this ID exists but is hidden."
+
+**Handler returns 404** in two narrower cases that occur *after* the middleware has resolved the tenant:
+1. The `public_libraries` row exists (stale) but `library.is_public` is false in the tenant DB.
+2. The `public_library_id` param names a library that doesn't exist or `is_public=false`.
+
+These 404s are appropriate because the middleware already established a valid tenant session — the question is whether *this resource* is accessible, not whether auth is required.
+
+No 404 leaks private library existence to unauthenticated callers: 401 from the middleware is the only response they ever see for a library not in `public_libraries`.
+
+### Control plane update ordering in PATCH handler
+
+The PATCH handler commits the tenant DB row first, then updates the control plane `public_libraries` table. If the control plane write fails after the tenant commit, the invariant is violated: the library is marked `is_public=true` in the tenant DB but has no entry in `public_libraries`, so unauthenticated requests will get 401 even though the library is "public." Recovery: re-issue the PATCH request — the handler is idempotent (upsert on the control plane). Log the failure clearly so it is surfaced.
+
+---
+
+## Phase 4: Web UI — Login Page
+
+### API key storage
+
+`src/ui/web/src/api/client.ts` currently reads the key from `import.meta.env.VITE_API_KEY`. Change this to read from `localStorage` first, falling back to the env var (which supports dev setups that still use it):
+
+```typescript
+function getApiKey(): string {
+  return localStorage.getItem("lumiverb_api_key") ?? import.meta.env.VITE_API_KEY ?? "";
+}
+```
+
+All places that build the `Authorization` header call `getApiKey()`. The hook `useAuthenticatedImage.ts` does the same.
+
+### `pages/LoginPage.tsx`
+
+Full-screen login. Single input for the API key. On submit, validates by calling `GET /v1/libraries` with the supplied key. On success, stores the key and reloads.
+
+```
+┌─────────────────────────────────┐
+│                                 │
+│         Lumiverb                │
+│                                 │
+│  API Key ______________________│
+│           [Sign in]             │
+│                                 │
+│  (error message if invalid)     │
+└─────────────────────────────────┘
+```
+
+**Key behaviors:**
+- On submit: `GET /v1/libraries` with `Authorization: Bearer {entered_key}`
+  - 200 → store key as `localStorage.setItem("lumiverb_api_key", key)`, trigger app reload
+  - 401 → show "Invalid API key"
+  - Network error → show "Could not reach server"
+- No "remember me" toggle — always stores in localStorage (persists across browser sessions)
+- No "sign up" or "forgot password" link — intentional; this is API-key-only auth in v1
+
+### `App.tsx` gating
+
+In the root router setup, check for a stored key before rendering any routes. If no key, render `<LoginPage />` instead of the normal shell:
+
+```typescript
+const apiKey = localStorage.getItem("lumiverb_api_key") ?? import.meta.env.VITE_API_KEY ?? "";
+if (!apiKey) {
+  return <LoginPage />;
+}
+```
+
+This check runs synchronously on render. There is no async session check on startup — the key is trusted until an API call returns 401, at which point the app should clear the key and reload to the login page. Add a global 401 handler in the API client that does this:
+
+```typescript
+if (response.status === 401) {
+  localStorage.removeItem("lumiverb_api_key");
+  window.location.reload();
+}
+```
+
+### Logout
+
+Add a Logout button to the top nav in `App.tsx`:
+
+```typescript
+function logout() {
+  localStorage.removeItem("lumiverb_api_key");
+  window.location.reload();
+}
+```
+
+Place it at the far right of the nav bar. Label: "Sign out".
+
+---
+
+## Phase 5: Web UI — Public Library Browsing
+
+### Share URL format
+
+Public libraries are accessible at their standard browse URL:
+
+```
+https://lumiverb.example.com/libraries/{library_id}/browse
+```
+
+No token required in the URL. The library's `is_public` flag is server-enforced. If a user bookmarks or shares this URL, anyone with it can browse the library as long as it remains public. If the owner makes the library private again, the URL stops working.
+
+### Library settings UI
+
+In the library list (`LibrariesPage.tsx`) or a library detail view, add a visibility toggle per library:
+
+- A toggle or button labeled "Public" / "Private"
+- Toggling calls `PATCH /v1/libraries/{id}` with `{"is_public": true/false}`
+- When public: show a "Copy link" button that copies the browse URL to clipboard
+- Confirmation prompt before making public: "Anyone with this link will be able to view this library's photos. Continue?"
+
+### Unauthenticated browsing mode
+
+When `BrowsePage` loads for a library route and there is no stored API key, the page must attempt to browse the library as a public visitor:
+
+1. Call `GET /v1/libraries/{library_id}` with no auth header
+   - 200 → render the library in read-only public mode (no upload, no delete, no settings)
+   - 401 → no key and not public → redirect to `<LoginPage />` (preserving the current URL as a `?next=` param so the user lands back after login)
+
+2. All subsequent API calls from `BrowsePage` in public mode:
+   - Asset list: `GET /v1/assets/page?library_id={library_id}` — no auth header; `library_id` is the existing param the handler already uses for scoping
+   - Thumbnails/proxies/previews: append `?public_library_id={library_id}` to all `/v1/assets/{id}/artifacts/...` requests
+
+**Important**: `BrowsePage` currently calls `listLibraries` (i.e., `GET /v1/libraries`) to resolve the library's display name and metadata. In public mode, `GET /v1/libraries` is blocked (returns 401 — no library_id to resolve from). Public mode must call `GET /v1/libraries/{library_id}` directly and use only that single response. Do not retain the `listLibraries` dependency for unauthenticated users.
+
+**Directory tree and path filters**: If `BrowsePage` calls `GET /v1/libraries/{library_id}/directories` or path filter endpoints during browsing, those routes are already in the public-eligible allowlist (see Phase 3). Confirm any other routes called from `BrowsePage` or `Lightbox` are in the allowlist before treating Phase 5 as complete. Routes missing from the allowlist will surface as silent 401 errors in the browser console during unauthenticated browsing.
+
+### `useAuthenticatedImage` in public mode
+
+The hook currently fetches images using the `Authorization` header. In public mode it must instead fetch without auth and with the `?public_library_id=` param:
+
+```typescript
+// Caller passes isPublic and publicLibraryId when in public mode
+function useAuthenticatedImage(url: string, isPublic = false, publicLibraryId?: string) {
+  // If public: fetch(url + `?public_library_id=${publicLibraryId}`) with no auth header
+  // If private: fetch(url, { headers: { Authorization: `Bearer ${getApiKey()}` } })
+}
+```
+
+The `BrowsePage` knows whether it is in public mode from the presence/absence of a stored API key and the 200 response from the unauthenticated library fetch. It passes `isPublic={true}` and `publicLibraryId={library_id}` down to `AssetCell` and `Lightbox`.
+
+### Public mode visual indicator
+
+When browsing in public mode, show a subtle read-only banner at the top:
+
+```
+🔒  Viewing as public guest · Sign in
+```
+
+"Sign in" links to `<LoginPage />`.
+
+---
+
+## Required Tests
+
+Per project conventions, new behavior requires test coverage. Suggested test cases — mark `@pytest.mark.slow` for anything requiring a DB (testcontainers Postgres), `@pytest.mark.fast` for pure unit tests.
+
+### Migrations (`@pytest.mark.migration`)
+- Control plane migration creates `public_libraries` table with correct schema
+- Tenant migration adds `is_public` column with `DEFAULT false`; existing rows unaffected
+
+### Middleware (`@pytest.mark.slow`)
+- Authenticated request with valid API key → resolves tenant, `is_public_request=False`
+- Unauthenticated GET `/v1/libraries/{id}` where library is public → resolves tenant, `is_public_request=True`
+- Unauthenticated GET `/v1/libraries/{id}` where library is private (no `public_libraries` row) → 401
+- Unauthenticated GET `/v1/assets/page?library_id={public_id}` → resolves via `library_id` query param
+- Unauthenticated GET `/v1/assets/{id}/artifacts/thumbnail?public_library_id={public_id}` → resolves via `public_library_id` query param
+- Unauthenticated GET `/v1/search?library_id={public_id}` → resolves via `library_id` query param
+- Unauthenticated POST (any route) → 401, never reaches public resolution
+- Unauthenticated GET non-eligible route (e.g. `/v1/jobs/next`) → 401
+
+### PATCH library toggle (`@pytest.mark.slow`)
+- `PATCH /v1/libraries/{id}` with `{"is_public": true}` → `is_public=true` in response, row inserted in `public_libraries`
+- `PATCH /v1/libraries/{id}` with `{"is_public": false}` → `is_public=false` in response, row removed from `public_libraries`
+- Toggling back and forth maintains invariant each time
+- `PATCH` with no `is_public` field → `public_libraries` unchanged
+
+### Handler-level `is_public` verification (`@pytest.mark.slow`)
+- GET public library with `is_public=true` in tenant DB → 200
+- GET public library with `is_public=false` in tenant DB but stale `public_libraries` row → 404 (handler check catches it)
+- GET asset with `public_library_id` pointing to correct public library → 200
+- GET asset with `public_library_id` pointing to a different library (cross-library attack) → 403
+- GET asset with `public_library_id` pointing to a private library → 404
+
+---
+
+## Environment Variable Behavior After This Change
+
+| Env | Dev | Production |
+|-----|-----|------------|
+| `VITE_API_KEY` set | Used as fallback if no localStorage key | Not needed; login page handles it |
+| `VITE_API_KEY` empty | Login page shown on first visit | Login page shown on first visit |
+
+`VITE_API_KEY` remains supported as a convenience for local dev. Set it in `.env.local` and the login page is bypassed for that browser. Do not set it in CI builds or production; the login page is the intended auth path.
