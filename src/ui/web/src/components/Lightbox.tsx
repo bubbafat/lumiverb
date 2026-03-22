@@ -126,7 +126,7 @@ export function Lightbox({
       <button
         type="button"
         onClick={onClose}
-        className="absolute right-4 top-4 z-10 rounded-full p-2 text-2xl text-white/80 transition-colors hover:bg-white/10 hover:text-white"
+        className="absolute right-4 top-4 z-10 mt-safe mr-safe flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full p-2 text-2xl text-white/80 transition-colors hover:bg-white/10 hover:text-white"
         aria-label="Close"
       >
         ×
@@ -174,7 +174,7 @@ export function Lightbox({
               <button
                 type="button"
                 onClick={() => onNavigate(currentIndex - 1)}
-                className="absolute left-0 top-1/2 -translate-y-1/2 rounded-full bg-white/10 p-5 min-h-[44px] min-w-[44px] text-white transition-colors hover:bg-white/20"
+                className="absolute left-0 top-1/2 -translate-y-1/2 ml-safe rounded-full bg-white/10 p-5 min-h-[44px] min-w-[44px] text-white transition-colors hover:bg-white/20"
                 aria-label="Previous"
               >
                 <svg
@@ -196,7 +196,7 @@ export function Lightbox({
               <button
                 type="button"
                 onClick={() => onNavigate(currentIndex + 1)}
-                className="absolute right-0 top-1/2 -translate-y-1/2 rounded-full bg-white/10 p-5 min-h-[44px] min-w-[44px] text-white transition-colors hover:bg-white/20"
+                className="absolute right-0 top-1/2 -translate-y-1/2 mr-safe rounded-full bg-white/10 p-5 min-h-[44px] min-w-[44px] text-white transition-colors hover:bg-white/20"
                 aria-label="Next"
               >
                 <svg
@@ -218,7 +218,7 @@ export function Lightbox({
         </div>
 
         {/* Right: metadata panel */}
-        <div className={`w-full border-t border-gray-700 bg-gray-900/50 p-4 lg:p-6 lg:w-80 lg:border-l lg:border-t-0 transition-[max-height] duration-200 ${metaOpen ? "overflow-y-auto max-h-none" : "max-h-[3.5rem] overflow-hidden"} lg:overflow-y-auto lg:max-h-none`}>
+        <div className={`w-full border-t border-gray-700 bg-gray-900/50 p-4 lg:p-6 lg:w-80 lg:border-l lg:border-t-0 transition-[max-height] duration-200 motion-reduce:transition-none ${metaOpen ? "overflow-y-auto max-h-none" : "max-h-[3.5rem] overflow-hidden"} lg:overflow-y-auto lg:max-h-none`}>
           {/* Details toggle — mobile only */}
           <button
             type="button"
@@ -228,7 +228,7 @@ export function Lightbox({
           >
             <span className="text-sm font-medium text-gray-300">Details</span>
             <svg
-              className={`h-4 w-4 text-gray-400 transition-transform ${metaOpen ? "" : "rotate-180"}`}
+              className={`h-4 w-4 text-gray-400 transition-transform motion-reduce:transition-none ${metaOpen ? "" : "rotate-180"}`}
               viewBox="0 0 24 24"
               fill="none"
               aria-hidden

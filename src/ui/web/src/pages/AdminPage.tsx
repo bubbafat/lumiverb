@@ -108,7 +108,7 @@ function WorkerSummary({ stats }: { stats: JobStatsResponse }) {
       {activeRows.length > 0 && (
         <div className="rounded-lg border border-gray-700/50 bg-gray-900/50 overflow-hidden">
           <table className="w-full text-sm">
-            <thead>
+            <thead className="hidden sm:table-header-group">
               <tr className="border-b border-gray-700/50">
                 <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Job type</th>
                 <th className="px-4 py-2 text-right text-xs font-medium text-gray-500">Pending</th>
@@ -118,15 +118,18 @@ function WorkerSummary({ stats }: { stats: JobStatsResponse }) {
             </thead>
             <tbody className="divide-y divide-gray-800/50">
               {activeRows.map((r) => (
-                <tr key={r.job_type}>
-                  <td className="px-4 py-2 font-mono text-xs text-gray-300">{r.job_type}</td>
-                  <td className="px-4 py-2 text-right text-gray-400">
+                <tr key={r.job_type} className="flex flex-col gap-1 px-4 py-3 sm:table-row sm:px-0 sm:py-0">
+                  <td className="sm:px-4 sm:py-2 font-mono text-xs text-gray-300">{r.job_type}</td>
+                  <td className="sm:px-4 sm:py-2 sm:text-right text-gray-400">
+                    <span className="text-xs text-gray-500 sm:hidden">Pending </span>
                     {r.pending ? r.pending.toLocaleString() : "—"}
                   </td>
-                  <td className={`px-4 py-2 text-right ${r.claimed > 0 ? "text-amber-300" : "text-gray-400"}`}>
+                  <td className={`sm:px-4 sm:py-2 sm:text-right ${r.claimed > 0 ? "text-amber-300" : "text-gray-400"}`}>
+                    <span className="text-xs text-gray-500 sm:hidden">Running </span>
                     {r.claimed ? r.claimed.toLocaleString() : "—"}
                   </td>
-                  <td className={`px-4 py-2 text-right ${r.failed > 0 ? "text-red-400" : "text-gray-400"}`}>
+                  <td className={`sm:px-4 sm:py-2 sm:text-right ${r.failed > 0 ? "text-red-400" : "text-gray-400"}`}>
+                    <span className="text-xs text-gray-500 sm:hidden">Failed </span>
                     {r.failed ? r.failed.toLocaleString() : "—"}
                   </td>
                 </tr>
@@ -149,7 +152,7 @@ function RunningJobs({ jobs }: { jobs: JobListItem[] }) {
   return (
     <div className="rounded-lg border border-gray-700/50 bg-gray-900/50 overflow-hidden">
       <table className="w-full text-sm">
-        <thead>
+        <thead className="hidden sm:table-header-group">
           <tr className="border-b border-gray-700/50">
             <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Type</th>
             <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Worker</th>
@@ -159,15 +162,18 @@ function RunningJobs({ jobs }: { jobs: JobListItem[] }) {
         </thead>
         <tbody className="divide-y divide-gray-800/50">
           {running.map((j) => (
-            <tr key={j.job_id}>
-              <td className="px-4 py-2 font-mono text-xs text-gray-300">{j.job_type}</td>
-              <td className="px-4 py-2 font-mono text-xs text-gray-500 truncate max-w-[12rem]">
+            <tr key={j.job_id} className="flex flex-col gap-1 px-4 py-3 sm:table-row sm:px-0 sm:py-0">
+              <td className="sm:px-4 sm:py-2 font-mono text-xs text-gray-300">{j.job_type}</td>
+              <td className="sm:px-4 sm:py-2 font-mono text-xs text-gray-500 sm:truncate sm:max-w-[12rem]">
+                <span className="text-xs text-gray-500 sm:hidden">Worker </span>
                 {j.worker_id ?? "—"}
               </td>
-              <td className="px-4 py-2 font-mono text-xs text-gray-500 truncate max-w-[14rem]">
+              <td className="sm:px-4 sm:py-2 font-mono text-xs text-gray-500 sm:truncate sm:max-w-[14rem]">
+                <span className="text-xs text-gray-500 sm:hidden">Asset </span>
                 {j.asset_id ? j.asset_id.slice(0, 8) + "…" : "—"}
               </td>
-              <td className="px-4 py-2 text-right text-xs text-amber-300">
+              <td className="sm:px-4 sm:py-2 sm:text-right text-xs text-amber-300">
+                <span className="text-xs text-gray-500 sm:hidden">Running for </span>
                 {duration(j.claimed_at)}
               </td>
             </tr>
@@ -190,7 +196,7 @@ function FailedJobs({ jobs }: { jobs: JobListItem[] }) {
       </h3>
       <div className="rounded-lg border border-red-900/40 bg-gray-900/50 overflow-hidden">
         <table className="w-full text-sm">
-          <thead>
+          <thead className="hidden sm:table-header-group">
             <tr className="border-b border-gray-700/50">
               <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Type</th>
               <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Error</th>
@@ -199,12 +205,14 @@ function FailedJobs({ jobs }: { jobs: JobListItem[] }) {
           </thead>
           <tbody className="divide-y divide-gray-800/50">
             {failed.map((j) => (
-              <tr key={j.job_id}>
-                <td className="px-4 py-2 font-mono text-xs text-gray-300">{j.job_type}</td>
-                <td className="px-4 py-2 text-xs text-red-400 truncate max-w-[28rem]">
+              <tr key={j.job_id} className="flex flex-col gap-1 px-4 py-3 sm:table-row sm:px-0 sm:py-0">
+                <td className="sm:px-4 sm:py-2 font-mono text-xs text-gray-300">{j.job_type}</td>
+                <td className="sm:px-4 sm:py-2 text-xs text-red-400 sm:truncate sm:max-w-[28rem]">
+                  <span className="text-xs text-gray-500 sm:hidden">Error </span>
                   {j.error_message ?? "Unknown error"}
                 </td>
-                <td className="px-4 py-2 text-right text-xs text-gray-500">
+                <td className="sm:px-4 sm:py-2 sm:text-right text-xs text-gray-500">
+                  <span className="text-xs text-gray-500 sm:hidden">Age </span>
                   {relativeTime(j.created_at)}
                 </td>
               </tr>

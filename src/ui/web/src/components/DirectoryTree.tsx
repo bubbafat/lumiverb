@@ -109,7 +109,7 @@ export function DirectoryTree({
               >
                 {showChevron ? (
                   <svg
-                    className={`h-4 w-4 text-gray-400 transition-transform duration-150 ${isExpanded ? "rotate-90" : ""}`}
+                    className={`h-4 w-4 text-gray-400 transition-transform duration-150 motion-reduce:transition-none ${isExpanded ? "rotate-90" : ""}`}
                     viewBox="0 0 24 24"
                     fill="none"
                     aria-hidden

@@ -1,16 +1,16 @@
 # ADR: Phased Mobile UI Improvements
 
 ## Status
-Planned
+Complete
 
 ## Implementation Progress
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | Navigation overhaul — bottom tab bar + sidebar drawer overlay | Planned |
-| 2 | Responsive grid — dynamic column count, breakpoint dead-zone fix | Planned |
-| 3 | Touch targets, lightbox mobile layout, modal sizing | Planned |
-| 4 | Polish — safe areas, reduced motion, admin table cards | Planned |
+| 1 | Navigation overhaul — bottom tab bar + sidebar drawer overlay | Complete |
+| 2 | Responsive grid — dynamic column count, breakpoint dead-zone fix | Complete |
+| 3 | Touch targets, lightbox mobile layout, modal sizing | Complete |
+| 4 | Polish — safe areas, reduced motion, admin table cards | Complete |
 
 ---
 
