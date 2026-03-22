@@ -17,9 +17,9 @@ import type { VirtualRowKind } from "../lib/virtualRows";
 const PAGE_SIZE = 100;
 const TARGET_ROW_HEIGHT = 220;
 const ROW_GAP = 4;
-const MOBILE_BREAKPOINT = 500;
-const MOBILE_COLUMNS = 2;
-const MOBILE_ROW_HEIGHT = 160;
+const FIXED_GRID_BREAKPOINT = 700; // px — at or below this, use fixed-column grid
+const MIN_CELL_WIDTH = 150;        // px — drives dynamic column count
+const CELL_ASPECT_RATIO = 1.0;     // square cells in fixed-column mode
 
 export default function BrowsePage() {
   const { libraryId } = useParams<{ libraryId: string }>();
@@ -135,14 +135,11 @@ export default function BrowsePage() {
   const virtualRows: VirtualRowKind[] = useMemo(
     () => {
       if (containerWidth <= 0) return [];
-      if (containerWidth < MOBILE_BREAKPOINT) {
-        return buildFixedGridRows(
-          groups,
-          containerWidth,
-          MOBILE_COLUMNS,
-          MOBILE_ROW_HEIGHT,
-          ROW_GAP,
-        );
+      if (containerWidth <= FIXED_GRID_BREAKPOINT) {
+        const columns = Math.max(2, Math.floor(containerWidth / MIN_CELL_WIDTH));
+        const cellWidth = Math.floor((containerWidth - ROW_GAP * (columns - 1)) / columns);
+        const rowHeight = Math.round(cellWidth * CELL_ASPECT_RATIO);
+        return buildFixedGridRows(groups, containerWidth, columns, rowHeight, ROW_GAP);
       }
       return buildVirtualRows(groups, containerWidth, TARGET_ROW_HEIGHT, ROW_GAP);
     },

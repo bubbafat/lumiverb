@@ -67,7 +67,7 @@ export function buildFixedGridRows(
 ): VirtualRowKind[] {
   if (containerWidth <= 0 || !groups.length) return [];
   const virtualRows: VirtualRowKind[] = [];
-  const colWidth = (containerWidth - rowGap * (columns - 1)) / columns;
+  const colWidth = Math.floor((containerWidth - rowGap * (columns - 1)) / columns);
 
   groups.forEach((group, groupIndex) => {
     virtualRows.push({ type: "header", label: group.label, height: HEADER_HEIGHT });
