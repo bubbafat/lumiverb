@@ -61,7 +61,14 @@ class VideoPreviewWorker(BaseWorker):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             preview_path = Path(tmpdir) / f"{asset_id}_preview.mp4"
-            self._run_ffmpeg(source_path, preview_path, asset_id=asset_id)
+            rel_path_display = rel_path.lstrip("/")
+            video_path = f"{library_id}/{rel_path_display}"
+            self._run_ffmpeg(
+                source_path,
+                preview_path,
+                asset_id=asset_id,
+                video_path=video_path,
+            )
             if not preview_path.exists():
                 raise RuntimeError(
                     f"ffmpeg finished without writing preview output for asset {asset_id}: {source_path}"
@@ -77,7 +84,14 @@ class VideoPreviewWorker(BaseWorker):
         )
         return {"video_preview_key": preview_ref.key}
 
-    def _run_ffmpeg(self, source_path: Path, preview_path: Path, *, asset_id: str) -> None:
+    def _run_ffmpeg(
+        self,
+        source_path: Path,
+        preview_path: Path,
+        *,
+        asset_id: str,
+        video_path: str,
+    ) -> None:
         # Build ffmpeg command to extract first PREVIEW_DURATION_SEC seconds,
         # re-encoding to H.264/AAC in MP4 container with a modest resolution.
         cmd = [
@@ -111,7 +125,11 @@ class VideoPreviewWorker(BaseWorker):
             str(preview_path),
         ]
 
-        logger.info("Generating video preview for asset_id=%s via ffmpeg", asset_id)
+        logger.info(
+            "Generating video preview for asset_id=%s via ffmpeg video_path=%s",
+            asset_id,
+            video_path,
+        )
         try:
             subprocess.run(cmd, check=True, capture_output=True)
         except subprocess.CalledProcessError as exc:
@@ -154,8 +172,9 @@ class VideoPreviewWorker(BaseWorker):
             try:
                 subprocess.run(no_audio_cmd, check=True, capture_output=True)
                 logger.warning(
-                    "ffmpeg preview succeeded only after no-audio retry for asset_id=%s source=%s",
+                    "ffmpeg preview succeeded only after no-audio retry for asset_id=%s video_path=%s source=%s",
                     asset_id,
+                    video_path,
                     source_path,
                 )
             except subprocess.CalledProcessError as exc2:

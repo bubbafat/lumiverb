@@ -6,6 +6,7 @@ import {
   ApiError,
   getApiKey,
   getLibrary,
+  listDirectories,
   pageAssets,
   searchAssets,
 } from "../api/client";
@@ -52,7 +53,6 @@ export default function BrowsePage() {
   const sortDir = (searchParams.get("dir") as SortDir | null) ?? "desc";
 
   const parentEl = useScrollContainer();
-  const sentinelRef = useRef<HTMLDivElement>(null);
   const isFetchingNextPageRef = useRef(false);
   const hasNextPageRef = useRef(false);
   const [containerWidth, setContainerWidth] = useState(0);
@@ -244,6 +244,22 @@ export default function BrowsePage() {
     return browseQuery.data?.pages.flatMap((p) => p ?? []).length ?? 0;
   }, [isSearchMode, browseQuery.data]);
 
+  // To show "X of Y photos", look up the current directory node from its parent listing.
+  // Only relevant when a pathPrefix is active (root has no single directory node).
+  const dirParent = pathPrefix
+    ? pathPrefix.includes("/")
+      ? pathPrefix.slice(0, pathPrefix.lastIndexOf("/"))
+      : undefined
+    : undefined;
+  const { data: parentDirNodes } = useQuery({
+    queryKey: ["directories", libraryId, dirParent ?? null],
+    queryFn: () => listDirectories(libraryId!, dirParent),
+    enabled: !!libraryId && !!pathPrefix && canFetchAssets,
+  });
+  const currentDirTotal = pathPrefix
+    ? parentDirNodes?.find((d) => d.path === pathPrefix)?.asset_count
+    : undefined;
+
   const groups = useMemo(
     () => groupAssetsByDate(displayAssets),
     [displayAssets],
@@ -295,22 +311,19 @@ export default function BrowsePage() {
   }, [hasNextPage]);
 
   useEffect(() => {
-    const sentinel = sentinelRef.current;
-    if (!sentinel || !parentEl) return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (
-          entries[0]?.isIntersecting &&
-          hasNextPageRef.current &&
-          !isFetchingNextPageRef.current
-        ) {
-          fetchNextPage();
-        }
-      },
-      { root: parentEl, rootMargin: "200px", threshold: 0 },
-    );
-    io.observe(sentinel);
-    return () => io.disconnect();
+    if (!parentEl) return;
+    const onScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = parentEl;
+      if (
+        scrollHeight - scrollTop - clientHeight < 400 &&
+        hasNextPageRef.current &&
+        !isFetchingNextPageRef.current
+      ) {
+        fetchNextPage();
+      }
+    };
+    parentEl.addEventListener("scroll", onScroll);
+    return () => parentEl.removeEventListener("scroll", onScroll);
   }, [fetchNextPage, parentEl]);
 
   const handleAssetClick = useCallback((asset: AssetPageItem) => {
@@ -511,7 +524,7 @@ export default function BrowsePage() {
                 </>
               )
             ) : browseCount > 0 ? (
-              `${browseCount.toLocaleString()} photo${browseCount === 1 ? "" : "s"} · sorted by date taken`
+              `${browseCount.toLocaleString()}${currentDirTotal != null ? ` of ${currentDirTotal.toLocaleString()}` : ""} photo${browseCount === 1 ? "" : "s"} · sorted by date taken`
             ) : null}
           </p>
 
@@ -693,8 +706,6 @@ export default function BrowsePage() {
               );
             })}
           </div>
-
-          <div ref={sentinelRef} className="h-4" />
 
           {isFetchingNextPage && (
             <div className="flex justify-center py-4">

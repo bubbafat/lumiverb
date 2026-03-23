@@ -7,6 +7,7 @@ unsupported codec), without relying on a real ffmpeg binary.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -154,4 +155,31 @@ def test_video_preview_worker_raises_when_ffmpeg_writes_no_output_file(tmp_path:
         with pytest.raises(RuntimeError, match="without writing preview output"):
             worker.process(job)
         artifact_store.write_artifact.assert_not_called()
+
+
+@pytest.mark.fast
+def test_video_preview_worker_logs_asset_id_and_video_path(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    artifact_store = MagicMock()
+    artifact_store.write_artifact.return_value = ArtifactRef(
+        key="t1/lib_test/previews/ab/ast_01ARZ3NDEKTSV4RRFFQ69G5FAV_clip.mp4",
+        sha256="abc123",
+    )
+    worker = VideoPreviewWorker(client=MagicMock(), artifact_store=artifact_store)
+    job = _job(str(tmp_path), "subdir/clip.mp4")
+    (tmp_path / "subdir").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "subdir" / "clip.mp4").write_bytes(b"not a real mp4, ffmpeg mocked")
+
+    def _run_side_effect(cmd, check, capture_output):
+        Path(cmd[-1]).write_bytes(b"fake mp4 bytes")
+        return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+    caplog.set_level(logging.INFO, logger="src.workers.video_preview_worker")
+    with patch("src.workers.video_preview_worker.subprocess.run", side_effect=_run_side_effect) as _mock_run:
+        worker.process(job)
+
+    expected_video_path = "lib_test/subdir/clip.mp4"
+    assert (
+        "Generating video preview for asset_id=ast_01ARZ3NDEKTSV4RRFFQ69G5FAV via ffmpeg "
+        f"video_path={expected_video_path}"
+    ) in caplog.text
 
