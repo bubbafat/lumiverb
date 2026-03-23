@@ -293,7 +293,7 @@ Client calls GET /assets/{id}/similar
 | Mac agent | Swift / Electron TBD | Filesystem access, background service |
 | Cloud platform | GCP | Employee discounts, known infrastructure |
 | Container | Docker Compose (self-hosted), Cloud Run (cloud) | Same image, different orchestration |
-| Auth | API keys (v1), Firebase Auth (v2 self-service) | Simple to start, extensible |
+| Auth | API keys (v1), email/password + JWT (v2) | Self-hosted, no external auth service dependency |
 
 ---
 
@@ -438,12 +438,11 @@ GCS standard tier provides 11 nines durability with built-in multi-AZ replicatio
 - Library configuration UI
 - Auto-ingest on file changes
 
-### Phase 5: Cloud + Self-Service
-- Firebase Auth integration
-- Self-service signup flow
-- Subscription management
-- GCP Cloud Run deployment
-- Multi-region routing
+### Phase 5: User Accounts
+- Email + password auth with JWT sessions (see ADR: user-accounts.mdc)
+- CLI bootstrap: `lumiverb create-user`
+- Password reset via SMTP
+- Operators add users via CLI; no public signup flow in v1
 
 ---
 

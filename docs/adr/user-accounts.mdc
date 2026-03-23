@@ -1,0 +1,313 @@
+# ADR: User Accounts (Phase 5 Auth)
+
+## Status
+Accepted
+
+## Implementation Progress
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 1 | Schema: `users` + `password_reset_tokens` tables in control plane | Pending |
+| 2 | API: `/v1/auth/login`, `/v1/auth/forgot-password`, `/v1/auth/reset-password` | Pending |
+| 3 | Middleware: JWT verification alongside existing API key path | Pending |
+| 4 | CLI: `create-user` bootstrap command | Pending |
+| 5 | Web UI: email/password login, JWT storage, password reset flow | Pending |
+
+---
+
+## Context
+
+Phase 4 (auth-and-public-libraries.mdc) introduced a web UI login page backed by a static API key stored in localStorage. This is a functional bridge but not a real user account system: there is no concept of identity, no password, and no way to add or remove users without editing the database directly.
+
+Phase 5 replaces this with email + password accounts. The goals:
+
+- Users authenticate with email and password, not a raw API key
+- Credentials are stored in the operator's own infrastructure — no external auth service
+- The CLI and any automation using static API keys continue to work unchanged
+- The system runs on DigitalOcean, Hetzner, or any VPS without cloud-provider dependencies
+- If the deployment ever moves to a native cloud provider, nothing needs to change
+
+### Why not Firebase Auth / Auth0 / Clerk
+
+All managed auth services introduce a hard external dependency: every authentication event requires an outbound call to a third-party server. This conflicts with the privacy-first, self-hosted positioning of the product and creates a single point of failure that the operator does not control. These services also assume a cloud-native deployment; running them alongside a DigitalOcean or Hetzner stack requires extra configuration and ongoing maintenance.
+
+### Why not Keycloak / Authentik
+
+Self-hostable identity servers are operationally heavy. They add a separate service (with its own DB, config, and upgrade path) for a feature set that far exceeds what is needed here. The same outcome — email/password login with JWT sessions — can be achieved with ~200 lines of FastAPI code and two new tables.
+
+### Decision
+
+Build email + password auth directly into FastAPI. Issue signed JWTs for web UI sessions. Keep static API keys working for CLI and automation. Bootstrap the first user via a CLI command; there is no public signup flow.
+
+---
+
+## Phase 1: Schema
+
+Two new tables in the control plane database.
+
+### `users`
+
+```python
+def upgrade() -> None:
+    op.create_table(
+        "users",
+        sa.Column("user_id", sa.Text(), primary_key=True),
+        sa.Column("tenant_id", sa.Text(), sa.ForeignKey("tenants.tenant_id"), nullable=False),
+        sa.Column("email", sa.Text(), nullable=False, unique=True),
+        sa.Column("password_hash", sa.Text(), nullable=False),  # bcrypt
+        sa.Column("role", sa.Text(), nullable=False, server_default="member"),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False,
+                  server_default=sa.func.now()),
+        sa.Column("last_login_at", sa.DateTime(timezone=True), nullable=True),
+    )
+
+def downgrade() -> None:
+    op.drop_table("users")
+```
+
+`role` is `"owner"` or `"member"`. The first user created via the CLI is always `owner`. Reserved for future permission checks; all roles have identical access in v1.
+
+### `password_reset_tokens`
+
+```python
+def upgrade() -> None:
+    op.create_table(
+        "password_reset_tokens",
+        sa.Column("token_hash", sa.Text(), primary_key=True),  # SHA-256 of emailed token
+        sa.Column("user_id", sa.Text(), sa.ForeignKey("users.user_id"), nullable=False),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("used_at", sa.DateTime(timezone=True), nullable=True),
+    )
+
+def downgrade() -> None:
+    op.drop_table("password_reset_tokens")
+```
+
+The token sent in the reset email is a random URL-safe string. Only its SHA-256 hash is stored, so a DB leak does not yield usable tokens.
+
+---
+
+## Phase 2: Auth Endpoints
+
+Three new routes under `/v1/auth/`. These routes are excluded from `TenantResolutionMiddleware` (added to the skip list alongside `/v1/health`).
+
+### `POST /v1/auth/login`
+
+Request:
+```json
+{ "email": "user@example.com", "password": "..." }
+```
+
+Response (200):
+```json
+{ "access_token": "<jwt>", "token_type": "bearer", "expires_in": 604800 }
+```
+
+Errors: `401` on invalid credentials. Always the same message ("Invalid email or password") — never indicate which field is wrong.
+
+Behavior:
+1. Look up `users` by `email`. If not found, run bcrypt comparison anyway (timing attack mitigation), then return 401.
+2. Compare password against `password_hash` with `bcrypt.verify`.
+3. Issue a JWT signed with `JWT_SECRET` (HS256), 7-day expiry.
+4. Update `last_login_at`.
+
+### `POST /v1/auth/forgot-password`
+
+Request:
+```json
+{ "email": "user@example.com" }
+```
+
+Response: always `204`, even if the email is not registered (prevents user enumeration).
+
+Behavior:
+1. Look up user by email. If not found, return 204 immediately.
+2. Generate a cryptographically random token (32 bytes, URL-safe base64).
+3. Store `SHA-256(token)` in `password_reset_tokens` with a 1-hour expiry.
+4. Send an email containing `https://{HOST}/reset-password?token={token}`.
+
+Requires `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, and `APP_HOST` env vars.
+
+### `POST /v1/auth/reset-password`
+
+Request:
+```json
+{ "token": "...", "password": "..." }
+```
+
+Response: `204` on success. `400` if token is invalid, expired, or already used.
+
+Behavior:
+1. Hash the submitted token. Look up in `password_reset_tokens`.
+2. Check `expires_at > now()` and `used_at IS NULL`.
+3. Hash the new password with bcrypt, update `users.password_hash`.
+4. Set `used_at = now()` on the token.
+
+---
+
+## Phase 3: Middleware — JWT Support
+
+`TenantResolutionMiddleware` currently validates Bearer tokens as API keys via a DB lookup. Extend it to try JWT decode first:
+
+```python
+import jwt  # PyJWT
+
+JWT_SECRET = os.environ["JWT_SECRET"]
+JWT_ALGORITHM = "HS256"
+
+# Inside dispatch(), authenticated path:
+token = auth[7:].strip()
+try:
+    claims = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    # JWT path — no DB lookup needed
+    request.state.tenant_id = claims["tenant_id"]
+    request.state.user_id = claims["sub"]
+    request.state.role = claims.get("role", "member")
+    request.state.key_id = None
+    request.state.is_public_request = False
+    return await call_next(request)
+except jwt.PyJWTError:
+    pass  # Not a JWT — fall through to API key lookup
+
+# Existing API key lookup follows unchanged
+```
+
+JWT payload issued at login:
+```json
+{
+  "sub": "<user_id>",
+  "tenant_id": "<tenant_id>",
+  "role": "owner",
+  "exp": <unix timestamp>
+}
+```
+
+**Coexistence invariant**: a token is either a valid JWT (verified by signature) or an API key (verified by DB lookup). There is no ambiguity: JWT decode either succeeds or throws. Static API keys continue to work for the CLI and automation without any changes.
+
+**New env var**: `JWT_SECRET` — a long random string. Generate with `openssl rand -hex 32`. Must be set in production; the server refuses to start if absent.
+
+---
+
+## Phase 4: CLI — `create-user` Command
+
+New subcommand: `lumiverb create-user`
+
+```
+lumiverb create-user --email user@example.com [--role owner|member]
+```
+
+Behavior:
+1. Prompt for password (hidden input, confirmed twice).
+2. Validate: email format, password minimum length (12 characters).
+3. Hash password with bcrypt (cost factor 12).
+4. Insert into `users` with a generated UUID.
+5. Print confirmation: `User created: user@example.com (owner)`.
+
+This is the only way to create users in v1. There is no signup page. Operators add users by running this command on the server.
+
+**Done when:**
+```bash
+lumiverb create-user --email admin@example.com --role owner
+# → prompts for password, confirms, prints success
+
+lumiverb create-user --email admin@example.com --role owner
+# → error: email already registered
+```
+
+---
+
+## Phase 5: Web UI
+
+### `LoginPage.tsx`
+
+Replace the single API key field with email + password fields:
+
+```
+┌─────────────────────────────────┐
+│                                 │
+│         Lumiverb                │
+│                                 │
+│  Email    ____________________  │
+│  Password ____________________  │
+│           [Sign in]             │
+│                                 │
+│  Forgot password?               │
+│  (error message if invalid)     │
+└─────────────────────────────────┘
+```
+
+On submit: `POST /v1/auth/login` with `{ email, password }`.
+- 200 → store `access_token` as `localStorage.setItem("lumiverb_api_key", token)`, reload.
+  - The localStorage key name is unchanged so the auth gate in `main.tsx` and `getApiKey()` require no modification.
+- 401 → show "Invalid email or password".
+- Network error → show "Could not reach server".
+
+"Forgot password?" links to `/forgot-password`.
+
+### `/forgot-password` and `/reset-password` pages
+
+Simple single-field forms. Both call the corresponding auth endpoints. Neither requires the user to be logged in; both are excluded from the auth gate in `main.tsx`.
+
+`/reset-password` reads `?token=` from the URL and submits it with the new password.
+
+### What does not change
+
+- `getApiKey()` / `getAuthToken()` — reads localStorage key unchanged; returns the JWT after login
+- `handleUnauthorized()` — clears the localStorage key and reloads; works identically with JWTs
+- Auth gate in `main.tsx` — checks for a non-empty token; behavior unchanged
+- Sign out in `Sidebar.tsx` — clears the localStorage key; behavior unchanged
+- All `Authorization: Bearer` headers — the JWT is sent exactly like the API key was
+
+---
+
+## Environment Variables
+
+| Var | Required | Description |
+|-----|----------|-------------|
+| `JWT_SECRET` | Yes | HS256 signing key. Generate: `openssl rand -hex 32` |
+| `SMTP_HOST` | For password reset | SMTP server hostname |
+| `SMTP_PORT` | For password reset | SMTP port (typically 587) |
+| `SMTP_USER` | For password reset | SMTP username |
+| `SMTP_PASSWORD` | For password reset | SMTP password |
+| `SMTP_FROM` | For password reset | From address for reset emails |
+| `APP_HOST` | For password reset | Public URL of the app (for reset links) |
+
+Password reset is optional in v1 — if SMTP vars are absent, the endpoint returns `501 Not Implemented`. Operators who manage users solely via the CLI may not need it.
+
+---
+
+## What Is Not in Scope
+
+- OAuth / SSO (future)
+- Multi-tenant self-service signup (future)
+- Per-user rate limiting (future)
+- Sessions table / refresh tokens — 7-day JWTs are sufficient for v1; add refresh when session length becomes a user issue
+- Role-based access control beyond `owner` / `member` distinction — all roles have identical permissions in v1
+
+---
+
+## Required Tests
+
+### Schema (`@pytest.mark.migration`)
+- `users` table created with correct columns and constraints
+- `password_reset_tokens` table created with correct columns
+
+### Auth endpoints (`@pytest.mark.slow`)
+- `POST /v1/auth/login` with valid credentials → 200 with JWT
+- `POST /v1/auth/login` with wrong password → 401
+- `POST /v1/auth/login` with unknown email → 401 (same timing as wrong password)
+- `POST /v1/auth/forgot-password` with unknown email → 204 (no enumeration)
+- `POST /v1/auth/reset-password` with valid token → 204, password updated
+- `POST /v1/auth/reset-password` with expired token → 400
+- `POST /v1/auth/reset-password` with already-used token → 400
+
+### Middleware (`@pytest.mark.slow`)
+- Request with valid JWT → resolves tenant from claims, no DB lookup for API key
+- Request with expired JWT → 401
+- Request with tampered JWT → 401
+- Request with valid API key (not a JWT) → resolves via existing API key path
+- Both token types can coexist in the same running server
+
+### CLI (`@pytest.mark.slow`)
+- `create-user` with new email → user row inserted, password hashes correctly
+- `create-user` with duplicate email → error, no duplicate row
