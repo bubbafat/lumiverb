@@ -136,6 +136,29 @@ def empty_trash(
     return EmptyTrashResponse(deleted=deleted)
 
 
+@router.get("/{library_id}", response_model=LibraryResponse)
+def get_library(
+    library_id: str,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> LibraryResponse:
+    """Return a single library by id. Public libraries are accessible without auth."""
+    repo = LibraryRepository(session)
+    library = repo.get_by_id(library_id)
+    if library is None:
+        raise HTTPException(status_code=404, detail="Library not found")
+    if getattr(request.state, "is_public_request", False) and not library.is_public:
+        raise HTTPException(status_code=404, detail="Not found")
+    return LibraryResponse(
+        library_id=library.library_id,
+        name=library.name,
+        root_path=library.root_path,
+        scan_status=library.scan_status,
+        vision_model_id=library.vision_model_id,
+        is_public=library.is_public,
+    )
+
+
 @router.patch("/{library_id}", response_model=LibraryResponse)
 def update_library(
     library_id: str,
@@ -205,6 +228,7 @@ def delete_library(
 @router.get("/{library_id}/directories", response_model=list[DirectoryItem])
 def list_directories(
     library_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     parent: str = "",
 ) -> list[DirectoryItem]:
@@ -221,6 +245,8 @@ def list_directories(
     library = lib_repo.get_by_id(library_id)
     if library is None:
         raise HTTPException(status_code=404, detail="Library not found")
+    if getattr(request.state, "is_public_request", False) and not library.is_public:
+        raise HTTPException(status_code=404, detail="Not found")
 
     # Normalize parent but treat empty string as root
     parent_norm = ""

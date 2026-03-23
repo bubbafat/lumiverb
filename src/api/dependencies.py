@@ -58,3 +58,14 @@ def require_tenant_admin(request: Request) -> None:
     role = getattr(request.state, "role", None)
     if role != "admin":
         raise HTTPException(status_code=403, detail="Admin API key required")
+
+
+def require_auth(request: Request) -> None:
+    """
+    Raise 403 if this is a public (unauthenticated) request.
+    Defense-in-depth for write routes that must never be reachable via public access.
+    The middleware already blocks non-GET from the public path, but this makes the
+    restriction explicit in route definitions.
+    """
+    if getattr(request.state, "is_public_request", False):
+        raise HTTPException(status_code=403, detail="This operation requires authentication")

@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session
-from src.repository.tenant import AssetRepository
+from src.repository.tenant import AssetRepository, LibraryRepository
 from src.storage.local import LocalStorage, get_storage
 
 logger = logging.getLogger(__name__)
@@ -143,6 +143,13 @@ def download_artifact(
     asset = AssetRepository(session).get_by_id(asset_id)
     if asset is None:
         raise HTTPException(status_code=404, detail="Asset not found")
+    if getattr(request.state, "is_public_request", False):
+        public_library_id = request.query_params.get("public_library_id")
+        if not public_library_id or asset.library_id != public_library_id:
+            raise HTTPException(status_code=403, detail="Asset does not belong to the requested public library")
+        lib = LibraryRepository(session).get_by_id(public_library_id)
+        if lib is None or not lib.is_public:
+            raise HTTPException(status_code=404, detail="Not found")
 
     if artifact_type == "proxy":
         key = asset.proxy_key

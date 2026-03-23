@@ -127,6 +127,7 @@ class VisionSubmitResponse(BaseModel):
 
 @router.get("/page", responses={204: {"description": "No assets (end of pages)"}})
 def page_assets(
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     library_id: str,
     after: str | None = None,
@@ -143,6 +144,11 @@ def page_assets(
         limit = 500
     if limit < 1:
         limit = 1
+    if getattr(request.state, "is_public_request", False):
+        lib_repo = LibraryRepository(session)
+        library = lib_repo.get_by_id(library_id)
+        if library is None or not library.is_public:
+            raise HTTPException(status_code=404, detail="Not found")
     asset_repo = AssetRepository(session)
     normalized_prefix: str | None = None
     if path_prefix is not None:
@@ -214,6 +220,13 @@ def _stream_asset_file(
     asset = asset_repo.get_by_id(asset_id)
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
+    if getattr(request.state, "is_public_request", False):
+        public_library_id = request.query_params.get("public_library_id")
+        if not public_library_id or asset.library_id != public_library_id:
+            raise HTTPException(status_code=403, detail="Asset does not belong to the requested public library")
+        lib = LibraryRepository(session).get_by_id(public_library_id)
+        if lib is None or not lib.is_public:
+            raise HTTPException(status_code=404, detail="Not found")
 
     key = asset.proxy_key if size == "proxy" else asset.thumbnail_key
     if not key:
@@ -370,9 +383,14 @@ def stream_thumbnail(
 def get_asset_by_path(
     library_id: str,
     rel_path: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> AssetResponse:
     """Return a single asset by library_id + rel_path. 404 if not found or trashed."""
+    if getattr(request.state, "is_public_request", False):
+        lib = LibraryRepository(session).get_by_id(library_id)
+        if lib is None or not lib.is_public:
+            raise HTTPException(status_code=404, detail="Not found")
     asset_repo = AssetRepository(session)
     asset = asset_repo.get_by_library_and_rel_path(library_id, rel_path)
     if asset is None or asset.deleted_at is not None:
@@ -438,13 +456,21 @@ def batch_trash_assets(
 @router.get("/{asset_id}", response_model=AssetResponse)
 def get_asset(
     asset_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
+    public_library_id: str | None = None,
 ) -> AssetResponse:
     """Return a single asset by id. 404 if not found or trashed."""
     asset_repo = AssetRepository(session)
     asset = asset_repo.get_by_id(asset_id)
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
+    if getattr(request.state, "is_public_request", False):
+        if not public_library_id or asset.library_id != public_library_id:
+            raise HTTPException(status_code=403, detail="Asset does not belong to the requested public library")
+        lib = LibraryRepository(session).get_by_id(public_library_id)
+        if lib is None or not lib.is_public:
+            raise HTTPException(status_code=404, detail="Not found")
     response = _to_asset_response(asset)
     ai_description: str | None = None
     ai_tags: list[str] = []
@@ -560,6 +586,13 @@ def stream_or_enqueue_preview(
     asset = asset_repo.get_by_id(asset_id)
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
+    if getattr(request.state, "is_public_request", False):
+        public_library_id = request.query_params.get("public_library_id")
+        if not public_library_id or asset.library_id != public_library_id:
+            raise HTTPException(status_code=403, detail="Asset does not belong to the requested public library")
+        lib = LibraryRepository(session).get_by_id(public_library_id)
+        if lib is None or not lib.is_public:
+            raise HTTPException(status_code=404, detail="Not found")
 
     if not asset.media_type.startswith("video"):
         raise HTTPException(status_code=422, detail="Preview only supported for video assets")

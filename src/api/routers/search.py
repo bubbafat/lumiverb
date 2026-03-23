@@ -6,14 +6,14 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session
 from src.core.config import get_settings
-from src.repository.tenant import AssetRepository
+from src.repository.tenant import AssetRepository, LibraryRepository
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +72,7 @@ MediaType = Literal["image", "video", "all"]
 
 @router.get("", response_model=SearchResponse)
 def search(
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     library_id: str,
     q: str = Query(default="", max_length=500),
@@ -101,6 +102,11 @@ def search(
     and may be combined with q. When q is empty and only date filters are provided
     a direct DB query is used (no BM25).
     """
+    if getattr(request.state, "is_public_request", False):
+        lib = LibraryRepository(session).get_by_id(library_id)
+        if lib is None or not lib.is_public:
+            raise HTTPException(status_code=404, detail="Not found")
+
     # Require at least a text query or a date filter
     if not q and not date_from and not date_to:
         return SearchResponse(query="", hits=[], total=0, source="none")

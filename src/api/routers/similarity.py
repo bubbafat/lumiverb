@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlmodel import Session
 
@@ -58,6 +58,7 @@ class ImageSimilarityResponse(BaseModel):
 def find_similar(
     asset_id: str,
     library_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
@@ -121,6 +122,11 @@ def find_similar(
     asset_repo = AssetRepository(session)
     lib_repo = LibraryRepository(session)
     emb_repo = AssetEmbeddingRepository(session)
+
+    if getattr(request.state, "is_public_request", False):
+        lib = lib_repo.get_by_id(library_id)
+        if lib is None or not lib.is_public:
+            raise HTTPException(status_code=404, detail="Not found")
 
     source = asset_repo.get_by_id(asset_id)
     if source is None:
