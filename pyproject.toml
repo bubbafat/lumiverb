@@ -40,6 +40,9 @@ dependencies = [
     "rapidfuzz>=3.0.0",       # Semantic deduplication (scene merge)
     # Search
     "PyYAML>=6.0",
+    # Auth
+    "pyjwt>=2.8",
+    "bcrypt>=4.0",
     # Utilities
     "python-ulid>=2.0",
     "reverse_geocoder>=1.5",  # GPS → country/region/city

@@ -16,6 +16,8 @@ def _skip_tenant_middleware(path: str) -> bool:
         return True
     if path.startswith("/v1/admin/"):
         return True
+    if path.startswith("/v1/auth/"):
+        return True
     if path in ("/docs", "/redoc", "/openapi.json"):
         return True
     return False

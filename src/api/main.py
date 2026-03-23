@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from src.api.middleware import TenantResolutionMiddleware
 from src.api.routers import admin, assets, jobs, keys, libraries, path_filters, scans, tenant, trash, video
+from src.api.routers.auth import router as auth_router
 from src.api.routers.artifacts import router as artifacts_router
 from src.api.routers.maintenance import router as maintenance_router
 from src.api.routers.upgrade import router as upgrade_router
@@ -14,6 +15,7 @@ from src.api.routers.similarity import router as similarity_router
 
 app = FastAPI(title="Lumiverb API", version="0.1.0")
 app.add_middleware(TenantResolutionMiddleware)
+app.include_router(auth_router)
 app.include_router(admin.router)
 app.include_router(tenant.router)
 app.include_router(jobs.router)

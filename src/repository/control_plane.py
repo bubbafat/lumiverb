@@ -9,7 +9,7 @@ from datetime import datetime
 from sqlmodel import Session, select
 
 from src.core.utils import utcnow
-from src.models.control_plane import ApiKey, PublicLibrary, Tenant, TenantDbRouting
+from src.models.control_plane import ApiKey, PasswordResetToken, PublicLibrary, Tenant, TenantDbRouting, User
 from ulid import ULID
 
 
@@ -97,7 +97,7 @@ class ApiKeyRepository:
         self,
         tenant_id: str,
         label: str | None,
-        role: str = "member",
+        role: str = "admin",
     ) -> tuple[ApiKey, str]:
         """
         Create a new API key for a tenant.
@@ -235,6 +235,142 @@ class TenantDbRoutingRepository:
         if row is not None:
             self._session.delete(row)
             self._session.commit()
+
+
+class UserRepository:
+    """Repository for users table."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def create(self, tenant_id: str, email: str, password_hash: str, role: str = "viewer") -> User:
+        from ulid import ULID
+        user = User(
+            user_id="usr_" + str(ULID()),
+            tenant_id=tenant_id,
+            email=email,
+            password_hash=password_hash,
+            role=role,
+        )
+        self._session.add(user)
+        self._session.commit()
+        self._session.refresh(user)
+        return user
+
+    def get_by_email(self, email: str) -> User | None:
+        stmt = select(User).where(User.email == email)
+        return self._session.exec(stmt).first()
+
+    def get_by_id(self, user_id: str) -> User | None:
+        return self._session.get(User, user_id)
+
+    def list_by_tenant(self, tenant_id: str) -> list[User]:
+        stmt = select(User).where(User.tenant_id == tenant_id).order_by(User.created_at.asc())
+        return list(self._session.exec(stmt).all())
+
+    def count_admins(self, tenant_id: str) -> int:
+        stmt = select(User).where(User.tenant_id == tenant_id).where(User.role == "admin")
+        return len(list(self._session.exec(stmt).all()))
+
+    def update_role(self, user_id: str, role: str) -> User:
+        user = self.get_by_id(user_id)
+        if user is None:
+            raise ValueError(f"User not found: {user_id}")
+        user.role = role
+        self._session.add(user)
+        self._session.commit()
+        self._session.refresh(user)
+        return user
+
+    def update_last_login(self, user_id: str) -> None:
+        user = self.get_by_id(user_id)
+        if user is not None:
+            user.last_login_at = utcnow()
+            self._session.add(user)
+            try:
+                self._session.commit()
+            except Exception:
+                self._session.rollback()
+
+    def update_password(self, user_id: str, password_hash: str) -> None:
+        user = self.get_by_id(user_id)
+        if user is None:
+            raise ValueError(f"User not found: {user_id}")
+        user.password_hash = password_hash
+        self._session.add(user)
+        self._session.commit()
+
+    def delete(self, user_id: str) -> None:
+        user = self.get_by_id(user_id)
+        if user is not None:
+            self._session.delete(user)
+            self._session.commit()
+
+
+class PasswordResetTokenRepository:
+    """Repository for password_reset_tokens table."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    @staticmethod
+    def _hash_token(plaintext: str) -> str:
+        return hashlib.sha256(plaintext.encode()).hexdigest()
+
+    def create(self, user_id: str, plaintext_token: str, expires_at: datetime) -> PasswordResetToken:
+        token = PasswordResetToken(
+            token_hash=self._hash_token(plaintext_token),
+            user_id=user_id,
+            expires_at=expires_at,
+        )
+        self._session.add(token)
+        self._session.commit()
+        self._session.refresh(token)
+        return token
+
+    def get_by_plaintext(self, plaintext_token: str) -> PasswordResetToken | None:
+        token_hash = self._hash_token(plaintext_token)
+        return self._session.get(PasswordResetToken, token_hash)
+
+    def mark_used(self, token_hash: str) -> None:
+        token = self._session.get(PasswordResetToken, token_hash)
+        if token is not None:
+            token.used_at = utcnow()
+            self._session.add(token)
+            self._session.commit()
+
+    def consume_valid_and_update_password(self, plaintext_token: str, password_hash: str) -> bool:
+        """
+        Atomically consume a valid reset token and update the user's password.
+
+        Returns True when the token was valid and consumed; False when invalid,
+        expired, or already used.
+        """
+        token_hash = self._hash_token(plaintext_token)
+        now = utcnow()
+
+        stmt = (
+            select(PasswordResetToken)
+            .where(PasswordResetToken.token_hash == token_hash)
+            .where(PasswordResetToken.used_at.is_(None))
+            .where(PasswordResetToken.expires_at > now)
+            .with_for_update()
+        )
+        token = self._session.exec(stmt).first()
+        if token is None:
+            return False
+
+        user = self._session.get(User, token.user_id)
+        if user is None:
+            self._session.rollback()
+            return False
+
+        user.password_hash = password_hash
+        token.used_at = now
+        self._session.add(user)
+        self._session.add(token)
+        self._session.commit()
+        return True
 
 
 class PublicLibraryRepository:

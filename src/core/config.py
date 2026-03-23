@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     exiftool_path: str = "exiftool"
     sharpness_max_variance: float = 1000.0
 
+    # Auth (JWT + password reset)
+    jwt_secret: str = ""  # Required for JWT auth; generate with: openssl rand -hex 32
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    app_host: str = ""  # Public URL, e.g. https://app.example.com
+
     # App
     app_env: str = "development"
     log_level: str = "DEBUG"
