@@ -416,6 +416,78 @@ systemctl restart lumiverb-api lumiverb-worker
 
 ---
 
+## Post-deploy verification
+
+Run this checklist after initial deploy and after each update.
+
+1) Verify service state:
+
+```bash
+systemctl status --no-pager lumiverb-quickwit lumiverb-api lumiverb-worker
+```
+
+Expected: all services are `active (running)` with no restart loop.
+
+2) Verify API health:
+
+```bash
+curl -fsS http://127.0.0.1:8000/health
+curl -fsS https://app.example.com/v1/health
+```
+
+Expected: both requests return `200 OK`.
+
+3) Verify nginx + TLS:
+
+```bash
+nginx -t
+systemctl status --no-pager nginx
+certbot certificates
+```
+
+Expected: nginx config test passes and certificate for your domain is present and not expired.
+
+4) Verify firewall policy:
+
+```bash
+ufw status verbose
+ss -ltnp | rg ':(22|80|443|5432|7280|8000)\b'
+```
+
+Expected:
+- `ufw` is active with inbound allow rules only for `22`, `80`, and `443`.
+- Postgres (`5432`), Quickwit (`7280`), and API (`8000`) are bound to `127.0.0.1` only.
+
+5) Verify migrations are at head:
+
+```bash
+cd /opt/lumiverb
+sudo -u lumiverb /usr/local/bin/uv run alembic -c alembic-control.ini current
+```
+
+Expected: control-plane migration shows current head revision.  
+If you have tenants, also run `bash scripts/migrate.sh` and confirm no failures.
+
+6) Verify static UI serving:
+
+```bash
+curl -I https://app.example.com/
+```
+
+Expected: `200 OK` (or cached `304`) and HTML served from nginx.
+
+7) Check recent logs for startup errors:
+
+```bash
+journalctl -u lumiverb-api -u lumiverb-worker -u lumiverb-quickwit -n 200 --no-pager
+```
+
+Expected: no repeated fatal errors, tracebacks, or crash/restart loops.
+
+If any check fails, fix before onboarding users or running bulk ingest jobs.
+
+---
+
 ## Backups and restore
 
 Policy baseline:
