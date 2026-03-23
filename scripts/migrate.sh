@@ -8,6 +8,13 @@ RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
+# Use system-installed uv if available, fall back to PATH
+UV="${UV_BIN:-$(command -v uv || true)}"
+if [[ -z "$UV" ]]; then
+  echo -e "${RED}✗ uv not found — set UV_BIN or ensure uv is on PATH${NC}" >&2
+  exit 1
+fi
+
 # --- Load CONTROL_PLANE_DATABASE_URL from .env.local or environment ---
 if [[ -z "${CONTROL_PLANE_DATABASE_URL:-}" ]]; then
   if [[ -f .env.local ]]; then
@@ -27,7 +34,7 @@ fi
 export ALEMBIC_CONTROL_URL="${CONTROL_PLANE_DATABASE_URL}"
 
 echo "=== Step 1: Control plane migrations ==="
-if ! uv run alembic -c alembic-control.ini upgrade head; then
+if ! $UV run alembic -c alembic-control.ini upgrade head; then
   echo -e "${RED}✗ Control plane migration failed.${NC}" >&2
   exit 1
 fi
@@ -35,7 +42,7 @@ echo -e "${GREEN}✓ Control plane up to date${NC}"
 
 echo ""
 echo "=== Step 2: Enumerating tenants ==="
-tenant_urls=$(uv run python - <<'PYEOF'
+tenant_urls=$($UV run python - <<'PYEOF'
 import os, sys
 url = os.environ.get("CONTROL_PLANE_DATABASE_URL", "")
 if not url:
@@ -74,7 +81,7 @@ current=0
 while IFS=$'\t' read -r tenant_id conn_str; do
   current=$((current + 1))
   echo -n "  [$current/$tenant_count] $tenant_id ... "
-  if ALEMBIC_TENANT_URL="$conn_str" uv run alembic -c alembic-tenant.ini upgrade head \
+  if ALEMBIC_TENANT_URL="$conn_str" $UV run alembic -c alembic-tenant.ini upgrade head \
       > /tmp/lumiverb_alembic_tenant.log 2>&1; then
     echo -e "${GREEN}✓${NC}"
   else

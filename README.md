@@ -55,7 +55,7 @@ lumiverb worker proxy --once --library "My Photos"
 ┌─────────────────────────────────────────────────────────┐
 │  CLI (local agent)          API Server (FastAPI/v1)      │
 │  - Scans local filesystem   - Multi-tenant              │
-│  - Generates proxies        - API key auth              │
+│  - Generates proxies        - JWT + API key auth        │
 │  - Uploads metadata         - Per-tenant DB routing     │
 └───────────────┬─────────────────────┬───────────────────┘
                 │                     │
@@ -264,11 +264,88 @@ uv run alembic -c alembic-tenant.ini upgrade head
 
 ---
 
-## Deployment
+## Deployment (VPS)
 
-See [`docs/architecture.md`](docs/architecture.md) for cloud deployment (GCP) and self-hosted (Docker Compose) options.
+Deploy Lumiverb to a DigitalOcean Droplet, Hetzner VPS, or any Ubuntu server (x86_64 or ARM64). The bootstrap script handles everything — Postgres, nginx, TLS, Quickwit, the API, and the web UI.
 
-Self-hosted deployment runs the full stack on a single machine with Docker Compose. Cloud deployment uses GCP Cloud Run (API), GCP Cloud SQL (Postgres), and GCS (object storage).
+### What you need before you start
+
+| Requirement | Details |
+|---|---|
+| **A VPS** | Ubuntu 22.04+, 2+ vCPUs, 4 GB+ RAM. A $24/mo DigitalOcean Droplet or Hetzner CX22 works. |
+| **A domain** | e.g. `app.example.com`. You need access to its DNS records. |
+| **SSH access** | You'll run the deploy script as root over SSH. |
+
+The VPS does not need anything pre-installed beyond the Ubuntu base image. The script installs all dependencies (PostgreSQL 16, pgvector, nginx, Node.js 20, Python/uv, Quickwit, certbot).
+
+### Step 1: Create the VPS
+
+Create a Droplet (or equivalent) with Ubuntu 22.04 LTS. Note its public IP address.
+
+### Step 2: Point DNS to the VPS
+
+At your DNS provider (Cloudflare, Namecheap, Route 53, etc.), create an **A record**:
+
+```
+app.example.com  →  A  →  <your-vps-ip>
+```
+
+Wait for propagation (usually 1–5 minutes; you can check with `dig app.example.com`).
+
+> DNS must resolve before the script runs — certbot validates the domain by making an HTTP request to it. If you want to deploy first and set up DNS later, add `--skip-certbot` and run `certbot --nginx -d app.example.com` after DNS is live.
+
+### Step 3: Run the deploy script
+
+SSH into the VPS and run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/bubbafat/lumiverb/main/scripts/deploy-vps.sh \
+  | bash -s -- --domain app.example.com --email you@example.com
+```
+
+This takes 3–5 minutes. It installs all system packages, creates the database, generates secrets, builds the web UI, configures nginx with TLS, and starts all services.
+
+The `--email` flag is for Let's Encrypt certificate expiry notices (optional but recommended).
+
+### Step 4: Create the admin user
+
+```bash
+cd /opt/lumiverb
+sudo -u lumiverb .venv/bin/python -m src.cli create-user --email you@example.com --role admin
+```
+
+You'll be prompted to set a password (minimum 12 characters).
+
+### Step 5: Log in
+
+Open `https://app.example.com` in your browser and sign in with the email and password you just created.
+
+### Updating
+
+To pull the latest code, run migrations, rebuild the UI, and restart services:
+
+```bash
+bash /opt/lumiverb/scripts/update-vps.sh
+```
+
+### Optional: enable password reset emails
+
+Edit `/etc/lumiverb/env`, uncomment and fill in the `SMTP_*` lines, then restart:
+
+```bash
+systemctl restart lumiverb-api
+```
+
+### Useful commands
+
+```bash
+journalctl -u lumiverb-api -f       # API server logs
+journalctl -u lumiverb-worker -f    # Background worker logs
+systemctl restart lumiverb-api      # Restart API
+sudo grep ADMIN_KEY /etc/lumiverb/env   # Admin key (for CLI access)
+```
+
+For full details on what the script does, directory layout, nginx config, backups, and manual deployment steps, see [`docs/reference/deployment-digitalocean.md`](docs/reference/deployment-digitalocean.md).
 
 ---
 
@@ -276,11 +353,12 @@ Self-hosted deployment runs the full stack on a single machine with Docker Compo
 
 | Phase | Status | Description |
 |-------|--------|-------------|
-| 1 | 🔨 In progress | CLI + API, scan + ingest, BM25 search |
+| 1 | Done | CLI + API, scan + ingest, BM25 search |
 | 2 | Planned | Visual similarity, face clustering, keyword fingerprinting |
-| 3 | Planned | Web UI (React + TypeScript) |
+| 3 | Done | Web UI (React + TypeScript + Tailwind) |
 | 4 | Planned | Mac app (local agent with GUI) |
-| 5 | Planned | Cloud self-service, Stripe billing |
+| 5 | Done | User accounts (email/password + JWT), role-based access |
+| 6 | Planned | Cloud self-service, Stripe billing |
 
 ---
 

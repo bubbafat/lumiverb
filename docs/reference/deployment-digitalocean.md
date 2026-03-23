@@ -14,6 +14,34 @@ Lumiverb runs on a single DigitalOcean Droplet for Phase 1. This is a pragmatic 
 
 The React UI is built to static assets and served directly by nginx.
 
+## Quick start
+
+From a fresh Ubuntu 22.04+ VPS with DNS already pointed:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/bubbafat/lumiverb/main/scripts/deploy-vps.sh \
+  | bash -s -- --domain app.example.com --email you@example.com
+```
+
+Then create the first admin user:
+
+```bash
+cd /opt/lumiverb
+sudo -u lumiverb .venv/bin/python -m src.cli create-user --email you@example.com --role admin
+```
+
+Open `https://app.example.com` and log in.
+
+To update an existing install:
+
+```bash
+bash /opt/lumiverb/scripts/update-vps.sh
+```
+
+The rest of this document covers what the script does and how to customize it.
+
+---
+
 ## Scope and non-negotiables
 
 - All API routes are under `/v1/`.
@@ -127,7 +155,7 @@ Tenant databases are provisioned by the admin tenant-creation flow.
 Hardening baseline:
 
 - `listen_addresses = '127.0.0.1'`
-- host firewall allows no public Postgres access
+- `ufw` firewall allows only SSH (22), HTTP (80), HTTPS (443) inbound — all other ports are denied
 - daily logical backups plus weekly restore drill (see Backups)
 
 ---
@@ -183,7 +211,7 @@ cd /opt/lumiverb
 uv sync --all-extras
 
 # Control-plane migrations
-uv run alembic -c migrations/control/alembic.ini upgrade head
+uv run alembic -c alembic-control.ini upgrade head
 ```
 
 Bootstrap the first admin user after migrations:
@@ -329,18 +357,50 @@ certbot --nginx -d app.example.com
 
 ---
 
+## Firewall
+
+The deploy script configures `ufw` to deny all inbound traffic except:
+
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| 22 | TCP | SSH |
+| 80 | TCP | HTTP (certbot validation + HTTPS redirect) |
+| 443 | TCP | HTTPS (nginx → API + UI) |
+
+All backend services (PostgreSQL 5432, Quickwit 7280, uvicorn 8000) bind to `127.0.0.1` and are not reachable from the network even if the firewall were disabled.
+
+To check status:
+
+```bash
+ufw status verbose
+```
+
+To allow additional ports (e.g. for a monitoring agent):
+
+```bash
+ufw allow <port>/tcp
+```
+
+---
+
 ## Deployments and updates
 
-Preferred path: CI builds and tests, then deploys versioned artifacts.
+Preferred: run the update script, which pulls code, syncs deps, runs migrations, rebuilds the UI, and restarts services:
 
-Manual fallback:
+```bash
+bash /opt/lumiverb/scripts/update-vps.sh
+```
+
+Manual fallback (e.g. pinning a specific release):
 
 ```bash
 cd /opt/lumiverb
 git fetch --all --prune
 git checkout <release-tag-or-commit>
 uv sync --all-extras
-uv run alembic -c migrations/control/alembic.ini upgrade head
+uv run alembic -c alembic-control.ini upgrade head
+bash scripts/migrate.sh
+cd src/ui/web && npm ci && npm run build && cd /opt/lumiverb
 systemctl restart lumiverb-api lumiverb-worker
 systemctl status --no-pager lumiverb-api lumiverb-worker lumiverb-quickwit
 ```
