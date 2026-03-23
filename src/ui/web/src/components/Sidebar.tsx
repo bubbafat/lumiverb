@@ -317,7 +317,27 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette }: Sidebar
 
       <div className="border-t border-gray-800" />
 
-      <div className="flex items-center justify-center px-2 py-2">
+      <div className="flex items-center justify-between px-2 py-2">
+        <button
+          type="button"
+          onClick={() => {
+            try {
+              localStorage.removeItem("lumiverb_api_key");
+            } catch {
+              // ignore
+            }
+            window.location.reload();
+          }}
+          className={`flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-gray-500 transition-colors hover:bg-gray-800/80 hover:text-gray-300 ${collapsed ? "hidden" : ""}`}
+          title="Sign out"
+        >
+          <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+            <polyline points="16 17 21 12 16 7" />
+            <line x1="21" y1="12" x2="9" y2="12" />
+          </svg>
+          Sign out
+        </button>
         <button
           type="button"
           onClick={() => {

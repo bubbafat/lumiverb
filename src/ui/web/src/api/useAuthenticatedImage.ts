@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getApiKey, handleUnauthorized } from "./client";
 
 type MediaType = "thumbnail" | "proxy" | "video-preview";
 
@@ -8,9 +9,10 @@ function mediaPath(assetId: string, type: MediaType): string {
   return `/assets/${assetId}/preview`;
 }
 
-const apiKey = import.meta.env.VITE_API_KEY as string | undefined;
-const authHeaders = (): HeadersInit =>
-  apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+const authHeaders = (): HeadersInit => {
+  const key = getApiKey();
+  return key ? { Authorization: `Bearer ${key}` } : {};
+};
 
 /**
  * Fetches an image or video preview with auth (src attributes can't send headers).
@@ -45,6 +47,10 @@ export function useAuthenticatedImage(
         if (cancelled) return;
         if (res.status === 202) {
           setGenerating(true);
+          return;
+        }
+        if (res.status === 401) {
+          handleUnauthorized();
           return;
         }
         if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);

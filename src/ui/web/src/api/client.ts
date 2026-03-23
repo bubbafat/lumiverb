@@ -20,10 +20,31 @@ export class ApiError extends Error {
   }
 }
 
-const apiKey = import.meta.env.VITE_API_KEY as string | undefined;
+export function getApiKey(): string {
+  try {
+    return (
+      localStorage.getItem("lumiverb_api_key") ??
+      (import.meta.env.VITE_API_KEY as string | undefined) ??
+      ""
+    );
+  } catch {
+    return (import.meta.env.VITE_API_KEY as string | undefined) ?? "";
+  }
+}
 
-const authHeaders = (): HeadersInit =>
-  apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+const authHeaders = (): HeadersInit => {
+  const key = getApiKey();
+  return key ? { Authorization: `Bearer ${key}` } : {};
+};
+
+export function handleUnauthorized(): void {
+  try {
+    localStorage.removeItem("lumiverb_api_key");
+  } catch {
+    // ignore
+  }
+  window.location.reload();
+}
 
 type ApiFetchOptions = Omit<RequestInit, "body"> & { body?: unknown };
 
@@ -45,6 +66,9 @@ async function apiFetch<T>(
     body: fetchBody,
   });
   if (!res.ok) {
+    if (res.status === 401) {
+      handleUnauthorized();
+    }
     let message = res.statusText;
     try {
       const json = (await res.json()) as { error?: { message?: string } };
@@ -63,7 +87,10 @@ async function apiFetch<T>(
 /** Fetch blob (e.g. image) with auth. Used for thumbnail/proxy URLs. */
 export async function apiFetchBlob(path: string): Promise<Blob> {
   const res = await fetch(`/v1${path}`, { headers: authHeaders() });
-  if (!res.ok) throw new ApiError(res.status, res.statusText);
+  if (!res.ok) {
+    if (res.status === 401) handleUnauthorized();
+    throw new ApiError(res.status, res.statusText);
+  }
   return res.blob();
 }
 

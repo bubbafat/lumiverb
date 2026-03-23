@@ -7,6 +7,8 @@ import AdminPage from "./pages/AdminPage";
 import BrowsePage from "./pages/BrowsePage";
 import LibrariesPage from "./pages/LibrariesPage";
 import LibrarySettingsPage from "./pages/LibrarySettingsPage";
+import LoginPage from "./pages/LoginPage";
+import { getApiKey } from "./api/client";
 import "./index.css";
 
 const queryClient = new QueryClient({
@@ -18,19 +20,25 @@ const queryClient = new QueryClient({
   },
 });
 
+const apiKey = getApiKey();
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<AppShell />}>
-            <Route index element={<LibrariesPage />} />
-            <Route path="libraries/:libraryId/browse" element={<BrowsePage />} />
-            <Route path="libraries/:libraryId/settings" element={<LibrarySettingsPage />} />
-            <Route path="admin" element={<AdminPage />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
-    </QueryClientProvider>
+    {!apiKey ? (
+      <LoginPage />
+    ) : (
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/" element={<AppShell />}>
+              <Route index element={<LibrariesPage />} />
+              <Route path="libraries/:libraryId/browse" element={<BrowsePage />} />
+              <Route path="libraries/:libraryId/settings" element={<LibrarySettingsPage />} />
+              <Route path="admin" element={<AdminPage />} />
+            </Route>
+          </Routes>
+        </BrowserRouter>
+      </QueryClientProvider>
+    )}
   </StrictMode>,
 );
