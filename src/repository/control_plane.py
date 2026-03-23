@@ -272,6 +272,16 @@ class UserRepository:
         stmt = select(User).where(User.tenant_id == tenant_id).where(User.role == "admin")
         return len(list(self._session.exec(stmt).all()))
 
+    def count_admins_locked(self, tenant_id: str) -> int:
+        """Count admins with FOR UPDATE lock to serialize concurrent last-admin checks."""
+        stmt = (
+            select(User)
+            .where(User.tenant_id == tenant_id)
+            .where(User.role == "admin")
+            .with_for_update()
+        )
+        return len(list(self._session.exec(stmt).all()))
+
     def update_role(self, user_id: str, role: str) -> User:
         user = self.get_by_id(user_id)
         if user is None:

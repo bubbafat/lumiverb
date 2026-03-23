@@ -121,7 +121,7 @@ def update_user_role(
             raise HTTPException(status_code=404, detail="User not found")
 
         if user.role == "admin" and body.role != "admin":
-            if repo.count_admins(tenant_id) <= 1:
+            if repo.count_admins_locked(tenant_id) <= 1:
                 return _error_response(409, "last_admin", "Cannot demote the last admin")
 
         updated = repo.update_role(user_id, body.role)
@@ -151,7 +151,7 @@ def delete_user(
             raise HTTPException(status_code=404, detail="User not found")
 
         if user.role == "admin":
-            if repo.count_admins(tenant_id) <= 1:
+            if repo.count_admins_locked(tenant_id) <= 1:
                 return _error_response(409, "last_admin", "Cannot remove the last admin")
 
         repo.delete(user_id)

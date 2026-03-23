@@ -135,6 +135,14 @@ export interface SimilarHit {
   height: number | null;
 }
 
+export interface UserItem {
+  user_id: string;
+  email: string;
+  role: string;
+  created_at: string;
+  last_login_at: string | null;
+}
+
 export interface SimilarityResponse {
   source_asset_id: string;
   hits: SimilarHit[];

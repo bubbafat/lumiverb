@@ -11,9 +11,9 @@ Accepted
 | 2 | API: auth endpoints (login, forgot-password, reset-password) | Pending |
 | 3 | Middleware: JWT verification alongside existing API key path | Pending |
 | 4 | API: user management endpoints (list, create, update role, remove) | Done |
-| 5 | CLI: user management commands | Pending |
-| 6 | Web UI: email/password login + password reset flow | Pending |
-| 7 | Web UI: user management admin page | Pending |
+| 5 | CLI: user management commands | Done |
+| 6 | Web UI: email/password login + password reset flow | Done |
+| 7 | Web UI: user management admin page | Done |
 
 ---
 

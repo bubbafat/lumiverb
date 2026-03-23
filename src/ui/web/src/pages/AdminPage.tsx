@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
 import { listLibraries, listJobs, getJobStats } from "../api/client";
 import type { JobListItem, JobStatsResponse, LibraryListItem } from "../api/types";
 
@@ -259,11 +260,19 @@ export default function AdminPage() {
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-6 space-y-10">
-      <div>
-        <h1 className="text-2xl font-semibold text-gray-100">System status</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Read-only dashboard. Refreshes every 10 seconds.
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold text-gray-100">System status</h1>
+          <p className="mt-1 text-sm text-gray-500">
+            Read-only dashboard. Refreshes every 10 seconds.
+          </p>
+        </div>
+        <Link
+          to="/admin/users"
+          className="text-sm text-indigo-400 hover:text-indigo-300"
+        >
+          Manage users →
+        </Link>
       </div>
 
       {/* Libraries */}

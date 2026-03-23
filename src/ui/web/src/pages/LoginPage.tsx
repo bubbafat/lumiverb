@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import type { FormEvent } from "react";
 
 export default function LoginPage() {
-  const [key, setKey] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
@@ -13,25 +14,27 @@ export default function LoginPage() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    const trimmed = key.trim();
-    if (!trimmed) return;
+    if (!email.trim() || !password) return;
 
     setLoading(true);
     setError(null);
 
     try {
-      const res = await fetch("/v1/libraries", {
-        headers: { Authorization: `Bearer ${trimmed}` },
+      const res = await fetch("/v1/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim(), password }),
       });
       if (res.ok) {
-        localStorage.setItem("lumiverb_api_key", trimmed);
+        const data = (await res.json()) as { access_token: string };
+        localStorage.setItem("lumiverb_api_key", data.access_token);
         if (next && next.startsWith("/")) {
           navigate(next);
         } else {
           navigate("/");
         }
       } else if (res.status === 401) {
-        setError("Invalid API key");
+        setError("Invalid email or password");
       } else {
         setError("Could not reach server");
       }
@@ -55,19 +58,36 @@ export default function LoginPage() {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label
-              htmlFor="api-key"
+              htmlFor="email"
               className="mb-1.5 block text-sm font-medium text-gray-300"
             >
-              API Key
+              Email
             </label>
             <input
-              id="api-key"
+              id="email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              autoComplete="email"
+              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+            />
+          </div>
+
+          <div>
+            <label
+              htmlFor="password"
+              className="mb-1.5 block text-sm font-medium text-gray-300"
+            >
+              Password
+            </label>
+            <input
+              id="password"
               type="password"
-              value={key}
-              onChange={(e) => setKey(e.target.value)}
-              placeholder="Enter your API key"
-              autoComplete="off"
-              spellCheck={false}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              autoComplete="current-password"
               className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
             />
           </div>
@@ -78,12 +98,18 @@ export default function LoginPage() {
 
           <button
             type="submit"
-            disabled={loading || !key.trim()}
+            disabled={loading || !email.trim() || !password}
             className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loading ? "Signing in…" : "Sign in"}
           </button>
         </form>
+
+        <p className="mt-4 text-center text-sm text-gray-500">
+          <Link to="/forgot-password" className="text-indigo-400 hover:text-indigo-300">
+            Forgot password?
+          </Link>
+        </p>
       </div>
     </div>
   );

@@ -8,6 +8,7 @@ import type {
   LibraryResponse,
   SearchResponse,
   SimilarityResponse,
+  UserItem,
 } from "./types";
 
 export class ApiError extends Error {
@@ -306,6 +307,35 @@ export async function deleteTenantFilterDefault(
   return apiFetch<void>(`/path-filter-defaults/${defaultId}`, {
     method: "DELETE",
   });
+}
+
+export async function listUsers(): Promise<UserItem[]> {
+  return apiFetch<UserItem[]>("/users");
+}
+
+export async function createUser(
+  email: string,
+  password: string,
+  role: string,
+): Promise<UserItem> {
+  return apiFetch<UserItem>("/users", {
+    method: "POST",
+    body: { email, password, role },
+  });
+}
+
+export async function updateUserRole(
+  userId: string,
+  role: string,
+): Promise<UserItem> {
+  return apiFetch<UserItem>(`/users/${userId}`, {
+    method: "PATCH",
+    body: { role },
+  });
+}
+
+export async function deleteUser(userId: string): Promise<void> {
+  return apiFetch<void>(`/users/${userId}`, { method: "DELETE" });
 }
 
 export async function getJobStats(): Promise<import("./types").JobStatsResponse> {
