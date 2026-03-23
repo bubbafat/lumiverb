@@ -38,6 +38,17 @@ const authHeaders = (): HeadersInit => {
 };
 
 export function handleUnauthorized(): void {
+  let stored = "";
+  try {
+    stored = localStorage.getItem("lumiverb_api_key") ?? "";
+  } catch {
+    // ignore
+  }
+
+  // Phase 5 public guest browsing expects 401s to be handled by the page/router.
+  // Only force a logout when the user actually has a stored key.
+  if (!stored) return;
+
   try {
     localStorage.removeItem("lumiverb_api_key");
   } catch {
@@ -115,6 +126,20 @@ export async function deleteLibrary(libraryId: string): Promise<void> {
   return apiFetch<void>(`/libraries/${libraryId}`, { method: "DELETE" });
 }
 
+export async function getLibrary(libraryId: string): Promise<LibraryResponse> {
+  return apiFetch<LibraryResponse>(`/libraries/${libraryId}`);
+}
+
+export async function updateLibraryVisibility(
+  libraryId: string,
+  is_public: boolean,
+): Promise<LibraryResponse> {
+  return apiFetch<LibraryResponse>(`/libraries/${libraryId}`, {
+    method: "PATCH",
+    body: { is_public },
+  });
+}
+
 export async function emptyTrash(): Promise<EmptyTrashResponse> {
   return apiFetch<EmptyTrashResponse>("/libraries/empty-trash", {
     method: "POST",
@@ -168,8 +193,11 @@ export async function searchAssets(params: {
   return apiFetch<SearchResponse>(`/search?${qs.toString()}`);
 }
 
-export async function getAsset(assetId: string): Promise<AssetDetail> {
-  return apiFetch<AssetDetail>(`/assets/${assetId}`);
+export async function getAsset(assetId: string, publicLibraryId?: string): Promise<AssetDetail> {
+  const qs = publicLibraryId
+    ? `?public_library_id=${encodeURIComponent(publicLibraryId)}`
+    : "";
+  return apiFetch<AssetDetail>(`/assets/${assetId}${qs}`);
 }
 
 export async function findSimilar(params: {

@@ -1,8 +1,14 @@
 import { useMemo, useRef, useEffect, useState, useCallback, useLayoutEffect } from "react";
-import { useParams, Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { pageAssets, listLibraries, searchAssets } from "../api/client";
+import {
+  ApiError,
+  getApiKey,
+  getLibrary,
+  pageAssets,
+  searchAssets,
+} from "../api/client";
 import { AssetCell } from "../components/AssetCell";
 import { Lightbox } from "../components/Lightbox";
 import { FilterBar } from "../components/FilterBar";
@@ -93,11 +99,45 @@ export default function BrowsePage() {
     [setSearchParams],
   );
 
-  const { data: libraries } = useQuery({
-    queryKey: ["libraries", true],
-    queryFn: () => listLibraries(true),
+  const apiKey = getApiKey();
+  const isAuthenticated = Boolean(apiKey);
+
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  const {
+    data: library,
+    error: libraryError,
+    isLoading: libraryLoading,
+    isError: libraryIsError,
+  } = useQuery({
+    queryKey: ["library", libraryId],
+    queryFn: () => getLibrary(libraryId!),
+    enabled: !!libraryId,
+    retry: false,
   });
-  const library = libraries?.find((l) => l.library_id === libraryId);
+
+  const isPublicMode = !isAuthenticated && library?.is_public === true;
+  const canFetchAssets = isAuthenticated || isPublicMode;
+
+  useEffect(() => {
+    if (
+      libraryIsError &&
+      !isAuthenticated &&
+      libraryError instanceof ApiError &&
+      libraryError.status === 401
+    ) {
+      const next = `${location.pathname}${location.search}`;
+      navigate(`/login?next=${encodeURIComponent(next)}`, { replace: true });
+    }
+  }, [
+    libraryIsError,
+    isAuthenticated,
+    libraryError,
+    location.pathname,
+    location.search,
+    navigate,
+  ]);
 
   const browseQuery = useInfiniteQuery({
     queryKey: ["assets", libraryId!, pathPrefix ?? null, activeTag ?? null],
@@ -114,7 +154,7 @@ export default function BrowsePage() {
       if (!lastPage || lastPage.length < PAGE_SIZE) return undefined;
       return lastPage[lastPage.length - 1].asset_id;
     },
-    enabled: !!libraryId && !isSearchMode,
+    enabled: !!libraryId && !isSearchMode && canFetchAssets,
   });
 
   const searchQuery = useQuery({
@@ -137,7 +177,7 @@ export default function BrowsePage() {
         dateTo,
         limit: SEARCH_RESULT_CAP,
       }),
-    enabled: !!libraryId && isSearchMode,
+    enabled: !!libraryId && isSearchMode && canFetchAssets,
   });
 
   const flatAssets = useMemo(() => {
@@ -303,7 +343,7 @@ export default function BrowsePage() {
     );
   }
 
-  if (!library) {
+  if (libraryLoading) {
     return (
       <div className="space-y-4">
         <div className="animate-pulse space-y-4">
@@ -311,12 +351,34 @@ export default function BrowsePage() {
           <div className="flex gap-4">
             {Array.from({ length: 6 }).map((_, i) => (
               <div
-                // eslint-disable-next-line react/no-array-index-key
                 key={i}
                 className="h-[220px] flex-1 rounded-lg bg-gray-800"
               />
             ))}
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (libraryIsError) {
+    const isPrivateUnauth =
+      !isAuthenticated &&
+      libraryError instanceof ApiError &&
+      libraryError.status === 401;
+    if (isPrivateUnauth) return null;
+
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center gap-2 text-sm text-gray-400">
+          <Link to="/" className="hover:text-gray-300">
+            Libraries
+          </Link>
+          <span>/</span>
+          <span className="text-gray-300">{libraryId}</span>
+        </div>
+        <div className="rounded-lg border border-red-800/50 bg-red-900/20 px-4 py-3 text-red-400">
+          <span>{(libraryError as ApiError).message}</span>
         </div>
       </div>
     );
@@ -361,6 +423,15 @@ export default function BrowsePage() {
 
   return (
     <div className="flex flex-col gap-4 px-6 py-6">
+      {isPublicMode && (
+        <div className="flex items-center gap-2 text-xs text-gray-500">
+          <span>🔒 Viewing as public guest</span>
+          <span>·</span>
+          <Link to="/login" className="text-indigo-400 hover:text-indigo-300">
+            Sign in
+          </Link>
+        </div>
+      )}
       {/* Breadcrumb + zoom control */}
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-2 text-sm text-gray-400 min-w-0">
@@ -384,7 +455,7 @@ export default function BrowsePage() {
             Libraries
           </Link>
           <span>/</span>
-          <span className="text-gray-300 truncate">{library.name}</span>
+          <span className="text-gray-300 truncate">{library?.name ?? ""}</span>
           {pathPrefix && (
             <>
               <span>/</span>
@@ -478,7 +549,6 @@ export default function BrowsePage() {
         <div className="flex gap-4">
           {Array.from({ length: 6 }).map((_, i) => (
             <div
-              // eslint-disable-next-line react/no-array-index-key
               key={i}
               className="h-[220px] flex-1 animate-pulse rounded-lg bg-gray-800"
             />
@@ -612,6 +682,8 @@ export default function BrowsePage() {
                             asset={asset}
                             onClick={() => handleAssetClick(asset)}
                             aspectRatio={aspectRatio}
+                            isPublic={isPublicMode}
+                            publicLibraryId={libraryId}
                           />
                         </div>
                       );
@@ -648,6 +720,8 @@ export default function BrowsePage() {
           }}
           onDateClick={handleLightboxDateClick}
           libraryId={libraryId}
+          isPublic={isPublicMode}
+          publicLibraryId={libraryId}
           onSimilarClick={(similarAsset) => {
             setLightboxAsset(similarAsset);
           }}

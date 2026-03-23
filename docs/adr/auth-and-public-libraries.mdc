@@ -10,8 +10,8 @@ Accepted
 | 1 | Schema: `libraries.is_public` + `public_libraries` control plane table | Complete |
 | 2 | API: expose `is_public` on library endpoints; maintain control plane table on toggle | Complete |
 | 3 | Middleware: unauthenticated public library resolution | Complete |
-| 4 | Web UI: API key login page with localStorage persistence | Pending |
-| 5 | Web UI: public library browsing (unauthenticated share URLs) | Pending |
+| 4 | Web UI: API key login page with localStorage persistence | Complete |
+| 5 | Web UI: public library browsing (unauthenticated share URLs) | Complete |
 
 ---
 

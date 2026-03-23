@@ -7,6 +7,7 @@ import {
   deleteLibrary,
   emptyTrash,
   ApiError,
+  updateLibraryVisibility,
 } from "../api/client";
 import { Badge } from "../components/Badge";
 import { Modal } from "../components/Modal";
@@ -41,6 +42,10 @@ export default function LibrariesPage() {
   const [addError, setAddError] = useState("");
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [emptyTrashConfirm, setEmptyTrashConfirm] = useState(false);
+  const [visibilityUpdatingId, setVisibilityUpdatingId] = useState<
+    string | null
+  >(null);
+  const [visibilityError, setVisibilityError] = useState<string | null>(null);
 
   const { data: libraries, isLoading, error } = useQuery({
     queryKey: ["libraries", true],
@@ -76,6 +81,34 @@ export default function LibrariesPage() {
       queryClient.invalidateQueries({ queryKey: ["libraries"] });
     },
   });
+
+  const visibilityMutation = useMutation({
+    mutationFn: (vars: {
+      libraryId: string;
+      is_public: boolean;
+    }) => updateLibraryVisibility(vars.libraryId, vars.is_public),
+    onMutate: (vars) => {
+      setVisibilityUpdatingId(vars.libraryId);
+      setVisibilityError(null);
+    },
+    onSuccess: () => {
+      setVisibilityUpdatingId(null);
+      queryClient.invalidateQueries({ queryKey: ["libraries", true] });
+    },
+    onError: (err: ApiError) => {
+      setVisibilityUpdatingId(null);
+      setVisibilityError(err.message);
+    },
+  });
+
+  async function copyShareLink(libraryId: string): Promise<void> {
+    const url = `${window.location.origin}/libraries/${libraryId}/browse`;
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      window.prompt("Copy link", url);
+    }
+  }
 
   const trashedCount = libraries?.filter((l) => l.status === "trashed").length ?? 0;
 
@@ -114,6 +147,11 @@ export default function LibrariesPage() {
         {error && (
           <div className="flex items-center justify-between rounded-lg border border-red-800/50 bg-red-900/20 px-4 py-3 text-red-400">
             <span>{(error as Error).message}</span>
+          </div>
+        )}
+        {visibilityError && (
+          <div className="flex items-center justify-between rounded-lg border border-red-800/50 bg-red-900/20 px-4 py-3 text-red-400">
+            <span>{visibilityError}</span>
           </div>
         )}
 
@@ -164,6 +202,51 @@ export default function LibrariesPage() {
                           >
                             Settings
                           </Link>
+                        </>
+                      )}
+                      {lib.status !== "trashed" && (
+                        <>
+                          <button
+                            type="button"
+                            disabled={
+                              visibilityMutation.isPending &&
+                              visibilityUpdatingId === lib.library_id
+                            }
+                            onClick={() => {
+                              const currentIsPublic = lib.is_public ?? false;
+                              const nextIsPublic = !currentIsPublic;
+                              if (nextIsPublic) {
+                                const ok = window.confirm(
+                                  "Anyone with this link will be able to view this library's photos. Continue?",
+                                );
+                                if (!ok) return;
+                              }
+                              visibilityMutation.mutate({
+                                libraryId: lib.library_id,
+                                is_public: nextIsPublic,
+                              });
+                            }}
+                            className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors duration-150 ${
+                              (lib.is_public ?? false)
+                                ? "bg-indigo-600 text-white hover:bg-indigo-500"
+                                : "border border-gray-600 text-gray-300 hover:bg-gray-800/50 hover:border-gray-500"
+                            }`}
+                          >
+                            {lib.is_public ? "Public" : "Private"}
+                          </button>
+                          {lib.is_public && (
+                            <button
+                              type="button"
+                              onClick={() => void copyShareLink(lib.library_id)}
+                              className="rounded-lg border border-gray-600 bg-gray-900/30 px-3 py-1.5 text-sm font-medium text-gray-300 transition-colors duration-150 hover:border-gray-500 hover:bg-gray-800/50 disabled:opacity-50 disabled:cursor-not-allowed"
+                              disabled={
+                                visibilityMutation.isPending &&
+                                visibilityUpdatingId === lib.library_id
+                              }
+                            >
+                              Copy link
+                            </button>
+                          )}
                         </>
                       )}
                       <Badge variant={scanStatusVariant(lib.scan_status)}>

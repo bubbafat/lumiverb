@@ -6,6 +6,8 @@ interface AssetCellProps {
   asset: AssetPageItem;
   onClick: () => void;
   aspectRatio?: number;
+  isPublic?: boolean;
+  publicLibraryId?: string;
 }
 
 function formatDuration(sec: number): string {
@@ -22,10 +24,17 @@ function basename(relPath: string): string {
   return i >= 0 ? relPath.slice(i + 1) : relPath;
 }
 
-function AssetCellInner({ asset, onClick, aspectRatio }: AssetCellProps) {
+function AssetCellInner({
+  asset,
+  onClick,
+  aspectRatio,
+  isPublic,
+  publicLibraryId,
+}: AssetCellProps) {
   const { url, isLoading, error } = useAuthenticatedImage(
     asset.asset_id,
     "thumbnail",
+    { isPublic, publicLibraryId },
   );
   const [hovered, setHovered] = useState(false);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -36,7 +45,7 @@ function AssetCellInner({ asset, onClick, aspectRatio }: AssetCellProps) {
   const { url: videoUrl } = useAuthenticatedImage(
     asset.asset_id,
     "video-preview",
-    { enabled: isVideo && hovered },
+    { enabled: isVideo && hovered, isPublic, publicLibraryId },
   );
 
   return (

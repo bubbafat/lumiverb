@@ -1,11 +1,17 @@
 import { useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import type { FormEvent } from "react";
 
 export default function LoginPage() {
   const [key, setKey] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
-  async function handleSubmit(e: React.FormEvent) {
+  const next = searchParams.get("next");
+
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     const trimmed = key.trim();
     if (!trimmed) return;
@@ -19,7 +25,11 @@ export default function LoginPage() {
       });
       if (res.ok) {
         localStorage.setItem("lumiverb_api_key", trimmed);
-        window.location.reload();
+        if (next && next.startsWith("/")) {
+          navigate(next);
+        } else {
+          navigate("/");
+        }
       } else if (res.status === 401) {
         setError("Invalid API key");
       } else {

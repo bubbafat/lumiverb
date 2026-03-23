@@ -23,7 +23,11 @@ const authHeaders = (): HeadersInit => {
 export function useAuthenticatedImage(
   assetId: string,
   type: MediaType = "thumbnail",
-  { enabled = true }: { enabled?: boolean } = {},
+  {
+    enabled = true,
+    isPublic = false,
+    publicLibraryId,
+  }: { enabled?: boolean; isPublic?: boolean; publicLibraryId?: string } = {},
 ): { url: string | null; isLoading: boolean; error: Error | null; generating: boolean } {
   const [url, setUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(enabled);
@@ -42,7 +46,14 @@ export function useAuthenticatedImage(
     let objectUrl: string | null = null;
     let cancelled = false;
 
-    fetch(`/v1${path}`, { headers: authHeaders() })
+    const publicQuery =
+      isPublic && publicLibraryId
+        ? `?public_library_id=${encodeURIComponent(publicLibraryId)}`
+        : "";
+    const fetchUrl = `/v1${path}${publicQuery}`;
+    const headers = isPublic ? {} : authHeaders();
+
+    fetch(fetchUrl, { headers })
       .then(async (res) => {
         if (cancelled) return;
         if (res.status === 202) {
@@ -71,7 +82,7 @@ export function useAuthenticatedImage(
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       setUrl(null);
     };
-  }, [assetId, type, enabled]);
+  }, [assetId, type, enabled, isPublic, publicLibraryId]);
 
   return { url, isLoading, error, generating };
 }

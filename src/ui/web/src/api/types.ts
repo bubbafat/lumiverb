@@ -6,6 +6,7 @@ export interface LibraryListItem {
   last_scan_at: string | null;
   status: string;
   vision_model_id: string;
+  is_public: boolean;
 }
 
 export interface DirectoryNode {
@@ -20,6 +21,7 @@ export interface LibraryResponse {
   root_path: string;
   scan_status: string;
   vision_model_id: string;
+  is_public: boolean;
 }
 
 export interface EmptyTrashResponse {

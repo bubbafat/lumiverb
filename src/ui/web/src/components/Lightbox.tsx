@@ -15,16 +15,25 @@ interface LightboxProps {
   onSimilarClick?: (asset: AssetPageItem) => void;
   onDateClick?: (dateStr: string) => void;
   libraryId?: string;
+  isPublic?: boolean;
+  publicLibraryId?: string;
 }
 
 function SimilarThumbnail({
   hit,
   onClick,
+  isPublic,
+  publicLibraryId,
 }: {
   hit: SimilarHit;
   onClick: () => void;
+  isPublic?: boolean;
+  publicLibraryId?: string;
 }) {
-  const { url, isLoading } = useAuthenticatedImage(hit.asset_id, "thumbnail");
+  const { url, isLoading } = useAuthenticatedImage(hit.asset_id, "thumbnail", {
+    isPublic,
+    publicLibraryId,
+  });
   const filename = basename(hit.rel_path);
   return (
     <button
@@ -66,6 +75,8 @@ export function Lightbox({
   onSimilarClick,
   onDateClick,
   libraryId,
+  isPublic,
+  publicLibraryId,
 }: LightboxProps) {
   const [showSimilar, setShowSimilar] = useState(false);
   const [metaOpen, setMetaOpen] = useState(true);
@@ -146,10 +157,14 @@ export function Lightbox({
     url: mediaUrl,
     isLoading: mediaLoading,
     generating,
-  } = useAuthenticatedImage(asset.asset_id, isVideo ? "video-preview" : "proxy");
+  } = useAuthenticatedImage(asset.asset_id, isVideo ? "video-preview" : "proxy", {
+    isPublic,
+    publicLibraryId,
+  });
   const { data: detail, isLoading: detailLoading } = useQuery({
-    queryKey: ["asset", asset.asset_id],
-    queryFn: () => getAsset(asset.asset_id),
+    queryKey: ["asset", asset.asset_id, publicLibraryId ?? null],
+    queryFn: () => getAsset(asset.asset_id, isPublic ? publicLibraryId : undefined),
+    enabled: !isPublic || !!publicLibraryId,
   });
 
   const { data: similarData, isLoading: similarLoading } = useQuery({
@@ -633,6 +648,8 @@ export function Lightbox({
                               <SimilarThumbnail
                                 key={hit.asset_id}
                                 hit={hit}
+                                isPublic={isPublic}
+                                publicLibraryId={publicLibraryId ?? libraryId}
                                 onClick={() => {
                                   if (onSimilarClick) {
                                     onSimilarClick({

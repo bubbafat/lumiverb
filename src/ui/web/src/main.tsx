@@ -1,7 +1,8 @@
 import { StrictMode } from "react";
+import type { ReactElement } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import AppShell from "./components/AppShell";
 import AdminPage from "./pages/AdminPage";
 import BrowsePage from "./pages/BrowsePage";
@@ -20,25 +21,54 @@ const queryClient = new QueryClient({
   },
 });
 
-const apiKey = getApiKey();
+function RequireAuth({ children }: { children: ReactElement }) {
+  const location = useLocation();
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    return (
+      <Navigate
+        to={`/login?next=${encodeURIComponent(
+          `${location.pathname}${location.search}`,
+        )}`}
+        replace
+      />
+    );
+  }
+  return children;
+}
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    {!apiKey ? (
-      <LoginPage />
-    ) : (
-      <QueryClientProvider client={queryClient}>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/" element={<AppShell />}>
-              <Route index element={<LibrariesPage />} />
-              <Route path="libraries/:libraryId/browse" element={<BrowsePage />} />
-              <Route path="libraries/:libraryId/settings" element={<LibrarySettingsPage />} />
-              <Route path="admin" element={<AdminPage />} />
-            </Route>
-          </Routes>
-        </BrowserRouter>
-      </QueryClientProvider>
-    )}
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/" element={<AppShell />}>
+            <Route path="libraries/:libraryId/browse" element={<BrowsePage />} />
+            <Route
+              index
+              element={<RequireAuth>{<LibrariesPage />}</RequireAuth>}
+            />
+            <Route
+              path="libraries/:libraryId/settings"
+              element={
+                <RequireAuth>
+                  {<LibrarySettingsPage />}
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="admin"
+              element={
+                <RequireAuth>
+                  {<AdminPage />}
+                </RequireAuth>
+              }
+            />
+          </Route>
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </QueryClientProvider>
   </StrictMode>,
 );
