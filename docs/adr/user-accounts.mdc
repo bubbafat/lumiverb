@@ -10,7 +10,7 @@ Accepted
 | 1 | Schema: `users` + `password_reset_tokens`; `api_keys.role` column | Done |
 | 2 | API: auth endpoints (login, forgot-password, reset-password) | Pending |
 | 3 | Middleware: JWT verification alongside existing API key path | Pending |
-| 4 | API: user management endpoints (list, create, update role, remove) | Pending |
+| 4 | API: user management endpoints (list, create, update role, remove) | Done |
 | 5 | CLI: user management commands | Pending |
 | 6 | Web UI: email/password login + password reset flow | Pending |
 | 7 | Web UI: user management admin page | Pending |
