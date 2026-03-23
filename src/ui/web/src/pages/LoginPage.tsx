@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import type { FormEvent } from "react";
+import { setApiKey } from "../api/client";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -27,7 +28,7 @@ export default function LoginPage() {
       });
       if (res.ok) {
         const data = (await res.json()) as { access_token: string };
-        localStorage.setItem("lumiverb_api_key", data.access_token);
+        setApiKey(data.access_token);
         if (next && next.startsWith("/")) {
           navigate(next);
         } else {

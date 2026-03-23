@@ -1,72 +1,75 @@
 # Deployment: DigitalOcean
 
-> **Status**: Work in progress. Sections marked `[TODO]` are incomplete or have open questions.
+> **Status**: Phase 1 baseline runbook (API key auth only).
 
 ## Overview
 
-Lumiverb runs on a DigitalOcean Droplet. The deployment is a standard Linux VPS setup:
-- **nginx** — TLS termination and reverse proxy to the FastAPI process
-- **systemd** — manages the API server and background worker processes
-- **PostgreSQL 16** — control plane DB and tenant DBs (separate databases, same instance)
-- **Quickwit** — BM25 full-text search; runs as a systemd service
-- **uv** — manages the Python environment and dependencies
+Lumiverb runs on a single DigitalOcean Droplet for Phase 1. This is a pragmatic bootstrap topology with a known single-host blast radius.
 
-The React web UI is compiled to static files and served by nginx directly.
+- **nginx** - TLS termination, static UI hosting, reverse proxy to FastAPI
+- **systemd** - process supervision for API, worker, and Quickwit
+- **PostgreSQL 16** - control plane DB plus one DB per tenant
+- **Quickwit** - BM25 search cache on localhost only
+- **uv** - Python environment and dependency management
 
----
+The React UI is built to static assets and served directly by nginx.
 
-## Droplet Sizing
+## Scope and non-negotiables
 
-> [TODO] Confirm sizing based on expected library size and number of users.
-
-Starting point:
-- **CPU**: 2 vCPUs (Basic, shared)
-- **RAM**: 4 GB (Quickwit and the embedding worker are the hungriest processes)
-- **Disk**: 50–100 GB SSD (for PostgreSQL data + Quickwit indexes; media files are stored separately)
-
-Media files (originals, proxies, thumbnails) should live on a **DigitalOcean Volume** (block storage) attached to the Droplet, not on the root disk. This keeps the Droplet replaceable without data loss.
-
-> [TODO] Decide on storage provider for proxies/thumbnails — local Volume vs. DigitalOcean Spaces (S3-compatible).
+- All API routes are under `/v1/`.
+- Authentication is API-key based: `Authorization: Bearer <api_key>`.
+- Tenant context is derived from API key only.
+- No user/password login, JWT sessions, or password-reset SMTP in Phase 1.
+- Quickwit, proxies, and thumbnails are regenerable caches. Postgres is irreplaceable.
 
 ---
 
-## Directory Layout on the Droplet
+## Droplet sizing
 
-```
-/opt/lumiverb/          # application code (git clone or deploy artifact)
-/etc/lumiverb/          # config and secrets (root:root, 700)
-  env                   # environment variables (root:root, 600)
-/var/lib/lumiverb/      # runtime data (data_dir)
+Starting baseline:
+
+- **CPU**: 2 vCPUs
+- **RAM**: 4 GB
+- **Disk**: 80 GB SSD root
+- **Volume**: 100 GB attached volume mounted at `/var/lib/lumiverb`
+
+Scale up when either condition is true:
+
+- API p95 latency remains elevated under normal load
+- Memory pressure causes swap usage or OOM restarts
+
+---
+
+## Directory layout
+
+```text
+/opt/lumiverb/          # app checkout / deploy artifact
+/etc/lumiverb/          # config and secrets (root:root 0700)
+  env                   # env vars file (root:root 0600)
+/var/lib/lumiverb/      # data_dir (volume mount)
   proxies/
   thumbnails/
-/var/log/lumiverb/      # log files (if not using journald)
+  quickwit/
+/var/backups/lumiverb/  # local backup staging
 ```
 
 ---
 
-## Environment Variables
+## Environment variables
 
-Secrets live in `/etc/lumiverb/env` — not in the repo, not in the Docker image.
+Secrets live in `/etc/lumiverb/env` and are never committed.
 
 ```bash
 # /etc/lumiverb/env
-# chmod 600, owned by root (or the lumiverb service user)
+# chmod 600; owner root (or root + readable by service group)
 
 # Database
 CONTROL_PLANE_DATABASE_URL=postgresql+psycopg2://app:<password>@127.0.0.1:5432/control_plane
 TENANT_DATABASE_URL_TEMPLATE=postgresql+psycopg2://app:<password>@127.0.0.1:5432/{tenant_id}
 
 # Auth
-JWT_SECRET=<openssl rand -hex 32>
 ADMIN_KEY=<openssl rand -hex 32>
-
-# SMTP (for password reset emails) — optional
-SMTP_HOST=smtp.example.com
-SMTP_PORT=587
-SMTP_USER=noreply@example.com
-SMTP_PASSWORD=<password>
-SMTP_FROM=noreply@example.com
-APP_HOST=https://app.example.com
+API_SECRET_KEY=<openssl rand -hex 32>
 
 # Storage
 STORAGE_PROVIDER=local
@@ -78,27 +81,30 @@ QUICKWIT_ENABLED=true
 
 # App
 APP_ENV=production
-LOG_LEVEL=WARNING
+LOG_LEVEL=INFO
 ```
 
 Generate secrets:
+
 ```bash
-openssl rand -hex 32   # for JWT_SECRET and ADMIN_KEY
+openssl rand -hex 32
 ```
 
 ---
 
 ## PostgreSQL
 
-> [TODO] Decide: managed DO Managed Database vs. self-hosted on the Droplet.
-> Managed DB adds ~$15/mo but removes backup/HA burden. Likely worth it.
+For a single-Droplet Phase 1 deployment, run Postgres locally. Managed Postgres is recommended once uptime/ops requirements increase.
 
-If self-hosted:
+Install:
+
 ```bash
-apt install postgresql-16 postgresql-16-pgvector
+apt update
+apt install -y postgresql-16 postgresql-16-pgvector
 ```
 
-Create the control plane database and application user:
+Bootstrap:
+
 ```sql
 CREATE USER app WITH PASSWORD '<password>';
 CREATE DATABASE control_plane OWNER app;
@@ -106,141 +112,189 @@ CREATE DATABASE control_plane OWNER app;
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
-Tenant databases are created programmatically via `lumiverb create-tenant`.
+Tenant databases are provisioned by the admin tenant-creation flow.
+
+Hardening baseline:
+
+- `listen_addresses = '127.0.0.1'`
+- host firewall allows no public Postgres access
+- daily logical backups plus weekly restore drill (see Backups)
 
 ---
 
 ## Quickwit
 
-> [TODO] Document exact Quickwit install and systemd unit.
+Quickwit runs on localhost and is not exposed publicly.
 
-Quickwit runs as a separate process listening on `127.0.0.1:7280` (not exposed externally).
+Install binary:
 
 ```bash
-# [TODO] install steps
 curl -L https://install.quickwit.io | bash
+install -m 0755 ~/.local/bin/quickwit /usr/local/bin/quickwit
+mkdir -p /var/lib/lumiverb/quickwit
+chown -R lumiverb:lumiverb /var/lib/lumiverb/quickwit
 ```
+
+Systemd unit:
+
+```ini
+# /etc/systemd/system/lumiverb-quickwit.service
+[Unit]
+Description=Lumiverb Quickwit
+After=network.target
+
+[Service]
+Type=simple
+User=lumiverb
+Group=lumiverb
+ExecStart=/usr/local/bin/quickwit run --service metastore --service indexer --service searcher --data-dir /var/lib/lumiverb/quickwit --listen-address 127.0.0.1 --rest-listen-port 7280
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/lumiverb/quickwit
+
+[Install]
+WantedBy=multi-user.target
+```
+
+> If your Quickwit release uses different `run` flags, adjust `ExecStart` to match `quickwit --help`.
 
 ---
 
-## Application Setup
+## Application setup
 
 ```bash
-# Clone the repo
 git clone https://github.com/your-org/lumiverb /opt/lumiverb
 cd /opt/lumiverb
 
-# Install Python dependencies
-uv sync --no-dev
+# Keep consistent with project environment policy.
+uv sync --all-extras
 
-# Run database migrations
+# Control-plane migrations
 uv run alembic -c migrations/control/alembic.ini upgrade head
-
-# Bootstrap the first admin user
-uv run lumiverb create-user --email admin@example.com --role admin
 ```
+
+Phase 1 bootstrap uses API keys and admin endpoints; do not bootstrap user accounts.
 
 ---
 
-## Building the Web UI
+## Build web UI
 
 ```bash
 cd /opt/lumiverb/src/ui/web
 npm ci
-npm run build   # outputs to dist/
+npm run build
 ```
 
-The `dist/` directory is served by nginx as static files.
+The `dist/` directory is served by nginx.
 
-> [TODO] Decide whether to build on the Droplet or in CI and deploy the artifact.
+Preferred production flow: build in CI, deploy artifact. Building on the Droplet is acceptable for manual deployments.
 
 ---
 
-## systemd Units
+## systemd units
 
-### API Server
+### API server
 
 ```ini
 # /etc/systemd/system/lumiverb-api.service
 [Unit]
 Description=Lumiverb API Server
-After=network.target postgresql.service
+After=network.target postgresql.service lumiverb-quickwit.service
+Wants=lumiverb-quickwit.service
 
 [Service]
 Type=simple
 User=lumiverb
+Group=lumiverb
 WorkingDirectory=/opt/lumiverb
 EnvironmentFile=/etc/lumiverb/env
-ExecStart=/opt/lumiverb/.venv/bin/uvicorn src.api.main:app \
-    --host 127.0.0.1 \
-    --port 8000 \
-    --workers 2
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/lumiverb/.venv/bin/uvicorn src.api.main:app --host 127.0.0.1 --port 8000 --workers 2
 Restart=on-failure
 RestartSec=5s
+LimitNOFILE=65535
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/lumiverb
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-### Background Worker
+### Background worker
 
 ```ini
 # /etc/systemd/system/lumiverb-worker.service
 [Unit]
 Description=Lumiverb Background Worker
-After=network.target postgresql.service
+After=network.target postgresql.service lumiverb-api.service
+Wants=lumiverb-api.service
 
 [Service]
 Type=simple
 User=lumiverb
+Group=lumiverb
 WorkingDirectory=/opt/lumiverb
 EnvironmentFile=/etc/lumiverb/env
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/opt/lumiverb/.venv/bin/python -m src.workers.main
 Restart=on-failure
 RestartSec=10s
+LimitNOFILE=65535
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/lumiverb
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-> [TODO] Confirm worker entrypoint module path.
+Enable services:
 
 ```bash
 systemctl daemon-reload
-systemctl enable --now lumiverb-api lumiverb-worker
+systemctl enable --now lumiverb-quickwit lumiverb-api lumiverb-worker
 ```
 
 ---
 
 ## nginx
 
-nginx terminates TLS (via Let's Encrypt / certbot) and proxies to the API. Static web UI files are served directly.
-
 ```nginx
 # /etc/nginx/sites-available/lumiverb
 server {
-    listen 443 ssl;
+    listen 443 ssl http2;
     server_name app.example.com;
 
     ssl_certificate     /etc/letsencrypt/live/app.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/app.example.com/privkey.pem;
 
-    # Serve the React web UI
     root /opt/lumiverb/src/ui/web/dist;
     index index.html;
 
-    # API proxy
+    # Keep responses secure by default.
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy no-referrer-when-downgrade always;
+
     location /v1/ {
         proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        # Increase for large file uploads (scans with many assets)
         client_max_body_size 100m;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
     }
 
-    # SPA fallback — let React Router handle client-side routes
     location / {
         try_files $uri $uri/ /index.html;
     }
@@ -253,34 +307,86 @@ server {
 }
 ```
 
+Certificate:
+
 ```bash
 certbot --nginx -d app.example.com
 ```
 
 ---
 
-## Deployments / Updates
+## Deployments and updates
 
-> [TODO] Define the deploy process. Options: git pull + restart, or CI artifact push.
+Preferred path: CI builds and tests, then deploys versioned artifacts.
 
-Minimal manual deploy:
+Manual fallback:
+
 ```bash
 cd /opt/lumiverb
-git pull
-uv sync --no-dev
+git fetch --all --prune
+git checkout <release-tag-or-commit>
+uv sync --all-extras
 uv run alembic -c migrations/control/alembic.ini upgrade head
+systemctl restart lumiverb-api lumiverb-worker
+systemctl status --no-pager lumiverb-api lumiverb-worker lumiverb-quickwit
+```
+
+Rollback:
+
+```bash
+cd /opt/lumiverb
+git checkout <previous-release-tag-or-commit>
+uv sync --all-extras
 systemctl restart lumiverb-api lumiverb-worker
 ```
 
 ---
 
-## Open Questions
+## Backups and restore
 
-- [ ] Managed DO PostgreSQL vs. self-hosted?
-- [ ] Proxy/thumbnail storage: local Volume or DO Spaces?
-- [ ] Build web UI on Droplet or in CI?
-- [ ] Deploy process: manual git pull, or automated via CI/CD?
-- [ ] How many worker processes / API uvicorn workers for expected load?
-- [ ] Log aggregation: journald only, or ship to a log service?
-- [ ] Backups: pg_dump schedule, Volume snapshots?
-- [ ] Domain and DNS setup
+Policy baseline:
+
+- Daily `pg_dump` of control plane DB and each tenant DB
+- Retention: 14 daily + 8 weekly snapshots
+- Weekly restore drill to a throwaway Postgres instance
+
+Example backup script:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+OUT="/var/backups/lumiverb/${STAMP}"
+mkdir -p "${OUT}"
+
+pg_dump -Fc -d control_plane -f "${OUT}/control_plane.dump"
+
+# Dump every non-template DB except postgres.
+for db in $(psql -Atqc "SELECT datname FROM pg_database WHERE datistemplate = false AND datname NOT IN ('postgres')"); do
+  pg_dump -Fc -d "$db" -f "${OUT}/${db}.dump"
+done
+```
+
+Restore test example:
+
+```bash
+createdb restore_check
+pg_restore --clean --if-exists -d restore_check /var/backups/lumiverb/<stamp>/control_plane.dump
+dropdb restore_check
+```
+
+---
+
+## Monitoring and logs
+
+- Use `journalctl -u lumiverb-api -f` and `journalctl -u lumiverb-worker -f`.
+- Alert on repeated service restarts and disk free space under 20%.
+- Track API p95 latency, job queue depth, and failed job counts.
+
+---
+
+## Open decisions
+
+- [ ] Move Postgres to managed service when operational burden or uptime needs justify it.
+- [ ] Decide when to split Quickwit and Postgres off the API Droplet.
+- [ ] Formalize CI/CD artifact deployment and release promotion gates.

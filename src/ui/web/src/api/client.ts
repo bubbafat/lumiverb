@@ -21,16 +21,56 @@ export class ApiError extends Error {
   }
 }
 
-export function getApiKey(): string {
+const API_KEY_STORAGE_KEY = "lumiverb_api_key";
+const AUTH_DISABLED_KEY = "lumiverb_auth_disabled";
+const LEGACY_AUTH_KEYS = [
+  "lumiverb_token",
+  "lumiverb_jwt",
+  "lumiverb_access_token",
+];
+
+function getStoredApiKey(): string {
   try {
-    return (
-      localStorage.getItem("lumiverb_api_key") ??
-      (import.meta.env.VITE_API_KEY as string | undefined) ??
-      ""
-    );
+    return localStorage.getItem(API_KEY_STORAGE_KEY) ?? "";
   } catch {
-    return (import.meta.env.VITE_API_KEY as string | undefined) ?? "";
+    return "";
   }
+}
+
+export function setApiKey(token: string): void {
+  try {
+    localStorage.setItem(API_KEY_STORAGE_KEY, token);
+    localStorage.removeItem(AUTH_DISABLED_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+export function clearApiKey(): void {
+  try {
+    localStorage.removeItem(API_KEY_STORAGE_KEY);
+    for (const key of LEGACY_AUTH_KEYS) {
+      localStorage.removeItem(key);
+    }
+    // Explicitly disable env fallback after logout.
+    localStorage.setItem(AUTH_DISABLED_KEY, "1");
+  } catch {
+    // ignore
+  }
+}
+
+export function getApiKey(): string {
+  const stored = getStoredApiKey();
+  if (stored) return stored;
+
+  try {
+    const authDisabled = localStorage.getItem(AUTH_DISABLED_KEY) === "1";
+    if (authDisabled) return "";
+  } catch {
+    // ignore
+  }
+
+  return (import.meta.env.VITE_API_KEY as string | undefined) ?? "";
 }
 
 const authHeaders = (): HeadersInit => {
@@ -39,22 +79,13 @@ const authHeaders = (): HeadersInit => {
 };
 
 export function handleUnauthorized(): void {
-  let stored = "";
-  try {
-    stored = localStorage.getItem("lumiverb_api_key") ?? "";
-  } catch {
-    // ignore
-  }
+  const stored = getStoredApiKey();
 
   // Phase 5 public guest browsing expects 401s to be handled by the page/router.
   // Only force a logout when the user actually has a stored key.
   if (!stored) return;
 
-  try {
-    localStorage.removeItem("lumiverb_api_key");
-  } catch {
-    // ignore
-  }
+  clearApiKey();
   window.location.reload();
 }
 
