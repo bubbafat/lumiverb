@@ -7,11 +7,13 @@ Accepted
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | Schema: `users` + `password_reset_tokens` tables in control plane | Pending |
-| 2 | API: `/v1/auth/login`, `/v1/auth/forgot-password`, `/v1/auth/reset-password` | Pending |
+| 1 | Schema: `users` + `password_reset_tokens`; `api_keys.role` column | Pending |
+| 2 | API: auth endpoints (login, forgot-password, reset-password) | Pending |
 | 3 | Middleware: JWT verification alongside existing API key path | Pending |
-| 4 | CLI: `create-user` bootstrap command | Pending |
-| 5 | Web UI: email/password login, JWT storage, password reset flow | Pending |
+| 4 | API: user management endpoints (list, create, update role, remove) | Pending |
+| 5 | CLI: user management commands | Pending |
+| 6 | Web UI: email/password login + password reset flow | Pending |
+| 7 | Web UI: user management admin page | Pending |
 
 ---
 
@@ -19,13 +21,15 @@ Accepted
 
 Phase 4 (auth-and-public-libraries.mdc) introduced a web UI login page backed by a static API key stored in localStorage. This is a functional bridge but not a real user account system: there is no concept of identity, no password, and no way to add or remove users without editing the database directly.
 
-Phase 5 replaces this with email + password accounts. The goals:
+Phase 5 replaces this with email + password accounts and a three-tier role system. The goals:
 
 - Users authenticate with email and password, not a raw API key
+- Three roles — Admin, Editor, Viewer — with enforced access control
+- There must always be at least one Admin; the system prevents the last Admin from being demoted or removed
+- The first Admin is bootstrapped via the CLI; subsequent users can be added via CLI or the web UI admin page
 - Credentials are stored in the operator's own infrastructure — no external auth service
 - The CLI and any automation using static API keys continue to work unchanged
 - The system runs on DigitalOcean, Hetzner, or any VPS without cloud-provider dependencies
-- If the deployment ever moves to a native cloud provider, nothing needs to change
 
 ### Why not Firebase Auth / Auth0 / Clerk
 
@@ -37,15 +41,31 @@ Self-hostable identity servers are operationally heavy. They add a separate serv
 
 ### Decision
 
-Build email + password auth directly into FastAPI. Issue signed JWTs for web UI sessions. Keep static API keys working for CLI and automation. Bootstrap the first user via a CLI command; there is no public signup flow.
+Build email + password auth directly into FastAPI. Issue signed JWTs for web UI sessions. Keep static API keys working for CLI and automation. Bootstrap the first Admin via CLI; subsequent users can be managed via CLI or the web UI admin page.
+
+---
+
+## Roles
+
+| | Admin | Editor | Viewer |
+|---|---|---|---|
+| Browse libraries and assets | ✓ | ✓ | ✓ |
+| Search, similar | ✓ | ✓ | ✓ |
+| Create/delete libraries, trigger scans | ✓ | ✓ | — |
+| Configure library settings (filters, visibility, is_public) | ✓ | ✓ | — |
+| Manage users (create, change role, remove) | ✓ | — | — |
+
+**Last-admin invariant**: the system must always have at least one Admin. The API rejects any role change or removal that would leave zero Admins. This is enforced at the API level; the CLI enforces it too.
+
+**API key role**: static API keys (used by the CLI and automation) are treated as Admin. API keys are operator-created and operator-controlled; there is no scenario where a key should have reduced permissions.
+
+**Stale role window**: roles are embedded in the JWT at login time and are not re-verified on each request (stateless JWTs). If a user's role is changed, the change takes effect at their next login (up to 7 days later). This is acceptable in v1. The last-admin guard operates at write time on the `users` table, so it is not affected by this window.
 
 ---
 
 ## Phase 1: Schema
 
-Two new tables in the control plane database.
-
-### `users`
+### `users` table (control plane)
 
 ```python
 def upgrade() -> None:
@@ -55,7 +75,7 @@ def upgrade() -> None:
         sa.Column("tenant_id", sa.Text(), sa.ForeignKey("tenants.tenant_id"), nullable=False),
         sa.Column("email", sa.Text(), nullable=False, unique=True),
         sa.Column("password_hash", sa.Text(), nullable=False),  # bcrypt
-        sa.Column("role", sa.Text(), nullable=False, server_default="member"),
+        sa.Column("role", sa.Text(), nullable=False, server_default="viewer"),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False,
                   server_default=sa.func.now()),
         sa.Column("last_login_at", sa.DateTime(timezone=True), nullable=True),
@@ -65,9 +85,9 @@ def downgrade() -> None:
     op.drop_table("users")
 ```
 
-`role` is `"owner"` or `"member"`. The first user created via the CLI is always `owner`. Reserved for future permission checks; all roles have identical access in v1.
+Valid `role` values: `"admin"`, `"editor"`, `"viewer"`. Default is `"viewer"`; CLI overrides this when creating the first user.
 
-### `password_reset_tokens`
+### `password_reset_tokens` table (control plane)
 
 ```python
 def upgrade() -> None:
@@ -84,6 +104,23 @@ def downgrade() -> None:
 ```
 
 The token sent in the reset email is a random URL-safe string. Only its SHA-256 hash is stored, so a DB leak does not yield usable tokens.
+
+### `api_keys.role` column (control plane)
+
+Add a `role` column to the existing `api_keys` table:
+
+```python
+def upgrade() -> None:
+    op.add_column(
+        "api_keys",
+        sa.Column("role", sa.Text(), nullable=False, server_default="admin"),
+    )
+
+def downgrade() -> None:
+    op.drop_column("api_keys", "role")
+```
+
+All existing and new API keys default to `"admin"`. This makes the middleware's `getattr(api_key, "role", "member")` pattern explicit and consistent with the new role vocabulary.
 
 ---
 
@@ -106,7 +143,7 @@ Response (200):
 Errors: `401` on invalid credentials. Always the same message ("Invalid email or password") — never indicate which field is wrong.
 
 Behavior:
-1. Look up `users` by `email`. If not found, run bcrypt comparison anyway (timing attack mitigation), then return 401.
+1. Look up `users` by `email`. If not found, run a dummy bcrypt comparison (timing attack mitigation), then return 401.
 2. Compare password against `password_hash` with `bcrypt.verify`.
 3. Issue a JWT signed with `JWT_SECRET` (HS256), 7-day expiry.
 4. Update `last_login_at`.
@@ -124,9 +161,9 @@ Behavior:
 1. Look up user by email. If not found, return 204 immediately.
 2. Generate a cryptographically random token (32 bytes, URL-safe base64).
 3. Store `SHA-256(token)` in `password_reset_tokens` with a 1-hour expiry.
-4. Send an email containing `https://{HOST}/reset-password?token={token}`.
+4. Send an email containing `https://{APP_HOST}/reset-password?token={token}`.
 
-Requires `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, and `APP_HOST` env vars.
+Requires `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, and `APP_HOST` env vars. If absent, returns `501 Not Implemented`.
 
 ### `POST /v1/auth/reset-password`
 
@@ -138,7 +175,7 @@ Request:
 Response: `204` on success. `400` if token is invalid, expired, or already used.
 
 Behavior:
-1. Hash the submitted token. Look up in `password_reset_tokens`.
+1. Hash the submitted token with SHA-256. Look up in `password_reset_tokens`.
 2. Check `expires_at > now()` and `used_at IS NULL`.
 3. Hash the new password with bcrypt, update `users.password_hash`.
 4. Set `used_at = now()` on the token.
@@ -159,17 +196,17 @@ JWT_ALGORITHM = "HS256"
 token = auth[7:].strip()
 try:
     claims = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-    # JWT path — no DB lookup needed
     request.state.tenant_id = claims["tenant_id"]
     request.state.user_id = claims["sub"]
-    request.state.role = claims.get("role", "member")
+    request.state.role = claims["role"]
     request.state.key_id = None
     request.state.is_public_request = False
     return await call_next(request)
 except jwt.PyJWTError:
-    pass  # Not a JWT — fall through to API key lookup
+    pass  # Not a JWT — fall through to existing API key lookup
 
-# Existing API key lookup follows unchanged
+# Existing API key lookup follows unchanged.
+# api_key.role is now always set (Phase 1 migration); middleware sets request.state.role from it.
 ```
 
 JWT payload issued at login:
@@ -177,46 +214,169 @@ JWT payload issued at login:
 {
   "sub": "<user_id>",
   "tenant_id": "<tenant_id>",
-  "role": "owner",
+  "role": "admin",
   "exp": <unix timestamp>
 }
 ```
 
-**Coexistence invariant**: a token is either a valid JWT (verified by signature) or an API key (verified by DB lookup). There is no ambiguity: JWT decode either succeeds or throws. Static API keys continue to work for the CLI and automation without any changes.
+**Coexistence invariant**: a token is either a valid JWT (verified by signature) or an API key (verified by DB lookup). JWT decode either succeeds or throws — there is no ambiguity. Static API keys continue to work unchanged.
 
-**New env var**: `JWT_SECRET` — a long random string. Generate with `openssl rand -hex 32`. Must be set in production; the server refuses to start if absent.
+**New env var**: `JWT_SECRET` — a long random string. Generate with `openssl rand -hex 32`. The server refuses to start if absent.
+
+### Role enforcement dependency
+
+Add to `src/api/dependencies.py`:
+
+```python
+def require_admin(request: Request) -> None:
+    """Raise 403 if the caller is not an Admin."""
+    if getattr(request.state, "role", None) != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+def require_editor(request: Request) -> None:
+    """Raise 403 if the caller is a Viewer."""
+    if getattr(request.state, "role", None) == "viewer":
+        raise HTTPException(status_code=403, detail="Editor access required")
+```
+
+Apply `require_editor` to all write routes (library create/delete, scan trigger, settings). Apply `require_admin` to all user management routes.
 
 ---
 
-## Phase 4: CLI — `create-user` Command
+## Phase 4: User Management API
 
-New subcommand: `lumiverb create-user`
+New routes under `/v1/users/`. All require authentication and `require_admin`.
+
+### `GET /v1/users`
+
+Response (200):
+```json
+[
+  {
+    "user_id": "...",
+    "email": "user@example.com",
+    "role": "admin",
+    "created_at": "...",
+    "last_login_at": "..."
+  }
+]
+```
+
+Returns all users for the caller's tenant.
+
+### `POST /v1/users`
+
+Request:
+```json
+{ "email": "user@example.com", "role": "editor", "password": "..." }
+```
+
+Response (201): the created user object (without `password_hash`).
+
+Errors: `409` if email already exists. `400` if role is not one of `admin`, `editor`, `viewer`.
+
+### `PATCH /v1/users/{user_id}`
+
+Request:
+```json
+{ "role": "viewer" }
+```
+
+Response (200): the updated user object.
+
+**Last-admin guard**: if changing this user's role would leave zero Admins, return `409`:
+```json
+{ "error": { "code": "last_admin", "message": "Cannot demote the last admin" } }
+```
+
+### `DELETE /v1/users/{user_id}`
+
+Response: `204`.
+
+**Last-admin guard**: if removing this user would leave zero Admins, return `409`:
+```json
+{ "error": { "code": "last_admin", "message": "Cannot remove the last admin" } }
+```
+
+A user may not delete their own account via this endpoint — return `400` if `user_id == request.state.user_id`. Prevents an Admin from accidentally locking themselves out.
+
+---
+
+## Phase 5: CLI — User Management Commands
+
+All commands connect directly to the control plane DB (same pattern as existing CLI commands).
+
+### `lumiverb create-user`
 
 ```
-lumiverb create-user --email user@example.com [--role owner|member]
+lumiverb create-user --email EMAIL [--role admin|editor|viewer]
 ```
 
-Behavior:
-1. Prompt for password (hidden input, confirmed twice).
-2. Validate: email format, password minimum length (12 characters).
-3. Hash password with bcrypt (cost factor 12).
-4. Insert into `users` with a generated UUID.
-5. Print confirmation: `User created: user@example.com (owner)`.
+- Prompts for password (hidden, confirmed twice)
+- Validates: email format, password minimum 12 characters
+- Hashes with bcrypt (cost factor 12)
+- Inserts into `users` with a generated UUID
+- Enforces last-admin invariant: if role would demote/skip the only admin path, warn and abort
+- Default role: `viewer` (caller must explicitly pass `--role admin` for the bootstrap case)
 
-This is the only way to create users in v1. There is no signup page. Operators add users by running this command on the server.
-
-**Done when:**
 ```bash
-lumiverb create-user --email admin@example.com --role owner
-# → prompts for password, confirms, prints success
+lumiverb create-user --email admin@example.com --role admin
+# → Password: ••••••••••••
+# → Confirm:  ••••••••••••
+# → User created: admin@example.com (admin)
 
-lumiverb create-user --email admin@example.com --role owner
-# → error: email already registered
+lumiverb create-user --email admin@example.com --role admin
+# → Error: email already registered
+```
+
+### `lumiverb list-users`
+
+```
+lumiverb list-users
+```
+
+Prints a table of all users: email, role, last login.
+
+```
+EMAIL                    ROLE     LAST LOGIN
+admin@example.com        admin    2026-03-20 14:32
+editor@example.com       editor   2026-03-18 09:11
+viewer@example.com       viewer   never
+```
+
+### `lumiverb set-user-role`
+
+```
+lumiverb set-user-role --email EMAIL --role admin|editor|viewer
+```
+
+Updates the user's role. Enforces the last-admin invariant.
+
+```bash
+lumiverb set-user-role --email editor@example.com --role admin
+# → Role updated: editor@example.com → admin
+```
+
+### `lumiverb remove-user`
+
+```
+lumiverb remove-user --email EMAIL
+```
+
+Prompts for confirmation before deleting. Enforces the last-admin invariant.
+
+```bash
+lumiverb remove-user --email viewer@example.com
+# → Remove viewer@example.com? [y/N]: y
+# → User removed.
+
+lumiverb remove-user --email admin@example.com
+# → Error: cannot remove the last admin
 ```
 
 ---
 
-## Phase 5: Web UI
+## Phase 6: Web UI — Login Page
 
 ### `LoginPage.tsx`
 
@@ -237,8 +397,8 @@ Replace the single API key field with email + password fields:
 ```
 
 On submit: `POST /v1/auth/login` with `{ email, password }`.
-- 200 → store `access_token` as `localStorage.setItem("lumiverb_api_key", token)`, reload.
-  - The localStorage key name is unchanged so the auth gate in `main.tsx` and `getApiKey()` require no modification.
+- 200 → `localStorage.setItem("lumiverb_api_key", access_token)`, reload.
+  - The localStorage key name is unchanged; `getApiKey()`, `handleUnauthorized()`, and the auth gate in `main.tsx` require no modification.
 - 401 → show "Invalid email or password".
 - Network error → show "Could not reach server".
 
@@ -252,11 +412,51 @@ Simple single-field forms. Both call the corresponding auth endpoints. Neither r
 
 ### What does not change
 
-- `getApiKey()` / `getAuthToken()` — reads localStorage key unchanged; returns the JWT after login
+- `getApiKey()` — reads localStorage key unchanged; returns the JWT after login
 - `handleUnauthorized()` — clears the localStorage key and reloads; works identically with JWTs
 - Auth gate in `main.tsx` — checks for a non-empty token; behavior unchanged
 - Sign out in `Sidebar.tsx` — clears the localStorage key; behavior unchanged
 - All `Authorization: Bearer` headers — the JWT is sent exactly like the API key was
+
+---
+
+## Phase 7: Web UI — User Management Admin Page
+
+A new route `/admin/users`, accessible only to Admin-role sessions. Link it from the existing `/admin` page (Workers).
+
+### User list
+
+Table showing all users:
+
+| Email | Role | Last login | Actions |
+|-------|------|------------|---------|
+| admin@example.com | Admin | 3 days ago | (role dropdown) |
+| editor@example.com | Editor | 1 week ago | (role dropdown) (remove) |
+| viewer@example.com | Viewer | never | (role dropdown) (remove) |
+
+- **Role dropdown**: `Admin / Editor / Viewer`. On change, calls `PATCH /v1/users/{user_id}`.
+  - If the server returns `409 last_admin`, show "Cannot demote the last admin".
+  - A user cannot change their own role (disable the dropdown for the current user's row).
+- **Remove button**: calls `DELETE /v1/users/{user_id}` after a confirmation prompt ("Remove {email}? They will lose access immediately.").
+  - If the server returns `409 last_admin`, show "Cannot remove the last admin".
+  - Not shown on the current user's own row.
+
+### Create user form
+
+Below the table or in a slide-over panel:
+
+```
+Email    ____________________
+Password ____________________
+Role     [Admin ▾]
+         [Create user]
+```
+
+Calls `POST /v1/users`. On success, the new user appears in the table. On `409`, show "Email already registered".
+
+### Access control
+
+If a non-Admin navigates to `/admin/users`, the page returns a 403 from the API and the UI shows "Admin access required". The route itself is not hidden — obscuring it provides no security since the API enforces it.
 
 ---
 
@@ -272,8 +472,6 @@ Simple single-field forms. Both call the corresponding auth endpoints. Neither r
 | `SMTP_FROM` | For password reset | From address for reset emails |
 | `APP_HOST` | For password reset | Public URL of the app (for reset links) |
 
-Password reset is optional in v1 — if SMTP vars are absent, the endpoint returns `501 Not Implemented`. Operators who manage users solely via the CLI may not need it.
-
 ---
 
 ## What Is Not in Scope
@@ -281,8 +479,8 @@ Password reset is optional in v1 — if SMTP vars are absent, the endpoint retur
 - OAuth / SSO (future)
 - Multi-tenant self-service signup (future)
 - Per-user rate limiting (future)
-- Sessions table / refresh tokens — 7-day JWTs are sufficient for v1; add refresh when session length becomes a user issue
-- Role-based access control beyond `owner` / `member` distinction — all roles have identical permissions in v1
+- Refresh tokens — 7-day JWTs are sufficient for v1; add refresh when session length becomes a user complaint
+- Per-user audit log (future)
 
 ---
 
@@ -291,23 +489,45 @@ Password reset is optional in v1 — if SMTP vars are absent, the endpoint retur
 ### Schema (`@pytest.mark.migration`)
 - `users` table created with correct columns and constraints
 - `password_reset_tokens` table created with correct columns
+- `api_keys.role` column added with default `"admin"`; existing rows unaffected
 
 ### Auth endpoints (`@pytest.mark.slow`)
-- `POST /v1/auth/login` with valid credentials → 200 with JWT
+- `POST /v1/auth/login` with valid credentials → 200 with JWT containing correct role
 - `POST /v1/auth/login` with wrong password → 401
-- `POST /v1/auth/login` with unknown email → 401 (same timing as wrong password)
+- `POST /v1/auth/login` with unknown email → 401, response time comparable to wrong password
 - `POST /v1/auth/forgot-password` with unknown email → 204 (no enumeration)
 - `POST /v1/auth/reset-password` with valid token → 204, password updated
 - `POST /v1/auth/reset-password` with expired token → 400
 - `POST /v1/auth/reset-password` with already-used token → 400
 
 ### Middleware (`@pytest.mark.slow`)
-- Request with valid JWT → resolves tenant from claims, no DB lookup for API key
+- Request with valid Admin JWT → resolves tenant, `role == "admin"`
+- Request with valid Viewer JWT → resolves tenant, `role == "viewer"`
 - Request with expired JWT → 401
 - Request with tampered JWT → 401
-- Request with valid API key (not a JWT) → resolves via existing API key path
-- Both token types can coexist in the same running server
+- Request with valid API key (not a JWT) → resolves via API key path, `role == "admin"`
+- Both token types coexist in the same running server
+
+### Role enforcement (`@pytest.mark.slow`)
+- Admin JWT → can call `POST /v1/libraries` (editor-gated write route) ✓
+- Editor JWT → can call `POST /v1/libraries` ✓
+- Viewer JWT → `POST /v1/libraries` → 403
+- Admin JWT → can call `GET /v1/users` ✓
+- Editor JWT → `GET /v1/users` → 403
+- Viewer JWT → `GET /v1/users` → 403
+
+### User management API (`@pytest.mark.slow`)
+- `POST /v1/users` → 201, user created
+- `POST /v1/users` with duplicate email → 409
+- `PATCH /v1/users/{id}` role change → 200, role updated
+- `PATCH /v1/users/{id}` demoting last Admin → 409 `last_admin`
+- `DELETE /v1/users/{id}` → 204, user removed
+- `DELETE /v1/users/{id}` removing last Admin → 409 `last_admin`
+- `DELETE /v1/users/{id}` where `user_id == caller` → 400
 
 ### CLI (`@pytest.mark.slow`)
-- `create-user` with new email → user row inserted, password hashes correctly
+- `create-user` with new email → user row inserted with correct role and password hash
 - `create-user` with duplicate email → error, no duplicate row
+- `set-user-role` on last Admin → error, no change
+- `remove-user` on last Admin → error, no deletion
+- `list-users` → prints all users for the tenant
