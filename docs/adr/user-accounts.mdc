@@ -7,7 +7,7 @@ Accepted
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | Schema: `users` + `password_reset_tokens`; `api_keys.role` column | Pending |
+| 1 | Schema: `users` + `password_reset_tokens`; `api_keys.role` column | Done |
 | 2 | API: auth endpoints (login, forgot-password, reset-password) | Pending |
 | 3 | Middleware: JWT verification alongside existing API key path | Pending |
 | 4 | API: user management endpoints (list, create, update role, remove) | Pending |
@@ -107,20 +107,23 @@ The token sent in the reset email is a random URL-safe string. Only its SHA-256 
 
 ### `api_keys.role` column (control plane)
 
-Add a `role` column to the existing `api_keys` table:
+The `role` column already exists on `api_keys` (added in an earlier migration), but its server default was `"member"`. Phase 5 standardizes it to `"admin"` — backfilling any remaining `"member"` rows and changing the column default:
 
 ```python
 def upgrade() -> None:
-    op.add_column(
-        "api_keys",
-        sa.Column("role", sa.Text(), nullable=False, server_default="admin"),
-    )
+    # Backfill any rows still carrying the old "member" default, then fix the column default.
+    # The "member" role is being removed from api_keys vocabulary; all API keys are admin.
+    op.execute(sa.text("UPDATE api_keys SET role = 'admin' WHERE role = 'member'"))
+    op.alter_column("api_keys", "role", existing_type=sa.Text(),
+                    existing_nullable=False, server_default="admin")
 
 def downgrade() -> None:
-    op.drop_column("api_keys", "role")
+    # Data change (member→admin backfill) is intentionally non-reversible.
+    op.alter_column("api_keys", "role", existing_type=sa.Text(),
+                    existing_nullable=False, server_default="member")
 ```
 
-All existing and new API keys default to `"admin"`. This makes the middleware's `getattr(api_key, "role", "member")` pattern explicit and consistent with the new role vocabulary.
+All existing and new API keys are `"admin"`. The middleware reads `request.state.role` set from this column; no fallback default is needed.
 
 ---
 
@@ -489,7 +492,7 @@ If a non-Admin navigates to `/admin/users`, the page returns a 403 from the API 
 ### Schema (`@pytest.mark.migration`)
 - `users` table created with correct columns and constraints
 - `password_reset_tokens` table created with correct columns
-- `api_keys.role` column added with default `"admin"`; existing rows unaffected
+- `api_keys.role` server default changed to `"admin"`; existing `"member"` rows backfilled to `"admin"`
 
 ### Auth endpoints (`@pytest.mark.slow`)
 - `POST /v1/auth/login` with valid credentials → 200 with JWT containing correct role

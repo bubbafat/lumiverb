@@ -1,4 +1,4 @@
-"""Control plane database models: tenants, api_keys, tenant_db_routing."""
+"""Control plane database models: tenants, api_keys, tenant_db_routing, users."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ class ApiKey(SQLModel, table=True):
         default=["read", "write"],
         sa_column=Column(JSONB, nullable=False),
     )
-    role: str = Field(default="member", nullable=False)
+    role: str = Field(default="admin", nullable=False)
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
@@ -62,6 +62,38 @@ class TenantDbRouting(SQLModel, table=True):
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
+class User(SQLModel, table=True):
+    __tablename__ = "users"
+
+    user_id: str = Field(primary_key=True)
+    tenant_id: str = Field(foreign_key="tenants.tenant_id", nullable=False)
+    email: str = Field(nullable=False, unique=True)
+    password_hash: str = Field(nullable=False)
+    role: str = Field(default="viewer", nullable=False)
+    created_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+    last_login_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+
+
+class PasswordResetToken(SQLModel, table=True):
+    __tablename__ = "password_reset_tokens"
+
+    token_hash: str = Field(primary_key=True)  # SHA-256 of the emailed token
+    user_id: str = Field(foreign_key="users.user_id", nullable=False)
+    expires_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+    used_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
     )
 
 

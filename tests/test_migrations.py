@@ -38,16 +38,20 @@ def test_control_plane_migrations_upgrade_and_downgrade() -> None:
         )
         assert result.returncode == 0, (result.stdout, result.stderr)
 
-        # Assert all four tables exist
+        # Assert all control plane tables exist
         with engine.connect() as conn:
             r = conn.execute(
                 text(
                     "SELECT table_name FROM information_schema.tables "
-                    "WHERE table_schema = 'public' AND table_name IN ('tenants', 'api_keys', 'tenant_db_routing', 'public_libraries')"
+                    "WHERE table_schema = 'public' AND table_name IN "
+                    "('tenants', 'api_keys', 'tenant_db_routing', 'public_libraries', 'users', 'password_reset_tokens')"
                 )
             )
             tables = {row[0] for row in r}
-        assert tables == {"tenants", "api_keys", "tenant_db_routing", "public_libraries"}, tables
+        assert tables == {
+            "tenants", "api_keys", "tenant_db_routing", "public_libraries",
+            "users", "password_reset_tokens",
+        }, tables
 
         # Downgrade to base
         result = subprocess.run(
@@ -59,12 +63,13 @@ def test_control_plane_migrations_upgrade_and_downgrade() -> None:
         )
         assert result.returncode == 0, (result.stdout, result.stderr)
 
-        # Assert all four tables are gone
+        # Assert all control plane tables are gone
         with engine.connect() as conn:
             r = conn.execute(
                 text(
                     "SELECT table_name FROM information_schema.tables "
-                    "WHERE table_schema = 'public' AND table_name IN ('tenants', 'api_keys', 'tenant_db_routing', 'public_libraries')"
+                    "WHERE table_schema = 'public' AND table_name IN "
+                    "('tenants', 'api_keys', 'tenant_db_routing', 'public_libraries', 'users', 'password_reset_tokens')"
                 )
             )
             tables = {row[0] for row in r}
@@ -147,6 +152,113 @@ def test_api_keys_role_replaces_is_admin() -> None:
             assert row is not None
             (role,) = row
             assert role == "admin"
+
+
+@pytest.mark.migration
+def test_phase5_users_schema_and_api_keys_role_backfill() -> None:
+    """
+    Control plane migration e1f2a3b4c5d6:
+    - users and password_reset_tokens tables created with correct columns.
+    - api_keys.role server default changed to 'admin'.
+    - Existing api_keys rows with role='member' are backfilled to 'admin'.
+    - Downgrade drops users/password_reset_tokens and restores the column default.
+    """
+    prev_rev = "d9e0f1a2b3c4"
+    target_rev = "e1f2a3b4c5d6"
+
+    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
+        url = postgres.get_connection_url()
+        if url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+
+        engine = create_engine(url)
+        with engine.connect() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            conn.commit()
+
+        env = os.environ.copy()
+        env["ALEMBIC_CONTROL_URL"] = url
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+        # Upgrade to the revision just before Phase 5.
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "-c", "alembic-control.ini", "upgrade", prev_rev],
+            cwd=project_root, env=env, capture_output=True, text=True,
+        )
+        assert result.returncode == 0, (result.stdout, result.stderr)
+
+        # Insert a tenant and two api_keys: one admin, one member.
+        with engine.connect() as conn:
+            conn.execute(text(
+                "INSERT INTO tenants (tenant_id, name, plan, status, created_at) "
+                "VALUES ('ten_p5', 'P5 Test', 'free', 'active', NOW())"
+            ))
+            conn.execute(text(
+                "INSERT INTO api_keys (key_id, key_hash, tenant_id, name, scopes, role, created_at) VALUES "
+                "('key_admin', 'hash_admin', 'ten_p5', 'admin-key', '[\"read\"]'::jsonb, 'admin', NOW()), "
+                "('key_member', 'hash_member', 'ten_p5', 'member-key', '[\"read\"]'::jsonb, 'member', NOW())"
+            ))
+            conn.commit()
+
+        # Apply Phase 5 migration.
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "-c", "alembic-control.ini", "upgrade", target_rev],
+            cwd=project_root, env=env, capture_output=True, text=True,
+        )
+        assert result.returncode == 0, (result.stdout, result.stderr)
+
+        with engine.connect() as conn:
+            # Both new tables must exist.
+            tables = {
+                row[0] for row in conn.execute(text(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema = 'public' AND table_name IN ('users', 'password_reset_tokens')"
+                ))
+            }
+            assert tables == {"users", "password_reset_tokens"}, tables
+
+            # users table columns.
+            cols = {
+                row[0] for row in conn.execute(text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'users'"
+                ))
+            }
+            assert {"user_id", "tenant_id", "email", "password_hash", "role", "created_at", "last_login_at"} <= cols, cols
+
+            # password_reset_tokens table columns.
+            cols = {
+                row[0] for row in conn.execute(text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'password_reset_tokens'"
+                ))
+            }
+            assert {"token_hash", "user_id", "expires_at", "used_at"} <= cols, cols
+
+            # member row must have been backfilled to admin.
+            rows = {
+                row[0]: row[1] for row in conn.execute(text(
+                    "SELECT key_id, role FROM api_keys WHERE key_id IN ('key_admin', 'key_member')"
+                ))
+            }
+            assert rows["key_admin"] == "admin"
+            assert rows["key_member"] == "admin", "member row should have been backfilled to admin"
+
+        # Downgrade back to prev_rev.
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "-c", "alembic-control.ini", "downgrade", prev_rev],
+            cwd=project_root, env=env, capture_output=True, text=True,
+        )
+        assert result.returncode == 0, (result.stdout, result.stderr)
+
+        with engine.connect() as conn:
+            tables = {
+                row[0] for row in conn.execute(text(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema = 'public' AND table_name IN ('users', 'password_reset_tokens')"
+                ))
+            }
+            assert tables == set(), f"tables should be dropped after downgrade: {tables}"
 
 
 TENANT_TABLES = [
