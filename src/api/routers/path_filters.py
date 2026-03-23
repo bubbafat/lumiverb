@@ -1,4 +1,4 @@
-"""Library path filters API. All routes require tenant auth + require_tenant_admin."""
+"""Library path filters API. All routes require tenant auth + require_editor."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlmodel import Session
 
-from src.api.dependencies import get_tenant_session, require_tenant_admin
+from src.api.dependencies import get_tenant_session, require_editor
 from src.core.path_filter import validate_pattern
 from src.repository.tenant import LibraryRepository, PathFilterRepository
 
@@ -42,7 +42,7 @@ class CreateLibraryFilterRequest(BaseModel):
 def list_library_filters(
     library_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
-    _: Annotated[None, Depends(require_tenant_admin)],
+    _: Annotated[None, Depends(require_editor)],
 ) -> LibraryFiltersResponse:
     """Return include and exclude path filters for a library."""
     lib_repo = LibraryRepository(session)
@@ -66,7 +66,7 @@ def create_library_filter(
     library_id: str,
     body: CreateLibraryFilterRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
-    _: Annotated[None, Depends(require_tenant_admin)],
+    _: Annotated[None, Depends(require_editor)],
 ) -> LibraryFilterItemWithType:
     """Add a path filter to a library. Returns 400 if pattern invalid, 404 if library not found."""
     if body.type not in ("include", "exclude"):
@@ -93,7 +93,7 @@ def delete_library_filter(
     library_id: str,
     filter_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
-    _: Annotated[None, Depends(require_tenant_admin)],
+    _: Annotated[None, Depends(require_editor)],
 ) -> None:
     """Remove a path filter. Returns 404 if not found."""
     filter_repo = PathFilterRepository(session)

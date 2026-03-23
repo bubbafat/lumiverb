@@ -60,6 +60,12 @@ def require_tenant_admin(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Admin API key required")
 
 
+def require_editor(request: Request) -> None:
+    """Raise 403 unless the caller is Admin or Editor. Blocks Viewer and unauthenticated public requests."""
+    if getattr(request.state, "role", None) not in ("admin", "editor"):
+        raise HTTPException(status_code=403, detail="Editor access required")
+
+
 def require_auth(request: Request) -> None:
     """
     Raise 403 if this is a public (unauthenticated) request.

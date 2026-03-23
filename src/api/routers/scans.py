@@ -7,7 +7,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
-from src.api.dependencies import get_tenant_session
+from src.api.dependencies import get_tenant_session, require_editor
 from src.repository.tenant import AssetRepository, LibraryRepository, ScanRepository
 
 router = APIRouter(prefix="/v1/scans", tags=["scans"])
@@ -86,6 +86,7 @@ class AbortScanResponse(BaseModel):
 def create_scan(
     body: CreateScanRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
 ) -> CreateScanResponse:
     """
     Create a scan record. If status is running, set library scan_status to scanning.
@@ -134,6 +135,7 @@ def batch_scan(
     scan_id: str,
     body: BatchRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
 ) -> BatchResponse:
     """
     Process a batch of scan actions: skip, update, missing, add.
@@ -206,6 +208,7 @@ def batch_scan(
 def complete_scan(
     scan_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
     body: CompleteScanRequest | None = Body(default=None),
 ) -> CompleteScanResponse:
     """
@@ -251,6 +254,7 @@ def abort_scan(
     scan_id: str,
     body: AbortScanRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
 ) -> AbortScanResponse:
     """Abort a running scan; update library scan_status to error or aborted."""
     scan_repo = ScanRepository(session)

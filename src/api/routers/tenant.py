@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlmodel import Session
 
-from src.api.dependencies import get_tenant_session, require_tenant_admin
+from src.api.dependencies import get_tenant_session, require_editor
 from src.core.path_filter import validate_pattern
 from src.repository.tenant import PathFilterRepository
 
@@ -58,7 +58,7 @@ def get_tenant_context(request: Request) -> TenantContextResponse:
 def list_filter_defaults(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
-    _: Annotated[None, Depends(require_tenant_admin)],
+    _: Annotated[None, Depends(require_editor)],
 ) -> TenantFilterDefaultsResponse:
     """Return include and exclude path filter defaults for the current tenant."""
     tenant_id = getattr(request.state, "tenant_id", None)
@@ -82,7 +82,7 @@ def create_filter_default(
     request: Request,
     body: CreateTenantFilterDefaultRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
-    _: Annotated[None, Depends(require_tenant_admin)],
+    _: Annotated[None, Depends(require_editor)],
 ) -> TenantFilterDefaultItemWithType:
     """Add a path filter default for the tenant. Returns 400 if pattern invalid."""
     if body.type not in ("include", "exclude"):
@@ -109,7 +109,7 @@ def delete_filter_default(
     default_id: str,
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
-    _: Annotated[None, Depends(require_tenant_admin)],
+    _: Annotated[None, Depends(require_editor)],
 ) -> None:
     """Remove a path filter default. Returns 404 if not found."""
     tenant_id = getattr(request.state, "tenant_id", None)

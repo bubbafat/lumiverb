@@ -1,5 +1,8 @@
 """FastAPI application entry point."""
 
+import os
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from src.api.middleware import TenantResolutionMiddleware
@@ -13,7 +16,14 @@ from src.api.routers.search import router as search_router
 from src.api.routers.search_sync import router as search_sync_router
 from src.api.routers.similarity import router as similarity_router
 
-app = FastAPI(title="Lumiverb API", version="0.1.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if not os.environ.get("JWT_SECRET"):
+        raise RuntimeError("JWT_SECRET environment variable is required but not set")
+    yield
+
+
+app = FastAPI(title="Lumiverb API", version="0.1.0", lifespan=lifespan)
 app.add_middleware(TenantResolutionMiddleware)
 app.include_router(auth_router)
 app.include_router(admin.router)

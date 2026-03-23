@@ -1,13 +1,17 @@
 """Tenant resolution middleware: API key → tenant DB routing, with public library fallback."""
 
+import os
 import re
 
+import jwt
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from src.core.database import get_control_session
 from src.repository.control_plane import ApiKeyRepository, PublicLibraryRepository, TenantDbRoutingRepository
+
+_JWT_ALGORITHM = "HS256"
 
 
 def _skip_tenant_middleware(path: str) -> bool:
@@ -62,11 +66,35 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
 
         auth = request.headers.get("Authorization")
 
-        # --- Authenticated path (unchanged behaviour) ---
+        # --- Authenticated path ---
         if auth and auth.startswith("Bearer "):
             token = auth[7:].strip()
             if not token:
                 return _error_response(401, "unauthorized", "Missing or invalid Authorization header")
+
+            # Try JWT first; fall through to API key lookup on failure.
+            jwt_secret = os.environ.get("JWT_SECRET", "")
+            if jwt_secret:
+                try:
+                    claims = jwt.decode(token, jwt_secret, algorithms=[_JWT_ALGORITHM])
+                    tenant_id = claims["tenant_id"]
+                    user_id = claims["sub"]
+                    role = claims["role"]
+                    with get_control_session() as session:
+                        routing_repo = TenantDbRoutingRepository(session)
+                        routing = routing_repo.get_by_tenant_id(tenant_id)
+                    if routing is None:
+                        return _error_response(500, "tenant_routing_missing", "Tenant database routing not found")
+                    request.state.tenant_id = tenant_id
+                    request.state.connection_string = routing.connection_string
+                    request.state.user_id = user_id
+                    request.state.key_id = None
+                    request.state.role = role
+                    request.state.is_public_request = False
+                    return await call_next(request)
+                except (jwt.PyJWTError, KeyError):
+                    pass  # Not a valid JWT or missing claims — fall through to API key lookup.
+
             with get_control_session() as session:
                 key_repo = ApiKeyRepository(session)
                 api_key = key_repo.get_by_plaintext(token)
@@ -79,8 +107,9 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
                     return _error_response(500, "tenant_routing_missing", "Tenant database routing not found")
                 request.state.tenant_id = api_key.tenant_id
                 request.state.connection_string = routing.connection_string
+                request.state.user_id = None
                 request.state.key_id = api_key.key_id
-                request.state.role = getattr(api_key, "role", "member")
+                request.state.role = getattr(api_key, "role", "admin")
                 request.state.is_public_request = False
             return await call_next(request)
 

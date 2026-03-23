@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, field_validator
 from sqlmodel import Session
-from src.api.dependencies import get_tenant_session
+from src.api.dependencies import get_tenant_session, require_editor
 from src.core.database import get_control_session
 from src.core.io_utils import normalize_path_prefix
 from src.core.utils import utcnow
@@ -70,6 +70,7 @@ def create_library(
     request: Request,
     body: CreateLibraryRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
 ) -> LibraryResponse:
     """
     Create a library. Name must be unique for this tenant.
@@ -121,6 +122,7 @@ def list_libraries(
 @router.post("/empty-trash", response_model=EmptyTrashResponse)
 def empty_trash(
     session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
 ) -> EmptyTrashResponse:
     """Hard delete all trashed libraries for this tenant. Returns count of libraries deleted."""
     repo = LibraryRepository(session)
@@ -165,6 +167,7 @@ def update_library(
     request: Request,
     body: LibraryUpdateRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
 ) -> LibraryResponse:
     """Update library name, vision_model_id, and/or is_public."""
     repo = LibraryRepository(session)
@@ -207,6 +210,7 @@ def update_library(
 def delete_library(
     library_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
 ) -> None:
     """Soft delete: move library to trash (status=trashed), cancel pending/claimed jobs. Returns 409 if already trashed."""
     repo = LibraryRepository(session)
