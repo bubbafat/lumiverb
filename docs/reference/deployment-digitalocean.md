@@ -1,6 +1,6 @@
 # Deployment: DigitalOcean
 
-> **Status**: Phase 1 baseline runbook (API key auth only).
+> **Status**: Updated for hybrid auth (JWT web sessions + API keys for CLI/automation).
 
 ## Overview
 
@@ -17,9 +17,10 @@ The React UI is built to static assets and served directly by nginx.
 ## Scope and non-negotiables
 
 - All API routes are under `/v1/`.
-- Authentication is API-key based: `Authorization: Bearer <api_key>`.
-- Tenant context is derived from API key only.
-- No user/password login, JWT sessions, or password-reset SMTP in Phase 1.
+- Web authentication uses email/password login with JWT bearer sessions.
+- CLI and automation authenticate with static API keys: `Authorization: Bearer <api_key>`.
+- Tenant context is derived from JWT claims or API key lookup.
+- `JWT_SECRET` is required in production.
 - Quickwit, proxies, and thumbnails are regenerable caches. Postgres is irreplaceable.
 
 ---
@@ -70,6 +71,15 @@ TENANT_DATABASE_URL_TEMPLATE=postgresql+psycopg2://app:<password>@127.0.0.1:5432
 # Auth
 ADMIN_KEY=<openssl rand -hex 32>
 API_SECRET_KEY=<openssl rand -hex 32>
+JWT_SECRET=<openssl rand -hex 32>
+
+# Password reset (optional — omit to disable forgot-password flow)
+# SMTP_HOST=smtp.example.com
+# SMTP_PORT=587
+# SMTP_USER=apikey
+# SMTP_PASSWORD=<smtp password>
+# SMTP_FROM=noreply@example.com
+# APP_HOST=https://app.example.com
 
 # Storage
 STORAGE_PROVIDER=local
@@ -176,7 +186,11 @@ uv sync --all-extras
 uv run alembic -c migrations/control/alembic.ini upgrade head
 ```
 
-Phase 1 bootstrap uses API keys and admin endpoints; do not bootstrap user accounts.
+Bootstrap the first admin user after migrations:
+
+```bash
+uv run python -m src.cli create-user --email admin@example.com --role admin
+```
 
 ---
 

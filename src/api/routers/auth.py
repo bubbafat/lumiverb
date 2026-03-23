@@ -1,4 +1,4 @@
-"""Auth endpoints: login, forgot-password, reset-password."""
+"""Auth endpoints: login, forgot-password, reset-password, logout."""
 
 from __future__ import annotations
 
@@ -126,10 +126,25 @@ def forgot_password(body: ForgotPasswordRequest, session: Annotated[Session, Dep
         smtp.send_message(msg)
 
 
+MIN_PASSWORD_LENGTH = 12
+
+
 @router.post("/reset-password", status_code=204)
 def reset_password(body: ResetPasswordRequest, session: Annotated[Session, Depends(_get_db)]) -> None:
+    if len(body.password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(status_code=400, detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
     token_repo = PasswordResetTokenRepository(session)
     password_hash = bcrypt.hashpw(body.password.encode(), bcrypt.gensalt(rounds=12)).decode()
     ok = token_repo.consume_valid_and_update_password(body.token, password_hash)
     if not ok:
         raise HTTPException(status_code=400, detail="Invalid, expired, or already-used token")
+
+
+@router.post("/logout", status_code=204)
+def logout() -> None:
+    """Stateless JWT logout — no server-side action needed.
+
+    The client clears the token from localStorage. This endpoint exists so the
+    web UI has a deterministic sign-out call and for future token revocation.
+    """
+    return None

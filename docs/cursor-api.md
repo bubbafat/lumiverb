@@ -14,8 +14,8 @@
 ## Non-Negotiables
 
 - Every route lives under `/v1/`
-- All routes require `Authorization: Bearer {api_key}` header
-- Tenant context is always derived from the API key — never passed as a URL param or body field
+- All routes require `Authorization: Bearer {token}` header (token is a JWT for web sessions or an API key for CLI/automation)
+- Tenant context is always derived from the token (JWT claims or API key lookup) — never passed as a URL param or body field
 - Pagination is cursor-based, never offset-based
 - File uploads are multipart form data
 - File serving uses signed URLs (cloud) or direct proxy (self-hosted) — never expose raw object storage URLs
@@ -28,7 +28,9 @@ Two-layer Postgres architecture:
 
 **Control plane DB** (shared, tiny):
 - `tenants` — tenant_id, name, plan, status, vision_api_url, vision_api_key, created_at
-- `api_keys` — key_hash, tenant_id, name, scopes, role (`admin`|`member`), created_at
+- `api_keys` — key_hash, tenant_id, name, scopes, role (`admin`), created_at
+- `users` — user_id, tenant_id, email, password_hash, role (`admin`|`editor`|`viewer`), created_at, last_login_at
+- `password_reset_tokens` — token_hash, user_id, expires_at, used_at
 - `tenant_db_routing` — tenant_id, connection_string, region
 
 **Tenant DB** (one per tenant, same Postgres instance):
@@ -64,9 +66,9 @@ SELECT * FROM assets WHERE deleted_at IS NULL
 4. **Scan write methods clear `deleted_at` unconditionally.** Both `update_for_scan` and the `ON CONFLICT DO UPDATE` in `create_or_update_for_scan_bulk` set `deleted_at = NULL`. A file present on disk during a scan is by definition active — this is the correct restore behaviour.
 5. **`search_sync_queue.pending_count()` must include expired-processing rows**, matching the scope of `claim_batch()`. Using only `status = 'pending'` produces a misleading count when rows are stuck in `processing` after an interrupted run.
 
-When writing queries, always use the tenant DB session, not the control plane session. The middleware resolves this from the API key before the route handler runs.
+When writing queries, always use the tenant DB session, not the control plane session. The middleware resolves this from the bearer token before the route handler runs.
 
-Tenant resolution runs for every request except `/health` and `/v1/admin/*`: reads `Authorization: Bearer <token>`, validates via control plane `ApiKeyRepository.get_by_plaintext`, touches `last_used_at`, looks up `TenantDbRouting` for the connection string, and stores `tenant_id` and `connection_string` in `request.state`. Use the `get_tenant_session` dependency in route handlers to obtain a tenant DB session.
+Tenant resolution runs for every request except `/health`, `/v1/admin/*`, and `/v1/auth/*`: reads `Authorization: Bearer <token>`, attempts JWT decode first (signature + expiry + required claims: `sub`, `tenant_id`, `role`), falls through to API key lookup on JWT failure, looks up `TenantDbRouting` for the connection string, and stores `tenant_id`, `connection_string`, `user_id`, `key_id`, `role`, and `is_public_request` in `request.state`. Use the `get_tenant_session` dependency in route handlers to obtain a tenant DB session.
 
 ## Tenant Context
 

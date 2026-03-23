@@ -17,6 +17,7 @@ from src.repository.control_plane import UserRepository
 router = APIRouter(prefix="/v1/users", tags=["users"])
 
 VALID_ROLES = {"admin", "editor", "viewer"}
+MIN_PASSWORD_LENGTH = 12
 
 
 class UserItem(BaseModel):
@@ -81,6 +82,9 @@ def create_user(
 
     if body.role not in VALID_ROLES:
         raise HTTPException(status_code=400, detail=f"Invalid role; must be one of: {', '.join(sorted(VALID_ROLES))}")
+
+    if len(body.password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(status_code=400, detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
 
     password_hash = bcrypt.hashpw(body.password.encode(), bcrypt.gensalt(rounds=12)).decode()
 

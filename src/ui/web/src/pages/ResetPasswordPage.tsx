@@ -12,9 +12,15 @@ export default function ResetPasswordPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const MIN_PASSWORD_LENGTH = 12;
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!password || password !== confirm) return;
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      setError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+      return;
+    }
 
     setLoading(true);
     setError(null);

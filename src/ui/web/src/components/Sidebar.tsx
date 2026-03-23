@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { clearApiKey, listJobs, listLibraries } from "../api/client";
+import { listJobs, listLibraries, logout } from "../api/client";
 import type { JobListItem, LibraryListItem } from "../api/types";
 import { DirectoryTree } from "./DirectoryTree";
 
@@ -321,8 +321,7 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette }: Sidebar
         <button
           type="button"
           onClick={() => {
-            clearApiKey();
-            window.location.reload();
+            logout();
           }}
           className={`flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-gray-500 transition-colors hover:bg-gray-800/80 hover:text-gray-300 ${collapsed ? "hidden" : ""}`}
           title="Sign out"

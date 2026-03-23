@@ -1,6 +1,6 @@
 """Tenant resolution middleware: API key → tenant DB routing, with public library fallback."""
 
-import os
+import logging
 import re
 
 import jwt
@@ -8,8 +8,11 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from src.core.config import get_settings
 from src.core.database import get_control_session
 from src.repository.control_plane import ApiKeyRepository, PublicLibraryRepository, TenantDbRoutingRepository
+
+logger = logging.getLogger(__name__)
 
 _JWT_ALGORITHM = "HS256"
 
@@ -73,7 +76,7 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
                 return _error_response(401, "unauthorized", "Missing or invalid Authorization header")
 
             # Try JWT first; fall through to API key lookup on failure.
-            jwt_secret = os.environ.get("JWT_SECRET", "")
+            jwt_secret = get_settings().jwt_secret
             if jwt_secret:
                 try:
                     claims = jwt.decode(token, jwt_secret, algorithms=[_JWT_ALGORITHM])
@@ -93,7 +96,7 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
                     request.state.is_public_request = False
                     return await call_next(request)
                 except (jwt.PyJWTError, KeyError):
-                    pass  # Not a valid JWT or missing claims — fall through to API key lookup.
+                    logger.debug("JWT decode failed for request to %s — falling through to API key", request.url.path)
 
             with get_control_session() as session:
                 key_repo = ApiKeyRepository(session)

@@ -293,7 +293,7 @@ Client calls GET /assets/{id}/similar
 | Mac agent | Swift / Electron TBD | Filesystem access, background service |
 | Cloud platform | GCP | Employee discounts, known infrastructure |
 | Container | Docker Compose (self-hosted), Cloud Run (cloud) | Same image, different orchestration |
-| Auth | API keys (v1), email/password + JWT (v2) | Self-hosted, no external auth service dependency |
+| Auth | Hybrid: email/password + JWT (web), API keys (CLI/automation) | Self-hosted, no external auth service dependency |
 
 ---
 
@@ -301,7 +301,7 @@ Client calls GET /assets/{id}/similar
 
 ### 6.1 Tenant Isolation
 
-Each tenant has a dedicated Postgres database. The control plane routes each API request to the correct database using the API key → tenant_id → connection_string lookup.
+Each tenant has a dedicated Postgres database. The control plane routes each API request to the correct database using JWT claims or API key → tenant_id → connection_string lookup.
 
 Benefits:
 - GDPR export = `pg_dump tenant_db`
@@ -395,8 +395,8 @@ GCS standard tier provides 11 nines durability with built-in multi-AZ replicatio
 *(Full API specification in separate document: `api-design.md`)*
 
 - RESTful resource-oriented design
-- All endpoints require API key authentication (`Authorization: Bearer {key}`)
-- Tenant context derived from API key — never passed as parameter
+- All endpoints require authentication (`Authorization: Bearer {jwt_or_api_key}`)
+- Tenant context derived from JWT claims or API key — never passed as parameter
 - Pagination via cursor (not offset) for large collections
 - Consistent error envelope: `{error: {code, message, details}}`
 - OpenAPI spec generated from FastAPI route definitions

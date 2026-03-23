@@ -4,6 +4,7 @@ import { listUsers, createUser, updateUserRole, deleteUser, ApiError } from "../
 import type { UserItem } from "../api/types";
 
 const ROLES = ["admin", "editor", "viewer"] as const;
+const MIN_PASSWORD_LENGTH = 12;
 type Role = (typeof ROLES)[number];
 
 function getCurrentUserIdFromJwt(): string | null {
@@ -157,6 +158,10 @@ export default function AdminUsersPage() {
   function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     setCreateError(null);
+    if (newPassword.length < MIN_PASSWORD_LENGTH) {
+      setCreateError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+      return;
+    }
     createMutation.mutate({ email: newEmail.trim(), password: newPassword, role: newRole });
   }
 

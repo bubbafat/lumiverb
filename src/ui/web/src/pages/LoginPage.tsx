@@ -29,11 +29,8 @@ export default function LoginPage() {
       if (res.ok) {
         const data = (await res.json()) as { access_token: string };
         setApiKey(data.access_token);
-        if (next && next.startsWith("/")) {
-          navigate(next);
-        } else {
-          navigate("/");
-        }
+        const safe = next && next.startsWith("/") && !next.startsWith("//");
+        navigate(safe ? next : "/");
       } else if (res.status === 401) {
         setError("Invalid email or password");
       } else {

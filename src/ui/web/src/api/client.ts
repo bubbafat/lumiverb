@@ -22,11 +22,11 @@ export class ApiError extends Error {
 }
 
 const API_KEY_STORAGE_KEY = "lumiverb_api_key";
-const AUTH_DISABLED_KEY = "lumiverb_auth_disabled";
 const LEGACY_AUTH_KEYS = [
   "lumiverb_token",
   "lumiverb_jwt",
   "lumiverb_access_token",
+  "lumiverb_auth_disabled",
 ];
 
 function getStoredApiKey(): string {
@@ -40,7 +40,6 @@ function getStoredApiKey(): string {
 export function setApiKey(token: string): void {
   try {
     localStorage.setItem(API_KEY_STORAGE_KEY, token);
-    localStorage.removeItem(AUTH_DISABLED_KEY);
   } catch {
     // ignore
   }
@@ -52,25 +51,13 @@ export function clearApiKey(): void {
     for (const key of LEGACY_AUTH_KEYS) {
       localStorage.removeItem(key);
     }
-    // Explicitly disable env fallback after logout.
-    localStorage.setItem(AUTH_DISABLED_KEY, "1");
   } catch {
     // ignore
   }
 }
 
 export function getApiKey(): string {
-  const stored = getStoredApiKey();
-  if (stored) return stored;
-
-  try {
-    const authDisabled = localStorage.getItem(AUTH_DISABLED_KEY) === "1";
-    if (authDisabled) return "";
-  } catch {
-    // ignore
-  }
-
-  return (import.meta.env.VITE_API_KEY as string | undefined) ?? "";
+  return getStoredApiKey();
 }
 
 const authHeaders = (): HeadersInit => {
@@ -80,13 +67,20 @@ const authHeaders = (): HeadersInit => {
 
 export function handleUnauthorized(): void {
   const stored = getStoredApiKey();
-
-  // Phase 5 public guest browsing expects 401s to be handled by the page/router.
-  // Only force a logout when the user actually has a stored key.
   if (!stored) return;
 
   clearApiKey();
-  window.location.reload();
+  window.location.href = "/login";
+}
+
+export async function logout(): Promise<void> {
+  try {
+    await fetch("/v1/auth/logout", { method: "POST", headers: authHeaders() });
+  } catch {
+    // Best-effort — server may be unreachable.
+  }
+  clearApiKey();
+  window.location.href = "/login";
 }
 
 type ApiFetchOptions = Omit<RequestInit, "body"> & { body?: unknown };
