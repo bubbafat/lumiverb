@@ -264,11 +264,14 @@ if ! command -v quickwit >/dev/null 2>&1; then
   # baseline integrity. If you need stronger guarantees, download manually and verify
   # the GitHub release digest before deploying.
   QW_ARCHIVE="quickwit-v${QUICKWIT_VERSION}-${RUST_TARGET}.tar.gz"
+  QW_TMP="$(mktemp -d)"
   curl -LsSf "https://github.com/quickwit-oss/quickwit/releases/download/v${QUICKWIT_VERSION}/${QW_ARCHIVE}" \
-    -o /tmp/quickwit.tar.gz
-  tar -xzf /tmp/quickwit.tar.gz -C /tmp
-  install -m 0755 "/tmp/quickwit-v${QUICKWIT_VERSION}-${RUST_TARGET}/quickwit" /usr/local/bin/quickwit
-  rm -rf /tmp/quickwit.tar.gz "/tmp/quickwit-v${QUICKWIT_VERSION}-${RUST_TARGET}"
+    -o "${QW_TMP}/quickwit.tar.gz"
+  tar -xzf "${QW_TMP}/quickwit.tar.gz" -C "$QW_TMP"
+  QW_BIN="$(find "$QW_TMP" -name quickwit -type f -executable | head -1)"
+  [[ -n "$QW_BIN" ]] || fail "Could not find quickwit binary in downloaded archive"
+  install -m 0755 "$QW_BIN" /usr/local/bin/quickwit
+  rm -rf "$QW_TMP"
 fi
 ok "quickwit $(quickwit --version 2>&1 | head -1)"
 
