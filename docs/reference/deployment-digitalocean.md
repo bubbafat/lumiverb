@@ -27,7 +27,7 @@ Then create the first admin user:
 
 ```bash
 cd /opt/lumiverb
-sudo -u lumiverb .venv/bin/python -m src.cli create-user --email you@example.com --role admin
+sudo -u lumiverb .venv/bin/lumiverb create-user --email you@example.com --role admin
 ```
 
 Open `https://app.example.com` and log in.

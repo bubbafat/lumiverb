@@ -311,7 +311,7 @@ The `--email` flag is for Let's Encrypt certificate expiry notices (optional but
 
 ```bash
 cd /opt/lumiverb
-sudo -u lumiverb .venv/bin/python -m src.cli create-user --email you@example.com --role admin
+sudo -u lumiverb .venv/bin/lumiverb create-user --email you@example.com --role admin
 ```
 
 You'll be prompted to set a password (minimum 12 characters).

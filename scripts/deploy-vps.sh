@@ -10,7 +10,7 @@
 # Idempotent: safe to run again to update an existing install.
 #
 # After completion, create the first admin user:
-#   cd /opt/lumiverb && sudo -u lumiverb .venv/bin/python -m src.cli create-user --email you@example.com --role admin
+#   cd /opt/lumiverb && sudo -u lumiverb .venv/bin/lumiverb create-user --email you@example.com --role admin
 #
 set -euo pipefail
 
@@ -515,7 +515,7 @@ echo ""
 echo "  1. Create the first admin user:"
 echo ""
 echo "     cd /opt/lumiverb"
-echo "     sudo -u lumiverb .venv/bin/python -m src.cli create-user --email you@example.com --role admin"
+echo "     sudo -u lumiverb .venv/bin/lumiverb create-user --email you@example.com --role admin"
 echo ""
 echo "  2. Open https://${DOMAIN} and log in."
 echo ""
