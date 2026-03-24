@@ -186,10 +186,10 @@ fi
 
 # Create user + DB if they don't exist
 su - postgres -c "psql -tc \"SELECT 1 FROM pg_roles WHERE rolname='${PG_USER}'\"" | grep -q 1 \
-  || su - postgres -c "psql -c \"CREATE USER ${PG_USER} WITH PASSWORD '${PG_PASS}'\""
+  || su - postgres -c "psql -c \"CREATE USER ${PG_USER} WITH PASSWORD '${PG_PASS}' CREATEDB\""
 
-# Update password on re-runs (idempotent)
-su - postgres -c "psql -c \"ALTER USER ${PG_USER} WITH PASSWORD '${PG_PASS}'\""
+# Update password and ensure CREATEDB on re-runs (idempotent)
+su - postgres -c "psql -c \"ALTER USER ${PG_USER} WITH PASSWORD '${PG_PASS}' CREATEDB\""
 
 su - postgres -c "psql -tc \"SELECT 1 FROM pg_database WHERE datname='${PG_DB}'\"" | grep -q 1 \
   || su - postgres -c "psql -c \"CREATE DATABASE ${PG_DB} OWNER ${PG_USER}\""

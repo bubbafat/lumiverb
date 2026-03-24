@@ -83,7 +83,7 @@ def provision_tenant_database(tenant_id: str) -> None:
     url_obj = make_url(tenant_url)
 
     # Connect to default 'postgres' database to create the tenant database
-    postgres_url = str(url_obj.set(database="control_plane"))
+    postgres_url = url_obj.set(database="control_plane").render_as_string(hide_password=False)
 
     engine = create_engine(postgres_url, isolation_level="AUTOCOMMIT")
 
@@ -134,7 +134,7 @@ def deprovision_tenant_database(tenant_id: str) -> None:
     settings = get_settings()
     tenant_url = settings.tenant_database_url_template.format(tenant_id=tenant_id)
     url_obj = make_url(tenant_url)
-    postgres_url = str(url_obj.set(database="control_plane"))
+    postgres_url = url_obj.set(database="control_plane").render_as_string(hide_password=False)
 
     engine = create_engine(postgres_url, isolation_level="AUTOCOMMIT")
     safe_name = tenant_id.replace('"', '""')
