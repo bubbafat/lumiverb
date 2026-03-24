@@ -194,9 +194,12 @@ su - postgres -c "psql -c \"ALTER USER ${PG_USER} WITH PASSWORD '${PG_PASS}' CRE
 su - postgres -c "psql -tc \"SELECT 1 FROM pg_database WHERE datname='${PG_DB}'\"" | grep -q 1 \
   || su - postgres -c "psql -c \"CREATE DATABASE ${PG_DB} OWNER ${PG_USER}\""
 
+# Install pgvector in template1 so all new tenant databases inherit it,
+# and in control_plane for the control plane schema.
+su - postgres -c "psql -d template1 -c 'CREATE EXTENSION IF NOT EXISTS vector'"
 su - postgres -c "psql -d ${PG_DB} -c 'CREATE EXTENSION IF NOT EXISTS vector'"
 
-ok "PostgreSQL: user=${PG_USER}, db=${PG_DB}, pgvector enabled"
+ok "PostgreSQL: user=${PG_USER}, db=${PG_DB}, pgvector enabled (template1 + ${PG_DB})"
 
 # ---------------------------------------------------------------------------
 # 5. Generate secrets and write env file
