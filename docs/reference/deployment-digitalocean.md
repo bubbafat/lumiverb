@@ -23,11 +23,25 @@ curl -fsSL https://raw.githubusercontent.com/bubbafat/lumiverb/main/scripts/depl
   | bash -s -- --domain app.example.com --email you@example.com
 ```
 
-Then create the first admin user:
+Then provision a tenant and create the first admin user:
 
 ```bash
-cd /opt/lumiverb
-sudo -u lumiverb .venv/bin/lumiverb create-user --email you@example.com --role admin
+# Get the admin key
+ADMIN_KEY=$(sudo grep '^ADMIN_KEY=' /etc/lumiverb/env | cut -d= -f2-)
+
+# Create a tenant (save the api_key from the response)
+curl -s -X POST http://127.0.0.1:8000/v1/admin/tenants \
+  -H "Authorization: Bearer $ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "My Org", "email": "you@example.com"}'
+
+# Configure the CLI with the tenant API key
+sudo -u lumiverb mkdir -p /var/lib/lumiverb/.lumiverb
+echo '{"api_url": "http://127.0.0.1:8000", "api_key": "<api_key from above>"}' \
+  | sudo -u lumiverb tee /var/lib/lumiverb/.lumiverb/config.json > /dev/null
+
+# Create the admin user (password must be 12+ characters)
+sudo -u lumiverb /opt/lumiverb/.venv/bin/lumiverb create-user --email you@example.com --role admin
 ```
 
 Open `https://app.example.com` and log in.
