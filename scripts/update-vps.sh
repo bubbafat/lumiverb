@@ -35,6 +35,9 @@ UV_BIN="/usr/local/bin/uv"
 [[ "$(id -u)" -eq 0 ]] || fail "Run as root"
 [[ -d "${APP_DIR}/.git" ]] || fail "${APP_DIR} is not a git repo — run deploy-vps.sh first"
 
+# Repo is owned by $SVC_USER; tell git it's safe for root to inspect it.
+git config --global --add safe.directory "$APP_DIR"
+
 cd "$APP_DIR"
 
 # ---------------------------------------------------------------------------
@@ -43,12 +46,12 @@ sudo -u "$SVC_USER" git fetch --all --prune
 
 # If HEAD is detached (e.g. pinned to a tag/commit), skip pull — user must
 # explicitly checkout the desired ref before running this script.
-if git symbolic-ref -q HEAD >/dev/null 2>&1; then
+if sudo -u "$SVC_USER" git symbolic-ref -q HEAD >/dev/null 2>&1; then
   sudo -u "$SVC_USER" git pull
 else
   warn "Detached HEAD detected — skipping git pull (checkout a branch or tag first to change versions)"
 fi
-ok "$(git log --oneline -1)"
+ok "$(sudo -u "$SVC_USER" git log --oneline -1)"
 
 # ---------------------------------------------------------------------------
 step "Updating Python dependencies"
