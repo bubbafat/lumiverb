@@ -282,6 +282,17 @@ if ! command -v quickwit >/dev/null 2>&1; then
 fi
 ok "quickwit $(quickwit --version 2>&1 | head -1)"
 
+# Quickwit config file
+cat > "${CONF_DIR}/quickwit.yaml" <<QWCONF
+version: 0.8
+node_id: lumiverb
+listen_address: 127.0.0.1
+rest:
+  listen_port: 7280
+data_dir: ${DATA_DIR}/quickwit
+QWCONF
+chown "${SVC_USER}:${SVC_USER}" "${CONF_DIR}/quickwit.yaml"
+
 cat > /etc/systemd/system/lumiverb-quickwit.service <<UNIT
 [Unit]
 Description=Lumiverb Quickwit
@@ -291,16 +302,14 @@ After=network.target
 Type=simple
 User=${SVC_USER}
 Group=${SVC_USER}
-Environment=QW_DATA_DIR=${DATA_DIR}/quickwit
-Environment=QW_LISTEN_ADDRESS=127.0.0.1
-Environment=QW_REST_LISTEN_PORT=7280
-ExecStart=/usr/local/bin/quickwit run --service metastore --service indexer --service searcher
+ExecStart=/usr/local/bin/quickwit run --config ${CONF_DIR}/quickwit.yaml --service metastore --service indexer --service searcher
 Restart=on-failure
 RestartSec=5s
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ReadWritePaths=${DATA_DIR}/quickwit
+ReadOnlyPaths=${CONF_DIR}/quickwit.yaml
 
 [Install]
 WantedBy=multi-user.target
