@@ -1,6 +1,9 @@
 import type {
+  ApiKeyCreateResponse,
+  ApiKeyItem,
   AssetDetail,
   AssetPageItem,
+  CurrentUser,
   DirectoryNode,
   EmptyTrashResponse,
   JobListItem,
@@ -21,7 +24,7 @@ export class ApiError extends Error {
   }
 }
 
-const API_KEY_STORAGE_KEY = "lumiverb_api_key";
+export const API_KEY_STORAGE_KEY = "lumiverb_api_key";
 const LEGACY_AUTH_KEYS = [
   "lumiverb_token",
   "lumiverb_jwt",
@@ -377,5 +380,25 @@ export async function listJobs(params: {
   if (params.limit) qs.set("limit", String(params.limit));
   if (params.libraryId) qs.set("library_id", params.libraryId);
   return apiFetch<JobListItem[]>(`/jobs?${qs.toString()}`);
+}
+
+export async function getCurrentUser(): Promise<CurrentUser> {
+  return apiFetch<CurrentUser>("/me");
+}
+
+export async function listApiKeys(): Promise<ApiKeyItem[]> {
+  const res = await apiFetch<{ keys: ApiKeyItem[] }>("/keys");
+  return res.keys;
+}
+
+export async function createApiKey(label: string): Promise<ApiKeyCreateResponse> {
+  return apiFetch<ApiKeyCreateResponse>("/keys", {
+    method: "POST",
+    body: { label },
+  });
+}
+
+export async function revokeApiKey(keyId: string): Promise<void> {
+  return apiFetch<void>(`/keys/${keyId}`, { method: "DELETE" });
 }
 

@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from src.api.middleware import TenantResolutionMiddleware
-from src.api.routers import admin, assets, jobs, keys, libraries, path_filters, scans, tenant, trash, video
+from src.api.routers import admin, assets, jobs, keys, libraries, me, path_filters, scans, tenant, trash, video
 from src.api.routers.auth import router as auth_router
 from src.api.routers.users import router as users_router
 from src.api.routers.artifacts import router as artifacts_router
@@ -40,6 +40,7 @@ app.include_router(artifacts_router)
 app.include_router(assets.router)
 app.include_router(video.router)
 app.include_router(keys.router)
+app.include_router(me.router)
 app.include_router(trash.router)
 app.include_router(search_router)
 app.include_router(similarity_router)

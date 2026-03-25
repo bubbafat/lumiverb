@@ -74,6 +74,18 @@ Tenant resolution runs for every request except `/health`, `/v1/admin/*`, and `/
 
 - **GET /v1/tenant/context** — Tenant auth required. Returns `{ "tenant_id" }` only. Used by CLI/worker for storage path computation. Workers must not have direct DB access; they use the jobs API only.
 
+## Current User
+
+- **GET /v1/me** — Returns `{ user_id, email, role }` for the authenticated user. For JWT auth, looks up email from the users table. For API key auth, `user_id` and `email` are null; only `role` is returned.
+
+## API Keys
+
+All routes under `/v1/keys` require tenant auth and **editor or admin** role.
+
+- **GET /v1/keys** — List all non-revoked keys for the current tenant. Requires editor or admin. Never includes plaintext.
+- **POST /v1/keys** — Create a new key. Body: `{ label }`. The key inherits the caller's role (body cannot override it). Returns `{ key_id, label, role, plaintext, created_at }`. The `plaintext` value is shown exactly once.
+- **DELETE /v1/keys/{key_id}** — Revoke a key. Returns 204. A key cannot revoke itself (409). The last admin key cannot be revoked (409).
+
 ## Tenant Maintenance API
 
 All routes under `/v1/tenant/maintenance` require tenant auth and **tenant admin** role (`require_tenant_admin`). Maintenance mode is stored as a JSON value in `system_metadata` under the key `maintenance_mode`. When active, `GET /v1/jobs/next` returns 204 immediately so workers idle without claiming jobs.
@@ -269,7 +281,6 @@ Vision API config (`vision_api_url`, `vision_api_key`) is stored per-tenant in t
 
 ## What Not to Build
 
-- Do not add user authentication (login/password/sessions) — that is Phase 5
 - Do not add webhooks — that is future work
 - Do not add multi-library search in v1 — search is per-library
 - Do not store or serve source files

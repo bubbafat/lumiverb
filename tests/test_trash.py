@@ -231,22 +231,36 @@ def test_batch_trash(trash_api_client: tuple[TestClient, str, str, list[str]]) -
 
 @pytest.mark.slow
 def test_empty_trash_requires_admin(trash_api_client: tuple[TestClient, str, str, list[str]]) -> None:
-    """DELETE /v1/trash/empty with member key returns 403."""
+    """DELETE /v1/trash/empty with viewer key returns 403."""
+    import hashlib
+    from src.core.database import get_control_session
+    from sqlmodel import text as sql_text
+
     client, api_key, _library_id, asset_ids = trash_api_client
     auth_admin = {"Authorization": f"Bearer {api_key}"}
 
+    # Create a key (inherits admin), then downgrade to viewer.
     r_create = client.post(
         "/v1/keys",
-        json={"label": "member", "role": "member"},
+        json={"label": "viewer-trash-test"},
         headers=auth_admin,
     )
     assert r_create.status_code == 200
-    member_plaintext = r_create.json()["plaintext"]
-    auth_member = {"Authorization": f"Bearer {member_plaintext}"}
+    viewer_plaintext = r_create.json()["plaintext"]
+
+    key_hash = hashlib.sha256(viewer_plaintext.encode()).hexdigest()
+    with get_control_session() as session:
+        session.exec(
+            sql_text("UPDATE api_keys SET role = 'viewer' WHERE key_hash = :h"),
+            params={"h": key_hash},
+        )
+        session.commit()
+
+    auth_viewer = {"Authorization": f"Bearer {viewer_plaintext}"}
 
     client.delete(f"/v1/assets/{asset_ids[0]}", headers=auth_admin)
 
-    r = client.request("DELETE", "/v1/trash/empty", json={}, headers=auth_member)
+    r = client.request("DELETE", "/v1/trash/empty", json={}, headers=auth_viewer)
     assert r.status_code == 403
 
 

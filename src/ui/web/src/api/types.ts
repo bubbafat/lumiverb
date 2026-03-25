@@ -150,3 +150,21 @@ export interface SimilarityResponse {
   embedding_available: boolean;
 }
 
+export interface CurrentUser {
+  user_id: string | null;
+  email: string | null;
+  role: string;
+}
+
+export interface ApiKeyItem {
+  key_id: string;
+  label: string | null;
+  role: string;
+  last_used_at: string | null;
+  created_at: string;
+}
+
+export interface ApiKeyCreateResponse extends ApiKeyItem {
+  plaintext: string;
+}
+

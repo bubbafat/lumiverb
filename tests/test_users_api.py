@@ -88,13 +88,25 @@ def test_list_users_requires_auth(users_client: tuple[TestClient, str]) -> None:
 
 @pytest.mark.slow
 def test_list_users_requires_admin(users_client: tuple[TestClient, str]) -> None:
+    import hashlib
+    from src.core.database import get_control_session
+    from sqlmodel import text as sql_text
+
     client, admin_key = users_client
     auth_admin = {"Authorization": f"Bearer {admin_key}"}
 
-    # Create a non-admin key.
-    r = client.post("/v1/keys", json={"label": "viewer-key", "role": "viewer"}, headers=auth_admin)
+    # Create a key (inherits admin), then downgrade to viewer.
+    r = client.post("/v1/keys", json={"label": "viewer-users-test"}, headers=auth_admin)
     assert r.status_code == 200
     viewer_key = r.json()["plaintext"]
+
+    key_hash = hashlib.sha256(viewer_key.encode()).hexdigest()
+    with get_control_session() as session:
+        session.exec(
+            sql_text("UPDATE api_keys SET role = 'viewer' WHERE key_hash = :h"),
+            params={"h": key_hash},
+        )
+        session.commit()
 
     r = client.get("/v1/users", headers={"Authorization": f"Bearer {viewer_key}"})
     assert r.status_code == 403
@@ -122,11 +134,25 @@ def test_create_user_requires_auth(users_client: tuple[TestClient, str]) -> None
 
 @pytest.mark.slow
 def test_create_user_requires_admin(users_client: tuple[TestClient, str]) -> None:
+    import hashlib
+    from src.core.database import get_control_session
+    from sqlmodel import text as sql_text
+
     client, admin_key = users_client
     auth_admin = {"Authorization": f"Bearer {admin_key}"}
 
-    r = client.post("/v1/keys", json={"label": "editor-key2", "role": "editor"}, headers=auth_admin)
+    # Create a key (inherits admin), then downgrade to editor.
+    r = client.post("/v1/keys", json={"label": "editor-users-test"}, headers=auth_admin)
+    assert r.status_code == 200
     editor_key = r.json()["plaintext"]
+
+    key_hash = hashlib.sha256(editor_key.encode()).hexdigest()
+    with get_control_session() as session:
+        session.exec(
+            sql_text("UPDATE api_keys SET role = 'editor' WHERE key_hash = :h"),
+            params={"h": key_hash},
+        )
+        session.commit()
 
     r = client.post(
         "/v1/users",

@@ -438,11 +438,12 @@ GCS standard tier provides 11 nines durability with built-in multi-AZ replicatio
 - Library configuration UI
 - Auto-ingest on file changes
 
-### Phase 5: User Accounts
+### Phase 5: User Accounts (Done)
 - Email + password auth with JWT sessions (see ADR: user-accounts.mdc)
 - CLI bootstrap: `lumiverb create-user`
 - Password reset via SMTP
 - Operators add users via CLI; no public signup flow in v1
+- Settings page with API key management (admin/editor)
 
 ---
 

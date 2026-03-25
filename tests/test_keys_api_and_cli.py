@@ -80,31 +80,49 @@ def keys_client() -> tuple[TestClient, str]:
 
 
 @pytest.mark.slow
-def test_non_admin_cannot_create_or_revoke_keys(keys_client: tuple[TestClient, str]) -> None:
-    """Non-admin key calling POST /v1/keys or DELETE /v1/keys/{id} returns 403."""
+def test_viewer_cannot_create_list_or_revoke_keys(keys_client: tuple[TestClient, str]) -> None:
+    """Viewer-role key calling GET/POST/DELETE /v1/keys returns 403."""
     client, api_key = keys_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
-    # Default key is admin; create a non-admin key first.
+    # Create a key (inherits admin role from caller), then downgrade it to viewer in the DB.
     r_admin = client.post(
         "/v1/keys",
-        json={"label": "non-admin", "role": "member"},
+        json={"label": "viewer-key"},
         headers=auth,
     )
     assert r_admin.status_code == 200
-    non_admin_id = r_admin.json()["key_id"]
+    viewer_key_id = r_admin.json()["key_id"]
+    viewer_plaintext = r_admin.json()["plaintext"]
 
-    # Use non-admin key for subsequent calls.
-    auth_non_admin = {"Authorization": f"Bearer {r_admin.json()['plaintext']}"}
+    import hashlib
+    from src.core.database import get_control_session
+    from sqlmodel import text as sql_text
 
+    key_hash = hashlib.sha256(viewer_plaintext.encode()).hexdigest()
+    with get_control_session() as session:
+        session.exec(
+            sql_text("UPDATE api_keys SET role = 'viewer' WHERE key_hash = :h"),
+            params={"h": key_hash},
+        )
+        session.commit()
+
+    auth_viewer = {"Authorization": f"Bearer {viewer_plaintext}"}
+
+    # Viewer cannot list keys.
+    r_list = client.get("/v1/keys", headers=auth_viewer)
+    assert r_list.status_code == 403
+
+    # Viewer cannot create keys.
     r_create = client.post(
         "/v1/keys",
-        json={"label": "should-fail", "role": "member"},
-        headers=auth_non_admin,
+        json={"label": "should-fail"},
+        headers=auth_viewer,
     )
     assert r_create.status_code == 403
 
-    r_delete = client.delete(f"/v1/keys/{non_admin_id}", headers=auth_non_admin)
+    # Viewer cannot revoke keys.
+    r_delete = client.delete(f"/v1/keys/{viewer_key_id}", headers=auth_viewer)
     assert r_delete.status_code == 403
 
 
@@ -126,30 +144,47 @@ def test_self_revoke_returns_409(keys_client: tuple[TestClient, str]) -> None:
 
 @pytest.mark.slow
 def test_last_admin_key_cannot_be_revoked(keys_client: tuple[TestClient, str]) -> None:
-    """Attempting to revoke the only admin key (as a member key) returns 409 with code last_admin_key."""
+    """Attempting to revoke the only admin key (as an editor key) returns 409 with code last_admin_key."""
+    import hashlib
+    from src.core.database import get_control_session
+    from sqlmodel import text as sql_text
+
     client, admin_plaintext = keys_client
     auth_admin = {"Authorization": f"Bearer {admin_plaintext}"}
 
-    # Create a member key; we will use it to try to revoke the admin key.
+    # Create a key (inherits admin), then downgrade to editor so it can still call revoke.
     r_create = client.post(
         "/v1/keys",
-        json={"label": "member", "role": "member"},
+        json={"label": "editor-for-revoke-test"},
         headers=auth_admin,
     )
     assert r_create.status_code == 200
-    member_plaintext = r_create.json()["plaintext"]
-    auth_member = {"Authorization": f"Bearer {member_plaintext}"}
+    editor_plaintext = r_create.json()["plaintext"]
+    editor_key_id = r_create.json()["key_id"]
 
-    # Ensure there is exactly one admin key.
-    r_list = client.get("/v1/keys", headers=auth_member)
+    key_hash = hashlib.sha256(editor_plaintext.encode()).hexdigest()
+    with get_control_session() as session:
+        session.exec(
+            sql_text("UPDATE api_keys SET role = 'editor' WHERE key_hash = :h"),
+            params={"h": key_hash},
+        )
+        session.commit()
+
+    auth_editor = {"Authorization": f"Bearer {editor_plaintext}"}
+
+    # Find the sole remaining admin key (exclude the editor key we just downgraded
+    # and the viewer key from the previous test).
+    r_list = client.get("/v1/keys", headers=auth_editor)
     assert r_list.status_code == 200
     keys = r_list.json()["keys"]
     admin_keys = [k for k in keys if k.get("role") == "admin"]
-    assert len(admin_keys) == 1
+    # There should be exactly one admin key (the original default key).
+    # Other keys created in earlier tests were downgraded to viewer/editor.
+    assert len(admin_keys) == 1, f"Expected 1 admin key, got {len(admin_keys)}: {admin_keys}"
     admin_id = admin_keys[0]["key_id"]
 
-    # Member key tries to revoke the only admin key → last_admin_key.
-    r = client.delete(f"/v1/keys/{admin_id}", headers=auth_member)
+    # Editor key tries to revoke the only admin key → last_admin_key.
+    r = client.delete(f"/v1/keys/{admin_id}", headers=auth_editor)
     assert r.status_code == 409
     body = r.json()
     assert body.get("error", {}).get("code") == "last_admin_key"
@@ -157,27 +192,34 @@ def test_last_admin_key_cannot_be_revoked(keys_client: tuple[TestClient, str]) -
 
 @pytest.mark.slow
 def test_non_admin_key_can_be_revoked_when_single_admin_exists(keys_client: tuple[TestClient, str]) -> None:
-    """Revoking a non-admin key succeeds even when there is only one admin key."""
+    """Revoking an editor key succeeds even when there is only one admin key."""
+    import hashlib
+    from src.core.database import get_control_session
+    from sqlmodel import text as sql_text
+
     client, api_key = keys_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
-    # Create a non-admin key.
+    # Create a key (inherits admin), then downgrade to editor.
     r_create = client.post(
         "/v1/keys",
-        json={"label": "temp", "role": "member"},
+        json={"label": "temp-editor"},
         headers=auth,
     )
     assert r_create.status_code == 200
-    non_admin_id = r_create.json()["key_id"]
+    editor_key_id = r_create.json()["key_id"]
+    editor_plaintext = r_create.json()["plaintext"]
 
-    # There should still be exactly one admin key.
-    r_list = client.get("/v1/keys", headers=auth)
-    keys = r_list.json()["keys"]
-    admin_keys = [k for k in keys if k.get("role") == "admin"]
-    assert len(admin_keys) == 1
+    key_hash = hashlib.sha256(editor_plaintext.encode()).hexdigest()
+    with get_control_session() as session:
+        session.exec(
+            sql_text("UPDATE api_keys SET role = 'editor' WHERE key_hash = :h"),
+            params={"h": key_hash},
+        )
+        session.commit()
 
-    # Revoking the non-admin key should succeed.
-    r_delete = client.delete(f"/v1/keys/{non_admin_id}", headers=auth)
+    # Revoking the editor key should succeed.
+    r_delete = client.delete(f"/v1/keys/{editor_key_id}", headers=auth)
     assert r_delete.status_code == 204
 
 
@@ -215,7 +257,7 @@ def test_cli_keys_create_prints_plaintext() -> None:
     mock_response.json.return_value = {
         "key_id": "key_01A",
         "label": "ci-read-only",
-        "role": "member",
+        "role": "editor",
         "plaintext": "lv_01ABC",
         "created_at": "2026-01-01T00:00:00Z",
     }

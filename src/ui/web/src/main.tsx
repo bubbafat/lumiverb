@@ -12,6 +12,11 @@ import LibrariesPage from "./pages/LibrariesPage";
 import LibrarySettingsPage from "./pages/LibrarySettingsPage";
 import LoginPage from "./pages/LoginPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
+import SettingsPage from "./pages/SettingsPage";
+import AccountSection from "./pages/settings/AccountSection";
+import PreferencesSection from "./pages/settings/PreferencesSection";
+import SecuritySection from "./pages/settings/SecuritySection";
+import ApiKeysSection from "./pages/settings/ApiKeysSection";
 import { getApiKey } from "./api/client";
 import "./index.css";
 
@@ -78,6 +83,20 @@ createRoot(document.getElementById("root")!).render(
                 </RequireAuth>
               }
             />
+            <Route
+              path="settings"
+              element={
+                <RequireAuth>
+                  {<SettingsPage />}
+                </RequireAuth>
+              }
+            >
+              <Route index element={<Navigate to="/settings/account" replace />} />
+              <Route path="account" element={<AccountSection />} />
+              <Route path="preferences" element={<PreferencesSection />} />
+              <Route path="security" element={<SecuritySection />} />
+              <Route path="keys" element={<ApiKeysSection />} />
+            </Route>
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

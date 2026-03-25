@@ -4,7 +4,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from src.api.dependencies import require_tenant_admin
+from src.api.dependencies import require_editor
 from src.api.middleware import _error_response
 from src.core.database import get_control_session
 from src.repository.control_plane import ApiKeyRepository
@@ -27,7 +27,6 @@ class KeyListResponse(BaseModel):
 
 class CreateKeyRequest(BaseModel):
     label: str | None = None
-    role: str = "member"
 
 
 class CreateKeyResponse(BaseModel):
@@ -39,7 +38,10 @@ class CreateKeyResponse(BaseModel):
 
 
 @router.get("", response_model=KeyListResponse)
-def list_keys(request: Request) -> KeyListResponse:
+def list_keys(
+    request: Request,
+    _: Annotated[None, Depends(require_editor)],
+) -> KeyListResponse:
     """Return all non-revoked keys for the current tenant. Never includes plaintext."""
     tenant_id = getattr(request.state, "tenant_id", None)
     if not tenant_id:
@@ -57,7 +59,7 @@ def list_keys(request: Request) -> KeyListResponse:
             KeyItem(
                 key_id=k.key_id,
                 label=getattr(k, "label", None),
-                role=getattr(k, "role", "member"),
+                role=getattr(k, "role", "viewer"),
                 last_used_at=_iso(k.last_used_at),
                 created_at=_iso(k.created_at) or "",
             )
@@ -70,26 +72,28 @@ def list_keys(request: Request) -> KeyListResponse:
 def create_key(
     request: Request,
     body: CreateKeyRequest,
-    _: Annotated[None, Depends(require_tenant_admin)],
+    _: Annotated[None, Depends(require_editor)],
 ) -> CreateKeyResponse:
     """Create a new key for the current tenant. Returns plaintext exactly once."""
     tenant_id = getattr(request.state, "tenant_id", None)
     if not tenant_id:
         raise HTTPException(status_code=500, detail="Tenant context missing")
 
+    caller_role = getattr(request.state, "role", "viewer")
+
     with get_control_session() as session:
         repo = ApiKeyRepository(session)
         api_key, plaintext = repo.create(
             tenant_id=tenant_id,
             label=body.label,
-            role=body.role,
+            role=caller_role,
         )
 
     created_at = api_key.created_at.isoformat()
     return CreateKeyResponse(
         key_id=api_key.key_id,
         label=getattr(api_key, "label", None),
-        role=getattr(api_key, "role", "member"),
+        role=getattr(api_key, "role", "viewer"),
         plaintext=plaintext,
         created_at=created_at,
     )
@@ -106,14 +110,16 @@ def revoke_key(
     Rules:
     1. A key cannot revoke itself (409).
     2. The last admin key cannot be revoked (409, code=last_admin_key) — checked
-       before the admin-role gate so that the constraint is visible regardless of
+       before the role gate so that the constraint is visible regardless of
        the caller's role.
-    3. Only admin keys may revoke other keys (403).
+    3. Only admin or editor may revoke keys (403).
     """
     tenant_id = getattr(request.state, "tenant_id", None)
-    current_key_id = getattr(request.state, "key_id", None)
-    if not tenant_id or not current_key_id:
+    if not tenant_id:
         raise HTTPException(status_code=500, detail="Tenant context missing")
+
+    # key_id is only set for API key auth; None for JWT users.
+    current_key_id: str | None = getattr(request.state, "key_id", None)
 
     with get_control_session() as session:
         repo = ApiKeyRepository(session)
@@ -128,7 +134,7 @@ def revoke_key(
 
         # 1. Check "last admin key" before the role gate so that this hard
         #    constraint surfaces as 409 regardless of the caller's role.
-        if getattr(target, "role", "member") == "admin":
+        if getattr(target, "role", "viewer") == "admin":
             admin_count = repo.count_admin_keys(tenant_id)
             if admin_count <= 1:
                 return _error_response(
@@ -137,13 +143,13 @@ def revoke_key(
                     "Cannot revoke the last remaining admin key for this tenant",
                 )
 
-        # 2. Enforce admin-only after the last_admin_key constraint check.
+        # 2. Enforce editor+ after the last_admin_key constraint check.
         caller_role = getattr(request.state, "role", None)
-        if caller_role != "admin":
-            raise HTTPException(status_code=403, detail="Admin API key required")
+        if caller_role not in ("admin", "editor"):
+            raise HTTPException(status_code=403, detail="Editor access required")
 
-        # 3. A key cannot revoke itself.
-        if key_id == current_key_id:
+        # 3. A key cannot revoke itself (only relevant for API key auth).
+        if current_key_id and key_id == current_key_id:
             raise HTTPException(status_code=409, detail="A key cannot revoke itself")
 
         ok = repo.revoke(key_id=key_id, tenant_id=tenant_id)

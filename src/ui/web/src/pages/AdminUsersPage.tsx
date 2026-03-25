@@ -1,24 +1,12 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { listUsers, createUser, updateUserRole, deleteUser, ApiError } from "../api/client";
+import { decodeJwtClaims } from "../api/jwt";
 import type { UserItem } from "../api/types";
 
 const ROLES = ["admin", "editor", "viewer"] as const;
 const MIN_PASSWORD_LENGTH = 12;
 type Role = (typeof ROLES)[number];
-
-function getCurrentUserIdFromJwt(): string | null {
-  try {
-    const token = localStorage.getItem("lumiverb_api_key");
-    if (!token) return null;
-    const parts = token.split(".");
-    if (parts.length !== 3) return null;
-    const payload = JSON.parse(atob(parts[1])) as { sub?: unknown };
-    return typeof payload.sub === "string" ? payload.sub : null;
-  } catch {
-    return null;
-  }
-}
 
 function relativeTime(iso: string | null): string {
   if (!iso) return "never";
@@ -79,7 +67,7 @@ function UserRow({
 
 export default function AdminUsersPage() {
   const qc = useQueryClient();
-  const currentUserId = getCurrentUserIdFromJwt();
+  const currentUserId = decodeJwtClaims()?.sub ?? null;
 
   const { data: users, isLoading, error } = useQuery({
     queryKey: ["admin", "users"],
