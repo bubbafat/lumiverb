@@ -1049,50 +1049,51 @@ def worker_search_sync(
     ] = "human",
 ) -> None:
     """Run the search sync worker for a library."""
-    from src.core.database import get_tenant_session
     from src.core.io_utils import normalize_path_prefix
-    from src.search.quickwit_client import QuickwitClient
-    from src.workers.search_sync import SearchSyncWorker
 
     path_prefix = normalize_path_prefix(path)
 
     client = LumiverbClient()
-    ctx = client.get("/v1/tenant/context").json()
-    tenant_id = ctx["tenant_id"]
     library_id = _resolve_library_id(client, library)
 
     grand_synced = 0
     grand_skipped = 0
     grand_batches = 0
 
-    quickwit = QuickwitClient()
-    with get_tenant_session(tenant_id) as session:
-        if force_resync:
-            body: dict[str, object] = {"library_id": library_id}
+    if force_resync:
+        body: dict[str, object] = {"library_id": library_id}
+        if path_prefix:
+            body["path_prefix"] = path_prefix
+        resync_resp = client.post("/v1/search-sync/resync", json=body)
+        resync_resp.raise_for_status()
+        n = resync_resp.json().get("enqueued", 0)
+        if n:
+            console.print(f"Re-enqueued {n:,} assets for resync.")
+
+    # Check pending count via API
+    params: dict[str, object] = {"library_id": library_id}
+    if path_prefix:
+        params["path_prefix"] = path_prefix
+    pending_resp = client.get("/v1/search-sync/pending", params=params)
+    pending = pending_resp.json().get("count", 0)
+
+    if pending == 0 and once:
+        console.print(f"No pending items in search_sync_queue for {library}.")
+    else:
+        # Process batches via API until queue is drained (or once if --once)
+        while True:
+            batch_body: dict[str, object] = {"library_id": library_id}
             if path_prefix:
-                body["path_prefix"] = path_prefix
-            resync_resp = client.post("/v1/search-sync/resync", json=body)
-            resync_resp.raise_for_status()
-            n = resync_resp.json().get("enqueued", 0)
-            if n:
-                console.print(f"Re-enqueued {n:,} assets for resync.")
-
-        worker = SearchSyncWorker(
-            session=session,
-            library_id=library_id,
-            quickwit=quickwit,
-            path_prefix=path_prefix,
-            output_mode=output,
-        )
-
-        pending = worker.pending_count()
-        if pending == 0 and once:
-            console.print(f"No pending items in search_sync_queue for {library}.")
-        else:
-            result = worker.run_once()
-            grand_synced = int(result["synced"])
-            grand_skipped = int(result["skipped"])
-            grand_batches = int(result["batches"])
+                batch_body["path_prefix"] = path_prefix
+            resp = client.post("/v1/search-sync/process-batch", json=batch_body)
+            data = resp.json()
+            if not data.get("processed", False):
+                break
+            grand_synced += int(data.get("synced", 0))
+            grand_skipped += int(data.get("skipped", 0))
+            grand_batches += 1
+            if once:
+                break
 
     table = Table(show_header=True)
     table.add_column("Metric", style="dim")
@@ -1298,221 +1299,90 @@ def status(
 
     client = LumiverbClient()
 
-    from src.core.database import get_tenant_session
-    from src.repository.tenant import AssetRepository, SearchSyncQueueRepository, WorkerJobRepository
-
-    def _build_pivot(job_rows: list[dict], ssq_rows: list[dict]) -> dict[str, dict[str, int]]:
-        pivot: dict[str, dict[str, int]] = {}
-        for r in job_rows:
-            jt, sv, count = r["job_type"], r["status"], r["count"]
-            if jt not in pivot:
-                pivot[jt] = {"done": 0, "inflight": 0, "pending": 0, "failed": 0, "blocked": 0}
-            if sv == "completed":
-                pivot[jt]["done"] += count
-            elif sv == "claimed":
-                pivot[jt]["inflight"] += count
-            elif sv == "pending":
-                pivot[jt]["pending"] += count
-            elif sv == "failed":
-                pivot[jt]["failed"] += count
-            elif sv == "blocked":
-                pivot[jt]["blocked"] += count
-
-        for r in ssq_rows:
-            sv, count = r["status"], r["count"]
-            if "search_sync" not in pivot:
-                pivot["search_sync"] = {"done": 0, "inflight": 0, "pending": 0, "failed": 0, "blocked": 0}
-            if sv == "synced":
-                pivot["search_sync"]["done"] += count
-            elif sv == "processing":
-                pivot["search_sync"]["inflight"] += count
-            elif sv == "pending":
-                pivot["search_sync"]["pending"] += count
-        return pivot
-
-    def _pivot_to_stages(pivot: dict[str, dict[str, int]]) -> list[dict]:
-        stages: list[dict] = []
-        for name in STAGE_ORDER:
-            if name not in pivot:
-                continue
-            c = pivot[name]
-            total = c["done"] + c["inflight"] + c["pending"] + c["failed"] + c.get("blocked", 0)
-            if total == 0:
-                continue
-            stages.append(
-                {
-                    "name": name,
-                    "label": JOB_TYPE_DISPLAY.get(name, name),
-                    "done": c["done"],
-                    "inflight": c["inflight"],
-                    "pending": c["pending"],
-                    "failed": c["failed"],
-                    "blocked": c.get("blocked", 0),
-                }
-            )
-        return stages
-
+    # Resolve library_id if a library name was given.
+    library_id: str | None = None
     if library is not None:
-        # Match order expected by tests: libraries first, then tenant context.
-        all_libraries = client.get("/v1/libraries").json()
-        match = next((lib for lib in all_libraries if lib.get("name") == library), None)
-        if match is None:
-            console.print(f"[red]Library not found: {library}[/red]")
-            raise typer.Exit(1)
+        library_id = _resolve_library_id(client, library)
 
-        tenant_id = client.get("/v1/tenant/context").json()["tenant_id"]
-        library_id = match["library_id"]
-        lib_name = match.get("name", library_id)
+    # Fetch pipeline status from the API.
+    params: dict[str, str] = {}
+    if library_id is not None:
+        params["library_id"] = library_id
+    data = client.get("/v1/pipeline/status", params=params).json()
 
-        with get_tenant_session(tenant_id) as session:
-            asset_repo = AssetRepository(session)
-            job_repo = WorkerJobRepository(session)
-            ssq_repo = SearchSyncQueueRepository(session)
-
-            job_rows = job_repo.pipeline_status(library_id)
-            ssq_rows = ssq_repo.search_sync_pipeline_status(library_id)
-            active_workers = job_repo.active_worker_count(library_id=library_id)
-            total_assets = asset_repo.count_by_library(library_id)
-
-            pivot = _build_pivot(job_rows, ssq_rows)
-            stages = _pivot_to_stages(pivot)
-            data = {
-                "library": lib_name,
-                "library_id": library_id,
-                "total_assets": total_assets,
-                "workers": active_workers,
-                "stages": stages,
-            }
-
-            if output == "json":
-                print(_json.dumps(data, ensure_ascii=False))
-                return
-
-            console.print(f"Library: {lib_name}  ({library_id})")
-            console.print(f"Total assets: {total_assets:,}  Active workers: {active_workers}")
-            console.print()
-
-            table = Table(show_header=True)
-            table.add_column("Stage", style="bold")
-            table.add_column("Done", justify="right")
-            table.add_column("Inflight", justify="right")
-            table.add_column("Pending", justify="right")
-            table.add_column("Failed", justify="right")
-            table.add_column("Blocked", justify="right")
-
-            for s in stages:
-                blocked = s.get("blocked", 0)
-                table.add_row(
-                    s["label"],
-                    f"{s['done']:,}",
-                    f"{s['inflight']:,}",
-                    f"{s['pending']:,}",
-                    f"{s['failed']:,}",
-                    f"[red]{blocked:,}[/]" if blocked else "0",
-                )
-            console.print(table)
-
-            notable_stages = [
-                (s["name"], s["failed"] + s.get("blocked", 0))
-                for s in stages
-                if (s["failed"] + s.get("blocked", 0)) > 0 and s["name"] != "search_sync"
-            ]
-            if notable_stages:
-                worst = max(notable_stages, key=lambda x: x[1])
-                hint_type = "vision" if worst[0] == "ai_vision" else worst[0]
-                console.print(f"\nRun 'lumiverb failures -l {lib_name} --job-type {hint_type}' to see failure details.")
+    if output == "json":
+        print(_json.dumps(data, ensure_ascii=False))
         return
 
-    # Tenant-wide mode
-    tenant_id = client.get("/v1/tenant/context").json()["tenant_id"]
-    all_libraries = client.get("/v1/libraries").json()
+    if library is not None:
+        # Single-library output
+        total_assets = data.get("total_assets", 0)
+        active_workers = data.get("workers", 0)
+        stages = data.get("stages", [])
 
-    with get_tenant_session(tenant_id) as session:
-        asset_repo = AssetRepository(session)
-        job_repo = WorkerJobRepository(session)
-        ssq_repo = SearchSyncQueueRepository(session)
-
-        active_workers = job_repo.active_worker_count()
-        job_rows_all = job_repo.pipeline_status_tenant()
-        ssq_rows_all = ssq_repo.search_sync_pipeline_status_tenant()
-
-        per_lib_pivot: dict[str, dict[str, dict[str, int]]] = {lib["library_id"]: {} for lib in all_libraries}
-
-        for r in job_rows_all:
-            lid, jt, sv, count = r["library_id"], r["job_type"], r["status"], r["count"]
-            if lid not in per_lib_pivot:
-                continue
-            stage_pivot = per_lib_pivot[lid]
-            if jt not in stage_pivot:
-                stage_pivot[jt] = {"done": 0, "inflight": 0, "pending": 0, "failed": 0, "blocked": 0}
-            if sv == "completed":
-                stage_pivot[jt]["done"] += count
-            elif sv == "claimed":
-                stage_pivot[jt]["inflight"] += count
-            elif sv == "pending":
-                stage_pivot[jt]["pending"] += count
-            elif sv == "failed":
-                stage_pivot[jt]["failed"] += count
-            elif sv == "blocked":
-                stage_pivot[jt]["blocked"] += count
-
-        for r in ssq_rows_all:
-            lid, sv, count = r["library_id"], r["status"], r["count"]
-            if lid not in per_lib_pivot:
-                continue
-            stage_pivot = per_lib_pivot[lid]
-            if "search_sync" not in stage_pivot:
-                stage_pivot["search_sync"] = {"done": 0, "inflight": 0, "pending": 0, "failed": 0, "blocked": 0}
-            if sv == "synced":
-                stage_pivot["search_sync"]["done"] += count
-            elif sv == "processing":
-                stage_pivot["search_sync"]["inflight"] += count
-            elif sv == "pending":
-                stage_pivot["search_sync"]["pending"] += count
-
-        libraries_payload: list[dict] = []
-        for lib in all_libraries:
-            lid = lib["library_id"]
-            pivot = per_lib_pivot.get(lid, {})
-            libraries_payload.append(
-                {
-                    "library": lib.get("name", lid),
-                    "library_id": lid,
-                    "total_assets": asset_repo.count_by_library(lid),
-                    "stages": _pivot_to_stages(pivot),
-                }
-            )
-
-        data = {"workers": active_workers, "libraries": libraries_payload}
-        if output == "json":
-            print(_json.dumps(data, ensure_ascii=False))
-            return
-
-        total_all = sum(lib["total_assets"] for lib in libraries_payload)
-        console.print(f"Total assets (all libraries): {total_all:,}  Active workers: {active_workers}")
+        console.print(f"Library: {data.get('library', library)}  ({data.get('library_id', library_id)})")
+        console.print(f"Total assets: {total_assets:,}  Active workers: {active_workers}")
         console.print()
+
         table = Table(show_header=True)
-        table.add_column("Library", style="bold")
         table.add_column("Stage", style="bold")
         table.add_column("Done", justify="right")
         table.add_column("Inflight", justify="right")
         table.add_column("Pending", justify="right")
         table.add_column("Failed", justify="right")
         table.add_column("Blocked", justify="right")
-        for lib_data in libraries_payload:
-            lib_name = lib_data.get("library", lib_data.get("library_id", "?"))
-            for s in lib_data.get("stages", []):
-                blocked = s.get("blocked", 0)
-                table.add_row(
-                    lib_name,
-                    s["label"],
-                    f"{s['done']:,}",
-                    f"{s['inflight']:,}",
-                    f"{s['pending']:,}",
-                    f"{s['failed']:,}",
-                    f"[red]{blocked:,}[/]" if blocked else "0",
-                )
+
+        for s in stages:
+            blocked = s.get("blocked", 0)
+            table.add_row(
+                s.get("label", s.get("name", "")),
+                f"{s['done']:,}",
+                f"{s['inflight']:,}",
+                f"{s['pending']:,}",
+                f"{s['failed']:,}",
+                f"[red]{blocked:,}[/]" if blocked else "0",
+            )
         console.print(table)
+
+        notable_stages = [
+            (s["name"], s["failed"] + s.get("blocked", 0))
+            for s in stages
+            if (s["failed"] + s.get("blocked", 0)) > 0 and s["name"] != "search_sync"
+        ]
+        if notable_stages:
+            worst = max(notable_stages, key=lambda x: x[1])
+            hint_type = "vision" if worst[0] == "ai_vision" else worst[0]
+            console.print(f"\nRun 'lumiverb failures -l {library} --job-type {hint_type}' to see failure details.")
+        return
+
+    # Tenant-wide output
+    active_workers = data.get("workers", 0)
+    libraries_payload = data.get("libraries", [])
+    total_all = sum(lib.get("total_assets", 0) for lib in libraries_payload)
+    console.print(f"Total assets (all libraries): {total_all:,}  Active workers: {active_workers}")
+    console.print()
+    table = Table(show_header=True)
+    table.add_column("Library", style="bold")
+    table.add_column("Stage", style="bold")
+    table.add_column("Done", justify="right")
+    table.add_column("Inflight", justify="right")
+    table.add_column("Pending", justify="right")
+    table.add_column("Failed", justify="right")
+    table.add_column("Blocked", justify="right")
+    for lib_data in libraries_payload:
+        lib_name = lib_data.get("library", lib_data.get("library_id", "?"))
+        for s in lib_data.get("stages", []):
+            blocked = s.get("blocked", 0)
+            table.add_row(
+                lib_name,
+                s.get("label", s.get("name", "")),
+                f"{s['done']:,}",
+                f"{s['inflight']:,}",
+                f"{s['pending']:,}",
+                f"{s['failed']:,}",
+                f"[red]{blocked:,}[/]" if blocked else "0",
+            )
+    console.print(table)
 
 
 # ---------------------------------------------------------------------------
@@ -1531,28 +1401,20 @@ def failures(
     job_type = _resolve_job_type(job_type)
 
     client = LumiverbClient()
-    libraries = client.get("/v1/libraries").json()
-    match = next((lib for lib in libraries if lib.get("name") == library), None)
-    if match is None:
-        console.print(f"[red]Library not found: {library}[/red]")
-        raise typer.Exit(1)
-
-    library_id = match["library_id"]
+    library_id = _resolve_library_id(client, library)
     path_prefix = normalize_path_prefix(path)
 
-    tenant_id = client.get("/v1/tenant/context").json()["tenant_id"]
+    params: dict[str, object] = {
+        "library_id": library_id,
+        "job_type": job_type,
+        "limit": limit,
+    }
+    if path_prefix:
+        params["path_prefix"] = path_prefix
 
-    from src.core.database import get_tenant_session
-    from src.repository.tenant import WorkerJobRepository
-
-    with get_tenant_session(tenant_id) as session:
-        job_repo = WorkerJobRepository(session)
-        rows, total_count = job_repo.list_failures(
-            library_id=library_id,
-            job_type=job_type,
-            path_prefix=path_prefix,
-            limit=limit,
-        )
+    data = client.get("/v1/jobs/failures", params=params).json()
+    rows = data.get("rows", [])
+    total_count = data.get("total_count", 0)
 
     def truncate(s: str, max_len: int = 60) -> str:
         if len(s) <= max_len:
@@ -1573,7 +1435,7 @@ def failures(
     table.add_column("Path")
     table.add_column("Error")
     for r in rows:
-        table.add_row(r["rel_path"], truncate(r["error_message"]))
+        table.add_row(r.get("rel_path", ""), truncate(r.get("error_message", "")))
     console.print(table)
 
     console.print()

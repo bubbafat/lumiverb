@@ -1,6 +1,6 @@
 """Fast tests for lumiverb worker search-sync CLI command."""
 
-from unittest.mock import ANY, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from typer.testing import CliRunner
@@ -10,80 +10,93 @@ from src.cli.main import app
 runner = CliRunner()
 
 
-@pytest.mark.fast
-def test_worker_search_sync_instantiates_and_runs() -> None:
-    """Mock LumiverbClient and SearchSyncWorker; invoke search-sync; assert worker run_once called."""
+def _mock_client_for_search_sync(*, pending_count: int = 1, batch_responses: list[dict] | None = None) -> MagicMock:
+    """Build a mock LumiverbClient whose .get/.post return the right shapes."""
+    if batch_responses is None:
+        batch_responses = [
+            {"processed": True, "synced": 1, "skipped": 0},
+            {"processed": False, "synced": 0, "skipped": 0},
+        ]
+
     mock_client = MagicMock()
-    # CLI order: first tenant context, then libraries (in _resolve_library_id).
-    mock_client.get.return_value.json.side_effect = [
-        {"tenant_id": "ten_01ABC"},
-        [{"library_id": "lib_TestLib01", "name": "TestLib", "root_path": "/path"}],
-    ]
-    mock_session = MagicMock()
-    mock_worker = MagicMock()
-    mock_worker.run_once.return_value = {"synced": 1, "skipped": 0, "batches": 1}
-    mock_worker.pending_count.return_value = 1
 
-    mock_quickwit = MagicMock()
-    mock_quickwit.enabled = True
+    def _get_side_effect(path: str, **kwargs: object) -> MagicMock:
+        resp = MagicMock()
+        if path == "/v1/libraries":
+            resp.json.return_value = [{"library_id": "lib_TestLib01", "name": "TestLib", "root_path": "/path"}]
+        elif path == "/v1/search-sync/pending":
+            resp.json.return_value = {"count": pending_count}
+        else:
+            resp.json.return_value = {}
+        return resp
 
-    mock_cm = MagicMock()
-    mock_cm.__enter__.return_value = mock_session
-    mock_cm.__exit__.return_value = None
+    post_call_count = 0
 
-    with (
-        patch("src.cli.main.LumiverbClient", return_value=mock_client),
-        patch("src.core.database.get_tenant_session", return_value=mock_cm),
-        patch("src.search.quickwit_client.QuickwitClient", return_value=mock_quickwit),
-        patch("src.workers.search_sync.SearchSyncWorker", return_value=mock_worker) as mock_worker_cls,
-    ):
+    def _post_side_effect(path: str, **kwargs: object) -> MagicMock:
+        nonlocal post_call_count
+        resp = MagicMock()
+        if path == "/v1/search-sync/process-batch":
+            idx = min(post_call_count, len(batch_responses) - 1)
+            resp.json.return_value = batch_responses[idx]
+            post_call_count += 1
+        elif path == "/v1/search-sync/resync":
+            resp.json.return_value = {"enqueued": 5}
+            resp.raise_for_status.return_value = None
+        else:
+            resp.json.return_value = {}
+        return resp
+
+    mock_client.get.side_effect = _get_side_effect
+    mock_client.post.side_effect = _post_side_effect
+    return mock_client
+
+
+@pytest.mark.fast
+def test_worker_search_sync_calls_api() -> None:
+    """search-sync uses the API (not direct DB) to process batches."""
+    mock_client = _mock_client_for_search_sync()
+
+    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(app, ["worker", "search-sync", "--library", "TestLib", "--once"])
 
     assert result.exit_code == 0
+    # Should have called the libraries endpoint
     mock_client.get.assert_any_call("/v1/libraries")
-    mock_client.get.assert_any_call("/v1/tenant/context")
-    mock_worker_cls.assert_called_once_with(
-        session=mock_session,
-        library_id="lib_TestLib01",
-        quickwit=ANY,
-        path_prefix=None,
-        output_mode="human",
-    )
-    mock_worker.pending_count.assert_called()
-    mock_worker.run_once.assert_called_once()
+    # Should have checked pending count
+    called_paths = [c.args[0] for c in mock_client.get.call_args_list]
+    assert "/v1/search-sync/pending" in called_paths
+    # Should have called process-batch
+    post_paths = [c.args[0] for c in mock_client.post.call_args_list]
+    assert "/v1/search-sync/process-batch" in post_paths
+    # Output should show synced count
+    assert "Synced" in result.output
+    assert "1" in result.output
 
 
 @pytest.mark.fast
-def test_worker_search_sync_output_jsonl_passes_output_mode() -> None:
-    """With --output jsonl, SearchSyncWorker receives output_mode='jsonl'."""
-    mock_client = MagicMock()
-    mock_client.get.return_value.json.side_effect = [
-        {"tenant_id": "ten_01ABC"},
-        [{"library_id": "lib_TestLib01", "name": "TestLib", "root_path": "/path"}],
-    ]
-    mock_session = MagicMock()
-    mock_worker = MagicMock()
-    mock_worker.run_once.return_value = {"synced": 1, "skipped": 0, "batches": 1}
-    mock_worker.pending_count.return_value = 1
+def test_worker_search_sync_empty_queue() -> None:
+    """When pending count is 0 and --once, prints message and exits."""
+    mock_client = _mock_client_for_search_sync(pending_count=0)
 
-    mock_quickwit = MagicMock()
-    mock_quickwit.enabled = True
-    mock_cm = MagicMock()
-    mock_cm.__enter__.return_value = mock_session
-    mock_cm.__exit__.return_value = None
+    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+        result = runner.invoke(app, ["worker", "search-sync", "--library", "TestLib", "--once"])
 
-    with (
-        patch("src.cli.main.LumiverbClient", return_value=mock_client),
-        patch("src.core.database.get_tenant_session", return_value=mock_cm),
-        patch("src.search.quickwit_client.QuickwitClient", return_value=mock_quickwit),
-        patch("src.workers.search_sync.SearchSyncWorker", return_value=mock_worker) as mock_worker_cls,
-    ):
+    assert result.exit_code == 0
+    assert "No pending items" in result.output
+
+
+@pytest.mark.fast
+def test_worker_search_sync_force_resync() -> None:
+    """--force-resync calls the resync endpoint before processing."""
+    mock_client = _mock_client_for_search_sync()
+
+    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
-            ["worker", "search-sync", "--library", "TestLib", "--once", "--output", "jsonl"],
+            ["worker", "search-sync", "--library", "TestLib", "--once", "--force-resync"],
         )
 
     assert result.exit_code == 0
-    mock_worker_cls.assert_called_once()
-    call_kw = mock_worker_cls.call_args[1]
-    assert call_kw.get("output_mode") == "jsonl"
+    post_paths = [c.args[0] for c in mock_client.post.call_args_list]
+    assert "/v1/search-sync/resync" in post_paths
+    assert "Re-enqueued" in result.output
