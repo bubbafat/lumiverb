@@ -278,22 +278,25 @@ if ! command -v quickwit >/dev/null 2>&1; then
 fi
 ok "quickwit $(quickwit --version 2>&1 | head -1)"
 
-cat > /etc/systemd/system/lumiverb-quickwit.service <<'UNIT'
+cat > /etc/systemd/system/lumiverb-quickwit.service <<UNIT
 [Unit]
 Description=Lumiverb Quickwit
 After=network.target
 
 [Service]
 Type=simple
-User=lumiverb
-Group=lumiverb
-ExecStart=/usr/local/bin/quickwit run --service metastore --service indexer --service searcher --data-dir /var/lib/lumiverb/quickwit --listen-address 127.0.0.1 --rest-listen-port 7280
+User=${SVC_USER}
+Group=${SVC_USER}
+Environment=QW_DATA_DIR=${DATA_DIR}/quickwit
+Environment=QW_LISTEN_ADDRESS=127.0.0.1
+Environment=QW_REST_LISTEN_PORT=7280
+ExecStart=/usr/local/bin/quickwit run --service metastore --service indexer --service searcher
 Restart=on-failure
 RestartSec=5s
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/lumiverb/quickwit
+ReadWritePaths=${DATA_DIR}/quickwit
 
 [Install]
 WantedBy=multi-user.target
@@ -391,7 +394,7 @@ Group=${SVC_USER}
 WorkingDirectory=${APP_DIR}
 EnvironmentFile=${ENV_FILE}
 Environment=PYTHONUNBUFFERED=1
-ExecStart=${APP_DIR}/.venv/bin/python -m src.workers.main
+ExecStart=${APP_DIR}/.venv/bin/lumiverb pipeline
 Restart=on-failure
 RestartSec=10s
 LimitNOFILE=65535
@@ -489,7 +492,10 @@ ok "Firewall active — inbound limited to SSH, HTTP, HTTPS"
 # ---------------------------------------------------------------------------
 step "Starting services"
 
-systemctl enable --now lumiverb-quickwit lumiverb-api lumiverb-worker
+# Note: lumiverb-worker is installed but not enabled by default. It requires
+# a configured CLI with a tenant API key. Enable it after tenant provisioning:
+#   sudo systemctl enable --now lumiverb-worker
+systemctl enable --now lumiverb-quickwit lumiverb-api
 
 # Brief wait for API to come up
 for i in {1..10}; do
@@ -505,7 +511,7 @@ else
   warn "API server not responding yet — check: journalctl -u lumiverb-api -n 50"
 fi
 
-systemctl status --no-pager lumiverb-quickwit lumiverb-api lumiverb-worker || true
+systemctl status --no-pager lumiverb-quickwit lumiverb-api || true
 
 # ---------------------------------------------------------------------------
 # Done

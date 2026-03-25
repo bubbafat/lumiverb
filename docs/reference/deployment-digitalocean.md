@@ -199,7 +199,10 @@ After=network.target
 Type=simple
 User=lumiverb
 Group=lumiverb
-ExecStart=/usr/local/bin/quickwit run --service metastore --service indexer --service searcher --data-dir /var/lib/lumiverb/quickwit --listen-address 127.0.0.1 --rest-listen-port 7280
+Environment=QW_DATA_DIR=/var/lib/lumiverb/quickwit
+Environment=QW_LISTEN_ADDRESS=127.0.0.1
+Environment=QW_REST_LISTEN_PORT=7280
+ExecStart=/usr/local/bin/quickwit run --service metastore --service indexer --service searcher
 Restart=on-failure
 RestartSec=5s
 NoNewPrivileges=true
