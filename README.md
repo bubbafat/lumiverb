@@ -308,6 +308,7 @@ This takes 3–5 minutes. It installs all system packages, creates the database,
 Options:
 - `--email` — Let's Encrypt certificate expiry notices (optional but recommended)
 - `--tenant <name>` — name for the default tenant (default: "Lumiverb")
+- `--data-dir <path>` — data directory for proxies, thumbnails, and Quickwit indexes (default: `/var/lib/lumiverb`). Use this to point at a mounted volume, e.g. `--data-dir /mnt/lumiverb`
 - `--skip-certbot` — skip TLS setup (run certbot manually later)
 
 ### Step 4: Create the admin user
