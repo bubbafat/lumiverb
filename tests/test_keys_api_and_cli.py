@@ -223,6 +223,141 @@ def test_non_admin_key_can_be_revoked_when_single_admin_exists(keys_client: tupl
     assert r_delete.status_code == 204
 
 
+# ---------------------------------------------------------------------------
+# POST /v1/keys role creation matrix
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_admin_can_create_viewer_key(keys_client: tuple[TestClient, str]) -> None:
+    """Admin creating a viewer key should succeed."""
+    client, api_key = keys_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+
+    r = client.post("/v1/keys", json={"label": "admin-creates-viewer", "role": "viewer"}, headers=auth)
+    assert r.status_code == 200
+    assert r.json()["role"] == "viewer"
+
+
+@pytest.mark.slow
+def test_admin_can_create_editor_key(keys_client: tuple[TestClient, str]) -> None:
+    """Admin creating an editor key should succeed."""
+    client, api_key = keys_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+
+    r = client.post("/v1/keys", json={"label": "admin-creates-editor", "role": "editor"}, headers=auth)
+    assert r.status_code == 200
+    assert r.json()["role"] == "editor"
+
+
+@pytest.mark.slow
+def test_admin_can_create_admin_key(keys_client: tuple[TestClient, str]) -> None:
+    """Admin creating an admin key should succeed."""
+    client, api_key = keys_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+
+    r = client.post("/v1/keys", json={"label": "admin-creates-admin", "role": "admin"}, headers=auth)
+    assert r.status_code == 200
+    assert r.json()["role"] == "admin"
+
+
+@pytest.mark.slow
+def test_editor_can_create_viewer_key(keys_client: tuple[TestClient, str]) -> None:
+    """Editor creating a viewer key should succeed."""
+    import hashlib
+    from src.core.database import get_control_session
+    from sqlmodel import text as sql_text
+
+    client, api_key = keys_client
+    auth_admin = {"Authorization": f"Bearer {api_key}"}
+
+    # Create a key, then downgrade to editor.
+    r = client.post("/v1/keys", json={"label": "editor-for-matrix"}, headers=auth_admin)
+    assert r.status_code == 200
+    editor_plaintext = r.json()["plaintext"]
+
+    key_hash = hashlib.sha256(editor_plaintext.encode()).hexdigest()
+    with get_control_session() as session:
+        session.exec(
+            sql_text("UPDATE api_keys SET role = 'editor' WHERE key_hash = :h"),
+            params={"h": key_hash},
+        )
+        session.commit()
+
+    auth_editor = {"Authorization": f"Bearer {editor_plaintext}"}
+    r = client.post("/v1/keys", json={"label": "editor-creates-viewer", "role": "viewer"}, headers=auth_editor)
+    assert r.status_code == 200
+    assert r.json()["role"] == "viewer"
+
+
+@pytest.mark.slow
+def test_editor_cannot_create_admin_key(keys_client: tuple[TestClient, str]) -> None:
+    """Editor trying to create an admin key should be rejected with 403."""
+    import hashlib
+    from src.core.database import get_control_session
+    from sqlmodel import text as sql_text
+
+    client, api_key = keys_client
+    auth_admin = {"Authorization": f"Bearer {api_key}"}
+
+    r = client.post("/v1/keys", json={"label": "editor-for-escalation"}, headers=auth_admin)
+    assert r.status_code == 200
+    editor_plaintext = r.json()["plaintext"]
+
+    key_hash = hashlib.sha256(editor_plaintext.encode()).hexdigest()
+    with get_control_session() as session:
+        session.exec(
+            sql_text("UPDATE api_keys SET role = 'editor' WHERE key_hash = :h"),
+            params={"h": key_hash},
+        )
+        session.commit()
+
+    auth_editor = {"Authorization": f"Bearer {editor_plaintext}"}
+    r = client.post("/v1/keys", json={"label": "should-fail", "role": "admin"}, headers=auth_editor)
+    assert r.status_code == 403
+    assert r.json().get("error", {}).get("code") == "role_escalation"
+
+
+@pytest.mark.slow
+def test_create_key_invalid_role_returns_400(keys_client: tuple[TestClient, str]) -> None:
+    """Creating a key with an unknown role returns 400."""
+    client, api_key = keys_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+
+    r = client.post("/v1/keys", json={"label": "bad-role", "role": "superuser"}, headers=auth)
+    assert r.status_code == 400
+    assert r.json().get("error", {}).get("code") == "invalid_role"
+
+
+@pytest.mark.slow
+def test_create_key_no_role_inherits_caller(keys_client: tuple[TestClient, str]) -> None:
+    """Omitting role should inherit the caller's role."""
+    import hashlib
+    from src.core.database import get_control_session
+    from sqlmodel import text as sql_text
+
+    client, api_key = keys_client
+    auth_admin = {"Authorization": f"Bearer {api_key}"}
+
+    # Editor creates key without specifying role — should inherit editor.
+    r = client.post("/v1/keys", json={"label": "editor-for-inherit"}, headers=auth_admin)
+    assert r.status_code == 200
+    editor_plaintext = r.json()["plaintext"]
+
+    key_hash = hashlib.sha256(editor_plaintext.encode()).hexdigest()
+    with get_control_session() as session:
+        session.exec(
+            sql_text("UPDATE api_keys SET role = 'editor' WHERE key_hash = :h"),
+            params={"h": key_hash},
+        )
+        session.commit()
+
+    auth_editor = {"Authorization": f"Bearer {editor_plaintext}"}
+    r = client.post("/v1/keys", json={"label": "inherited-role"}, headers=auth_editor)
+    assert r.status_code == 200
+    assert r.json()["role"] == "editor"
+
+
 @pytest.mark.fast
 def test_cli_keys_list_uses_api() -> None:
     """lumi keys list calls GET /v1/keys and renders table."""

@@ -391,10 +391,12 @@ export async function listApiKeys(): Promise<ApiKeyItem[]> {
   return res.keys;
 }
 
-export async function createApiKey(label: string): Promise<ApiKeyCreateResponse> {
+export async function createApiKey(label: string, role?: string): Promise<ApiKeyCreateResponse> {
+  const body: Record<string, string> = { label };
+  if (role) body.role = role;
   return apiFetch<ApiKeyCreateResponse>("/keys", {
     method: "POST",
-    body: { label },
+    body,
   });
 }
 

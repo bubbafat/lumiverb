@@ -50,18 +50,17 @@ def keys_list() -> None:
     table = Table(title="API Keys")
     table.add_column("Key ID", style="dim")
     table.add_column("Label")
-    table.add_column("Admin", justify="center")
+    table.add_column("Role")
     table.add_column("Last Used")
     table.add_column("Created")
 
     for k in keys:
-        admin_flag = "✓" if k.get("role") == "admin" else ""
         last_used_raw = k.get("last_used_at")
         created_raw = k.get("created_at", "")
         table.add_row(
             k.get("key_id", ""),
             k.get("label") or "",
-            admin_flag,
+            k.get("role", ""),
             _human_relative(last_used_raw),
             created_raw or "",
         )
@@ -72,17 +71,17 @@ def keys_list() -> None:
 @keys_app.command("create")
 def keys_create(
     label: Annotated[str | None, typer.Option("--label", help="Optional human-readable label for the key.")] = None,
-    role: Annotated[str, typer.Option("--role", help="Key role: admin or member.")] = "member",
+    role: Annotated[str | None, typer.Option("--role", help="Key role: admin, editor, or viewer. Defaults to caller's role.")] = None,
 ) -> None:
     """Create a new API key for the current tenant."""
-    if role not in ("admin", "member"):
-        console.print("[red]Role must be 'admin' or 'member'.[/red]")
+    if role is not None and role not in ("admin", "editor", "viewer"):
+        console.print("[red]Role must be 'admin', 'editor', or 'viewer'.[/red]")
         raise typer.Exit(1)
+    body: dict[str, str | None] = {"label": label}
+    if role is not None:
+        body["role"] = role
     client = LumiverbClient()
-    resp = client.post(
-        "/v1/keys",
-        json={"label": label, "role": role},
-    )
+    resp = client.post("/v1/keys", json=body)
     data = resp.json()
     plaintext = data.get("plaintext", "")
     console.print(f"[green]Created key:[/green] {plaintext}")
@@ -91,13 +90,12 @@ def keys_create(
     table = Table(show_header=True)
     table.add_column("Key ID", style="dim")
     table.add_column("Label")
-    table.add_column("Admin", justify="center")
+    table.add_column("Role")
 
-    admin_flag = "✓" if data.get("role") == "admin" else ""
     table.add_row(
         data.get("key_id", ""),
         data.get("label") or "",
-        admin_flag,
+        data.get("role", ""),
     )
     console.print(table)
 

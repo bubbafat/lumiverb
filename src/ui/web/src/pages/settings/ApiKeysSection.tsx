@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { listApiKeys, createApiKey, revokeApiKey, ApiError } from "../../api/client";
+import { listApiKeys, createApiKey, revokeApiKey, getCurrentUser, ApiError } from "../../api/client";
 import type { ApiKeyItem } from "../../api/types";
 
 function relativeTime(iso: string | null): string {
@@ -78,9 +78,16 @@ function KeyRow({
 export default function ApiKeysSection() {
   const qc = useQueryClient();
   const [label, setLabel] = useState("");
+  const [role, setRole] = useState("");
   const [newPlaintext, setNewPlaintext] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [revokeError, setRevokeError] = useState<string | null>(null);
+
+  const { data: me } = useQuery({
+    queryKey: ["settings", "me"],
+    queryFn: getCurrentUser,
+  });
+  const callerRole = me?.role ?? "viewer";
 
   const { data: keys, isLoading } = useQuery({
     queryKey: ["settings", "apiKeys"],
@@ -88,10 +95,11 @@ export default function ApiKeysSection() {
   });
 
   const createMutation = useMutation({
-    mutationFn: (l: string) => createApiKey(l),
+    mutationFn: ({ l, r }: { l: string; r: string }) => createApiKey(l, r || undefined),
     onSuccess: (data) => {
       setNewPlaintext(data.plaintext);
       setLabel("");
+      setRole("");
       setCreateError(null);
       qc.invalidateQueries({ queryKey: ["settings", "apiKeys"] });
     },
@@ -123,7 +131,7 @@ export default function ApiKeysSection() {
     e.preventDefault();
     setCreateError(null);
     setNewPlaintext(null);
-    createMutation.mutate(label.trim());
+    createMutation.mutate({ l: label.trim(), r: role });
   }
 
   async function handleCopy() {
@@ -206,6 +214,19 @@ export default function ApiKeysSection() {
               placeholder="e.g. CI pipeline"
               className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
             />
+          </div>
+          <div className="w-36">
+            <label className="mb-1 block text-sm font-medium text-gray-300">Role</label>
+            <select
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+            >
+              <option value="">Same as mine ({callerRole})</option>
+              {callerRole === "admin" && <option value="admin">Admin</option>}
+              {callerRole !== "viewer" && <option value="editor">Editor</option>}
+              {callerRole !== "viewer" && <option value="viewer">Viewer</option>}
+            </select>
           </div>
           <button
             type="submit"

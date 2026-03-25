@@ -25,8 +25,12 @@ class KeyListResponse(BaseModel):
     keys: list[KeyItem]
 
 
+_ROLE_RANK = {"admin": 2, "editor": 1, "viewer": 0}
+
+
 class CreateKeyRequest(BaseModel):
     label: str | None = None
+    role: str | None = None
 
 
 class CreateKeyResponse(BaseModel):
@@ -80,13 +84,19 @@ def create_key(
         raise HTTPException(status_code=500, detail="Tenant context missing")
 
     caller_role = getattr(request.state, "role", "viewer")
+    requested_role = body.role or caller_role
+
+    if requested_role not in _ROLE_RANK:
+        return _error_response(400, "invalid_role", f"Invalid role: {requested_role}")
+    if _ROLE_RANK[requested_role] > _ROLE_RANK[caller_role]:
+        return _error_response(403, "role_escalation", "Cannot create a key with higher privileges than your own")
 
     with get_control_session() as session:
         repo = ApiKeyRepository(session)
         api_key, plaintext = repo.create(
             tenant_id=tenant_id,
             label=body.label,
-            role=caller_role,
+            role=requested_role,
         )
 
     created_at = api_key.created_at.isoformat()
