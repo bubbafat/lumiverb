@@ -35,8 +35,9 @@ UV_BIN="/usr/local/bin/uv"
 [[ "$(id -u)" -eq 0 ]] || fail "Run as root"
 [[ -d "${APP_DIR}/.git" ]] || fail "${APP_DIR} is not a git repo — run deploy-vps.sh first"
 
-# Repo is owned by $SVC_USER; tell git it's safe for root to inspect it.
+# Repo is owned by $SVC_USER; tell git it's safe for both root and the service user.
 git config --global --add safe.directory "$APP_DIR"
+sudo -u "$SVC_USER" git config --global --add safe.directory "$APP_DIR"
 
 cd "$APP_DIR"
 
