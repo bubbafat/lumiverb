@@ -88,7 +88,10 @@ cd "$APP_DIR"
 
 # ---------------------------------------------------------------------------
 step "Restarting services"
-systemctl restart lumiverb-api lumiverb-worker
+systemctl restart lumiverb-api
+# Only restart worker and quickwit if they are enabled
+systemctl is-enabled lumiverb-worker >/dev/null 2>&1 && systemctl restart lumiverb-worker
+systemctl is-enabled lumiverb-quickwit >/dev/null 2>&1 && systemctl restart lumiverb-quickwit
 
 for i in {1..10}; do
   if curl -sf http://127.0.0.1:8000/health >/dev/null 2>&1; then
@@ -97,7 +100,9 @@ for i in {1..10}; do
   sleep 1
 done
 
-systemctl status --no-pager lumiverb-api lumiverb-worker lumiverb-quickwit || true
+systemctl status --no-pager lumiverb-api || true
+systemctl is-enabled lumiverb-quickwit >/dev/null 2>&1 && systemctl status --no-pager lumiverb-quickwit || true
+systemctl is-enabled lumiverb-worker >/dev/null 2>&1 && systemctl status --no-pager lumiverb-worker || true
 
 if curl -sf http://127.0.0.1:8000/health >/dev/null 2>&1; then
   ok "API server healthy"
