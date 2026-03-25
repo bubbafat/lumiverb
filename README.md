@@ -300,39 +300,23 @@ SSH into the VPS and run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/bubbafat/lumiverb/main/scripts/deploy-vps.sh \
-  | bash -s -- --domain app.example.com --email you@example.com
+  | sudo bash -s -- --domain app.example.com --email you@example.com
 ```
 
-This takes 3–5 minutes. It installs all system packages, creates the database, generates secrets, builds the web UI, configures nginx with TLS, and starts all services.
+This takes 3–5 minutes. It installs all system packages, creates the database, generates secrets, provisions a default tenant, builds the web UI, configures nginx with TLS, and starts all services.
 
-The `--email` flag is for Let's Encrypt certificate expiry notices (optional but recommended).
+Options:
+- `--email` — Let's Encrypt certificate expiry notices (optional but recommended)
+- `--tenant <name>` — name for the default tenant (default: "Lumiverb")
+- `--skip-certbot` — skip TLS setup (run certbot manually later)
 
-### Step 4: Provision a tenant and create the admin user
-
-Lumiverb is multi-tenant. Before creating a user you need to provision a tenant, which creates a dedicated database and returns an API key.
-
-```bash
-# Get the admin key
-ADMIN_KEY=$(sudo grep '^ADMIN_KEY=' /etc/lumiverb/env | cut -d= -f2-)
-
-# Create a tenant (note the api_key in the response)
-curl -s -X POST http://127.0.0.1:8000/v1/admin/tenants \
-  -H "Authorization: Bearer $ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "My Org", "email": "you@example.com"}'
-```
-
-Save the `api_key` from the response, then configure the CLI and create your user:
+### Step 4: Create the admin user
 
 ```bash
-# Configure the CLI with the tenant API key
-sudo -u lumiverb mkdir -p /var/lib/lumiverb/.lumiverb
-echo '{"api_url": "http://127.0.0.1:8000", "api_key": "<api_key from above>"}' \
-  | sudo -u lumiverb tee /var/lib/lumiverb/.lumiverb/config.json > /dev/null
-
-# Create the admin user (password must be 12+ characters)
 sudo -u lumiverb /opt/lumiverb/.venv/bin/lumiverb create-user --email you@example.com --role admin
 ```
+
+You'll be prompted to set a password (minimum 12 characters).
 
 ### Step 5: Log in
 

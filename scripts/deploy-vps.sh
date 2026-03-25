@@ -10,7 +10,7 @@
 # Idempotent: safe to run again to update an existing install.
 #
 # After completion, create the first admin user:
-#   cd /opt/lumiverb && sudo -u lumiverb .venv/bin/lumiverb create-user --email you@example.com --role admin
+#   sudo -u lumiverb /opt/lumiverb/.venv/bin/lumiverb create-user --email you@example.com --role admin
 #
 set -euo pipefail
 
@@ -36,6 +36,7 @@ REPO_URL="https://github.com/bubbafat/lumiverb.git"
 BRANCH="main"
 CERTBOT_EMAIL=""
 SKIP_CERTBOT=false
+TENANT_NAME="Lumiverb"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -43,9 +44,10 @@ while [[ $# -gt 0 ]]; do
     --repo)         REPO_URL="${2:?Missing value for --repo}"; shift 2 ;;
     --branch)       BRANCH="${2:?Missing value for --branch}"; shift 2 ;;
     --email)        CERTBOT_EMAIL="${2:?Missing value for --email}"; shift 2 ;;
+    --tenant)       TENANT_NAME="${2:?Missing value for --tenant}"; shift 2 ;;
     --skip-certbot) SKIP_CERTBOT=true; shift ;;
     -h|--help)
-      echo "Usage: $0 --domain <FQDN> [--email <certbot-email>] [--repo <url>] [--branch <ref>] [--skip-certbot]"
+      echo "Usage: $0 --domain <FQDN> [--email <certbot-email>] [--tenant <name>] [--repo <url>] [--branch <ref>] [--skip-certbot]"
       exit 0
       ;;
     *) fail "Unknown option: $1" ;;
@@ -514,6 +516,28 @@ fi
 systemctl status --no-pager lumiverb-quickwit lumiverb-api || true
 
 # ---------------------------------------------------------------------------
+# 16. Provision default tenant
+# ---------------------------------------------------------------------------
+step "Provisioning tenant: ${TENANT_NAME}"
+
+ADMIN_KEY="$(grep '^ADMIN_KEY=' "${ENV_FILE}" | cut -d= -f2-)"
+TENANT_RESPONSE="$(curl -sf -X POST http://127.0.0.1:8000/v1/admin/tenants \
+  -H "Authorization: Bearer ${ADMIN_KEY}" \
+  -H "Content-Type: application/json" \
+  -d "{\"name\": \"${TENANT_NAME}\", \"email\": \"${CERTBOT_EMAIL}\"}")" \
+  || fail "Tenant provisioning failed — check: journalctl -u lumiverb-api -n 50"
+
+TENANT_ID="$(echo "$TENANT_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['tenant_id'])")"
+TENANT_API_KEY="$(echo "$TENANT_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['api_key'])")"
+ok "Tenant ${TENANT_ID} provisioned"
+
+# Configure CLI for the service user so create-user works
+sudo -u "${SVC_USER}" mkdir -p "${DATA_DIR}/.lumiverb"
+echo "{\"api_url\": \"http://127.0.0.1:8000\", \"api_key\": \"${TENANT_API_KEY}\"}" \
+  | sudo -u "${SVC_USER}" tee "${DATA_DIR}/.lumiverb/config.json" > /dev/null
+ok "CLI configured for tenant"
+
+# ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
 echo ""
@@ -521,27 +545,13 @@ echo -e "${GREEN}${BOLD}Lumiverb deployed to https://${DOMAIN}${NC}"
 echo ""
 echo "Next steps:"
 echo ""
-echo "  1. Provision a tenant:"
-echo ""
-echo "     ADMIN_KEY=\$(sudo grep '^ADMIN_KEY=' ${ENV_FILE} | cut -d= -f2-)"
-echo "     curl -s -X POST http://127.0.0.1:8000/v1/admin/tenants \\"
-echo "       -H \"Authorization: Bearer \$ADMIN_KEY\" \\"
-echo "       -H \"Content-Type: application/json\" \\"
-echo "       -d '{\"name\": \"My Org\", \"email\": \"you@example.com\"}'"
-echo ""
-echo "  2. Configure the CLI with the api_key from the response:"
-echo ""
-echo "     sudo -u lumiverb mkdir -p /var/lib/lumiverb/.lumiverb"
-echo "     echo '{\"api_url\": \"http://127.0.0.1:8000\", \"api_key\": \"<api_key>\"}' \\"
-echo "       | sudo -u lumiverb tee /var/lib/lumiverb/.lumiverb/config.json > /dev/null"
-echo ""
-echo "  3. Create the first admin user:"
+echo "  1. Create the first admin user:"
 echo ""
 echo "     sudo -u lumiverb /opt/lumiverb/.venv/bin/lumiverb create-user --email you@example.com --role admin"
 echo ""
-echo "  4. Open https://${DOMAIN} and log in."
+echo "  2. Open https://${DOMAIN} and log in."
 echo ""
-echo "  5. (Optional) Enable password reset — edit ${ENV_FILE} and uncomment the SMTP_* lines."
+echo "  3. (Optional) Enable password reset — edit ${ENV_FILE} and uncomment the SMTP_* lines."
 echo ""
 echo "Useful commands:"
 echo "  journalctl -u lumiverb-api -f          # API logs"
