@@ -56,8 +56,8 @@ ok "$(sudo -u "$SVC_USER" git log --oneline -1)"
 
 # ---------------------------------------------------------------------------
 step "Updating Python dependencies"
-sudo -u "$SVC_USER" "$UV_BIN" sync --all-extras
-ok "Python venv synced"
+sudo -u "$SVC_USER" "$UV_BIN" sync --extra cli
+ok "Python venv synced (server + cli)"
 
 # ---------------------------------------------------------------------------
 step "Running migrations"

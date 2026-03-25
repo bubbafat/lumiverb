@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = {text = "MIT"}
 
+# Base dependencies: API server + shared core (what the VPS needs)
 dependencies = [
     # API & web framework
     "fastapi[standard]>=0.115",
@@ -20,41 +21,49 @@ dependencies = [
     "sqlmodel>=0.0.14",
     "alembic>=1.13",
     "psycopg2-binary>=2.9",
-    "pgvector>=0.3.0",       # pgvector Python client (phase 2: face embeddings)
-    # CLI (local agent)
-    "typer>=0.12",
-    "rich>=13.0",
-    "httpx>=0.27",
-    # Image processing
-    "pillow>=10.0",
-    "rawpy>=0.26.1",          # RAW format support (CR2, NEF, ARW, DNG, etc.)
-    "pyvips>=3.1.1",          # Fast proxy/thumbnail generation (libvips)
-    # Video processing
-    "imagehash>=4.3.0",       # pHash for scene segmentation
-    "opencv-python-headless>=4.8.0",  # Laplacian sharpness, frame manipulation
-    # AI & metadata
-    "requests>=2.25",         # Moondream Station HTTP client
-    "moondream>=0.0.5",
-    "pyexiftool>=0.5",        # EXIF metadata extraction
-    "mediapipe>=0.10.0,<0.11",  # Face detection (BlazeFace)
-    "rapidfuzz>=3.0.0",       # Semantic deduplication (scene merge)
-    # Search
-    "PyYAML>=6.0",
+    "pgvector>=0.3.0",
     # Auth
     "pyjwt>=2.8",
     "bcrypt>=4.0",
-    # Utilities
+    # Search
+    "PyYAML>=6.0",
+    # Shared utilities
     "python-ulid>=2.0",
-    "reverse_geocoder>=1.5",  # GPS → country/region/city
-    "torch>=2.10.0",
-    "open-clip-torch>=3.3.0",
+    "requests>=2.25",
 ]
 
 [project.scripts]
 lumiverb = "src.cli:main"
 
 [project.optional-dependencies]
+# CLI: local agent that talks to the API
+cli = [
+    "typer>=0.12",
+    "rich>=13.0",
+    "httpx>=0.27",
+]
+# Workers: image/video processing and AI (runs on the client machine)
+workers = [
+    "pillow>=10.0",
+    "rawpy>=0.26.1",
+    "pyvips>=3.1.1",
+    "imagehash>=4.3.0",
+    "opencv-python-headless>=4.8.0",
+    "moondream>=0.0.5",
+    "pyexiftool>=0.5",
+    "mediapipe>=0.10.0,<0.11",
+    "rapidfuzz>=3.0.0",
+    "reverse_geocoder>=1.5",
+    "torch>=2.10.0",
+    "open-clip-torch>=3.3.0",
+]
+# All extras: CLI + workers (for local development and client installs)
+all = [
+    "lumiverb[cli]",
+    "lumiverb[workers]",
+]
 dev = [
+    "lumiverb[all]",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pytest-order>=1.0",
