@@ -148,8 +148,9 @@ step "Creating service user and directories"
 id -u "$SVC_USER" >/dev/null 2>&1 || useradd --system --shell /usr/sbin/nologin --home "$DATA_DIR" "$SVC_USER"
 
 mkdir -p "$CONF_DIR" "$DATA_DIR"/{proxies,thumbnails,quickwit} "$BACKUP_DIR"
-chown -R root:root "$CONF_DIR"
-chmod 700 "$CONF_DIR"
+# Service user needs to traverse the dir (for quickwit.yaml); secrets in env file stay 600.
+chown root:"$SVC_USER" "$CONF_DIR"
+chmod 750 "$CONF_DIR"
 chown -R "$SVC_USER":"$SVC_USER" "$DATA_DIR"
 
 ok "User $SVC_USER, dirs ready"
@@ -291,7 +292,8 @@ rest:
   listen_port: 7280
 data_dir: ${DATA_DIR}/quickwit
 QWCONF
-chown "${SVC_USER}:${SVC_USER}" "${CONF_DIR}/quickwit.yaml"
+# Root-owned, world-readable (no secrets in this file; parent dir is 700 for env file).
+chmod 644 "${CONF_DIR}/quickwit.yaml"
 
 cat > /etc/systemd/system/lumiverb-quickwit.service <<UNIT
 [Unit]
