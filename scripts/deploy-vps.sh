@@ -37,6 +37,7 @@ BRANCH="main"
 CERTBOT_EMAIL=""
 SKIP_CERTBOT=false
 TENANT_NAME="Lumiverb"
+DATA_DIR_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -45,9 +46,10 @@ while [[ $# -gt 0 ]]; do
     --branch)       BRANCH="${2:?Missing value for --branch}"; shift 2 ;;
     --email)        CERTBOT_EMAIL="${2:?Missing value for --email}"; shift 2 ;;
     --tenant)       TENANT_NAME="${2:?Missing value for --tenant}"; shift 2 ;;
+    --data-dir)     DATA_DIR_OVERRIDE="${2:?Missing value for --data-dir}"; shift 2 ;;
     --skip-certbot) SKIP_CERTBOT=true; shift ;;
     -h|--help)
-      echo "Usage: $0 --domain <FQDN> [--email <certbot-email>] [--tenant <name>] [--repo <url>] [--branch <ref>] [--skip-certbot]"
+      echo "Usage: $0 --domain <FQDN> [--email <certbot-email>] [--tenant <name>] [--data-dir <path>] [--repo <url>] [--branch <ref>] [--skip-certbot]"
       exit 0
       ;;
     *) fail "Unknown option: $1" ;;
@@ -64,7 +66,7 @@ done
 # ---------------------------------------------------------------------------
 APP_DIR="/opt/lumiverb"
 CONF_DIR="/etc/lumiverb"
-DATA_DIR="/var/lib/lumiverb"
+DATA_DIR="${DATA_DIR_OVERRIDE:-/var/lib/lumiverb}"
 BACKUP_DIR="/var/backups/lumiverb"
 ENV_FILE="${CONF_DIR}/env"
 SVC_USER="lumiverb"
