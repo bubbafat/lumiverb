@@ -25,7 +25,7 @@ from rich.console import Console
 
 from src.cli.client import LumiverbClient
 from src.core.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
-from src.core.path_filter import PathFilter, is_path_included
+from src.core.path_filter import PathFilter, is_path_included_merged
 from src.workers.exif_extract import compute_sha256, extract_exif, parse_gps, parse_taken_at
 
 logger = logging.getLogger(__name__)
@@ -405,12 +405,13 @@ class _IngestStats:
 def _walk_library(
     root_path: Path,
     path_prefix: str | None = None,
-    filters: list[PathFilter] | None = None,
+    tenant_filters: list[PathFilter] | None = None,
+    library_filters: list[PathFilter] | None = None,
 ) -> list[dict]:
     """Walk the library root and return a list of file descriptors.
 
     Each entry: {rel_path, file_size, file_mtime, media_type, ext}.
-    Files that don't pass the include/exclude filters are silently skipped.
+    Files that don't pass the merged tenant + library filters are silently skipped.
     """
     walk_root = root_path
     if path_prefix:
@@ -418,6 +419,10 @@ def _walk_library(
 
     if not walk_root.is_dir():
         return []
+
+    has_filters = bool(tenant_filters or library_filters)
+    t_filters = tenant_filters or []
+    l_filters = library_filters or []
 
     results = []
     for p in sorted(walk_root.rglob("*")):
@@ -429,7 +434,7 @@ def _walk_library(
 
         rel_path = str(p.relative_to(root_path))
 
-        if filters and not is_path_included(rel_path, filters):
+        if has_filters and not is_path_included_merged(rel_path, t_filters, l_filters):
             continue
 
         stat = p.stat()
@@ -444,6 +449,38 @@ def _walk_library(
         })
 
     return results
+
+
+def _load_tenant_filters(client: LumiverbClient) -> list[PathFilter]:
+    """Load tenant-level default filters from the API."""
+    try:
+        resp = client.get("/v1/tenant/filter-defaults")
+        data = resp.json()
+        filters: list[PathFilter] = []
+        for item in data.get("includes", []):
+            filters.append(PathFilter(type="include", pattern=item["pattern"]))
+        for item in data.get("excludes", []):
+            filters.append(PathFilter(type="exclude", pattern=item["pattern"]))
+        return filters
+    except Exception:
+        logger.warning("Failed to load tenant filter defaults")
+        return []
+
+
+def _load_library_filters(client: LumiverbClient, library_id: str) -> list[PathFilter]:
+    """Load library-level filters from the API."""
+    try:
+        resp = client.get(f"/v1/libraries/{library_id}/filters")
+        data = resp.json()
+        filters: list[PathFilter] = []
+        for item in data.get("includes", []):
+            filters.append(PathFilter(type="include", pattern=item["pattern"]))
+        for item in data.get("excludes", []):
+            filters.append(PathFilter(type="exclude", pattern=item["pattern"]))
+        return filters
+    except Exception:
+        logger.warning("Failed to load library filters for %s", library_id)
+        return []
 
 
 def _fetch_existing_rel_paths(client: LumiverbClient, library_id: str) -> set[str]:
@@ -493,16 +530,16 @@ def run_ingest(
     root_path = Path(library["root_path"]).resolve()
     vision_model_id = library.get("vision_model_id", "")
 
-    # Step 1: Load path filters
-    from src.cli.scanner import _load_path_filters
+    # Step 1: Load path filters (tenant + library)
+    tenant_filters = _load_tenant_filters(client)
+    library_filters = _load_library_filters(client, library_id)
+    total_filters = len(tenant_filters) + len(library_filters)
+    if total_filters:
+        console.print(f"Loaded {len(tenant_filters)} tenant + {len(library_filters)} library filter(s)")
 
-    path_filters = _load_path_filters(client, library_id)
-    if path_filters:
-        console.print(f"Loaded {len(path_filters)} path filter(s)")
-
-    # Step 2: Discover files (filters applied during walk)
+    # Step 2: Discover files (merged filters applied during walk)
     console.print("[bold]Discovering files...[/bold]")
-    local_files = _walk_library(root_path, path_override, filters=path_filters)
+    local_files = _walk_library(root_path, path_override, tenant_filters=tenant_filters, library_filters=library_filters)
     console.print(f"Found {len(local_files):,} media files")
 
     if not local_files:

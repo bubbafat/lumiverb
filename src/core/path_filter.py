@@ -75,6 +75,47 @@ def is_path_included(rel_path: str, filters: list[PathFilter]) -> bool:
     return True
 
 
+def is_path_included_merged(
+    rel_path: str,
+    tenant_filters: list[PathFilter],
+    library_filters: list[PathFilter],
+) -> bool:
+    """Evaluate path against merged tenant + library filters.
+
+    Priority rules:
+    1. Library exclude matches → BLOCKED (absolute, highest priority)
+    2. Library include matches → ALLOWED (overrides tenant restrictions)
+    3. Tenant exclude matches → BLOCKED
+    4. Tenant includes exist but path doesn't match any → BLOCKED
+    5. Default → ALLOWED
+    """
+    rel_path_norm = rel_path.replace("\\", "/")
+
+    lib_includes = [f for f in library_filters if f.type == "include"]
+    lib_excludes = [f for f in library_filters if f.type == "exclude"]
+    tenant_includes = [f for f in tenant_filters if f.type == "include"]
+    tenant_excludes = [f for f in tenant_filters if f.type == "exclude"]
+
+    # Rule 1: Library exclude → blocked
+    if any(_glob_match(f.pattern, rel_path_norm) for f in lib_excludes):
+        return False
+
+    # Rule 2: Library include → allowed (overrides tenant restrictions)
+    if lib_includes and any(_glob_match(f.pattern, rel_path_norm) for f in lib_includes):
+        return True
+
+    # Rule 3: Tenant exclude → blocked
+    if any(_glob_match(f.pattern, rel_path_norm) for f in tenant_excludes):
+        return False
+
+    # Rule 4: Tenant includes exist but path doesn't match → blocked
+    if tenant_includes and not any(_glob_match(f.pattern, rel_path_norm) for f in tenant_includes):
+        return False
+
+    # Rule 5: Default → allowed
+    return True
+
+
 def validate_pattern(pattern: str) -> str:
     """
     Validate and return the pattern, or raise ValueError if invalid.

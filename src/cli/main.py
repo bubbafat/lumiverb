@@ -39,6 +39,8 @@ app.add_typer(keys_app, name="keys")
 users_commands.register(app)
 tenant_app = typer.Typer(help="Manage tenants (admin only).")
 app.add_typer(tenant_app, name="tenant")
+filter_app = typer.Typer(help="Manage path filters (include/exclude patterns).")
+app.add_typer(filter_app, name="filter")
 
 console = Console()
 
@@ -266,6 +268,102 @@ def tenant_set_vision(
     data = resp.json()
     console.print(f"[green]Tenant {data['tenant_id']} updated.[/green]")
     console.print(f"  vision_api_url: {data['vision_api_url']}")
+
+
+# ---------------------------------------------------------------------------
+# filter
+# ---------------------------------------------------------------------------
+
+
+def _resolve_library_id_for_filter(client: LumiverbClient, library: str) -> str:
+    """Resolve library name to ID."""
+    libraries = client.get("/v1/libraries").json()
+    match = next((lib for lib in libraries if lib["name"] == library), None)
+    if match is None:
+        console.print(f"[red]Library not found: {library}[/red]")
+        raise typer.Exit(1)
+    return match["library_id"]
+
+
+@filter_app.command("list")
+def filter_list(
+    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name. Omit to show tenant defaults.")] = None,
+) -> None:
+    """List filters for a library or tenant defaults."""
+    client = LumiverbClient()
+    if library:
+        library_id = _resolve_library_id_for_filter(client, library)
+        resp = client.get(f"/v1/libraries/{library_id}/filters")
+        data = resp.json()
+        title = f"Filters for library: {library}"
+    else:
+        resp = client.get("/v1/tenant/filter-defaults")
+        data = resp.json()
+        title = "Tenant default filters"
+
+    table = Table(title=title)
+    table.add_column("ID", style="dim")
+    table.add_column("Type")
+    table.add_column("Pattern")
+    includes = data.get("includes", [])
+    excludes = data.get("excludes", [])
+    for f in includes:
+        table.add_row(f.get("filter_id") or f.get("default_id", ""), "include", f["pattern"])
+    for f in excludes:
+        table.add_row(f.get("filter_id") or f.get("default_id", ""), "exclude", f["pattern"])
+    if not includes and not excludes:
+        console.print(f"No filters configured ({title.lower()}).")
+    else:
+        console.print(table)
+
+
+@filter_app.command("add")
+def filter_add(
+    pattern: Annotated[str, typer.Argument(help="Glob pattern (e.g. '**/Output/**').")],
+    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name. Omit to add as tenant default.")] = None,
+    include: Annotated[bool, typer.Option("--include", help="Add as include filter.")] = False,
+    exclude: Annotated[bool, typer.Option("--exclude", help="Add as exclude filter.")] = False,
+) -> None:
+    """Add a path filter. Specify --include or --exclude."""
+    if include == exclude:
+        console.print("[red]Specify exactly one of --include or --exclude.[/red]")
+        raise typer.Exit(1)
+    filter_type = "include" if include else "exclude"
+
+    client = LumiverbClient()
+    if library:
+        library_id = _resolve_library_id_for_filter(client, library)
+        resp = client.post(
+            f"/v1/libraries/{library_id}/filters",
+            json={"type": filter_type, "pattern": pattern},
+        )
+        data = resp.json()
+        console.print(f"[green]Added {filter_type} filter to library {library}:[/green] {pattern}")
+        console.print(f"  ID: {data.get('filter_id') or data.get('default_id', '')}")
+    else:
+        resp = client.post(
+            "/v1/tenant/filter-defaults",
+            json={"type": filter_type, "pattern": pattern},
+        )
+        data = resp.json()
+        console.print(f"[green]Added tenant default {filter_type} filter:[/green] {pattern}")
+        console.print(f"  ID: {data.get('default_id', '')}")
+
+
+@filter_app.command("remove")
+def filter_remove(
+    filter_id: Annotated[str, typer.Argument(help="Filter ID to remove (lpf_... or tpfd_...).")],
+    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name. Omit to remove tenant default.")] = None,
+) -> None:
+    """Remove a filter by ID."""
+    client = LumiverbClient()
+    if library:
+        library_id = _resolve_library_id_for_filter(client, library)
+        client.delete(f"/v1/libraries/{library_id}/filters/{filter_id}")
+        console.print(f"[green]Removed filter {filter_id} from library {library}.[/green]")
+    else:
+        client.delete(f"/v1/tenant/filter-defaults/{filter_id}")
+        console.print(f"[green]Removed tenant default filter {filter_id}.[/green]")
 
 
 # ---------------------------------------------------------------------------

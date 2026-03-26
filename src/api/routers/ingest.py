@@ -23,7 +23,7 @@ from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session
 from src.core import asset_status
-from src.core.path_filter import PathFilter, is_path_included
+from src.core.path_filter import PathFilter, is_path_included_merged
 from src.repository.tenant import (
     AssetEmbeddingRepository,
     AssetMetadataRepository,
@@ -286,15 +286,17 @@ async def create_and_ingest(
     if library is None:
         raise HTTPException(status_code=404, detail="Library not found")
 
-    # Enforce path filters
-    filter_rows = PathFilterRepository(session).list_for_library(library_id)
-    if filter_rows:
-        filters = [PathFilter(type=f.type, pattern=f.pattern) for f in filter_rows]
-        if not is_path_included(rel_path, filters):
-            raise HTTPException(
-                status_code=422,
-                detail=f"Path excluded by library filters: {rel_path}",
-            )
+    # Enforce path filters (merged tenant + library)
+    filter_repo = PathFilterRepository(session)
+    lib_filter_rows = filter_repo.list_for_library(library_id)
+    tenant_filter_rows = filter_repo.list_defaults(tenant_id)
+    lib_filters = [PathFilter(type=f.type, pattern=f.pattern) for f in lib_filter_rows]
+    tenant_filters = [PathFilter(type=f.type, pattern=f.pattern) for f in tenant_filter_rows]
+    if (lib_filters or tenant_filters) and not is_path_included_merged(rel_path, tenant_filters, lib_filters):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Path excluded by filters: {rel_path}",
+        )
 
     # Parse optional JSON
     exif_data = _parse_optional_json(exif, "exif")
