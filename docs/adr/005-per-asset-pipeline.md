@@ -81,69 +81,80 @@ This simplifies the client (no thumbnail generation, no WebP encoding required) 
 
 Each phase leaves the system fully working. Phases can be deployed and validated independently.
 
-### Phase 1: Server-side proxy normalization and thumbnail generation
-**Changes**: Server only. No client changes required. Fully backward compatible.
-
-- Modify `POST /v1/assets/{id}/artifacts/proxy` to re-encode uploaded proxy to WebP, enforce 2048px max.
-- Add on-demand thumbnail generation to `GET /v1/assets/{id}/artifacts/thumbnail` — if thumbnail file doesn't exist but proxy does, generate from proxy (512px WebP), cache, and serve.
-- Update web UI to accept WebP thumbnails (should already work — browsers support WebP natively).
-- Remove thumbnail upload from the proxy worker (it just uploads the proxy; server handles the rest).
-- Update content type for proxy/thumbnail responses.
-
-**Validation**: Run existing proxy worker. Server normalizes on upload. Web UI grid loads thumbnails lazily. All existing tests pass.
-
-### Phase 2: Atomic ingest endpoint
-**Changes**: Server only (new endpoint). No client changes required. Existing pipeline continues to work.
+### Phase 1: Atomic ingest endpoint
+**Changes**: Server only. New endpoint alongside existing APIs. Fully backward compatible.
 
 - Add `POST /v1/assets/{asset_id}/ingest` endpoint.
-- Accepts proxy + EXIF + vision + embeddings in one multipart request.
-- Server normalizes proxy, generates thumbnail, stores all metadata atomically.
+- Accepts multipart: `proxy` (file, required), `exif` (JSON, optional), `vision` (JSON, optional), `embeddings` (JSON/binary, optional).
+- Server normalizes proxy to WebP (2048px long edge max, no upscale).
+- Server generates and caches thumbnail (512px WebP) from normalized proxy.
+- Stores all provided metadata atomically — asset record updated in one transaction.
 - Enqueues search sync.
-- Write integration tests for the new endpoint.
+- Returns the complete asset state.
+- EXIF, vision, and embeddings are optional: a client that only has the proxy can ingest now and enrich later via the existing per-field APIs.
 
-**Validation**: Hit endpoint manually or with a test script. Existing stage-based pipeline is unaffected.
+**Validation**: Integration tests for the new endpoint. Existing pipeline and APIs unaffected.
 
-### Phase 3: Client-side per-asset pipeline
-**Changes**: Client only. Server already has everything it needs from Phase 2.
+### Phase 2: Client-side scan + ingest pipeline
+**Changes**: Client only. Server already has everything it needs from Phase 1.
 
-- New CLI command: `lumiverb pipeline-v2` (or replace `lumiverb pipeline`).
-- For each asset: scan → resize → EXIF → vision → embed → ingest (single API call).
-- Proxy stays in memory across stages — no re-download.
+- New CLI command (or new mode of `lumiverb pipeline`): scan + ingest in one pass.
+- For each asset: discover file → resize → extract EXIF → call vision AI → compute embeddings → POST /v1/assets/{id}/ingest.
+- Proxy stays in memory across all stages — no download, no re-fetch.
 - Concurrency via thread pool (N assets processed in parallel).
 - Progress reporting per-asset instead of per-stage.
+- Scan creates/confirms the asset record first (`POST /v1/scans` or similar), then ingests.
 
-**Validation**: Run against the same library. Compare results with stage-based pipeline. Measure round-trip reduction.
+**Validation**: Run against a library. Compare results with stage-based pipeline. Verify assets are fully populated after one pass.
 
-### Phase 4: Deprecate stage-based workers for images
-**Changes**: Remove old code paths.
+### Phase 3: Existing upload/complete APIs become edit APIs
+**Changes**: Server + client. Existing APIs stay but their role changes.
 
-- Remove individual worker commands for image processing (keep for video).
-- Remove thumbnail upload from `RemoteArtifactStore` (server generates it).
-- Remove job queue infrastructure for image stages (proxy, exif, ai_vision, embed).
-- Job queue remains for video stages and for retry/resumability tracking.
+- The individual artifact upload and job-complete endpoints become the way to **edit** existing asset data (re-run vision on one asset, update EXIF, replace a proxy, etc.).
+- Atomic ingest is the primary path for new assets. The server is always in a consistent state — no partial assets.
+- Update CLI commands: `lumiverb vision --asset <id>` re-runs vision for one asset and calls the edit API. Similar for EXIF, embeddings.
+- Document the distinction: ingest = create with full data, edit = update individual fields on existing assets.
 
-**⚠ Breaking**: Old CLI versions will no longer work for image processing after this phase. Server update and client update must be coordinated. Call this out in release notes.
+**Validation**: Existing edit workflows continue to work. No breaking changes.
 
-### Phase 5 (future): Video pipeline consolidation
+### Phase 4: Remove stage-based job queues for images
+**Changes**: Server + client. Breaking change for old CLI versions.
+
+- Remove individual worker commands for image processing (proxy, exif, ai_vision, embed).
+- Remove image job queue infrastructure (enqueue, claim, complete for image stages).
+- Job queue remains for video stages (scene detection, video-vision, video-preview).
+- Remove thumbnail upload from client — server generates it from proxy.
+- Clean up `RemoteArtifactStore.write_artifacts_batch` and related batch endpoints that were transitional.
+
+**⚠ Breaking**: Old CLI versions that use stage-based workers will no longer work for image processing. Server and client updates must be coordinated. Call this out in release notes.
+
+### Phase 5: Server-side proxy normalization for all paths
+**Changes**: Server only.
+
+- All proxy upload paths (ingest endpoint, edit API, legacy artifact upload) normalize to WebP 2048px.
+- All thumbnail reads generate on-demand from proxy if cached file is missing.
+- This is the cleanup phase — ensures consistency regardless of how the proxy arrived.
+
+### Phase 6 (future): Video pipeline consolidation
 - Video has more complex dependencies (scene detection → per-scene vision → assembly).
 - May stay stage-based or get a per-asset pipeline with sub-stages.
 - Not in scope for this ADR.
 
 ## Open Questions
 
-1. **Resumability**: If the client crashes mid-asset, how does it know which assets are complete? Options: (a) server tracks ingest status per asset, (b) client queries asset status before processing, (c) idempotent ingest — just re-run and the server overwrites.
-2. **Partial ingest**: Should the ingest endpoint accept subsets (e.g. proxy + EXIF but no vision)? Useful for assets where vision is disabled or fails. Probably yes — make vision and embeddings optional fields.
-3. **Scan integration**: Should scan + ingest be one API call (`POST /v1/ingest` with path + library + all data), or should scan remain separate? Separate is simpler and keeps scan as a lightweight metadata operation.
-4. **Embedding format**: Binary vectors or JSON arrays? Binary is more compact but harder to debug. JSON is fine for now; optimize later if bandwidth becomes a concern.
+1. **Resumability**: If the client crashes mid-library, how does it know which assets are complete? Options: (a) query asset status before processing — skip assets that already have a proxy, (b) idempotent ingest — re-run overwrites, cheap for already-complete assets. Leaning toward (a) with (b) as the safety net.
+2. **Embedding format**: Binary vectors or JSON arrays? JSON is fine for now; optimize later if bandwidth matters.
+3. **Scan + ingest atomicity**: Should there be a single `POST /v1/ingest` that creates the asset record AND stores all data in one call? Or keep scan (create record) separate from ingest (store data)? Separate is simpler — scan is lightweight metadata, ingest is heavyweight multipart.
+4. **Per-type upload size limits**: Should the ingest endpoint enforce per-field limits (proxy < 5 MB, EXIF JSON < 100 KB, etc.)? Yes — see ADR-004.
 
 ## Decision
 
-Proceed with phased rollout starting from Phase 1. Each phase is independently valuable and leaves the system working.
+Proceed with phased rollout starting from Phase 1 (atomic ingest endpoint). Each phase is independently valuable and leaves the system fully working through Phase 3. Phase 4 is the only breaking change and requires coordinated deployment.
 
 ## Consequences
 
-- **Phase 1**: Proxy worker gets simpler. Thumbnails become a server concern. WebP saves storage and bandwidth. No client coordination needed.
-- **Phase 2**: New ingest endpoint available but optional. Existing pipeline unchanged.
-- **Phase 3**: Dramatic reduction in API calls and bandwidth for image processing. Client keeps proxy in memory across stages.
-- **Phase 4**: Simplified codebase. Old CLI versions break — requires coordinated release.
-- **Long-term**: The per-asset model is a better fit for remote workers and scales naturally with client concurrency.
+- **Phase 1**: Atomic ingest available. Server always stores consistent assets. Proxy normalization and thumbnail generation move server-side. No client changes needed.
+- **Phase 2**: Dramatic reduction in API calls (from ~20 per asset to 1-2). No proxy re-download. Client pipeline is simpler and faster.
+- **Phase 3**: Clean separation — ingest for creation, edit APIs for updates. Server is always in a good state.
+- **Phase 4**: Simplified codebase, less infrastructure. Old CLIs break.
+- **Long-term**: The per-asset model is a better fit for remote workers, eliminates partial-state bugs, and scales naturally with client concurrency.
