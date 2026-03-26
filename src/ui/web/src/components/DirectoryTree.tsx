@@ -22,6 +22,7 @@ export function DirectoryTree({
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const [loadingPath, setLoadingPath] = useState<string | null>(null);
 
+  // Full reset when library changes
   useEffect(() => {
     let cancelled = false;
     setRootNodes(null);
@@ -40,7 +41,26 @@ export function DirectoryTree({
     return () => {
       cancelled = true;
     };
-  }, [libraryId, revision]);
+  }, [libraryId]);
+
+  // Seamless refresh when revision changes (keep existing data visible)
+  useEffect(() => {
+    if (revision === undefined) return;
+    let cancelled = false;
+
+    listDirectories(libraryId)
+      .then((nodes) => {
+        if (!cancelled) setRootNodes(nodes);
+      })
+      .catch(() => {
+        // keep existing data on error
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revision]);
 
   const loadChildren = useCallback(
     (path: string) => {

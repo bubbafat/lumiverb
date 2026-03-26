@@ -1,6 +1,6 @@
 import { useMemo, useRef, useEffect, useState, useCallback, useLayoutEffect } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ApiError,
@@ -140,7 +140,8 @@ export default function BrowsePage() {
     navigate,
   ]);
 
-  // Poll library revision every 10 seconds to detect changes
+  // Poll library revision every 10 seconds; invalidate queries on change
+  const queryClient = useQueryClient();
   const revisionQuery = useQuery({
     queryKey: ["library-revision", libraryId!],
     queryFn: () => getLibraryRevision(libraryId!),
@@ -148,9 +149,17 @@ export default function BrowsePage() {
     refetchInterval: 10_000,
   });
   const revision = revisionQuery.data?.revision ?? 0;
+  const prevRevisionRef = useRef(revision);
+  useEffect(() => {
+    if (revision !== prevRevisionRef.current) {
+      prevRevisionRef.current = revision;
+      queryClient.invalidateQueries({ queryKey: ["assets", libraryId!] });
+      queryClient.invalidateQueries({ queryKey: ["directories", libraryId] });
+    }
+  }, [revision, libraryId, queryClient]);
 
   const browseQuery = useInfiniteQuery({
-    queryKey: ["assets", libraryId!, pathPrefix ?? null, activeTag ?? null, revision],
+    queryKey: ["assets", libraryId!, pathPrefix ?? null, activeTag ?? null],
     queryFn: ({ pageParam }) =>
       pageAssets(
         libraryId!,
@@ -262,7 +271,7 @@ export default function BrowsePage() {
       : undefined
     : undefined;
   const { data: parentDirNodes } = useQuery({
-    queryKey: ["directories", libraryId, dirParent ?? null, revision],
+    queryKey: ["directories", libraryId, dirParent ?? null],
     queryFn: () => listDirectories(libraryId!, dirParent),
     enabled: !!libraryId && !!pathPrefix && canFetchAssets,
   });
