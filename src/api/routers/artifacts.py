@@ -121,6 +121,102 @@ async def upload_artifact(
     return ArtifactUploadResponse(key=key, sha256=sha256)
 
 
+class BatchArtifactItem(BaseModel):
+    artifact_type: str
+    key: str
+    sha256: str
+
+
+class BatchArtifactUploadResponse(BaseModel):
+    items: list[BatchArtifactItem]
+
+
+@router.post("/{asset_id}/artifacts", response_model=BatchArtifactUploadResponse)
+async def upload_artifacts_batch(
+    asset_id: str,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    proxy: UploadFile | None = File(default=None),
+    thumbnail: UploadFile | None = File(default=None),
+    video_preview: UploadFile | None = File(default=None),
+    width: int | None = Form(default=None),
+    height: int | None = Form(default=None),
+) -> BatchArtifactUploadResponse:
+    """Upload multiple artifacts for an asset in a single request.
+
+    Accepts optional multipart fields: proxy, thumbnail, video_preview.
+    Each file is streamed to disk, SHA-256 computed, and DB updated.
+    """
+    files: dict[str, UploadFile] = {}
+    if proxy is not None:
+        files["proxy"] = proxy
+    if thumbnail is not None:
+        files["thumbnail"] = thumbnail
+    if video_preview is not None:
+        files["video_preview"] = video_preview
+
+    if not files:
+        raise HTTPException(status_code=400, detail="No artifact files provided")
+
+    asset_repo = AssetRepository(session)
+    asset = asset_repo.get_by_id(asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    tenant_id: str = request.state.tenant_id
+    storage: LocalStorage = get_storage()
+    items: list[BatchArtifactItem] = []
+
+    for artifact_type, upload_file in files.items():
+        if artifact_type == "proxy":
+            key = storage.proxy_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
+        elif artifact_type == "thumbnail":
+            key = storage.thumbnail_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
+        elif artifact_type == "video_preview":
+            key = storage.video_preview_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported artifact_type in batch: {artifact_type}")
+
+        path = storage.abs_path(key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_name(path.name + ".tmp")
+
+        hasher = hashlib.sha256()
+        total_bytes = 0
+
+        try:
+            with open(tmp_path, "wb") as f:
+                while True:
+                    chunk = await upload_file.read(UPLOAD_CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    total_bytes += len(chunk)
+                    if total_bytes > MAX_UPLOAD_BYTES:
+                        raise HTTPException(status_code=413, detail="File too large")
+                    hasher.update(chunk)
+                    f.write(chunk)
+            tmp_path.rename(path)
+        except HTTPException:
+            tmp_path.unlink(missing_ok=True)
+            raise
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail="Failed to write artifact to storage")
+
+        sha256 = hasher.hexdigest()
+
+        if artifact_type == "proxy":
+            asset_repo.set_proxy_artifact(asset_id, key, sha256, width, height)
+        elif artifact_type == "thumbnail":
+            asset_repo.set_thumbnail_artifact(asset_id, key, sha256)
+        elif artifact_type == "video_preview":
+            asset_repo.set_video_preview(asset_id, video_preview_key=key)
+
+        items.append(BatchArtifactItem(artifact_type=artifact_type, key=key, sha256=sha256))
+
+    return BatchArtifactUploadResponse(items=items)
+
+
 @router.get("/{asset_id}/artifacts/{artifact_type}")
 def download_artifact(
     asset_id: str,

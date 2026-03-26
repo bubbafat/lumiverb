@@ -253,11 +253,6 @@ class ProxyWorker(BaseWorker):
 
         # Generate proxy (resize down only — never upscale)
         proxy_bytes = proxy_img.write_to_buffer(".jpg[Q=%d]" % PROXY_JPEG_QUALITY)
-        proxy_ref = self._artifact_store.write_artifact(
-            "proxy", asset_id, proxy_bytes,
-            library_id=library_id, rel_path=rel_path,
-            width=width_orig, height=height_orig,
-        )
 
         # Generate thumbnail FROM PROXY — not from source
         # proxy_img is already the right size or smaller; no need to reload source
@@ -267,13 +262,30 @@ class ProxyWorker(BaseWorker):
             size=pyvips.enums.Size.DOWN,
         )
         thumb_bytes = thumb_img.write_to_buffer(".jpg[Q=%d]" % THUMBNAIL_JPEG_QUALITY)
-        thumb_ref = self._artifact_store.write_artifact(
-            "thumbnail", asset_id, thumb_bytes,
-            library_id=library_id, rel_path=rel_path,
-        )
 
         if from_thumb:
             logger.debug("Used embedded JPEG for %s", source_path.name)
+
+        # Upload both artifacts in a single request if the store supports it.
+        if hasattr(self._artifact_store, "write_artifacts_batch"):
+            refs = self._artifact_store.write_artifacts_batch(
+                asset_id,
+                {"proxy": proxy_bytes, "thumbnail": thumb_bytes},
+                width=width_orig,
+                height=height_orig,
+            )
+            proxy_ref = refs["proxy"]
+            thumb_ref = refs["thumbnail"]
+        else:
+            proxy_ref = self._artifact_store.write_artifact(
+                "proxy", asset_id, proxy_bytes,
+                library_id=library_id, rel_path=rel_path,
+                width=width_orig, height=height_orig,
+            )
+            thumb_ref = self._artifact_store.write_artifact(
+                "thumbnail", asset_id, thumb_bytes,
+                library_id=library_id, rel_path=rel_path,
+            )
 
         return {
             "proxy_key": proxy_ref.key,

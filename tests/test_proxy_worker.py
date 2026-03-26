@@ -39,7 +39,10 @@ def test_proxy_worker_process_calls_write_artifact_for_both(tmp_path: Path) -> N
     artifact_store = MagicMock()
     proxy_ref = ArtifactRef(key="tnt/lib/proxies/07/ast_photo.jpg", sha256="abc123")
     thumb_ref = ArtifactRef(key="tnt/lib/thumbnails/07/ast_photo.jpg", sha256="def456")
-    artifact_store.write_artifact.side_effect = [proxy_ref, thumb_ref]
+    artifact_store.write_artifacts_batch.return_value = {
+        "proxy": proxy_ref,
+        "thumbnail": thumb_ref,
+    }
 
     img = Image.new("RGB", (200, 150), color=(100, 150, 200))
     src = tmp_path / "photos" / "test.jpg"
@@ -64,15 +67,13 @@ def test_proxy_worker_process_calls_write_artifact_for_both(tmp_path: Path) -> N
     assert result["width"] == 200
     assert result["height"] == 150
 
-    proxy_call, thumb_call = artifact_store.write_artifact.call_args_list
-    assert proxy_call[0][0] == "proxy"
-    assert proxy_call[0][1] == ASSET_ID
-    assert proxy_call[1]["library_id"] == LIBRARY_ID
-    assert proxy_call[1]["rel_path"] == REL_PATH
-    assert proxy_call[1]["width"] == 200
-    assert proxy_call[1]["height"] == 150
-    assert thumb_call[0][0] == "thumbnail"
-    assert thumb_call[0][1] == ASSET_ID
+    artifact_store.write_artifacts_batch.assert_called_once()
+    call_args = artifact_store.write_artifacts_batch.call_args
+    assert call_args[0][0] == ASSET_ID
+    assert "proxy" in call_args[0][1]
+    assert "thumbnail" in call_args[0][1]
+    assert call_args[1]["width"] == 200
+    assert call_args[1]["height"] == 150
 
 
 @pytest.mark.fast

@@ -155,6 +155,40 @@ class RemoteArtifactStore:
         body = resp.json()
         return ArtifactRef(key=body["key"], sha256=body["sha256"])
 
+    def write_artifacts_batch(
+        self,
+        asset_id: str,
+        artifacts: dict[str, bytes],
+        *,
+        width: int | None = None,
+        height: int | None = None,
+    ) -> dict[str, ArtifactRef]:
+        """Upload multiple artifacts in a single request.
+
+        artifacts: mapping of artifact_type -> bytes (e.g. {"proxy": ..., "thumbnail": ...})
+        Returns mapping of artifact_type -> ArtifactRef.
+        """
+        files = {
+            atype: (atype, io.BytesIO(data), "application/octet-stream")
+            for atype, data in artifacts.items()
+        }
+        form: dict[str, str] = {}
+        if width is not None:
+            form["width"] = str(width)
+        if height is not None:
+            form["height"] = str(height)
+
+        resp = self._client.post(
+            f"/v1/assets/{asset_id}/artifacts",
+            files=files,
+            data=form,
+        )
+        body = resp.json()
+        return {
+            item["artifact_type"]: ArtifactRef(key=item["key"], sha256=item["sha256"])
+            for item in body["items"]
+        }
+
     def read_artifact(
         self,
         key: str,
