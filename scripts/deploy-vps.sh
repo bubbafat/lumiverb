@@ -145,9 +145,11 @@ ok "uv $($UV_BIN --version)"
 # ---------------------------------------------------------------------------
 step "Creating service user and directories"
 
-id -u "$SVC_USER" >/dev/null 2>&1 || useradd --system --shell /usr/sbin/nologin --home "$DATA_DIR" "$SVC_USER"
+SVC_HOME="/var/lib/lumiverb"
+id -u "$SVC_USER" >/dev/null 2>&1 || useradd --system --shell /usr/sbin/nologin --home "$SVC_HOME" "$SVC_USER"
 
-mkdir -p "$CONF_DIR" "$DATA_DIR"/{proxies,thumbnails,quickwit} "$BACKUP_DIR"
+mkdir -p "$SVC_HOME" "$CONF_DIR" "$DATA_DIR"/{proxies,thumbnails,quickwit} "$BACKUP_DIR"
+chown "$SVC_USER":"$SVC_USER" "$SVC_HOME"
 # Service user needs to traverse the dir (for quickwit.yaml); secrets in env file stay 600.
 chown root:"$SVC_USER" "$CONF_DIR"
 chmod 750 "$CONF_DIR"
@@ -546,9 +548,9 @@ TENANT_API_KEY="$(echo "$TENANT_RESPONSE" | python3 -c "import sys,json; print(j
 ok "Tenant ${TENANT_ID} provisioned"
 
 # Configure CLI for the service user so create-user works
-sudo -u "${SVC_USER}" mkdir -p "${DATA_DIR}/.lumiverb"
+sudo -u "${SVC_USER}" mkdir -p "${SVC_HOME}/.lumiverb"
 echo "{\"api_url\": \"http://127.0.0.1:8000\", \"api_key\": \"${TENANT_API_KEY}\"}" \
-  | sudo -u "${SVC_USER}" tee "${DATA_DIR}/.lumiverb/config.json" > /dev/null
+  | sudo -u "${SVC_USER}" tee "${SVC_HOME}/.lumiverb/config.json" > /dev/null
 ok "CLI configured for tenant"
 
 # ---------------------------------------------------------------------------

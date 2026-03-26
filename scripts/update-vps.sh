@@ -35,13 +35,14 @@ UV_BIN="/usr/local/bin/uv"
 [[ "$(id -u)" -eq 0 ]] || fail "Run as root"
 [[ -d "${APP_DIR}/.git" ]] || fail "${APP_DIR} is not a git repo — run deploy-vps.sh first"
 
-# Ensure the service user's HOME exists (it's the data dir, which may have been
-# recreated or cleaned up). Without this, git config --global fails.
-SVC_HOME="$(getent passwd "$SVC_USER" | cut -d: -f6)"
-if [[ -n "$SVC_HOME" ]] && [[ ! -d "$SVC_HOME" ]]; then
-  mkdir -p "$SVC_HOME"
-  chown "$SVC_USER":"$SVC_USER" "$SVC_HOME"
+# Ensure HOME is /var/lib/lumiverb (not the data dir, which may be removable storage).
+SVC_HOME="/var/lib/lumiverb"
+CURRENT_HOME="$(getent passwd "$SVC_USER" | cut -d: -f6)"
+if [[ "$CURRENT_HOME" != "$SVC_HOME" ]] && id -u "$SVC_USER" >/dev/null 2>&1; then
+  usermod --home "$SVC_HOME" "$SVC_USER" 2>/dev/null || true
 fi
+mkdir -p "$SVC_HOME"
+chown "$SVC_USER":"$SVC_USER" "$SVC_HOME"
 
 # Repo is owned by $SVC_USER; tell git it's safe via system config (not user global)
 # to avoid dependency on user HOME existing.
