@@ -368,8 +368,10 @@ def run_ingest(
     if skip_vision:
         console.print("Vision AI: skipped (--skip-vision)")
     elif not vision_api_url:
-        console.print("[yellow]Vision AI: not configured (set via 'lumiverb config set --vision-api-url <url>' or tenant config)[/yellow]")
-        skip_vision = True
+        console.print("[red]Vision AI: not configured.[/red]")
+        console.print("  Set it via: lumiverb config set --vision-api-url <url>")
+        console.print("  Or to ingest without AI: lumiverb ingest --library <name> --skip-vision")
+        raise SystemExit(1)
     else:
         console.print(f"Vision AI: {vision_model_id} via {vision_api_url} ({vision_source})")
 
