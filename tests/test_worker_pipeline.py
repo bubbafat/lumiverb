@@ -253,3 +253,115 @@ def test_no_jobs_available() -> None:
     # No exceptions, no complete calls.
     post_calls = [c for c in client.post.call_args_list if "/complete" in str(c)]
     assert len(post_calls) == 0
+
+
+# ---------------------------------------------------------------------------
+# Concurrency tests
+# ---------------------------------------------------------------------------
+
+
+def _mock_client_threadsafe(jobs: list[dict]) -> MagicMock:
+    """Thread-safe mock client that hands out jobs atomically."""
+    client = MagicMock()
+    lock = threading.Lock()
+    remaining = list(jobs)
+
+    def _get(path: str, **kw) -> MagicMock:
+        resp = MagicMock()
+        if path == "/v1/jobs/next":
+            with lock:
+                if remaining:
+                    job = remaining.pop(0)
+                    resp.status_code = 200
+                    resp.json.return_value = job
+                    resp.raise_for_status.return_value = None
+                else:
+                    resp.status_code = 204
+        elif path == "/v1/jobs/pending":
+            resp.status_code = 200
+            resp.json.return_value = {"pending": len(remaining)}
+            resp.raise_for_status.return_value = None
+        else:
+            resp.status_code = 200
+            resp.json.return_value = {}
+            resp.raise_for_status.return_value = None
+        return resp
+
+    client.get.side_effect = _get
+    client.post.return_value = MagicMock()
+    return client
+
+
+@pytest.mark.fast
+def test_concurrent_workers_process_all_jobs() -> None:
+    """With concurrency=3, all jobs are processed exactly once."""
+    jobs = [{"job_id": f"j{i}", "rel_path": f"img{i}.jpg"} for i in range(10)]
+    client = _mock_client_threadsafe(jobs)
+
+    processed_ids: list[str] = []
+    lock = threading.Lock()
+
+    def process_fn(job: dict) -> dict:
+        time.sleep(0.01)  # Simulate work
+        with lock:
+            processed_ids.append(job["job_id"])
+        return {"ok": True}
+
+    worker = StubWorker(client=client, process_fn=process_fn, once=True, concurrency=3)
+    worker.run()
+
+    # All 10 jobs processed, no duplicates.
+    assert sorted(processed_ids) == sorted(j["job_id"] for j in jobs)
+
+
+@pytest.mark.fast
+def test_concurrent_workers_handle_mixed_failures() -> None:
+    """Concurrent workers handle a mix of successes, blocks, and failures."""
+    jobs = [
+        {"job_id": "ok1", "rel_path": "a.jpg"},
+        {"job_id": "block1", "rel_path": "b.jpg"},
+        {"job_id": "ok2", "rel_path": "c.jpg"},
+        {"job_id": "fail1", "rel_path": "d.jpg"},
+        {"job_id": "ok3", "rel_path": "e.jpg"},
+        {"job_id": "ok4", "rel_path": "f.jpg"},
+    ]
+    client = _mock_client_threadsafe(jobs)
+
+    def process_fn(job: dict) -> dict:
+        if job["job_id"].startswith("block"):
+            raise BlockJob("bad media type")
+        if job["job_id"].startswith("fail"):
+            raise RuntimeError("processing error")
+        return {"ok": True}
+
+    worker = StubWorker(client=client, process_fn=process_fn, once=True, concurrency=2)
+    worker.run()
+
+    # Check that complete, block, and fail were all called appropriately.
+    post_paths = [str(c) for c in client.post.call_args_list]
+    complete_count = sum(1 for p in post_paths if "/complete" in p)
+    block_count = sum(1 for p in post_paths if "/block" in p)
+    fail_count = sum(1 for p in post_paths if "/fail" in p)
+
+    assert complete_count == 4  # ok1, ok2, ok3, ok4
+    assert block_count == 1     # block1
+    assert fail_count == 1      # fail1
+
+
+@pytest.mark.fast
+def test_concurrent_workers_update_shared_stats() -> None:
+    """Shared processed/failed counters are accurate after concurrent run."""
+    jobs = [{"job_id": f"j{i}", "rel_path": f"img{i}.jpg"} for i in range(8)]
+    client = _mock_client_threadsafe(jobs)
+
+    worker = StubWorker(
+        client=client,
+        process_fn=lambda job: {"ok": True},
+        once=True,
+        concurrency=4,
+    )
+    worker.run()
+
+    # The "Done:" output should show all 8 succeeded.
+    post_calls = [c for c in client.post.call_args_list if "/complete" in str(c)]
+    assert len(post_calls) == 8

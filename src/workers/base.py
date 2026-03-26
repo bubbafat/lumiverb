@@ -1,6 +1,7 @@
 """Base worker: API-only. Claims jobs via GET /v1/jobs/next, complete/fail via POST."""
 
 import logging
+import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import nullcontext
@@ -40,6 +41,7 @@ class BaseWorker:
         output_mode: str = "human",
     ) -> None:
         self._client = client
+        self._concurrency = max(1, concurrency)
         self._once = once
         self._library_id = library_id
         self._path_prefix = path_prefix
@@ -111,18 +113,107 @@ class BaseWorker:
             logger.exception("Background completion call failed (job will be re-claimed)")
             return False
 
-    def run(self) -> None:
-        """Main loop: claim, process, complete or fail.
+    def _worker_loop(
+        self,
+        *,
+        stats: "_WorkerStats",
+        completion_pool: ThreadPoolExecutor,
+        bar: object | None,
+    ) -> None:
+        """Single worker loop: claim → process → complete. Runs in its own thread
+        when concurrency > 1, or on the main thread when concurrency == 1."""
+        use_jsonl = self._output_mode == "jsonl"
+        inflight: Future | None = None
 
-        Pipelined: the completion API call for job N runs in a background thread
-        while job N+1 is being processed. This overlaps network I/O (uploading
-        artifacts via complete_job) with local compute (processing the next image).
-        The system is idempotent, so if a background completion fails, the job
-        will simply be re-claimed on the next cycle.
+        while not stats.stopping:
+            job = self.claim_job()
+            if job is None:
+                self._wait_for_completion(inflight)
+                inflight = None
+                if self._once:
+                    return
+                time.sleep(WORKER_IDLE_POLL_SECONDS)
+                continue
+            job_id = job["job_id"]
+            try:
+                logger.info(
+                    "claimed job_id=%s job_type=%s asset_id=%s",
+                    job_id,
+                    job.get("job_type"),
+                    job.get("asset_id"),
+                )
+                result = self.process(job)
+
+                # Wait for this thread's previous completion before submitting the next.
+                self._wait_for_completion(inflight)
+                inflight = completion_pool.submit(self.complete_job, job_id, result or {})
+
+                with stats.lock:
+                    stats.processed += 1
+                    stats.last_rel_path = job.get("rel_path", "") or stats.last_rel_path
+                    p, f = stats.processed, stats.failed
+                    rel = stats.last_rel_path
+                if bar is not None:
+                    bar.update(completed=p + f, done=p, failed=f)
+                logger.info("completed job_id=%s", job_id)
+                if not use_jsonl:
+                    print(f"{self.job_type} ✓ {job.get('rel_path', job_id)}", flush=True)
+                self._emit_event(
+                    "batch",
+                    processed=p,
+                    failed=f,
+                    library_id=self._library_id or "",
+                    rel_path=rel,
+                )
+            except BlockJob as e:
+                self._wait_for_completion(inflight)
+                inflight = None
+                logger.warning("blocking job_id=%s reason=%s", job_id, e)
+                self.block_job(job_id, str(e))
+                with stats.lock:
+                    stats.failed += 1
+                    p, f = stats.processed, stats.failed
+                if bar is not None:
+                    bar.update(completed=p + f, done=p, failed=f)
+                if not use_jsonl:
+                    print(f"{self.job_type} ⊘ {job.get('rel_path', job_id)}: {e}", flush=True)
+                self._emit_event(
+                    "error",
+                    message=str(e),
+                    rel_path=job.get("rel_path", ""),
+                    processed=p,
+                    failed=f,
+                )
+            except Exception as e:
+                self._wait_for_completion(inflight)
+                inflight = None
+                logger.exception("failed job_id=%s error=%s", job_id, e)
+                self.fail_job(job_id, str(e))
+                with stats.lock:
+                    stats.failed += 1
+                    p, f = stats.processed, stats.failed
+                if bar is not None:
+                    bar.update(completed=p + f, done=p, failed=f)
+                if not use_jsonl:
+                    print(f"{self.job_type} ✗ {job.get('rel_path', job_id)}: {e}", flush=True)
+                self._emit_event(
+                    "error",
+                    message=str(e),
+                    rel_path=job.get("rel_path", ""),
+                    processed=p,
+                    failed=f,
+                )
+
+        # Drain this thread's in-flight completion on shutdown.
+        self._wait_for_completion(inflight)
+
+    def run(self) -> None:
+        """Main entry point. Spawns concurrent worker threads if concurrency > 1,
+        otherwise runs a single loop on the main thread.
+
+        Each thread pipelines its own completion calls: the upload for job N
+        runs in the background while job N+1 is being processed.
         """
-        processed = 0
-        failed = 0
-        last_rel_path = ""
         pending = self._pending_count()
         use_jsonl = self._output_mode == "jsonl"
         self._emit_event(
@@ -142,107 +233,47 @@ class BaseWorker:
             else UnifiedProgress(self._console, spec)
         )
 
-        # Single-thread pool for pipelining the completion call.
-        completion_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="complete")
-        inflight: Future | None = None
+        stats = _WorkerStats()
+        # One completion thread per worker thread for pipelining.
+        completion_pool = ThreadPoolExecutor(
+            max_workers=self._concurrency,
+            thread_name_prefix="complete",
+        )
 
         with progress_ctx as bar:
-            while True:
-                job = self.claim_job()
-                if job is None:
-                    # No more work — wait for any in-flight completion before exiting.
-                    self._wait_for_completion(inflight)
-                    inflight = None
-                    if self._once:
-                        if bar is not None:
-                            bar.finish()
-                        break
-                    time.sleep(WORKER_IDLE_POLL_SECONDS)
-                    continue
-                job_id = job["job_id"]
-                try:
-                    logger.info(
-                        "claimed job_id=%s job_type=%s asset_id=%s",
-                        job_id,
-                        job.get("job_type"),
-                        job.get("asset_id"),
+            if self._concurrency == 1:
+                self._worker_loop(stats=stats, completion_pool=completion_pool, bar=bar)
+            else:
+                threads: list[threading.Thread] = []
+                for i in range(self._concurrency):
+                    t = threading.Thread(
+                        target=self._worker_loop,
+                        kwargs={"stats": stats, "completion_pool": completion_pool, "bar": bar},
+                        name=f"worker-{i}",
+                        daemon=True,
                     )
-                    last_rel_path = job.get("rel_path", "") or last_rel_path
-                    result = self.process(job)
+                    t.start()
+                    threads.append(t)
+                for t in threads:
+                    t.join()
+            if bar is not None:
+                bar.finish()
 
-                    # Wait for the previous job's completion before submitting the next one.
-                    # This ensures at most one completion is in flight at a time.
-                    self._wait_for_completion(inflight)
-
-                    # Submit this job's completion to the background thread.
-                    inflight = completion_pool.submit(self.complete_job, job_id, result or {})
-
-                    processed += 1
-                    if bar is not None:
-                        bar.update(
-                            completed=processed + failed,
-                            done=processed,
-                            failed=failed,
-                        )
-                    logger.info("completed job_id=%s", job_id)
-                    if not use_jsonl:
-                        print(f"{self.job_type} ✓ {job.get('rel_path', job_id)}", flush=True)
-                    self._emit_event(
-                        "batch",
-                        processed=processed,
-                        failed=failed,
-                        library_id=self._library_id or "",
-                        rel_path=last_rel_path,
-                    )
-                except BlockJob as e:
-                    self._wait_for_completion(inflight)
-                    inflight = None
-                    logger.warning("blocking job_id=%s reason=%s", job_id, e)
-                    self.block_job(job_id, str(e))
-                    failed += 1
-                    if bar is not None:
-                        bar.update(
-                            completed=processed + failed,
-                            done=processed,
-                            failed=failed,
-                        )
-                    if not use_jsonl:
-                        print(f"{self.job_type} ⊘ {job.get('rel_path', job_id)}: {e}", flush=True)
-                    self._emit_event(
-                        "error",
-                        message=str(e),
-                        rel_path=job.get("rel_path", ""),
-                        processed=processed,
-                        failed=failed,
-                    )
-                except Exception as e:
-                    self._wait_for_completion(inflight)
-                    inflight = None
-                    logger.exception("failed job_id=%s error=%s", job_id, e)
-                    self.fail_job(job_id, str(e))
-                    failed += 1
-                    if bar is not None:
-                        bar.update(
-                            completed=processed + failed,
-                            done=processed,
-                            failed=failed,
-                        )
-                    if not use_jsonl:
-                        print(f"{self.job_type} ✗ {job.get('rel_path', job_id)}: {e}", flush=True)
-                    self._emit_event(
-                        "error",
-                        message=str(e),
-                        rel_path=job.get("rel_path", ""),
-                        processed=processed,
-                        failed=failed,
-                    )
-
-        # Wait for final in-flight completion and shut down the pool.
-        self._wait_for_completion(inflight)
         completion_pool.shutdown(wait=True)
 
-        self._emit_event("complete", processed=processed, failed=failed)
+        self._emit_event("complete", processed=stats.processed, failed=stats.failed)
         if not use_jsonl and not self._suppress_base_progress:
             self._console.print(
-                f"Done: {processed:,} succeeded, {failed:,} failed"
+                f"Done: {stats.processed:,} succeeded, {stats.failed:,} failed"
             )
+
+
+class _WorkerStats:
+    """Thread-safe counters shared across concurrent worker loops."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.processed = 0
+        self.failed = 0
+        self.last_rel_path = ""
+        self.stopping = False
