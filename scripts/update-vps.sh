@@ -35,9 +35,18 @@ UV_BIN="/usr/local/bin/uv"
 [[ "$(id -u)" -eq 0 ]] || fail "Run as root"
 [[ -d "${APP_DIR}/.git" ]] || fail "${APP_DIR} is not a git repo — run deploy-vps.sh first"
 
-# Repo is owned by $SVC_USER; tell git it's safe for both root and the service user.
-git config --global --add safe.directory "$APP_DIR"
-sudo -u "$SVC_USER" git config --global --add safe.directory "$APP_DIR"
+# Ensure the service user's HOME exists (it's the data dir, which may have been
+# recreated or cleaned up). Without this, git config --global fails.
+SVC_HOME="$(getent passwd "$SVC_USER" | cut -d: -f6)"
+if [[ -n "$SVC_HOME" ]] && [[ ! -d "$SVC_HOME" ]]; then
+  mkdir -p "$SVC_HOME"
+  chown "$SVC_USER":"$SVC_USER" "$SVC_HOME"
+fi
+
+# Repo is owned by $SVC_USER; tell git it's safe via system config (not user global)
+# to avoid dependency on user HOME existing.
+git config --system --replace-all safe.directory "$APP_DIR" "$APP_DIR" 2>/dev/null \
+  || git config --global --add safe.directory "$APP_DIR"
 
 cd "$APP_DIR"
 
