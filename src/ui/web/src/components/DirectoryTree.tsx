@@ -6,12 +6,14 @@ export interface DirectoryTreeProps {
   libraryId: string;
   activePath: string | null;
   onNavigate: (path: string | null) => void;
+  revision?: number;
 }
 
 export function DirectoryTree({
   libraryId,
   activePath,
   onNavigate,
+  revision,
 }: DirectoryTreeProps) {
   const [rootNodes, setRootNodes] = useState<DirectoryNode[] | null>(null);
   const [childrenCache, setChildrenCache] = useState<
@@ -38,7 +40,7 @@ export function DirectoryTree({
     return () => {
       cancelled = true;
     };
-  }, [libraryId]);
+  }, [libraryId, revision]);
 
   const loadChildren = useCallback(
     (path: string) => {

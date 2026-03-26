@@ -262,7 +262,7 @@ export default function BrowsePage() {
       : undefined
     : undefined;
   const { data: parentDirNodes } = useQuery({
-    queryKey: ["directories", libraryId, dirParent ?? null],
+    queryKey: ["directories", libraryId, dirParent ?? null, revision],
     queryFn: () => listDirectories(libraryId!, dirParent),
     enabled: !!libraryId && !!pathPrefix && canFetchAssets,
   });
@@ -499,6 +499,7 @@ export default function BrowsePage() {
               setParam("path", path);
               setDrawerOpen(false);
             }}
+            revision={revision}
           />
         </div>
       </DrawerOverlay>
