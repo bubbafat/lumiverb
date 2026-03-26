@@ -32,7 +32,16 @@ logger = logging.getLogger(__name__)
 
 PROXY_LONG_EDGE = 2048
 PROXY_JPEG_QUALITY = 75
+PROXY_WEBP_QUALITY = 80
 SUPPORTED_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
+
+
+def _jpeg_to_webp(jpeg_bytes: bytes) -> bytes:
+    """Convert JPEG bytes to WebP using pyvips. Fast — no resize needed."""
+    import pyvips
+
+    img = pyvips.Image.new_from_buffer(jpeg_bytes, "")
+    return img.write_to_buffer(".webp[Q=%d]" % PROXY_WEBP_QUALITY)
 
 
 def _generate_proxy_bytes(source_path: Path) -> tuple[bytes, int, int]:
@@ -285,8 +294,8 @@ def _process_and_ingest_video_stage1(
         return
 
     try:
-        # 1. Extract poster frame as proxy
-        proxy_bytes, width_orig, height_orig = _extract_video_poster(source_path)
+        # 1. Extract poster frame as JPEG proxy
+        jpeg_bytes, width_orig, height_orig = _extract_video_poster(source_path)
 
         # 2. Extract EXIF
         exif_payload = _build_exif_payload(source_path, "video")
@@ -294,8 +303,11 @@ def _process_and_ingest_video_stage1(
         # 3. Generate 10-second preview
         preview_bytes = _generate_video_preview(source_path)
 
-        # 4. POST /v1/ingest — create asset with poster frame as proxy
-        files = {"proxy": ("proxy.jpg", io.BytesIO(proxy_bytes), "image/jpeg")}
+        # 4. Convert poster to WebP for upload
+        webp_bytes = _jpeg_to_webp(jpeg_bytes)
+
+        # 5. POST /v1/ingest — create asset with poster frame as proxy
+        files = {"proxy": ("proxy.webp", io.BytesIO(webp_bytes), "image/webp")}
         data: dict[str, str] = {
             "library_id": library_id,
             "rel_path": rel_path,
@@ -311,7 +323,7 @@ def _process_and_ingest_video_stage1(
         resp = client.post("/v1/ingest", files=files, data=data)
         asset_id = resp.json()["asset_id"]
 
-        # 5. Upload video preview
+        # 6. Upload video preview
         client.post(
             f"/v1/assets/{asset_id}/artifacts/video_preview",
             files={"file": ("preview.mp4", io.BytesIO(preview_bytes), "video/mp4")},
@@ -352,21 +364,24 @@ def _process_and_ingest_one(
         return
 
     try:
-        # 1. Generate proxy
-        proxy_bytes, width_orig, height_orig = _generate_proxy_bytes(source_path)
+        # 1. Generate JPEG proxy (needed for vision AI compatibility)
+        jpeg_bytes, width_orig, height_orig = _generate_proxy_bytes(source_path)
 
         # 2. Extract EXIF
         exif_payload = _build_exif_payload(source_path, media_type)
 
-        # 3. Call vision AI (optional)
+        # 3. Call vision AI with JPEG (optional)
         vision_payload = None
         if not skip_vision:
             vision_payload = _call_vision_ai(
-                proxy_bytes, vision_model_id, vision_api_url, vision_api_key,
+                jpeg_bytes, vision_model_id, vision_api_url, vision_api_key,
             )
 
-        # 4. POST /v1/ingest — create asset + ingest atomically
-        files = {"proxy": ("proxy.jpg", io.BytesIO(proxy_bytes), "image/jpeg")}
+        # 4. Convert to WebP for upload (server stores as-is, skips re-encoding)
+        webp_bytes = _jpeg_to_webp(jpeg_bytes)
+
+        # 5. POST /v1/ingest — create asset + ingest atomically
+        files = {"proxy": ("proxy.webp", io.BytesIO(webp_bytes), "image/webp")}
         data: dict[str, str] = {
             "library_id": library_id,
             "rel_path": rel_path,
