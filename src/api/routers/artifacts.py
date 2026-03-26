@@ -27,8 +27,8 @@ MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # 100 MB absolute ceiling
 UPLOAD_CHUNK_SIZE = 64 * 1024  # 64 KB read buffer
 
 CONTENT_TYPES: dict[str, str] = {
-    "proxy": "image/jpeg",
-    "thumbnail": "image/jpeg",
+    "proxy": "image/webp",
+    "thumbnail": "image/webp",
     "video_preview": "video/mp4",
     "scene_rep": "image/jpeg",
 }

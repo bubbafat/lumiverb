@@ -48,7 +48,7 @@ class EmbedWorker(BaseWorker):
         except Exception as e:
             raise BlockJob(f"Could not read proxy for asset {asset_id}: {e}") from e
 
-        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=".webp", delete=False) as tmp:
             tmp.write(proxy_bytes)
             tmp_path = Path(tmp.name)
 

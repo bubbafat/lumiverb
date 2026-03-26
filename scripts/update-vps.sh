@@ -94,6 +94,15 @@ ok "Web UI built"
 cd "$APP_DIR"
 
 # ---------------------------------------------------------------------------
+step "Ensuring data directory"
+DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2-)"
+if [[ -n "$DATA_DIR" ]]; then
+  mkdir -p "$DATA_DIR"
+  chown "$SVC_USER":"$SVC_USER" "$DATA_DIR"
+  ok "Data dir: $DATA_DIR"
+fi
+
+# ---------------------------------------------------------------------------
 step "Restarting services"
 systemctl restart lumiverb-api
 # Only restart worker and quickwit if they are enabled

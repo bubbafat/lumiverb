@@ -171,7 +171,8 @@ def _call_vision_ai(
     from src.workers.captions.factory import get_caption_provider
 
     provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key)
-    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+    # PIL auto-detects format regardless of extension; suffix is cosmetic
+    with tempfile.NamedTemporaryFile(suffix=".img", delete=False) as tmp:
         tmp.write(proxy_bytes)
         tmp_path = Path(tmp.name)
     try:

@@ -13,8 +13,8 @@ class LocalStorage:
     Local filesystem storage. All paths are relative to DATA_DIR.
 
     Path structure:
-      {data_dir}/{tenant_id}/{library_id}/proxies/{bucket}/{asset_id}_{filename}.jpg
-      {data_dir}/{tenant_id}/{library_id}/thumbnails/{bucket}/{asset_id}_{filename}.jpg
+      {data_dir}/{tenant_id}/{library_id}/proxies/{bucket}/{asset_id}_{filename}.webp
+      {data_dir}/{tenant_id}/{library_id}/thumbnails/{bucket}/{asset_id}_{filename}.webp
 
     bucket = int(asset_id_ulid_timestamp) % 100, zero-padded to 2 digits.
     """
@@ -34,14 +34,14 @@ class LocalStorage:
     ) -> str:
         bucket = self._bucket_from_asset_id(asset_id)
         original_stem = Path(original_filename).stem
-        return f"{tenant_id}/{library_id}/proxies/{bucket:02d}/{asset_id}_{original_stem}.jpg"
+        return f"{tenant_id}/{library_id}/proxies/{bucket:02d}/{asset_id}_{original_stem}.webp"
 
     def thumbnail_key(
         self, tenant_id: str, library_id: str, asset_id: str, original_filename: str
     ) -> str:
         bucket = self._bucket_from_asset_id(asset_id)
         original_stem = Path(original_filename).stem
-        return f"{tenant_id}/{library_id}/thumbnails/{bucket:02d}/{asset_id}_{original_stem}.jpg"
+        return f"{tenant_id}/{library_id}/thumbnails/{bucket:02d}/{asset_id}_{original_stem}.webp"
 
     def scene_rep_key(
         self, tenant_id: str, library_id: str, asset_id: str, rep_frame_ms: int

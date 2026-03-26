@@ -260,7 +260,13 @@ def _stream_asset_file(
         session.commit()
         return JSONResponse({"status": "generating"}, status_code=202)
 
-    filename = Path(asset.rel_path).stem + ".jpg"
+    key_ext = Path(key).suffix.lower()
+    if key_ext == ".webp":
+        content_type = "image/webp"
+        filename = Path(asset.rel_path).stem + ".webp"
+    else:
+        content_type = "image/jpeg"
+        filename = Path(asset.rel_path).stem + ".jpg"
 
     def _iter() -> bytes:
         with open(path, "rb") as f:
@@ -269,7 +275,7 @@ def _stream_asset_file(
 
     return StreamingResponse(
         _iter(),
-        media_type="image/jpeg",
+        media_type=content_type,
         headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
 

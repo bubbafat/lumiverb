@@ -53,7 +53,7 @@ class VisionWorker(BaseWorker):
         proxy_bytes = self._artifact_store.read_artifact(
             proxy_key, asset_id=asset_id, artifact_type="proxy"
         )
-        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=".webp", delete=False) as tmp:
             tmp.write(proxy_bytes)
             tmp_path = Path(tmp.name)
 
