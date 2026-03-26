@@ -30,6 +30,8 @@ dependencies = [
     # Shared utilities
     "python-ulid>=2.0",
     "requests>=2.25",
+    # Image normalization (proxy → WebP, thumbnail generation)
+    "pillow>=10.0",
 ]
 
 [project.scripts]
@@ -44,7 +46,6 @@ cli = [
 ]
 # Workers: image/video processing and AI (runs on the client machine)
 workers = [
-    "pillow>=10.0",
     "rawpy>=0.26.1",
     "pyvips>=3.1.1",
     "imagehash>=4.3.0",

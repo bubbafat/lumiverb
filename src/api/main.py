@@ -10,6 +10,7 @@ from src.api.routers import admin, assets, jobs, keys, libraries, me, path_filte
 from src.api.routers.auth import router as auth_router
 from src.api.routers.users import router as users_router
 from src.api.routers.artifacts import router as artifacts_router
+from src.api.routers.ingest import router as ingest_router
 from src.api.routers.maintenance import router as maintenance_router
 from src.api.routers.upgrade import router as upgrade_router
 from src.api.routers.pipeline import router as pipeline_router
@@ -37,6 +38,7 @@ app.include_router(path_filters.router)
 app.include_router(libraries.router)
 app.include_router(scans.router)
 app.include_router(artifacts_router)
+app.include_router(ingest_router)
 app.include_router(assets.router)
 app.include_router(video.router)
 app.include_router(keys.router)
