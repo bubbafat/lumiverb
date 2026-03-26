@@ -134,11 +134,13 @@ def page_assets(
     limit: int = 500,
     path_prefix: str | None = None,
     tag: str | None = None,
+    missing_vision: bool = False,
 ) -> list[AssetPageItem]:
     """
     Keyset-paginated assets for bulk reconciliation. Returns 204 if no results.
     Query: library_id (required), after (cursor), limit (default 500, max 500),
-    optional path_prefix for directory-scoped pagination.
+    optional path_prefix for directory-scoped pagination,
+    optional missing_vision=true to filter to assets without AI descriptions.
     """
     if limit > 500:
         limit = 500
@@ -164,6 +166,7 @@ def page_assets(
         limit=limit,
         path_prefix=normalized_prefix,
         tag=tag,
+        missing_vision=missing_vision,
     )
     if not assets:
         from fastapi.responses import Response

@@ -420,3 +420,128 @@ def run_ingest(
     pool.shutdown(wait=True)
 
     return stats
+
+
+# ---------------------------------------------------------------------------
+# Vision backfill: add AI descriptions to assets that don't have them
+# ---------------------------------------------------------------------------
+
+
+def _backfill_one(
+    *,
+    client: LumiverbClient,
+    asset_id: str,
+    rel_path: str,
+    vision_model_id: str,
+    vision_api_url: str,
+    vision_api_key: str | None,
+    stats: _IngestStats,
+) -> None:
+    """Download proxy, call vision AI, POST results back."""
+    try:
+        resp = client.get(f"/v1/assets/{asset_id}/artifacts/proxy")
+        proxy_bytes = resp.content
+
+        vision_result = _call_vision_ai(
+            proxy_bytes, vision_model_id, vision_api_url, vision_api_key,
+        )
+        if not vision_result:
+            logger.warning("Vision returned no result for %s", rel_path)
+            with stats.lock:
+                stats.failed += 1
+            print(f"vision \u2717 {rel_path}: no result", flush=True)
+            return
+
+        client.post(f"/v1/assets/{asset_id}/vision", json={
+            "model_id": vision_result["model_id"],
+            "model_version": vision_result["model_version"],
+            "description": vision_result["description"],
+            "tags": vision_result["tags"],
+        })
+
+        with stats.lock:
+            stats.processed += 1
+        print(f"vision \u2713 {rel_path}", flush=True)
+
+    except Exception as e:
+        logger.exception("Failed to backfill vision for %s: %s", rel_path, e)
+        with stats.lock:
+            stats.failed += 1
+        print(f"vision \u2717 {rel_path}: {e}", flush=True)
+
+
+def run_backfill_vision(
+    client: LumiverbClient,
+    library: dict,
+    *,
+    concurrency: int = 4,
+    console: Console,
+) -> _IngestStats:
+    """Backfill AI descriptions for assets that don't have them."""
+    from src.cli.config import load_config as _load_cli_config
+
+    library_id = library["library_id"]
+    vision_model_id = library.get("vision_model_id", "")
+
+    # Resolve vision config (client > tenant)
+    cli_cfg = _load_cli_config()
+    ctx = client.get("/v1/tenant/context").json()
+    vision_api_url = cli_cfg.vision_api_url or ctx.get("vision_api_url", "")
+    vision_api_key = cli_cfg.vision_api_key or ctx.get("vision_api_key") or None
+    vision_source = "client config" if cli_cfg.vision_api_url else "tenant config"
+
+    if not vision_api_url:
+        console.print("[red]Vision AI: not configured.[/red]")
+        console.print("  Set it via: lumiverb config set --vision-api-url <url>")
+        raise SystemExit(1)
+
+    console.print(f"Vision AI: {vision_model_id} via {vision_api_url} ({vision_source})")
+
+    # Page through assets missing vision
+    console.print("Finding assets without AI descriptions...")
+    to_backfill: list[dict] = []
+    after: str | None = None
+    while True:
+        params: dict[str, str] = {
+            "library_id": library_id,
+            "limit": "500",
+            "missing_vision": "true",
+        }
+        if after:
+            params["after"] = after
+        resp = client.get("/v1/assets/page", params=params)
+        if resp.status_code == 204:
+            break
+        assets = resp.json()
+        if not assets:
+            break
+        for a in assets:
+            to_backfill.append(a)
+        after = assets[-1]["asset_id"]
+
+    stats = _IngestStats()
+    console.print(f"[bold]Backfilling {len(to_backfill):,} assets...[/bold]")
+
+    if not to_backfill:
+        return stats
+
+    pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="backfill")
+    futures = []
+    for a in to_backfill:
+        fut = pool.submit(
+            _backfill_one,
+            client=client,
+            asset_id=a["asset_id"],
+            rel_path=a["rel_path"],
+            vision_model_id=vision_model_id,
+            vision_api_url=vision_api_url,
+            vision_api_key=vision_api_key,
+            stats=stats,
+        )
+        futures.append(fut)
+
+    for fut in futures:
+        fut.result()
+    pool.shutdown(wait=True)
+
+    return stats

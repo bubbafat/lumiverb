@@ -1489,6 +1489,42 @@ def ingest(
         raise typer.Exit(1)
 
 
+@app.command("backfill-vision")
+def backfill_vision(
+    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
+    concurrency: Annotated[int, typer.Option("--concurrency", help="Number of parallel workers.")] = 4,
+) -> None:
+    """Add AI descriptions to assets that don't have them.
+
+    Pages through assets missing vision metadata, downloads the proxy from
+    the server, calls the vision AI, and posts the results back. Use this
+    after ingesting with --skip-vision, or to backfill assets that were
+    ingested before vision AI was configured.
+    """
+    from src.cli.ingest import run_backfill_vision
+
+    client = LumiverbClient()
+    libraries = client.get("/v1/libraries").json()
+    match = next((lib for lib in libraries if lib["name"] == library), None)
+    if match is None:
+        console.print(f"[red]Library not found: {library}[/red]")
+        raise typer.Exit(1)
+
+    stats = run_backfill_vision(
+        client,
+        match,
+        concurrency=concurrency,
+        console=console,
+    )
+
+    console.print(
+        f"\nDone: {stats.processed:,} described, "
+        f"{stats.failed:,} failed"
+    )
+    if stats.failed > 0:
+        raise typer.Exit(1)
+
+
 def _run_apply_filters(client: LumiverbClient, library_id: str, *, dry_run: bool) -> None:
     """Apply current library filters to existing assets, trashing those that no longer match."""
     from src.cli.progress import UnifiedProgress, UnifiedProgressSpec

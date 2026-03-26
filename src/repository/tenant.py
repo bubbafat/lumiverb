@@ -728,6 +728,7 @@ class AssetRepository:
         limit: int,
         path_prefix: str | None = None,
         tag: str | None = None,
+        missing_vision: bool = False,
     ) -> list[Asset]:
         """Keyset pagination: return assets with asset_id > after, ordered by asset_id, limit rows.
 
@@ -737,6 +738,8 @@ class AssetRepository:
 
         Optional tag filters to assets whose latest metadata row's tags array
         (data->'tags') contains the given tag.
+
+        Optional missing_vision=True filters to assets with no rows in asset_metadata.
         """
         conditions = ["a.library_id = :library_id"]
         params: dict[str, object] = {
@@ -755,6 +758,8 @@ class AssetRepository:
         if tag is not None:
             conditions.append("m.tags @> jsonb_build_array(:tag)")
             params["tag"] = tag
+        if missing_vision:
+            conditions.append("m.tags IS NULL")
 
         where_sql = " AND ".join(conditions)
         id_sql = f"""
