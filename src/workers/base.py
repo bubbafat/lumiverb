@@ -2,6 +2,7 @@
 
 import logging
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import nullcontext
 
 
@@ -99,8 +100,26 @@ class BaseWorker:
         """
         raise NotImplementedError
 
+    def _wait_for_completion(self, future: Future | None) -> bool:
+        """Wait for a pipelined complete/fail/block call. Returns True if it succeeded."""
+        if future is None:
+            return True
+        try:
+            future.result()
+            return True
+        except Exception:
+            logger.exception("Background completion call failed (job will be re-claimed)")
+            return False
+
     def run(self) -> None:
-        """Main loop: claim, process, complete or fail. Respects once flag."""
+        """Main loop: claim, process, complete or fail.
+
+        Pipelined: the completion API call for job N runs in a background thread
+        while job N+1 is being processed. This overlaps network I/O (uploading
+        artifacts via complete_job) with local compute (processing the next image).
+        The system is idempotent, so if a background completion fails, the job
+        will simply be re-claimed on the next cycle.
+        """
         processed = 0
         failed = 0
         last_rel_path = ""
@@ -122,10 +141,18 @@ class BaseWorker:
             if (self._suppress_base_progress or use_jsonl)
             else UnifiedProgress(self._console, spec)
         )
+
+        # Single-thread pool for pipelining the completion call.
+        completion_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="complete")
+        inflight: Future | None = None
+
         with progress_ctx as bar:
             while True:
                 job = self.claim_job()
                 if job is None:
+                    # No more work — wait for any in-flight completion before exiting.
+                    self._wait_for_completion(inflight)
+                    inflight = None
                     if self._once:
                         if bar is not None:
                             bar.finish()
@@ -142,7 +169,14 @@ class BaseWorker:
                     )
                     last_rel_path = job.get("rel_path", "") or last_rel_path
                     result = self.process(job)
-                    self.complete_job(job_id, result or {})
+
+                    # Wait for the previous job's completion before submitting the next one.
+                    # This ensures at most one completion is in flight at a time.
+                    self._wait_for_completion(inflight)
+
+                    # Submit this job's completion to the background thread.
+                    inflight = completion_pool.submit(self.complete_job, job_id, result or {})
+
                     processed += 1
                     if bar is not None:
                         bar.update(
@@ -161,6 +195,8 @@ class BaseWorker:
                         rel_path=last_rel_path,
                     )
                 except BlockJob as e:
+                    self._wait_for_completion(inflight)
+                    inflight = None
                     logger.warning("blocking job_id=%s reason=%s", job_id, e)
                     self.block_job(job_id, str(e))
                     failed += 1
@@ -180,6 +216,8 @@ class BaseWorker:
                         failed=failed,
                     )
                 except Exception as e:
+                    self._wait_for_completion(inflight)
+                    inflight = None
                     logger.exception("failed job_id=%s error=%s", job_id, e)
                     self.fail_job(job_id, str(e))
                     failed += 1
@@ -198,6 +236,10 @@ class BaseWorker:
                         processed=processed,
                         failed=failed,
                     )
+
+        # Wait for final in-flight completion and shut down the pool.
+        self._wait_for_completion(inflight)
+        completion_pool.shutdown(wait=True)
 
         self._emit_event("complete", processed=processed, failed=failed)
         if not use_jsonl and not self._suppress_base_progress:
