@@ -34,9 +34,9 @@ Two-layer Postgres architecture:
 - `tenant_db_routing` — tenant_id, connection_string, region
 
 **Tenant DB** (one per tenant, same Postgres instance):
-- `libraries` — library_id, name, root_path, scan_status, created_at
+- `libraries` — library_id, name, root_path, scan_status, revision (int, bumped on asset changes), created_at
 - `library_path_filters` — filter_id (lpf_+ULID), library_id FK, type (include|exclude), pattern, created_at. Controls which paths are ingested per library.
-- `tenant_path_filter_defaults` — default_id (tpfd_+ULID), tenant_id, type (include|exclude), pattern, created_at. Copied to new libraries at creation only.
+- `tenant_path_filter_defaults` — default_id (tpfd_+ULID), tenant_id, type (include|exclude), pattern, created_at. Tenant defaults and library filters are merged at evaluation time (see filter evaluation rules below).
 - `assets` — asset_id, library_id, sha256, file_path, file_size, media_type, width, height, duration_ms, duration_sec, captured_at, proxy_key, proxy_sha256, thumbnail_key, thumbnail_sha256, availability, video_indexed, created_at
 - `video_scenes` — scene_id, asset_id, start_ms, end_ms, rep_frame_ms, proxy_key, thumbnail_key, rep_frame_sha256, description, tags, sharpness_score, keep_reason, phash, created_at
 - `video_index_chunks` — chunk_id, asset_id, chunk_index, start_ms, end_ms, status, worker_id, claimed_at, lease_expires_at, completed_at, error_message, anchor_phash, scene_start_ms, created_at
@@ -72,7 +72,7 @@ Tenant resolution runs for every request except `/health`, `/v1/admin/*`, and `/
 
 ## Tenant Context
 
-- **GET /v1/tenant/context** — Tenant auth required. Returns `{ "tenant_id" }` only. Used by CLI/worker for storage path computation. Workers must not have direct DB access; they use the jobs API only.
+- **GET /v1/tenant/context** — Tenant auth required. Returns `{ "tenant_id", "vision_api_url", "vision_api_key" }`. Used by CLI/worker for storage path computation and vision config fallback. Workers must not have direct DB access; they use the jobs API only. Client-side `vision_api_url`/`vision_api_key` in `~/.lumiverb/config.json` override the tenant values (hybrid config).
 
 ## Current User
 
@@ -168,6 +168,7 @@ All under `/v1/libraries`; require tenant auth (middleware).
 - **GET /v1/libraries** — Query: `include_trashed` (optional, default false). Returns list of libraries with `library_id`, `name`, `root_path`, `scan_status`, `last_scan_at`, `status` (`"active"` or `"trashed"`), `is_public`. Trashed libraries excluded unless `include_trashed=true`.
 - **DELETE /v1/libraries/{library_id}** — Soft delete: set library `status` to `"trashed"`, cancel pending/claimed worker jobs for its assets. If library was public, removes its `public_libraries` control plane row. Returns 204 on success, 404 if not found, 409 if already trashed.
 - **POST /v1/libraries/empty-trash** — Hard delete all trashed libraries for this tenant (cascade: worker_jobs, search_sync_queue, asset_metadata, video_scenes, assets, scans, library_path_filters, libraries). Removes `public_libraries` control plane rows for any trashed libraries that were public. Returns `{ "deleted": N }`.
+- **GET /v1/libraries/{library_id}/revision** — Lightweight polling endpoint. Returns `{ "library_id", "revision", "asset_count" }`. The `revision` counter increments atomically on asset create/update (ingest) and vision metadata submission. UI clients poll this every 10 seconds and use `revision` in query keys to trigger cache invalidation when data changes.
 
 ## Library path filters API
 
@@ -179,11 +180,23 @@ All under `/v1/libraries/{library_id}/filters`; require tenant auth and **admin*
 
 ## Tenant filter defaults API
 
-All under `/v1/tenant/filter-defaults`; require tenant auth and **admin** API key. Defaults are copied to each new library at creation time only.
+All under `/v1/tenant/filter-defaults`; require tenant auth and **editor** role. Tenant defaults apply dynamically to all libraries via merged evaluation (see below).
 
 - **GET /v1/tenant/filter-defaults** — Returns `{ "includes": [{ "default_id", "pattern", "created_at" }], "excludes": [...] }`.
 - **POST /v1/tenant/filter-defaults** — Body: `{ "type": "include"|"exclude", "pattern": "..." }`. Creates default. Returns 201 with `{ "default_id", "type", "pattern", "created_at" }`. 400 if pattern invalid.
 - **DELETE /v1/tenant/filter-defaults/{default_id}** — Removes default. Returns 204 on success, 404 if not found.
+
+### Merged filter evaluation
+
+Tenant defaults and library filters are merged at evaluation time with "library wins" priority:
+
+1. **Library exclude** matches → **BLOCKED** (absolute, highest priority)
+2. **Library include** matches → **ALLOWED** (overrides tenant restrictions)
+3. **Tenant exclude** matches → **BLOCKED**
+4. **Tenant includes exist** but path doesn't match any → **BLOCKED**
+5. **Default** → **ALLOWED**
+
+This is enforced both client-side (during filesystem walk for efficiency) and server-side (POST /v1/ingest returns 422 for filtered paths).
 
 ## Scans API
 
@@ -200,7 +213,7 @@ All under `/v1/scans`; require tenant auth.
 All under `/v1/assets`; require tenant auth. List/get endpoints return only active (non-trashed) assets.
 
 - **GET /v1/assets** — Query: `library_id` (optional). List active assets; filter by library when provided. Returns list of `{ "asset_id", "library_id", "rel_path", "media_type", "status", "proxy_key", "thumbnail_key", "width", "height" }`.
-- **GET /v1/assets/page** — Query: `library_id` (required), `after` (cursor), `limit` (default 500, max 500). Keyset-paginated active assets for bulk reconciliation. Returns list of `{ "asset_id", "rel_path", "file_size", "file_mtime", "sha256", "media_type" }`. Returns 204 if no results (end of pages).
+- **GET /v1/assets/page** — Query: `library_id` (required), `after` (cursor), `limit` (default 500, max 500), `missing_vision` (optional bool, filters to assets without AI metadata). Keyset-paginated active assets for bulk reconciliation. Returns list of `{ "asset_id", "rel_path", "file_size", "file_mtime", "sha256", "media_type" }`. Returns 204 if no results (end of pages).
 - **GET /v1/assets/{asset_id}** — Return single asset. 404 if not found or trashed.
 - **DELETE /v1/assets/{asset_id}** — Soft-delete (trash) a single asset. Sets `deleted_at`. Returns 204 on success, 404 if not found or already trashed. Quickwit delete is best-effort (log on failure).
 - **DELETE /v1/assets** — Body: `{ "asset_ids": ["ast_...", ...] }`. Soft-delete multiple assets. Returns `{ "trashed": [...], "not_found": [...] }`. Quickwit delete is best-effort.
@@ -208,6 +221,13 @@ All under `/v1/assets`; require tenant auth. List/get endpoints return only acti
 - **POST /v1/assets/{asset_id}/thumbnail-key** — Body: `{ "thumbnail_key" }`. Records a thumbnail_key on the asset. Used by VideoIndexWorker after extracting the first frame of a video. Returns `{ "asset_id", "thumbnail_key" }`.
 - **POST /v1/assets/{asset_id}/artifacts/{artifact_type}** — Multipart file upload. `artifact_type` must be one of: `proxy`, `thumbnail`, `video_preview`, `scene_rep`. Form fields: `file` (binary, required), `width` (int, optional, images only), `height` (int, optional, images only), `rep_frame_ms` (int, required for `scene_rep`, ignored for other types). Streams the upload to disk in 64 KB chunks, computes SHA-256 incrementally, and atomic-renames into place. Updates DB after file is safely on disk. Returns `{ "key", "sha256" }`. Errors: 400 invalid type or missing `rep_frame_ms` for `scene_rep`, 404 asset not found or trashed, 413 file too large. Does NOT advance `asset.status` — that remains the job-complete path's responsibility.
 - **POST /v1/assets/upsert** — Legacy single-file upsert. Prefer POST /v1/scans/{scan_id}/batch for bulk operations. Body: `{ "library_id", "rel_path", "file_size", "file_mtime" (ISO8601), "media_type", "scan_id", "force": false }`. Upserts by `(library_id, rel_path)`. Returns `{ "action": "added|updated|skipped" }`.
+
+## Ingest API
+
+Atomic ingest: create + populate assets in one request. The server normalizes the proxy (WebP, 2048px max), generates a thumbnail (WebP, 512px), and stores all provided metadata atomically. If the client sends a WebP proxy already within size limits, the server stores it as-is (no re-encoding).
+
+- **POST /v1/ingest** — Multipart form. Creates asset record AND ingests proxy + metadata atomically. The asset only appears on the server once fully populated. If an asset with the same `(library_id, rel_path)` already exists, it is updated (idempotent). Required fields: `proxy` (file), `library_id`, `rel_path`, `file_size`. Optional: `file_mtime` (ISO8601), `media_type` (default `image/jpeg`), `width`/`height` (source dimensions), `exif` (JSON), `vision` (JSON), `embeddings` (JSON array). Returns `{ "asset_id", "proxy_key", "proxy_sha256", "thumbnail_key", "thumbnail_sha256", "status", "width", "height", "created" }`. Enforces library path filters: 422 if `rel_path` is excluded.
+- **POST /v1/assets/{asset_id}/ingest** — Ingest into an existing asset record. Same proxy + metadata fields minus `library_id`/`rel_path`/`file_size`.
 
 ## Trash API
 

@@ -489,3 +489,69 @@ def test_create_on_ingest_invalid_library(ingest_env) -> None:
         },
     )
     assert r.status_code == 404
+
+
+@pytest.mark.slow
+def test_create_on_ingest_blocked_by_library_exclude_filter(ingest_env) -> None:
+    """POST /v1/ingest returns 422 when rel_path matches a library exclude filter."""
+    client, auth, library_id, _, storage, _ = ingest_env
+
+    # Add an exclude filter to the library
+    r_filter = client.post(
+        f"/v1/libraries/{library_id}/filters",
+        json={"type": "exclude", "pattern": "**/blocked/**"},
+        headers=auth,
+    )
+    assert r_filter.status_code == 201
+    filter_id = r_filter.json()["filter_id"]
+
+    # Attempt ingest with a path matching the exclude filter
+    r = client.post(
+        "/v1/ingest",
+        headers=auth,
+        files={"proxy": ("photo.jpg", io.BytesIO(_make_test_image()), "image/jpeg")},
+        data={
+            "library_id": library_id,
+            "rel_path": "some/blocked/photo.jpg",
+            "file_size": "5000",
+        },
+    )
+    assert r.status_code == 422
+
+    # Clean up: remove the filter so other tests are unaffected
+    client.delete(
+        f"/v1/libraries/{library_id}/filters/{filter_id}",
+        headers=auth,
+    )
+
+
+# ---------------------------------------------------------------------------
+# _normalize_proxy unit tests (WebP fast path)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_normalize_proxy_webp_fast_path() -> None:
+    """_normalize_proxy returns input bytes unchanged for valid WebP within size limits."""
+    from src.api.routers.ingest import _normalize_proxy
+
+    webp_bytes = _make_test_image(800, 600, fmt="WEBP")
+    result_bytes, w, h = _normalize_proxy(webp_bytes)
+    assert result_bytes is webp_bytes  # exact same object — no re-encoding
+    assert w == 800
+    assert h == 600
+
+
+@pytest.mark.fast
+def test_normalize_proxy_jpeg_reencoded_to_webp() -> None:
+    """_normalize_proxy re-encodes JPEG input to WebP."""
+    from src.api.routers.ingest import _normalize_proxy
+
+    jpeg_bytes = _make_test_image(400, 300, fmt="JPEG")
+    result_bytes, w, h = _normalize_proxy(jpeg_bytes)
+    assert result_bytes is not jpeg_bytes  # different object
+    # Verify the output is WebP
+    img = Image.open(io.BytesIO(result_bytes))
+    assert img.format == "WEBP"
+    assert w == 400
+    assert h == 300

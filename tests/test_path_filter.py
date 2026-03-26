@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.core.path_filter import PathFilter, is_path_included, validate_pattern
+from src.core.path_filter import PathFilter, is_path_included, is_path_included_merged, validate_pattern
 
 
 @pytest.mark.fast
@@ -99,3 +99,67 @@ def test_validate_pattern_accepts_valid() -> None:
     assert validate_pattern("Photos/**") == "Photos/**"
     assert validate_pattern("**/*.mov") == "**/*.mov"
     assert validate_pattern("*.jpg") == "*.jpg"
+
+
+# ---------------------------------------------------------------------------
+# is_path_included_merged — 5-rule priority system
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_merged_no_filters_allowed() -> None:
+    """No tenant or library filters → allowed."""
+    assert is_path_included_merged("any/path.jpg", [], []) is True
+    assert is_path_included_merged("deep/nested/file.mov", [], []) is True
+
+
+@pytest.mark.fast
+def test_merged_tenant_exclude_only() -> None:
+    """Tenant exclude **/Proxy/** blocks matching, allows non-matching."""
+    tenant = [PathFilter(type="exclude", pattern="**/Proxy/**")]
+    assert is_path_included_merged("foo/Proxy/bar.jpg", tenant, []) is False
+    assert is_path_included_merged("foo/bar.jpg", tenant, []) is True
+
+
+@pytest.mark.fast
+def test_merged_library_include_overrides_tenant_exclude() -> None:
+    """Rule 2: Library include overrides tenant exclude (Rule 3)."""
+    tenant = [PathFilter(type="exclude", pattern="**/Proxy/**")]
+    library = [PathFilter(type="include", pattern="path/to/proxy/**")]
+    assert is_path_included_merged("path/to/proxy/img.jpg", tenant, library) is True
+
+
+@pytest.mark.fast
+def test_merged_library_exclude_is_absolute() -> None:
+    """Rule 1: Library exclude is absolute — blocks even if tenant includes match."""
+    tenant = [PathFilter(type="include", pattern="Photos/**")]
+    library = [PathFilter(type="exclude", pattern="**/tmp/**")]
+    assert is_path_included_merged("Photos/tmp/img.jpg", tenant, library) is False
+
+
+@pytest.mark.fast
+def test_merged_tenant_includes_narrow_scope() -> None:
+    """Rule 4: Tenant includes exist but no match → blocked."""
+    tenant = [PathFilter(type="include", pattern="Photos/**")]
+    assert is_path_included_merged("Videos/clip.mov", tenant, []) is False
+    assert is_path_included_merged("Photos/img.jpg", tenant, []) is True
+
+
+@pytest.mark.fast
+def test_merged_library_include_overrides_tenant_include_scope() -> None:
+    """Rule 2: Library include overrides tenant include scope."""
+    tenant = [PathFilter(type="include", pattern="Photos/**")]
+    library = [PathFilter(type="include", pattern="Videos/**")]
+    assert is_path_included_merged("Videos/clip.mov", tenant, library) is True
+
+
+@pytest.mark.fast
+def test_merged_library_exclude_beats_library_include() -> None:
+    """Rule 1 beats Rule 2: Library exclude has highest priority."""
+    library = [
+        PathFilter(type="include", pattern="Photos/**"),
+        PathFilter(type="exclude", pattern="**/junk/**"),
+    ]
+    assert is_path_included_merged("Photos/junk/img.jpg", [], library) is False
+    # Non-junk photos still allowed via Rule 2
+    assert is_path_included_merged("Photos/good/img.jpg", [], library) is True

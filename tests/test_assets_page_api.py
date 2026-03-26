@@ -205,6 +205,27 @@ def test_page_assets_limit_capped_at_500(
 
 
 @pytest.mark.slow
+def test_page_assets_missing_vision_returns_all_unprocessed(
+    page_api_client: tuple[TestClient, str, str, list[str]]
+) -> None:
+    """GET /v1/assets/page?missing_vision=true returns assets without vision descriptions."""
+    client, api_key, library_id, asset_ids = page_api_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+
+    # All 5 assets were created without vision data, so missing_vision should return all of them
+    r = client.get(
+        "/v1/assets/page",
+        params={"library_id": library_id, "missing_vision": "true"},
+        headers=auth,
+    )
+    assert r.status_code == 200
+    items = r.json()
+    assert len(items) == 5
+    returned_ids = {i["asset_id"] for i in items}
+    assert returned_ids == set(asset_ids)
+
+
+@pytest.mark.slow
 def test_page_assets_empty_library_204(
     page_api_client: tuple[TestClient, str, str, list[str]]
 ) -> None:

@@ -9,15 +9,15 @@ See docs/architecture.md for the full design.
 
 ## Package layout
 - `src/cli/main.py` — Typer app entry point; command groups: `config`, `library`, `tenant`, and top-level `scan`
-- `src/cli/config.py` — Local config in `~/.lumiverb/config.json` (`api_url`, `api_key`, `admin_key`): `load_config`, `save_config`, `get_api_url`, `get_api_key`, `get_admin_key`
+- `src/cli/config.py` — Local config in `~/.lumiverb/config.json` (`api_url`, `api_key`, `admin_key`, `vision_api_url`, `vision_api_key`): `load_config`, `save_config`, `get_api_url`, `get_api_key`, `get_admin_key`
 - `src/cli/client.py` — `LumiverbClient`: thin httpx wrapper, reads config for base URL and `Authorization: Bearer <api_key>`; accepts `api_key_override` for admin commands; on non-2xx prints error envelope and exits 1
 - `src/cli/progress.py` — `UnifiedProgress`: unified layout (spinner + bar + N/M units + counters) for all long-running commands (scan, workers, search-sync). Disabled when not a terminal.
 
 Entry point: `lumiverb = "src.cli:main"` (setuptools); `main()` invokes the Typer app.
 
 ## Commands
-- `lumiverb config set [--api-url <url>] [--api-key <key>] [--admin-key <key>]` — write config
-- `lumiverb config show` — show api_url, whether api_key is set, whether admin_key is set
+- `lumiverb config set [--api-url <url>] [--api-key <key>] [--admin-key <key>] [--vision-api-url <url>] [--vision-api-key <key>]` — write config. Vision API settings override tenant defaults (hybrid: client config wins if set, tenant config is the fallback).
+- `lumiverb config show` — show api_url, whether api_key is set, whether admin_key is set, vision_api_url, vision_api_key
 - `lumiverb library create <name> <path>` — POST /v1/libraries
 - `lumiverb library list` — GET /v1/libraries (Rich table: ID, Name, Root path, Scan status, Vision Model, Last scan; trashed libraries hidden)
 - `lumiverb library set-model --library <name> --model <model_id>` — PATCH vision_model_id. Model ID is any OpenAI-compatible model name (e.g. `qwen3-visioncaption-2b`). Vision API URL and key are set at the tenant level.
@@ -28,6 +28,11 @@ Entry point: `lumiverb = "src.cli:main"` (setuptools); `main()` invokes the Type
 - `lumiverb status --library <name>` — Show pipeline status: asset counts by stage (proxy, EXIF, vision, search sync) with done/pending/failed breakdown.
 - `lumiverb failures --library <name> --job-type <type> [--path <prefix>] [--limit N]` — List failed jobs with error messages. Shows most recent failure per asset. Prints retry command hint.
 - `lumiverb scan --library <name> [--path <subpath>] [--force]` — Scan a library for media files; discovers/upserts assets via API, reports added/updated/skipped/missing.
+- `lumiverb ingest --library <name> [--path <subpath>] [--force] [--concurrency N] [--skip-vision] [--media-type image|video|all]` — Scan and ingest a library in one pass. Images: proxy + EXIF + vision AI → atomic upload. Videos (stage 1): poster frame + EXIF + 10-sec preview → atomic upload. Processing order: all images first, then videos. `--skip-vision` skips AI; without it, vision must be configured or the command fails with setup instructions. `--media-type` (default `all`) filters to just images or videos. Client sends WebP proxy to minimize server CPU.
+- `lumiverb backfill-vision --library <name> [--concurrency N]` — Add AI descriptions to assets that don't have them. Pages through assets missing vision metadata (via `GET /v1/assets/page?missing_vision=true`), downloads proxy from server, calls vision AI, posts results back. Uses hybrid vision config (client > tenant).
+- `lumiverb filter list [--library <name>]` — List path filters. Without `--library`, shows tenant defaults. With `--library`, shows library-specific filters.
+- `lumiverb filter add <pattern> --include|--exclude [--library <name>]` — Add a path filter. Without `--library`, adds as tenant default (applies to all libraries). With `--library`, adds to that library only.
+- `lumiverb filter remove <filter_id> [--library <name>]` — Remove a filter by ID. IDs prefixed `tpfd_` for tenant defaults, `lpf_` for library filters.
 - `lumiverb admin maintenance` — Show current maintenance mode status (`active`, `message`, `started_at`).
 - `lumiverb admin maintenance --start [--message "..."]` — Enable maintenance mode; workers stop claiming jobs immediately.
 - `lumiverb admin maintenance --end` — Disable maintenance mode; workers resume normally.
