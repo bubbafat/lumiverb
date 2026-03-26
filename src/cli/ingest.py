@@ -355,18 +355,23 @@ def run_ingest(
     else:
         existing = set()
 
-    # Step 3: Get vision config from tenant
+    # Step 3: Get vision config — client config overrides tenant default
+    from src.cli.config import load_config as _load_cli_config
+
+    cli_cfg = _load_cli_config()
     ctx = client.get("/v1/tenant/context").json()
-    vision_api_url = ctx.get("vision_api_url", "")
-    vision_api_key = ctx.get("vision_api_key") or None
+
+    vision_api_url = cli_cfg.vision_api_url or ctx.get("vision_api_url", "")
+    vision_api_key = cli_cfg.vision_api_key or ctx.get("vision_api_key") or None
+    vision_source = "client config" if cli_cfg.vision_api_url else "tenant config"
 
     if skip_vision:
         console.print("Vision AI: skipped (--skip-vision)")
     elif not vision_api_url:
-        console.print("[yellow]Vision AI: not configured (no vision_api_url on tenant)[/yellow]")
+        console.print("[yellow]Vision AI: not configured (set via 'lumiverb config set --vision-api-url <url>' or tenant config)[/yellow]")
         skip_vision = True
     else:
-        console.print(f"Vision AI: {vision_model_id} via {vision_api_url}")
+        console.print(f"Vision AI: {vision_model_id} via {vision_api_url} ({vision_source})")
 
     # Step 4: Filter to files that need ingestion
     to_ingest = []

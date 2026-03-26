@@ -59,6 +59,8 @@ def config_set(
     api_url: Annotated[str | None, typer.Option("--api-url")] = None,
     api_key: Annotated[str | None, typer.Option("--api-key")] = None,
     admin_key: Annotated[str | None, typer.Option("--admin-key")] = None,
+    vision_api_url: Annotated[str | None, typer.Option("--vision-api-url", help="Local vision API URL (overrides tenant default).")] = None,
+    vision_api_key: Annotated[str | None, typer.Option("--vision-api-key", help="Local vision API key (overrides tenant default).")] = None,
 ) -> None:
     """Set API URL, API key, and/or admin key in ~/.lumiverb/config.json."""
     cfg = load_config()
@@ -68,6 +70,10 @@ def config_set(
         cfg.api_key = api_key
     if admin_key is not None:
         cfg.admin_key = admin_key
+    if vision_api_url is not None:
+        cfg.vision_api_url = vision_api_url.rstrip("/")
+    if vision_api_key is not None:
+        cfg.vision_api_key = vision_api_key
     save_config(cfg)
     console.print("[green]Config saved.[/green]")
 
@@ -82,6 +88,8 @@ def config_show() -> None:
     table.add_row("api_url", cfg.api_url)
     table.add_row("api_key", escape("[set]") if cfg.api_key else escape("[not set]"))
     table.add_row("admin_key", escape("[set]") if cfg.admin_key else escape("[not set]"))
+    table.add_row("vision_api_url", cfg.vision_api_url or escape("[not set — will use tenant default]"))
+    table.add_row("vision_api_key", escape("[set]") if cfg.vision_api_key else escape("[not set — will use tenant default]"))
     console.print(table)
 
 

@@ -11,6 +11,8 @@ class CLIConfig(BaseModel):
     api_url: str = "http://localhost:8000"
     api_key: str = ""
     admin_key: str = ""
+    vision_api_url: str = ""
+    vision_api_key: str = ""
 
 
 def _config_path() -> Path:
