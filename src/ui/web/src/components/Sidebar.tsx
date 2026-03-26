@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { listJobs, listLibraries, logout } from "../api/client";
+import { getLibraryRevision, listJobs, listLibraries, logout } from "../api/client";
 import type { JobListItem, LibraryListItem } from "../api/types";
 import { DirectoryTree } from "./DirectoryTree";
 
@@ -133,7 +133,16 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette }: Sidebar
   const { data: libraries, isLoading: isLibrariesLoading } = useQuery({
     queryKey: ["libraries", false],
     queryFn: () => listLibraries(false),
+    refetchInterval: 10_000,
   });
+
+  const revisionQuery = useQuery({
+    queryKey: ["library-revision", libraryId!],
+    queryFn: () => getLibraryRevision(libraryId!),
+    enabled: !!libraryId,
+    refetchInterval: 10_000,
+  });
+  const revision = revisionQuery.data?.revision ?? 0;
 
   const { data: jobs } = useQuery<JobListItem[]>({
     queryKey: ["jobs", "running"],
@@ -273,6 +282,7 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette }: Sidebar
                       libraryId={libraryId}
                       activePath={activePath}
                       onNavigate={onNavigate}
+                      revision={revision}
                     />
                   )}
                 </div>
