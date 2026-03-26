@@ -76,14 +76,13 @@ if [[ -n "$CERTIFICATE_ARCHIVE" ]] && [[ ! -f "$CERTIFICATE_ARCHIVE" ]]; then
   fail "Certificate archive not found: $CERTIFICATE_ARCHIVE"
 fi
 
-# Validate data dir parent exists (if overridden)
-if [[ -n "$DATA_DIR_OVERRIDE" ]]; then
-  DATA_DIR_PARENT="$(dirname "$DATA_DIR_OVERRIDE")"
-  [[ -d "$DATA_DIR_PARENT" ]] || fail "Parent directory for --data-dir does not exist: $DATA_DIR_PARENT"
-fi
-
 # Must run as root
 [[ "$(id -u)" -eq 0 ]] || fail "This script must be run as root (try: sudo bash ...)"
+
+# Create data dir if it doesn't exist (must be after root check)
+if [[ -n "$DATA_DIR_OVERRIDE" ]]; then
+  mkdir -p "$DATA_DIR_OVERRIDE" || fail "Cannot create data directory: $DATA_DIR_OVERRIDE"
+fi
 
 # ---------------------------------------------------------------------------
 # Constants
