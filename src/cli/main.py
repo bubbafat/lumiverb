@@ -1454,14 +1454,21 @@ def ingest(
     force: Annotated[bool, typer.Option("--force", "-f", help="Re-ingest already-processed assets.")] = False,
     concurrency: Annotated[int, typer.Option("--concurrency", help="Number of parallel workers.")] = 4,
     skip_vision: Annotated[bool, typer.Option("--skip-vision", help="Skip AI vision processing.")] = False,
+    media_type: Annotated[str, typer.Option("--media-type", help="Filter: image, video, or all.")] = "all",
 ) -> None:
     """Scan and ingest a library in one pass.
 
-    For each image asset: generate proxy, extract EXIF, call vision AI,
-    then upload everything to the server in a single atomic request.
-    Videos are skipped (use the stage-based pipeline for video).
+    Images: generate proxy, extract EXIF, call vision AI, upload atomically.
+    Videos: extract poster frame, EXIF, 10-sec preview, upload atomically.
+
+    Processing order: all images first, then videos. Use --media-type to
+    filter to just images or videos.
     """
     from src.cli.ingest import run_ingest
+
+    if media_type not in ("image", "video", "all"):
+        console.print(f"[red]Invalid --media-type: {media_type}. Must be image, video, or all.[/red]")
+        raise typer.Exit(1)
 
     client = LumiverbClient()
     libraries = client.get("/v1/libraries").json()
@@ -1477,6 +1484,7 @@ def ingest(
         skip_vision=skip_vision,
         path_override=path,
         force=force,
+        media_type_filter=media_type,
         console=console,
     )
 

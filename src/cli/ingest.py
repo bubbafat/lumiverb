@@ -1,11 +1,13 @@
 """Per-asset ingest pipeline: discover files + process + create-on-ingest.
 
-Walks the library root, and for each image file: resize proxy, extract
-EXIF, call vision AI, then POST /v1/ingest to create the asset record and
-store all data atomically. The asset only appears on the server once it's
-fully populated — no partial state.
+Walks the library root and processes each file:
 
-Videos are skipped (they still use the stage-based pipeline).
+Images: resize proxy, extract EXIF, call vision AI, then POST /v1/ingest.
+Videos (stage 1): extract poster frame, extract EXIF, generate 10-sec preview,
+  POST /v1/ingest + upload preview. Gets the UI looking right ASAP.
+Videos (stage 2): scene detection + vision AI on each scene (run after stage 1).
+
+The asset only appears on the server once it's fully populated — no partial state.
 """
 
 from __future__ import annotations
@@ -188,6 +190,143 @@ def _detect_media_type(ext: str) -> str:
     return "image"
 
 
+def _extract_video_poster(source_path: Path) -> tuple[bytes, int, int]:
+    """Extract a poster frame (first frame) from a video. Returns (jpeg_bytes, width, height)."""
+    import tempfile
+    from src.video.clip_extractor import extract_video_frame
+    import pyvips
+
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+
+    try:
+        ok = extract_video_frame(source_path, tmp_path, timestamp=0.0)
+        if not ok or not tmp_path.exists() or tmp_path.stat().st_size == 0:
+            raise RuntimeError(f"Failed to extract poster frame from {source_path}")
+
+        # Read the frame, get dimensions, resize to proxy size
+        img = pyvips.Image.new_from_file(str(tmp_path))
+        width_orig = img.width
+        height_orig = img.height
+
+        proxy_img = pyvips.Image.thumbnail(
+            str(tmp_path), PROXY_LONG_EDGE,
+            height=PROXY_LONG_EDGE,
+            size=pyvips.enums.Size.DOWN,
+        ).copy_memory()
+        proxy_bytes = proxy_img.write_to_buffer(".jpg[Q=%d]" % PROXY_JPEG_QUALITY)
+        return proxy_bytes, width_orig, height_orig
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def _generate_video_preview(source_path: Path) -> bytes:
+    """Generate a 10-second MP4 preview clip. Returns preview bytes."""
+    import subprocess
+    import tempfile
+
+    PREVIEW_DURATION_SEC = 10
+    PREVIEW_MAX_HEIGHT = 720
+
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+        preview_path = Path(tmp.name)
+
+    cmd = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-ss", "0", "-i", str(source_path),
+        "-t", str(PREVIEW_DURATION_SEC),
+        "-vf", f"scale=-2:'min({PREVIEW_MAX_HEIGHT},ih)',format=yuv420p",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
+        "-c:a", "aac", "-ac", "2", "-b:a", "128k",
+        "-movflags", "+faststart",
+        str(preview_path),
+    ]
+
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+    except subprocess.CalledProcessError:
+        # Retry without audio (broken audio track in some camera MOVs)
+        no_audio_cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-ss", "0", "-i", str(source_path),
+            "-t", str(PREVIEW_DURATION_SEC),
+            "-vf", f"scale=-2:'min({PREVIEW_MAX_HEIGHT},ih)',format=yuv420p",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
+            "-an", "-movflags", "+faststart",
+            str(preview_path),
+        ]
+        subprocess.run(no_audio_cmd, check=True, capture_output=True)
+
+    try:
+        if not preview_path.exists() or preview_path.stat().st_size == 0:
+            raise RuntimeError(f"ffmpeg produced no output for {source_path}")
+        return preview_path.read_bytes()
+    finally:
+        preview_path.unlink(missing_ok=True)
+
+
+def _process_and_ingest_video_stage1(
+    *,
+    client: LumiverbClient,
+    library_id: str,
+    root_path: Path,
+    rel_path: str,
+    file_size: int,
+    file_mtime: datetime | None,
+    stats: "_IngestStats",
+) -> None:
+    """Video stage 1: poster frame + EXIF + 10-sec preview → POST /v1/ingest + upload preview."""
+    source_path = (root_path / rel_path).resolve()
+    if not source_path.is_relative_to(root_path):
+        logger.warning("Skipping %s: escapes library root", rel_path)
+        with stats.lock:
+            stats.failed += 1
+        return
+
+    try:
+        # 1. Extract poster frame as proxy
+        proxy_bytes, width_orig, height_orig = _extract_video_poster(source_path)
+
+        # 2. Extract EXIF
+        exif_payload = _build_exif_payload(source_path, "video")
+
+        # 3. Generate 10-second preview
+        preview_bytes = _generate_video_preview(source_path)
+
+        # 4. POST /v1/ingest — create asset with poster frame as proxy
+        files = {"proxy": ("proxy.jpg", io.BytesIO(proxy_bytes), "image/jpeg")}
+        data: dict[str, str] = {
+            "library_id": library_id,
+            "rel_path": rel_path,
+            "file_size": str(file_size),
+            "media_type": "video",
+            "width": str(width_orig),
+            "height": str(height_orig),
+            "exif": json.dumps(exif_payload),
+        }
+        if file_mtime is not None:
+            data["file_mtime"] = file_mtime.isoformat()
+
+        resp = client.post("/v1/ingest", files=files, data=data)
+        asset_id = resp.json()["asset_id"]
+
+        # 5. Upload video preview
+        client.post(
+            f"/v1/assets/{asset_id}/artifacts/video_preview",
+            files={"file": ("preview.mp4", io.BytesIO(preview_bytes), "video/mp4")},
+        )
+
+        with stats.lock:
+            stats.processed += 1
+        print(f"ingest \u2713 {rel_path} (video stage 1)", flush=True)
+
+    except Exception as e:
+        logger.exception("Failed to ingest video %s: %s", rel_path, e)
+        with stats.lock:
+            stats.failed += 1
+        print(f"ingest \u2717 {rel_path}: {e}", flush=True)
+
+
 def _process_and_ingest_one(
     *,
     client: LumiverbClient,
@@ -325,14 +464,20 @@ def run_ingest(
     skip_vision: bool = False,
     path_override: str | None = None,
     force: bool = False,
+    media_type_filter: str = "all",
     console: Console,
 ) -> _IngestStats:
-    """Discover files and ingest each image atomically.
+    """Discover files and ingest them.
+
+    Processing order: all images first, then video stage 1 (poster + preview),
+    then video stage 2 (scene detection + vision).
 
     1. Walk the filesystem to find media files.
     2. Fetch existing assets from the server (skip unless --force).
     3. Fetch tenant vision config.
-    4. For each new/updated file: proxy + EXIF + vision → POST /v1/ingest.
+    4. Images: proxy + EXIF + vision → POST /v1/ingest.
+    5. Videos stage 1: poster frame + EXIF + 10-sec preview → POST /v1/ingest.
+    6. Videos stage 2: scene detection + vision (future).
     """
     library_id = library["library_id"]
     root_path = Path(library["root_path"]).resolve()
@@ -365,59 +510,92 @@ def run_ingest(
     vision_api_key = cli_cfg.vision_api_key or ctx.get("vision_api_key") or None
     vision_source = "client config" if cli_cfg.vision_api_url else "tenant config"
 
-    if skip_vision:
-        console.print("Vision AI: skipped (--skip-vision)")
-    elif not vision_api_url:
-        console.print("[red]Vision AI: not configured.[/red]")
-        console.print("  Set it via: lumiverb config set --vision-api-url <url>")
-        console.print("  Or to ingest without AI: lumiverb ingest --library <name> --skip-vision")
-        raise SystemExit(1)
-    else:
-        console.print(f"Vision AI: {vision_model_id} via {vision_api_url} ({vision_source})")
+    include_images = media_type_filter in ("all", "image")
+    include_videos = media_type_filter in ("all", "video")
 
-    # Step 4: Filter to files that need ingestion
-    to_ingest = []
+    if include_images:
+        if skip_vision:
+            console.print("Vision AI: skipped (--skip-vision)")
+        elif not vision_api_url:
+            console.print("[red]Vision AI: not configured.[/red]")
+            console.print("  Set it via: lumiverb config set --vision-api-url <url>")
+            console.print("  Or to ingest without AI: lumiverb ingest --library <name> --skip-vision")
+            raise SystemExit(1)
+        else:
+            console.print(f"Vision AI: {vision_model_id} via {vision_api_url} ({vision_source})")
+
+    # Step 4: Separate images and videos
+    images_to_ingest = []
+    videos_to_ingest = []
     for f in local_files:
-        if f["media_type"] == "video":
-            with stats.lock:
-                stats.skipped += 1
-            continue
         if not force and f["rel_path"] in existing:
             with stats.lock:
                 stats.skipped += 1
             continue
-        to_ingest.append(f)
+        if f["media_type"] == "video":
+            if include_videos:
+                videos_to_ingest.append(f)
+            else:
+                with stats.lock:
+                    stats.skipped += 1
+        else:
+            if include_images:
+                images_to_ingest.append(f)
+            else:
+                with stats.lock:
+                    stats.skipped += 1
 
-    console.print(f"[bold]Ingesting {len(to_ingest):,} images ({stats.skipped:,} skipped)...[/bold]")
+    # Step 5: Ingest images first
+    if images_to_ingest:
+        console.print(f"[bold]Ingesting {len(images_to_ingest):,} images...[/bold]")
+        pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="ingest")
+        futures = []
+        for f in images_to_ingest:
+            fut = pool.submit(
+                _process_and_ingest_one,
+                client=client,
+                library_id=library_id,
+                root_path=root_path,
+                rel_path=f["rel_path"],
+                file_size=f["file_size"],
+                file_mtime=f["file_mtime"],
+                media_type=f["media_type"],
+                vision_model_id=vision_model_id,
+                vision_api_url=vision_api_url,
+                vision_api_key=vision_api_key,
+                skip_vision=skip_vision,
+                stats=stats,
+            )
+            futures.append(fut)
+        for fut in futures:
+            fut.result()
+        pool.shutdown(wait=True)
 
-    if not to_ingest:
-        return stats
+    # Step 6: Video stage 1 — poster frame + EXIF + 10-sec preview
+    if videos_to_ingest:
+        console.print(f"[bold]Ingesting {len(videos_to_ingest):,} videos (stage 1: poster + preview)...[/bold]")
+        pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="video")
+        futures = []
+        for f in videos_to_ingest:
+            fut = pool.submit(
+                _process_and_ingest_video_stage1,
+                client=client,
+                library_id=library_id,
+                root_path=root_path,
+                rel_path=f["rel_path"],
+                file_size=f["file_size"],
+                file_mtime=f["file_mtime"],
+                stats=stats,
+            )
+            futures.append(fut)
+        for fut in futures:
+            fut.result()
+        pool.shutdown(wait=True)
 
-    # Step 5: Process and ingest concurrently
-    pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="ingest")
-    futures = []
+    if not images_to_ingest and not videos_to_ingest:
+        console.print("Nothing to ingest.")
 
-    for f in to_ingest:
-        fut = pool.submit(
-            _process_and_ingest_one,
-            client=client,
-            library_id=library_id,
-            root_path=root_path,
-            rel_path=f["rel_path"],
-            file_size=f["file_size"],
-            file_mtime=f["file_mtime"],
-            media_type=f["media_type"],
-            vision_model_id=vision_model_id,
-            vision_api_url=vision_api_url,
-            vision_api_key=vision_api_key,
-            skip_vision=skip_vision,
-            stats=stats,
-        )
-        futures.append(fut)
-
-    for fut in futures:
-        fut.result()
-    pool.shutdown(wait=True)
+    # TODO: Video stage 2 — scene detection + vision (ADR-005 Phase 6)
 
     return stats
 
