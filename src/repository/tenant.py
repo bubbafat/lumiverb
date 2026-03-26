@@ -81,11 +81,18 @@ class LibraryRepository:
         return library
 
     def bump_revision(self, library_id: str) -> None:
-        """Atomically increment the library revision counter."""
-        self._session.execute(
-            text("UPDATE libraries SET revision = revision + 1 WHERE library_id = :lid"),
-            {"lid": library_id},
-        )
+        """Atomically increment the library revision counter.
+
+        Uses a separate short transaction to avoid holding a row lock
+        on the libraries table for the duration of long ingest transactions.
+        """
+        engine = self._session.get_bind()
+        with engine.connect() as conn:
+            conn.execute(
+                text("UPDATE libraries SET revision = revision + 1 WHERE library_id = :lid"),
+                {"lid": library_id},
+            )
+            conn.commit()
 
     def get_by_id(self, library_id: str) -> Library | None:
         """Return library by id or None."""
