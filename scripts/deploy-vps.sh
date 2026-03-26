@@ -175,7 +175,7 @@ step "Creating service user and directories"
 SVC_HOME="/var/lib/lumiverb"
 id -u "$SVC_USER" >/dev/null 2>&1 || useradd --system --shell /usr/sbin/nologin --home "$SVC_HOME" "$SVC_USER"
 
-mkdir -p "$SVC_HOME" "$CONF_DIR" "$DATA_DIR"/{proxies,thumbnails,quickwit} "$BACKUP_DIR"
+mkdir -p "$SVC_HOME" "$CONF_DIR" "$DATA_DIR"/quickwit "$BACKUP_DIR"
 chown "$SVC_USER":"$SVC_USER" "$SVC_HOME"
 # Service user needs to traverse the dir (for quickwit.yaml); secrets in env file stay 600.
 chown root:"$SVC_USER" "$CONF_DIR"
