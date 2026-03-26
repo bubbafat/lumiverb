@@ -6,6 +6,7 @@ import {
   ApiError,
   getApiKey,
   getLibrary,
+  getLibraryRevision,
   listDirectories,
   pageAssets,
   searchAssets,
@@ -139,8 +140,17 @@ export default function BrowsePage() {
     navigate,
   ]);
 
+  // Poll library revision every 10 seconds to detect changes
+  const revisionQuery = useQuery({
+    queryKey: ["library-revision", libraryId!],
+    queryFn: () => getLibraryRevision(libraryId!),
+    enabled: !!libraryId && canFetchAssets,
+    refetchInterval: 10_000,
+  });
+  const revision = revisionQuery.data?.revision ?? 0;
+
   const browseQuery = useInfiniteQuery({
-    queryKey: ["assets", libraryId!, pathPrefix ?? null, activeTag ?? null],
+    queryKey: ["assets", libraryId!, pathPrefix ?? null, activeTag ?? null, revision],
     queryFn: ({ pageParam }) =>
       pageAssets(
         libraryId!,

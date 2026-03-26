@@ -165,6 +165,7 @@ export function Lightbox({
     queryKey: ["asset", asset.asset_id, publicLibraryId ?? null],
     queryFn: () => getAsset(asset.asset_id, isPublic ? publicLibraryId : undefined),
     enabled: !isPublic || !!publicLibraryId,
+    refetchInterval: 10_000,
   });
 
   const { data: similarData, isLoading: similarLoading } = useQuery({

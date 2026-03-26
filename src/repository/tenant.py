@@ -80,6 +80,13 @@ class LibraryRepository:
         self._session.refresh(library)
         return library
 
+    def bump_revision(self, library_id: str) -> None:
+        """Atomically increment the library revision counter."""
+        self._session.execute(
+            text("UPDATE libraries SET revision = revision + 1 WHERE library_id = :lid"),
+            {"lid": library_id},
+        )
+
     def get_by_id(self, library_id: str) -> Library | None:
         """Return library by id or None."""
         stmt = select(Library).where(Library.library_id == library_id)

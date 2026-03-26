@@ -566,6 +566,9 @@ def submit_vision(
     SearchSyncQueueRepository(session).enqueue(asset_id=asset_id, operation="upsert")
     AssetRepository(session).set_status(asset_id, asset_status.DESCRIBED)
 
+    # Bump library revision for UI polling
+    LibraryRepository(session).bump_revision(asset.library_id)
+
     return VisionSubmitResponse(asset_id=asset_id, status="described")
 
 

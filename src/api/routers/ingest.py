@@ -226,6 +226,9 @@ def _do_ingest(
     # --- Set final status ---
     asset_repo.set_status(asset_id, final_status)
 
+    # --- Bump library revision for UI polling ---
+    LibraryRepository(session).bump_revision(library_id)
+
     return IngestResponse(
         asset_id=asset_id,
         proxy_key=proxy_key,

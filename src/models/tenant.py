@@ -41,6 +41,7 @@ class Library(SQLModel, table=True):
     )
     vision_model_id: str = Field(default="", nullable=False)
     is_public: bool = Field(default=False, nullable=False)
+    revision: int = Field(default=0, nullable=False)
 
 
 class LibraryPathFilter(SQLModel, table=True):

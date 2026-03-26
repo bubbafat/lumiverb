@@ -168,3 +168,9 @@ export interface ApiKeyCreateResponse extends ApiKeyItem {
   plaintext: string;
 }
 
+export interface LibraryRevision {
+  library_id: string;
+  revision: number;
+  asset_count: number;
+}
+

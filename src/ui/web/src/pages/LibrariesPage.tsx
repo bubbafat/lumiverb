@@ -50,6 +50,7 @@ export default function LibrariesPage() {
   const { data: libraries, isLoading, error } = useQuery({
     queryKey: ["libraries", true],
     queryFn: () => listLibraries(true),
+    refetchInterval: 10_000,
   });
 
   const createMutation = useMutation({

@@ -9,6 +9,7 @@ import type {
   JobListItem,
   LibraryListItem,
   LibraryResponse,
+  LibraryRevision,
   SearchResponse,
   SimilarityResponse,
   UserItem,
@@ -184,6 +185,13 @@ export async function listDirectories(
   return apiFetch<DirectoryNode[]>(
     `/libraries/${libraryId}/directories?${qs.toString()}`,
   );
+}
+
+/** Lightweight revision check for UI polling. */
+export async function getLibraryRevision(
+  libraryId: string,
+): Promise<LibraryRevision> {
+  return apiFetch<LibraryRevision>(`/libraries/${libraryId}/revision`);
 }
 
 /** Paginated assets for a library. Returns null/undefined on 204 (end of pages). */
