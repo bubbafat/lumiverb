@@ -311,7 +311,7 @@ def get_library_revision(
     library = lib_repo.get_by_id(library_id)
     if library is None:
         raise HTTPException(status_code=404, detail="Library not found")
-    asset_count = AssetRepository(session).count_by_library([library_id])
+    asset_count = AssetRepository(session).count_by_library(library_id)
     return LibraryRevisionResponse(
         library_id=library_id,
         revision=library.revision,
