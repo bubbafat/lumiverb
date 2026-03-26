@@ -38,6 +38,7 @@ CERTBOT_EMAIL=""
 SKIP_CERTBOT=false
 TENANT_NAME="Lumiverb"
 DATA_DIR_OVERRIDE=""
+CERTIFICATE_ARCHIVE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -47,16 +48,39 @@ while [[ $# -gt 0 ]]; do
     --email)        CERTBOT_EMAIL="${2:?Missing value for --email}"; shift 2 ;;
     --tenant)       TENANT_NAME="${2:?Missing value for --tenant}"; shift 2 ;;
     --data-dir)     DATA_DIR_OVERRIDE="${2:?Missing value for --data-dir}"; shift 2 ;;
+    --certificate)  CERTIFICATE_ARCHIVE="${2:?Missing value for --certificate}"; shift 2 ;;
     --skip-certbot) SKIP_CERTBOT=true; shift ;;
     -h|--help)
-      echo "Usage: $0 --domain <FQDN> [--email <certbot-email>] [--tenant <name>] [--data-dir <path>] [--repo <url>] [--branch <ref>] [--skip-certbot]"
+      echo "Usage: $0 --domain <FQDN> [--email <certbot-email>] [--tenant <name>] [--data-dir <path>] [--certificate <letsencrypt.tar.gz>] [--repo <url>] [--branch <ref>] [--skip-certbot]"
       exit 0
       ;;
     *) fail "Unknown option: $1" ;;
   esac
 done
 
+# ---------------------------------------------------------------------------
+# Validate inputs before doing anything
+# ---------------------------------------------------------------------------
 [[ -n "$DOMAIN" ]] || fail "Required: --domain <FQDN>  (e.g. --domain app.example.com)"
+
+# Catch copy-paste from docs
+if [[ "$DOMAIN" == *"example.com"* ]]; then
+  fail "Replace example.com with your actual domain (e.g. --domain app.yourdomain.com)"
+fi
+if [[ -n "$CERTBOT_EMAIL" ]] && [[ "$CERTBOT_EMAIL" == *"example.com"* ]]; then
+  fail "Replace example.com email with your actual email (e.g. --email you@yourdomain.com)"
+fi
+
+# Validate certificate archive exists before starting
+if [[ -n "$CERTIFICATE_ARCHIVE" ]] && [[ ! -f "$CERTIFICATE_ARCHIVE" ]]; then
+  fail "Certificate archive not found: $CERTIFICATE_ARCHIVE"
+fi
+
+# Validate data dir parent exists (if overridden)
+if [[ -n "$DATA_DIR_OVERRIDE" ]]; then
+  DATA_DIR_PARENT="$(dirname "$DATA_DIR_OVERRIDE")"
+  [[ -d "$DATA_DIR_PARENT" ]] || fail "Parent directory for --data-dir does not exist: $DATA_DIR_PARENT"
+fi
 
 # Must run as root
 [[ "$(id -u)" -eq 0 ]] || fail "This script must be run as root (try: sudo bash ...)"
@@ -473,7 +497,19 @@ ok "nginx configured for ${DOMAIN}"
 # ---------------------------------------------------------------------------
 # 13. TLS certificate
 # ---------------------------------------------------------------------------
-if [[ "$SKIP_CERTBOT" == "false" ]]; then
+TLS_ACTIVE=false
+
+if [[ -n "$CERTIFICATE_ARCHIVE" ]]; then
+  step "Restoring TLS certificate from archive"
+  tar xzf "$CERTIFICATE_ARCHIVE" -C /
+  ok "Restored /etc/letsencrypt from $CERTIFICATE_ARCHIVE"
+
+  # Re-run certbot install to wire the restored cert into the nginx config
+  certbot install --nginx -d "$DOMAIN" --non-interactive --redirect
+  ok "TLS certificate installed into nginx"
+  TLS_ACTIVE=true
+
+elif [[ "$SKIP_CERTBOT" == "false" ]]; then
   step "Obtaining TLS certificate"
 
   certbot_args=(--nginx -d "$DOMAIN" --non-interactive --agree-tos --redirect)
@@ -485,11 +521,18 @@ if [[ "$SKIP_CERTBOT" == "false" ]]; then
 
   if certbot "${certbot_args[@]}"; then
     ok "TLS certificate obtained"
+    TLS_ACTIVE=true
   else
     warn "Certbot failed — site will serve HTTP only until DNS is pointed and certbot re-run"
   fi
 else
   warn "Skipping certbot (--skip-certbot)"
+fi
+
+# Fix APP_HOST in env file if TLS is not active
+if [[ "$TLS_ACTIVE" == "false" ]]; then
+  sed -i "s|^APP_HOST=https://|APP_HOST=http://|" "$ENV_FILE"
+  warn "APP_HOST set to http:// (no TLS). After obtaining a cert, update APP_HOST in ${ENV_FILE}"
 fi
 
 # ---------------------------------------------------------------------------
@@ -557,7 +600,13 @@ ok "CLI configured for tenant"
 # Done
 # ---------------------------------------------------------------------------
 echo ""
-echo -e "${GREEN}${BOLD}Lumiverb deployed to https://${DOMAIN}${NC}"
+if [[ "$TLS_ACTIVE" == "true" ]]; then
+  SITE_URL="https://${DOMAIN}"
+else
+  SITE_URL="http://${DOMAIN}"
+fi
+
+echo -e "${GREEN}${BOLD}Lumiverb deployed to ${SITE_URL}${NC}"
 echo ""
 echo "Next steps:"
 echo ""
@@ -566,10 +615,19 @@ echo ""
 EXAMPLE_EMAIL="${CERTBOT_EMAIL:-you@example.com}"
 echo "     sudo -u lumiverb /opt/lumiverb/.venv/bin/lumiverb create-user --email ${EXAMPLE_EMAIL} --role admin"
 echo ""
-echo "  2. Open https://${DOMAIN} and log in."
+echo "  2. Open ${SITE_URL} and log in."
 echo ""
 echo "  3. (Optional) Enable password reset — edit ${ENV_FILE} and uncomment the SMTP_* lines."
 echo ""
+if [[ "$TLS_ACTIVE" == "true" ]] && [[ -z "$CERTIFICATE_ARCHIVE" ]]; then
+  echo "  4. Back up the TLS certificate for future redeploys:"
+  echo ""
+  echo "     tar czf /mnt/lumiverb/data/letsencrypt.tar.gz -C / etc/letsencrypt"
+  echo ""
+  echo "     Then pass --certificate /mnt/lumiverb/data/letsencrypt.tar.gz on future deploys."
+  echo ""
+fi
+
 echo "Useful commands:"
 echo "  journalctl -u lumiverb-api -f          # API logs"
 echo "  journalctl -u lumiverb-worker -f       # Worker logs"
