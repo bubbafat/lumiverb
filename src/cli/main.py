@@ -1439,6 +1439,48 @@ def scan(
         _run_apply_filters(client, match["library_id"], dry_run=dry_run)
 
 
+@app.command("ingest")
+def ingest(
+    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
+    path: Annotated[str | None, typer.Option("--path", "-p", help="Optional subpath.")] = None,
+    force: Annotated[bool, typer.Option("--force", "-f", help="Re-ingest already-processed assets.")] = False,
+    concurrency: Annotated[int, typer.Option("--concurrency", help="Number of parallel workers.")] = 4,
+    skip_vision: Annotated[bool, typer.Option("--skip-vision", help="Skip AI vision processing.")] = False,
+) -> None:
+    """Scan and ingest a library in one pass.
+
+    For each image asset: generate proxy, extract EXIF, call vision AI,
+    then upload everything to the server in a single atomic request.
+    Videos are skipped (use the stage-based pipeline for video).
+    """
+    from src.cli.ingest import run_ingest
+
+    client = LumiverbClient()
+    libraries = client.get("/v1/libraries").json()
+    match = next((lib for lib in libraries if lib["name"] == library), None)
+    if match is None:
+        console.print(f"[red]Library not found: {library}[/red]")
+        raise typer.Exit(1)
+
+    stats = run_ingest(
+        client,
+        match,
+        concurrency=concurrency,
+        skip_vision=skip_vision,
+        path_override=path,
+        force=force,
+        console=console,
+    )
+
+    console.print(
+        f"\nDone: {stats.processed:,} ingested, "
+        f"{stats.failed:,} failed, "
+        f"{stats.skipped:,} skipped"
+    )
+    if stats.failed > 0:
+        raise typer.Exit(1)
+
+
 def _run_apply_filters(client: LumiverbClient, library_id: str, *, dry_run: bool) -> None:
     """Apply current library filters to existing assets, trashing those that no longer match."""
     from src.cli.progress import UnifiedProgress, UnifiedProgressSpec

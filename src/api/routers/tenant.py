@@ -19,7 +19,8 @@ router = APIRouter(prefix="/v1/tenant", tags=["tenant"])
 
 class TenantContextResponse(BaseModel):
     tenant_id: str
-    # connection_string removed — workers must not have direct DB access
+    vision_api_url: str = ""
+    vision_api_key: str = ""
 
 
 class TenantFilterDefaultItem(BaseModel):
@@ -48,10 +49,21 @@ class CreateTenantFilterDefaultRequest(BaseModel):
 @router.get("/context", response_model=TenantContextResponse)
 def get_tenant_context(request: Request) -> TenantContextResponse:
     """
-    Return tenant_id for the authenticated tenant.
-    Used by CLI/worker for storage path computation only.
+    Return tenant_id and vision API config for the authenticated tenant.
+    Used by CLI for ingest pipeline configuration.
     """
-    return TenantContextResponse(tenant_id=request.state.tenant_id)
+    from src.core.database import get_control_session
+    from src.repository.control_plane import TenantRepository
+
+    tenant_id = request.state.tenant_id
+    with get_control_session() as session:
+        tenant = TenantRepository(session).get_by_id(tenant_id)
+
+    return TenantContextResponse(
+        tenant_id=tenant_id,
+        vision_api_url=tenant.vision_api_url if tenant else "",
+        vision_api_key=tenant.vision_api_key if tenant else "",
+    )
 
 
 @router.get("/filter-defaults", response_model=TenantFilterDefaultsResponse)
