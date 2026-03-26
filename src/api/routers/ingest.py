@@ -1,8 +1,10 @@
-"""Atomic ingest endpoint: upload proxy + optional metadata in one request.
+"""Atomic ingest endpoints: create + populate assets in one request.
+
+POST /v1/ingest — create asset record AND ingest proxy + metadata atomically.
+POST /v1/assets/{asset_id}/ingest — ingest into an existing asset record.
 
 The server normalizes the proxy (WebP, 2048px max), generates a thumbnail
-(WebP, 512px), and stores all provided metadata atomically. This is the
-primary path for creating fully-populated assets.
+(WebP, 512px), and stores all provided metadata atomically.
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ import hashlib
 import io
 import json
 import logging
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -24,13 +27,14 @@ from src.repository.tenant import (
     AssetEmbeddingRepository,
     AssetMetadataRepository,
     AssetRepository,
+    LibraryRepository,
     SearchSyncQueueRepository,
 )
 from src.storage.local import LocalStorage, get_storage
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/v1/assets", tags=["ingest"])
+router = APIRouter(tags=["ingest"])
 
 PROXY_MAX_LONG_EDGE = 2048
 THUMBNAIL_LONG_EDGE = 512
@@ -87,79 +91,47 @@ class IngestResponse(BaseModel):
     status: str
     width: int
     height: int
+    created: bool = False
 
 
-@router.post("/{asset_id}/ingest", response_model=IngestResponse)
-async def ingest_asset(
+def _parse_optional_json(field: str | None, field_name: str) -> dict | None:
+    if field is None:
+        return None
+    try:
+        return json.loads(field)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail=f"{field_name} must be valid JSON")
+
+
+def _parse_optional_json_list(field: str | None, field_name: str) -> list[dict] | None:
+    if field is None:
+        return None
+    try:
+        data = json.loads(field)
+        if not isinstance(data, list):
+            raise ValueError
+        return data
+    except (json.JSONDecodeError, ValueError):
+        raise HTTPException(status_code=400, detail=f"{field_name} must be a JSON array")
+
+
+def _do_ingest(
+    *,
     asset_id: str,
-    request: Request,
-    session: Annotated[Session, Depends(get_tenant_session)],
-    proxy: UploadFile = File(...),
-    width: int | None = Form(default=None),
-    height: int | None = Form(default=None),
-    exif: str | None = Form(default=None),
-    vision: str | None = Form(default=None),
-    embeddings: str | None = Form(default=None),
+    library_id: str,
+    rel_path: str,
+    tenant_id: str,
+    raw_proxy: bytes,
+    width: int | None,
+    height: int | None,
+    exif_data: dict | None,
+    vision_data: dict | None,
+    embeddings_data: list[dict] | None,
+    session: Session,
 ) -> IngestResponse:
-    """Atomically ingest an asset with proxy and optional metadata.
-
-    Required:
-      - proxy: image file (JPEG, PNG, WebP, etc.) — server normalizes to WebP 2048px.
-
-    Optional form fields (JSON strings):
-      - width/height: original source dimensions (passed through to DB).
-      - exif: JSON object with EXIF fields (sha256, camera_make, camera_model,
-              taken_at, gps_lat, gps_lon, duration_sec, exif).
-      - vision: JSON object with AI results (model_id, model_version, description, tags).
-      - embeddings: JSON array of {model_id, model_version, vector} objects.
-
-    The server:
-      1. Normalizes the proxy to WebP (2048px max long edge, no upscale).
-      2. Generates a thumbnail (512px WebP) from the normalized proxy.
-      3. Writes both to storage.
-      4. Stores EXIF, vision, and embedding data if provided.
-      5. Sets asset status based on what was provided.
-      6. Enqueues search sync if vision data was provided.
-    """
-    # --- Read and validate proxy upload ---
-    raw_proxy = await proxy.read()
-    if len(raw_proxy) > MAX_PROXY_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="Proxy upload too large (10 MB max)")
-    if not raw_proxy:
-        raise HTTPException(status_code=400, detail="Proxy file is empty")
-
-    # --- Validate asset exists ---
-    asset_repo = AssetRepository(session)
-    asset = asset_repo.get_by_id(asset_id)
-    if asset is None:
-        raise HTTPException(status_code=404, detail="Asset not found")
-
-    tenant_id: str = request.state.tenant_id
+    """Core ingest logic shared by both endpoints."""
     storage: LocalStorage = get_storage()
-
-    # --- Parse optional JSON fields ---
-    exif_data: dict | None = None
-    if exif is not None:
-        try:
-            exif_data = json.loads(exif)
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="exif must be valid JSON")
-
-    vision_data: dict | None = None
-    if vision is not None:
-        try:
-            vision_data = json.loads(vision)
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="vision must be valid JSON")
-
-    embeddings_data: list[dict] | None = None
-    if embeddings is not None:
-        try:
-            embeddings_data = json.loads(embeddings)
-            if not isinstance(embeddings_data, list):
-                raise ValueError
-        except (json.JSONDecodeError, ValueError):
-            raise HTTPException(status_code=400, detail="embeddings must be a JSON array")
+    asset_repo = AssetRepository(session)
 
     # --- Normalize proxy to WebP ---
     try:
@@ -171,27 +143,25 @@ async def ingest_asset(
     thumb_bytes = _generate_thumbnail(proxy_bytes)
 
     # --- Write proxy to storage ---
-    proxy_key = storage.proxy_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
+    proxy_key = storage.proxy_key(tenant_id, library_id, asset_id, rel_path)
     proxy_path = storage.abs_path(proxy_key)
     proxy_path.parent.mkdir(parents=True, exist_ok=True)
     proxy_path.write_bytes(proxy_bytes)
     proxy_sha256 = hashlib.sha256(proxy_bytes).hexdigest()
 
     # --- Write thumbnail to storage ---
-    thumb_key = storage.thumbnail_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
+    thumb_key = storage.thumbnail_key(tenant_id, library_id, asset_id, rel_path)
     thumb_path = storage.abs_path(thumb_key)
     thumb_path.parent.mkdir(parents=True, exist_ok=True)
     thumb_path.write_bytes(thumb_bytes)
     thumb_sha256 = hashlib.sha256(thumb_bytes).hexdigest()
 
     # --- Update DB: proxy + thumbnail ---
-    # Use source dimensions if provided, otherwise use normalized proxy dimensions.
     source_w = width if width is not None else proxy_w
     source_h = height if height is not None else proxy_h
     asset_repo.set_proxy_artifact(asset_id, proxy_key, proxy_sha256, source_w, source_h)
     asset_repo.set_thumbnail_artifact(asset_id, thumb_key, thumb_sha256)
 
-    # Determine final status based on what data was provided.
     final_status = asset_status.PROXY_READY
 
     # --- Store EXIF if provided ---
@@ -223,7 +193,6 @@ async def ingest_asset(
                 model_version=model_version,
                 data={"description": description, "tags": tags},
             )
-            # Enqueue search sync.
             queue_repo = SearchSyncQueueRepository(session)
             queue_repo.enqueue(asset_id=asset_id, operation="upsert")
             final_status = asset_status.DESCRIBED
@@ -259,4 +228,167 @@ async def ingest_asset(
         status=final_status,
         width=source_w,
         height=source_h,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/ingest — create asset + ingest atomically
+# ---------------------------------------------------------------------------
+
+
+@router.post("/v1/ingest", response_model=IngestResponse)
+async def create_and_ingest(
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    proxy: UploadFile = File(...),
+    library_id: str = Form(...),
+    rel_path: str = Form(...),
+    file_size: int = Form(...),
+    file_mtime: str | None = Form(default=None),
+    media_type: str = Form(default="image/jpeg"),
+    width: int | None = Form(default=None),
+    height: int | None = Form(default=None),
+    exif: str | None = Form(default=None),
+    vision: str | None = Form(default=None),
+    embeddings: str | None = Form(default=None),
+) -> IngestResponse:
+    """Create an asset record and ingest proxy + metadata in one atomic request.
+
+    The asset only appears on the server once it's fully populated — no
+    partial state. If an asset with the same (library_id, rel_path) already
+    exists, it is updated (idempotent).
+
+    Required form fields:
+      - proxy: image file
+      - library_id: target library
+      - rel_path: relative path within the library root
+      - file_size: source file size in bytes
+
+    Optional:
+      - file_mtime: ISO8601 timestamp of source file
+      - media_type: MIME type (default image/jpeg)
+      - width/height: original source dimensions
+      - exif, vision, embeddings: JSON strings (same as /v1/assets/{id}/ingest)
+    """
+    raw_proxy = await proxy.read()
+    if len(raw_proxy) > MAX_PROXY_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Proxy upload too large (10 MB max)")
+    if not raw_proxy:
+        raise HTTPException(status_code=400, detail="Proxy file is empty")
+
+    tenant_id: str = request.state.tenant_id
+
+    # Validate library
+    lib_repo = LibraryRepository(session)
+    library = lib_repo.get_by_id(library_id)
+    if library is None:
+        raise HTTPException(status_code=404, detail="Library not found")
+
+    # Parse optional JSON
+    exif_data = _parse_optional_json(exif, "exif")
+    vision_data = _parse_optional_json(vision, "vision")
+    embeddings_data = _parse_optional_json_list(embeddings, "embeddings")
+
+    # Parse mtime
+    file_mtime_dt: datetime | None = None
+    if file_mtime:
+        try:
+            file_mtime_dt = datetime.fromisoformat(file_mtime.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid file_mtime format")
+
+    # Create or find existing asset
+    asset_repo = AssetRepository(session)
+    existing = asset_repo.get_by_library_and_rel_path(library_id, rel_path)
+    created = False
+
+    if existing is None:
+        # Create a minimal scan record for the asset (required by create_for_scan).
+        from src.repository.tenant import ScanRepository
+        scan_repo = ScanRepository(session)
+        scan = scan_repo.create(library_id=library_id, status="complete")
+        asset = asset_repo.create_for_scan(
+            library_id=library_id,
+            rel_path=rel_path,
+            file_size=file_size,
+            file_mtime=file_mtime_dt,
+            media_type=media_type,
+            scan_id=scan.scan_id,
+        )
+        asset_id = asset.asset_id
+        created = True
+    else:
+        asset_id = existing.asset_id
+        # Update file metadata if changed
+        existing.file_size = file_size
+        if file_mtime_dt is not None:
+            existing.file_mtime = file_mtime_dt
+        existing.media_type = media_type
+        session.add(existing)
+        session.commit()
+
+    result = _do_ingest(
+        asset_id=asset_id,
+        library_id=library_id,
+        rel_path=rel_path,
+        tenant_id=tenant_id,
+        raw_proxy=raw_proxy,
+        width=width,
+        height=height,
+        exif_data=exif_data,
+        vision_data=vision_data,
+        embeddings_data=embeddings_data,
+        session=session,
+    )
+    result.created = created
+    return result
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/assets/{asset_id}/ingest — ingest into existing asset
+# ---------------------------------------------------------------------------
+
+
+@router.post("/v1/assets/{asset_id}/ingest", response_model=IngestResponse)
+async def ingest_asset(
+    asset_id: str,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    proxy: UploadFile = File(...),
+    width: int | None = Form(default=None),
+    height: int | None = Form(default=None),
+    exif: str | None = Form(default=None),
+    vision: str | None = Form(default=None),
+    embeddings: str | None = Form(default=None),
+) -> IngestResponse:
+    """Ingest proxy + metadata into an existing asset record."""
+    raw_proxy = await proxy.read()
+    if len(raw_proxy) > MAX_PROXY_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Proxy upload too large (10 MB max)")
+    if not raw_proxy:
+        raise HTTPException(status_code=400, detail="Proxy file is empty")
+
+    asset_repo = AssetRepository(session)
+    asset = asset_repo.get_by_id(asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    tenant_id: str = request.state.tenant_id
+
+    exif_data = _parse_optional_json(exif, "exif")
+    vision_data = _parse_optional_json(vision, "vision")
+    embeddings_data = _parse_optional_json_list(embeddings, "embeddings")
+
+    return _do_ingest(
+        asset_id=asset_id,
+        library_id=asset.library_id,
+        rel_path=asset.rel_path,
+        tenant_id=tenant_id,
+        raw_proxy=raw_proxy,
+        width=width,
+        height=height,
+        exif_data=exif_data,
+        vision_data=vision_data,
+        embeddings_data=embeddings_data,
+        session=session,
     )

@@ -375,3 +375,117 @@ def test_ingest_is_idempotent(ingest_env) -> None:
 
     # Second ingest should have different sha256 (different image)
     assert r1.json()["proxy_sha256"] != r2.json()["proxy_sha256"]
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/ingest — create-on-ingest tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_create_on_ingest_creates_asset(ingest_env) -> None:
+    """POST /v1/ingest creates the asset record and ingests atomically."""
+    client, auth, library_id, _, storage, _ = ingest_env
+
+    r = client.post(
+        "/v1/ingest",
+        headers=auth,
+        files={"proxy": ("photo.jpg", io.BytesIO(_make_test_image()), "image/jpeg")},
+        data={
+            "library_id": library_id,
+            "rel_path": "new_photo.jpg",
+            "file_size": "5000",
+            "media_type": "image/jpeg",
+        },
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["created"] is True
+    assert data["status"] == "proxy_ready"
+    assert data["asset_id"].startswith("ast_")
+
+    # Verify the asset exists on the server
+    r_detail = client.get(f"/v1/assets/{data['asset_id']}", headers=auth)
+    assert r_detail.status_code == 200
+    assert r_detail.json()["rel_path"] == "new_photo.jpg"
+
+
+@pytest.mark.slow
+def test_create_on_ingest_with_vision(ingest_env) -> None:
+    """Create-on-ingest with vision data sets status to described."""
+    client, auth, library_id, _, storage, _ = ingest_env
+
+    vision_data = {
+        "model_id": "gpt-4o",
+        "model_version": "1",
+        "description": "A beautiful photo",
+        "tags": ["beautiful"],
+    }
+
+    r = client.post(
+        "/v1/ingest",
+        headers=auth,
+        files={"proxy": ("photo.jpg", io.BytesIO(_make_test_image()), "image/jpeg")},
+        data={
+            "library_id": library_id,
+            "rel_path": "new_vision.jpg",
+            "file_size": "5000",
+            "vision": json.dumps(vision_data),
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "described"
+    assert r.json()["created"] is True
+
+
+@pytest.mark.slow
+def test_create_on_ingest_idempotent(ingest_env) -> None:
+    """Calling create-on-ingest twice with the same rel_path updates instead of duplicating."""
+    client, auth, library_id, _, storage, _ = ingest_env
+
+    rel_path = "idempotent_create.jpg"
+
+    r1 = client.post(
+        "/v1/ingest",
+        headers=auth,
+        files={"proxy": ("v1.jpg", io.BytesIO(_make_test_image(400, 300)), "image/jpeg")},
+        data={
+            "library_id": library_id,
+            "rel_path": rel_path,
+            "file_size": "5000",
+        },
+    )
+    assert r1.status_code == 200
+    assert r1.json()["created"] is True
+
+    r2 = client.post(
+        "/v1/ingest",
+        headers=auth,
+        files={"proxy": ("v2.jpg", io.BytesIO(_make_test_image(500, 400)), "image/jpeg")},
+        data={
+            "library_id": library_id,
+            "rel_path": rel_path,
+            "file_size": "6000",
+        },
+    )
+    assert r2.status_code == 200
+    assert r2.json()["created"] is False
+    assert r1.json()["asset_id"] == r2.json()["asset_id"]
+
+
+@pytest.mark.slow
+def test_create_on_ingest_invalid_library(ingest_env) -> None:
+    """Create-on-ingest with nonexistent library returns 404."""
+    client, auth, *_ = ingest_env
+
+    r = client.post(
+        "/v1/ingest",
+        headers=auth,
+        files={"proxy": ("photo.jpg", io.BytesIO(_make_test_image()), "image/jpeg")},
+        data={
+            "library_id": "lib_nonexistent",
+            "rel_path": "photo.jpg",
+            "file_size": "5000",
+        },
+    )
+    assert r.status_code == 404

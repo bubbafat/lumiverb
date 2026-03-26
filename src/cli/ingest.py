@@ -1,9 +1,9 @@
-"""Per-asset ingest pipeline: scan + process + upload in one pass.
+"""Per-asset ingest pipeline: discover files + process + create-on-ingest.
 
-For each image asset: resize proxy, extract EXIF, call vision AI, then
-POST everything to /v1/assets/{id}/ingest in a single request. The server
-normalizes the proxy to WebP, generates the thumbnail, and stores all
-metadata atomically.
+Walks the library root, and for each image file: resize proxy, extract
+EXIF, call vision AI, then POST /v1/ingest to create the asset record and
+store all data atomically. The asset only appears on the server once it's
+fully populated — no partial state.
 
 Videos are skipped (they still use the stage-based pipeline).
 """
@@ -13,28 +13,27 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
 
 from rich.console import Console
 
 from src.cli.client import LumiverbClient
+from src.core.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from src.workers.exif_extract import compute_sha256, extract_exif, parse_gps, parse_taken_at
 
 logger = logging.getLogger(__name__)
 
 PROXY_LONG_EDGE = 2048
 PROXY_JPEG_QUALITY = 75
+SUPPORTED_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
 
 
 def _generate_proxy_bytes(source_path: Path) -> tuple[bytes, int, int]:
-    """Generate a resized JPEG proxy from a source image. Returns (bytes, width_orig, height_orig).
-
-    Handles RAW, TIFF, and standard image formats. The server will normalize
-    to WebP, so we just produce a reasonable-quality JPEG here.
-    """
+    """Generate a resized JPEG proxy from a source image. Returns (bytes, width_orig, height_orig)."""
     import pyvips
     import numpy as np
     from PIL import Image as PILImage
@@ -47,7 +46,6 @@ def _generate_proxy_bytes(source_path: Path) -> tuple[bytes, int, int]:
     if ext in RAW_EXTENSIONS:
         import rawpy
 
-        # Try embedded thumb first
         try:
             with rawpy.imread(str(source_path)) as raw:
                 thumb = raw.extract_thumb()
@@ -68,7 +66,6 @@ def _generate_proxy_bytes(source_path: Path) -> tuple[bytes, int, int]:
         except Exception:
             pass
 
-        # Full decode fallback
         with rawpy.imread(str(source_path)) as raw:
             rgb = raw.postprocess()
             _s = raw.sizes
@@ -109,7 +106,6 @@ def _generate_proxy_bytes(source_path: Path) -> tuple[bytes, int, int]:
         return proxy_bytes, width_orig, height_orig
 
     else:
-        # Standard image (JPEG, PNG, WebP, etc.)
         header = pyvips.Image.new_from_file(
             str(source_path), fail_on=pyvips.enums.FailOn.NONE,
         )
@@ -154,7 +150,7 @@ def _call_vision_ai(
     vision_api_url: str,
     vision_api_key: str | None,
 ) -> dict | None:
-    """Call the vision AI provider and return the result dict, or None if not configured."""
+    """Call the vision AI provider. Returns result dict or None if not configured."""
     if not vision_api_url or not vision_model_id:
         return None
 
@@ -185,30 +181,32 @@ def _call_vision_ai(
     }
 
 
-def _process_one_asset(
+def _detect_media_type(ext: str) -> str:
+    """Return a simple media type string based on file extension."""
+    if ext in VIDEO_EXTENSIONS:
+        return "video"
+    return "image"
+
+
+def _process_and_ingest_one(
     *,
     client: LumiverbClient,
-    asset_id: str,
+    library_id: str,
+    root_path: Path,
     rel_path: str,
-    root_path: str,
+    file_size: int,
+    file_mtime: datetime | None,
     media_type: str,
     vision_model_id: str,
     vision_api_url: str,
     vision_api_key: str | None,
     skip_vision: bool,
-    console: Console,
     stats: "_IngestStats",
 ) -> None:
-    """Process and ingest a single image asset."""
-    root = Path(root_path).resolve()
-    source_path = (root / rel_path).resolve()
-    if not source_path.is_relative_to(root):
-        logger.warning("Skipping %s: rel_path escapes library root", rel_path)
-        with stats.lock:
-            stats.failed += 1
-        return
-    if not source_path.exists():
-        logger.warning("Skipping %s: file not found", rel_path)
+    """Process one image file and POST /v1/ingest to create + populate atomically."""
+    source_path = (root_path / rel_path).resolve()
+    if not source_path.is_relative_to(root_path):
+        logger.warning("Skipping %s: escapes library root", rel_path)
         with stats.lock:
             stats.failed += 1
         return
@@ -227,17 +225,23 @@ def _process_one_asset(
                 proxy_bytes, vision_model_id, vision_api_url, vision_api_key,
             )
 
-        # 4. POST /v1/assets/{id}/ingest
+        # 4. POST /v1/ingest — create asset + ingest atomically
         files = {"proxy": ("proxy.jpg", io.BytesIO(proxy_bytes), "image/jpeg")}
         data: dict[str, str] = {
+            "library_id": library_id,
+            "rel_path": rel_path,
+            "file_size": str(file_size),
+            "media_type": media_type,
             "width": str(width_orig),
             "height": str(height_orig),
             "exif": json.dumps(exif_payload),
         }
+        if file_mtime is not None:
+            data["file_mtime"] = file_mtime.isoformat()
         if vision_payload is not None:
             data["vision"] = json.dumps(vision_payload)
 
-        client.post(f"/v1/assets/{asset_id}/ingest", files=files, data=data)
+        client.post("/v1/ingest", files=files, data=data)
 
         with stats.lock:
             stats.processed += 1
@@ -258,6 +262,61 @@ class _IngestStats:
         self.skipped = 0
 
 
+def _walk_library(root_path: Path, path_prefix: str | None = None) -> list[dict]:
+    """Walk the library root and return a list of file descriptors.
+
+    Each entry: {rel_path, file_size, file_mtime, media_type, ext}.
+    """
+    walk_root = root_path
+    if path_prefix:
+        walk_root = root_path / path_prefix
+
+    if not walk_root.is_dir():
+        return []
+
+    results = []
+    for p in sorted(walk_root.rglob("*")):
+        if not p.is_file():
+            continue
+        ext = p.suffix.lower()
+        if ext not in SUPPORTED_EXTENSIONS:
+            continue
+
+        rel_path = str(p.relative_to(root_path))
+        stat = p.stat()
+        file_mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+
+        results.append({
+            "rel_path": rel_path,
+            "file_size": stat.st_size,
+            "file_mtime": file_mtime,
+            "media_type": _detect_media_type(ext),
+            "ext": ext,
+        })
+
+    return results
+
+
+def _fetch_existing_rel_paths(client: LumiverbClient, library_id: str) -> set[str]:
+    """Page through all assets on the server and collect their rel_paths."""
+    existing: set[str] = set()
+    after: str | None = None
+    while True:
+        params: dict[str, str] = {"library_id": library_id, "limit": "500"}
+        if after:
+            params["after"] = after
+        resp = client.get("/v1/assets/page", params=params)
+        if resp.status_code == 204:
+            break
+        assets = resp.json()
+        if not assets:
+            break
+        for a in assets:
+            existing.add(a["rel_path"])
+        after = assets[-1]["asset_id"]
+    return existing
+
+
 def run_ingest(
     client: LumiverbClient,
     library: dict,
@@ -268,35 +327,35 @@ def run_ingest(
     force: bool = False,
     console: Console,
 ) -> _IngestStats:
-    """Run the full scan + ingest pipeline for a library.
+    """Discover files and ingest each image atomically.
 
-    1. Scan the library (discover/reconcile files).
-    2. Fetch tenant vision config + library vision_model_id.
-    3. Page through assets needing ingestion.
-    4. Process each asset: proxy + EXIF + vision → POST /ingest.
+    1. Walk the filesystem to find media files.
+    2. Fetch existing assets from the server (skip unless --force).
+    3. Fetch tenant vision config.
+    4. For each new/updated file: proxy + EXIF + vision → POST /v1/ingest.
     """
-    from src.cli.scanner import scan_library
-
     library_id = library["library_id"]
-    root_path = library["root_path"]
+    root_path = Path(library["root_path"]).resolve()
     vision_model_id = library.get("vision_model_id", "")
 
-    # Step 1: Scan
-    console.print("[bold]Scanning...[/bold]")
-    scan_result = scan_library(client, library, path_override=path_override, force=force)
-    console.print(
-        f"Scan: {scan_result.files_discovered:,} discovered, "
-        f"{scan_result.files_added:,} added, "
-        f"{scan_result.files_updated:,} updated, "
-        f"{scan_result.files_skipped:,} skipped"
-    )
+    # Step 1: Discover files
+    console.print("[bold]Discovering files...[/bold]")
+    local_files = _walk_library(root_path, path_override)
+    console.print(f"Found {len(local_files):,} media files")
 
-    if scan_result.status != "complete":
-        console.print(f"[red]Scan failed: {scan_result.error_message}[/red]")
-        stats = _IngestStats()
-        return stats
+    if not local_files:
+        return _IngestStats()
 
-    # Step 2: Get vision config from tenant
+    # Step 2: Fetch existing assets to skip already-ingested
+    stats = _IngestStats()
+    if not force:
+        console.print("Checking server for existing assets...")
+        existing = _fetch_existing_rel_paths(client, library_id)
+        console.print(f"Server has {len(existing):,} existing assets")
+    else:
+        existing = set()
+
+    # Step 3: Get vision config from tenant
     ctx = client.get("/v1/tenant/context").json()
     vision_api_url = ctx.get("vision_api_url", "")
     vision_api_key = ctx.get("vision_api_key") or None
@@ -309,62 +368,46 @@ def run_ingest(
     else:
         console.print(f"Vision AI: {vision_model_id} via {vision_api_url}")
 
-    # Step 3: Page through assets that need ingestion
-    # Process assets with status=pending (newly scanned) or re-process if --force
-    console.print("[bold]Ingesting...[/bold]")
-    stats = _IngestStats()
+    # Step 4: Filter to files that need ingestion
+    to_ingest = []
+    for f in local_files:
+        if f["media_type"] == "video":
+            with stats.lock:
+                stats.skipped += 1
+            continue
+        if not force and f["rel_path"] in existing:
+            with stats.lock:
+                stats.skipped += 1
+            continue
+        to_ingest.append(f)
 
+    console.print(f"[bold]Ingesting {len(to_ingest):,} images ({stats.skipped:,} skipped)...[/bold]")
+
+    if not to_ingest:
+        return stats
+
+    # Step 5: Process and ingest concurrently
     pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="ingest")
     futures = []
 
-    after: str | None = None
-    while True:
-        params: dict[str, str] = {"library_id": library_id, "limit": "500"}
-        if after:
-            params["after"] = after
-        resp = client.get("/v1/assets/page", params=params)
-        if resp.status_code == 204:
-            break
-        assets = resp.json()
-        if not assets:
-            break
+    for f in to_ingest:
+        fut = pool.submit(
+            _process_and_ingest_one,
+            client=client,
+            library_id=library_id,
+            root_path=root_path,
+            rel_path=f["rel_path"],
+            file_size=f["file_size"],
+            file_mtime=f["file_mtime"],
+            media_type=f["media_type"],
+            vision_model_id=vision_model_id,
+            vision_api_url=vision_api_url,
+            vision_api_key=vision_api_key,
+            skip_vision=skip_vision,
+            stats=stats,
+        )
+        futures.append(fut)
 
-        for asset in assets:
-            asset_id = asset["asset_id"]
-            asset_status = asset.get("status", "pending")
-            asset_media_type = asset.get("media_type", "")
-
-            # Skip videos (stage-based pipeline)
-            if asset_media_type == "video":
-                with stats.lock:
-                    stats.skipped += 1
-                continue
-
-            # Skip already-ingested unless force
-            if not force and asset_status not in ("pending",):
-                with stats.lock:
-                    stats.skipped += 1
-                continue
-
-            fut = pool.submit(
-                _process_one_asset,
-                client=client,
-                asset_id=asset_id,
-                rel_path=asset["rel_path"],
-                root_path=root_path,
-                media_type=asset_media_type,
-                vision_model_id=vision_model_id,
-                vision_api_url=vision_api_url,
-                vision_api_key=vision_api_key,
-                skip_vision=skip_vision,
-                console=console,
-                stats=stats,
-            )
-            futures.append(fut)
-
-        after = assets[-1]["asset_id"]
-
-    # Wait for all futures
     for fut in futures:
         fut.result()
     pool.shutdown(wait=True)
