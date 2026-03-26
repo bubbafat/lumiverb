@@ -23,11 +23,13 @@ from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session
 from src.core import asset_status
+from src.core.path_filter import PathFilter, is_path_included
 from src.repository.tenant import (
     AssetEmbeddingRepository,
     AssetMetadataRepository,
     AssetRepository,
     LibraryRepository,
+    PathFilterRepository,
     SearchSyncQueueRepository,
 )
 from src.storage.local import LocalStorage, get_storage
@@ -283,6 +285,16 @@ async def create_and_ingest(
     library = lib_repo.get_by_id(library_id)
     if library is None:
         raise HTTPException(status_code=404, detail="Library not found")
+
+    # Enforce path filters
+    filter_rows = PathFilterRepository(session).list_for_library(library_id)
+    if filter_rows:
+        filters = [PathFilter(type=f.type, pattern=f.pattern) for f in filter_rows]
+        if not is_path_included(rel_path, filters):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Path excluded by library filters: {rel_path}",
+            )
 
     # Parse optional JSON
     exif_data = _parse_optional_json(exif, "exif")

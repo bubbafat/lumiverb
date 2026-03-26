@@ -25,6 +25,7 @@ from rich.console import Console
 
 from src.cli.client import LumiverbClient
 from src.core.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
+from src.core.path_filter import PathFilter, is_path_included
 from src.workers.exif_extract import compute_sha256, extract_exif, parse_gps, parse_taken_at
 
 logger = logging.getLogger(__name__)
@@ -401,10 +402,15 @@ class _IngestStats:
         self.skipped = 0
 
 
-def _walk_library(root_path: Path, path_prefix: str | None = None) -> list[dict]:
+def _walk_library(
+    root_path: Path,
+    path_prefix: str | None = None,
+    filters: list[PathFilter] | None = None,
+) -> list[dict]:
     """Walk the library root and return a list of file descriptors.
 
     Each entry: {rel_path, file_size, file_mtime, media_type, ext}.
+    Files that don't pass the include/exclude filters are silently skipped.
     """
     walk_root = root_path
     if path_prefix:
@@ -422,6 +428,10 @@ def _walk_library(root_path: Path, path_prefix: str | None = None) -> list[dict]
             continue
 
         rel_path = str(p.relative_to(root_path))
+
+        if filters and not is_path_included(rel_path, filters):
+            continue
+
         stat = p.stat()
         file_mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
 
@@ -483,9 +493,16 @@ def run_ingest(
     root_path = Path(library["root_path"]).resolve()
     vision_model_id = library.get("vision_model_id", "")
 
-    # Step 1: Discover files
+    # Step 1: Load path filters
+    from src.cli.scanner import _load_path_filters
+
+    path_filters = _load_path_filters(client, library_id)
+    if path_filters:
+        console.print(f"Loaded {len(path_filters)} path filter(s)")
+
+    # Step 2: Discover files (filters applied during walk)
     console.print("[bold]Discovering files...[/bold]")
-    local_files = _walk_library(root_path, path_override)
+    local_files = _walk_library(root_path, path_override, filters=path_filters)
     console.print(f"Found {len(local_files):,} media files")
 
     if not local_files:
