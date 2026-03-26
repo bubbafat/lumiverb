@@ -5,7 +5,6 @@ export interface LibraryListItem {
   scan_status: string;
   last_scan_at: string | null;
   status: string;
-  vision_model_id: string;
   is_public: boolean;
 }
 
@@ -20,7 +19,6 @@ export interface LibraryResponse {
   name: string;
   root_path: string;
   scan_status: string;
-  vision_model_id: string;
   is_public: boolean;
 }
 

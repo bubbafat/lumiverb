@@ -32,8 +32,8 @@ def _ensure_library_asset(session: Session, library_id: str, asset_id: str, rel_
     session.execute(
         text(
             """
-            INSERT INTO libraries (library_id, name, root_path, scan_status, status, vision_model_id, created_at, updated_at)
-            VALUES (:lib_id, 'test', '/tmp', 'idle', 'active', 'moondream', NOW(), NOW())
+            INSERT INTO libraries (library_id, name, root_path, scan_status, status, created_at, updated_at)
+            VALUES (:lib_id, 'test', '/tmp', 'idle', 'active', NOW(), NOW())
             ON CONFLICT (library_id) DO NOTHING
             """
         ),
@@ -192,7 +192,7 @@ def test_search_sync_worker_counts_assets_not_rows(tenant_db_session: Session, t
         text(
             """
             INSERT INTO asset_metadata (metadata_id, asset_id, model_id, model_version, data, generated_at)
-            VALUES (:meta_id, :asset_id, 'moondream', '1', '{"description": "test", "tags": []}'::jsonb, NOW())
+            VALUES (:meta_id, :asset_id, 'test-vision-model', '1', '{"description": "test", "tags": []}'::jsonb, NOW())
             ON CONFLICT (asset_id, model_id, model_version) DO NOTHING
             """
         ),

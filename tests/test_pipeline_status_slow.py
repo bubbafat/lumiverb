@@ -31,8 +31,8 @@ def _ensure_library_asset(session: Session, library_id: str, asset_id: str, rel_
     session.execute(
         text(
             """
-            INSERT INTO libraries (library_id, name, root_path, scan_status, status, vision_model_id, created_at, updated_at)
-            VALUES (:lib_id, 'test', '/tmp', 'idle', 'active', 'moondream', NOW(), NOW())
+            INSERT INTO libraries (library_id, name, root_path, scan_status, status, created_at, updated_at)
+            VALUES (:lib_id, 'test', '/tmp', 'idle', 'active', NOW(), NOW())
             ON CONFLICT (library_id) DO NOTHING
             """
         ),

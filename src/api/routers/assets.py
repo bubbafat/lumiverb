@@ -402,19 +402,11 @@ def get_asset_by_path(
     ai_description: str | None = None
     ai_tags: list[str] = []
 
-    lib_repo = LibraryRepository(session)
-    library = lib_repo.get_by_id(asset.library_id)
-    if library is not None:
-        meta_repo = AssetMetadataRepository(session)
-        model_version = "1"
-        meta = meta_repo.get(
-            asset_id=asset.asset_id,
-            model_id=library.vision_model_id,
-            model_version=model_version,
-        )
-        if meta and meta.data:
-            ai_description = meta.data.get("description") or None
-            ai_tags = meta.data.get("tags") or []
+    meta_repo = AssetMetadataRepository(session)
+    meta = meta_repo.get_latest(asset_id=asset.asset_id)
+    if meta and meta.data:
+        ai_description = meta.data.get("description") or None
+        ai_tags = meta.data.get("tags") or []
 
     response.ai_description = ai_description
     response.ai_tags = ai_tags
@@ -478,19 +470,11 @@ def get_asset(
     ai_description: str | None = None
     ai_tags: list[str] = []
 
-    lib_repo = LibraryRepository(session)
-    library = lib_repo.get_by_id(asset.library_id)
-    if library is not None:
-        meta_repo = AssetMetadataRepository(session)
-        model_version = "1"
-        meta = meta_repo.get(
-            asset_id=asset.asset_id,
-            model_id=library.vision_model_id,
-            model_version=model_version,
-        )
-        if meta and meta.data:
-            ai_description = meta.data.get("description") or None
-            ai_tags = meta.data.get("tags") or []
+    meta_repo = AssetMetadataRepository(session)
+    meta = meta_repo.get_latest(asset_id=asset.asset_id)
+    if meta and meta.data:
+        ai_description = meta.data.get("description") or None
+        ai_tags = meta.data.get("tags") or []
 
     response.ai_description = ai_description
     response.ai_tags = ai_tags

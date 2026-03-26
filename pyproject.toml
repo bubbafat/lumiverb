@@ -50,7 +50,6 @@ workers = [
     "pyvips>=3.1.1",
     "imagehash>=4.3.0",
     "opencv-python-headless>=4.8.0",
-    "moondream>=0.0.5",
     "pyexiftool>=0.5",
     "mediapipe>=0.10.0,<0.11",
     "rapidfuzz>=3.0.0",

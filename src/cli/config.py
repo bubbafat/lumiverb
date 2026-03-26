@@ -13,6 +13,7 @@ class CLIConfig(BaseModel):
     admin_key: str = ""
     vision_api_url: str = ""
     vision_api_key: str = ""
+    vision_model_id: str = ""
 
 
 def _config_path() -> Path:

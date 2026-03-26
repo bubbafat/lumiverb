@@ -63,6 +63,7 @@ def config_set(
     admin_key: Annotated[str | None, typer.Option("--admin-key")] = None,
     vision_api_url: Annotated[str | None, typer.Option("--vision-api-url", help="Local vision API URL (overrides tenant default).")] = None,
     vision_api_key: Annotated[str | None, typer.Option("--vision-api-key", help="Local vision API key (overrides tenant default).")] = None,
+    vision_model_id: Annotated[str | None, typer.Option("--vision-model-id", help="Vision model ID override (default: auto-discover from API).")] = None,
 ) -> None:
     """Set API URL, API key, and/or admin key in ~/.lumiverb/config.json."""
     cfg = load_config()
@@ -76,6 +77,8 @@ def config_set(
         cfg.vision_api_url = vision_api_url.rstrip("/")
     if vision_api_key is not None:
         cfg.vision_api_key = vision_api_key
+    if vision_model_id is not None:
+        cfg.vision_model_id = vision_model_id
     save_config(cfg)
     console.print("[green]Config saved.[/green]")
 
@@ -92,6 +95,7 @@ def config_show() -> None:
     table.add_row("admin_key", escape("[set]") if cfg.admin_key else escape("[not set]"))
     table.add_row("vision_api_url", cfg.vision_api_url or escape("[not set — will use tenant default]"))
     table.add_row("vision_api_key", escape("[set]") if cfg.vision_api_key else escape("[not set — will use tenant default]"))
+    table.add_row("vision_model_id", cfg.vision_model_id or escape("[not set — will auto-discover from API]"))
     console.print(table)
 
 
@@ -126,7 +130,6 @@ def library_list() -> None:
     table.add_column("Name")
     table.add_column("Root path")
     table.add_column("Scan status")
-    table.add_column("Vision Model")
     table.add_column("Last scan")
     for lib in libraries:
         table.add_row(
@@ -134,33 +137,9 @@ def library_list() -> None:
             lib.get("name", ""),
             lib.get("root_path", ""),
             lib.get("scan_status", ""),
-            lib.get("vision_model_id", ""),
             lib.get("last_scan_at") or "—",
         )
     console.print(table)
-
-
-@library_app.command("set-model")
-def library_set_model(
-    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
-    model: Annotated[
-        str,
-        typer.Option(
-            "--model",
-            "-m",
-            help="OpenAI-compatible model ID (e.g. \"qwen3-visioncaption-2b\", \"llava:13b\").",
-        ),
-    ],
-) -> None:
-    """Set the vision model for a library."""
-    if not model.strip():
-        typer.echo("Model ID cannot be empty.")
-        raise typer.Exit(1)
-    client = LumiverbClient()
-    library_id = _resolve_library_id(client, library)
-    r = client.patch(f"/v1/libraries/{library_id}", json={"vision_model_id": model})
-    r.raise_for_status()
-    typer.echo(f"Library {library_id} now uses model: {model}")
 
 
 @library_app.command("delete")
@@ -248,11 +227,12 @@ def tenant_set_vision(
     tenant_id: Annotated[str, typer.Option("--tenant-id", "-t", help="Tenant ID.")],
     vision_api_url: Annotated[str | None, typer.Option("--vision-api-url", help="OpenAI-compatible vision API base URL.")] = None,
     vision_api_key: Annotated[str | None, typer.Option("--vision-api-key", help="API key for the vision endpoint.")] = None,
+    vision_model_id: Annotated[str | None, typer.Option("--vision-model-id", help="Vision model ID (default: auto-discover from API).")] = None,
     admin_key: Annotated[str | None, typer.Option("--admin-key", help="Admin key (falls back to saved config).")] = None,
 ) -> None:
-    """Set the vision API URL and/or key for a tenant."""
-    if vision_api_url is None and vision_api_key is None:
-        console.print("[red]Provide at least one of --vision-api-url or --vision-api-key.[/red]")
+    """Set the vision API URL, key, and/or model ID for a tenant."""
+    if vision_api_url is None and vision_api_key is None and vision_model_id is None:
+        console.print("[red]Provide at least one of --vision-api-url, --vision-api-key, or --vision-model-id.[/red]")
         raise typer.Exit(1)
     key = admin_key or get_admin_key()
     if not key:
@@ -264,10 +244,14 @@ def tenant_set_vision(
         body["vision_api_url"] = vision_api_url
     if vision_api_key is not None:
         body["vision_api_key"] = vision_api_key
+    if vision_model_id is not None:
+        body["vision_model_id"] = vision_model_id
     resp = client.patch(f"/v1/admin/tenants/{tenant_id}", json=body)
     data = resp.json()
     console.print(f"[green]Tenant {data['tenant_id']} updated.[/green]")
     console.print(f"  vision_api_url: {data['vision_api_url']}")
+    if data.get("vision_model_id"):
+        console.print(f"  vision_model_id: {data['vision_model_id']}")
 
 
 # ---------------------------------------------------------------------------

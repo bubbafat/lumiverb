@@ -9,6 +9,7 @@ from pathlib import Path
 from src.storage.artifact_store import ArtifactStore
 from src.workers.base import BaseWorker, BlockJob
 from src.workers.captions.factory import get_caption_provider
+from src.workers.captions.model_discovery import resolve_vision_model_id
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,9 @@ class VisionWorker(BaseWorker):
         if not vision_api_url:
             raise ValueError(f"No vision_api_url configured for asset {asset_id}")
         if not vision_model_id:
-            raise ValueError(f"No vision_model_id configured for asset {asset_id}")
+            vision_model_id = resolve_vision_model_id(
+                api_url=vision_api_url, api_key=vision_api_key,
+            )
 
         proxy_bytes = self._artifact_store.read_artifact(
             proxy_key, asset_id=asset_id, artifact_type="proxy"

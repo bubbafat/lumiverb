@@ -158,7 +158,7 @@ def vision_env(tmp_path_factory):
 
 
 def _post(auth: _AuthClient, asset_id: str, **kwargs):
-    body = {"model_id": "moondream2", "description": "a sunset", "tags": ["landscape"]}
+    body = {"model_id": "test-vision-model", "description": "a sunset", "tags": ["landscape"]}
     body.update(kwargs)
     return auth.post(f"/v1/assets/{asset_id}/vision", json=body)
 
@@ -219,7 +219,7 @@ def test_upsert_overwrites_existing_metadata(vision_env) -> None:
     with SMSession(tenant_engine) as db:
         stmt = select(AssetMetadata).where(
             AssetMetadata.asset_id == nosha_id,
-            AssetMetadata.model_id == "moondream2",
+            AssetMetadata.model_id == "test-vision-model",
         )
         rows = list(db.exec(stmt).all())
 
@@ -285,6 +285,6 @@ def test_missing_auth_returns_401(vision_env) -> None:
     _, raw_client, _, active_id, _, _, _ = vision_env
     r = raw_client.post(
         f"/v1/assets/{active_id}/vision",
-        json={"model_id": "moondream2", "description": "test", "tags": []},
+        json={"model_id": "test-vision-model", "description": "test", "tags": []},
     )
     assert r.status_code == 401

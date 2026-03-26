@@ -441,7 +441,7 @@ def test_update_scene_vision(video_api_client: tuple[TestClient, str, str, str, 
     r = client.patch(
         f"/v1/video/scenes/{scene_id}",
         json={
-            "model_id": "moondream",
+            "model_id": "test-vision-model",
             "model_version": "1",
             "description": "AI-generated description of the scene",
             "tags": ["indoor", "people"],

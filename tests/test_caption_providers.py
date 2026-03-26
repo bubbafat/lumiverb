@@ -51,10 +51,10 @@ def test_openai_strips_thinking_blocks():
 
 
 @pytest.mark.fast
-def test_embedding_config_moondream_is_clip():
+def test_embedding_config_default_model_is_clip():
     from src.models.registry import get_embedding_config
 
-    config = get_embedding_config("moondream")
+    config = get_embedding_config("test-vision-model")
     assert config.embedding_provider == "clip"
     assert config.embedding_dim == 512
 

@@ -226,9 +226,9 @@ def _insert_library(conn, *, library_id: str) -> None:
         text(
             """
             INSERT INTO libraries
-              (library_id, name, root_path, scan_status, status, vision_model_id, created_at, updated_at)
+              (library_id, name, root_path, scan_status, status, created_at, updated_at)
             VALUES
-              (:id, :name, '/tmp', 'idle', 'active', 'moondream', NOW(), NOW())
+              (:id, :name, '/tmp', 'idle', 'active', NOW(), NOW())
             ON CONFLICT DO NOTHING
             """
         ),

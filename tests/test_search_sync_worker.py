@@ -133,7 +133,7 @@ def test_ai_vision_completion_enqueues_search_sync(search_sync_env: tuple, tmp_p
     complete_vis = client.post(
         f"/v1/jobs/{vis_job['job_id']}/complete",
         json={
-            "model_id": "moondream",
+            "model_id": "test-vision-model",
             "model_version": "2",
             "description": "A tiny blue square.",
             "tags": ["blue", "square"],
@@ -219,7 +219,7 @@ def test_search_sync_worker_drains_queue_and_marks_synced(search_sync_env: tuple
     client.post(
         f"/v1/jobs/{vis_job['job_id']}/complete",
         json={
-            "model_id": "moondream",
+            "model_id": "test-vision-model",
             "model_version": "1",
             "description": "A bright red square.",
             "tags": ["red", "square"],
@@ -279,6 +279,6 @@ def test_search_sync_worker_drains_queue_and_marks_synced(search_sync_env: tuple
     assert doc["description"] == "A bright red square."
     assert doc["tags"] == ["red", "square"]
     # Provenance comes from asset_metadata (library's vision model)
-    assert doc["model_id"] == "moondream"
+    assert doc["model_id"] == "test-vision-model"
     assert doc["model_version"] == "1"
 

@@ -124,7 +124,7 @@ def get_next_job(
         "root_path": library.root_path,
         "proxy_key": asset.proxy_key,
         "thumbnail_key": asset.thumbnail_key,
-        "vision_model_id": library.vision_model_id,
+        "vision_model_id": tenant.vision_model_id if tenant else "",
         "vision_api_url": tenant.vision_api_url if tenant else "",
         "vision_api_key": tenant.vision_api_key if tenant else "",
     }

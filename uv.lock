@@ -979,7 +979,6 @@ all = [
     { name = "httpx" },
     { name = "imagehash" },
     { name = "mediapipe" },
-    { name = "moondream" },
     { name = "open-clip-torch" },
     { name = "opencv-python-headless" },
     { name = "pyexiftool" },
@@ -1000,7 +999,6 @@ dev = [
     { name = "httpx" },
     { name = "imagehash" },
     { name = "mediapipe" },
-    { name = "moondream" },
     { name = "mypy" },
     { name = "open-clip-torch" },
     { name = "opencv-python-headless" },
@@ -1021,7 +1019,6 @@ dev = [
 workers = [
     { name = "imagehash" },
     { name = "mediapipe" },
-    { name = "moondream" },
     { name = "open-clip-torch" },
     { name = "opencv-python-headless" },
     { name = "pyexiftool" },
@@ -1043,7 +1040,6 @@ requires-dist = [
     { name = "lumiverb", extras = ["cli"], marker = "extra == 'all'" },
     { name = "lumiverb", extras = ["workers"], marker = "extra == 'all'" },
     { name = "mediapipe", marker = "extra == 'workers'", specifier = ">=0.10.0,<0.11" },
-    { name = "moondream", marker = "extra == 'workers'", specifier = ">=0.0.5" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8" },
     { name = "open-clip-torch", marker = "extra == 'workers'", specifier = ">=3.3.0" },
     { name = "opencv-python-headless", marker = "extra == 'workers'", specifier = ">=4.8.0" },
@@ -1240,18 +1236,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/24/d9/ca1be234911c76ccd87a9e0d8210394153cb6ad9b5da65a231aff8769d6f/mediapipe-0.10.32-py3-none-macosx_11_0_arm64.whl", hash = "sha256:b62178b7585e0bb8789075c43bbb3e352fbc4a8f765797fded509f86a098b29b", size = 19386286, upload-time = "2026-01-22T16:15:01.042Z" },
     { url = "https://files.pythonhosted.org/packages/e3/98/00cd8b2dcb563f2298655633e6611a791b2c1a7df1dae064b2b96084f1bf/mediapipe-0.10.32-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:4b0941fbbbce41862f13cb1850c4878c13dbc62cd5e81e74880051b7a20ce3b6", size = 10331072, upload-time = "2026-01-22T16:15:04.747Z" },
     { url = "https://files.pythonhosted.org/packages/fe/63/c9172142521fc334fa891be9ef6259a3790502041b395127d63755cb3f0b/mediapipe-0.10.32-py3-none-win_amd64.whl", hash = "sha256:438d98977a4e1b0f88070ad16537a328912f847ce9debf236da047b0b483cbfd", size = 10211344, upload-time = "2026-01-22T16:15:11.716Z" },
-]
-
-[[package]]
-name = "moondream"
-version = "0.2.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "pillow" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/a5/d7/85e4d020c4d00f4842b35773e4442fe5cea310e4ebc6a1856e55d3e1a658/moondream-0.2.0.tar.gz", hash = "sha256:402655cc23b94490512caa1cf9f250fc34d133dfdbac201f78b32cbdeabdae0d", size = 97837, upload-time = "2025-11-25T18:22:04.477Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/f2/cf/369278487161c8d8eadd1a6cee8b0bd629936a1b263bbeccf71342b24dc8/moondream-0.2.0-py3-none-any.whl", hash = "sha256:ca722763bddcce7c13faf87fa3e6b834f86f7bea22bc8794fc1fe15f2d826d93", size = 96169, upload-time = "2025-11-25T18:22:03.465Z" },
 ]
 
 [[package]]

@@ -10,6 +10,7 @@ from typing import Callable
 from src.storage.artifact_store import ArtifactStore
 from src.workers.base import BaseWorker, BlockJob
 from src.workers.captions.factory import get_caption_provider
+from src.workers.captions.model_discovery import resolve_vision_model_id
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +47,13 @@ class VideoVisionWorker(BaseWorker):
         asset_id = job["asset_id"]
         if job.get("media_type") != "video":
             raise BlockJob(f"video-vision requires a video asset; got media_type={job.get('media_type')!r} for asset {asset_id}")
-        vision_model_id = job.get("vision_model_id", "")
         vision_api_url = job.get("vision_api_url", "")
         vision_api_key = job.get("vision_api_key") or None
+        vision_model_id = job.get("vision_model_id", "")
+        if not vision_model_id and vision_api_url:
+            vision_model_id = resolve_vision_model_id(
+                api_url=vision_api_url, api_key=vision_api_key,
+            )
 
         resp = self._client.get(f"/v1/video/{asset_id}/scenes")
         resp.raise_for_status()

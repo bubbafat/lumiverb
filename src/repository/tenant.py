@@ -65,7 +65,7 @@ class LibraryRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def create(self, name: str, root_path: str, vision_model_id: str = "") -> Library:
+    def create(self, name: str, root_path: str) -> Library:
         """Generate library_id as lib_ + ULID(), insert, return Library."""
         library_id = "lib_" + str(ULID())
         library = Library(
@@ -73,7 +73,6 @@ class LibraryRepository:
             name=name,
             root_path=root_path,
             scan_status="idle",
-            vision_model_id=vision_model_id,
         )
         self._session.add(library)
         self._session.commit()
@@ -1141,7 +1140,7 @@ class AssetRepository:
         """
         conditions = ["a.library_id = :library_id"]
         params: dict = {"library_id": filter.library_id, "job_type": job_type}
-        join_libraries = filter.missing_ai or (job_type == "ai_vision" and not force and not filter.retry_failed)
+        join_libraries = False
 
         # Single asset shortcut
         if filter.asset_id:
@@ -1170,7 +1169,6 @@ class AssetRepository:
                     NOT EXISTS (
                         SELECT 1 FROM asset_metadata m
                         WHERE m.asset_id = a.asset_id
-                          AND m.model_id = l.vision_model_id
                     )
                     """
                 )
@@ -1251,7 +1249,6 @@ class AssetRepository:
                     NOT EXISTS (
                         SELECT 1 FROM asset_metadata m
                         WHERE m.asset_id = a.asset_id
-                          AND m.model_id = l.vision_model_id
                     )
                     """
                 )
@@ -1335,6 +1332,16 @@ class AssetMetadataRepository:
             AssetMetadata.asset_id == asset_id,
             AssetMetadata.model_id == model_id,
             AssetMetadata.model_version == model_version,
+        )
+        return self._session.exec(stmt).first()
+
+    def get_latest(self, asset_id: str) -> AssetMetadata | None:
+        """Return the most recent metadata row for the asset, regardless of model."""
+        stmt = (
+            select(AssetMetadata)
+            .where(AssetMetadata.asset_id == asset_id)
+            .order_by(AssetMetadata.generated_at.desc())  # type: ignore[union-attr]
+            .limit(1)
         )
         return self._session.exec(stmt).first()
 

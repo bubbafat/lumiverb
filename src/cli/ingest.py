@@ -193,6 +193,36 @@ def _call_vision_ai(
     }
 
 
+def _resolve_vision_config(
+    client: "LumiverbClient",
+) -> tuple[str, str | None, str, str]:
+    """Resolve vision API URL, key, model ID, and source label.
+
+    Resolution order: client config > tenant config > auto-discover.
+    Returns (vision_api_url, vision_api_key, vision_model_id, source_label).
+    """
+    from src.cli.config import load_config as _load_cli_config
+    from src.workers.captions.model_discovery import resolve_vision_model_id
+
+    cli_cfg = _load_cli_config()
+    ctx = client.get("/v1/tenant/context").json()
+
+    vision_api_url = cli_cfg.vision_api_url or ctx.get("vision_api_url", "")
+    vision_api_key = cli_cfg.vision_api_key or ctx.get("vision_api_key") or None
+    vision_source = "client config" if cli_cfg.vision_api_url else "tenant config"
+
+    vision_model_id = ""
+    if vision_api_url:
+        vision_model_id = resolve_vision_model_id(
+            client_model_id=cli_cfg.vision_model_id,
+            tenant_model_id=ctx.get("vision_model_id", ""),
+            api_url=vision_api_url,
+            api_key=vision_api_key,
+        )
+
+    return vision_api_url, vision_api_key, vision_model_id, vision_source
+
+
 def _detect_media_type(ext: str) -> str:
     """Return a simple media type string based on file extension."""
     if ext in VIDEO_EXTENSIONS:
@@ -543,7 +573,6 @@ def run_ingest(
     """
     library_id = library["library_id"]
     root_path = Path(library["root_path"]).resolve()
-    vision_model_id = library.get("vision_model_id", "")
 
     # Step 1: Load path filters (tenant + library)
     tenant_filters = _load_tenant_filters(client)
@@ -569,15 +598,8 @@ def run_ingest(
     else:
         existing = set()
 
-    # Step 3: Get vision config — client config overrides tenant default
-    from src.cli.config import load_config as _load_cli_config
-
-    cli_cfg = _load_cli_config()
-    ctx = client.get("/v1/tenant/context").json()
-
-    vision_api_url = cli_cfg.vision_api_url or ctx.get("vision_api_url", "")
-    vision_api_key = cli_cfg.vision_api_key or ctx.get("vision_api_key") or None
-    vision_source = "client config" if cli_cfg.vision_api_url else "tenant config"
+    # Step 3: Resolve vision config (client > tenant > auto-discover)
+    vision_api_url, vision_api_key, vision_model_id, vision_source = _resolve_vision_config(client)
 
     include_images = media_type_filter in ("all", "image")
     include_videos = media_type_filter in ("all", "video")
@@ -725,17 +747,10 @@ def run_backfill_vision(
     console: Console,
 ) -> _IngestStats:
     """Backfill AI descriptions for assets that don't have them."""
-    from src.cli.config import load_config as _load_cli_config
-
     library_id = library["library_id"]
-    vision_model_id = library.get("vision_model_id", "")
 
-    # Resolve vision config (client > tenant)
-    cli_cfg = _load_cli_config()
-    ctx = client.get("/v1/tenant/context").json()
-    vision_api_url = cli_cfg.vision_api_url or ctx.get("vision_api_url", "")
-    vision_api_key = cli_cfg.vision_api_key or ctx.get("vision_api_key") or None
-    vision_source = "client config" if cli_cfg.vision_api_url else "tenant config"
+    # Resolve vision config (client > tenant > auto-discover)
+    vision_api_url, vision_api_key, vision_model_id, vision_source = _resolve_vision_config(client)
 
     if not vision_api_url:
         console.print("[red]Vision AI: not configured.[/red]")

@@ -10,11 +10,10 @@ from src.core.config import get_settings
 from src.workers.output_events import emit_event
 from src.core.io_utils import normalize_path_prefix
 from src.core.utils import utcnow
-from src.models.tenant import Asset, AssetMetadata, Library, VideoScene
+from src.models.tenant import Asset, AssetMetadata, VideoScene
 from src.repository.tenant import (
     AssetMetadataRepository,
     AssetRepository,
-    LibraryRepository,
     SearchSyncQueueRepository,
     VideoSceneRepository,
 )
@@ -58,7 +57,7 @@ class SearchSyncWorker:
         self._path_prefix = normalize_path_prefix(path_prefix)
         self._asset_repo = AssetRepository(session)
         self._meta_repo = AssetMetadataRepository(session)
-        self._library_repo = LibraryRepository(session)
+
         self._queue_repo = SearchSyncQueueRepository(session)
         self._quickwit = quickwit or QuickwitClient()
         self._output_mode = output_mode
@@ -195,7 +194,6 @@ class SearchSyncWorker:
         scene_docs: list[dict] = []
         sync_ids: list[str] = []
 
-        library = self._library_repo.get_by_id(self._library_id)
         scene_repo = VideoSceneRepository(self._session)
         for row in batch:
             if row.scene_id:
@@ -211,7 +209,7 @@ class SearchSyncWorker:
                     f"scene row {row.sync_id}: asset {asset.asset_id} belongs to library "
                     f"{asset.library_id}, not {self._library_id} — cross-library claim leak"
                 )
-                scene_doc = self._build_scene_document(scene, asset, library)
+                scene_doc = self._build_scene_document(scene, asset)
                 scene_docs.append(scene_doc)
                 sync_ids.append(row.sync_id)
                 asset_status[row.asset_id] = "synced"
@@ -234,21 +232,13 @@ class SearchSyncWorker:
                     f"asset row {row.sync_id}: asset {asset.asset_id} belongs to library "
                     f"{asset.library_id}, not {self._library_id} — cross-library claim leak"
                 )
-                lib = self._library_repo.get_by_id(asset.library_id)
-                vision_model_id = lib.vision_model_id if lib else ""
-                model_version = "1"
-
-                meta: AssetMetadata | None = self._meta_repo.get(
+                meta: AssetMetadata | None = self._meta_repo.get_latest(
                     asset_id=asset.asset_id,
-                    model_id=vision_model_id,
-                    model_version=model_version,
                 )
                 if meta is None:
                     logger.debug(
-                        "No AI metadata for asset_id=%s model=%s version=%s; skipping",
+                        "No AI metadata for asset_id=%s; skipping",
                         asset.asset_id,
-                        vision_model_id,
-                        model_version,
                     )
                     sync_ids.append(row.sync_id)
                     if asset_status.get(asset_id) != "synced":
@@ -317,10 +307,8 @@ class SearchSyncWorker:
         }
 
     def _build_scene_document(
-        self, scene: VideoScene, asset: Asset, library: Library | None
+        self, scene: VideoScene, asset: Asset,
     ) -> dict:
-        model_id = library.vision_model_id if library else ""
-        model_version = "1"
         indexed_at = int(utcnow().timestamp())
         return {
             "id": scene.scene_id,
@@ -337,8 +325,8 @@ class SearchSyncWorker:
             "tags": scene.tags or [],
             "sharpness_score": scene.sharpness_score,
             "keep_reason": scene.keep_reason,
-            "model_id": model_id,
-            "model_version": model_version,
+            "model_id": "",
+            "model_version": "",
             "indexed_at": indexed_at,
         }
 

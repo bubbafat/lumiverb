@@ -30,7 +30,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
     Config (from Settings):
         vision_api_url: base URL (e.g. http://localhost:1234/v1)
 
-    The model ID is passed at construction time (from library.vision_model_id).
+    The model ID is passed at construction time (auto-discovered or from config).
     """
 
     def __init__(self, base_url: str, model: str, api_key: str | None = None) -> None:

@@ -88,7 +88,7 @@ def search_client() -> Tuple[_AuthClient, str, str]:
 
 
 def _insert_asset_with_metadata(tenant_url: str, library_id: str, description: str, tag: str) -> str:
-    """Insert an asset and moondream metadata row directly into tenant DB."""
+    """Insert an asset and metadata row directly into tenant DB."""
     engine = create_engine(tenant_url)
     asset_id = "ast_" + secrets.token_urlsafe(8)
     with engine.begin() as conn:
@@ -121,7 +121,7 @@ def _insert_asset_with_metadata(tenant_url: str, library_id: str, description: s
                     metadata_id, asset_id, model_id, model_version, generated_at, data
                 )
                 VALUES (
-                    :metadata_id, :asset_id, 'moondream', '2', NOW(),
+                    :metadata_id, :asset_id, 'test-vision-model', '2', NOW(),
                     :data
                 )
                 """

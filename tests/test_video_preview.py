@@ -393,7 +393,7 @@ def test_asset_status_proxy_ready_and_described(
     r_complete_vis = client.post(
         f"/v1/jobs/{vis_job_id}/complete",
         json={
-            "model_id": "moondream",
+            "model_id": "test-vision-model",
             "model_version": "1",
             "description": "A test image",
             "tags": ["test"],

@@ -21,6 +21,7 @@ class TenantContextResponse(BaseModel):
     tenant_id: str
     vision_api_url: str = ""
     vision_api_key: str = ""
+    vision_model_id: str = ""
 
 
 class TenantFilterDefaultItem(BaseModel):
@@ -63,6 +64,7 @@ def get_tenant_context(request: Request) -> TenantContextResponse:
         tenant_id=tenant_id,
         vision_api_url=tenant.vision_api_url if tenant else "",
         vision_api_key=tenant.vision_api_key if tenant else "",
+        vision_model_id=tenant.vision_model_id if tenant else "",
     )
 
 

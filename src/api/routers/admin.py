@@ -42,11 +42,13 @@ class TenantListItem(BaseModel):
 class UpdateTenantRequest(BaseModel):
     vision_api_url: str | None = None
     vision_api_key: str | None = None
+    vision_model_id: str | None = None
 
 
 class UpdateTenantResponse(BaseModel):
     tenant_id: str
     vision_api_url: str
+    vision_model_id: str = ""
 
 
 class CreateTenantKeyRequest(BaseModel):
@@ -190,12 +192,15 @@ def update_tenant(
         tenant.vision_api_url = body.vision_api_url
     if body.vision_api_key is not None:
         tenant.vision_api_key = body.vision_api_key
+    if body.vision_model_id is not None:
+        tenant.vision_model_id = body.vision_model_id
     session.add(tenant)
     session.commit()
     session.refresh(tenant)
     return UpdateTenantResponse(
         tenant_id=tenant.tenant_id,
         vision_api_url=tenant.vision_api_url,
+        vision_model_id=tenant.vision_model_id,
     )
 
 

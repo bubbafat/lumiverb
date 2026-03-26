@@ -49,14 +49,14 @@ def test_video_vision_worker_reads_scene_rep_and_updates_scene() -> None:
             {
                 "asset_id": "ast_1",
                 "media_type": "video",
-                "vision_model_id": "moondream",
+                "vision_model_id": "test-vision-model",
                 "vision_api_url": "http://example/v1",
                 "vision_api_key": None,
                 "rel_path": "clip.mp4",
             }
         )
 
-    assert result["model_id"] == "moondream"
+    assert result["model_id"] == "test-vision-model"
     artifact_store.read_artifact.assert_called_once_with(
         "t/lib/scenes/00/ast_1_0000001000.jpg",
         asset_id="ast_1",
@@ -99,7 +99,7 @@ def test_video_vision_worker_temp_file_cleaned_up_on_provider_error() -> None:
                 {
                     "asset_id": "ast_1",
                     "media_type": "video",
-                    "vision_model_id": "moondream",
+                    "vision_model_id": "test-vision-model",
                     "vision_api_url": "http://example/v1",
                     "vision_api_key": None,
                     "rel_path": "clip.mp4",

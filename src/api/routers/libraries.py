@@ -3,7 +3,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel
 from sqlmodel import Session
 from src.api.dependencies import get_tenant_session, require_editor
 from src.core.database import get_control_session
@@ -19,20 +19,11 @@ router = APIRouter(prefix="/v1/libraries", tags=["libraries"])
 class CreateLibraryRequest(BaseModel):
     name: str
     root_path: str
-    vision_model_id: str = "moondream"
 
 
 class LibraryUpdateRequest(BaseModel):
     name: str | None = None
-    vision_model_id: str | None = None
     is_public: bool | None = None
-
-    @field_validator("vision_model_id")
-    @classmethod
-    def vision_model_id_not_empty(cls, v: str | None) -> str | None:
-        if v is not None and not v:
-            raise ValueError("vision_model_id must not be empty")
-        return v
 
 
 class LibraryResponse(BaseModel):
@@ -40,7 +31,6 @@ class LibraryResponse(BaseModel):
     name: str
     root_path: str
     scan_status: str
-    vision_model_id: str
     is_public: bool = False
 
 
@@ -51,7 +41,6 @@ class LibraryListItem(BaseModel):
     scan_status: str
     last_scan_at: str | None
     status: str = "active"
-    vision_model_id: str = ""
     is_public: bool = False
 
 
@@ -81,7 +70,7 @@ def create_library(
     existing = repo.get_by_name(body.name)
     if existing is not None:
         raise HTTPException(status_code=409, detail="A library with this name already exists")
-    library = repo.create(name=body.name, root_path=body.root_path, vision_model_id=body.vision_model_id)
+    library = repo.create(name=body.name, root_path=body.root_path)
     tenant_id = getattr(request.state, "tenant_id", None)
     if tenant_id:
         path_filter_repo = PathFilterRepository(session)
@@ -91,7 +80,6 @@ def create_library(
         name=library.name,
         root_path=library.root_path,
         scan_status=library.scan_status,
-        vision_model_id=library.vision_model_id,
         is_public=library.is_public,
     )
 
@@ -112,7 +100,6 @@ def list_libraries(
             scan_status=lib.scan_status,
             last_scan_at=lib.last_scan_at.isoformat() if lib.last_scan_at else None,
             status=lib.status,
-            vision_model_id=lib.vision_model_id,
             is_public=lib.is_public,
         )
         for lib in libraries
@@ -156,7 +143,6 @@ def get_library(
         name=library.name,
         root_path=library.root_path,
         scan_status=library.scan_status,
-        vision_model_id=library.vision_model_id,
         is_public=library.is_public,
     )
 
@@ -169,13 +155,11 @@ def update_library(
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
 ) -> LibraryResponse:
-    """Update library name, vision_model_id, and/or is_public."""
+    """Update library name and/or is_public."""
     repo = LibraryRepository(session)
     library = repo.get_by_id(library_id)
     if library is None:
         raise HTTPException(status_code=404, detail="Library not found")
-    if body.vision_model_id is not None:
-        library.vision_model_id = body.vision_model_id
     if body.name is not None:
         library.name = body.name
     if body.is_public is not None:
@@ -201,7 +185,6 @@ def update_library(
         name=library.name,
         root_path=library.root_path,
         scan_status=library.scan_status,
-        vision_model_id=library.vision_model_id,
         is_public=library.is_public,
     )
 

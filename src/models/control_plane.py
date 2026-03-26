@@ -19,6 +19,7 @@ class Tenant(SQLModel, table=True):
     status: str = Field(default="active", nullable=False)
     vision_api_url: str = Field(default="", nullable=False)
     vision_api_key: str = Field(default="", nullable=False)
+    vision_model_id: str = Field(default="", nullable=False)
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),

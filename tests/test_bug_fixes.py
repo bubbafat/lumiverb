@@ -448,14 +448,14 @@ def test_video_vision_worker_empty_string_description_not_treated_as_missing() -
             {
                 "asset_id": "ast_fix4",
                 "media_type": "video",
-                "vision_model_id": "moondream",
+                "vision_model_id": "test-vision-model",
                 "vision_api_url": "http://example/v1",
                 "vision_api_key": None,
                 "rel_path": "fix4.mp4",
             }
         )
 
-    assert result["model_id"] == "moondream"
+    assert result["model_id"] == "test-vision-model"
 
 
 # ---------------------------------------------------------------------------
@@ -484,7 +484,7 @@ def test_vision_worker_missing_proxy_key_raises_block_job() -> None:
         "job_id": "job_fix5_test",
         "asset_id": "ast_fix5",
         # proxy_key intentionally absent
-        "vision_model_id": "moondream",
+        "vision_model_id": "test-vision-model",
         "vision_api_url": "http://localhost:1234/v1",
         "vision_api_key": None,
     }

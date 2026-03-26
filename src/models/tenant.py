@@ -39,7 +39,6 @@ class Library(SQLModel, table=True):
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
-    vision_model_id: str = Field(default="", nullable=False)
     is_public: bool = Field(default=False, nullable=False)
     revision: int = Field(default=0, nullable=False)
 

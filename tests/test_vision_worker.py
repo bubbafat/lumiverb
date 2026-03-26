@@ -17,7 +17,7 @@ def test_vision_worker_raises_on_empty_description_and_tags() -> None:
         "job_id": "job-1",
         "asset_id": "asset-1",
         "proxy_key": "proxies/asset-1.jpg",
-        "vision_model_id": "moondream",
+        "vision_model_id": "test-vision-model",
         "vision_api_url": "http://localhost:1234/v1",
         "vision_api_key": None,
     }
@@ -33,7 +33,7 @@ def test_vision_worker_raises_on_empty_description_and_tags() -> None:
 
     assert result["description"] == ""
     assert result["tags"] == []
-    assert result["model_id"] == "moondream"
+    assert result["model_id"] == "test-vision-model"
 
 
 @pytest.mark.fast
@@ -48,7 +48,7 @@ def test_vision_worker_temp_file_cleaned_up() -> None:
         "job_id": "job-2",
         "asset_id": "asset-2",
         "proxy_key": "proxies/asset-2.jpg",
-        "vision_model_id": "moondream",
+        "vision_model_id": "test-vision-model",
         "vision_api_url": "http://localhost:1234/v1",
         "vision_api_key": None,
     }
@@ -240,7 +240,7 @@ def test_ai_vision_job_complete_stores_metadata(vision_worker_env: tuple, tmp_pa
     complete_vis = client.post(
         f"/v1/jobs/{vis_job['job_id']}/complete",
         json={
-            "model_id": "moondream",
+            "model_id": "test-vision-model",
             "model_version": "2",
             "description": "A blue square.",
             "tags": ["blue", "square"],
@@ -254,13 +254,13 @@ def test_ai_vision_job_complete_stores_metadata(vision_worker_env: tuple, tmp_pa
         row = conn.execute(
             text(
                 "SELECT model_id, model_version, data FROM asset_metadata "
-                "WHERE asset_id = :asset_id AND model_id = 'moondream' AND model_version = '2'"
+                "WHERE asset_id = :asset_id AND model_id = 'test-vision-model' AND model_version = '2'"
             ),
             {"asset_id": asset_id},
         ).fetchone()
     engine.dispose()
     assert row is not None
-    assert row[0] == "moondream"
+    assert row[0] == "test-vision-model"
     assert row[1] == "2"
     data = _jsonb(row[2])
     assert data["description"] == "A blue square."
@@ -313,7 +313,7 @@ def test_ai_vision_job_complete_upsert(vision_worker_env: tuple, tmp_path: Path)
     ).json()
     client.post(
         f"/v1/jobs/{job1['job_id']}/complete",
-        json={"model_id": "moondream", "model_version": "2", "description": "First", "tags": ["one"]},
+        json={"model_id": "test-vision-model", "model_version": "2", "description": "First", "tags": ["one"]},
         headers={"Authorization": f"Bearer {api_key}"},
     )
 
@@ -328,7 +328,7 @@ def test_ai_vision_job_complete_upsert(vision_worker_env: tuple, tmp_path: Path)
     ).json()
     client.post(
         f"/v1/jobs/{job2['job_id']}/complete",
-        json={"model_id": "moondream", "model_version": "2", "description": "Second", "tags": ["two"]},
+        json={"model_id": "test-vision-model", "model_version": "2", "description": "Second", "tags": ["two"]},
         headers={"Authorization": f"Bearer {api_key}"},
     )
 
@@ -337,14 +337,14 @@ def test_ai_vision_job_complete_upsert(vision_worker_env: tuple, tmp_path: Path)
         count = conn.execute(
             text(
                 "SELECT COUNT(*) FROM asset_metadata "
-                "WHERE asset_id = :asset_id AND model_id = 'moondream' AND model_version = '2'"
+                "WHERE asset_id = :asset_id AND model_id = 'test-vision-model' AND model_version = '2'"
             ),
             {"asset_id": asset_id},
         ).scalar_one()
         row = conn.execute(
             text(
                 "SELECT data FROM asset_metadata "
-                "WHERE asset_id = :asset_id AND model_id = 'moondream' AND model_version = '2'"
+                "WHERE asset_id = :asset_id AND model_id = 'test-vision-model' AND model_version = '2'"
             ),
             {"asset_id": asset_id},
         ).fetchone()
@@ -394,7 +394,7 @@ def test_missing_ai_filter(vision_worker_env: tuple, tmp_path: Path) -> None:
             {
                 "metadata_id": "meta_" + secrets.token_urlsafe(8),
                 "asset_id": asset_with_meta,
-                "model_id": "moondream",
+                "model_id": "test-vision-model",
                 "model_version": "1",
                 "generated_at": datetime.now(timezone.utc),
                 "data": json.dumps({"description": "already", "tags": []}),
