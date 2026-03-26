@@ -12,8 +12,9 @@ class BlockJob(Exception):
 from rich.console import Console
 
 from src.cli.progress import UnifiedProgress, UnifiedProgressSpec
-from src.core.config import get_settings
 from src.workers.output_events import emit_event
+
+WORKER_IDLE_POLL_SECONDS = 5.0
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +101,6 @@ class BaseWorker:
 
     def run(self) -> None:
         """Main loop: claim, process, complete or fail. Respects once flag."""
-        settings = get_settings()
         processed = 0
         failed = 0
         last_rel_path = ""
@@ -130,7 +130,7 @@ class BaseWorker:
                         if bar is not None:
                             bar.finish()
                         break
-                    time.sleep(settings.worker_idle_poll_seconds)
+                    time.sleep(WORKER_IDLE_POLL_SECONDS)
                     continue
                 job_id = job["job_id"]
                 try:

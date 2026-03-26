@@ -1,12 +1,11 @@
 """ArtifactStore: unified interface for reading and writing media artifacts.
 
 Provides two implementations:
-  LocalArtifactStore  — wraps LocalStorage; reads/writes directly to DATA_DIR.
-  RemoteArtifactStore — calls the upload/download artifact API endpoints.
+  LocalArtifactStore  — wraps LocalStorage; reads/writes directly to DATA_DIR (server-side).
+  RemoteArtifactStore — calls the upload/download artifact API endpoints (CLI workers).
 
-Mode is selected via the LUMIVERB_ARTIFACT_STORE env var ("local" or "remote")
-or the --remote-storage CLI flag. Workers receive an ArtifactStore via constructor
-injection; they never select the implementation themselves.
+CLI workers always use RemoteArtifactStore. LocalArtifactStore is used server-side
+by the API artifact endpoints.
 """
 
 from __future__ import annotations

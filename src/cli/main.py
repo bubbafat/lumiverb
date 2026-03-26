@@ -602,31 +602,17 @@ def worker_proxy(
         str,
         typer.Option("--output", help="Output mode: human (default) or jsonl for structured events."),
     ] = "human",
-    remote_storage: Annotated[
-        bool,
-        typer.Option("--remote-storage", help="Upload artifacts via API instead of writing to local DATA_DIR."),
-    ] = False,
 ) -> None:
     """Generate proxies and thumbnails for pending image assets."""
-    import os
-    from src.storage.artifact_store import get_artifact_store
-    from src.storage.local import LocalStorage
+    from src.storage.artifact_store import RemoteArtifactStore
     from src.workers.proxy import ProxyWorker
 
     client = LumiverbClient()
-    storage = LocalStorage()
-    # tenant_id needed for storage path computation only (from lightweight context)
-    ctx = client.get("/v1/tenant/context").json()
-    tenant_id = ctx["tenant_id"]
-
     library_id: str = _resolve_library_id(client, library)
-
-    mode = "remote" if (remote_storage or os.environ.get("LUMIVERB_ARTIFACT_STORE") == "remote") else "local"
-    artifact_store = get_artifact_store(mode, storage=storage, client=client, tenant_id=tenant_id)
 
     worker = ProxyWorker(
         client=client,
-        artifact_store=artifact_store,
+        artifact_store=RemoteArtifactStore(client=client),
         concurrency=concurrency,
         once=once,
         library_id=library_id,
@@ -661,31 +647,17 @@ def worker_vision(
         str,
         typer.Option("--output", help="Output mode: human (default) or jsonl for structured events."),
     ] = "human",
-    remote_storage: Annotated[
-        bool,
-        typer.Option("--remote-storage", help="Download proxy artifacts via API instead of reading from local DATA_DIR."),
-    ] = False,
 ) -> None:
     """Run the AI vision worker (Moondream descriptions and tags)."""
-    import os
-    from src.storage.artifact_store import get_artifact_store
-    from src.storage.local import get_storage
+    from src.storage.artifact_store import RemoteArtifactStore
     from src.workers.vision_worker import VisionWorker
 
     client = LumiverbClient()
-    storage = get_storage()
     library_id = _resolve_library_id(client, library)
-
-    mode = "remote" if (remote_storage or os.environ.get("LUMIVERB_ARTIFACT_STORE") == "remote") else "local"
-    if mode == "remote":
-        artifact_store = get_artifact_store(mode, client=client)
-    else:
-        ctx = client.get("/v1/tenant/context").json()
-        artifact_store = get_artifact_store(mode, storage=storage, client=client, tenant_id=ctx["tenant_id"])
 
     worker = VisionWorker(
         client=client,
-        artifact_store=artifact_store,
+        artifact_store=RemoteArtifactStore(client=client),
         once=once,
         library_id=library_id,
         output_mode=output,
@@ -703,30 +675,18 @@ def worker_video_preview(
         str,
         typer.Option("--output", help="Output mode: human (default) or jsonl for structured events."),
     ] = "human",
-    remote_storage: Annotated[
-        bool,
-        typer.Option("--remote-storage", help="Upload artifacts via API instead of writing to local DATA_DIR."),
-    ] = False,
 ) -> None:
     """Run the video preview worker (short MP4 previews for video assets)."""
-    import os
-    from src.storage.artifact_store import get_artifact_store
-    from src.storage.local import LocalStorage
+    from src.storage.artifact_store import RemoteArtifactStore
     from src.workers.video_preview_worker import VideoPreviewWorker
 
     client = LumiverbClient()
-    storage = LocalStorage()
-    ctx = client.get("/v1/tenant/context").json()
-    tenant_id = ctx["tenant_id"]
     library_id = _resolve_library_id(client, library)
     path_prefix = normalize_path_prefix(path) if path else None
 
-    mode = "remote" if (remote_storage or os.environ.get("LUMIVERB_ARTIFACT_STORE") == "remote") else "local"
-    artifact_store = get_artifact_store(mode, storage=storage, client=client, tenant_id=tenant_id)
-
     worker = VideoPreviewWorker(
         client=client,
-        artifact_store=artifact_store,
+        artifact_store=RemoteArtifactStore(client=client),
         concurrency=concurrency,
         once=once,
         library_id=library_id,
@@ -744,31 +704,17 @@ def worker_embed(
         str,
         typer.Option("--output", help="Output mode: human (default) or jsonl for structured events."),
     ] = "human",
-    remote_storage: Annotated[
-        bool,
-        typer.Option("--remote-storage", help="Download proxy artifacts via API instead of reading from local DATA_DIR."),
-    ] = False,
 ) -> None:
     """Run the embedding worker (CLIP + Moondream vectors for similarity search)."""
-    import os
-    from src.storage.artifact_store import get_artifact_store
-    from src.storage.local import get_storage
+    from src.storage.artifact_store import RemoteArtifactStore
     from src.workers.embed_worker import EmbedWorker
 
     client = LumiverbClient()
-    storage = get_storage()
     library_id = _resolve_library_id(client, library)
-
-    mode = "remote" if (remote_storage or os.environ.get("LUMIVERB_ARTIFACT_STORE") == "remote") else "local"
-    if mode == "remote":
-        artifact_store = get_artifact_store(mode, client=client)
-    else:
-        ctx = client.get("/v1/tenant/context").json()
-        artifact_store = get_artifact_store(mode, storage=storage, client=client, tenant_id=ctx["tenant_id"])
 
     worker = EmbedWorker(
         client=client,
-        artifact_store=artifact_store,
+        artifact_store=RemoteArtifactStore(client=client),
         once=once,
         library_id=library_id,
         output_mode=output,
@@ -784,31 +730,18 @@ def worker_video_index(
         str,
         typer.Option("--output", help="Output mode: human (default) or jsonl for structured events."),
     ] = "human",
-    remote_storage: Annotated[
-        bool,
-        typer.Option("--remote-storage", help="Upload artifacts via API instead of writing to local DATA_DIR."),
-    ] = False,
 ) -> None:
     """Run the video index worker (scene detection for video assets)."""
-    import os
     import threading
     from pathlib import Path as _Path
     from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
-    from src.storage.artifact_store import get_artifact_store
-    from src.storage.local import LocalStorage
+    from src.storage.artifact_store import RemoteArtifactStore
     from src.workers.video_index_worker import VideoIndexWorker
 
     client = LumiverbClient()
     library_id = _resolve_library_id(client, library)
     console = Console()
-
-    mode = "remote" if (remote_storage or os.environ.get("LUMIVERB_ARTIFACT_STORE") == "remote") else "local"
-    if mode == "remote":
-        artifact_store = get_artifact_store(mode, client=client)
-    else:
-        storage = LocalStorage()
-        ctx = client.get("/v1/tenant/context").json()
-        artifact_store = get_artifact_store(mode, storage=storage, client=client, tenant_id=ctx["tenant_id"])
+    artifact_store = RemoteArtifactStore(client=client)
 
     jobs_done = 0
     jobs_failed = 0
@@ -915,18 +848,12 @@ def worker_video_vision(
         str,
         typer.Option("--output", help="Output mode: human (default) or jsonl for structured events."),
     ] = "human",
-    remote_storage: Annotated[
-        bool,
-        typer.Option("--remote-storage", help="Download scene rep frame artifacts via API instead of reading from local DATA_DIR."),
-    ] = False,
 ) -> None:
     """Run the video vision worker (AI scene description for video assets)."""
-    import os
     import threading
     from pathlib import Path as _Path
     from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
-    from src.storage.artifact_store import get_artifact_store
-    from src.storage.local import LocalStorage
+    from src.storage.artifact_store import RemoteArtifactStore
     from src.workers.video_vision_worker import VideoVisionWorker
 
     client = LumiverbClient()
@@ -934,14 +861,7 @@ def worker_video_vision(
     path_prefix = normalize_path_prefix(path) if path else None
     console = Console()
     _lock = threading.Lock()
-
-    mode = "remote" if (remote_storage or os.environ.get("LUMIVERB_ARTIFACT_STORE") == "remote") else "local"
-    if mode == "remote":
-        artifact_store = get_artifact_store(mode, client=client)
-    else:
-        storage = LocalStorage()
-        ctx = client.get("/v1/tenant/context").json()
-        artifact_store = get_artifact_store(mode, storage=storage, client=client, tenant_id=ctx["tenant_id"])
+    artifact_store = RemoteArtifactStore(client=client)
 
     if output == "jsonl":
         worker = VideoVisionWorker(
