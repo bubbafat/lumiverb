@@ -39,6 +39,8 @@ SKIP_CERTBOT=false
 TENANT_NAME="Lumiverb"
 DATA_DIR_OVERRIDE=""
 CERTIFICATE_ARCHIVE=""
+VISION_API_URL=""
+VISION_API_KEY=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -48,10 +50,12 @@ while [[ $# -gt 0 ]]; do
     --email)        CERTBOT_EMAIL="${2:?Missing value for --email}"; shift 2 ;;
     --tenant)       TENANT_NAME="${2:?Missing value for --tenant}"; shift 2 ;;
     --data-dir)     DATA_DIR_OVERRIDE="${2:?Missing value for --data-dir}"; shift 2 ;;
-    --certificate)  CERTIFICATE_ARCHIVE="${2:?Missing value for --certificate}"; shift 2 ;;
-    --skip-certbot) SKIP_CERTBOT=true; shift ;;
+    --certificate)    CERTIFICATE_ARCHIVE="${2:?Missing value for --certificate}"; shift 2 ;;
+    --vision-api-url) VISION_API_URL="${2:?Missing value for --vision-api-url}"; shift 2 ;;
+    --vision-api-key) VISION_API_KEY="${2:?Missing value for --vision-api-key}"; shift 2 ;;
+    --skip-certbot)   SKIP_CERTBOT=true; shift ;;
     -h|--help)
-      echo "Usage: $0 --domain <FQDN> [--email <certbot-email>] [--tenant <name>] [--data-dir <path>] [--certificate <letsencrypt.tar.gz>] [--repo <url>] [--branch <ref>] [--skip-certbot]"
+      echo "Usage: $0 --domain <FQDN> [--email <certbot-email>] [--tenant <name>] [--data-dir <path>] [--certificate <letsencrypt.tar.gz>] [--vision-api-url <url>] [--vision-api-key <key>] [--repo <url>] [--branch <ref>] [--skip-certbot]"
       exit 0
       ;;
     *) fail "Unknown option: $1" ;;
@@ -579,10 +583,19 @@ systemctl status --no-pager lumiverb-quickwit lumiverb-api || true
 step "Provisioning tenant: ${TENANT_NAME}"
 
 ADMIN_KEY="$(grep '^ADMIN_KEY=' "${ENV_FILE}" | cut -d= -f2-)"
+TENANT_BODY="{\"name\": \"${TENANT_NAME}\", \"email\": \"${CERTBOT_EMAIL}\""
+if [[ -n "$VISION_API_URL" ]]; then
+  TENANT_BODY="${TENANT_BODY}, \"vision_api_url\": \"${VISION_API_URL}\""
+fi
+if [[ -n "$VISION_API_KEY" ]]; then
+  TENANT_BODY="${TENANT_BODY}, \"vision_api_key\": \"${VISION_API_KEY}\""
+fi
+TENANT_BODY="${TENANT_BODY}}"
+
 TENANT_RESPONSE="$(curl -sf -X POST http://127.0.0.1:8000/v1/admin/tenants \
   -H "Authorization: Bearer ${ADMIN_KEY}" \
   -H "Content-Type: application/json" \
-  -d "{\"name\": \"${TENANT_NAME}\", \"email\": \"${CERTBOT_EMAIL}\"}")" \
+  -d "${TENANT_BODY}")" \
   || fail "Tenant provisioning failed — check: journalctl -u lumiverb-api -n 50"
 
 TENANT_ID="$(echo "$TENANT_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['tenant_id'])")"
@@ -616,10 +629,20 @@ echo "     sudo -u lumiverb /opt/lumiverb/.venv/bin/lumiverb create-user --email
 echo ""
 echo "  2. Open ${SITE_URL} and log in."
 echo ""
-echo "  3. (Optional) Enable password reset — edit ${ENV_FILE} and uncomment the SMTP_* lines."
+if [[ -n "$VISION_API_URL" ]]; then
+  echo "  3. Vision AI: configured (${VISION_API_URL})"
+else
+  echo "  3. (Optional) Configure vision AI for automatic image descriptions:"
+  echo ""
+  echo "     lumiverb tenant update-vision --vision-api-url <url> --vision-api-key <key>"
+  echo ""
+  echo "     Or pass --vision-api-url and --vision-api-key to this deploy script next time."
+fi
+echo ""
+echo "  4. (Optional) Enable password reset — edit ${ENV_FILE} and uncomment the SMTP_* lines."
 echo ""
 if [[ "$TLS_ACTIVE" == "true" ]] && [[ -z "$CERTIFICATE_ARCHIVE" ]]; then
-  echo "  4. Back up the TLS certificate for future redeploys:"
+  echo "  5. Back up the TLS certificate for future redeploys:"
   echo ""
   echo "     tar czf /mnt/lumiverb/data/letsencrypt.tar.gz -C / etc/letsencrypt"
   echo ""
