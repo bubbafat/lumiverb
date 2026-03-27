@@ -105,20 +105,13 @@ fi
 # ---------------------------------------------------------------------------
 step "Fixing Quickwit sandbox (namespace-dependent directives)"
 # PrivateTmp, ProtectSystem, ReadWritePaths, ReadOnlyPaths require mount
-# namespaces which many VPS hosts block (status=226/NAMESPACE).  A drop-in
-# override blanks them without touching the base unit file.
-if systemctl is-enabled lumiverb-quickwit >/dev/null 2>&1; then
-  DROPIN_DIR="/etc/systemd/system/lumiverb-quickwit.service.d"
-  mkdir -p "$DROPIN_DIR"
-  cat > "$DROPIN_DIR/no-sandbox.conf" <<'DROPIN'
-[Service]
-PrivateTmp=
-ProtectSystem=
-ReadWritePaths=
-ReadOnlyPaths=
-DROPIN
+# namespaces which many VPS hosts block (status=226/NAMESPACE).  Strip them
+# from the base unit file directly.
+QW_UNIT="/etc/systemd/system/lumiverb-quickwit.service"
+if [[ -f "$QW_UNIT" ]] && grep -qE '^(PrivateTmp|ProtectSystem|ReadWritePaths|ReadOnlyPaths)=' "$QW_UNIT"; then
+  sed -i '/^PrivateTmp=/d; /^ProtectSystem=/d; /^ReadWritePaths=/d; /^ReadOnlyPaths=/d' "$QW_UNIT"
   systemctl daemon-reload
-  ok "Quickwit sandbox overrides applied"
+  ok "Removed namespace-dependent directives from Quickwit unit"
 fi
 
 # ---------------------------------------------------------------------------
