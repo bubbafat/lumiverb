@@ -55,9 +55,6 @@ def get_facets(
 
     where_sql = " AND ".join(conditions)
 
-    params["image_prefix"] = "image/%"
-    params["video_prefix"] = "video/%"
-
     sql = f"""
         SELECT
             array_agg(DISTINCT camera_make) FILTER (WHERE camera_make IS NOT NULL) AS camera_makes,
@@ -69,8 +66,8 @@ def get_facets(
             MAX(aperture) AS aperture_max,
             MIN(focal_length) AS fl_min,
             MAX(focal_length) AS fl_max,
-            bool_or(media_type LIKE :image_prefix) AS has_images,
-            bool_or(media_type LIKE :video_prefix) AS has_videos,
+            bool_or(media_type = 'image') AS has_images,
+            bool_or(media_type = 'video') AS has_videos,
             COUNT(*) FILTER (WHERE gps_lat IS NOT NULL AND gps_lon IS NOT NULL) AS gps_count
         FROM active_assets
         WHERE {where_sql}

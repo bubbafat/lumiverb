@@ -840,15 +840,13 @@ class AssetRepository:
 
         # --- Media type filter ---
         if media_types:
-            prefixes = []
+            clauses = []
             if "image" in media_types:
-                prefixes.append("a.media_type LIKE :media_prefix_image")
-                params["media_prefix_image"] = "image/%"
+                clauses.append("a.media_type = 'image'")
             if "video" in media_types:
-                prefixes.append("a.media_type LIKE :media_prefix_video")
-                params["media_prefix_video"] = "video/%"
-            if prefixes:
-                conditions.append(f"({' OR '.join(prefixes)})")
+                clauses.append("a.media_type = 'video'")
+            if clauses:
+                conditions.append(f"({' OR '.join(clauses)})")
 
         # --- Camera / lens filters ---
         if camera_make:
