@@ -115,6 +115,39 @@ if [[ -f "$QW_UNIT" ]] && grep -qE '^(PrivateTmp|ProtectSystem|ReadWritePaths|Re
 fi
 
 # ---------------------------------------------------------------------------
+step "Installing upkeep timer"
+ADMIN_KEY="$(grep '^ADMIN_KEY=' "$ENV_FILE" | cut -d= -f2-)"
+if [[ -n "$ADMIN_KEY" ]] && [[ ! -f /etc/systemd/system/lumiverb-upkeep.timer ]]; then
+  cat > /etc/systemd/system/lumiverb-upkeep.service <<UPKEEP_SVC
+[Unit]
+Description=Lumiverb periodic upkeep (search sync, cleanup)
+
+[Service]
+Type=oneshot
+EnvironmentFile=${ENV_FILE}
+ExecStart=/usr/bin/curl -sf -X POST http://127.0.0.1:8000/v1/upkeep -H "Authorization: Bearer \${ADMIN_KEY}" -H "Content-Type: application/json"
+TimeoutSec=120
+UPKEEP_SVC
+
+  cat > /etc/systemd/system/lumiverb-upkeep.timer <<UPKEEP_TMR
+[Unit]
+Description=Run Lumiverb upkeep every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
+UPKEEP_TMR
+
+  systemctl daemon-reload
+  systemctl enable --now lumiverb-upkeep.timer
+  ok "Upkeep timer installed and started"
+fi
+
+# ---------------------------------------------------------------------------
 step "Restarting services"
 systemctl restart lumiverb-api
 # Only restart worker and quickwit if they are enabled

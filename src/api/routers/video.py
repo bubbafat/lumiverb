@@ -15,7 +15,6 @@ from src.repository.tenant import (
     AssetRepository,
     VideoIndexChunkRepository,
     VideoSceneRepository,
-    SearchSyncQueueRepository,
     WorkerJobRepository,
 )
 
@@ -180,9 +179,14 @@ def complete_chunk(
             )
             asset_repo = AssetRepository(session)
             asset_repo.set_video_indexed(asset_id)
-            queue_repo = SearchSyncQueueRepository(session)
-            queue_repo.enqueue(asset_id=asset_id, operation="upsert")
             session.commit()
+            # Inline search sync (best-effort)
+            asset_obj = asset_repo.get_by_id(asset_id)
+            if asset_obj:
+                meta_obj = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
+                if meta_obj:
+                    from src.search.sync import try_sync_asset
+                    try_sync_asset(session, asset_obj, meta_obj)
 
     return ChunkCompleteResponse(
         chunk_id=chunk_id,
@@ -308,15 +312,21 @@ class SceneSyncRequest(BaseModel):
 
 
 @router.post("/scenes/{scene_id}/sync")
-def enqueue_scene_sync(
+def sync_scene(
     scene_id: str,
     body: SceneSyncRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> dict:
-    """Enqueue a search sync entry for the given scene."""
-    queue_repo = SearchSyncQueueRepository(session)
-    queue_repo.enqueue(asset_id=body.asset_id, operation="upsert", scene_id=scene_id)
-    return {"scene_id": scene_id, "status": "enqueued"}
+    """Sync a scene to Quickwit search index."""
+    from src.search.sync import try_sync_scene
+    scene = VideoSceneRepository(session).get_by_id(scene_id)
+    if scene is None:
+        raise HTTPException(status_code=404, detail="Scene not found")
+    asset = AssetRepository(session).get_by_id(body.asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    ok = try_sync_scene(session, scene, asset)
+    return {"scene_id": scene_id, "status": "synced" if ok else "deferred"}
 
 
 # ---------------------------------------------------------------------------

@@ -30,7 +30,6 @@ from src.repository.tenant import (
     AssetRepository,
     LibraryRepository,
     PathFilterRepository,
-    SearchSyncQueueRepository,
 )
 from src.storage.local import LocalStorage, get_storage
 
@@ -208,8 +207,12 @@ def _do_ingest(
                 model_version=model_version,
                 data={"description": description, "tags": tags},
             )
-            queue_repo = SearchSyncQueueRepository(session)
-            queue_repo.enqueue(asset_id=asset_id, operation="upsert")
+            # Inline search sync (best-effort)
+            asset_obj = asset_repo.get_by_id(asset_id)
+            meta_obj = meta_repo.get_latest(asset_id=asset_id)
+            if asset_obj and meta_obj:
+                from src.search.sync import try_sync_asset
+                try_sync_asset(session, asset_obj, meta_obj)
             final_status = asset_status.DESCRIBED
 
     # --- Store embeddings if provided ---

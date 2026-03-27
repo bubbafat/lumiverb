@@ -1,0 +1,294 @@
+"""Search sync: build Quickwit documents and sync assets/scenes.
+
+This module provides:
+- Document builders (shared between inline sync and maintenance sweep)
+- try_sync_asset / try_sync_scene: best-effort inline sync (never raises)
+- run_search_sync_sweep: maintenance sweep for stale/missing syncs
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from datetime import datetime
+
+from sqlalchemy import text
+from sqlmodel import Session
+
+from src.core.utils import utcnow
+from src.models.tenant import Asset, AssetMetadata, VideoScene
+from src.search.quickwit_client import QuickwitClient
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Document builders
+# ---------------------------------------------------------------------------
+
+def _path_to_tokens(rel_path: str) -> str:
+    """Turn rel_path into space-separated tokens for BM25 search."""
+    s = re.sub(r"[/\\_\-.]", " ", rel_path)
+    return re.sub(r" +", " ", s).strip()
+
+
+def build_asset_document(asset: Asset, meta: AssetMetadata) -> dict:
+    """Build a Quickwit document for an asset + its latest AI metadata."""
+    data = meta.data or {}
+    description = data.get("description", "")
+    tags = data.get("tags") or []
+
+    capture_ts = None
+    if asset.taken_at:
+        capture_ts = int(asset.taken_at.timestamp())
+
+    return {
+        "id": asset.asset_id,
+        "asset_id": asset.asset_id,
+        "library_id": asset.library_id,
+        "rel_path": asset.rel_path,
+        "path_tokens": _path_to_tokens(asset.rel_path),
+        "media_type": asset.media_type,
+        "description": description,
+        "tags": tags,
+        "capture_ts": capture_ts,
+        "camera_make": asset.camera_make,
+        "camera_model": asset.camera_model,
+        "gps_lat": asset.gps_lat,
+        "gps_lon": asset.gps_lon,
+        "searchable": True,
+        "model_id": meta.model_id,
+        "model_version": meta.model_version,
+        "indexed_at": int(utcnow().timestamp()),
+    }
+
+
+def build_scene_document(scene: VideoScene, asset: Asset) -> dict:
+    """Build a Quickwit document for a video scene."""
+    return {
+        "id": scene.scene_id,
+        "scene_id": scene.scene_id,
+        "asset_id": asset.asset_id,
+        "library_id": asset.library_id,
+        "rel_path": asset.rel_path,
+        "start_ms": scene.start_ms,
+        "end_ms": scene.end_ms,
+        "rep_frame_ms": scene.rep_frame_ms,
+        "thumbnail_key": scene.thumbnail_key,
+        "duration_sec": asset.duration_sec,
+        "description": scene.description or "",
+        "tags": scene.tags or [],
+        "sharpness_score": scene.sharpness_score,
+        "keep_reason": scene.keep_reason,
+        "model_id": "",
+        "model_version": "",
+        "indexed_at": int(utcnow().timestamp()),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Inline sync (best-effort, never raises)
+# ---------------------------------------------------------------------------
+
+def _get_quickwit() -> QuickwitClient | None:
+    """Get a QuickwitClient, returning None if disabled or unavailable."""
+    try:
+        qw = QuickwitClient()
+        return qw if qw.enabled else None
+    except Exception:
+        return None
+
+
+def try_sync_asset(
+    session: Session,
+    asset: Asset,
+    meta: AssetMetadata,
+    quickwit: QuickwitClient | None = None,
+) -> bool:
+    """Try to sync an asset to Quickwit. Returns True on success, False on failure.
+
+    On success, sets asset.search_synced_at and commits. On failure, logs a
+    warning but never raises — the maintenance sweep will catch it later.
+    """
+    qw = quickwit or _get_quickwit()
+    if qw is None:
+        return False
+
+    try:
+        qw.ensure_index_for_library(asset.library_id)
+        doc = build_asset_document(asset, meta)
+        qw.ingest_documents_for_library(asset.library_id, [doc])
+        asset.search_synced_at = utcnow()
+        session.add(asset)
+        session.commit()
+        return True
+    except Exception as exc:
+        logger.warning("Inline search sync failed for asset %s: %s", asset.asset_id, exc)
+        return False
+
+
+def try_sync_scene(
+    session: Session,
+    scene: VideoScene,
+    asset: Asset,
+    quickwit: QuickwitClient | None = None,
+) -> bool:
+    """Try to sync a video scene to Quickwit. Returns True on success."""
+    qw = quickwit or _get_quickwit()
+    if qw is None:
+        return False
+
+    try:
+        qw.ensure_scene_index_for_library(asset.library_id)
+        doc = build_scene_document(scene, asset)
+        qw.ingest_scene_documents_for_library(asset.library_id, [doc])
+        scene.search_synced_at = utcnow()
+        session.add(scene)
+        session.commit()
+        return True
+    except Exception as exc:
+        logger.warning("Inline search sync failed for scene %s: %s", scene.scene_id, exc)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Maintenance sweep
+# ---------------------------------------------------------------------------
+
+def run_search_sync_sweep(session: Session) -> dict:
+    """Find and sync all assets/scenes with stale or missing search_synced_at.
+
+    An asset needs sync when it has AI metadata but either:
+    - search_synced_at IS NULL, or
+    - search_synced_at < asset_metadata.generated_at
+
+    Returns {"synced": N, "failed": M, "scenes_synced": S, "scenes_failed": F}.
+    """
+    qw = _get_quickwit()
+    if qw is None:
+        return {"synced": 0, "failed": 0, "scenes_synced": 0, "scenes_failed": 0}
+
+    from src.repository.tenant import AssetMetadataRepository
+
+    # --- Asset sync ---
+    # Find assets needing sync: have metadata, but search_synced_at is stale or null
+    rows = session.execute(text("""
+        SELECT a.asset_id, a.library_id
+        FROM active_assets a
+        JOIN LATERAL (
+            SELECT generated_at
+            FROM asset_metadata
+            WHERE asset_id = a.asset_id
+            ORDER BY generated_at DESC
+            LIMIT 1
+        ) m ON TRUE
+        WHERE a.search_synced_at IS NULL
+           OR a.search_synced_at < m.generated_at
+        ORDER BY a.library_id, a.asset_id
+        LIMIT 1000
+    """)).fetchall()
+
+    synced = 0
+    failed = 0
+    meta_repo = AssetMetadataRepository(session)
+
+    # Group by library for batch index creation
+    from collections import defaultdict
+    by_library: dict[str, list] = defaultdict(list)
+    for r in rows:
+        by_library[r.library_id].append(r.asset_id)
+
+    for library_id, asset_ids in by_library.items():
+        try:
+            qw.ensure_index_for_library(library_id)
+        except Exception as exc:
+            logger.warning("Cannot ensure Quickwit index for %s: %s", library_id, exc)
+            failed += len(asset_ids)
+            continue
+
+        docs = []
+        assets_to_stamp: list[str] = []
+
+        for asset_id in asset_ids:
+            asset = session.get(Asset, asset_id)
+            if asset is None:
+                continue
+            meta = meta_repo.get_latest(asset_id=asset_id)
+            if meta is None:
+                continue
+            docs.append(build_asset_document(asset, meta))
+            assets_to_stamp.append(asset_id)
+
+        if docs:
+            try:
+                qw.ingest_documents_for_library(library_id, docs)
+                now = utcnow()
+                session.execute(
+                    text("UPDATE assets SET search_synced_at = :now WHERE asset_id = ANY(:ids)"),
+                    {"now": now, "ids": assets_to_stamp},
+                )
+                session.commit()
+                synced += len(assets_to_stamp)
+            except Exception as exc:
+                logger.warning("Quickwit batch ingest failed for library %s: %s", library_id, exc)
+                session.rollback()
+                failed += len(docs)
+
+    # --- Scene sync ---
+    scene_rows = session.execute(text("""
+        SELECT vs.scene_id, a.asset_id, a.library_id
+        FROM video_scenes vs
+        JOIN active_assets a ON a.asset_id = vs.asset_id
+        WHERE vs.description IS NOT NULL
+          AND (vs.search_synced_at IS NULL OR vs.search_synced_at < vs.created_at)
+        ORDER BY a.library_id, vs.scene_id
+        LIMIT 1000
+    """)).fetchall()
+
+    scenes_synced = 0
+    scenes_failed = 0
+
+    scene_by_lib: dict[str, list] = defaultdict(list)
+    for r in scene_rows:
+        scene_by_lib[r.library_id].append((r.scene_id, r.asset_id))
+
+    for library_id, scene_pairs in scene_by_lib.items():
+        try:
+            qw.ensure_scene_index_for_library(library_id)
+        except Exception as exc:
+            logger.warning("Cannot ensure Quickwit scene index for %s: %s", library_id, exc)
+            scenes_failed += len(scene_pairs)
+            continue
+
+        docs = []
+        scene_ids_to_stamp: list[str] = []
+
+        for scene_id, asset_id in scene_pairs:
+            scene = session.get(VideoScene, scene_id)
+            asset = session.get(Asset, asset_id)
+            if scene is None or asset is None:
+                continue
+            docs.append(build_scene_document(scene, asset))
+            scene_ids_to_stamp.append(scene_id)
+
+        if docs:
+            try:
+                qw.ingest_scene_documents_for_library(library_id, docs)
+                now = utcnow()
+                session.execute(
+                    text("UPDATE video_scenes SET search_synced_at = :now WHERE scene_id = ANY(:ids)"),
+                    {"now": now, "ids": scene_ids_to_stamp},
+                )
+                session.commit()
+                scenes_synced += len(scene_ids_to_stamp)
+            except Exception as exc:
+                logger.warning("Quickwit scene batch ingest failed for library %s: %s", library_id, exc)
+                session.rollback()
+                scenes_failed += len(docs)
+
+    return {
+        "synced": synced,
+        "failed": failed,
+        "scenes_synced": scenes_synced,
+        "scenes_failed": scenes_failed,
+    }

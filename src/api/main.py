@@ -18,6 +18,7 @@ from src.api.routers.search import router as search_router
 from src.api.routers.search_sync import router as search_sync_router
 from src.api.routers.facets import router as facets_router
 from src.api.routers.similarity import router as similarity_router
+from src.api.routers.upkeep import router as upkeep_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -50,6 +51,7 @@ app.include_router(search_router)
 app.include_router(similarity_router)
 app.include_router(maintenance_router)
 app.include_router(upgrade_router)
+app.include_router(upkeep_router)
 
 
 @app.get("/health")

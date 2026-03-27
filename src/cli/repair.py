@@ -16,8 +16,8 @@ from src.cli.client import LumiverbClient
 
 logger = logging.getLogger(__name__)
 
-REPAIR_TYPES = ("embed", "vision", "all")
-RepairType = Literal["embed", "vision", "all"]
+REPAIR_TYPES = ("embed", "vision", "search-sync", "all")
+RepairType = Literal["embed", "vision", "search-sync", "all"]
 
 
 class _RepairStats:
@@ -158,6 +158,8 @@ def run_repair(
         plan.append(("embed", summary["missing_embeddings"], "missing CLIP embeddings"))
     if job_type in ("vision", "all") and summary.get("missing_vision", 0) > 0:
         plan.append(("vision", summary["missing_vision"], "missing AI descriptions"))
+    if job_type in ("search-sync", "all") and summary.get("stale_search_sync", 0) > 0:
+        plan.append(("search-sync", summary["stale_search_sync"], "stale search index"))
 
     # Display summary table
     table = Table(title=f"Repair Summary — {library_name}", show_lines=False)
@@ -173,6 +175,7 @@ def run_repair(
         ("EXIF", "missing_exif", job_type in ("exif", "all")),
         ("Embeddings", "missing_embeddings", job_type in ("embed", "all")),
         ("Vision AI", "missing_vision", job_type in ("vision", "all")),
+        ("Search sync", "stale_search_sync", job_type in ("search-sync", "all")),
     ]:
         count = summary.get(key, 0)
         if count == 0:
@@ -237,6 +240,14 @@ def run_repair(
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
             from src.cli.ingest import run_backfill_vision
             run_backfill_vision(client, library, concurrency=concurrency, console=console)
+
+        elif repair_type == "search-sync":
+            console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
+            resp = client.post("/v1/upkeep/search-sync")
+            result = resp.json()
+            synced = result.get("synced", 0)
+            sync_failed = result.get("failed", 0)
+            console.print(f"  Search sync: {synced} synced, {sync_failed} failed")
 
     console.print(f"\n[green bold]Repair complete.[/green bold] "
                   f"{stats.processed} fixed, {stats.failed} failed, {stats.skipped} skipped")

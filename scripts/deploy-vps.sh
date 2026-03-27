@@ -448,6 +448,30 @@ ReadWritePaths=${DATA_DIR}
 WantedBy=multi-user.target
 UNIT
 
+cat > /etc/systemd/system/lumiverb-upkeep.service <<UNIT
+[Unit]
+Description=Lumiverb periodic upkeep (search sync, cleanup)
+
+[Service]
+Type=oneshot
+EnvironmentFile=${ENV_FILE}
+ExecStart=/usr/bin/curl -sf -X POST http://127.0.0.1:8000/v1/upkeep -H "Authorization: Bearer \${ADMIN_KEY}" -H "Content-Type: application/json"
+TimeoutSec=120
+UNIT
+
+cat > /etc/systemd/system/lumiverb-upkeep.timer <<UNIT
+[Unit]
+Description=Run Lumiverb upkeep every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
+UNIT
+
 systemctl daemon-reload
 ok "systemd units installed"
 
@@ -555,7 +579,7 @@ step "Starting services"
 # Note: lumiverb-worker is installed but not enabled by default. It requires
 # a configured CLI with a tenant API key. Enable it after tenant provisioning:
 #   sudo systemctl enable --now lumiverb-worker
-systemctl enable --now lumiverb-quickwit lumiverb-api
+systemctl enable --now lumiverb-quickwit lumiverb-api lumiverb-upkeep.timer
 
 # Brief wait for API to come up
 for i in {1..10}; do

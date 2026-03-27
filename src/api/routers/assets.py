@@ -15,7 +15,7 @@ from sqlmodel import Session
 from src.api.dependencies import get_tenant_session
 from src.core import asset_status
 from src.core.io_utils import normalize_path_prefix
-from src.repository.tenant import AssetMetadataRepository, AssetRepository, LibraryRepository, ScanRepository, SearchSyncQueueRepository, WorkerJobRepository
+from src.repository.tenant import AssetMetadataRepository, AssetRepository, LibraryRepository, ScanRepository, WorkerJobRepository
 from src.storage.local import get_storage
 from src.core.utils import utcnow
 
@@ -299,6 +299,7 @@ class RepairSummary(BaseModel):
     missing_exif: int = 0
     missing_vision: int = 0
     missing_embeddings: int = 0
+    stale_search_sync: int = 0
 
 
 @router.get("/repair-summary", response_model=RepairSummary)
@@ -328,7 +329,20 @@ def repair_summary(
                         SELECT 1 FROM asset_embeddings ae
                         WHERE ae.asset_id = a.asset_id
                     ) AND media_type = 'image'
-                ) AS missing_embeddings
+                ) AS missing_embeddings,
+                COUNT(*) FILTER (
+                    WHERE EXISTS (
+                        SELECT 1 FROM asset_metadata am
+                        WHERE am.asset_id = a.asset_id
+                    ) AND (
+                        a.search_synced_at IS NULL
+                        OR a.search_synced_at < (
+                            SELECT MAX(am2.generated_at)
+                            FROM asset_metadata am2
+                            WHERE am2.asset_id = a.asset_id
+                        )
+                    )
+                ) AS stale_search_sync
             FROM active_assets a
             WHERE library_id = :library_id
         """),
@@ -340,6 +354,7 @@ def repair_summary(
         missing_exif=row.missing_exif,
         missing_vision=row.missing_vision,
         missing_embeddings=row.missing_embeddings,
+        stale_search_sync=row.stale_search_sync,
     )
 
 
@@ -714,8 +729,13 @@ def submit_vision(
         model_version=body.model_version,
         data={"description": body.description, "tags": body.tags},
     )
-    SearchSyncQueueRepository(session).enqueue(asset_id=asset_id, operation="upsert")
     AssetRepository(session).set_status(asset_id, asset_status.DESCRIBED)
+
+    # Inline search sync (best-effort)
+    meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
+    if meta:
+        from src.search.sync import try_sync_asset
+        try_sync_asset(session, asset, meta)
 
     # Bump library revision for UI polling
     LibraryRepository(session).bump_revision(asset.library_id)

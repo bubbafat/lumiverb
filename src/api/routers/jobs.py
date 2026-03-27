@@ -18,7 +18,6 @@ from src.repository.tenant import (
     AssetEmbeddingRepository,
     AssetMetadataRepository,
     LibraryRepository,
-    SearchSyncQueueRepository,
     WorkerJobRepository,
 )
 from src.workers.enqueue import enqueue_jobs_for_filter
@@ -239,8 +238,13 @@ def complete_job(
             raise HTTPException(status_code=400, detail="Job has no asset_id")
         asset_repo = AssetRepository(session)
         asset_repo.set_video_preview(job.asset_id, video_preview_key=video_preview_key)
-        queue_repo = SearchSyncQueueRepository(session)
-        queue_repo.enqueue(asset_id=job.asset_id, operation="upsert")
+        # Inline search sync (best-effort) — only if asset has AI metadata
+        asset_obj = asset_repo.get_by_id(job.asset_id)
+        if asset_obj:
+            meta_obj = AssetMetadataRepository(session).get_latest(asset_id=job.asset_id)
+            if meta_obj:
+                from src.search.sync import try_sync_asset
+                try_sync_asset(session, asset_obj, meta_obj)
     elif job.job_type == "exif":
         if job.asset_id is None:
             raise HTTPException(status_code=400, detail="Job has no asset_id")
@@ -273,12 +277,14 @@ def complete_job(
                 "tags": tags,
             },
         )
-        # Enqueue search sync so Quickwit can be updated for this asset.
-        queue_repo = SearchSyncQueueRepository(session)
-        queue_repo.enqueue(asset_id=job.asset_id, operation="upsert")
         # Advance asset status to described.
         asset_repo = AssetRepository(session)
         asset_repo.set_status(job.asset_id, asset_status.DESCRIBED)
+        # Inline search sync (best-effort)
+        asset_obj = asset_repo.get_by_id(job.asset_id)
+        if asset_obj:
+            from src.search.sync import try_sync_asset
+            try_sync_asset(session, asset_obj, AssetMetadataRepository(session).get_latest(asset_id=job.asset_id))
     elif job.job_type == "embed":
         if job.asset_id is None:
             raise HTTPException(status_code=400, detail="Job has no asset_id")

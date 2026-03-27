@@ -1620,7 +1620,7 @@ def backfill_vision(
 @app.command("repair")
 def repair(
     library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
-    job_type: Annotated[str, typer.Option("--job-type", "-j", help="Repair type: embed, vision, or all.")] = "all",
+    job_type: Annotated[str, typer.Option("--job-type", "-j", help="Repair type: embed, vision, search-sync, or all.")] = "all",
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be repaired without making changes.")] = False,
     concurrency: Annotated[int, typer.Option("--concurrency", help="Number of parallel workers.")] = 4,
 ) -> None:
@@ -1631,14 +1631,15 @@ def repair(
 
     \b
     Job types:
-      embed   — Generate missing CLIP embeddings (similarity search)
-      vision  — Generate missing AI descriptions and tags
-      all     — Run all repairs in logical order (default)
+      embed       — Generate missing CLIP embeddings (similarity search)
+      vision      — Generate missing AI descriptions and tags
+      search-sync — Push stale assets to Quickwit search index
+      all         — Run all repairs in logical order (default)
     """
     from src.cli.repair import run_repair
 
-    if job_type not in ("embed", "vision", "all"):
-        console.print(f"[red]Invalid --job-type: {job_type}. Must be embed, vision, or all.[/red]")
+    if job_type not in ("embed", "vision", "search-sync", "all"):
+        console.print(f"[red]Invalid --job-type: {job_type}. Must be embed, vision, search-sync, or all.[/red]")
         raise typer.Exit(1)
 
     client = LumiverbClient()
