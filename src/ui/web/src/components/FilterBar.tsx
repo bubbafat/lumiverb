@@ -378,6 +378,12 @@ export function FilterBar({
           {hasDateFilter && dateFrom && dateTo && (
             <Chiclet label={formatDateChiclet(dateFrom, dateTo)} onClear={clearDate} />
           )}
+          {mediaType && (
+            <Chiclet
+              label={mediaType === "image" ? "Photos only" : "Videos only"}
+              onClear={() => onChangeFilter("media_type", null)}
+            />
+          )}
           {cameraMake && (
             <Chiclet label={cameraMake} onClear={() => { onChangeFilter("camera_make", null); onChangeFilter("camera_model", null); }} />
           )}

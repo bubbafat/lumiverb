@@ -842,9 +842,11 @@ class AssetRepository:
         if media_types:
             prefixes = []
             if "image" in media_types:
-                prefixes.append("a.media_type LIKE 'image/%'")
+                prefixes.append("a.media_type LIKE :media_prefix_image")
+                params["media_prefix_image"] = "image/%"
             if "video" in media_types:
-                prefixes.append("a.media_type LIKE 'video/%'")
+                prefixes.append("a.media_type LIKE :media_prefix_video")
+                params["media_prefix_video"] = "video/%"
             if prefixes:
                 conditions.append(f"({' OR '.join(prefixes)})")
 
