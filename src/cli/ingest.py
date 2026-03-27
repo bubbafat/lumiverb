@@ -401,6 +401,27 @@ def _process_and_ingest_video_stage1(
             progress.update(task_id, ok=ok, fail=fail)
 
 
+def _generate_clip_embedding(
+    jpeg_bytes: bytes,
+    clip_provider: object | None,
+) -> dict | None:
+    """Generate a CLIP embedding from JPEG proxy bytes. Returns embedding dict or None."""
+    if clip_provider is None:
+        return None
+    try:
+        from PIL import Image as PILImage
+        img = PILImage.open(io.BytesIO(jpeg_bytes)).convert("RGB")
+        vector = clip_provider.embed_image(img)
+        return {
+            "model_id": clip_provider.model_id,
+            "model_version": clip_provider.model_version,
+            "vector": vector,
+        }
+    except Exception as e:
+        logger.warning("CLIP embedding failed: %s", e)
+        return None
+
+
 def _process_and_ingest_one(
     *,
     client: LumiverbClient,
@@ -414,6 +435,7 @@ def _process_and_ingest_one(
     vision_api_url: str,
     vision_api_key: str | None,
     skip_vision: bool,
+    clip_provider: object | None,
     stats: "_IngestStats",
     progress: Progress | None = None,
     task_id: object = None,
@@ -440,10 +462,13 @@ def _process_and_ingest_one(
                 jpeg_bytes, vision_model_id, vision_api_url, vision_api_key,
             )
 
-        # 4. Convert to WebP for upload (server stores as-is, skips re-encoding)
+        # 4. Generate CLIP embedding from JPEG proxy
+        embedding = _generate_clip_embedding(jpeg_bytes, clip_provider)
+
+        # 5. Convert to WebP for upload (server stores as-is, skips re-encoding)
         webp_bytes = _jpeg_to_webp(jpeg_bytes)
 
-        # 5. POST /v1/ingest — create asset + ingest atomically
+        # 6. POST /v1/ingest — create asset + ingest atomically
         files = {"proxy": ("proxy.webp", io.BytesIO(webp_bytes), "image/webp")}
         data: dict[str, str] = {
             "library_id": library_id,
@@ -458,6 +483,8 @@ def _process_and_ingest_one(
             data["file_mtime"] = file_mtime.isoformat()
         if vision_payload is not None:
             data["vision"] = json.dumps(vision_payload)
+        if embedding is not None:
+            data["embeddings"] = json.dumps([embedding])
 
         client.post("/v1/ingest", files=files, data=data)
 
@@ -608,6 +635,7 @@ def run_ingest(
     *,
     concurrency: int = 1,
     skip_vision: bool = False,
+    skip_embeddings: bool = False,
     path_override: str | None = None,
     force: bool = False,
     media_type_filter: str = "all",
@@ -669,6 +697,18 @@ def run_ingest(
         else:
             console.print(f"Vision AI: {vision_model_id} via {vision_api_url} ({vision_source})")
 
+    # Step 3b: Load CLIP embedding model (lazy — first embed_image call loads weights)
+    clip_provider = None
+    if include_images and not skip_embeddings:
+        try:
+            from src.workers.embeddings.clip_provider import CLIPEmbeddingProvider
+            clip_provider = CLIPEmbeddingProvider()
+            console.print(f"CLIP embeddings: {clip_provider.model_version}")
+        except Exception as e:
+            console.print(f"[yellow]CLIP embeddings: unavailable ({e})[/yellow]")
+    elif skip_embeddings:
+        console.print("CLIP embeddings: skipped (--skip-embeddings)")
+
     # Step 4: Separate images and videos
     images_to_ingest = []
     videos_to_ingest = []
@@ -724,6 +764,7 @@ def run_ingest(
                     vision_api_url=vision_api_url,
                     vision_api_key=vision_api_key,
                     skip_vision=skip_vision,
+                    clip_provider=clip_provider,
                     stats=stats,
                     progress=progress,
                     task_id=img_tid,

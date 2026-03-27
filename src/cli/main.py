@@ -1536,6 +1536,7 @@ def ingest(
     force: Annotated[bool, typer.Option("--force", "-f", help="Re-ingest already-processed assets.")] = False,
     concurrency: Annotated[int, typer.Option("--concurrency", help="Number of parallel workers.")] = 4,
     skip_vision: Annotated[bool, typer.Option("--skip-vision", help="Skip AI vision processing.")] = False,
+    skip_embeddings: Annotated[bool, typer.Option("--skip-embeddings", help="Skip CLIP embedding generation.")] = False,
     media_type: Annotated[str, typer.Option("--media-type", help="Filter: image, video, or all.")] = "all",
 ) -> None:
     """Scan and ingest a library in one pass.
@@ -1564,6 +1565,7 @@ def ingest(
         match,
         concurrency=concurrency,
         skip_vision=skip_vision,
+        skip_embeddings=skip_embeddings,
         path_override=path,
         force=force,
         media_type_filter=media_type,
