@@ -621,7 +621,7 @@ export default function BrowsePage() {
                 </>
               )
             ) : browseCount > 0 ? (
-              `${browseCount.toLocaleString()}${currentDirTotal != null ? ` of ${currentDirTotal.toLocaleString()}` : ""} photo${browseCount === 1 ? "" : "s"} · sorted by date taken`
+              `${browseCount.toLocaleString()}${currentDirTotal != null ? ` of ${currentDirTotal.toLocaleString()}` : ""} photo${browseCount === 1 ? "" : "s"}`
             ) : null}
           </p>
 
@@ -687,6 +687,47 @@ export default function BrowsePage() {
                 {activeTag && <li>Remove the tag filter</li>}
                 {pathPrefix && <li>Browse a different folder</li>}
               </ul>
+            </>
+          ) : (browseMediaType || browseCameraMake || browseLensModel ||
+                searchParams.get("iso_min") || searchParams.get("iso_max") ||
+                searchParams.get("aperture_min") || searchParams.get("aperture_max") ||
+                searchParams.get("focal_length_min") || searchParams.get("focal_length_max") ||
+                browseHasGps || searchParams.get("near_lat")) ? (
+            // Browse mode with active filters — no matches
+            <>
+              <svg
+                className="mb-3 h-10 w-10 text-gray-600"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                aria-hidden
+              >
+                <line x1="4" y1="6" x2="20" y2="6" />
+                <line x1="7" y1="12" x2="17" y2="12" />
+                <line x1="10" y1="18" x2="14" y2="18" />
+              </svg>
+              <p className="text-sm text-gray-400 mb-2">No photos match your filters</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchParams((prev) => {
+                    const next = new URLSearchParams(prev);
+                    for (const key of [
+                      "media_type", "camera_make", "camera_model", "lens_model",
+                      "iso_min", "iso_max", "aperture_min", "aperture_max",
+                      "focal_length_min", "focal_length_max", "has_gps",
+                      "near_lat", "near_lon", "near_radius_km",
+                    ]) {
+                      next.delete(key);
+                    }
+                    return next;
+                  });
+                }}
+                className="mt-2 rounded-md bg-gray-700 px-3 py-1.5 text-xs text-gray-200 hover:bg-gray-600"
+              >
+                Clear all filters
+              </button>
             </>
           ) : pathPrefix ? (
             // Browse mode, path filter active, empty folder

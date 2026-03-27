@@ -1,7 +1,7 @@
 # ADR-006: Filtering, Sorting, and Geo-Proximity for BrowsePage
 
 ## Status
-Proposed
+Complete
 
 ## Implementation Progress
 
@@ -11,7 +11,7 @@ Proposed
 | 2 | Sort and filter API — composite cursor, response envelope, filter params | Complete |
 | 3 | Facets endpoint and FilterBar UI — dropdowns, range sliders, chiclets | Complete |
 | 4 | Geo-proximity — "near this photo" from Lightbox | Complete |
-| 5 | Performance and polish — indexes, empty states, mobile filter sheet | Not started |
+| 5 | Performance and polish — indexes, empty states, mobile filter sheet | Complete |
 
 ---
 
