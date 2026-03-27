@@ -337,10 +337,6 @@ ExecStart=/usr/local/bin/quickwit run --config ${CONF_DIR}/quickwit.yaml --servi
 Restart=on-failure
 RestartSec=5s
 NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ReadWritePaths=${DATA_DIR}/quickwit
-ReadOnlyPaths=${CONF_DIR}/quickwit.yaml
 
 [Install]
 WantedBy=multi-user.target
