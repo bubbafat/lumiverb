@@ -1,0 +1,776 @@
+# ADR-006: Filtering, Sorting, and Geo-Proximity for BrowsePage
+
+## Status
+Proposed
+
+## Implementation Progress
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 1 | Database migration — promote EXIF to columns, backfill, extract on ingest | Not started |
+| 2 | Sort and filter API — composite cursor, response envelope, filter params | Not started |
+| 3 | Facets endpoint and FilterBar UI — dropdowns, range sliders, chiclets | Not started |
+| 4 | Geo-proximity — "near this photo" from Lightbox | Not started |
+| 5 | Performance and polish — indexes, empty states, mobile filter sheet | Not started |
+
+---
+
+## Context
+
+### Background
+
+The BrowsePage currently supports browsing assets with keyset pagination (ordered by `asset_id`),
+path prefix filtering, tag filtering, and free-text search (via Quickwit or Postgres fallback).
+Users cannot filter or sort by camera metadata, exposure settings, lens, media type, or
+geographic proximity. These are core workflows for professional photographers:
+
+- "Show me all photos shot on my 35mm f/1.4 at ISO 3200 or higher"
+- "Sort by date taken, newest first"
+- "Show photos taken near this one"
+- "Show only videos"
+
+### Current state
+
+**Asset model** (`src/models/tenant.py`): The `Asset` table has dedicated columns for
+`camera_make`, `camera_model`, `taken_at`, `gps_lat`, `gps_lon`, `media_type`, `width`,
+`height`, `duration_sec`. The full EXIF blob is stored in a JSON column (`exif`). Key
+photographic metadata (ISO, aperture, focal length, shutter speed, lens model, flash,
+orientation) exists only inside the JSON blob, not as indexed columns.
+
+**EXIF extraction** (`src/workers/exif_extract.py`): The `EXIF_FIELDS` list already extracts
+`ISO`, `FNumber`, `FocalLength`, `FocalLengthIn35mmFormat`, `LensModel`, `LensID`, `Flash`,
+`Orientation`, `ExposureTime`, `ShutterSpeedValue`, and `ApertureValue`. These are all stored in
+the JSON blob but never promoted to dedicated columns.
+
+**Page endpoint** (`src/api/routers/assets.py`): `GET /v1/assets/page` accepts `library_id`,
+`after` (cursor), `limit`, `path_prefix`, `tag`, and `missing_vision`. It always orders by
+`asset_id` (opaque ULID). There is no sort parameter and no EXIF-based filter support.
+
+**Repository pagination** (`src/repository/tenant.py`): `page_by_library` builds a raw SQL query
+against the `active_assets` view. Keyset pagination uses `asset_id > :after ORDER BY asset_id`.
+The cursor is the last `asset_id` in the page.
+
+**BrowsePage** (`src/ui/web/src/pages/BrowsePage.tsx`): Uses `useInfiniteQuery` with
+`pageAssets()` in browse mode. The `getNextPageParam` callback uses the last asset's `asset_id`
+as cursor. Sort is client-side in search mode only (date, filename, relevance). In browse mode,
+the sort order is fixed by `asset_id`.
+
+**FilterBar** (`src/ui/web/src/components/FilterBar.tsx`): Has a search text input with debounce,
+date range filter (presets + custom), and chiclets for active q/tag/path/date filters. No
+EXIF-based filters, no media type filter, no camera/lens filter.
+
+**AssetPageItem** (`src/ui/web/src/api/types.ts`): Returns `asset_id`, `rel_path`, `file_size`,
+`file_mtime`, `sha256`, `media_type`, `width`, `height`, `taken_at`, `status`, `duration_sec`.
+No camera/lens/EXIF fields, no `created_at`, no GPS coordinates.
+
+### What is NOT in scope
+
+- Star ratings / color labels — Phase 5 per project plan, separate ADR.
+- Full-text search changes — Quickwit integration is stable.
+- Multi-library filtering — search is per-library per API design principles.
+- Source file serving — not supported.
+- Embedding-based similarity search — Phase 2 per project plan.
+- PostGIS — bounding-box filter on lat/lon columns is sufficient.
+
+---
+
+## Design Decisions
+
+### D1: Promote EXIF fields to dedicated columns
+
+Querying JSONB with GIN indexes for range filters (ISO between 100 and 3200) is possible but
+significantly slower than B-tree indexes on scalar columns, especially for composite sort+filter
+queries. Since these fields are fixed-schema and well-understood, dedicated columns are the right
+choice. The `exif` JSON blob remains for raw data access but is not queried for filtering.
+
+New columns on `assets`:
+
+| Column | Type | Nullable | Source EXIF key | Notes |
+|--------|------|----------|-----------------|-------|
+| `iso` | `integer` | yes | `ISO` | |
+| `shutter_speed` | `text` | yes | `ExposureTime` | Human-readable, e.g. "1/250" |
+| `aperture` | `float` | yes | `FNumber` / `ApertureValue` | f-number, e.g. 2.8 |
+| `focal_length` | `float` | yes | `FocalLength` | mm |
+| `focal_length_35mm` | `float` | yes | `FocalLengthIn35mmFormat` | 35mm equivalent in mm |
+| `lens_model` | `text` | yes | `LensModel` / `LensID` | Fallback chain |
+| `flash_fired` | `boolean` | yes | `Flash` | Parsed from Flash string |
+| `orientation` | `integer` | yes | `Orientation` | EXIF orientation tag 1-8 |
+
+### D2: Composite cursor pagination for sort support
+
+The current cursor is `asset_id` only, which locks the sort order. To support arbitrary sort
+orders the cursor must encode the sort column value plus the tiebreaker (`asset_id`).
+
+- The `after` cursor becomes an opaque base64-encoded JSON: `{"v": "<sort_value>", "id": "<asset_id>"}`.
+- The WHERE clause becomes: `(sort_col, asset_id) > (:cursor_value, :cursor_id)` for ASC, or
+  `(sort_col, asset_id) < (:cursor_value, :cursor_id)` for DESC.
+- Nulls sort last regardless of direction (`NULLS LAST`).
+- Default sort: `taken_at DESC NULLS LAST, asset_id DESC`.
+
+### D3: Response envelope
+
+The page endpoint currently returns a bare `list[AssetPageItem]` or 204. This makes it
+impossible to return a cursor alongside items. The new response is:
+
+```json
+{
+  "items": [...AssetPageItem],
+  "next_cursor": "base64..."
+}
+```
+
+The 204 behavior is removed; an empty page returns `{"items": [], "next_cursor": null}`. This is
+a breaking change for CLI consumers — the CLI must be updated in the same release.
+
+### D4: Media type filter
+
+The `media_type` column stores MIME types (`image/jpeg`, `video/mp4`, etc.). The filter groups
+these into user-facing categories: `image` (any `image/*`), `video` (any `video/*`). The API
+accepts `media_type=image,video` as a comma-separated list. Default is all types.
+
+### D5: Facets endpoint
+
+A new `GET /v1/assets/facets?library_id=X&path_prefix=Y` endpoint returns distinct values and
+ranges for filterable columns scoped to the current view. This avoids hardcoding lists in the UI
+and shows only values that actually exist.
+
+```json
+{
+  "media_types": ["image", "video"],
+  "camera_makes": ["Canon", "Sony"],
+  "camera_models": ["Canon EOS R5", "Sony A7IV"],
+  "lens_models": ["RF 24-70mm F2.8L IS USM"],
+  "iso_range": [100, 12800],
+  "aperture_range": [1.4, 22.0],
+  "focal_length_range": [14, 200]
+}
+```
+
+Cached client-side per library with long stale time; invalidated on revision change.
+
+### D6: Geo-proximity ("near this photo")
+
+Triggered from the Lightbox when an asset has GPS coordinates. Implemented as a bounding-box
+filter: given center lat/lon and radius in km, compute min/max lat/lon and filter with
+`gps_lat BETWEEN :min_lat AND :max_lat AND gps_lon BETWEEN :min_lon AND :max_lon`. Simple,
+index-friendly, no PostGIS required.
+
+Approximate degrees per km: `lat_delta = km / 111.0`, `lon_delta = km / (111.0 * cos(lat_rad))`.
+
+---
+
+## Phase 1 — Database Migration and EXIF Column Extraction
+
+**Goal**: Add new columns, backfill from existing JSON, update extraction code to populate them
+on ingest. No API or UI changes.
+
+### Files to create
+
+#### `migrations/tenant/versions/XX_add_exif_columns.py`
+
+Alembic migration adding the 8 new columns to the `assets` table with indexes:
+
+```python
+def upgrade() -> None:
+    op.add_column("assets", sa.Column("iso", sa.Integer(), nullable=True))
+    op.add_column("assets", sa.Column("shutter_speed", sa.Text(), nullable=True))
+    op.add_column("assets", sa.Column("aperture", sa.Float(), nullable=True))
+    op.add_column("assets", sa.Column("focal_length", sa.Float(), nullable=True))
+    op.add_column("assets", sa.Column("focal_length_35mm", sa.Float(), nullable=True))
+    op.add_column("assets", sa.Column("lens_model", sa.Text(), nullable=True))
+    op.add_column("assets", sa.Column("flash_fired", sa.Boolean(), nullable=True))
+    op.add_column("assets", sa.Column("orientation", sa.Integer(), nullable=True))
+
+    # Indexes for filtering and sorting
+    op.create_index("ix_assets_iso", "assets", ["iso"])
+    op.create_index("ix_assets_aperture", "assets", ["aperture"])
+    op.create_index("ix_assets_focal_length", "assets", ["focal_length"])
+    op.create_index("ix_assets_lens_model", "assets", ["lens_model"])
+    op.create_index("ix_assets_library_gps", "assets", ["library_id", "gps_lat", "gps_lon"])
+
+    # Composite index for default sort query
+    op.create_index(
+        "ix_assets_library_taken_at",
+        "assets",
+        [sa.text("library_id"), sa.text("taken_at DESC NULLS LAST"), sa.text("asset_id DESC")],
+    )
+
+    # Backfill from EXIF JSON
+    op.execute("""
+        UPDATE assets SET
+          iso = (exif->>'ISO')::int,
+          shutter_speed = exif->>'ExposureTime',
+          aperture = COALESCE((exif->>'FNumber')::float, (exif->>'ApertureValue')::float),
+          focal_length = (exif->>'FocalLength')::float,
+          focal_length_35mm = (exif->>'FocalLengthIn35mmFormat')::float,
+          lens_model = COALESCE(exif->>'LensModel', exif->>'LensID'),
+          flash_fired = CASE
+            WHEN exif->>'Flash' ILIKE '%fired%'
+              AND exif->>'Flash' NOT ILIKE '%not fire%' THEN TRUE
+            WHEN exif->>'Flash' ILIKE '%no flash%'
+              OR exif->>'Flash' ILIKE '%not fire%'
+              OR exif->>'Flash' ILIKE '%off%' THEN FALSE
+            ELSE NULL END,
+          orientation = (exif->>'Orientation')::int
+        WHERE exif IS NOT NULL
+          AND exif::text != 'null'
+          AND exif::text != '{}'
+    """)
+```
+
+### Files to modify
+
+#### `src/models/tenant.py`
+
+Add the 8 new fields to the `Asset` class, after `gps_lon`:
+
+```python
+iso: int | None = Field(default=None, nullable=True)
+shutter_speed: str | None = Field(default=None, nullable=True)
+aperture: float | None = Field(default=None, nullable=True)
+focal_length: float | None = Field(default=None, nullable=True)
+focal_length_35mm: float | None = Field(default=None, nullable=True)
+lens_model: str | None = Field(default=None, nullable=True)
+flash_fired: bool | None = Field(default=None, nullable=True)
+orientation: int | None = Field(default=None, nullable=True)
+```
+
+#### `src/workers/exif_extract.py`
+
+Add parsing helpers after the existing `parse_taken_at` function:
+
+```python
+def parse_aperture(exif: dict) -> float | None:
+    """Extract f-number from FNumber or ApertureValue."""
+    for key in ("FNumber", "ApertureValue"):
+        val = exif.get(key)
+        if val is not None:
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+def parse_focal_length(exif: dict, key: str = "FocalLength") -> float | None:
+    """Extract focal length in mm. Handles '35 mm' and '35.0' formats."""
+    val = exif.get(key)
+    if val is None:
+        return None
+    try:
+        return float(str(val).split()[0])
+    except (ValueError, IndexError):
+        return None
+
+def parse_flash_fired(exif: dict) -> bool | None:
+    """Parse the Flash EXIF string into a boolean."""
+    flash = exif.get("Flash")
+    if flash is None:
+        return None
+    flash_str = str(flash).lower()
+    if "not fire" in flash_str or "no flash" in flash_str or "off" in flash_str:
+        return False
+    if "fired" in flash_str:
+        return True
+    return None
+
+def parse_lens_model(exif: dict) -> str | None:
+    """Extract lens model from LensModel or LensID."""
+    return exif.get("LensModel") or exif.get("LensID") or None
+
+def parse_iso(exif: dict) -> int | None:
+    """Extract ISO as integer."""
+    val = exif.get("ISO")
+    if val is None:
+        return None
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return None
+
+def parse_shutter_speed(exif: dict) -> str | None:
+    """Extract shutter speed as human-readable string (e.g. '1/250')."""
+    val = exif.get("ExposureTime")
+    if val is None:
+        return None
+    return str(val) if val else None
+
+def parse_orientation(exif: dict) -> int | None:
+    """Extract EXIF orientation tag (1-8)."""
+    val = exif.get("Orientation")
+    if val is None:
+        return None
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return None
+```
+
+#### `src/cli/ingest.py`
+
+Update `_build_exif_payload` (around line 138) to include the new fields:
+
+```python
+from src.workers.exif_extract import (
+    parse_aperture, parse_focal_length, parse_flash_fired,
+    parse_lens_model, parse_iso, parse_shutter_speed, parse_orientation,
+)
+
+# In _build_exif_payload, add to the return dict:
+    "iso": parse_iso(exif_data),
+    "shutter_speed": parse_shutter_speed(exif_data),
+    "aperture": parse_aperture(exif_data),
+    "focal_length": parse_focal_length(exif_data, "FocalLength"),
+    "focal_length_35mm": parse_focal_length(exif_data, "FocalLengthIn35mmFormat"),
+    "lens_model": parse_lens_model(exif_data),
+    "flash_fired": parse_flash_fired(exif_data),
+    "orientation": parse_orientation(exif_data),
+```
+
+#### `src/api/routers/ingest.py`
+
+Update the EXIF processing in `_do_ingest` to persist the new fields when creating/updating
+assets. The `exif_data` dict from the request body already flows through — the repository
+`update_exif` or asset creation must accept and store the 8 new fields.
+
+#### `src/repository/tenant.py`
+
+Update `update_exif` to accept and persist the new columns in the `UPDATE assets SET ...`
+statement. Add the 8 fields to the method signature with `None` defaults.
+
+### Acceptance criteria
+
+- Migration runs cleanly on a database with 3,600+ existing assets.
+- After migration, `SELECT COUNT(*) FROM assets WHERE iso IS NOT NULL` returns a non-zero count.
+- New ingests populate all 8 columns from EXIF data.
+- Assets without EXIF data have NULL for all 8 columns.
+- New unit tests for `parse_flash_fired`, `parse_aperture`, `parse_focal_length`,
+  `parse_lens_model`.
+- All existing tests pass.
+
+---
+
+## Phase 2 — Sort and Filter API
+
+**Goal**: The page endpoint supports sorting by any indexed column, media type filtering, EXIF
+range filters, camera/lens filters, and returns a response envelope with an opaque cursor.
+
+### Files to modify
+
+#### `src/api/routers/assets.py`
+
+Rewrite `page_assets` (line 128). New query parameters:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `sort` | enum | `taken_at` | Sort column: `taken_at`, `created_at`, `file_size`, `iso`, `aperture`, `focal_length`, `rel_path` |
+| `dir` | enum | `desc` | Sort direction: `asc`, `desc` |
+| `after` | string | null | Opaque cursor (base64 JSON), replaces old `asset_id` cursor |
+| `media_type` | string | null | Comma-separated: `image`, `video` |
+| `camera_make` | string | null | Exact match |
+| `camera_model` | string | null | Exact match |
+| `lens_model` | string | null | Exact match |
+| `iso_min` | int | null | Minimum ISO (inclusive) |
+| `iso_max` | int | null | Maximum ISO (inclusive) |
+| `aperture_min` | float | null | Minimum aperture (inclusive) |
+| `aperture_max` | float | null | Maximum aperture (inclusive) |
+| `focal_length_min` | float | null | Minimum focal length in mm |
+| `focal_length_max` | float | null | Maximum focal length in mm |
+| `has_gps` | bool | false | Filter to assets with GPS coordinates |
+| `near_lat` | float | null | Center latitude for geo filter |
+| `near_lon` | float | null | Center longitude for geo filter |
+| `near_radius_km` | float | 1.0 | Radius in km for geo filter |
+
+New response model (replaces bare list):
+
+```python
+class AssetPageResponse(BaseModel):
+    items: list[AssetPageItem]
+    next_cursor: str | None
+```
+
+Add `AssetPageItem` fields for the new columns:
+
+```python
+class AssetPageItem(BaseModel):
+    # ...existing fields...
+    camera_make: str | None = None
+    camera_model: str | None = None
+    iso: int | None = None
+    aperture: float | None = None
+    focal_length: float | None = None
+    focal_length_35mm: float | None = None
+    lens_model: str | None = None
+    flash_fired: bool | None = None
+    gps_lat: float | None = None
+    gps_lon: float | None = None
+    created_at: str | None = None
+```
+
+Cursor encoding/decoding helpers:
+
+```python
+import base64, json
+
+def encode_cursor(sort_value, asset_id: str) -> str:
+    payload = json.dumps({"v": sort_value, "id": asset_id}, default=str)
+    return base64.urlsafe_b64encode(payload.encode()).decode()
+
+def decode_cursor(cursor: str) -> tuple:
+    payload = json.loads(base64.urlsafe_b64decode(cursor))
+    return payload["v"], payload["id"]
+```
+
+#### `src/repository/tenant.py`
+
+Rewrite `page_by_library` to accept sort/filter/cursor parameters. Core query pattern:
+
+```sql
+SELECT a.asset_id
+FROM active_assets a
+LEFT JOIN LATERAL (...) m ON TRUE   -- only if tag filter is active
+WHERE {filter_conditions}
+  AND (a.{sort_col}, a.asset_id) {< or >} (:cursor_value, :cursor_id)
+ORDER BY a.{sort_col} {ASC|DESC} NULLS LAST, a.asset_id {ASC|DESC}
+LIMIT :limit
+```
+
+For `DESC` sort: the cursor condition is `<`; for `ASC`: `>`. `NULLS LAST` ensures null sort
+values sink to the bottom regardless of direction.
+
+Media type filter:
+
+```python
+if media_types:
+    prefixes = []
+    if "image" in media_types:
+        prefixes.append("a.media_type LIKE 'image/%'")
+    if "video" in media_types:
+        prefixes.append("a.media_type LIKE 'video/%'")
+    conditions.append(f"({' OR '.join(prefixes)})")
+```
+
+EXIF range filters:
+
+```python
+if iso_min is not None:
+    conditions.append("a.iso >= :iso_min")
+if iso_max is not None:
+    conditions.append("a.iso <= :iso_max")
+# Same pattern for aperture_min/max, focal_length_min/max
+```
+
+Camera/lens exact match:
+
+```python
+if camera_make:
+    conditions.append("a.camera_make = :camera_make")
+if lens_model:
+    conditions.append("a.lens_model = :lens_model")
+```
+
+Geo-proximity bounding box (if params provided):
+
+```python
+if near_lat is not None and near_lon is not None:
+    import math
+    radius_km = near_radius_km or 1.0
+    lat_delta = radius_km / 111.0
+    lon_delta = radius_km / (111.0 * math.cos(math.radians(near_lat)))
+    conditions.append("a.gps_lat BETWEEN :min_lat AND :max_lat")
+    conditions.append("a.gps_lon BETWEEN :min_lon AND :max_lon")
+    params.update({
+        "min_lat": near_lat - lat_delta, "max_lat": near_lat + lat_delta,
+        "min_lon": near_lon - lon_delta, "max_lon": near_lon + lon_delta,
+    })
+```
+
+#### `src/ui/web/src/api/types.ts`
+
+Update `AssetPageItem` with new fields. Add:
+
+```typescript
+export interface AssetPageResponse {
+  items: AssetPageItem[];
+  next_cursor: string | null;
+}
+```
+
+#### `src/ui/web/src/api/client.ts`
+
+Update `pageAssets` to accept filter/sort options and return `AssetPageResponse`:
+
+```typescript
+export interface PageAssetsOptions {
+  pathPrefix?: string;
+  tag?: string;
+  sort?: string;
+  dir?: "asc" | "desc";
+  mediaType?: string;
+  cameraMake?: string;
+  cameraModel?: string;
+  lensModel?: string;
+  isoMin?: number;
+  isoMax?: number;
+  apertureMin?: number;
+  apertureMax?: number;
+  focalLengthMin?: number;
+  focalLengthMax?: number;
+  hasGps?: boolean;
+  nearLat?: number;
+  nearLon?: number;
+  nearRadiusKm?: number;
+}
+
+export async function pageAssets(
+  libraryId: string,
+  cursor?: string,
+  limit?: number,
+  opts?: PageAssetsOptions,
+): Promise<AssetPageResponse>
+```
+
+#### `src/ui/web/src/pages/BrowsePage.tsx`
+
+Update the `useInfiniteQuery`:
+- Use the new `pageAssets` signature.
+- Extract `next_cursor` from response as `getNextPageParam`.
+- Pass sort/filter state from URL search params.
+- Update `browseQuery.queryKey` to include all active filter params.
+
+#### `src/cli/ingest.py` and `src/cli/main.py`
+
+Update any CLI code that calls `page_assets` to handle the new response envelope (access
+`response["items"]` instead of the bare list).
+
+### Acceptance criteria
+
+- `GET /v1/assets/page?library_id=X&sort=taken_at&dir=desc` returns assets sorted by date taken,
+  newest first, with correct cursor-based pagination across multiple pages.
+- `GET /v1/assets/page?library_id=X&media_type=video` returns only video assets.
+- `GET /v1/assets/page?library_id=X&iso_min=800&iso_max=3200` returns only assets with ISO in
+  range.
+- `GET /v1/assets/page?library_id=X&camera_make=Sony&lens_model=FE 35mm F1.4 GM` returns only
+  matching assets.
+- Cursor pagination produces no duplicates and no gaps across all sort orders.
+- CLI consumers updated and working with response envelope.
+- All existing tests updated and passing.
+
+---
+
+## Phase 3 — Facets Endpoint and FilterBar UI
+
+**Goal**: The UI has a rich filter bar with dropdowns populated from real data. Filters compose
+with each other and with search.
+
+### Files to create
+
+#### `src/api/routers/facets.py`
+
+New router mounted at `GET /v1/assets/facets`:
+
+```python
+class FacetsResponse(BaseModel):
+    media_types: list[str]           # ["image", "video"]
+    camera_makes: list[str]          # sorted alphabetically
+    camera_models: list[str]         # sorted alphabetically
+    lens_models: list[str]           # sorted alphabetically
+    iso_range: list[int | None]      # [min, max] or [null, null]
+    aperture_range: list[float | None]
+    focal_length_range: list[float | None]
+```
+
+Query params: `library_id` (required), `path_prefix` (optional — scopes facets to the current
+directory view).
+
+Implementation — single aggregation query:
+
+```sql
+SELECT
+  array_agg(DISTINCT camera_make) FILTER (WHERE camera_make IS NOT NULL),
+  array_agg(DISTINCT camera_model) FILTER (WHERE camera_model IS NOT NULL),
+  array_agg(DISTINCT lens_model) FILTER (WHERE lens_model IS NOT NULL),
+  MIN(iso), MAX(iso),
+  MIN(aperture), MAX(aperture),
+  MIN(focal_length), MAX(focal_length),
+  bool_or(media_type LIKE 'image/%') AS has_images,
+  bool_or(media_type LIKE 'video/%') AS has_videos
+FROM active_assets
+WHERE library_id = :library_id
+  AND (:path_prefix IS NULL
+       OR rel_path = :path_prefix
+       OR rel_path LIKE :path_prefix_like)
+```
+
+#### `src/ui/web/src/api/client.ts` — add `getFacets(libraryId, pathPrefix?)` function.
+
+#### `src/ui/web/src/api/types.ts` — add `FacetsResponse` interface.
+
+### Files to modify
+
+#### `src/api/app.py` (or router registration)
+
+Register the new facets router.
+
+#### `src/ui/web/src/components/FilterBar.tsx`
+
+Major expansion. The FilterBar gains a collapsible filter panel (toggle via "Filters" button)
+containing:
+
+1. **Media type toggle buttons** — Photo / Video / All. Always visible in the main bar row
+   (not inside the collapsible panel).
+
+2. **Sort dropdown** — Date Taken, Date Added, File Size, ISO, Aperture, Focal Length. With
+   asc/desc toggle. Visible in the main bar row.
+
+3. **Camera dropdown** — `<select>` populated from `facets.camera_makes`. When a make is
+   selected, a second dropdown shows `facets.camera_models` filtered to that make (requires the
+   facets endpoint to return make+model pairs, or the UI filters client-side from the full
+   model list by checking if the model string contains the make).
+
+4. **Lens dropdown** — `<select>` populated from `facets.lens_models`.
+
+5. **EXIF range inputs** — ISO (min/max number inputs), Aperture (min/max), Focal Length
+   (min/max). Range bounds from facets. Simple number inputs rather than sliders for precision.
+
+6. **GPS toggle** — "Has location" checkbox.
+
+7. **Active filter chiclets** — Each active filter shows as a removable chiclet, extending the
+   existing pattern for q/tag/path/date. New chiclets for: media type, camera, lens, ISO range,
+   aperture range, focal length range, GPS, geo-proximity.
+
+All filter state is URL-driven (search params), matching the existing pattern. New params:
+`media_type`, `camera_make`, `camera_model`, `lens_model`, `iso_min`, `iso_max`, `aperture_min`,
+`aperture_max`, `focal_length_min`, `focal_length_max`, `has_gps`, `sort`, `dir`.
+
+Layout: The main bar row contains search, date, media type toggle, sort dropdown, and a
+"Filters" button. Clicking "Filters" expands a second row with camera, lens, EXIF ranges, and
+GPS toggle. The expanded state persists in local storage.
+
+#### `src/ui/web/src/pages/BrowsePage.tsx`
+
+- Add a `useQuery` for facets, keyed on `["facets", libraryId, pathPrefix]`, stale time 5
+  minutes, invalidated on revision change.
+- Pass facets data to FilterBar.
+- Read all new filter params from `searchParams` and pass to `pageAssets`.
+- Wire sort dropdown to URL params (replacing the search-mode-only sort).
+
+### Acceptance criteria
+
+- FilterBar shows Photo / Video / All toggle; selecting "Video" adds `media_type=video` to URL
+  and grid shows only videos.
+- Camera make dropdown shows only makes present in the library.
+- ISO range inputs reflect actual min/max from facets.
+- All filters compose: selecting Sony + ISO 800-3200 + Video shows only Sony videos in that
+  ISO range.
+- Removing a chiclet clears that filter and refetches.
+- Sort dropdown works in browse mode and persists in URL.
+- Filters panel expand/collapse state persists across page loads.
+
+---
+
+## Phase 4 — Geo-Proximity Filter
+
+**Goal**: "Near this photo" button in the Lightbox triggers a filtered grid view showing photos
+taken within a configurable radius.
+
+### Files to modify
+
+#### `src/ui/web/src/components/Lightbox.tsx`
+
+Add a "Photos nearby" button in the metadata sidebar, visible only when `gps_lat` and `gps_lon`
+are non-null on the asset detail. Clicking navigates to BrowsePage with geo filter params:
+
+```typescript
+const handleNearbyClick = () => {
+  const params = new URLSearchParams();
+  params.set("near_lat", String(asset.gps_lat));
+  params.set("near_lon", String(asset.gps_lon));
+  params.set("near_radius_km", "1");
+  navigate(`/libraries/${libraryId}/browse?${params}`);
+  onClose();
+};
+```
+
+Button placement: Below the GPS coordinates display in the metadata panel. Icon: a map pin or
+crosshair. Style: secondary button matching existing metadata panel actions.
+
+#### `src/ui/web/src/components/FilterBar.tsx`
+
+Add a chiclet for active geo-proximity filter: "Within 1km of [lat, lon]" with a clear button.
+Optionally add a radius selector (0.5km, 1km, 5km, 10km, 50km) that updates `near_radius_km`.
+
+#### `src/ui/web/src/pages/BrowsePage.tsx`
+
+Read `near_lat`, `near_lon`, `near_radius_km` from search params and pass to `pageAssets`.
+
+### Acceptance criteria
+
+- Lightbox shows "Photos nearby" button only when GPS data is available.
+- Clicking the button closes the Lightbox and navigates to BrowsePage with geo filter active.
+- The grid shows only photos within the specified radius.
+- Geo filter composes with other filters (e.g., "Sony photos near this location").
+- Clearing the geo chiclet removes the filter.
+- Radius selector allows changing the search radius.
+
+---
+
+## Phase 5 — Performance and Polish
+
+**Goal**: Optimize query performance for large libraries, add loading states, polish edge cases,
+and ensure mobile usability.
+
+### Performance
+
+- **Partial indexes**: The composite index from Phase 1 covers the default sort. Add additional
+  partial indexes if query profiling reveals slow paths.
+- **Facets caching**: For libraries with 100k+ assets, the facets aggregation query may become
+  slow. Options: materialized view refreshed on revision change, or application-level cache with
+  TTL. Evaluate after profiling with real data.
+- **Count estimation**: The `AssetPageResponse` does not include a total count (expensive for
+  filtered queries). If needed, use `EXPLAIN` row estimation or a separate count endpoint with
+  a cache.
+
+### UI polish
+
+- **Empty state**: When filters match zero results, show "No photos match your filters" with a
+  "Clear all filters" button.
+- **Filter count badges**: Show approximate result counts next to facet values (e.g.,
+  "Canon (2,340)"). Requires per-value counts in the facets endpoint — defer if expensive.
+- **Mobile filter sheet**: On screens below `md:`, the filter panel renders as a bottom sheet
+  (slide up from bottom) instead of an inline expanded row. Follows the drawer pattern from
+  ADR phased_mobile_ui.
+- **Sort indicator**: Show ascending/descending arrow icon next to the active sort column.
+- **URL sharing**: All filter state is in the URL — sharing a filtered view works out of the box.
+  Verify long URLs don't break (camera models and lens names can be long strings).
+- **Keyboard shortcuts**: Consider `Escape` to clear all filters, `/` to focus search.
+
+### Acceptance criteria
+
+- Default sort query performs within 50ms for a 100k-asset library.
+- Facets endpoint responds within 200ms for a 100k-asset library.
+- All filter combinations produce correct results (integration test matrix).
+- Mobile filter experience is usable on a 390px viewport.
+- Empty filter results show a clear message with a reset action.
+
+---
+
+## Summary of File Changes
+
+| File | Phase | Change type |
+|------|-------|-------------|
+| `migrations/tenant/versions/XX_add_exif_columns.py` | 1 | **Create** — 8 columns, indexes, backfill |
+| `src/models/tenant.py` | 1 | Modify — add 8 fields to Asset |
+| `src/workers/exif_extract.py` | 1 | Modify — add parsing helpers |
+| `src/cli/ingest.py` | 1, 2 | Modify — `_build_exif_payload` new fields; handle response envelope |
+| `src/repository/tenant.py` | 1, 2 | Modify — `update_exif` new fields; `page_by_library` rewrite |
+| `src/api/routers/ingest.py` | 1 | Modify — pass new EXIF fields |
+| `src/api/routers/assets.py` | 2 | Modify — new params, response envelope, cursor |
+| `src/api/routers/facets.py` | 3 | **Create** — facets endpoint |
+| `src/api/app.py` | 3 | Modify — register facets router |
+| `src/ui/web/src/api/types.ts` | 2, 3 | Modify — `AssetPageItem` fields, `AssetPageResponse`, `FacetsResponse` |
+| `src/ui/web/src/api/client.ts` | 2, 3 | Modify — `pageAssets` new signature, `getFacets` |
+| `src/ui/web/src/components/FilterBar.tsx` | 3, 4 | Modify — media type, camera, lens, EXIF, geo |
+| `src/ui/web/src/pages/BrowsePage.tsx` | 2, 3, 4 | Modify — sort/filter state, facets, geo |
+| `src/ui/web/src/components/Lightbox.tsx` | 4 | Modify — "Photos nearby" button |
+| `src/cli/main.py` | 2 | Modify — handle response envelope |
+| Tests (various) | 1-5 | **Create/Modify** — parsing tests, pagination tests, filter composition |
