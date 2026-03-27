@@ -173,6 +173,7 @@ def page_assets(
     path_prefix: str | None = None,
     tag: str | None = None,
     missing_vision: bool = False,
+    missing_embeddings: bool = False,
     sort: str = "taken_at",
     dir: str = "desc",
     media_type: str | None = None,
@@ -231,6 +232,7 @@ def page_assets(
         path_prefix=normalized_prefix,
         tag=tag,
         missing_vision=missing_vision,
+        missing_embeddings=missing_embeddings,
         sort=sort_col,
         direction=direction,
         media_types=media_types,
@@ -289,6 +291,56 @@ def page_assets(
         next_cursor = _encode_cursor(sort_col, sort_value, last.asset_id)
 
     return AssetPageResponse(items=items, next_cursor=next_cursor)
+
+
+class RepairSummary(BaseModel):
+    total_assets: int = 0
+    missing_proxy: int = 0
+    missing_exif: int = 0
+    missing_vision: int = 0
+    missing_embeddings: int = 0
+
+
+@router.get("/repair-summary", response_model=RepairSummary)
+def repair_summary(
+    session: Annotated[Session, Depends(get_tenant_session)],
+    library_id: str,
+) -> RepairSummary:
+    """Count assets missing various pipeline outputs for a library."""
+    from sqlalchemy import text
+    lib = LibraryRepository(session).get_by_id(library_id)
+    if lib is None:
+        raise HTTPException(status_code=404, detail="Library not found")
+    row = session.execute(
+        text("""
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE proxy_key IS NULL) AS missing_proxy,
+                COUNT(*) FILTER (WHERE exif_extracted_at IS NULL AND media_type = 'image') AS missing_exif,
+                COUNT(*) FILTER (
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM asset_metadata am
+                        WHERE am.asset_id = a.asset_id
+                    ) AND media_type = 'image'
+                ) AS missing_vision,
+                COUNT(*) FILTER (
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM asset_embeddings ae
+                        WHERE ae.asset_id = a.asset_id
+                    ) AND media_type = 'image'
+                ) AS missing_embeddings
+            FROM active_assets a
+            WHERE library_id = :library_id
+        """),
+        {"library_id": library_id},
+    ).one()
+    return RepairSummary(
+        total_assets=row.total,
+        missing_proxy=row.missing_proxy,
+        missing_exif=row.missing_exif,
+        missing_vision=row.missing_vision,
+        missing_embeddings=row.missing_embeddings,
+    )
 
 
 @router.post("/state-check", response_model=StateCheckResponse)
@@ -679,6 +731,33 @@ def _enqueue_video_preview_job_if_needed(
     if job_repo.has_pending_job("video-preview", asset_id):
         return
     job_repo.create(job_type="video-preview", asset_id=asset_id, priority=PRIORITY_URGENT)
+
+
+class EmbeddingSubmitRequest(BaseModel):
+    model_id: str
+    model_version: str
+    vector: list[float]
+
+
+@router.post("/{asset_id}/embeddings", status_code=201)
+def submit_embedding(
+    asset_id: str,
+    body: EmbeddingSubmitRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> dict:
+    """Submit an embedding vector for an asset."""
+    from src.repository.tenant import AssetEmbeddingRepository
+    asset = AssetRepository(session).get_by_id(asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    emb_repo = AssetEmbeddingRepository(session)
+    emb_repo.upsert(
+        asset_id=asset_id,
+        model_id=body.model_id,
+        model_version=body.model_version,
+        vector=[float(x) for x in body.vector],
+    )
+    return {"ok": True}
 
 
 @router.get("/{asset_id}/preview")

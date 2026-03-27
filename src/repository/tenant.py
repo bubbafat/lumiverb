@@ -748,6 +748,7 @@ class AssetRepository:
         path_prefix: str | None = None,
         tag: str | None = None,
         missing_vision: bool = False,
+        missing_embeddings: bool = False,
         *,
         sort: str = "taken_at",
         direction: str = "desc",
@@ -840,6 +841,10 @@ class AssetRepository:
             params["tag"] = tag
         if missing_vision:
             conditions.append("m.tags IS NULL")
+        if missing_embeddings:
+            conditions.append(
+                "NOT EXISTS (SELECT 1 FROM asset_embeddings ae WHERE ae.asset_id = a.asset_id)"
+            )
 
         # --- Media type filter ---
         if media_types:

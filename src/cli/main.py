@@ -1617,6 +1617,47 @@ def backfill_vision(
         raise typer.Exit(1)
 
 
+@app.command("repair")
+def repair(
+    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
+    job_type: Annotated[str, typer.Option("--job-type", "-j", help="Repair type: embed, vision, or all.")] = "all",
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be repaired without making changes.")] = False,
+    concurrency: Annotated[int, typer.Option("--concurrency", help="Number of parallel workers.")] = 4,
+) -> None:
+    """Detect and repair missing pipeline outputs.
+
+    Checks each pipeline stage and repairs what's missing. Use --dry-run
+    to preview without making changes.
+
+    \b
+    Job types:
+      embed   — Generate missing CLIP embeddings (similarity search)
+      vision  — Generate missing AI descriptions and tags
+      all     — Run all repairs in logical order (default)
+    """
+    from src.cli.repair import run_repair
+
+    if job_type not in ("embed", "vision", "all"):
+        console.print(f"[red]Invalid --job-type: {job_type}. Must be embed, vision, or all.[/red]")
+        raise typer.Exit(1)
+
+    client = LumiverbClient()
+    libraries = client.get("/v1/libraries").json()
+    match = next((lib for lib in libraries if lib["name"] == library), None)
+    if match is None:
+        console.print(f"[red]Library not found: {library}[/red]")
+        raise typer.Exit(1)
+
+    run_repair(
+        client,
+        match,
+        job_type=job_type,
+        dry_run=dry_run,
+        concurrency=concurrency,
+        console=console,
+    )
+
+
 def _run_apply_filters(client: LumiverbClient, library_id: str, *, dry_run: bool) -> None:
     """Apply current library filters to existing assets, trashing those that no longer match."""
     from src.cli.progress import UnifiedProgress, UnifiedProgressSpec
