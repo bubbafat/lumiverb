@@ -761,6 +761,7 @@ class AssetRepository:
         aperture_max: float | None = None,
         focal_length_min: float | None = None,
         focal_length_max: float | None = None,
+        has_exposure: bool | None = None,
         has_gps: bool = False,
         near_lat: float | None = None,
         near_lon: float | None = None,
@@ -878,6 +879,16 @@ class AssetRepository:
         if focal_length_max is not None:
             conditions.append("a.focal_length <= :focal_length_max")
             params["focal_length_max"] = focal_length_max
+
+        # --- Exposure data filter ---
+        if has_exposure is True:
+            conditions.append(
+                "(a.iso IS NOT NULL OR a.shutter_speed IS NOT NULL OR a.aperture IS NOT NULL)"
+            )
+        elif has_exposure is False:
+            conditions.append(
+                "a.iso IS NULL AND a.shutter_speed IS NULL AND a.aperture IS NULL"
+            )
 
         # --- GPS filters ---
         if has_gps:

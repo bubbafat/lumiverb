@@ -86,6 +86,7 @@ interface FilterBarProps {
   apertureMax: string | null;
   focalLengthMin: string | null;
   focalLengthMax: string | null;
+  hasExposure: boolean | null;
   hasGps: boolean;
   nearLat: string | null;
   nearLon: string | null;
@@ -116,6 +117,7 @@ export function FilterBar({
   apertureMax,
   focalLengthMin,
   focalLengthMax,
+  hasExposure,
   hasGps,
   nearLat,
   nearLon,
@@ -216,7 +218,7 @@ export function FilterBar({
   const hasActiveFilters = !!(
     mediaType || cameraMake || cameraModel || lensModel ||
     isoMin || isoMax || apertureMin || apertureMax ||
-    focalLengthMin || focalLengthMax || hasGps || nearLat
+    focalLengthMin || focalLengthMax || hasExposure != null || hasGps || nearLat
   );
 
   const showQChiclet = q !== null && q.length > 0;
@@ -410,6 +412,12 @@ export function FilterBar({
               label={`${focalLengthMin ?? ""}${focalLengthMin && focalLengthMax ? "-" : ""}${focalLengthMax ?? ""}mm`}
               onClear={() => { onChangeFilter("focal_length_min", null); onChangeFilter("focal_length_max", null); }}
             />
+          )}
+          {hasExposure === false && (
+            <Chiclet label="No exposure data" onClear={() => onChangeFilter("has_exposure", null)} />
+          )}
+          {hasExposure === true && (
+            <Chiclet label="Has exposure data" onClear={() => onChangeFilter("has_exposure", null)} />
           )}
           {hasGps && !nearLat && (
             <Chiclet label="Has location" onClear={() => onChangeFilter("has_gps", null)} />

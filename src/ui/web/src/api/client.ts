@@ -210,6 +210,7 @@ export interface PageAssetsOptions {
   apertureMax?: number;
   focalLengthMin?: number;
   focalLengthMax?: number;
+  hasExposure?: boolean;
   hasGps?: boolean;
   nearLat?: number;
   nearLon?: number;
@@ -240,6 +241,7 @@ export async function pageAssets(
   if (opts?.apertureMax != null) params.set("aperture_max", String(opts.apertureMax));
   if (opts?.focalLengthMin != null) params.set("focal_length_min", String(opts.focalLengthMin));
   if (opts?.focalLengthMax != null) params.set("focal_length_max", String(opts.focalLengthMax));
+  if (opts?.hasExposure != null) params.set("has_exposure", String(opts.hasExposure));
   if (opts?.hasGps) params.set("has_gps", "true");
   if (opts?.nearLat != null) params.set("near_lat", String(opts.nearLat));
   if (opts?.nearLon != null) params.set("near_lon", String(opts.nearLon));

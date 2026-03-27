@@ -15,6 +15,7 @@ interface LightboxProps {
   onSimilarClick?: (asset: AssetPageItem) => void;
   onDateClick?: (dateStr: string) => void;
   onNearbyClick?: (lat: number, lon: number) => void;
+  onFilterClick?: (params: Record<string, string>) => void;
   libraryId?: string;
   isPublic?: boolean;
   publicLibraryId?: string;
@@ -66,6 +67,37 @@ function MetadataSkeleton() {
   );
 }
 
+function FilterLink({
+  children,
+  params,
+  onFilterClick,
+  onClose,
+  title,
+}: {
+  children: React.ReactNode;
+  params: Record<string, string>;
+  onFilterClick?: (params: Record<string, string>) => void;
+  onClose: () => void;
+  title?: string;
+}) {
+  if (!onFilterClick) {
+    return <span className="text-gray-300">{children}</span>;
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        onFilterClick(params);
+        onClose();
+      }}
+      title={title ?? "Filter by this value"}
+      className="text-gray-300 hover:text-indigo-400 hover:underline transition-colors text-left"
+    >
+      {children}
+    </button>
+  );
+}
+
 export function Lightbox({
   asset,
   assets,
@@ -76,6 +108,7 @@ export function Lightbox({
   onSimilarClick,
   onDateClick,
   onNearbyClick,
+  onFilterClick,
   libraryId,
   isPublic,
   publicLibraryId,
@@ -548,13 +581,149 @@ export function Lightbox({
                       (detail.camera_make || detail.camera_model) && (
                         <div className="flex">
                           <dt className="w-2/5 text-xs text-gray-500">Camera</dt>
-                          <dd className="w-3/5 text-sm text-gray-300">
-                            {[detail.camera_make, detail.camera_model]
-                              .filter(Boolean)
-                              .join(" ")}
+                          <dd className="w-3/5 text-sm">
+                            <FilterLink
+                              params={{
+                                ...(detail.camera_make
+                                  ? { camera_make: detail.camera_make }
+                                  : {}),
+                                ...(detail.camera_model
+                                  ? { camera_model: detail.camera_model }
+                                  : {}),
+                              }}
+                              onFilterClick={onFilterClick}
+                              onClose={onClose}
+                              title="Filter by this camera"
+                            >
+                              {[detail.camera_make, detail.camera_model]
+                                .filter(Boolean)
+                                .join(" ")}
+                            </FilterLink>
                           </dd>
                         </div>
                       )}
+                    {detail && detail.lens_model && (
+                      <div className="flex">
+                        <dt className="w-2/5 text-xs text-gray-500">Lens</dt>
+                        <dd className="w-3/5 text-sm">
+                          <FilterLink
+                            params={{ lens_model: detail.lens_model }}
+                            onFilterClick={onFilterClick}
+                            onClose={onClose}
+                            title="Filter by this lens"
+                          >
+                            {detail.lens_model}
+                          </FilterLink>
+                        </dd>
+                      </div>
+                    )}
+                    {detail && (
+                      <div className="flex">
+                        <dt className="w-2/5 text-xs text-gray-500">Exposure</dt>
+                        <dd className="w-3/5 text-sm">
+                          {detail.shutter_speed != null ||
+                          detail.aperture != null ||
+                          detail.iso != null ? (
+                            <span className="flex flex-wrap items-center gap-x-1.5">
+                              {onFilterClick ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const p: Record<string, string> = {};
+                                    if (detail.iso != null) {
+                                      p.iso_min = String(detail.iso);
+                                      p.iso_max = String(detail.iso);
+                                    }
+                                    if (detail.aperture != null) {
+                                      p.aperture_min = String(detail.aperture);
+                                      p.aperture_max = String(detail.aperture);
+                                    }
+                                    onFilterClick(p);
+                                    onClose();
+                                  }}
+                                  title="Filter by all exposure settings"
+                                  className="text-gray-500 hover:text-indigo-400 transition-colors text-xs mr-0.5"
+                                >
+                                  ▸
+                                </button>
+                              ) : null}
+                              {detail.shutter_speed != null && (
+                                <span className="text-gray-300">
+                                  {detail.shutter_speed}
+                                </span>
+                              )}
+                              {detail.aperture != null && (
+                                <FilterLink
+                                  params={{
+                                    aperture_min: String(detail.aperture),
+                                    aperture_max: String(detail.aperture),
+                                  }}
+                                  onFilterClick={onFilterClick}
+                                  onClose={onClose}
+                                  title="Filter by this aperture"
+                                >
+                                  f/{detail.aperture}
+                                </FilterLink>
+                              )}
+                              {detail.iso != null && (
+                                <FilterLink
+                                  params={{
+                                    iso_min: String(detail.iso),
+                                    iso_max: String(detail.iso),
+                                  }}
+                                  onFilterClick={onFilterClick}
+                                  onClose={onClose}
+                                  title="Filter by this ISO"
+                                >
+                                  ISO {detail.iso}
+                                </FilterLink>
+                              )}
+                            </span>
+                          ) : (
+                            <FilterLink
+                              params={{ has_exposure: "false" }}
+                              onFilterClick={onFilterClick}
+                              onClose={onClose}
+                              title="Find images with no exposure data"
+                            >
+                              Unknown
+                            </FilterLink>
+                          )}
+                        </dd>
+                      </div>
+                    )}
+                    {detail &&
+                      detail.focal_length != null && (
+                        <div className="flex">
+                          <dt className="w-2/5 text-xs text-gray-500">
+                            Focal length
+                          </dt>
+                          <dd className="w-3/5 text-sm">
+                            <FilterLink
+                              params={{
+                                focal_length_min: String(detail.focal_length),
+                                focal_length_max: String(detail.focal_length),
+                              }}
+                              onFilterClick={onFilterClick}
+                              onClose={onClose}
+                              title="Filter by this focal length"
+                            >
+                              {detail.focal_length}mm
+                              {detail.focal_length_35mm != null &&
+                                detail.focal_length_35mm !== detail.focal_length &&
+                                ` (${detail.focal_length_35mm}mm eq.)`}
+                            </FilterLink>
+                          </dd>
+                        </div>
+                      )}
+                    {detail && detail.flash_fired != null && (
+                      <div className="flex">
+                        <dt className="w-2/5 text-xs text-gray-500">Flash</dt>
+                        <dd className="w-3/5 text-sm text-gray-300">
+                          {detail.flash_fired ? "Fired" : "No flash"}
+                        </dd>
+                      </div>
+                    )}
                     {detail &&
                       detail.width != null &&
                       detail.height != null && (

@@ -116,6 +116,14 @@ export interface AssetDetail {
   taken_at: string | null;
   gps_lat: number | null;
   gps_lon: number | null;
+  iso: number | null;
+  shutter_speed: string | null;
+  aperture: number | null;
+  focal_length: number | null;
+  focal_length_35mm: number | null;
+  lens_model: string | null;
+  flash_fired: boolean | null;
+  orientation: number | null;
   ai_description?: string | null;
   ai_tags: string[];
 }

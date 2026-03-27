@@ -58,6 +58,14 @@ class AssetResponse(BaseModel):
     taken_at: str | None = None  # ISO8601
     gps_lat: float | None = None
     gps_lon: float | None = None
+    iso: int | None = None
+    shutter_speed: str | None = None
+    aperture: float | None = None
+    focal_length: float | None = None
+    focal_length_35mm: float | None = None
+    lens_model: str | None = None
+    flash_fired: bool | None = None
+    orientation: int | None = None
     video_preview_key: str | None = None
     video_preview_generated_at: str | None = None  # ISO8601
     video_preview_last_accessed_at: str | None = None  # ISO8601
@@ -177,6 +185,7 @@ def page_assets(
     aperture_max: float | None = None,
     focal_length_min: float | None = None,
     focal_length_max: float | None = None,
+    has_exposure: bool | None = None,
     has_gps: bool = False,
     near_lat: float | None = None,
     near_lon: float | None = None,
@@ -232,6 +241,7 @@ def page_assets(
         aperture_max=aperture_max,
         focal_length_min=focal_length_min,
         focal_length_max=focal_length_max,
+        has_exposure=has_exposure,
         has_gps=has_gps,
         near_lat=near_lat,
         near_lon=near_lon,
@@ -444,6 +454,14 @@ def _to_asset_response(asset) -> AssetResponse:
         taken_at=asset.taken_at.isoformat() if asset.taken_at else None,
         gps_lat=asset.gps_lat,
         gps_lon=asset.gps_lon,
+        iso=asset.iso,
+        shutter_speed=asset.shutter_speed,
+        aperture=asset.aperture,
+        focal_length=asset.focal_length,
+        focal_length_35mm=asset.focal_length_35mm,
+        lens_model=asset.lens_model,
+        flash_fired=asset.flash_fired,
+        orientation=asset.orientation,
         video_preview_key=asset.video_preview_key,
         video_preview_generated_at=asset.video_preview_generated_at.isoformat()
         if asset.video_preview_generated_at

@@ -183,6 +183,7 @@ export default function BrowsePage() {
   const browseApertureMax = searchParams.get("aperture_max") ? Number(searchParams.get("aperture_max")) : undefined;
   const browseFocalLengthMin = searchParams.get("focal_length_min") ? Number(searchParams.get("focal_length_min")) : undefined;
   const browseFocalLengthMax = searchParams.get("focal_length_max") ? Number(searchParams.get("focal_length_max")) : undefined;
+  const browseHasExposure = searchParams.has("has_exposure") ? searchParams.get("has_exposure") === "true" : undefined;
   const browseHasGps = searchParams.get("has_gps") === "true";
   const browseNearLat = searchParams.get("near_lat") ? Number(searchParams.get("near_lat")) : undefined;
   const browseNearLon = searchParams.get("near_lon") ? Number(searchParams.get("near_lon")) : undefined;
@@ -203,6 +204,7 @@ export default function BrowsePage() {
     apertureMax: browseApertureMax,
     focalLengthMin: browseFocalLengthMin,
     focalLengthMax: browseFocalLengthMax,
+    hasExposure: browseHasExposure,
     hasGps: browseHasGps,
     nearLat: browseNearLat,
     nearLon: browseNearLon,
@@ -211,7 +213,7 @@ export default function BrowsePage() {
     pathPrefix, activeTag, browseSort, browseDir, browseMediaType,
     browseCameraMake, browseCameraModel, browseLensModel,
     browseIsoMin, browseIsoMax, browseApertureMin, browseApertureMax,
-    browseFocalLengthMin, browseFocalLengthMax, browseHasGps,
+    browseFocalLengthMin, browseFocalLengthMax, browseHasExposure, browseHasGps,
     browseNearLat, browseNearLon, browseNearRadiusKm,
   ]);
 
@@ -595,6 +597,7 @@ export default function BrowsePage() {
         apertureMax={searchParams.get("aperture_max")}
         focalLengthMin={searchParams.get("focal_length_min")}
         focalLengthMax={searchParams.get("focal_length_max")}
+        hasExposure={browseHasExposure ?? null}
         hasGps={browseHasGps}
         nearLat={searchParams.get("near_lat")}
         nearLon={searchParams.get("near_lon")}
@@ -716,7 +719,7 @@ export default function BrowsePage() {
                     for (const key of [
                       "media_type", "camera_make", "camera_model", "lens_model",
                       "iso_min", "iso_max", "aperture_min", "aperture_max",
-                      "focal_length_min", "focal_length_max", "has_gps",
+                      "focal_length_min", "focal_length_max", "has_exposure", "has_gps",
                       "near_lat", "near_lon", "near_radius_km",
                     ]) {
                       next.delete(key);
@@ -873,6 +876,16 @@ export default function BrowsePage() {
           publicLibraryId={libraryId}
           onSimilarClick={(similarAsset) => {
             setLightboxAsset(similarAsset);
+          }}
+          onFilterClick={(params) => {
+            setLightboxAsset(null);
+            setSearchParams((prev) => {
+              const next = new URLSearchParams(prev);
+              for (const [k, v] of Object.entries(params)) {
+                next.set(k, v);
+              }
+              return next;
+            });
           }}
           onNearbyClick={(lat, lon) => {
             setLightboxAsset(null);
