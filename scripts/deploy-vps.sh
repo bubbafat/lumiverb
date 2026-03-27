@@ -454,6 +454,8 @@ Description=Lumiverb periodic upkeep (search sync, cleanup)
 
 [Service]
 Type=oneshot
+User=${SVC_USER}
+Group=${SVC_USER}
 EnvironmentFile=${ENV_FILE}
 ExecStart=/usr/bin/curl -sf -X POST http://127.0.0.1:8000/v1/upkeep -H "Authorization: Bearer \${ADMIN_KEY}" -H "Content-Type: application/json"
 TimeoutSec=120
