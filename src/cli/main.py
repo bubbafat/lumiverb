@@ -17,6 +17,7 @@ from rich.table import Table
 from src.cli.client import LumiverbAPIError, LumiverbClient
 from src.cli.config import get_admin_key, load_config, save_config
 from src.cli.commands.keys import keys_app
+from src.cli.commands.maintenance import maintenance_app
 from src.cli.commands import users as users_commands
 from src.cli.scanner import (
     APPLY_FILTERS_BATCH_SIZE,
@@ -41,6 +42,7 @@ tenant_app = typer.Typer(help="Manage tenants (admin only).")
 app.add_typer(tenant_app, name="tenant")
 filter_app = typer.Typer(help="Manage path filters (include/exclude patterns).")
 app.add_typer(filter_app, name="filter")
+app.add_typer(maintenance_app, name="maintenance")
 
 console = Console()
 

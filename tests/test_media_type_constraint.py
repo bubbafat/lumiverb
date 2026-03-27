@@ -133,7 +133,7 @@ def test_invalid_media_type_rejected(media_type_client):
         from sqlalchemy.exc import IntegrityError
         with pytest.raises(IntegrityError, match="ck_assets_media_type"):
             conn.execute(text("""
-                INSERT INTO assets (asset_id, library_id, rel_path, file_size, media_type, status, availability)
-                VALUES ('ast_test_bad', :lib, 'bad.txt', 100, 'image/jpeg', 'pending', 'online')
+                INSERT INTO assets (asset_id, library_id, rel_path, file_size, media_type, status, availability, created_at, updated_at)
+                VALUES ('ast_test_bad', :lib, 'bad.txt', 100, 'image/jpeg', 'pending', 'online', NOW(), NOW())
             """), {"lib": library_id})
             conn.commit()

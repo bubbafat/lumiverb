@@ -122,7 +122,7 @@ def ingest_env(tmp_path_factory):
                                 "rel_path": rel_path,
                                 "file_size": 1000,
                                 "file_mtime": "2025-01-01T12:00:00Z",
-                                "media_type": "image/jpeg",
+                                "media_type": "image",
                                 "scan_id": scan_id,
                             },
                             headers=auth_headers,
@@ -162,7 +162,7 @@ def test_ingest_proxy_only(ingest_env) -> None:
 
     assert data["asset_id"] == asset_id
     assert data["status"] == "proxy_ready"
-    assert data["proxy_key"].endswith(".jpg")  # key naming convention
+    assert data["proxy_key"].endswith(".webp")  # key naming convention
     assert data["thumbnail_key"]
     assert data["proxy_sha256"]
     assert data["thumbnail_sha256"]
@@ -395,7 +395,7 @@ def test_create_on_ingest_creates_asset(ingest_env) -> None:
             "library_id": library_id,
             "rel_path": "new_photo.jpg",
             "file_size": "5000",
-            "media_type": "image/jpeg",
+            "media_type": "image",
         },
     )
     assert r.status_code == 200, r.text

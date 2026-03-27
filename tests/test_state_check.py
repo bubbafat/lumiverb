@@ -111,7 +111,7 @@ def state_check_env(tmp_path_factory):
                             "rel_path": rel_path,
                             "file_size": 1000,
                             "file_mtime": "2025-01-01T12:00:00Z",
-                            "media_type": "image/jpeg",
+                            "media_type": "image",
                             "scan_id": scan_id,
                         },
                         headers=auth_headers,

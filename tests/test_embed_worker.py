@@ -27,7 +27,7 @@ def _image_job(asset_id: str = ASSET_ID, proxy_key: str = PROXY_KEY) -> dict:
         "job_id": "job-1",
         "asset_id": asset_id,
         "proxy_key": proxy_key,
-        "media_type": "image/jpeg",
+        "media_type": "image",
     }
 
 
@@ -55,7 +55,7 @@ def test_embed_worker_returns_clip_vector() -> None:
 def test_embed_worker_non_image_raises_block_job() -> None:
     worker, _ = _make_worker()
     job = _image_job()
-    job["media_type"] = "video/mp4"
+    job["media_type"] = "video"
 
     with pytest.raises(BlockJob, match="embed requires an image"):
         worker.process(job)

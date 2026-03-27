@@ -2,7 +2,17 @@ import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+_has_pyvips = False
+try:
+    import pyvips
+    _has_pyvips = hasattr(pyvips, "Image")
+except Exception:
+    pass
 
+_skip_no_libvips = pytest.mark.skipif(not _has_pyvips, reason="libvips not installed")
+
+
+@_skip_no_libvips
 @pytest.mark.fast
 def test_tiff_pyvips_primary_success_no_pillow_fallback() -> None:
     from src.workers import proxy as proxy_mod
@@ -35,6 +45,7 @@ def test_tiff_pyvips_primary_success_no_pillow_fallback() -> None:
     assert kwargs["fail_on"] == proxy_mod.pyvips.enums.FailOn.NONE
 
 
+@_skip_no_libvips
 @pytest.mark.fast
 def test_tiff_pyvips_failure_falls_back_to_pillow() -> None:
     from src.workers import proxy as proxy_mod
@@ -68,6 +79,7 @@ def test_tiff_pyvips_failure_falls_back_to_pillow() -> None:
     pil_to_vips.assert_called_once_with(fake_pil_img)
 
 
+@_skip_no_libvips
 @pytest.mark.fast
 def test_tiff_oversize_guard_raises_without_pillow_decode() -> None:
     from src.workers import proxy as proxy_mod

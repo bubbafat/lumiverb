@@ -474,6 +474,32 @@ AccuracySec=30s
 WantedBy=timers.target
 UNIT
 
+cat > /etc/systemd/system/lumiverb-upkeep-daily.service <<UNIT
+[Unit]
+Description=Lumiverb daily maintenance (filesystem cleanup)
+
+[Service]
+Type=oneshot
+User=${SVC_USER}
+Group=${SVC_USER}
+EnvironmentFile=${ENV_FILE}
+ExecStart=/usr/bin/curl -sf -X POST "http://127.0.0.1:8000/v1/upkeep/cleanup?dry_run=false" -H "Authorization: Bearer \${ADMIN_KEY}" -H "Content-Type: application/json"
+TimeoutSec=300
+UNIT
+
+cat > /etc/systemd/system/lumiverb-upkeep-daily.timer <<UNIT
+[Unit]
+Description=Run Lumiverb daily maintenance at 3am
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+AccuracySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+
 systemctl daemon-reload
 ok "systemd units installed"
 
@@ -581,7 +607,7 @@ step "Starting services"
 # Note: lumiverb-worker is installed but not enabled by default. It requires
 # a configured CLI with a tenant API key. Enable it after tenant provisioning:
 #   sudo systemctl enable --now lumiverb-worker
-systemctl enable --now lumiverb-quickwit lumiverb-api lumiverb-upkeep.timer
+systemctl enable --now lumiverb-quickwit lumiverb-api lumiverb-upkeep.timer lumiverb-upkeep-daily.timer
 
 # Brief wait for API to come up
 for i in {1..10}; do

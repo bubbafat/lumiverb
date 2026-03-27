@@ -22,6 +22,15 @@ from src.storage.local import LocalStorage
 from src.workers.proxy import ProxyWorker
 from tests.conftest import _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
+_has_pyvips = False
+try:
+    import pyvips
+    _has_pyvips = hasattr(pyvips, "Image")
+except Exception:
+    pass
+
+_skip_no_libvips = pytest.mark.skipif(not _has_pyvips, reason="libvips not installed")
+
 
 # ---------------------------------------------------------------------------
 # Fast unit tests
@@ -33,6 +42,7 @@ ASSET_ID = "ast_01ARZ3NDEKTSV4RRFFQ69G5FAV"
 REL_PATH = "photos/test.jpg"
 
 
+@_skip_no_libvips
 @pytest.mark.fast
 def test_proxy_worker_process_calls_write_artifact_for_both(tmp_path: Path) -> None:
     """process() calls write_artifact for proxy and thumbnail; return dict uses ref keys/sha256."""
@@ -76,6 +86,7 @@ def test_proxy_worker_process_calls_write_artifact_for_both(tmp_path: Path) -> N
     assert call_args[1]["height"] == 150
 
 
+@_skip_no_libvips
 @pytest.mark.fast
 def test_proxy_worker_local_store_writes_files(tmp_path: Path) -> None:
     """LocalArtifactStore integration: proxy and thumbnail files land on disk."""
@@ -167,6 +178,7 @@ def proxy_worker_env():
         _engines.clear()
 
 
+@_skip_no_libvips
 @pytest.mark.slow
 def test_proxy_worker_processes_image(proxy_worker_env, tmp_path: Path) -> None:
     """Worker generates proxy and thumbnail via API; job completes; asset has keys."""
@@ -255,6 +267,7 @@ def test_proxy_worker_processes_image(proxy_worker_env, tmp_path: Path) -> None:
     assert db_thumbnail_sha256 == thumbnail_sha256
 
 
+@_skip_no_libvips
 @pytest.mark.slow
 def test_proxy_worker_skips_video(proxy_worker_env, tmp_path: Path) -> None:
     """Video asset: worker completes job without setting proxy_key."""
@@ -338,6 +351,7 @@ def test_proxy_worker_skips_video(proxy_worker_env, tmp_path: Path) -> None:
     assert assets[0]["proxy_key"] is None
 
 
+@_skip_no_libvips
 @pytest.mark.slow
 def test_proxy_worker_missing_file(proxy_worker_env, tmp_path: Path) -> None:
     """Missing source file: worker claims job, fails it; job status is 'failed' with 'not found' in error."""

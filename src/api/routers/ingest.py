@@ -266,7 +266,7 @@ async def create_and_ingest(
     rel_path: str = Form(...),
     file_size: int = Form(...),
     file_mtime: str | None = Form(default=None),
-    media_type: str = Form(default="image/jpeg"),
+    media_type: str = Form(default="image"),
     width: int | None = Form(default=None),
     height: int | None = Form(default=None),
     exif: str | None = Form(default=None),
@@ -287,7 +287,7 @@ async def create_and_ingest(
 
     Optional:
       - file_mtime: ISO8601 timestamp of source file
-      - media_type: MIME type (default image/jpeg)
+      - media_type: "image" or "video" (default "image")
       - width/height: original source dimensions
       - exif, vision, embeddings: JSON strings (same as /v1/assets/{id}/ingest)
     """

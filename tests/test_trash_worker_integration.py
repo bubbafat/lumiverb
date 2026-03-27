@@ -116,7 +116,7 @@ def _insert_asset(session: Session, library_id: str, rel_path: str) -> str:
                 "library_id": library_id,
                 "rel_path": rel_path,
                 "file_size": 1000,
-                "media_type": "image/jpeg",
+                "media_type": "image",
                 "status": "pending",
                 "availability": "online",
                 "created_at": now,

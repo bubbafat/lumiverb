@@ -28,7 +28,7 @@ def _job(root_path: str, rel_path: str, **extra) -> dict:
         "rel_path": rel_path,
         # In the real system this would be video/* for video-preview jobs,
         # but we don't rely on media_type for these tests.
-        "media_type": "video/mp4",
+        "media_type": "video",
         **extra,
     }
 

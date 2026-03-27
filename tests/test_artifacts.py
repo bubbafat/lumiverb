@@ -121,7 +121,7 @@ def artifact_env(tmp_path_factory):
                             "rel_path": "photo.jpg",
                             "file_size": 1000,
                             "file_mtime": "2025-01-01T12:00:00Z",
-                            "media_type": "image/jpeg",
+                            "media_type": "image",
                             "scan_id": scan_id,
                         },
                         headers=auth_headers,
@@ -171,7 +171,7 @@ def test_upload_proxy_returns_key_and_sha256(artifact_env) -> None:
     body = r.json()
     assert "key" in body
     assert body["sha256"] == _sha256(content)
-    assert body["key"].endswith(".jpg")
+    assert body["key"].endswith(".webp")
 
 
 @pytest.mark.slow
@@ -328,7 +328,7 @@ def test_upload_video_preview_writes_file_no_sha256_col(artifact_env) -> None:
             "rel_path": "clip.mp4",
             "file_size": 5000,
             "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": "video/mp4",
+            "media_type": "video",
             "scan_id": scan_id,
         },
     )
@@ -375,7 +375,7 @@ def test_upload_scene_rep_writes_file_to_scenes_path(artifact_env) -> None:
             "rel_path": rel_path,
             "file_size": 5000,
             "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": "video/mp4",
+            "media_type": "video",
             "scan_id": scan_id,
         },
     )
@@ -411,7 +411,7 @@ def test_upload_scene_rep_requires_rep_frame_ms(artifact_env) -> None:
             "rel_path": rel_path,
             "file_size": 5000,
             "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": "video/mp4",
+            "media_type": "video",
             "scan_id": scan_id,
         },
     )
@@ -504,7 +504,7 @@ def test_upload_soft_deleted_asset_returns_404(artifact_env) -> None:
             "rel_path": rel_path,
             "file_size": 100,
             "file_mtime": "2025-01-01T00:00:00Z",
-            "media_type": "image/jpeg",
+            "media_type": "image",
             "scan_id": scan_id,
         },
     )
@@ -546,7 +546,7 @@ def test_download_proxy_returns_bytes(artifact_env) -> None:
 
     r = auth.get(f"/v1/assets/{asset_id}/artifacts/proxy")
     assert r.status_code == 200
-    assert r.headers["content-type"] == "image/jpeg"
+    assert r.headers["content-type"] == "image/webp"
     assert r.content == content
 
 
@@ -562,7 +562,7 @@ def test_download_thumbnail_returns_bytes(artifact_env) -> None:
 
     r = auth.get(f"/v1/assets/{asset_id}/artifacts/thumbnail")
     assert r.status_code == 200
-    assert r.headers["content-type"] == "image/jpeg"
+    assert r.headers["content-type"] == "image/webp"
     assert r.content == content
 
 
@@ -580,7 +580,7 @@ def test_download_video_preview_returns_bytes(artifact_env) -> None:
             "rel_path": rel_path,
             "file_size": 5000,
             "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": "video/mp4",
+            "media_type": "video",
             "scan_id": scan_id,
         },
     )
@@ -613,7 +613,7 @@ def test_download_scene_rep_returns_bytes(artifact_env) -> None:
             "rel_path": rel_path,
             "file_size": 5000,
             "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": "video/mp4",
+            "media_type": "video",
             "scan_id": scan_id,
         },
     )
@@ -654,7 +654,7 @@ def test_download_proxy_not_ready_returns_404(artifact_env) -> None:
             "rel_path": rel_path,
             "file_size": 100,
             "file_mtime": "2025-01-01T00:00:00Z",
-            "media_type": "image/jpeg",
+            "media_type": "image",
             "scan_id": scan_id,
         },
     )
@@ -682,7 +682,7 @@ def test_download_proxy_file_missing_returns_404(artifact_env) -> None:
             "rel_path": rel_path,
             "file_size": 100,
             "file_mtime": "2025-01-01T00:00:00Z",
-            "media_type": "image/jpeg",
+            "media_type": "image",
             "scan_id": scan_id,
         },
     )

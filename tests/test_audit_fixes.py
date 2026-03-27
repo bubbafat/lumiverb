@@ -109,7 +109,7 @@ def _upsert_asset(
     auth: dict,
     library_id: str,
     rel_path: str,
-    media_type: str = "image/jpeg",
+    media_type: str = "image",
 ) -> str:
     """Create a scan, upsert an asset, return its asset_id."""
     r_scan = client.post(
@@ -223,7 +223,7 @@ def test_stale_image_thumbnail_reenqueues_proxy_job(
     client, api_key, library_id, tenant_url = audit_fixes_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
-    asset_id = _upsert_asset(client, auth, library_id, "stale_thumb_image.jpg", "image/jpeg")
+    asset_id = _upsert_asset(client, auth, library_id, "stale_thumb_image.jpg", "image")
     _set_thumbnail_key(tenant_url, asset_id, "nonexistent/fake_thumb.jpg")
 
     r = client.get(f"/v1/assets/{asset_id}/thumbnail", headers=auth)
@@ -246,7 +246,7 @@ def test_stale_video_thumbnail_reenqueues_video_index_job(
     client, api_key, library_id, tenant_url = audit_fixes_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
-    asset_id = _upsert_asset(client, auth, library_id, "stale_thumb_video.mp4", "video/mp4")
+    asset_id = _upsert_asset(client, auth, library_id, "stale_thumb_video.mp4", "video")
     _set_thumbnail_key(tenant_url, asset_id, "nonexistent/fake_video_thumb.jpg")
 
     r = client.get(f"/v1/assets/{asset_id}/thumbnail", headers=auth)
@@ -270,7 +270,7 @@ def test_asset_response_includes_duration_sec(
     client, api_key, library_id, tenant_url = audit_fixes_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
-    asset_id = _upsert_asset(client, auth, library_id, "duration_test.mp4", "video/mp4")
+    asset_id = _upsert_asset(client, auth, library_id, "duration_test.mp4", "video")
 
     # Set duration_sec directly via SQL
     engine = create_engine(tenant_url)
@@ -299,7 +299,7 @@ def test_asset_detail_duration_sec_from_duration_sec(
     client, api_key, library_id, tenant_url = audit_fixes_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
-    asset_id = _upsert_asset(client, auth, library_id, "duration_check.mp4", "video/mp4")
+    asset_id = _upsert_asset(client, auth, library_id, "duration_check.mp4", "video")
 
     engine = create_engine(tenant_url)
     try:
@@ -692,7 +692,7 @@ def test_video_vision_complete_no_asset_sync_enqueued(
     client, api_key, library_id, tenant_url = audit_fixes_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
-    asset_id = _upsert_asset(client, auth, library_id, "video_vision_complete.mp4", "video/mp4")
+    asset_id = _upsert_asset(client, auth, library_id, "video_vision_complete.mp4", "video")
 
     # Enqueue a video-vision job directly
     engine = create_engine(tenant_url)

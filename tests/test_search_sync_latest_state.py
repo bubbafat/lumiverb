@@ -43,7 +43,7 @@ def _ensure_library_asset(session: Session, library_id: str, asset_id: str, rel_
         text(
             """
             INSERT INTO assets (asset_id, library_id, rel_path, file_size, media_type, availability, status, created_at, updated_at)
-            VALUES (:asset_id, :lib_id, :rel_path, 0, 'image/jpeg', 'online', 'proxy_ready', NOW(), NOW())
+            VALUES (:asset_id, :lib_id, :rel_path, 0, 'image', 'online', 'proxy_ready', NOW(), NOW())
             ON CONFLICT (asset_id) DO NOTHING
             """
         ),

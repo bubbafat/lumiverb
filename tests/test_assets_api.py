@@ -96,7 +96,7 @@ def assets_api_client() -> tuple[TestClient, str, str, list[str]]:
                             "rel_path": rel_path,
                             "file_size": 1000 + i,
                             "file_mtime": "2025-01-01T12:00:00Z",
-                            "media_type": "image/jpeg" if "jpg" in rel_path else "image/png",
+                            "media_type": "image",
                             "scan_id": scan_id,
                         },
                         headers=auth,
@@ -182,7 +182,7 @@ def test_get_asset_by_id(assets_api_client: tuple[TestClient, str, str, list[str
     assert body["asset_id"] == asset_id
     assert body["library_id"] == library_id
     assert body["rel_path"] == "a.jpg"
-    assert body["media_type"] == "image/jpeg"
+    assert body["media_type"] == "image"
     assert "status" in body
 
 

@@ -91,7 +91,7 @@ def jobs_api_client() -> tuple[TestClient, str, str, str, str]:
                         "rel_path": "img.jpg",
                         "file_size": 1000,
                         "file_mtime": "2025-01-01T12:00:00Z",
-                        "media_type": "image/jpeg",
+                        "media_type": "image",
                         "scan_id": scan_id,
                     },
                     headers=auth,

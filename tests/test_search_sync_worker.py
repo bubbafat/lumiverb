@@ -142,14 +142,17 @@ def test_ai_vision_completion_enqueues_search_sync(search_sync_env: tuple, tmp_p
     )
     assert complete_vis.status_code == 200, (complete_vis.status_code, complete_vis.text)
 
+    # Vision completion now triggers inline try_sync_asset (best-effort).
+    # Without Quickwit in test, it fails silently and the sweep catches it.
+    # Verify the asset has AI metadata persisted (the trigger for sync).
     engine = create_engine(tenant_url)
     with engine.connect() as conn:
-        count = conn.execute(
-            text("SELECT COUNT(*) FROM search_sync_queue WHERE asset_id = :asset_id"),
+        meta_count = conn.execute(
+            text("SELECT COUNT(*) FROM asset_metadata WHERE asset_id = :asset_id"),
             {"asset_id": asset_id},
         ).scalar_one()
     engine.dispose()
-    assert count == 1
+    assert meta_count >= 1
 
 
 class _DummyQuickwit:
@@ -168,6 +171,7 @@ class _DummyQuickwit:
         self.ingested.extend(list(docs))
 
 
+@pytest.mark.skip(reason="Tests old SearchSyncWorker queue-based infrastructure; replaced by timestamp-based sweep")
 @pytest.mark.slow
 def test_search_sync_worker_drains_queue_and_marks_synced(search_sync_env: tuple, tmp_path: Path) -> None:
     """SearchSyncWorker should build docs, send them, and mark rows as synced."""

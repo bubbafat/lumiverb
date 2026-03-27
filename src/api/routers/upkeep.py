@@ -2,8 +2,9 @@
 
 Uses admin auth (ADMIN_KEY), iterates all tenants automatically.
 
-POST /v1/upkeep             — run all tasks across all tenants
-POST /v1/upkeep/search-sync — run search sync sweep only
+POST /v1/upkeep              — run all frequent tasks across all tenants
+POST /v1/upkeep/search-sync  — run search sync sweep only
+POST /v1/upkeep/cleanup      — run filesystem cleanup (dry_run=true by default)
 """
 
 from __future__ import annotations
@@ -28,6 +29,16 @@ class SearchSyncResult(BaseModel):
     failed: int = 0
     scenes_synced: int = 0
     scenes_failed: int = 0
+
+
+class CleanupResultModel(BaseModel):
+    orphan_tenants: int = 0
+    orphan_libraries: int = 0
+    orphan_files: int = 0
+    bytes_freed: int = 0
+    skipped_libraries: int = 0
+    errors: list[str] = []
+    dry_run: bool = True
 
 
 class UpkeepResult(BaseModel):
@@ -109,3 +120,41 @@ def run_search_sync(
     else:
         result = _run_sweep_single_tenant(request)
     return SearchSyncResult(**result)
+
+
+@router.post("/cleanup", response_model=CleanupResultModel)
+def run_cleanup(
+    request: Request,
+    authorization: Annotated[str | None, Header()] = None,
+    dry_run: bool = True,
+) -> CleanupResultModel:
+    """Run filesystem cleanup to remove orphaned files left after trash is emptied.
+
+    dry_run=true (default): report what would be deleted without deleting.
+    dry_run=false: actually delete orphaned files.
+
+    With admin key: cleans all tenants. With tenant API key: cleans that tenant only.
+    """
+    from src.search.cleanup import run_cleanup_all_tenants, run_cleanup_single_tenant
+
+    if _is_admin_key(authorization):
+        result = run_cleanup_all_tenants(dry_run=dry_run)
+    else:
+        from src.api.dependencies import get_tenant_session as dep_get_tenant_session
+
+        tenant_id = request.state.tenant_id
+        session = next(dep_get_tenant_session(request))
+        try:
+            result = run_cleanup_single_tenant(tenant_id, session, dry_run=dry_run)
+        finally:
+            session.close()
+
+    return CleanupResultModel(
+        orphan_tenants=result.orphan_tenants,
+        orphan_libraries=result.orphan_libraries,
+        orphan_files=result.orphan_files,
+        bytes_freed=result.bytes_freed,
+        skipped_libraries=result.skipped_libraries,
+        errors=result.errors,
+        dry_run=dry_run,
+    )

@@ -104,7 +104,7 @@ def _insert_asset_with_metadata(tenant_url: str, library_id: str, description: s
                 )
                 VALUES (
                     :asset_id, :library_id, :rel_path, 123, NOW(),
-                    'image/jpeg', 'online', 'pending', NOW(), NOW()
+                    'image', 'online', 'pending', NOW(), NOW()
                 )
                 """
             ),

@@ -108,7 +108,7 @@ def test_similar_no_embedding(similarity_client: Tuple[_AuthClient, str, str]) -
             rel_path="photos/a.jpg",
             file_size=123,
             file_mtime=None,
-            media_type="image/jpeg",
+            media_type="image",
             scan_id=scan.scan_id,
         )
 
@@ -140,7 +140,7 @@ def test_similar_with_embeddings(similarity_client: Tuple[_AuthClient, str, str]
             rel_path="photos/base.jpg",
             file_size=100,
             file_mtime=None,
-            media_type="image/jpeg",
+            media_type="image",
             scan_id=scan.scan_id,
         )
         close_asset = asset_repo.create_for_scan(
@@ -148,7 +148,7 @@ def test_similar_with_embeddings(similarity_client: Tuple[_AuthClient, str, str]
             rel_path="photos/close.jpg",
             file_size=100,
             file_mtime=None,
-            media_type="image/jpeg",
+            media_type="image",
             scan_id=scan.scan_id,
         )
         far_asset = asset_repo.create_for_scan(
@@ -156,7 +156,7 @@ def test_similar_with_embeddings(similarity_client: Tuple[_AuthClient, str, str]
             rel_path="photos/far.jpg",
             file_size=100,
             file_mtime=None,
-            media_type="image/jpeg",
+            media_type="image",
             scan_id=scan.scan_id,
         )
 
@@ -218,7 +218,7 @@ def test_similar_date_range_filter(similarity_client: Tuple[_AuthClient, str, st
             rel_path="date_filter/base.jpg",
             file_size=100,
             file_mtime=None,
-            media_type="image/jpeg",
+            media_type="image",
             scan_id=scan.scan_id,
         )
         close_asset = asset_repo.create_for_scan(
@@ -226,7 +226,7 @@ def test_similar_date_range_filter(similarity_client: Tuple[_AuthClient, str, st
             rel_path="date_filter/close_oct.jpg",
             file_size=100,
             file_mtime=None,
-            media_type="image/jpeg",
+            media_type="image",
             scan_id=scan.scan_id,
         )
         far_asset = asset_repo.create_for_scan(
@@ -234,7 +234,7 @@ def test_similar_date_range_filter(similarity_client: Tuple[_AuthClient, str, st
             rel_path="date_filter/far_nov.jpg",
             file_size=100,
             file_mtime=None,
-            media_type="image/jpeg",
+            media_type="image",
             scan_id=scan.scan_id,
         )
         base_asset.taken_at = datetime(2025, 10, 15, 12, 0, 0, tzinfo=timezone.utc)
@@ -314,7 +314,7 @@ def test_search_by_image_basic(similarity_client: Tuple[_AuthClient, str, str]) 
             rel_path="image_search/base.jpg",
             file_size=100,
             file_mtime=None,
-            media_type="image/jpeg",
+            media_type="image",
             scan_id=scan.scan_id,
         )
         close_asset = asset_repo.create_for_scan(
@@ -322,7 +322,7 @@ def test_search_by_image_basic(similarity_client: Tuple[_AuthClient, str, str]) 
             rel_path="image_search/close.jpg",
             file_size=100,
             file_mtime=None,
-            media_type="image/jpeg",
+            media_type="image",
             scan_id=scan.scan_id,
         )
         far_asset = asset_repo.create_for_scan(
@@ -330,7 +330,7 @@ def test_search_by_image_basic(similarity_client: Tuple[_AuthClient, str, str]) 
             rel_path="image_search/far.jpg",
             file_size=100,
             file_mtime=None,
-            media_type="image/jpeg",
+            media_type="image",
             scan_id=scan.scan_id,
         )
 
@@ -392,7 +392,7 @@ def test_similar_asset_types_filter(similarity_client: Tuple[_AuthClient, str, s
             rel_path="type_filter/base.jpg",
             file_size=100,
             file_mtime=None,
-            media_type="image/jpeg",
+            media_type="image",
             scan_id=scan.scan_id,
         )
         close_asset = asset_repo.create_for_scan(
@@ -400,7 +400,7 @@ def test_similar_asset_types_filter(similarity_client: Tuple[_AuthClient, str, s
             rel_path="type_filter/close_image.jpg",
             file_size=100,
             file_mtime=None,
-            media_type="image/jpeg",
+            media_type="image",
             scan_id=scan.scan_id,
         )
         far_asset = asset_repo.create_for_scan(
@@ -473,7 +473,7 @@ def test_similar_camera_filter(similarity_client: Tuple[_AuthClient, str, str]) 
             rel_path="camera_filter/base.jpg",
             file_size=100,
             file_mtime=None,
-            media_type="image/jpeg",
+            media_type="image",
             scan_id=scan.scan_id,
         )
         close_asset = asset_repo.create_for_scan(
@@ -481,7 +481,7 @@ def test_similar_camera_filter(similarity_client: Tuple[_AuthClient, str, str]) 
             rel_path="camera_filter/close_canon.jpg",
             file_size=100,
             file_mtime=None,
-            media_type="image/jpeg",
+            media_type="image",
             scan_id=scan.scan_id,
         )
         far_asset = asset_repo.create_for_scan(
@@ -489,7 +489,7 @@ def test_similar_camera_filter(similarity_client: Tuple[_AuthClient, str, str]) 
             rel_path="camera_filter/far_nikon.jpg",
             file_size=100,
             file_mtime=None,
-            media_type="image/jpeg",
+            media_type="image",
             scan_id=scan.scan_id,
         )
         base_asset.camera_make = "Canon"

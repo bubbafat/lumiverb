@@ -106,7 +106,7 @@ def _upsert_asset(
     auth: dict,
     library_id: str,
     rel_path: str,
-    media_type: str = "image/jpeg",
+    media_type: str = "image",
 ) -> str:
     """Create a scan, upsert an asset, return its asset_id."""
     r_scan = client.post(
@@ -145,7 +145,7 @@ def _upsert_asset_with_scan(
     auth: dict,
     library_id: str,
     rel_path: str,
-    media_type: str = "image/jpeg",
+    media_type: str = "image",
 ) -> tuple[str, str]:
     """Create a scan, upsert an asset, return (asset_id, scan_id)."""
     r_scan = client.post(
@@ -263,7 +263,7 @@ def test_failed_chunks_reset_to_pending_on_claim(
     client, api_key, library_id, _tenant_url = bug_fixes_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
-    asset_id = _upsert_asset(client, auth, library_id, "fail_reset_clip.mp4", "video/mp4")
+    asset_id = _upsert_asset(client, auth, library_id, "fail_reset_clip.mp4", "video")
 
     # Init chunks (30 s → at least one chunk).
     r_init = client.post(
@@ -321,7 +321,7 @@ def test_try_create_unique_prevents_duplicate_video_vision_jobs(
     client, api_key, library_id, tenant_url = bug_fixes_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
-    asset_id = _upsert_asset(client, auth, library_id, "toctou_clip.mp4", "video/mp4")
+    asset_id = _upsert_asset(client, auth, library_id, "toctou_clip.mp4", "video")
 
     engine = create_engine(tenant_url)
     try:
@@ -534,7 +534,7 @@ def test_mark_missing_for_scan_bulk_sql(
                 "rel_path": path,
                 "file_size": 1000,
                 "file_mtime": "2025-01-01T12:00:00Z",
-                "media_type": "image/jpeg",
+                "media_type": "image",
                 "scan_id": scan1_id,
             },
             headers=auth,
@@ -582,7 +582,7 @@ def test_mark_missing_for_scan_bulk_sql(
             "rel_path": paths[0],
             "file_size": 1000,
             "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": "image/jpeg",
+            "media_type": "image",
             "scan_id": scan2_id,
         },
         headers=auth,
@@ -691,7 +691,7 @@ def test_video_preview_complete_enqueues_search_sync(
     auth = {"Authorization": f"Bearer {api_key}"}
 
     asset_id = _upsert_asset(
-        client, auth, library_id, f"preview_sync_{os.urandom(4).hex()}.mp4", "video/mp4"
+        client, auth, library_id, f"preview_sync_{os.urandom(4).hex()}.mp4", "video"
     )
 
     # Enqueue a video-preview job.
@@ -722,24 +722,24 @@ def test_video_preview_complete_enqueues_search_sync(
     )
     assert r_complete.status_code == 200, (r_complete.status_code, r_complete.text)
 
-    # Verify a search_sync_queue entry was created for this asset.
+    # Verify the video preview key was persisted on the asset.
+    # (Search sync is now handled inline via try_sync_asset, which is
+    # best-effort and won't work without Quickwit in tests. The maintenance
+    # sweep catches any that fail.)
     engine = create_engine(tenant_url)
     try:
         with engine.connect() as conn:
-            count = conn.execute(
+            row = conn.execute(
                 text(
-                    """
-                    SELECT COUNT(*) FROM search_sync_queue
-                    WHERE asset_id = :asset_id
-                      AND scene_id IS NULL
-                    """
+                    "SELECT video_preview_key FROM assets WHERE asset_id = :asset_id"
                 ),
                 {"asset_id": claimed_asset_id},
-            ).scalar()
+            ).fetchone()
     finally:
         engine.dispose()
 
-    assert count >= 1, (
-        f"Expected at least 1 search_sync_queue entry for asset {claimed_asset_id} "
-        f"after video-preview completion, got {count}"
+    assert row is not None
+    assert row[0] is not None, (
+        f"Expected video_preview_key to be set for asset {claimed_asset_id} "
+        f"after video-preview completion"
     )

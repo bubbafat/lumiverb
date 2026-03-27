@@ -94,7 +94,7 @@ def page_api_client() -> tuple[TestClient, str, str, list[str]]:
                             "rel_path": rp,
                             "file_size": 1000 + i,
                             "file_mtime": "2025-01-01T12:00:00Z",
-                            "media_type": "image/jpeg" if rp.endswith(".jpg") else "image/png",
+                            "media_type": "image",
                             "scan_id": scan_id,
                         },
                         headers=auth,
@@ -300,4 +300,4 @@ def test_page_assets_media_type_filter(
     # All 5 are images (4 jpeg, 1 png)
     assert len(items) == 5
     for item in items:
-        assert item["media_type"].startswith("image/")
+        assert item["media_type"] == "image"

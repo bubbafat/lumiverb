@@ -448,9 +448,9 @@ def test_migration_marks_invalid_ai_vision_missing_proxy_failed() -> None:
                     """
                     INSERT INTO assets (asset_id, library_id, rel_path, file_size, media_type, availability, status, created_at, updated_at, proxy_key, thumbnail_key)
                     VALUES
-                      (:bad_img, :lib, 'bad_img.jpg', 1000, 'image/jpeg', 'online', 'pending', NOW(), NOW(), NULL, NULL),
-                      (:bad_vid, :lib, 'bad_vid.mov', 2000, 'video/quicktime', 'online', 'pending', NOW(), NOW(), NULL, NULL),
-                      (:good_img, :lib, 'good_img.jpg', 1000, 'image/jpeg', 'online', 'pending', NOW(), NOW(), 'proxy/good.jpg', 'thumb/good.jpg')
+                      (:bad_img, :lib, 'bad_img.jpg', 1000, 'image', 'online', 'pending', NOW(), NOW(), NULL, NULL),
+                      (:bad_vid, :lib, 'bad_vid.mov', 2000, 'video', 'online', 'pending', NOW(), NOW(), NULL, NULL),
+                      (:good_img, :lib, 'good_img.jpg', 1000, 'image', 'online', 'pending', NOW(), NOW(), 'proxy/good.jpg', 'thumb/good.jpg')
                     """
                 ),
                 {"bad_img": bad_img_id, "bad_vid": bad_vid_id, "good_img": good_img_id, "lib": lib_id},

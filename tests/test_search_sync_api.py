@@ -92,7 +92,7 @@ def search_sync_api_client():
                         "rel_path": "photo.jpg",
                         "file_size": 1024,
                         "file_mtime": "2025-06-01T00:00:00Z",
-                        "media_type": "image/jpeg",
+                        "media_type": "image",
                         "scan_id": scan_id,
                     },
                     headers=auth,

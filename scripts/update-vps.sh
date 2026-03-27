@@ -115,7 +115,7 @@ if [[ -f "$QW_UNIT" ]] && grep -qE '^(PrivateTmp|ProtectSystem|ReadWritePaths|Re
 fi
 
 # ---------------------------------------------------------------------------
-step "Installing upkeep timer"
+step "Installing upkeep timers"
 cat > /etc/systemd/system/lumiverb-upkeep.service <<UPKEEP_SVC
 [Unit]
 Description=Lumiverb periodic upkeep (search sync, cleanup)
@@ -142,9 +142,35 @@ AccuracySec=30s
 WantedBy=timers.target
 UPKEEP_TMR
 
+cat > /etc/systemd/system/lumiverb-upkeep-daily.service <<DAILY_SVC
+[Unit]
+Description=Lumiverb daily maintenance (filesystem cleanup)
+
+[Service]
+Type=oneshot
+User=${SVC_USER}
+Group=${SVC_USER}
+EnvironmentFile=${ENV_FILE}
+ExecStart=/usr/bin/curl -sf -X POST "http://127.0.0.1:8000/v1/upkeep/cleanup?dry_run=false" -H "Authorization: Bearer \${ADMIN_KEY}" -H "Content-Type: application/json"
+TimeoutSec=300
+DAILY_SVC
+
+cat > /etc/systemd/system/lumiverb-upkeep-daily.timer <<DAILY_TMR
+[Unit]
+Description=Run Lumiverb daily maintenance at 3am
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+AccuracySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+DAILY_TMR
+
 systemctl daemon-reload
-systemctl enable --now lumiverb-upkeep.timer
-ok "Upkeep timer installed and started"
+systemctl enable --now lumiverb-upkeep.timer lumiverb-upkeep-daily.timer
+ok "Upkeep timers installed and started"
 
 # ---------------------------------------------------------------------------
 step "Restarting services"
