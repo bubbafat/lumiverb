@@ -59,7 +59,7 @@ class AssetResponse(BaseModel):
     gps_lat: float | None = None
     gps_lon: float | None = None
     iso: int | None = None
-    shutter_speed: str | None = None
+    exposure_time_us: int | None = None
     aperture: float | None = None
     focal_length: float | None = None
     focal_length_35mm: float | None = None
@@ -109,7 +109,7 @@ class AssetPageResponse(BaseModel):
 
 
 # Valid sort columns for the page endpoint.
-SORT_COLUMNS = {"taken_at", "created_at", "file_size", "iso", "aperture", "focal_length", "rel_path", "asset_id"}
+SORT_COLUMNS = {"taken_at", "created_at", "file_size", "iso", "exposure_time_us", "aperture", "focal_length", "rel_path", "asset_id"}
 
 
 def _encode_cursor(sort_col: str, sort_value: object, asset_id: str) -> str:
@@ -181,6 +181,8 @@ def page_assets(
     lens_model: str | None = None,
     iso_min: int | None = None,
     iso_max: int | None = None,
+    exposure_min_us: int | None = None,
+    exposure_max_us: int | None = None,
     aperture_min: float | None = None,
     aperture_max: float | None = None,
     focal_length_min: float | None = None,
@@ -237,6 +239,8 @@ def page_assets(
         lens_model=lens_model,
         iso_min=iso_min,
         iso_max=iso_max,
+        exposure_min_us=exposure_min_us,
+        exposure_max_us=exposure_max_us,
         aperture_min=aperture_min,
         aperture_max=aperture_max,
         focal_length_min=focal_length_min,
@@ -455,7 +459,7 @@ def _to_asset_response(asset) -> AssetResponse:
         gps_lat=asset.gps_lat,
         gps_lon=asset.gps_lon,
         iso=asset.iso,
-        shutter_speed=asset.shutter_speed,
+        exposure_time_us=asset.exposure_time_us,
         aperture=asset.aperture,
         focal_length=asset.focal_length,
         focal_length_35mm=asset.focal_length_35mm,

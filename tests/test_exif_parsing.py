@@ -2,12 +2,12 @@
 
 from src.workers.exif_extract import (
     parse_aperture,
+    parse_exposure_time_us,
     parse_flash_fired,
     parse_focal_length,
     parse_iso,
     parse_lens_model,
     parse_orientation,
-    parse_shutter_speed,
 )
 
 
@@ -25,31 +25,38 @@ class TestParseIso:
         assert parse_iso({"ISO": "auto"}) is None
 
 
-class TestParseShutterSpeed:
+class TestParseExposureTimeUs:
     def test_fraction_string(self):
-        """String fractions like '1/250' are converted via float to 1/250."""
-        assert parse_shutter_speed({"ExposureTime": "1/250"}) == "1/250"
+        assert parse_exposure_time_us({"ExposureTime": "1/250"}) == 4000
 
     def test_decimal_fast(self):
-        assert parse_shutter_speed({"ExposureTime": "0.004"}) == "1/250"
+        assert parse_exposure_time_us({"ExposureTime": "0.004"}) == 4000
 
     def test_decimal_half_second(self):
-        assert parse_shutter_speed({"ExposureTime": "0.5"}) == "1/2"
+        assert parse_exposure_time_us({"ExposureTime": "0.5"}) == 500_000
 
     def test_one_second(self):
-        assert parse_shutter_speed({"ExposureTime": "1"}) == "1s"
+        assert parse_exposure_time_us({"ExposureTime": "1"}) == 1_000_000
 
     def test_long_exposure(self):
-        assert parse_shutter_speed({"ExposureTime": "30"}) == "30s"
+        assert parse_exposure_time_us({"ExposureTime": "30"}) == 30_000_000
 
     def test_numeric_float(self):
-        assert parse_shutter_speed({"ExposureTime": 0.004}) == "1/250"
+        assert parse_exposure_time_us({"ExposureTime": 0.004}) == 4000
 
     def test_missing(self):
-        assert parse_shutter_speed({}) is None
+        assert parse_exposure_time_us({}) is None
 
     def test_empty_string(self):
-        assert parse_shutter_speed({"ExposureTime": ""}) is None
+        assert parse_exposure_time_us({"ExposureTime": ""}) is None
+
+    def test_very_fast(self):
+        """1/8000s = 125 microseconds."""
+        assert parse_exposure_time_us({"ExposureTime": "1/8000"}) == 125
+
+    def test_very_long(self):
+        """1 hour exposure."""
+        assert parse_exposure_time_us({"ExposureTime": "3600"}) == 3_600_000_000
 
 
 class TestParseAperture:

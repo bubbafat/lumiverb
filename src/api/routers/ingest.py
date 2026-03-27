@@ -184,7 +184,7 @@ def _do_ingest(
             gps_lon=exif_data.get("gps_lon"),
             duration_sec=exif_data.get("duration_sec"),
             iso=exif_data.get("iso"),
-            shutter_speed=exif_data.get("shutter_speed"),
+            exposure_time_us=exif_data.get("exposure_time_us"),
             aperture=exif_data.get("aperture"),
             focal_length=exif_data.get("focal_length"),
             focal_length_35mm=exif_data.get("focal_length_35mm"),

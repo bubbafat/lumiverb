@@ -179,6 +179,8 @@ export default function BrowsePage() {
   const browseLensModel = searchParams.get("lens_model") ?? undefined;
   const browseIsoMin = searchParams.get("iso_min") ? Number(searchParams.get("iso_min")) : undefined;
   const browseIsoMax = searchParams.get("iso_max") ? Number(searchParams.get("iso_max")) : undefined;
+  const browseExposureMinUs = searchParams.get("exposure_min_us") ? Number(searchParams.get("exposure_min_us")) : undefined;
+  const browseExposureMaxUs = searchParams.get("exposure_max_us") ? Number(searchParams.get("exposure_max_us")) : undefined;
   const browseApertureMin = searchParams.get("aperture_min") ? Number(searchParams.get("aperture_min")) : undefined;
   const browseApertureMax = searchParams.get("aperture_max") ? Number(searchParams.get("aperture_max")) : undefined;
   const browseFocalLengthMin = searchParams.get("focal_length_min") ? Number(searchParams.get("focal_length_min")) : undefined;
@@ -200,6 +202,8 @@ export default function BrowsePage() {
     lensModel: browseLensModel,
     isoMin: browseIsoMin,
     isoMax: browseIsoMax,
+    exposureMinUs: browseExposureMinUs,
+    exposureMaxUs: browseExposureMaxUs,
     apertureMin: browseApertureMin,
     apertureMax: browseApertureMax,
     focalLengthMin: browseFocalLengthMin,
@@ -212,7 +216,8 @@ export default function BrowsePage() {
   }), [
     pathPrefix, activeTag, browseSort, browseDir, browseMediaType,
     browseCameraMake, browseCameraModel, browseLensModel,
-    browseIsoMin, browseIsoMax, browseApertureMin, browseApertureMax,
+    browseIsoMin, browseIsoMax, browseExposureMinUs, browseExposureMaxUs,
+    browseApertureMin, browseApertureMax,
     browseFocalLengthMin, browseFocalLengthMax, browseHasExposure, browseHasGps,
     browseNearLat, browseNearLon, browseNearRadiusKm,
   ]);
@@ -593,6 +598,8 @@ export default function BrowsePage() {
         lensModel={browseLensModel ?? null}
         isoMin={searchParams.get("iso_min")}
         isoMax={searchParams.get("iso_max")}
+        exposureMinUs={searchParams.get("exposure_min_us")}
+        exposureMaxUs={searchParams.get("exposure_max_us")}
         apertureMin={searchParams.get("aperture_min")}
         apertureMax={searchParams.get("aperture_max")}
         focalLengthMin={searchParams.get("focal_length_min")}
@@ -718,7 +725,8 @@ export default function BrowsePage() {
                     const next = new URLSearchParams(prev);
                     for (const key of [
                       "media_type", "camera_make", "camera_model", "lens_model",
-                      "iso_min", "iso_max", "aperture_min", "aperture_max",
+                      "iso_min", "iso_max", "exposure_min_us", "exposure_max_us",
+                      "aperture_min", "aperture_max",
                       "focal_length_min", "focal_length_max", "has_exposure", "has_gps",
                       "near_lat", "near_lon", "near_radius_km",
                     ]) {

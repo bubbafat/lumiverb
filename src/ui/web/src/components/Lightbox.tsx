@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { getAsset, findSimilar } from "../api/client";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 import type { AssetPageItem, SimilarHit } from "../api/types";
-import { basename, formatFileSize, formatDate, formatShutter } from "../lib/format";
+import { basename, formatFileSize, formatDate, formatExposure } from "../lib/format";
 
 interface LightboxProps {
   asset: AssetPageItem;
@@ -621,7 +621,7 @@ export function Lightbox({
                       <div className="flex">
                         <dt className="w-2/5 text-xs text-gray-500">Exposure</dt>
                         <dd className="w-3/5 text-sm">
-                          {detail.shutter_speed != null ||
+                          {detail.exposure_time_us != null ||
                           detail.aperture != null ||
                           detail.iso != null ? (
                             <span className="flex flex-wrap items-center gap-x-1.5">
@@ -630,6 +630,10 @@ export function Lightbox({
                                   type="button"
                                   onClick={() => {
                                     const p: Record<string, string> = {};
+                                    if (detail.exposure_time_us != null) {
+                                      p.exposure_min_us = String(detail.exposure_time_us);
+                                      p.exposure_max_us = String(detail.exposure_time_us);
+                                    }
                                     if (detail.iso != null) {
                                       p.iso_min = String(detail.iso);
                                       p.iso_max = String(detail.iso);
@@ -647,10 +651,18 @@ export function Lightbox({
                                   ▸
                                 </button>
                               ) : null}
-                              {detail.shutter_speed != null && (
-                                <span className="text-gray-300">
-                                  {formatShutter(detail.shutter_speed)}
-                                </span>
+                              {detail.exposure_time_us != null && (
+                                <FilterLink
+                                  params={{
+                                    exposure_min_us: String(detail.exposure_time_us),
+                                    exposure_max_us: String(detail.exposure_time_us),
+                                  }}
+                                  onFilterClick={onFilterClick}
+                                  onClose={onClose}
+                                  title="Filter by this shutter speed"
+                                >
+                                  {formatExposure(detail.exposure_time_us)}
+                                </FilterLink>
                               )}
                               {detail.aperture != null && (
                                 <FilterLink

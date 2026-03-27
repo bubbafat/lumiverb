@@ -206,6 +206,8 @@ export interface PageAssetsOptions {
   lensModel?: string;
   isoMin?: number;
   isoMax?: number;
+  exposureMinUs?: number;
+  exposureMaxUs?: number;
   apertureMin?: number;
   apertureMax?: number;
   focalLengthMin?: number;
@@ -237,6 +239,8 @@ export async function pageAssets(
   if (opts?.lensModel) params.set("lens_model", opts.lensModel);
   if (opts?.isoMin != null) params.set("iso_min", String(opts.isoMin));
   if (opts?.isoMax != null) params.set("iso_max", String(opts.isoMax));
+  if (opts?.exposureMinUs != null) params.set("exposure_min_us", String(opts.exposureMinUs));
+  if (opts?.exposureMaxUs != null) params.set("exposure_max_us", String(opts.exposureMaxUs));
   if (opts?.apertureMin != null) params.set("aperture_min", String(opts.apertureMin));
   if (opts?.apertureMax != null) params.set("aperture_max", String(opts.apertureMax));
   if (opts?.focalLengthMin != null) params.set("focal_length_min", String(opts.focalLengthMin));

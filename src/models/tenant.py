@@ -136,7 +136,7 @@ class Asset(SQLModel, table=True):
     gps_lat: float | None = Field(default=None, nullable=True)
     gps_lon: float | None = Field(default=None, nullable=True)
     iso: int | None = Field(default=None, nullable=True)
-    shutter_speed: str | None = Field(default=None, nullable=True)
+    exposure_time_us: int | None = Field(default=None, sa_column=Column(BigInteger, nullable=True))
     aperture: float | None = Field(default=None, nullable=True)
     focal_length: float | None = Field(default=None, nullable=True)
     focal_length_35mm: float | None = Field(default=None, nullable=True)

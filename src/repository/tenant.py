@@ -757,6 +757,8 @@ class AssetRepository:
         lens_model: str | None = None,
         iso_min: int | None = None,
         iso_max: int | None = None,
+        exposure_min_us: int | None = None,
+        exposure_max_us: int | None = None,
         aperture_min: float | None = None,
         aperture_max: float | None = None,
         focal_length_min: float | None = None,
@@ -867,6 +869,12 @@ class AssetRepository:
         if iso_max is not None:
             conditions.append("a.iso <= :iso_max")
             params["iso_max"] = iso_max
+        if exposure_min_us is not None:
+            conditions.append("a.exposure_time_us >= :exposure_min_us")
+            params["exposure_min_us"] = exposure_min_us
+        if exposure_max_us is not None:
+            conditions.append("a.exposure_time_us <= :exposure_max_us")
+            params["exposure_max_us"] = exposure_max_us
         if aperture_min is not None:
             conditions.append("a.aperture >= :aperture_min")
             params["aperture_min"] = aperture_min
@@ -883,11 +891,11 @@ class AssetRepository:
         # --- Exposure data filter ---
         if has_exposure is True:
             conditions.append(
-                "(a.iso IS NOT NULL OR a.shutter_speed IS NOT NULL OR a.aperture IS NOT NULL)"
+                "(a.iso IS NOT NULL OR a.exposure_time_us IS NOT NULL OR a.aperture IS NOT NULL)"
             )
         elif has_exposure is False:
             conditions.append(
-                "a.iso IS NULL AND a.shutter_speed IS NULL AND a.aperture IS NULL"
+                "a.iso IS NULL AND a.exposure_time_us IS NULL AND a.aperture IS NULL"
             )
 
         # --- GPS filters ---
@@ -1190,7 +1198,7 @@ class AssetRepository:
         gps_lon: float | None,
         duration_sec: float | None = None,
         iso: int | None = None,
-        shutter_speed: str | None = None,
+        exposure_time_us: int | None = None,
         aperture: float | None = None,
         focal_length: float | None = None,
         focal_length_35mm: float | None = None,
@@ -1219,7 +1227,7 @@ class AssetRepository:
                     gps_lon = :gps_lon,
                     duration_sec = COALESCE(:duration_sec, duration_sec),
                     iso = :iso,
-                    shutter_speed = :shutter_speed,
+                    exposure_time_us = :exposure_time_us,
                     aperture = :aperture,
                     focal_length = :focal_length,
                     focal_length_35mm = :focal_length_35mm,
@@ -1240,7 +1248,7 @@ class AssetRepository:
                 "gps_lon": gps_lon,
                 "duration_sec": duration_sec,
                 "iso": iso,
-                "shutter_speed": shutter_speed,
+                "exposure_time_us": exposure_time_us,
                 "aperture": aperture,
                 "focal_length": focal_length,
                 "focal_length_35mm": focal_length_35mm,

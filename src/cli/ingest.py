@@ -37,7 +37,7 @@ from src.workers.exif_extract import (
     parse_iso,
     parse_lens_model,
     parse_orientation,
-    parse_shutter_speed,
+    parse_exposure_time_us,
     parse_taken_at,
 )
 
@@ -167,7 +167,7 @@ def _build_exif_payload(source_path: Path, media_type: str) -> dict:
         "gps_lon": gps_lon,
         "duration_sec": duration_sec,
         "iso": parse_iso(exif_data),
-        "shutter_speed": parse_shutter_speed(exif_data),
+        "exposure_time_us": parse_exposure_time_us(exif_data),
         "aperture": parse_aperture(exif_data),
         "focal_length": parse_focal_length(exif_data, "FocalLength"),
         "focal_length_35mm": parse_focal_length(exif_data, "FocalLengthIn35mmFormat"),

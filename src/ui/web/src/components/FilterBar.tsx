@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FacetsResponse } from "../api/types";
+import { formatExposure } from "../lib/format";
 
 interface DatePreset {
   label: string;
@@ -82,6 +83,8 @@ interface FilterBarProps {
   lensModel: string | null;
   isoMin: string | null;
   isoMax: string | null;
+  exposureMinUs: string | null;
+  exposureMaxUs: string | null;
   apertureMin: string | null;
   apertureMax: string | null;
   focalLengthMin: string | null;
@@ -113,6 +116,8 @@ export function FilterBar({
   lensModel,
   isoMin,
   isoMax,
+  exposureMinUs,
+  exposureMaxUs,
   apertureMin,
   apertureMax,
   focalLengthMin,
@@ -217,7 +222,7 @@ export function FilterBar({
   const hasDateFilter = Boolean(dateFrom);
   const hasActiveFilters = !!(
     mediaType || cameraMake || cameraModel || lensModel ||
-    isoMin || isoMax || apertureMin || apertureMax ||
+    isoMin || isoMax || exposureMinUs || exposureMaxUs || apertureMin || apertureMax ||
     focalLengthMin || focalLengthMax || hasExposure != null || hasGps || nearLat
   );
 
@@ -401,6 +406,19 @@ export function FilterBar({
               onClear={() => { onChangeFilter("iso_min", null); onChangeFilter("iso_max", null); }}
             />
           )}
+          {(exposureMinUs || exposureMaxUs) && (() => {
+            const minLabel = exposureMinUs ? formatExposure(Number(exposureMinUs)) : null;
+            const maxLabel = exposureMaxUs ? formatExposure(Number(exposureMaxUs)) : null;
+            const label = minLabel && maxLabel && minLabel === maxLabel
+              ? minLabel
+              : `${minLabel ?? ""}${minLabel && maxLabel ? " – " : ""}${maxLabel ?? ""}`;
+            return (
+              <Chiclet
+                label={label}
+                onClear={() => { onChangeFilter("exposure_min_us", null); onChangeFilter("exposure_max_us", null); }}
+              />
+            );
+          })()}
           {(apertureMin || apertureMax) && (
             <Chiclet
               label={`f/${apertureMin ?? ""}${apertureMin && apertureMax ? "-" : ""}${apertureMax ?? ""}`}

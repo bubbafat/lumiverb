@@ -117,7 +117,7 @@ export interface AssetDetail {
   gps_lat: number | null;
   gps_lon: number | null;
   iso: number | null;
-  shutter_speed: string | null;
+  exposure_time_us: number | null;
   aperture: number | null;
   focal_length: number | null;
   focal_length_35mm: number | null;
