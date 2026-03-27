@@ -6,6 +6,7 @@ import type {
   CurrentUser,
   DirectoryNode,
   EmptyTrashResponse,
+  FacetsResponse,
   JobListItem,
   LibraryListItem,
   LibraryResponse,
@@ -244,6 +245,16 @@ export async function pageAssets(
   if (opts?.nearLon != null) params.set("near_lon", String(opts.nearLon));
   if (opts?.nearRadiusKm != null) params.set("near_radius_km", String(opts.nearRadiusKm));
   return apiFetch<AssetPageResponse>(`/assets/page?${params}`);
+}
+
+/** Fetch aggregated filter facets for a library. */
+export async function getFacets(
+  libraryId: string,
+  pathPrefix?: string,
+): Promise<FacetsResponse> {
+  const params = new URLSearchParams({ library_id: libraryId });
+  if (pathPrefix) params.set("path_prefix", pathPrefix);
+  return apiFetch<FacetsResponse>(`/assets/facets?${params}`);
 }
 
 export async function searchAssets(params: {

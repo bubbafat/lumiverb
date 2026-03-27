@@ -16,6 +16,7 @@ from src.api.routers.upgrade import router as upgrade_router
 from src.api.routers.pipeline import router as pipeline_router
 from src.api.routers.search import router as search_router
 from src.api.routers.search_sync import router as search_sync_router
+from src.api.routers.facets import router as facets_router
 from src.api.routers.similarity import router as similarity_router
 
 @asynccontextmanager
@@ -40,6 +41,7 @@ app.include_router(scans.router)
 app.include_router(artifacts_router)
 app.include_router(ingest_router)
 app.include_router(assets.router)
+app.include_router(facets_router)
 app.include_router(video.router)
 app.include_router(keys.router)
 app.include_router(me.router)

@@ -5,6 +5,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ApiError,
   getApiKey,
+  getFacets,
   getLibrary,
   getLibraryRevision,
   listDirectories,
@@ -18,7 +19,7 @@ import { FilterBar } from "../components/FilterBar";
 import { ZoomControl } from "../components/ZoomControl";
 import { DrawerOverlay } from "../components/DrawerOverlay";
 import { DirectoryTree } from "../components/DirectoryTree";
-import type { AssetPageItem } from "../api/types";
+import type { AssetPageItem, FacetsResponse } from "../api/types";
 import { useScrollContainer } from "../context/ScrollContainerContext";
 import { groupAssetsByDate } from "../lib/groupByDate";
 import { buildVirtualRows, buildFixedGridRows } from "../lib/virtualRows";
@@ -156,8 +157,18 @@ export default function BrowsePage() {
       prevRevisionRef.current = revision;
       queryClient.invalidateQueries({ queryKey: ["assets", libraryId!] });
       queryClient.invalidateQueries({ queryKey: ["directories", libraryId] });
+      queryClient.invalidateQueries({ queryKey: ["facets", libraryId] });
     }
   }, [revision, libraryId, queryClient]);
+
+  // Facets query for filter dropdowns
+  const facetsQuery = useQuery({
+    queryKey: ["facets", libraryId!, pathPrefix ?? null],
+    queryFn: () => getFacets(libraryId!, pathPrefix),
+    enabled: !!libraryId && canFetchAssets,
+    staleTime: 5 * 60_000, // 5 minutes
+  });
+  const facets: FacetsResponse | null = facetsQuery.data ?? null;
 
   // Build filter/sort options from URL search params
   const browseSort = searchParams.get("sort") ?? "taken_at";
@@ -572,6 +583,24 @@ export default function BrowsePage() {
         onChangeTag={(v) => setParam("tag", v)}
         onChangePath={(v) => setParam("path", v)}
         onChangeDateRange={handleChangeDateRange}
+        sort={browseSort}
+        dir={browseDir}
+        mediaType={browseMediaType ?? null}
+        cameraMake={browseCameraMake ?? null}
+        cameraModel={browseCameraModel ?? null}
+        lensModel={browseLensModel ?? null}
+        isoMin={searchParams.get("iso_min")}
+        isoMax={searchParams.get("iso_max")}
+        apertureMin={searchParams.get("aperture_min")}
+        apertureMax={searchParams.get("aperture_max")}
+        focalLengthMin={searchParams.get("focal_length_min")}
+        focalLengthMax={searchParams.get("focal_length_max")}
+        hasGps={browseHasGps}
+        nearLat={searchParams.get("near_lat")}
+        nearLon={searchParams.get("near_lon")}
+        nearRadiusKm={searchParams.get("near_radius_km")}
+        onChangeFilter={(key, value) => setParam(key, value)}
+        facets={facets}
       />
 
       {/* Toolbar: status line + sort */}
@@ -803,6 +832,16 @@ export default function BrowsePage() {
           publicLibraryId={libraryId}
           onSimilarClick={(similarAsset) => {
             setLightboxAsset(similarAsset);
+          }}
+          onNearbyClick={(lat, lon) => {
+            setLightboxAsset(null);
+            setSearchParams((prev) => {
+              const next = new URLSearchParams(prev);
+              next.set("near_lat", String(lat));
+              next.set("near_lon", String(lon));
+              next.set("near_radius_km", "1");
+              return next;
+            });
           }}
         />
       )}

@@ -14,6 +14,7 @@ interface LightboxProps {
   onTagClick?: (tag: string) => void;
   onSimilarClick?: (asset: AssetPageItem) => void;
   onDateClick?: (dateStr: string) => void;
+  onNearbyClick?: (lat: number, lon: number) => void;
   libraryId?: string;
   isPublic?: boolean;
   publicLibraryId?: string;
@@ -74,6 +75,7 @@ export function Lightbox({
   onTagClick,
   onSimilarClick,
   onDateClick,
+  onNearbyClick,
   libraryId,
   isPublic,
   publicLibraryId,
@@ -568,20 +570,36 @@ export function Lightbox({
                     {detail &&
                       detail.gps_lat != null &&
                       detail.gps_lon != null && (
-                        <div className="flex">
-                          <dt className="w-2/5 text-xs text-gray-500">GPS</dt>
-                          <dd className="w-3/5 text-sm">
-                            <a
-                              href={`https://maps.google.com/?q=${detail.gps_lat},${detail.gps_lon}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              title={formatGps(detail.gps_lat, detail.gps_lon)}
-                              className="text-indigo-400 hover:text-indigo-300 hover:underline transition-colors"
-                            >
-                              {formatGps(detail.gps_lat, detail.gps_lon)}
-                            </a>
-                          </dd>
-                        </div>
+                        <>
+                          <div className="flex">
+                            <dt className="w-2/5 text-xs text-gray-500">GPS</dt>
+                            <dd className="w-3/5 text-sm">
+                              <a
+                                href={`https://maps.google.com/?q=${detail.gps_lat},${detail.gps_lon}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title={formatGps(detail.gps_lat, detail.gps_lon)}
+                                className="text-indigo-400 hover:text-indigo-300 hover:underline transition-colors"
+                              >
+                                {formatGps(detail.gps_lat, detail.gps_lon)}
+                              </a>
+                            </dd>
+                          </div>
+                          {onNearbyClick && (
+                            <div className="flex">
+                              <dt className="w-2/5" />
+                              <dd className="w-3/5">
+                                <button
+                                  type="button"
+                                  onClick={() => onNearbyClick(detail.gps_lat!, detail.gps_lon!)}
+                                  className="text-xs text-indigo-400 hover:text-indigo-300 hover:underline transition-colors"
+                                >
+                                  Photos nearby
+                                </button>
+                              </dd>
+                            </div>
+                          )}
+                        </>
                       )}
                     <div className="flex">
                       <dt className="w-2/5 text-xs text-gray-500">File size</dt>

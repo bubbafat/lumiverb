@@ -56,6 +56,17 @@ export interface AssetPageResponse {
   next_cursor: string | null;
 }
 
+export interface FacetsResponse {
+  media_types: string[];
+  camera_makes: string[];
+  camera_models: string[];
+  lens_models: string[];
+  iso_range: (number | null)[];
+  aperture_range: (number | null)[];
+  focal_length_range: (number | null)[];
+  has_gps_count: number;
+}
+
 export interface SearchHit {
   type: "image" | "scene";
   asset_id: string;
