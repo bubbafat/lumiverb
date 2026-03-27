@@ -18,7 +18,6 @@ from src.core.database import _engines
 from src.models.tenant import Asset
 from src.repository.tenant import (
     AssetEmbeddingRepository,
-    SearchSyncQueueRepository,
     WorkerJobRepository,
 )
 from src.workers.enqueue import enqueue_proxy_jobs
@@ -297,37 +296,6 @@ def test_active_worker_count_excludes_trashed_asset(
     finally:
         engine.dispose()
 
-
-@pytest.mark.slow
-def test_search_sync_pipeline_status_excludes_trashed_asset(
-    trash_worker_client: tuple[TestClient, str, str],
-) -> None:
-    client, api_key, library_id = trash_worker_client
-    auth = {"Authorization": f"Bearer {api_key}"}
-
-    engine = _tenant_engine_from_client(client, api_key)
-    try:
-        # Baseline pending count before inserting a new sync entry.
-        with Session(engine) as session:
-            ssq_repo = SearchSyncQueueRepository(session)
-            baseline_by_status = {r["status"]: r["count"] for r in ssq_repo.search_sync_pipeline_status(library_id)}
-            baseline_pending = baseline_by_status.get("pending", 0)
-
-        with Session(engine) as session:
-            trashed_asset_id = _insert_asset(session, library_id, f"ssync_trashed_{secrets.token_urlsafe(4)}.jpg")
-            ssq_repo = SearchSyncQueueRepository(session)
-            ssq_repo.enqueue(trashed_asset_id, "index")
-            by_status_after_enqueue = {r["status"]: r["count"] for r in ssq_repo.search_sync_pipeline_status(library_id)}
-            assert by_status_after_enqueue.get("pending", 0) == baseline_pending + 1
-
-        client.delete(f"/v1/assets/{trashed_asset_id}", headers=auth)
-
-        with Session(engine) as session:
-            ssq_repo = SearchSyncQueueRepository(session)
-            by_status_after_trash = {r["status"]: r["count"] for r in ssq_repo.search_sync_pipeline_status(library_id)}
-            assert by_status_after_trash.get("pending", 0) == baseline_pending
-    finally:
-        engine.dispose()
 
 
 @pytest.mark.slow

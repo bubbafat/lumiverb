@@ -6,8 +6,8 @@ Fix 3: TOCTOU race for duplicate video-vision jobs (try_create_unique + partial 
 Fix 4: VideoVisionWorker infinite retry — description='' treated as missing
 Fix 5: VisionWorker BlockJob for missing proxy_key
 Fix 6: mark_missing_for_scan bulk SQL
-Fix 7: SearchSyncQueue.enqueue dedup
-Fix 7b: video-preview completion enqueues search_sync
+
+Fix 7b: video-preview completion triggers search sync
 """
 
 import os
@@ -616,63 +616,7 @@ def test_mark_missing_for_scan_bulk_sql(
 
 
 # ---------------------------------------------------------------------------
-# Fix 7: SearchSyncQueue.enqueue dedup
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.slow
-def test_search_sync_queue_enqueue_dedup(
-    bug_fixes_api_client: tuple[TestClient, str, str, str],
-) -> None:
-    """
-    SearchSyncQueueRepository.enqueue is idempotent: calling it twice for the
-    same (asset_id, scene_id=None) returns None on the second call and leaves
-    exactly one pending row in search_sync_queue.
-
-    This verifies the guard that checks for existing pending/processing rows
-    before inserting.
-    """
-    client, api_key, library_id, tenant_url = bug_fixes_api_client
-    auth = {"Authorization": f"Bearer {api_key}"}
-
-    asset_id = _upsert_asset(
-        client, auth, library_id, f"ssq_dedup_{os.urandom(4).hex()}.jpg"
-    )
-
-    from sqlmodel import Session as SQLModelSession
-    from src.repository.tenant import SearchSyncQueueRepository
-
-    engine = create_engine(tenant_url)
-    try:
-        with SQLModelSession(engine) as session:
-            repo = SearchSyncQueueRepository(session)
-
-            result1 = repo.enqueue(asset_id=asset_id, operation="index")
-            assert result1 is not None, "First enqueue should return a SearchSyncQueue row"
-
-            result2 = repo.enqueue(asset_id=asset_id, operation="index")
-            assert result2 is None, "Second enqueue for same asset should be skipped (dedup)"
-
-        with engine.connect() as conn:
-            count = conn.execute(
-                text(
-                    """
-                    SELECT COUNT(*) FROM search_sync_queue
-                    WHERE asset_id = :asset_id
-                      AND scene_id IS NULL
-                      AND status IN ('pending', 'processing')
-                    """
-                ),
-                {"asset_id": asset_id},
-            ).scalar()
-    finally:
-        engine.dispose()
-
-    assert count == 1, f"Expected exactly 1 pending row, got {count}"
-
-
-# ---------------------------------------------------------------------------
-# Fix 7b: video-preview completion enqueues search_sync
+# Fix 7b: video-preview completion triggers search sync
 # ---------------------------------------------------------------------------
 
 
@@ -682,7 +626,7 @@ def test_video_preview_complete_enqueues_search_sync(
 ) -> None:
     """
     POST /v1/jobs/{job_id}/complete for a video-preview job must enqueue a
-    search_sync_queue entry for the asset so it gets indexed.
+    inline search sync for the asset so it gets indexed.
 
     Regression: completing a video-preview job previously did not enqueue
     search sync, leaving the asset invisible to search after preview generation.

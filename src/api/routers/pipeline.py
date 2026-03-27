@@ -14,7 +14,6 @@ from src.repository.tenant import (
     LibraryRepository,
     PipelineLockHeldError,
     PipelineLockRepository,
-    SearchSyncQueueRepository,
     WorkerJobRepository,
 )
 
@@ -25,7 +24,6 @@ _STAGE_ORDER = [
     "exif",
     "ai_vision",
     "embed",
-    "search_sync",
     "video-index",
     "video-vision",
     "video-preview",
@@ -35,7 +33,6 @@ _JOB_TYPE_LABEL: dict[str, str] = {
     "proxy": "Proxy",
     "exif": "EXIF",
     "ai_vision": "Vision (AI)",
-    "search_sync": "Search Sync",
     "embed": "Embeddings",
     "video-index": "Video Index",
     "video-vision": "Video Vision",
@@ -145,7 +142,6 @@ def release_lock(
 
 def _build_pivot(
     job_rows: list[dict],
-    ssq_rows: list[dict],
 ) -> dict[str, dict[str, int]]:
     """Build stage-name → {done, inflight, pending, failed, blocked} from raw repo rows."""
     pivot: dict[str, dict[str, int]] = {}
@@ -163,16 +159,6 @@ def _build_pivot(
             pivot[jt]["failed"] += count
         elif sv == "blocked":
             pivot[jt]["blocked"] += count
-    for r in ssq_rows:
-        sv, count = r["status"], r["count"]
-        if "search_sync" not in pivot:
-            pivot["search_sync"] = {"done": 0, "inflight": 0, "pending": 0, "failed": 0, "blocked": 0}
-        if sv == "synced":
-            pivot["search_sync"]["done"] += count
-        elif sv == "processing":
-            pivot["search_sync"]["inflight"] += count
-        elif sv == "pending":
-            pivot["search_sync"]["pending"] += count
     return pivot
 
 
@@ -214,7 +200,6 @@ def get_pipeline_status(
     library_repo = LibraryRepository(session)
     asset_repo = AssetRepository(session)
     job_repo = WorkerJobRepository(session)
-    ssq_repo = SearchSyncQueueRepository(session)
 
     all_libraries = library_repo.list_all()
 
@@ -224,11 +209,10 @@ def get_pipeline_status(
             raise HTTPException(status_code=404, detail="Library not found")
 
         job_rows = job_repo.pipeline_status(library_id)
-        ssq_rows = ssq_repo.search_sync_pipeline_status(library_id)
         active_workers = job_repo.active_worker_count(library_id=library_id)
         total_assets = asset_repo.count_by_library(library_id)
 
-        pivot = _build_pivot(job_rows, ssq_rows)
+        pivot = _build_pivot(job_rows)
         return {
             "library": target.name,
             "library_id": library_id,
@@ -240,7 +224,6 @@ def get_pipeline_status(
     # Tenant-wide
     active_workers = job_repo.active_worker_count()
     job_rows_all = job_repo.pipeline_status_tenant()
-    ssq_rows_all = ssq_repo.search_sync_pipeline_status_tenant()
 
     per_lib_pivot: dict[str, dict[str, dict[str, int]]] = {lib.library_id: {} for lib in all_libraries}
 
@@ -260,19 +243,6 @@ def get_pipeline_status(
             per_lib_pivot[lid][jt]["failed"] += count
         elif sv == "blocked":
             per_lib_pivot[lid][jt]["blocked"] += count
-
-    for r in ssq_rows_all:
-        lid, sv, count = r["library_id"], r["status"], r["count"]
-        if lid not in per_lib_pivot:
-            continue
-        if "search_sync" not in per_lib_pivot[lid]:
-            per_lib_pivot[lid]["search_sync"] = {"done": 0, "inflight": 0, "pending": 0, "failed": 0, "blocked": 0}
-        if sv == "synced":
-            per_lib_pivot[lid]["search_sync"]["done"] += count
-        elif sv == "processing":
-            per_lib_pivot[lid]["search_sync"]["inflight"] += count
-        elif sv == "pending":
-            per_lib_pivot[lid]["search_sync"]["pending"] += count
 
     libraries = []
     for lib in all_libraries:

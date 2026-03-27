@@ -30,8 +30,6 @@ class LockHeartbeatClient(Protocol):
 _log = logging.getLogger(__name__)
 
 # Maps completed stage name → job types to enqueue next.
-# search_sync is populated via the search_sync_queue by the ai_vision/video-vision
-# completion handlers on the API side, so it doesn't need explicit supervisor enqueuing.
 _DOWNSTREAM: dict[str, list[str]] = {
     "proxy": ["ai_vision", "embed", "video-preview", "video-index"],
     "video-index": ["video-vision"],
@@ -64,14 +62,12 @@ IMAGE_STAGES: tuple[PipelineStage, ...] = (
     PipelineStage("exif", "EXIF", "exif", "image", "image"),
     PipelineStage("ai_vision", "Vision (AI)", "vision", "image", "image"),
     PipelineStage("embed", "Embeddings", "embed", "image", "image"),
-    PipelineStage("search_sync", "Search Sync", "search-sync", "image", "image"),
 )
 VIDEO_STAGES: tuple[PipelineStage, ...] = (
     PipelineStage("proxy", "Proxy", "proxy", "video", "video"),
     PipelineStage("video-index", "Video Index", "video-index", "video", "video"),
     PipelineStage("video-preview", "Video Preview", "video-preview", "video", "video"),
     PipelineStage("video-vision", "Video Vision", "video-vision", "video", "video"),
-    PipelineStage("search_sync", "Search Sync", "search-sync", "video", "video"),
 )
 
 
@@ -445,7 +441,7 @@ class PipelineSupervisor:
                     suffix += f" path_prefix={path}"
                 self._dashboard_update([], log_line=f"[{label}] start{suffix}")
             elif kind in ("batch", "complete"):
-                # Support both job-style (processed, failed) and search_sync-style (synced, skipped, batches).
+                # Support both job-style (processed, failed) and worker-style (synced, skipped, batches).
                 processed = event.get("processed")
                 failed = event.get("failed")
                 synced = event.get("synced")

@@ -1045,77 +1045,6 @@ def worker_video_vision(
         console.print("Done.")
 
 
-# Shell alias: function lumi-search-sync() { lumiverb worker search-sync --library "$1" --once; }
-@worker_app.command("search-sync")
-def worker_search_sync(
-    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
-    once: Annotated[bool, typer.Option("--once", help="Process one batch then exit.")] = False,
-    force_resync: Annotated[bool, typer.Option("--force-resync", help="Re-enqueue all assets before syncing.")] = False,
-    path: Annotated[str | None, typer.Option("--path", "-p", help="Optional subpath to scope sync.")] = None,
-    output: Annotated[
-        str,
-        typer.Option(
-            "--output",
-            help="Output mode: human (default) or jsonl for structured events.",
-        ),
-    ] = "human",
-) -> None:
-    """Run the search sync worker for a library."""
-    from src.core.io_utils import normalize_path_prefix
-
-    path_prefix = normalize_path_prefix(path)
-
-    client = LumiverbClient()
-    library_id = _resolve_library_id(client, library)
-
-    grand_synced = 0
-    grand_skipped = 0
-    grand_batches = 0
-
-    if force_resync:
-        body: dict[str, object] = {"library_id": library_id}
-        if path_prefix:
-            body["path_prefix"] = path_prefix
-        resync_resp = client.post("/v1/search-sync/resync", json=body)
-        resync_resp.raise_for_status()
-        n = resync_resp.json().get("enqueued", 0)
-        if n:
-            console.print(f"Re-enqueued {n:,} assets for resync.")
-
-    # Check pending count via API
-    params: dict[str, object] = {"library_id": library_id}
-    if path_prefix:
-        params["path_prefix"] = path_prefix
-    pending_resp = client.get("/v1/search-sync/pending", params=params)
-    pending = pending_resp.json().get("count", 0)
-
-    if pending == 0 and once:
-        console.print(f"No pending items in search_sync_queue for {library}.")
-    else:
-        # Process batches via API until queue is drained (or once if --once)
-        while True:
-            batch_body: dict[str, object] = {"library_id": library_id}
-            if path_prefix:
-                batch_body["path_prefix"] = path_prefix
-            resp = client.post("/v1/search-sync/process-batch", json=batch_body)
-            data = resp.json()
-            if not data.get("processed", False):
-                break
-            grand_synced += int(data.get("synced", 0))
-            grand_skipped += int(data.get("skipped", 0))
-            grand_batches += 1
-            if once:
-                break
-
-    table = Table(show_header=True)
-    table.add_column("Metric", style="dim")
-    table.add_column("Count", justify="right")
-    table.add_row("Synced", str(grand_synced))
-    table.add_row("Skipped", str(grand_skipped))
-    table.add_row("Batches", str(grand_batches))
-    console.print(table)
-
-
 # ---------------------------------------------------------------------------
 # status
 # ---------------------------------------------------------------------------
@@ -1125,7 +1054,6 @@ JOB_TYPE_DISPLAY: dict[str, str] = {
     "proxy": "Proxy",
     "exif": "EXIF",
     "ai_vision": "Vision (AI)",
-    "search_sync": "Search Sync",
     "embed": "Embeddings",
     "video-preview": "Video Preview",
 }
@@ -1139,7 +1067,6 @@ STAGE_ORDER: list[str] = [
     "proxy",
     "exif",
     "ai_vision",
-    "search_sync",
     "embed",
     "video-index",
     "video-vision",
@@ -1359,7 +1286,7 @@ def status(
         notable_stages = [
             (s["name"], s["failed"] + s.get("blocked", 0))
             for s in stages
-            if (s["failed"] + s.get("blocked", 0)) > 0 and s["name"] != "search_sync"
+            if (s["failed"] + s.get("blocked", 0)) > 0
         ]
         if notable_stages:
             worst = max(notable_stages, key=lambda x: x[1])

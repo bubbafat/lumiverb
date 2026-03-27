@@ -270,7 +270,6 @@ TENANT_TABLES = [
     "video_scenes",
     "video_index_chunks",
     "asset_metadata",
-    "search_sync_queue",
     "worker_jobs",
     "system_metadata",
     "faces",
@@ -312,23 +311,22 @@ def test_tenant_schema_upgrade_and_downgrade() -> None:
                     "WHERE table_schema = 'public' AND table_name IN "
                     "('libraries', 'library_path_filters', 'tenant_path_filter_defaults', "
                     "'scans', 'assets', 'video_scenes', 'video_index_chunks', "
-                    "'asset_metadata', 'search_sync_queue', 'worker_jobs', 'system_metadata', "
+                    "'asset_metadata', 'worker_jobs', 'system_metadata', "
                     "'faces', 'people', 'face_person_matches', 'pipeline_locks')"
                 )
             )
             tables = {row[0] for row in r}
         assert set(TENANT_TABLES) == tables, tables
 
-        # Verify search_sync_latest and active_assets views exist
+        # Verify active_assets view exists
         with engine.connect() as conn:
             r = conn.execute(
                 text(
                     "SELECT table_name FROM information_schema.views "
-                    "WHERE table_schema = 'public' AND table_name IN ('search_sync_latest', 'active_assets')"
+                    "WHERE table_schema = 'public' AND table_name = 'active_assets'"
                 )
             )
             views = {row[0] for row in r}
-        assert "search_sync_latest" in views, "search_sync_latest view should exist"
         assert "active_assets" in views, "active_assets view should exist"
         with engine.connect() as conn:
             r = conn.execute(
@@ -379,7 +377,7 @@ def test_tenant_schema_upgrade_and_downgrade() -> None:
                     "WHERE table_schema = 'public' AND table_name IN "
                     "('libraries', 'library_path_filters', 'tenant_path_filter_defaults', "
                     "'scans', 'assets', 'video_scenes', 'video_index_chunks', "
-                    "'asset_metadata', 'search_sync_queue', 'worker_jobs', 'system_metadata', "
+                    "'asset_metadata', 'worker_jobs', 'system_metadata', "
                     "'faces', 'people', 'face_person_matches', 'pipeline_locks')"
                 )
             )

@@ -24,7 +24,6 @@ from src.models.tenant import (
     Library,
     LibraryPathFilter,
     Scan,
-    SearchSyncQueue,
     TenantPathFilterDefault,
     VideoIndexChunk,
     VideoScene,
@@ -140,18 +139,6 @@ class LibraryRepository:
             ),
             {"library_id": library_id, "now": utcnow()},
         )
-        # Cancel pending/processing search_sync_queue rows for this library's assets.
-        # Use 'cancelled' (not 'synced') so status reports can distinguish intent.
-        self._session.execute(
-            text(
-                """
-                UPDATE search_sync_queue SET status = 'cancelled'
-                WHERE asset_id IN (SELECT asset_id FROM assets WHERE library_id = :library_id)
-                AND status IN ('pending', 'processing')
-                """
-            ),
-            {"library_id": library_id},
-        )
         library.status = "trashed"
         library.updated_at = utcnow()
         self._session.add(library)
@@ -161,21 +148,12 @@ class LibraryRepository:
 
     def hard_delete(self, library_id: str) -> None:
         """Permanently delete library and all related data in FK-safe order. Single transaction."""
-        # Order: worker_jobs, search_sync_queue, asset_metadata, video_scenes, video_index_chunks, assets, scans, libraries
+        # Order: worker_jobs, asset_metadata, video_scenes, video_index_chunks, assets, scans, libraries
         params = {"library_id": library_id}
         self._session.execute(
             text(
                 """
                 DELETE FROM worker_jobs
-                WHERE asset_id IN (SELECT asset_id FROM assets WHERE library_id = :library_id)
-                """
-            ),
-            params,
-        )
-        self._session.execute(
-            text(
-                """
-                DELETE FROM search_sync_queue
                 WHERE asset_id IN (SELECT asset_id FROM assets WHERE library_id = :library_id)
                 """
             ),
@@ -1034,10 +1012,6 @@ class AssetRepository:
         params = {"asset_ids": asset_ids}
         self._session.execute(
             text("DELETE FROM worker_jobs WHERE asset_id = ANY(:asset_ids)"),
-            params,
-        )
-        self._session.execute(
-            text("DELETE FROM search_sync_queue WHERE asset_id = ANY(:asset_ids)"),
             params,
         )
         self._session.execute(
@@ -2203,323 +2177,6 @@ class PipelineLockRepository:
         self._session.commit()
 
 
-class SearchSyncQueueRepository:
-    """Repository for search_sync_queue outbox table."""
-
-    def __init__(self, session: Session) -> None:
-        self._session = session
-
-    def enqueue(
-        self,
-        asset_id: str,
-        operation: str,
-        scene_id: str | None = None,
-    ) -> SearchSyncQueue | None:
-        """
-        Atomically insert a new row into search_sync_queue using ON CONFLICT DO NOTHING.
-
-        The partial unique index uq_ssq_pending_asset_scene ensures only one
-        pending/processing row exists per (asset_id, scene_id) at any time.
-        ON CONFLICT DO NOTHING makes concurrent callers idempotent without the
-        TOCTOU race of a SELECT-then-INSERT pattern.
-
-        Returns the inserted row, or None if a pending/processing row already existed.
-        """
-        now = utcnow()
-        sync_id = "ssq_" + str(ULID())
-        stmt = pg_insert(SearchSyncQueue).values(
-            sync_id=sync_id,
-            asset_id=asset_id,
-            scene_id=scene_id,
-            operation=operation,
-            status="pending",
-            created_at=now,
-        ).on_conflict_do_nothing()
-        self._session.execute(stmt)
-        self._session.commit()
-        # Return the row only if our insert actually went through
-        row = self._session.get(SearchSyncQueue, sync_id)
-        return row  # None if conflict (already pending/processing)
-
-    def claim_batch(
-        self,
-        batch_size: int = 100,
-        library_id: str | None = None,
-        path_prefix: str | None = None,
-        lease_minutes: int = 5,
-    ) -> list[SearchSyncQueue]:
-        """
-        Claim up to batch_size assets whose latest sync state is pending.
-
-        Uses search_sync_latest view to pick only assets whose most recent queue row
-        is pending (deduplicates retries/force-resyncs). Locks underlying table rows.
-        Returns claimed rows with status updated to 'processing'.
-        """
-        library_filter = " AND a.library_id = :library_id" if library_id else ""
-        path_filter = ""
-        params: dict = {"batch_size": batch_size}
-        if library_id:
-            params["library_id"] = library_id
-        if path_prefix:
-            normalised = normalize_path_prefix(path_prefix)
-            if normalised:
-                path_filter = " AND a.rel_path LIKE :path_prefix"
-                params["path_prefix"] = normalised + "/%"
-        params["lease_interval"] = f"{lease_minutes} minutes"
-
-        sql = f"""
-            WITH candidates AS (
-                SELECT ssl.sync_id, ssl.asset_id
-                FROM search_sync_latest ssl
-                JOIN active_assets a ON a.asset_id = ssl.asset_id
-                WHERE (ssl.status = 'pending'
-                   OR (ssl.status = 'processing'
-                       AND ssl.processing_started_at < NOW() - (:lease_interval)::interval))
-                {library_filter}
-                {path_filter}
-                ORDER BY ssl.created_at
-                LIMIT :batch_size
-            ),
-            locked AS (
-                SELECT ssq.sync_id, ssq.asset_id
-                FROM search_sync_queue ssq
-                JOIN candidates c ON c.sync_id = ssq.sync_id
-                FOR UPDATE OF ssq SKIP LOCKED
-            )
-            UPDATE search_sync_queue
-            SET status = 'processing',
-                processing_started_at = NOW()
-            WHERE sync_id IN (SELECT sync_id FROM locked)
-            RETURNING sync_id, asset_id, operation
-        """
-        result = self._session.execute(text(sql), params)
-        rows_data = result.fetchall()
-        self._session.commit()
-        if not rows_data:
-            return []
-        sync_ids = [r[0] for r in rows_data]
-        rows = []
-        for sid in sync_ids:
-            row = self._session.get(SearchSyncQueue, sid)
-            if row is not None:
-                rows.append(row)
-        return rows
-
-    RESYNC_BATCH_SIZE = 500
-
-    def enqueue_all_for_library(
-        self,
-        library_id: str,
-        path_prefix: str | None = None,
-        progress_callback: object | None = None,
-    ) -> list[str]:
-        """
-        Re-enqueue all online, non-trashed assets in the library for search sync.
-
-        Optionally scope by path_prefix (rel_path LIKE prefix/%).
-        Processes in batches of RESYNC_BATCH_SIZE. If progress_callback is provided,
-        it is called after each batch as progress_callback(completed, total).
-        Returns the list of asset_ids enqueued.
-        """
-        sql = """
-            SELECT asset_id FROM active_assets
-            WHERE library_id = :library_id
-            AND availability = 'online'
-        """
-        params: dict = {"library_id": library_id}
-        if path_prefix:
-            normalised = normalize_path_prefix(path_prefix)
-            if normalised:
-                sql += " AND rel_path LIKE :path_prefix"
-                params["path_prefix"] = normalised + "/%"
-        asset_ids = [r[0] for r in self._session.execute(text(sql), params).fetchall()]
-        if not asset_ids:
-            return []
-
-        total = len(asset_ids)
-        cb = progress_callback if callable(progress_callback) else None
-
-        for i in range(0, total, self.RESYNC_BATCH_SIZE):
-            batch = asset_ids[i : i + self.RESYNC_BATCH_SIZE]
-
-            # Reset only the latest row per (asset_id, scene_id) to pending.
-            # Resetting all historical rows creates orphaned pending rows that
-            # are hidden by search_sync_latest but accumulate indefinitely.
-            self._session.execute(
-                text(
-                    """
-                    UPDATE search_sync_queue ssq
-                    SET status = 'pending'
-                    WHERE ssq.asset_id = ANY(:asset_ids)
-                      AND ssq.sync_id IN (
-                          SELECT DISTINCT ON (asset_id, scene_id) sync_id
-                          FROM search_sync_queue
-                          WHERE asset_id = ANY(:asset_ids)
-                          ORDER BY asset_id, scene_id, created_at DESC
-                      )
-                    """
-                ),
-                {"asset_ids": batch},
-            )
-            self._session.commit()
-
-            # Find asset_ids in batch that have no row
-            rows = self._session.execute(
-                text(
-                    """
-                    SELECT asset_id FROM search_sync_queue
-                    WHERE asset_id = ANY(:asset_ids)
-                    """
-                ),
-                {"asset_ids": batch},
-            ).fetchall()
-            existing = {r[0] for r in rows}
-            to_insert = [aid for aid in batch if aid not in existing]
-
-            if to_insert:
-                insert_time = utcnow()
-                # Exclude asset_ids that already have a synced row with created_at >= insert_time,
-                # so we never insert a stale pending row hidden by search_sync_latest.
-                already_synced = self._session.execute(
-                    text(
-                        """
-                        SELECT asset_id FROM search_sync_queue
-                        WHERE asset_id = ANY(:asset_ids)
-                          AND scene_id IS NOT DISTINCT FROM NULL
-                          AND status = 'synced'
-                          AND created_at >= :insert_time
-                        """
-                    ),
-                    {"asset_ids": to_insert, "insert_time": insert_time},
-                ).fetchall()
-                skip_ids = {r[0] for r in already_synced}
-                to_insert = [aid for aid in to_insert if aid not in skip_ids]
-
-                for aid in to_insert:
-                    sync = SearchSyncQueue(
-                        sync_id="ssq_" + str(ULID()),
-                        asset_id=aid,
-                        scene_id=None,
-                        operation="index",
-                        status="pending",
-                        created_at=insert_time,
-                    )
-                    self._session.add(sync)
-                if to_insert:
-                    self._session.commit()
-
-            completed = min(i + self.RESYNC_BATCH_SIZE, total)
-            if cb:
-                cb(completed, total)
-
-        return asset_ids
-
-    def search_sync_pipeline_status(self, library_id: str) -> list[dict]:
-        """
-        Return [{status, count}] for search_sync_latest in this library.
-        Status is synced, pending, or processing. Used for pipeline overview.
-        """
-        rows = self._session.execute(
-            text("""
-                SELECT ssl.status, COUNT(*)::int as count
-                FROM search_sync_latest ssl
-                JOIN active_assets a ON a.asset_id = ssl.asset_id
-                WHERE a.library_id = :library_id
-                GROUP BY ssl.status
-            """),
-            {"library_id": library_id},
-        ).fetchall()
-        return [{"status": r.status, "count": r.count} for r in rows]
-
-    def search_sync_pipeline_status_tenant(self) -> list[dict]:
-        """Return [{library_id, status, count}] across all libraries."""
-        rows = self._session.execute(
-            text("""
-                SELECT a.library_id, ssl.status, COUNT(*)::int as count
-                FROM search_sync_latest ssl
-                JOIN active_assets a ON a.asset_id = ssl.asset_id
-                GROUP BY a.library_id, ssl.status
-            """),
-        ).fetchall()
-        return [{"library_id": r.library_id, "status": r.status, "count": r.count} for r in rows]
-
-    def pending_count(
-        self,
-        library_id: str | None = None,
-        path_prefix: str | None = None,
-        lease_minutes: int = 5,
-    ) -> int:
-        """
-        Count rows that claim_batch() will process: 'pending' rows plus 'processing'
-        rows whose lease has expired. Matches claim_batch scope so the progress bar
-        total accurately reflects the work about to be done.
-        """
-        sql = """
-            SELECT COUNT(*)
-            FROM search_sync_latest ssl
-            JOIN active_assets a ON a.asset_id = ssl.asset_id
-            WHERE (ssl.status = 'pending'
-               OR (ssl.status = 'processing'
-                   AND ssl.processing_started_at < NOW() - (:lease_interval)::interval))
-        """
-        params: dict = {"lease_interval": f"{lease_minutes} minutes"}
-        if library_id:
-            sql += " AND a.library_id = :library_id"
-            params["library_id"] = library_id
-        if path_prefix:
-            normalised = normalize_path_prefix(path_prefix)
-            if normalised:
-                sql += " AND a.rel_path LIKE :path_prefix"
-                params["path_prefix"] = normalised + "/%"
-        return int(self._session.execute(text(sql), params).scalar() or 0)
-
-    def mark_synced(self, sync_ids: list[str]) -> int:
-        """
-        Mark the given sync_ids as synced.
-
-        Returns the number of rows updated.
-        """
-        if not sync_ids:
-            return 0
-        result = self._session.execute(
-            text(
-                """
-                UPDATE search_sync_queue
-                SET status = 'synced'
-                WHERE sync_id = ANY(:sync_ids)
-                """
-            ),
-            {"sync_ids": sync_ids},
-        )
-        self._session.commit()
-        # SQLAlchemy's rowcount can be -1 on some drivers; coerce to int >= 0
-        try:
-            return int(result.rowcount or 0)
-        except Exception:
-            return 0
-
-    def reset_to_pending(self, sync_ids: list[str]) -> int:
-        """Reset processing rows back to pending (e.g. after a transient Quickwit failure).
-
-        Clears processing_started_at so the rows are immediately eligible for reclaiming.
-        Returns the number of rows updated.
-        """
-        if not sync_ids:
-            return 0
-        result = self._session.execute(
-            text(
-                "UPDATE search_sync_queue SET status = 'pending', processing_started_at = NULL "
-                "WHERE sync_id = ANY(:ids)"
-            ),
-            {"ids": sync_ids},
-        )
-        self._session.commit()
-        try:
-            return int(result.rowcount or 0)
-        except Exception:
-            return 0
-
-
 class VideoSceneRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
@@ -2540,22 +2197,6 @@ class VideoSceneRepository:
     def delete_for_library(self, library_id: str) -> int:
         """Delete all scenes for all video assets in a library. Returns count deleted."""
         from sqlalchemy import delete as sa_delete
-        # Must delete search_sync_queue rows that reference these scenes first.
-        scene_ids_subq = (
-            select(VideoScene.scene_id).where(
-                VideoScene.asset_id.in_(  # type: ignore[attr-defined]
-                    select(Asset.asset_id).where(
-                        Asset.library_id == library_id,
-                        Asset.media_type == "video",
-                    )
-                )
-            )
-        )
-        self._session.exec(  # type: ignore[call-overload]
-            sa_delete(SearchSyncQueue).where(
-                SearchSyncQueue.scene_id.in_(scene_ids_subq)  # type: ignore[attr-defined]
-            )
-        )
         result = self._session.exec(  # type: ignore[call-overload]
             sa_delete(VideoScene).where(
                 VideoScene.asset_id.in_(  # type: ignore[attr-defined]
