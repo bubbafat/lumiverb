@@ -38,6 +38,22 @@ export interface AssetPageItem {
   taken_at: string | null;
   status: string;
   duration_sec: number | null;
+  camera_make: string | null;
+  camera_model: string | null;
+  iso: number | null;
+  aperture: number | null;
+  focal_length: number | null;
+  focal_length_35mm: number | null;
+  lens_model: string | null;
+  flash_fired: boolean | null;
+  gps_lat: number | null;
+  gps_lon: number | null;
+  created_at: string | null;
+}
+
+export interface AssetPageResponse {
+  items: AssetPageItem[];
+  next_cursor: string | null;
 }
 
 export interface SearchHit {

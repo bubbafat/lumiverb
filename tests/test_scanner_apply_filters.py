@@ -51,9 +51,9 @@ def _make_client(
         if "/assets/page" in path:
             try:
                 page = next(page_iter)
-                return _resp(200, page)
+                return _resp(200, {"items": page, "next_cursor": None})
             except StopIteration:
-                return _resp(204, None)
+                return _resp(200, {"items": [], "next_cursor": None})
         return _resp(200, {})
 
     client.raw.side_effect = _raw

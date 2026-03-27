@@ -227,7 +227,7 @@ def test_scan_registers_signal_handlers(tmp_path: Path) -> None:
     get_responses = [
         _json([{"library_id": "lib_1", "name": "SigLib", "root_path": str(tmp_path)}]),
         _json([]),  # no running scans
-        _204(),  # GET /v1/assets/page - no known assets
+        _json({"items": [], "next_cursor": None}),  # GET /v1/assets/page - no known assets
     ]
 
     def _get_side_effect(*args, **kwargs):
@@ -326,7 +326,7 @@ def test_scan_force_skips_warning(tmp_path: Path) -> None:
     libs = [{"library_id": "lib_1", "name": "ForceLib", "root_path": str(tmp_path)}]
     running = [{"scan_id": "scan_1", "library_id": "lib_1", "started_at": "2025-01-01T00:00:00", "worker_id": None}]
     mock_client = MagicMock()
-    mock_client.get.side_effect = [_json(libs), _json(running), _204()]
+    mock_client.get.side_effect = [_json(libs), _json(running), _json({"items": [], "next_cursor": None})]
     mock_client.post.side_effect = [
         _json({"scan_id": "scan_1"}),
         _json({"added": 1, "updated": 0, "skipped": 0, "missing": 0}),

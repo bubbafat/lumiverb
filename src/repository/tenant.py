@@ -734,6 +734,12 @@ class AssetRepository:
         result = self._session.execute(stmt, {"library_ids": library_ids})
         return int(result.scalar() or 0)
 
+    # Columns allowed for sorting.
+    SORTABLE_COLUMNS = {
+        "asset_id", "taken_at", "created_at", "file_size",
+        "iso", "aperture", "focal_length", "rel_path",
+    }
+
     def page_by_library(
         self,
         library_id: str,
@@ -742,42 +748,157 @@ class AssetRepository:
         path_prefix: str | None = None,
         tag: str | None = None,
         missing_vision: bool = False,
+        *,
+        sort: str = "taken_at",
+        direction: str = "desc",
+        media_types: list[str] | None = None,
+        camera_make: str | None = None,
+        camera_model: str | None = None,
+        lens_model: str | None = None,
+        iso_min: int | None = None,
+        iso_max: int | None = None,
+        aperture_min: float | None = None,
+        aperture_max: float | None = None,
+        focal_length_min: float | None = None,
+        focal_length_max: float | None = None,
+        has_gps: bool = False,
+        near_lat: float | None = None,
+        near_lon: float | None = None,
+        near_radius_km: float = 1.0,
     ) -> list[Asset]:
-        """Keyset pagination: return assets with asset_id > after, ordered by asset_id, limit rows.
+        """Keyset pagination with composite cursor, sorting, and filtering.
 
-        Optional path_prefix filters to assets whose rel_path equals the prefix
-        or starts with prefix + '/'. The prefix is expected to be normalized
-        (no leading/trailing slash).
+        The ``after`` parameter is either:
+        - A plain asset_id string (legacy callers, sort=asset_id implied).
+        - A base64-encoded JSON ``{"v": <sort_value>, "id": <asset_id>}``.
 
-        Optional tag filters to assets whose latest metadata row's tags array
-        (data->'tags') contains the given tag.
-
-        Optional missing_vision=True filters to assets with no rows in asset_metadata.
+        Returns assets ordered by the requested sort column with asset_id as
+        tiebreaker.  Nulls always sort last.
         """
+        import base64 as _b64
+        import math as _math
+
+        sort_col = sort if sort in self.SORTABLE_COLUMNS else "taken_at"
+        is_desc = direction.lower() == "desc"
+        cmp_op = "<" if is_desc else ">"
+        order_dir = "DESC" if is_desc else "ASC"
+
         conditions = ["a.library_id = :library_id"]
         params: dict[str, object] = {
             "library_id": library_id,
             "limit": limit,
         }
+
+        # --- Path prefix ---
         if path_prefix:
             conditions.append(
                 "(a.rel_path = :path_prefix OR a.rel_path LIKE :path_prefix_like)"
             )
             params["path_prefix"] = path_prefix
             params["path_prefix_like"] = path_prefix + "/%"
+
+        # --- Composite cursor ---
         if after is not None:
-            conditions.append("a.asset_id > :after")
-            params["after"] = after
+            cursor_value = None
+            cursor_id = after  # default: plain asset_id
+            try:
+                decoded = json.loads(_b64.urlsafe_b64decode(after + "=="))
+                cursor_value = decoded["v"]
+                cursor_id = decoded["id"]
+            except Exception:
+                # Legacy plain asset_id cursor — treat as sort=asset_id
+                if sort_col != "asset_id":
+                    # Fallback: just use asset_id comparison
+                    sort_col = "asset_id"
+
+            if sort_col == "asset_id":
+                conditions.append(f"a.asset_id {cmp_op} :cursor_id")
+                params["cursor_id"] = cursor_id
+            else:
+                # Row-value comparison for composite cursor.
+                # NULLs sort last: rows with NULL sort_col come after non-NULL rows.
+                conditions.append(f"""(
+                    CASE
+                        WHEN :cursor_value IS NULL THEN
+                            a.{sort_col} IS NOT NULL
+                            OR (a.{sort_col} IS NULL AND a.asset_id {cmp_op} :cursor_id)
+                        WHEN a.{sort_col} IS NULL THEN
+                            FALSE
+                        ELSE
+                            (a.{sort_col}, a.asset_id) {cmp_op} (:cursor_value, :cursor_id)
+                    END
+                )""")
+                params["cursor_value"] = cursor_value
+                params["cursor_id"] = cursor_id
+
+        # --- Tag / missing_vision ---
         if tag is not None:
             conditions.append("m.tags @> jsonb_build_array(:tag)")
             params["tag"] = tag
         if missing_vision:
             conditions.append("m.tags IS NULL")
 
+        # --- Media type filter ---
+        if media_types:
+            prefixes = []
+            if "image" in media_types:
+                prefixes.append("a.media_type LIKE 'image/%'")
+            if "video" in media_types:
+                prefixes.append("a.media_type LIKE 'video/%'")
+            if prefixes:
+                conditions.append(f"({' OR '.join(prefixes)})")
+
+        # --- Camera / lens filters ---
+        if camera_make:
+            conditions.append("a.camera_make = :camera_make")
+            params["camera_make"] = camera_make
+        if camera_model:
+            conditions.append("a.camera_model = :camera_model")
+            params["camera_model"] = camera_model
+        if lens_model:
+            conditions.append("a.lens_model = :lens_model")
+            params["lens_model"] = lens_model
+
+        # --- EXIF range filters ---
+        if iso_min is not None:
+            conditions.append("a.iso >= :iso_min")
+            params["iso_min"] = iso_min
+        if iso_max is not None:
+            conditions.append("a.iso <= :iso_max")
+            params["iso_max"] = iso_max
+        if aperture_min is not None:
+            conditions.append("a.aperture >= :aperture_min")
+            params["aperture_min"] = aperture_min
+        if aperture_max is not None:
+            conditions.append("a.aperture <= :aperture_max")
+            params["aperture_max"] = aperture_max
+        if focal_length_min is not None:
+            conditions.append("a.focal_length >= :focal_length_min")
+            params["focal_length_min"] = focal_length_min
+        if focal_length_max is not None:
+            conditions.append("a.focal_length <= :focal_length_max")
+            params["focal_length_max"] = focal_length_max
+
+        # --- GPS filters ---
+        if has_gps:
+            conditions.append("a.gps_lat IS NOT NULL AND a.gps_lon IS NOT NULL")
+        if near_lat is not None and near_lon is not None:
+            lat_delta = near_radius_km / 111.0
+            lon_delta = near_radius_km / (111.0 * _math.cos(_math.radians(near_lat)))
+            conditions.append("a.gps_lat BETWEEN :min_lat AND :max_lat")
+            conditions.append("a.gps_lon BETWEEN :min_lon AND :max_lon")
+            params["min_lat"] = near_lat - lat_delta
+            params["max_lat"] = near_lat + lat_delta
+            params["min_lon"] = near_lon - lon_delta
+            params["max_lon"] = near_lon + lon_delta
+
+        # --- Build query ---
+        join_metadata = tag is not None or missing_vision
         where_sql = " AND ".join(conditions)
-        id_sql = f"""
-            SELECT a.asset_id
-            FROM active_assets a
+
+        lateral_join = ""
+        if join_metadata:
+            lateral_join = """
             LEFT JOIN LATERAL (
                 SELECT data->'tags' AS tags
                 FROM asset_metadata
@@ -785,8 +906,19 @@ class AssetRepository:
                 ORDER BY generated_at DESC
                 LIMIT 1
             ) m ON TRUE
+            """
+
+        if sort_col == "asset_id":
+            order_clause = f"a.asset_id {order_dir}"
+        else:
+            order_clause = f"a.{sort_col} {order_dir} NULLS LAST, a.asset_id {order_dir}"
+
+        id_sql = f"""
+            SELECT a.asset_id
+            FROM active_assets a
+            {lateral_join}
             WHERE {where_sql}
-            ORDER BY a.asset_id
+            ORDER BY {order_clause}
             LIMIT :limit
         """
         result = self._session.execute(text(id_sql).bindparams(**params))
@@ -1046,6 +1178,14 @@ class AssetRepository:
         gps_lat: float | None,
         gps_lon: float | None,
         duration_sec: float | None = None,
+        iso: int | None = None,
+        shutter_speed: str | None = None,
+        aperture: float | None = None,
+        focal_length: float | None = None,
+        focal_length_35mm: float | None = None,
+        lens_model: str | None = None,
+        flash_fired: bool | None = None,
+        orientation: int | None = None,
     ) -> None:
         """Update EXIF fields on asset record."""
         taken_at_dt: datetime | None = None
@@ -1066,7 +1206,15 @@ class AssetRepository:
                     taken_at = :taken_at,
                     gps_lat = :gps_lat,
                     gps_lon = :gps_lon,
-                    duration_sec = COALESCE(:duration_sec, duration_sec)
+                    duration_sec = COALESCE(:duration_sec, duration_sec),
+                    iso = :iso,
+                    shutter_speed = :shutter_speed,
+                    aperture = :aperture,
+                    focal_length = :focal_length,
+                    focal_length_35mm = :focal_length_35mm,
+                    lens_model = :lens_model,
+                    flash_fired = :flash_fired,
+                    orientation = :orientation
                 WHERE asset_id = :asset_id
                 """
             ),
@@ -1080,6 +1228,14 @@ class AssetRepository:
                 "gps_lat": gps_lat,
                 "gps_lon": gps_lon,
                 "duration_sec": duration_sec,
+                "iso": iso,
+                "shutter_speed": shutter_speed,
+                "aperture": aperture,
+                "focal_length": focal_length,
+                "focal_length_35mm": focal_length_35mm,
+                "lens_model": lens_model,
+                "flash_fired": flash_fired,
+                "orientation": orientation,
                 "asset_id": asset_id,
             },
         )

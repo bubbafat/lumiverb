@@ -1,4 +1,4 @@
-"""API tests for GET /v1/assets/page (keyset pagination)."""
+"""API tests for GET /v1/assets/page (keyset pagination with response envelope)."""
 
 import os
 from unittest.mock import patch
@@ -116,23 +116,26 @@ def page_api_client() -> tuple[TestClient, str, str, list[str]]:
 def test_page_assets_returns_first_page(
     page_api_client: tuple[TestClient, str, str, list[str]]
 ) -> None:
-    """GET /v1/assets/page?library_id=...&limit=3 returns exactly 3 items."""
+    """GET /v1/assets/page?library_id=...&limit=3 returns envelope with 3 items."""
     client, api_key, library_id, _ = page_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
     r = client.get(
         "/v1/assets/page",
-        params={"library_id": library_id, "limit": 3},
+        params={"library_id": library_id, "limit": 3, "sort": "asset_id", "dir": "asc"},
         headers=auth,
     )
     assert r.status_code == 200
-    items = r.json()
+    data = r.json()
+    assert "items" in data
+    assert "next_cursor" in data
+    items = data["items"]
     assert len(items) == 3
+    assert data["next_cursor"] is not None
     for item in items:
         assert "asset_id" in item
         assert "rel_path" in item
         assert "file_size" in item
-        assert "file_mtime" in item
         assert "media_type" in item
 
 
@@ -140,27 +143,29 @@ def test_page_assets_returns_first_page(
 def test_page_assets_cursor_pagination(
     page_api_client: tuple[TestClient, str, str, list[str]]
 ) -> None:
-    """Use after cursor from first page to fetch next; assert no overlap and correct total."""
+    """Use next_cursor from first page to fetch next; assert no overlap and correct total."""
     client, api_key, library_id, _ = page_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
     r1 = client.get(
         "/v1/assets/page",
-        params={"library_id": library_id, "limit": 3},
+        params={"library_id": library_id, "limit": 3, "sort": "asset_id", "dir": "asc"},
         headers=auth,
     )
     assert r1.status_code == 200
-    page1 = r1.json()
+    data1 = r1.json()
+    page1 = data1["items"]
     assert len(page1) == 3
-    last_id = page1[-1]["asset_id"]
+    cursor = data1["next_cursor"]
+    assert cursor is not None
 
     r2 = client.get(
         "/v1/assets/page",
-        params={"library_id": library_id, "after": last_id, "limit": 10},
+        params={"library_id": library_id, "after": cursor, "limit": 10, "sort": "asset_id", "dir": "asc"},
         headers=auth,
     )
     assert r2.status_code == 200
-    page2 = r2.json()
+    page2 = r2.json()["items"]
 
     ids1 = {i["asset_id"] for i in page1}
     ids2 = {i["asset_id"] for i in page2}
@@ -169,20 +174,24 @@ def test_page_assets_cursor_pagination(
 
 
 @pytest.mark.slow
-def test_page_assets_204_when_exhausted(
+def test_page_assets_empty_when_exhausted(
     page_api_client: tuple[TestClient, str, str, list[str]]
 ) -> None:
-    """GET /v1/assets/page?after={last_asset_id} returns 204 when no more assets."""
-    client, api_key, library_id, asset_ids = page_api_client
+    """When all assets have been paged, next_cursor is null and items is empty."""
+    client, api_key, library_id, _ = page_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
-    last_id = asset_ids[-1]
+    # Fetch all 5 in one page
     r = client.get(
         "/v1/assets/page",
-        params={"library_id": library_id, "after": last_id, "limit": 10},
+        params={"library_id": library_id, "limit": 500, "sort": "asset_id", "dir": "asc"},
         headers=auth,
     )
-    assert r.status_code == 204
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data["items"]) == 5
+    # With limit > count, next_cursor should be null
+    assert data["next_cursor"] is None
 
 
 @pytest.mark.slow
@@ -199,7 +208,7 @@ def test_page_assets_limit_capped_at_500(
         headers=auth,
     )
     assert r.status_code == 200
-    items = r.json()
+    items = r.json()["items"]
     assert len(items) <= 500
     assert len(items) == 5
 
@@ -212,24 +221,23 @@ def test_page_assets_missing_vision_returns_all_unprocessed(
     client, api_key, library_id, asset_ids = page_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
-    # All 5 assets were created without vision data, so missing_vision should return all of them
     r = client.get(
         "/v1/assets/page",
         params={"library_id": library_id, "missing_vision": "true"},
         headers=auth,
     )
     assert r.status_code == 200
-    items = r.json()
+    items = r.json()["items"]
     assert len(items) == 5
     returned_ids = {i["asset_id"] for i in items}
     assert returned_ids == set(asset_ids)
 
 
 @pytest.mark.slow
-def test_page_assets_empty_library_204(
+def test_page_assets_empty_library(
     page_api_client: tuple[TestClient, str, str, list[str]]
 ) -> None:
-    """GET /v1/assets/page on library with no assets returns 204."""
+    """GET /v1/assets/page on library with no assets returns empty items."""
     client, api_key, _, _ = page_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
@@ -246,4 +254,50 @@ def test_page_assets_empty_library_204(
         params={"library_id": library_id},
         headers=auth,
     )
-    assert r.status_code == 204
+    assert r.status_code == 200
+    data = r.json()
+    assert data["items"] == []
+    assert data["next_cursor"] is None
+
+
+@pytest.mark.slow
+def test_page_assets_new_fields_present(
+    page_api_client: tuple[TestClient, str, str, list[str]]
+) -> None:
+    """Response items include the new EXIF and metadata fields."""
+    client, api_key, library_id, _ = page_api_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+
+    r = client.get(
+        "/v1/assets/page",
+        params={"library_id": library_id, "limit": 1},
+        headers=auth,
+    )
+    assert r.status_code == 200
+    item = r.json()["items"][0]
+    # New fields should be present (nullable)
+    for field in ["camera_make", "camera_model", "iso", "aperture",
+                  "focal_length", "lens_model", "flash_fired",
+                  "gps_lat", "gps_lon", "created_at"]:
+        assert field in item, f"Missing field: {field}"
+
+
+@pytest.mark.slow
+def test_page_assets_media_type_filter(
+    page_api_client: tuple[TestClient, str, str, list[str]]
+) -> None:
+    """media_type=image returns only image assets."""
+    client, api_key, library_id, _ = page_api_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+
+    r = client.get(
+        "/v1/assets/page",
+        params={"library_id": library_id, "media_type": "image"},
+        headers=auth,
+    )
+    assert r.status_code == 200
+    items = r.json()["items"]
+    # All 5 are images (4 jpeg, 1 png)
+    assert len(items) == 5
+    for item in items:
+        assert item["media_type"].startswith("image/")

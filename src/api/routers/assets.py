@@ -1,11 +1,13 @@
 """Assets API: upsert for scanner, trash and restore. All routes require tenant auth (middleware)."""
 
+import base64
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, field_validator
 from sqlmodel import Session
@@ -65,7 +67,7 @@ class AssetResponse(BaseModel):
 
 
 class AssetPageItem(BaseModel):
-    """Asset fields returned by GET /v1/assets/page for bulk reconciliation."""
+    """Asset fields returned by GET /v1/assets/page."""
 
     asset_id: str
     rel_path: str
@@ -78,6 +80,34 @@ class AssetPageItem(BaseModel):
     taken_at: str | None = None  # ISO8601
     status: str = "pending"
     duration_sec: float | None = None
+    camera_make: str | None = None
+    camera_model: str | None = None
+    iso: int | None = None
+    aperture: float | None = None
+    focal_length: float | None = None
+    focal_length_35mm: float | None = None
+    lens_model: str | None = None
+    flash_fired: bool | None = None
+    gps_lat: float | None = None
+    gps_lon: float | None = None
+    created_at: str | None = None  # ISO8601
+
+
+class AssetPageResponse(BaseModel):
+    """Response envelope for paginated assets."""
+
+    items: list[AssetPageItem]
+    next_cursor: str | None = None
+
+
+# Valid sort columns for the page endpoint.
+SORT_COLUMNS = {"taken_at", "created_at", "file_size", "iso", "aperture", "focal_length", "rel_path", "asset_id"}
+
+
+def _encode_cursor(sort_col: str, sort_value: object, asset_id: str) -> str:
+    """Encode a composite cursor as base64 JSON."""
+    payload = json.dumps({"v": sort_value, "id": asset_id}, default=str)
+    return base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
 
 
 class BatchTrashRequest(BaseModel):
@@ -125,7 +155,7 @@ class VisionSubmitResponse(BaseModel):
     status: str
 
 
-@router.get("/page", responses={204: {"description": "No assets (end of pages)"}})
+@router.get("/page", response_model=AssetPageResponse)
 def page_assets(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -135,12 +165,26 @@ def page_assets(
     path_prefix: str | None = None,
     tag: str | None = None,
     missing_vision: bool = False,
-) -> list[AssetPageItem]:
+    sort: str = "taken_at",
+    dir: str = "desc",
+    media_type: str | None = None,
+    camera_make: str | None = None,
+    camera_model: str | None = None,
+    lens_model: str | None = None,
+    iso_min: int | None = None,
+    iso_max: int | None = None,
+    aperture_min: float | None = None,
+    aperture_max: float | None = None,
+    focal_length_min: float | None = None,
+    focal_length_max: float | None = None,
+    has_gps: bool = False,
+    near_lat: float | None = None,
+    near_lon: float | None = None,
+    near_radius_km: float = 1.0,
+) -> AssetPageResponse:
     """
-    Keyset-paginated assets for bulk reconciliation. Returns 204 if no results.
-    Query: library_id (required), after (cursor), limit (default 500, max 500),
-    optional path_prefix for directory-scoped pagination,
-    optional missing_vision=true to filter to assets without AI descriptions.
+    Keyset-paginated assets with sorting and filtering.
+    Returns a response envelope with items and next_cursor.
     """
     if limit > 500:
         limit = 500
@@ -151,6 +195,10 @@ def page_assets(
         library = lib_repo.get_by_id(library_id)
         if library is None or not library.is_public:
             raise HTTPException(status_code=404, detail="Not found")
+
+    sort_col = sort if sort in SORT_COLUMNS else "taken_at"
+    direction = dir if dir in ("asc", "desc") else "desc"
+
     asset_repo = AssetRepository(session)
     normalized_prefix: str | None = None
     if path_prefix is not None:
@@ -160,6 +208,11 @@ def page_assets(
                 status_code=400,
                 detail="Invalid path_prefix; path traversal not allowed",
             )
+
+    media_types: list[str] | None = None
+    if media_type:
+        media_types = [m.strip() for m in media_type.split(",") if m.strip()]
+
     assets = asset_repo.page_by_library(
         library_id=library_id,
         after=after,
@@ -167,12 +220,25 @@ def page_assets(
         path_prefix=normalized_prefix,
         tag=tag,
         missing_vision=missing_vision,
+        sort=sort_col,
+        direction=direction,
+        media_types=media_types,
+        camera_make=camera_make,
+        camera_model=camera_model,
+        lens_model=lens_model,
+        iso_min=iso_min,
+        iso_max=iso_max,
+        aperture_min=aperture_min,
+        aperture_max=aperture_max,
+        focal_length_min=focal_length_min,
+        focal_length_max=focal_length_max,
+        has_gps=has_gps,
+        near_lat=near_lat,
+        near_lon=near_lon,
+        near_radius_km=near_radius_km,
     )
-    if not assets:
-        from fastapi.responses import Response
 
-        return Response(status_code=204)
-    return [
+    items = [
         AssetPageItem(
             asset_id=a.asset_id,
             rel_path=a.rel_path,
@@ -185,9 +251,30 @@ def page_assets(
             taken_at=a.taken_at.isoformat() if a.taken_at else None,
             status=a.status,
             duration_sec=a.duration_sec,
+            camera_make=a.camera_make,
+            camera_model=a.camera_model,
+            iso=a.iso,
+            aperture=a.aperture,
+            focal_length=a.focal_length,
+            focal_length_35mm=a.focal_length_35mm,
+            lens_model=a.lens_model,
+            flash_fired=a.flash_fired,
+            gps_lat=a.gps_lat,
+            gps_lon=a.gps_lon,
+            created_at=a.created_at.isoformat() if a.created_at else None,
         )
         for a in assets
     ]
+
+    next_cursor: str | None = None
+    if items and len(items) == limit:
+        last = assets[-1]
+        sort_value = getattr(last, sort_col, None)
+        if hasattr(sort_value, "isoformat"):
+            sort_value = sort_value.isoformat()
+        next_cursor = _encode_cursor(sort_col, sort_value, last.asset_id)
+
+    return AssetPageResponse(items=items, next_cursor=next_cursor)
 
 
 @router.post("/state-check", response_model=StateCheckResponse)

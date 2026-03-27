@@ -27,7 +27,19 @@ from rich.progress import Progress, BarColumn, TextColumn, MofNCompleteColumn, T
 from src.cli.client import LumiverbClient
 from src.core.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from src.core.path_filter import PathFilter, is_path_included_merged
-from src.workers.exif_extract import compute_sha256, extract_exif, parse_gps, parse_taken_at
+from src.workers.exif_extract import (
+    compute_sha256,
+    extract_exif,
+    parse_aperture,
+    parse_flash_fired,
+    parse_focal_length,
+    parse_gps,
+    parse_iso,
+    parse_lens_model,
+    parse_orientation,
+    parse_shutter_speed,
+    parse_taken_at,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +166,14 @@ def _build_exif_payload(source_path: Path, media_type: str) -> dict:
         "gps_lat": gps_lat,
         "gps_lon": gps_lon,
         "duration_sec": duration_sec,
+        "iso": parse_iso(exif_data),
+        "shutter_speed": parse_shutter_speed(exif_data),
+        "aperture": parse_aperture(exif_data),
+        "focal_length": parse_focal_length(exif_data, "FocalLength"),
+        "focal_length_35mm": parse_focal_length(exif_data, "FocalLengthIn35mmFormat"),
+        "lens_model": parse_lens_model(exif_data),
+        "flash_fired": parse_flash_fired(exif_data),
+        "orientation": parse_orientation(exif_data),
     }
 
 
@@ -564,20 +584,21 @@ def _load_library_filters(client: LumiverbClient, library_id: str) -> list[PathF
 def _fetch_existing_rel_paths(client: LumiverbClient, library_id: str) -> set[str]:
     """Page through all assets on the server and collect their rel_paths."""
     existing: set[str] = set()
-    after: str | None = None
+    cursor: str | None = None
     while True:
-        params: dict[str, str] = {"library_id": library_id, "limit": "500"}
-        if after:
-            params["after"] = after
+        params: dict[str, str] = {"library_id": library_id, "limit": "500", "sort": "asset_id", "dir": "asc"}
+        if cursor:
+            params["after"] = cursor
         resp = client.get("/v1/assets/page", params=params)
-        if resp.status_code == 204:
+        data = resp.json()
+        items = data.get("items", [])
+        if not items:
             break
-        assets = resp.json()
-        if not assets:
-            break
-        for a in assets:
+        for a in items:
             existing.add(a["rel_path"])
-        after = assets[-1]["asset_id"]
+        cursor = data.get("next_cursor")
+        if not cursor:
+            break
     return existing
 
 
@@ -823,24 +844,27 @@ def run_backfill_vision(
     # Page through assets missing vision
     console.print("Finding assets without AI descriptions...")
     to_backfill: list[dict] = []
-    after: str | None = None
+    cursor: str | None = None
     while True:
         params: dict[str, str] = {
             "library_id": library_id,
             "limit": "500",
             "missing_vision": "true",
+            "sort": "asset_id",
+            "dir": "asc",
         }
-        if after:
-            params["after"] = after
+        if cursor:
+            params["after"] = cursor
         resp = client.get("/v1/assets/page", params=params)
-        if resp.status_code == 204:
+        data = resp.json()
+        items = data.get("items", [])
+        if not items:
             break
-        assets = resp.json()
-        if not assets:
-            break
-        for a in assets:
+        for a in items:
             to_backfill.append(a)
-        after = assets[-1]["asset_id"]
+        cursor = data.get("next_cursor")
+        if not cursor:
+            break
 
     stats = _IngestStats()
 

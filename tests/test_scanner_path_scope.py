@@ -63,7 +63,7 @@ def test_missing_outside_path_not_marked(tmp_path: Path) -> None:
         m = MagicMock()
         if "/assets/page" in path:
             m.status_code = 200
-            m.json.return_value = assets_page
+            m.json.return_value = {"items": assets_page, "next_cursor": None}
         elif "scans/running" in path:
             m.status_code = 200
             m.json.return_value = []

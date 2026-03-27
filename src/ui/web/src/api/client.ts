@@ -2,7 +2,7 @@ import type {
   ApiKeyCreateResponse,
   ApiKeyItem,
   AssetDetail,
-  AssetPageItem,
+  AssetPageResponse,
   CurrentUser,
   DirectoryNode,
   EmptyTrashResponse,
@@ -194,20 +194,56 @@ export async function getLibraryRevision(
   return apiFetch<LibraryRevision>(`/libraries/${libraryId}/revision`);
 }
 
-/** Paginated assets for a library. Returns null/undefined on 204 (end of pages). */
+export interface PageAssetsOptions {
+  pathPrefix?: string;
+  tag?: string;
+  sort?: string;
+  dir?: "asc" | "desc";
+  mediaType?: string;
+  cameraMake?: string;
+  cameraModel?: string;
+  lensModel?: string;
+  isoMin?: number;
+  isoMax?: number;
+  apertureMin?: number;
+  apertureMax?: number;
+  focalLengthMin?: number;
+  focalLengthMax?: number;
+  hasGps?: boolean;
+  nearLat?: number;
+  nearLon?: number;
+  nearRadiusKm?: number;
+}
+
+/** Paginated assets for a library with sort/filter support. */
 export async function pageAssets(
   libraryId: string,
-  after?: string,
+  cursor?: string,
   limit = 100,
-  pathPrefix?: string,
-  tag?: string,
-): Promise<AssetPageItem[] | null> {
+  opts?: PageAssetsOptions,
+): Promise<AssetPageResponse> {
   const params = new URLSearchParams({ library_id: libraryId });
-  if (after) params.set("after", after);
+  if (cursor) params.set("after", cursor);
   params.set("limit", String(limit));
-  if (pathPrefix) params.set("path_prefix", pathPrefix);
-  if (tag) params.set("tag", tag);
-  return apiFetch<AssetPageItem[] | null>(`/assets/page?${params}`);
+  if (opts?.pathPrefix) params.set("path_prefix", opts.pathPrefix);
+  if (opts?.tag) params.set("tag", opts.tag);
+  if (opts?.sort) params.set("sort", opts.sort);
+  if (opts?.dir) params.set("dir", opts.dir);
+  if (opts?.mediaType) params.set("media_type", opts.mediaType);
+  if (opts?.cameraMake) params.set("camera_make", opts.cameraMake);
+  if (opts?.cameraModel) params.set("camera_model", opts.cameraModel);
+  if (opts?.lensModel) params.set("lens_model", opts.lensModel);
+  if (opts?.isoMin != null) params.set("iso_min", String(opts.isoMin));
+  if (opts?.isoMax != null) params.set("iso_max", String(opts.isoMax));
+  if (opts?.apertureMin != null) params.set("aperture_min", String(opts.apertureMin));
+  if (opts?.apertureMax != null) params.set("aperture_max", String(opts.apertureMax));
+  if (opts?.focalLengthMin != null) params.set("focal_length_min", String(opts.focalLengthMin));
+  if (opts?.focalLengthMax != null) params.set("focal_length_max", String(opts.focalLengthMax));
+  if (opts?.hasGps) params.set("has_gps", "true");
+  if (opts?.nearLat != null) params.set("near_lat", String(opts.nearLat));
+  if (opts?.nearLon != null) params.set("near_lon", String(opts.nearLon));
+  if (opts?.nearRadiusKm != null) params.set("near_radius_km", String(opts.nearRadiusKm));
+  return apiFetch<AssetPageResponse>(`/assets/page?${params}`);
 }
 
 export async function searchAssets(params: {

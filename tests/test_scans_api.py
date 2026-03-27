@@ -177,7 +177,7 @@ def test_batch_skip(
 
     r_page = client.get("/v1/assets/page", params={"library_id": library_id}, headers=auth)
     assert r_page.status_code == 200
-    page = r_page.json()
+    page = r_page.json()["items"]
     assert len(page) == 2
     asset_ids = [a["asset_id"] for a in page]
 
@@ -226,7 +226,7 @@ def test_batch_update(
 
     r_page = client.get("/v1/assets/page", params={"library_id": library_id}, headers=auth)
     assert r_page.status_code == 200
-    asset_id = r_page.json()[0]["asset_id"]
+    asset_id = r_page.json()["items"][0]["asset_id"]
 
     r_batch = client.post(
         f"/v1/scans/{scan_id}/batch",
@@ -275,7 +275,7 @@ def test_batch_missing(
 
     r_page = client.get("/v1/assets/page", params={"library_id": library_id}, headers=auth)
     assert r_page.status_code == 200
-    asset_id = r_page.json()[0]["asset_id"]
+    asset_id = r_page.json()["items"][0]["asset_id"]
 
     r_batch = client.post(
         f"/v1/scans/{scan_id}/batch",
@@ -323,7 +323,7 @@ def test_batch_mixed(
 
     r_page = client.get("/v1/assets/page", params={"library_id": library_id}, headers=auth)
     assert r_page.status_code == 200
-    page = r_page.json()
+    page = r_page.json()["items"]
     by_path = {a["rel_path"]: a for a in page}
 
     r_batch = client.post(

@@ -7,8 +7,8 @@ Proposed
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | Database migration — promote EXIF to columns, backfill, extract on ingest | Not started |
-| 2 | Sort and filter API — composite cursor, response envelope, filter params | Not started |
+| 1 | Database migration — promote EXIF to columns, backfill, extract on ingest | Complete |
+| 2 | Sort and filter API — composite cursor, response envelope, filter params | Complete |
 | 3 | Facets endpoint and FilterBar UI — dropdowns, range sliders, chiclets | Not started |
 | 4 | Geo-proximity — "near this photo" from Lightbox | Not started |
 | 5 | Performance and polish — indexes, empty states, mobile filter sheet | Not started |

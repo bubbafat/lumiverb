@@ -85,23 +85,22 @@ def fetch_filter_candidates(
     candidates: list[dict] = []
     cursor: str | None = None
     while True:
-        params: dict = {"library_id": library_id, "limit": SCAN_PAGE_SIZE}
+        params: dict = {"library_id": library_id, "limit": SCAN_PAGE_SIZE, "sort": "asset_id", "dir": "asc"}
         if cursor:
             params["after"] = cursor
         resp = client.raw("GET", "/v1/assets/page", params=params)  # type: ignore[attr-defined]
-        if resp.status_code == 204:
-            break
         if resp.status_code != 200:
             break
-        page = resp.json()
-        if not page:
+        data = resp.json()
+        items = data.get("items", [])
+        if not items:
             break
-        for asset in page:
+        for asset in items:
             rel_path = asset["rel_path"]
             if not is_path_included(rel_path, path_filters):
                 candidates.append({"asset_id": asset["asset_id"], "rel_path": rel_path})
-        cursor = page[-1]["asset_id"]
-        if len(page) < SCAN_PAGE_SIZE:
+        cursor = data.get("next_cursor")
+        if not cursor or len(items) < SCAN_PAGE_SIZE:
             break
     return candidates
 
@@ -324,22 +323,22 @@ def scan_library(
         with UnifiedProgress(console, spec) as bar:
             cursor = None
             while True:
-                params = {"library_id": library_id, "limit": SCAN_PAGE_SIZE}
+                params = {"library_id": library_id, "limit": SCAN_PAGE_SIZE, "sort": "asset_id", "dir": "asc"}
                 if cursor:
                     params["after"] = cursor
                 resp = client.get("/v1/assets/page", params=params)
-                if resp.status_code == 204:
-                    bar.update(
-                        completed=0,
-                        total=0,
-                        new=len(local_map),
-                        updated=updated_count,
-                        unchanged=skipped_count,
-                        missing=missing_count,
-                    )
-                    break
-                page = resp.json()
+                data = resp.json()
+                page = data.get("items", [])
                 if not page:
+                    if reconciled == 0:
+                        bar.update(
+                            completed=0,
+                            total=0,
+                            new=len(local_map),
+                            updated=updated_count,
+                            unchanged=skipped_count,
+                            missing=missing_count,
+                        )
                     break
 
                 batch_items = []
@@ -372,7 +371,8 @@ def scan_library(
                             skipped_count += 1
 
                 reconciled += len(page)
-                is_last_page = len(page) < SCAN_PAGE_SIZE
+                next_cursor = data.get("next_cursor")
+                is_last_page = not next_cursor
                 bar.update(
                     completed=reconciled,
                     total=reconciled if is_last_page else None,
@@ -385,7 +385,7 @@ def scan_library(
                 if batch_items:
                     client.post(f"/v1/scans/{scan_id}/batch", json={"items": batch_items})
 
-                cursor = page[-1]["asset_id"]
+                cursor = next_cursor
                 if is_last_page:
                     break
 

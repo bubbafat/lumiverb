@@ -286,7 +286,7 @@ def test_assets_page_path_prefix_2024(
         headers=auth,
     )
     assert r.status_code == 200
-    items = r.json()
+    items = r.json()["items"]
     assert {i["rel_path"] for i in items} == {
         "2024/Europe/France/Paris/img1.jpg",
         "2024/Europe/France/Lyon/img2.jpg",
@@ -308,7 +308,7 @@ def test_assets_page_path_prefix_2024_europe(
         headers=auth,
     )
     assert r.status_code == 200
-    items = r.json()
+    items = r.json()["items"]
     assert {i["rel_path"] for i in items} == {
         "2024/Europe/France/Paris/img1.jpg",
         "2024/Europe/France/Lyon/img2.jpg",
@@ -316,10 +316,10 @@ def test_assets_page_path_prefix_2024_europe(
 
 
 @pytest.mark.slow
-def test_assets_page_path_prefix_nonexistent_204(
+def test_assets_page_path_prefix_nonexistent_empty(
     directory_api_client: tuple[TestClient, str, str, str]
 ) -> None:
-    """GET /v1/assets/page?path_prefix=nonexistent returns 204."""
+    """GET /v1/assets/page?path_prefix=nonexistent returns empty items."""
     client, api_key, nested_library_id, _ = directory_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
@@ -328,5 +328,6 @@ def test_assets_page_path_prefix_nonexistent_204(
         params={"library_id": nested_library_id, "path_prefix": "nonexistent"},
         headers=auth,
     )
-    assert r.status_code == 204
+    assert r.status_code == 200
+    assert r.json()["items"] == []
 

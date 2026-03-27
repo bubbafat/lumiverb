@@ -11,6 +11,7 @@ import {
   pageAssets,
   searchAssets,
 } from "../api/client";
+import type { PageAssetsOptions } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
 import { Lightbox } from "../components/Lightbox";
 import { FilterBar } from "../components/FilterBar";
@@ -158,21 +159,57 @@ export default function BrowsePage() {
     }
   }, [revision, libraryId, queryClient]);
 
+  // Build filter/sort options from URL search params
+  const browseSort = searchParams.get("sort") ?? "taken_at";
+  const browseDir = (searchParams.get("dir") as "asc" | "desc" | null) ?? "desc";
+  const browseMediaType = searchParams.get("media_type") ?? undefined;
+  const browseCameraMake = searchParams.get("camera_make") ?? undefined;
+  const browseCameraModel = searchParams.get("camera_model") ?? undefined;
+  const browseLensModel = searchParams.get("lens_model") ?? undefined;
+  const browseIsoMin = searchParams.get("iso_min") ? Number(searchParams.get("iso_min")) : undefined;
+  const browseIsoMax = searchParams.get("iso_max") ? Number(searchParams.get("iso_max")) : undefined;
+  const browseApertureMin = searchParams.get("aperture_min") ? Number(searchParams.get("aperture_min")) : undefined;
+  const browseApertureMax = searchParams.get("aperture_max") ? Number(searchParams.get("aperture_max")) : undefined;
+  const browseFocalLengthMin = searchParams.get("focal_length_min") ? Number(searchParams.get("focal_length_min")) : undefined;
+  const browseFocalLengthMax = searchParams.get("focal_length_max") ? Number(searchParams.get("focal_length_max")) : undefined;
+  const browseHasGps = searchParams.get("has_gps") === "true";
+  const browseNearLat = searchParams.get("near_lat") ? Number(searchParams.get("near_lat")) : undefined;
+  const browseNearLon = searchParams.get("near_lon") ? Number(searchParams.get("near_lon")) : undefined;
+  const browseNearRadiusKm = searchParams.get("near_radius_km") ? Number(searchParams.get("near_radius_km")) : undefined;
+
+  const browseOpts: PageAssetsOptions = useMemo(() => ({
+    pathPrefix,
+    tag: activeTag ?? undefined,
+    sort: browseSort,
+    dir: browseDir,
+    mediaType: browseMediaType,
+    cameraMake: browseCameraMake,
+    cameraModel: browseCameraModel,
+    lensModel: browseLensModel,
+    isoMin: browseIsoMin,
+    isoMax: browseIsoMax,
+    apertureMin: browseApertureMin,
+    apertureMax: browseApertureMax,
+    focalLengthMin: browseFocalLengthMin,
+    focalLengthMax: browseFocalLengthMax,
+    hasGps: browseHasGps,
+    nearLat: browseNearLat,
+    nearLon: browseNearLon,
+    nearRadiusKm: browseNearRadiusKm,
+  }), [
+    pathPrefix, activeTag, browseSort, browseDir, browseMediaType,
+    browseCameraMake, browseCameraModel, browseLensModel,
+    browseIsoMin, browseIsoMax, browseApertureMin, browseApertureMax,
+    browseFocalLengthMin, browseFocalLengthMax, browseHasGps,
+    browseNearLat, browseNearLon, browseNearRadiusKm,
+  ]);
+
   const browseQuery = useInfiniteQuery({
-    queryKey: ["assets", libraryId!, pathPrefix ?? null, activeTag ?? null],
+    queryKey: ["assets", libraryId!, browseOpts],
     queryFn: ({ pageParam }) =>
-      pageAssets(
-        libraryId!,
-        pageParam,
-        PAGE_SIZE,
-        pathPrefix,
-        activeTag ?? undefined,
-      ),
+      pageAssets(libraryId!, pageParam, PAGE_SIZE, browseOpts),
     initialPageParam: undefined as string | undefined,
-    getNextPageParam: (lastPage) => {
-      if (!lastPage || lastPage.length < PAGE_SIZE) return undefined;
-      return lastPage[lastPage.length - 1].asset_id;
-    },
+    getNextPageParam: (lastPage) => lastPage?.next_cursor ?? undefined,
     enabled: !!libraryId && !isSearchMode && canFetchAssets,
   });
 
@@ -201,7 +238,7 @@ export default function BrowsePage() {
 
   const flatAssets = useMemo(() => {
     if (isSearchMode) {
-      return (searchQuery.data?.hits ?? []).map((h) => ({
+      return (searchQuery.data?.hits ?? []).map((h): AssetPageItem => ({
         asset_id: h.asset_id,
         rel_path: h.rel_path,
         file_size: h.file_size ?? 0,
@@ -213,10 +250,21 @@ export default function BrowsePage() {
         taken_at: h.taken_at ?? null,
         status: "indexed",
         duration_sec: h.duration_sec ?? null,
+        camera_make: h.camera_make ?? null,
+        camera_model: h.camera_model ?? null,
+        iso: null,
+        aperture: null,
+        focal_length: null,
+        focal_length_35mm: null,
+        lens_model: null,
+        flash_fired: null,
+        gps_lat: null,
+        gps_lon: null,
+        created_at: null,
       }));
     }
     if (!browseQuery.data?.pages) return [];
-    return browseQuery.data.pages.flatMap((p) => p ?? []);
+    return browseQuery.data.pages.flatMap((p) => p?.items ?? []);
   }, [isSearchMode, searchQuery.data, browseQuery.data]);
 
   // Sort in search mode (client-side, all results are loaded)
@@ -260,7 +308,7 @@ export default function BrowsePage() {
 
   const browseCount = useMemo(() => {
     if (isSearchMode) return 0;
-    return browseQuery.data?.pages.flatMap((p) => p ?? []).length ?? 0;
+    return browseQuery.data?.pages.flatMap((p) => p?.items ?? []).length ?? 0;
   }, [isSearchMode, browseQuery.data]);
 
   // To show "X of Y photos", look up the current directory node from its parent listing.

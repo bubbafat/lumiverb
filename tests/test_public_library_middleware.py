@@ -145,10 +145,11 @@ def test_unauthenticated_get_directories_public_library(public_lib_client) -> No
 
 @pytest.mark.slow
 def test_unauthenticated_assets_page_public_library(public_lib_client) -> None:
-    """GET /v1/assets/page?library_id= for a public library without auth → 204 (empty)."""
+    """GET /v1/assets/page?library_id= for a public library without auth → 200 (empty items)."""
     client, _, library_id, _ = public_lib_client
     r = client.get("/v1/assets/page", params={"library_id": library_id})
-    assert r.status_code in (200, 204)
+    assert r.status_code == 200
+    assert isinstance(r.json()["items"], list)
 
 
 @pytest.mark.slow

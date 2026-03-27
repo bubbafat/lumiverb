@@ -666,6 +666,17 @@ export function Lightbox({
                                       taken_at: null,
                                       status: "indexed",
                                       duration_sec: null,
+                                      camera_make: null,
+                                      camera_model: null,
+                                      iso: null,
+                                      aperture: null,
+                                      focal_length: null,
+                                      focal_length_35mm: null,
+                                      lens_model: null,
+                                      flash_fired: null,
+                                      gps_lat: null,
+                                      gps_lon: null,
+                                      created_at: null,
                                     });
                                   }
                                 }}

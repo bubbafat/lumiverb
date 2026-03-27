@@ -109,7 +109,7 @@ def _page_all(client: TestClient, api_key: str, library_id: str) -> list[dict]:
     assets = []
     cursor = None
     while True:
-        params: dict = {"library_id": library_id, "limit": 500}
+        params: dict = {"library_id": library_id, "limit": 500, "sort": "asset_id", "dir": "asc"}
         if cursor:
             params["after"] = cursor
         r = client.get(
@@ -117,14 +117,13 @@ def _page_all(client: TestClient, api_key: str, library_id: str) -> list[dict]:
             params=params,
             headers={"Authorization": f"Bearer {api_key}"},
         )
-        if r.status_code == 204:
+        data = r.json()
+        items = data.get("items", [])
+        if not items:
             break
-        page = r.json()
-        if not page:
-            break
-        assets.extend(page)
-        cursor = page[-1]["asset_id"]
-        if len(page) < 500:
+        assets.extend(items)
+        cursor = data.get("next_cursor")
+        if not cursor:
             break
     return assets
 

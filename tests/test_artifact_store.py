@@ -50,7 +50,7 @@ def test_local_write_artifact_proxy(tmp_path: Path) -> None:
     assert isinstance(ref, ArtifactRef)
     assert "proxies" in ref.key
     assert ASSET_ID in ref.key
-    assert ref.key.endswith(".jpg")
+    assert ref.key.endswith(".webp")
     assert ref.sha256 == hashlib.sha256(SAMPLE_BYTES).hexdigest()
     assert (tmp_path / ref.key).exists()
     assert (tmp_path / ref.key).read_bytes() == SAMPLE_BYTES
@@ -65,7 +65,7 @@ def test_local_write_artifact_thumbnail(tmp_path: Path) -> None:
 
     assert "thumbnails" in ref.key
     assert ASSET_ID in ref.key
-    assert ref.key.endswith(".jpg")
+    assert ref.key.endswith(".webp")
     assert ref.sha256 == hashlib.sha256(SAMPLE_BYTES).hexdigest()
     assert (tmp_path / ref.key).read_bytes() == SAMPLE_BYTES
 

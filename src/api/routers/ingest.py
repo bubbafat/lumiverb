@@ -183,6 +183,14 @@ def _do_ingest(
             gps_lat=exif_data.get("gps_lat"),
             gps_lon=exif_data.get("gps_lon"),
             duration_sec=exif_data.get("duration_sec"),
+            iso=exif_data.get("iso"),
+            shutter_speed=exif_data.get("shutter_speed"),
+            aperture=exif_data.get("aperture"),
+            focal_length=exif_data.get("focal_length"),
+            focal_length_35mm=exif_data.get("focal_length_35mm"),
+            lens_model=exif_data.get("lens_model"),
+            flash_fired=exif_data.get("flash_fired"),
+            orientation=exif_data.get("orientation"),
         )
 
     # --- Store vision results if provided ---

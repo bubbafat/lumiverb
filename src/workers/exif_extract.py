@@ -154,3 +154,74 @@ def parse_taken_at(exif: dict) -> datetime | None:
                     continue
     logger.debug("Could not parse taken_at from %r", raw)
     return None
+
+
+def parse_iso(exif: dict) -> int | None:
+    """Extract ISO as integer."""
+    val = exif.get("ISO")
+    if val is None:
+        return None
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_shutter_speed(exif: dict) -> str | None:
+    """Extract shutter speed as human-readable string (e.g. '1/250')."""
+    val = exif.get("ExposureTime")
+    if val is None:
+        return None
+    return str(val) if val else None
+
+
+def parse_aperture(exif: dict) -> float | None:
+    """Extract f-number from FNumber or ApertureValue."""
+    for key in ("FNumber", "ApertureValue"):
+        val = exif.get(key)
+        if val is not None:
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def parse_focal_length(exif: dict, key: str = "FocalLength") -> float | None:
+    """Extract focal length in mm. Handles '35 mm' and '35.0' formats."""
+    val = exif.get(key)
+    if val is None:
+        return None
+    try:
+        return float(str(val).split()[0])
+    except (ValueError, IndexError):
+        return None
+
+
+def parse_flash_fired(exif: dict) -> bool | None:
+    """Parse the Flash EXIF string into a boolean."""
+    flash = exif.get("Flash")
+    if flash is None:
+        return None
+    flash_str = str(flash).lower()
+    if "not fire" in flash_str or "no flash" in flash_str or "off" in flash_str:
+        return False
+    if "fired" in flash_str:
+        return True
+    return None
+
+
+def parse_lens_model(exif: dict) -> str | None:
+    """Extract lens model from LensModel or LensID."""
+    return exif.get("LensModel") or exif.get("LensID") or None
+
+
+def parse_orientation(exif: dict) -> int | None:
+    """Extract EXIF orientation tag (1-8)."""
+    val = exif.get("Orientation")
+    if val is None:
+        return None
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return None

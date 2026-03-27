@@ -20,9 +20,9 @@ def test_proxy_key_format() -> None:
 
     key = storage.proxy_key(tenant_id, library_id, asset_id, original_filename)
 
-    # Pattern: tenant_id/library_id/proxies/{2-digit}/{asset_id}_{stem}.jpg
+    # Pattern: tenant_id/library_id/proxies/{2-digit}/{asset_id}_{stem}.webp
     pattern = re.compile(
-        r"^[^/]+/[^/]+/proxies/\d{2}/ast_[A-Z0-9]+_my_photo\.jpg$"
+        r"^[^/]+/[^/]+/proxies/\d{2}/ast_[A-Z0-9]+_my_photo\.webp$"
     )
     assert pattern.match(key), f"Key {key!r} did not match expected pattern"
     parts = key.split("/")
@@ -30,7 +30,7 @@ def test_proxy_key_format() -> None:
     assert parts[1] == library_id
     assert parts[2] == "proxies"
     assert len(parts[3]) == 2 and parts[3].isdigit()
-    assert parts[4].startswith("ast_") and parts[4].endswith("_my_photo.jpg")
+    assert parts[4].startswith("ast_") and parts[4].endswith("_my_photo.webp")
 
 
 @pytest.mark.fast
@@ -45,7 +45,7 @@ def test_thumbnail_key_format() -> None:
     key = storage.thumbnail_key(tenant_id, library_id, asset_id, original_filename)
 
     pattern = re.compile(
-        r"^[^/]+/[^/]+/thumbnails/\d{2}/ast_[A-Z0-9]+_vacation\.jpg$"
+        r"^[^/]+/[^/]+/thumbnails/\d{2}/ast_[A-Z0-9]+_vacation\.webp$"
     )
     assert pattern.match(key), f"Key {key!r} did not match expected pattern"
     parts = key.split("/")
