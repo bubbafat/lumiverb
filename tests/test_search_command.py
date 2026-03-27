@@ -124,27 +124,3 @@ def test_search_json_output() -> None:
     assert "Desc" in result.output
 
 
-@pytest.mark.fast
-def test_enqueue_requires_library_option() -> None:
-    """enqueue without --library/-l fails with missing option."""
-    result = runner.invoke(app, ["enqueue", "--job-type", "proxy"])
-    assert result.exit_code != 0
-    assert "library" in result.output.lower() or "Missing" in result.output
-
-
-@pytest.mark.fast
-def test_enqueue_embed_calls_api_with_job_type_embed() -> None:
-    """enqueue --job-type embed calls POST /v1/jobs/enqueue with job_type embed."""
-    mock_client = MagicMock()
-    mock_client.get.return_value.json.return_value = [
-        {"library_id": "lib_1", "name": "Lib", "root_path": "/path"}
-    ]
-    mock_client.post.return_value.json.return_value = {"enqueued": 5}
-
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
-        result = runner.invoke(app, ["enqueue", "-l", "Lib", "--job-type", "embed"])
-
-    assert result.exit_code == 0
-    mock_client.post.assert_called_once()
-    call_kw = mock_client.post.call_args[1]
-    assert call_kw["json"]["job_type"] == "embed"

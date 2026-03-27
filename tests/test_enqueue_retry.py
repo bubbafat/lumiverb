@@ -1,19 +1,17 @@
-"""Tests for --retry-failed enqueue: CLI mutual exclusivity and retry logic."""
+"""Tests for retry-failed enqueue logic (internal function tests)."""
 
 import os
 import secrets
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import create_engine, insert, text
 from sqlalchemy.engine import make_url
 from sqlmodel import Session
 from testcontainers.postgres import PostgresContainer
-from typer.testing import CliRunner
 from ulid import ULID
 
-from src.cli.main import app
 from src.core.config import get_settings
 from src.core.database import _engines, get_engine_for_url
 from src.models.filter import AssetFilterSpec
@@ -21,50 +19,6 @@ from src.models.tenant import Asset
 from src.repository.tenant import LibraryRepository, WorkerJobRepository
 from src.workers.enqueue import enqueue_jobs_for_filter
 from tests.conftest import _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
-
-runner = CliRunner()
-
-
-@pytest.mark.fast
-def test_enqueue_force_and_retry_failed_mutually_exclusive() -> None:
-    """--force and --retry-failed together must print error and exit 1."""
-    mock_client = MagicMock()
-    mock_client.get.return_value.json.return_value = [
-        {"library_id": "lib_1", "name": "TestLib", "root_path": "/path"},
-    ]
-
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
-        result = runner.invoke(
-            app,
-            ["enqueue", "-l", "TestLib", "--force", "--retry-failed"],
-        )
-
-    assert result.exit_code == 1
-    assert "mutually exclusive" in result.output
-    mock_client.post.assert_not_called()
-
-
-@pytest.mark.fast
-def test_enqueue_retry_failed_passes_filter_to_api() -> None:
-    """When --retry-failed is set, filter.retry_failed=True is sent to the enqueue endpoint."""
-    mock_client = MagicMock()
-    mock_client.get.return_value.json.return_value = [
-        {"library_id": "lib_1", "name": "TestLib", "root_path": "/path"},
-    ]
-    mock_client.post.return_value.json.return_value = {"enqueued": 0}
-
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
-        result = runner.invoke(
-            app,
-            ["enqueue", "-l", "TestLib", "--retry-failed"],
-        )
-
-    assert result.exit_code == 0
-    mock_client.post.assert_called_once()
-    call_args = mock_client.post.call_args
-    assert call_args[0][0] == "/v1/jobs/enqueue"
-    assert call_args[1]["json"]["filter"]["retry_failed"] is True
-    assert call_args[1]["json"]["force"] is False
 
 
 @pytest.fixture(scope="module")

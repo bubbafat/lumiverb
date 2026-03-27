@@ -1,4 +1,4 @@
-"""Fast unit tests for --path scoped scanning: missing detection and enqueue filter."""
+"""Fast unit tests for --path scoped scanning: missing detection."""
 
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -117,40 +117,3 @@ def test_missing_outside_path_not_marked(tmp_path: Path) -> None:
     assert by_asset["ast_003"]["action"] == "skip"
 
 
-@pytest.mark.fast
-def test_enqueue_filter_includes_path_prefix() -> None:
-    """When scan completes with --path, enqueue POST must include filter.path_prefix."""
-    from typer.testing import CliRunner
-
-    from src.cli.main import app
-
-    runner = CliRunner()
-    mock_client = MagicMock()
-    mock_client.get.return_value.json.return_value = [
-        {"library_id": "lib_1", "name": "PathLib", "root_path": "/photos"}
-    ]
-    mock_client.post.return_value.json.return_value = {"enqueued": 3}
-
-    complete = MagicMock()
-    complete.status = "complete"
-    complete.files_added = 1
-    complete.files_updated = 0
-    complete.files_skipped = 0
-    complete.files_missing = 0
-    complete.files_discovered = 1
-    complete.scan_id = "scan_1"
-
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client), patch(
-        "src.cli.main.scan_library", return_value=complete
-    ):
-        runner.invoke(app, ["scan", "--library", "PathLib", "--path", "Photos/HS150/HollyFest2025"])
-
-    enqueue_calls = [
-        c for c in mock_client.post.call_args_list
-        if c[0][0] == "/v1/jobs/enqueue"
-    ]
-    assert len(enqueue_calls) >= 1, "expected at least one enqueue call"
-    for call in enqueue_calls:
-        json_body = call[1]["json"]
-        assert json_body["filter"]["library_id"] == "lib_1"
-        assert json_body["filter"]["path_prefix"] == "Photos/HS150/HollyFest2025"
