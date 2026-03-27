@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import BigInteger, Column, DateTime, JSON, UniqueConstraint
+from sqlalchemy import BigInteger, CheckConstraint, Column, DateTime, JSON, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
@@ -99,7 +99,10 @@ class Scan(SQLModel, table=True):
 
 class Asset(SQLModel, table=True):
     __tablename__ = "assets"
-    __table_args__ = (UniqueConstraint("library_id", "rel_path", name="uq_assets_library_rel_path"),)
+    __table_args__ = (
+        UniqueConstraint("library_id", "rel_path", name="uq_assets_library_rel_path"),
+        CheckConstraint("media_type IN ('image', 'video')", name="ck_assets_media_type"),
+    )
 
     asset_id: str = Field(primary_key=True)
     library_id: str = Field(foreign_key="libraries.library_id", nullable=False)

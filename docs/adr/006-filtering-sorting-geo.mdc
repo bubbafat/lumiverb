@@ -124,9 +124,10 @@ a breaking change for CLI consumers — the CLI must be updated in the same rele
 
 ### D4: Media type filter
 
-The `media_type` column stores MIME types (`image/jpeg`, `video/mp4`, etc.). The filter groups
-these into user-facing categories: `image` (any `image/*`), `video` (any `video/*`). The API
-accepts `media_type=image,video` as a comma-separated list. Default is all types.
+The `media_type` column stores exactly `'image'` or `'video'` (not MIME types). A database
+CHECK constraint (`ck_assets_media_type`) enforces this invariant. The filter uses equality
+matching (`media_type = 'image'`). The API accepts `media_type=image,video` as a
+comma-separated list. Default is all types.
 
 ### D5: Facets endpoint
 
