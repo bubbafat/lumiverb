@@ -402,7 +402,9 @@ export function FilterBar({
           )}
           {(isoMin || isoMax) && (
             <Chiclet
-              label={`ISO ${isoMin ?? ""}${isoMin && isoMax ? "-" : ""}${isoMax ?? ""}`}
+              label={isoMin && isoMax && isoMin === isoMax
+                ? `ISO ${isoMin}`
+                : `ISO ${isoMin ?? ""}${isoMin && isoMax ? "–" : ""}${isoMax ?? ""}`}
               onClear={() => { onChangeFilter("iso_min", null); onChangeFilter("iso_max", null); }}
             />
           )}
@@ -421,13 +423,17 @@ export function FilterBar({
           })()}
           {(apertureMin || apertureMax) && (
             <Chiclet
-              label={`f/${apertureMin ?? ""}${apertureMin && apertureMax ? "-" : ""}${apertureMax ?? ""}`}
+              label={apertureMin && apertureMax && apertureMin === apertureMax
+                ? `f/${apertureMin}`
+                : `f/${apertureMin ?? ""}${apertureMin && apertureMax ? "–" : ""}${apertureMax ?? ""}`}
               onClear={() => { onChangeFilter("aperture_min", null); onChangeFilter("aperture_max", null); }}
             />
           )}
           {(focalLengthMin || focalLengthMax) && (
             <Chiclet
-              label={`${focalLengthMin ?? ""}${focalLengthMin && focalLengthMax ? "-" : ""}${focalLengthMax ?? ""}mm`}
+              label={focalLengthMin && focalLengthMax && focalLengthMin === focalLengthMax
+                ? `${focalLengthMin}mm`
+                : `${focalLengthMin ?? ""}${focalLengthMin && focalLengthMax ? "–" : ""}${focalLengthMax ?? ""}mm`}
               onClear={() => { onChangeFilter("focal_length_min", null); onChangeFilter("focal_length_max", null); }}
             />
           )}
