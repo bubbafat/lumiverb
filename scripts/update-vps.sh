@@ -103,6 +103,25 @@ if [[ -n "$DATA_DIR" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+step "Fixing Quickwit sandbox (namespace-dependent directives)"
+# PrivateTmp, ProtectSystem, ReadWritePaths, ReadOnlyPaths require mount
+# namespaces which many VPS hosts block (status=226/NAMESPACE).  A drop-in
+# override blanks them without touching the base unit file.
+if systemctl is-enabled lumiverb-quickwit >/dev/null 2>&1; then
+  DROPIN_DIR="/etc/systemd/system/lumiverb-quickwit.service.d"
+  mkdir -p "$DROPIN_DIR"
+  cat > "$DROPIN_DIR/no-sandbox.conf" <<'DROPIN'
+[Service]
+PrivateTmp=
+ProtectSystem=
+ReadWritePaths=
+ReadOnlyPaths=
+DROPIN
+  systemctl daemon-reload
+  ok "Quickwit sandbox overrides applied"
+fi
+
+# ---------------------------------------------------------------------------
 step "Restarting services"
 systemctl restart lumiverb-api
 # Only restart worker and quickwit if they are enabled
