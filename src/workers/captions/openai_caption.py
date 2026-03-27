@@ -11,6 +11,7 @@ import base64
 import io
 import json
 import logging
+import random
 import re
 import time
 from pathlib import Path
@@ -74,13 +75,19 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         """Strip <think>...</think> blocks; some reasoning models prefix responses with them."""
         return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
+    # Retry config: 3 attempts with exponential backoff + jitter.
+    # Base delays: ~1s, ~3s, ~9s (jittered ±50%).
+    MAX_ATTEMPTS = 3
+    BACKOFF_BASE = 1.0
+    BACKOFF_MULTIPLIER = 3.0
+    BACKOFF_JITTER = 0.5  # ±50%
+
     def describe(self, proxy_path: Path) -> dict:
         """
         Returns {} on failure.
 
-        If the OpenAI-compatible endpoint returns an empty/invalid body, retry once before
-        giving up. This prevents spuriously failing jobs when the inference service
-        intermittently returns an empty completion.
+        Retries with exponential backoff + jitter to reduce pressure on the
+        inference server under load.
         """
         if not proxy_path.exists():
             logger.warning("Proxy not found: %s", proxy_path)
@@ -108,7 +115,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         )
 
         last_error: Exception | None = None
-        for attempt in (1, 2):
+        for attempt in range(1, self.MAX_ATTEMPTS + 1):
             try:
                 raw = self._chat(data_url, prompt)
 
@@ -130,16 +137,19 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                 return {"description": description, "tags": tags}
             except Exception as e:  # noqa: BLE001
                 last_error = e
-                if attempt == 1:
-                    # Brief backoff: helps with transient empty responses.
-                    time.sleep(0.2)
+                if attempt < self.MAX_ATTEMPTS:
+                    delay = self.BACKOFF_BASE * (self.BACKOFF_MULTIPLIER ** (attempt - 1))
+                    jitter = delay * self.BACKOFF_JITTER * (2 * random.random() - 1)
+                    sleep_time = max(0.1, delay + jitter)
+                    logger.info(
+                        "Vision retry %d/%d for %s (sleeping %.1fs): %s",
+                        attempt, self.MAX_ATTEMPTS, proxy_path.name, sleep_time, e,
+                    )
+                    time.sleep(sleep_time)
                     continue
-                logger.warning("OpenAI-compatible caption failed for %s: %s", proxy_path, e)
+                logger.warning("OpenAI-compatible caption failed for %s after %d attempts: %s", proxy_path, self.MAX_ATTEMPTS, e)
                 return {}
 
-        logger.warning(
-            "OpenAI-compatible caption failed for %s: %s", proxy_path, last_error or "unknown"
-        )
         return {}
 
     def _chat(self, data_url: str, prompt: str) -> str:

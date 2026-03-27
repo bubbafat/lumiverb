@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from rich.console import Console
+from rich.progress import Progress, BarColumn, TextColumn, MofNCompleteColumn, TimeRemainingColumn, SpinnerColumn
 
 from src.cli.client import LumiverbClient
 from src.core.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
@@ -315,6 +316,8 @@ def _process_and_ingest_video_stage1(
     file_size: int,
     file_mtime: datetime | None,
     stats: "_IngestStats",
+    progress: Progress | None = None,
+    task_id: object = None,
 ) -> None:
     """Video stage 1: poster frame + EXIF + 10-sec preview → POST /v1/ingest + upload preview."""
     source_path = (root_path / rel_path).resolve()
@@ -362,13 +365,20 @@ def _process_and_ingest_video_stage1(
 
         with stats.lock:
             stats.processed += 1
-        print(f"ingest \u2713 {rel_path} (video stage 1)", flush=True)
+            ok, fail = stats.processed, stats.failed
+        if progress is not None:
+            progress.advance(task_id, 1)
+            progress.update(task_id, ok=ok, fail=fail)
 
     except Exception as e:
         logger.exception("Failed to ingest video %s: %s", rel_path, e)
         with stats.lock:
             stats.failed += 1
-        print(f"ingest \u2717 {rel_path}: {e}", flush=True)
+            ok, fail = stats.processed, stats.failed
+        if progress is not None:
+            progress.console.print(f"[red]ingest \u2717[/red] {rel_path}: {e}")
+            progress.advance(task_id, 1)
+            progress.update(task_id, ok=ok, fail=fail)
 
 
 def _process_and_ingest_one(
@@ -385,6 +395,8 @@ def _process_and_ingest_one(
     vision_api_key: str | None,
     skip_vision: bool,
     stats: "_IngestStats",
+    progress: Progress | None = None,
+    task_id: object = None,
 ) -> None:
     """Process one image file and POST /v1/ingest to create + populate atomically."""
     source_path = (root_path / rel_path).resolve()
@@ -431,13 +443,20 @@ def _process_and_ingest_one(
 
         with stats.lock:
             stats.processed += 1
-        print(f"ingest \u2713 {rel_path}", flush=True)
+            ok, fail = stats.processed, stats.failed
+        if progress is not None:
+            progress.advance(task_id, 1)
+            progress.update(task_id, ok=ok, fail=fail)
 
     except Exception as e:
         logger.exception("Failed to ingest %s: %s", rel_path, e)
         with stats.lock:
             stats.failed += 1
-        print(f"ingest \u2717 {rel_path}: {e}", flush=True)
+            ok, fail = stats.processed, stats.failed
+        if progress is not None:
+            progress.console.print(f"[red]ingest \u2717[/red] {rel_path}: {e}")
+            progress.advance(task_id, 1)
+            progress.update(task_id, ok=ok, fail=fail)
 
 
 class _IngestStats:
@@ -446,6 +465,19 @@ class _IngestStats:
         self.processed = 0
         self.failed = 0
         self.skipped = 0
+
+
+def _make_progress(console: Console) -> Progress:
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("[bold]{task.description:<8s}"),
+        BarColumn(bar_width=30),
+        MofNCompleteColumn(),
+        TextColumn("[green]{task.fields[ok]} ok[/green], [red]{task.fields[fail]} failed[/red]"),
+        TimeRemainingColumn(),
+        console=console,
+        refresh_per_second=4,
+    )
 
 
 def _walk_library(
@@ -637,55 +669,70 @@ def run_ingest(
                 with stats.lock:
                     stats.skipped += 1
 
-    # Step 5: Ingest images first
-    if images_to_ingest:
-        console.print(f"[bold]Ingesting {len(images_to_ingest):,} images...[/bold]")
-        pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="ingest")
-        futures = []
-        for f in images_to_ingest:
-            fut = pool.submit(
-                _process_and_ingest_one,
-                client=client,
-                library_id=library_id,
-                root_path=root_path,
-                rel_path=f["rel_path"],
-                file_size=f["file_size"],
-                file_mtime=f["file_mtime"],
-                media_type=f["media_type"],
-                vision_model_id=vision_model_id,
-                vision_api_url=vision_api_url,
-                vision_api_key=vision_api_key,
-                skip_vision=skip_vision,
-                stats=stats,
-            )
-            futures.append(fut)
-        for fut in futures:
-            fut.result()
-        pool.shutdown(wait=True)
-
-    # Step 6: Video stage 1 — poster frame + EXIF + 10-sec preview
-    if videos_to_ingest:
-        console.print(f"[bold]Ingesting {len(videos_to_ingest):,} videos (stage 1: poster + preview)...[/bold]")
-        pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="video")
-        futures = []
-        for f in videos_to_ingest:
-            fut = pool.submit(
-                _process_and_ingest_video_stage1,
-                client=client,
-                library_id=library_id,
-                root_path=root_path,
-                rel_path=f["rel_path"],
-                file_size=f["file_size"],
-                file_mtime=f["file_mtime"],
-                stats=stats,
-            )
-            futures.append(fut)
-        for fut in futures:
-            fut.result()
-        pool.shutdown(wait=True)
-
     if not images_to_ingest and not videos_to_ingest:
         console.print("Nothing to ingest.")
+        return stats
+
+    # One progress bar with a row per phase — all visible simultaneously.
+    progress = _make_progress(console)
+    with progress:
+        img_tid = progress.add_task(
+            "Images", total=len(images_to_ingest) or 1, ok=0, fail=0,
+            visible=bool(images_to_ingest),
+        )
+        vid_tid = progress.add_task(
+            "Videos", total=len(videos_to_ingest) or 1, ok=0, fail=0,
+            visible=bool(videos_to_ingest),
+        )
+
+        # Step 5: Ingest images
+        if images_to_ingest:
+            pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="ingest")
+            futures = []
+            for f in images_to_ingest:
+                fut = pool.submit(
+                    _process_and_ingest_one,
+                    client=client,
+                    library_id=library_id,
+                    root_path=root_path,
+                    rel_path=f["rel_path"],
+                    file_size=f["file_size"],
+                    file_mtime=f["file_mtime"],
+                    media_type=f["media_type"],
+                    vision_model_id=vision_model_id,
+                    vision_api_url=vision_api_url,
+                    vision_api_key=vision_api_key,
+                    skip_vision=skip_vision,
+                    stats=stats,
+                    progress=progress,
+                    task_id=img_tid,
+                )
+                futures.append(fut)
+            for fut in futures:
+                fut.result()
+            pool.shutdown(wait=True)
+
+        # Step 6: Video stage 1 — poster frame + EXIF + 10-sec preview
+        if videos_to_ingest:
+            pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="video")
+            futures = []
+            for f in videos_to_ingest:
+                fut = pool.submit(
+                    _process_and_ingest_video_stage1,
+                    client=client,
+                    library_id=library_id,
+                    root_path=root_path,
+                    rel_path=f["rel_path"],
+                    file_size=f["file_size"],
+                    file_mtime=f["file_mtime"],
+                    stats=stats,
+                    progress=progress,
+                    task_id=vid_tid,
+                )
+                futures.append(fut)
+            for fut in futures:
+                fut.result()
+            pool.shutdown(wait=True)
 
     # TODO: Video stage 2 — scene detection + vision (ADR-005 Phase 6)
 
@@ -706,6 +753,8 @@ def _backfill_one(
     vision_api_url: str,
     vision_api_key: str | None,
     stats: _IngestStats,
+    progress: Progress | None = None,
+    task_id: object = None,
 ) -> None:
     """Download proxy, call vision AI, POST results back."""
     try:
@@ -719,7 +768,11 @@ def _backfill_one(
             logger.warning("Vision returned no result for %s", rel_path)
             with stats.lock:
                 stats.failed += 1
-            print(f"vision \u2717 {rel_path}: no result", flush=True)
+                ok, fail = stats.processed, stats.failed
+            if progress is not None:
+                progress.console.print(f"[red]vision \u2717[/red] {rel_path}: no result")
+                progress.advance(task_id, 1)
+                progress.update(task_id, ok=ok, fail=fail)
             return
 
         client.post(f"/v1/assets/{asset_id}/vision", json={
@@ -731,13 +784,20 @@ def _backfill_one(
 
         with stats.lock:
             stats.processed += 1
-        print(f"vision \u2713 {rel_path}", flush=True)
+            ok, fail = stats.processed, stats.failed
+        if progress is not None:
+            progress.advance(task_id, 1)
+            progress.update(task_id, ok=ok, fail=fail)
 
     except Exception as e:
         logger.exception("Failed to backfill vision for %s: %s", rel_path, e)
         with stats.lock:
             stats.failed += 1
-        print(f"vision \u2717 {rel_path}: {e}", flush=True)
+            ok, fail = stats.processed, stats.failed
+        if progress is not None:
+            progress.console.print(f"[red]vision \u2717[/red] {rel_path}: {e}")
+            progress.advance(task_id, 1)
+            progress.update(task_id, ok=ok, fail=fail)
 
 
 def run_backfill_vision(
@@ -783,28 +843,33 @@ def run_backfill_vision(
         after = assets[-1]["asset_id"]
 
     stats = _IngestStats()
-    console.print(f"[bold]Backfilling {len(to_backfill):,} assets...[/bold]")
 
     if not to_backfill:
+        console.print("All assets already have AI descriptions.")
         return stats
 
-    pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="backfill")
-    futures = []
-    for a in to_backfill:
-        fut = pool.submit(
-            _backfill_one,
-            client=client,
-            asset_id=a["asset_id"],
-            rel_path=a["rel_path"],
-            vision_model_id=vision_model_id,
-            vision_api_url=vision_api_url,
-            vision_api_key=vision_api_key,
-            stats=stats,
-        )
-        futures.append(fut)
+    progress = _make_progress(console)
+    with progress:
+        tid = progress.add_task("Vision", total=len(to_backfill), ok=0, fail=0)
+        pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="backfill")
+        futures = []
+        for a in to_backfill:
+            fut = pool.submit(
+                _backfill_one,
+                client=client,
+                asset_id=a["asset_id"],
+                rel_path=a["rel_path"],
+                vision_model_id=vision_model_id,
+                vision_api_url=vision_api_url,
+                vision_api_key=vision_api_key,
+                stats=stats,
+                progress=progress,
+                task_id=tid,
+            )
+            futures.append(fut)
 
-    for fut in futures:
-        fut.result()
-    pool.shutdown(wait=True)
+        for fut in futures:
+            fut.result()
+        pool.shutdown(wait=True)
 
     return stats
