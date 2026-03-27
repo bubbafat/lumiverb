@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { getAsset, findSimilar } from "../api/client";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 import type { AssetPageItem, SimilarHit } from "../api/types";
-import { basename, formatFileSize, formatDate } from "../lib/format";
+import { basename, formatFileSize, formatDate, formatShutter } from "../lib/format";
 
 interface LightboxProps {
   asset: AssetPageItem;
@@ -649,7 +649,7 @@ export function Lightbox({
                               ) : null}
                               {detail.shutter_speed != null && (
                                 <span className="text-gray-300">
-                                  {detail.shutter_speed}
+                                  {formatShutter(detail.shutter_speed)}
                                 </span>
                               )}
                               {detail.aperture != null && (

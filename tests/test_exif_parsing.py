@@ -26,11 +26,24 @@ class TestParseIso:
 
 
 class TestParseShutterSpeed:
-    def test_fraction(self):
+    def test_fraction_string(self):
+        """String fractions like '1/250' are converted via float to 1/250."""
         assert parse_shutter_speed({"ExposureTime": "1/250"}) == "1/250"
 
-    def test_decimal(self):
-        assert parse_shutter_speed({"ExposureTime": "0.5"}) == "0.5"
+    def test_decimal_fast(self):
+        assert parse_shutter_speed({"ExposureTime": "0.004"}) == "1/250"
+
+    def test_decimal_half_second(self):
+        assert parse_shutter_speed({"ExposureTime": "0.5"}) == "1/2"
+
+    def test_one_second(self):
+        assert parse_shutter_speed({"ExposureTime": "1"}) == "1s"
+
+    def test_long_exposure(self):
+        assert parse_shutter_speed({"ExposureTime": "30"}) == "30s"
+
+    def test_numeric_float(self):
+        assert parse_shutter_speed({"ExposureTime": 0.004}) == "1/250"
 
     def test_missing(self):
         assert parse_shutter_speed({}) is None

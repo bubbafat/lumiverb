@@ -168,11 +168,25 @@ def parse_iso(exif: dict) -> int | None:
 
 
 def parse_shutter_speed(exif: dict) -> str | None:
-    """Extract shutter speed as human-readable string (e.g. '1/250')."""
+    """Extract shutter speed as human-readable string (e.g. '1/250').
+
+    ExposureTime is typically a decimal (0.004 for 1/250s).  Convert to
+    fractional notation for speeds < 1s, or whole seconds with 's' suffix.
+    """
     val = exif.get("ExposureTime")
     if val is None:
         return None
-    return str(val) if val else None
+    try:
+        t = float(val)
+    except (TypeError, ValueError):
+        s = str(val)
+        return s if s else None
+    if t <= 0:
+        return None
+    if t >= 1:
+        return f"{int(t)}s" if t == int(t) else f"{t:.1f}s"
+    denom = round(1.0 / t)
+    return f"1/{denom}"
 
 
 def parse_aperture(exif: dict) -> float | None:
