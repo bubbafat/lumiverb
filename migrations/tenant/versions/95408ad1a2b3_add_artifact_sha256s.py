@@ -25,8 +25,13 @@ def upgrade() -> None:
     op.add_column("video_scenes", sa.Column("rep_frame_sha256", sa.Text(), nullable=True))
 
 
+_VIEW_DDL = "CREATE VIEW active_assets AS SELECT * FROM assets WHERE deleted_at IS NULL"
+
+
 def downgrade() -> None:
+    op.execute(sa.text("DROP VIEW IF EXISTS active_assets"))
     op.drop_column("video_scenes", "rep_frame_sha256")
     op.drop_column("assets", "thumbnail_sha256")
     op.drop_column("assets", "proxy_sha256")
+    op.execute(sa.text(_VIEW_DDL))
 
