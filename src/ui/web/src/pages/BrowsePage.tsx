@@ -759,11 +759,11 @@ export default function BrowsePage() {
               </svg>
               <p className="text-sm text-gray-400">No photos yet</p>
               <p className="mt-1 text-xs text-gray-600">
-                Trigger a scan from the{" "}
-                <Link to="/admin" className="underline hover:text-gray-400">
-                  Workers
-                </Link>{" "}
-                page
+                Run{" "}
+                <code className="rounded bg-gray-800 px-1 py-0.5 text-gray-400">
+                  lumiverb ingest
+                </code>{" "}
+                to add photos
               </p>
             </>
           )}

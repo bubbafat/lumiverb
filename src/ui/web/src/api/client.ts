@@ -7,7 +7,6 @@ import type {
   DirectoryNode,
   EmptyTrashResponse,
   FacetsResponse,
-  JobListItem,
   LibraryListItem,
   LibraryResponse,
   LibraryRevision,
@@ -425,22 +424,6 @@ export async function updateUserRole(
 
 export async function deleteUser(userId: string): Promise<void> {
   return apiFetch<void>(`/users/${userId}`, { method: "DELETE" });
-}
-
-export async function getJobStats(): Promise<import("./types").JobStatsResponse> {
-  return apiFetch<import("./types").JobStatsResponse>("/jobs/stats");
-}
-
-export async function listJobs(params: {
-  status?: string;
-  limit?: number;
-  libraryId?: string;
-}): Promise<JobListItem[]> {
-  const qs = new URLSearchParams();
-  if (params.status) qs.set("status", params.status);
-  if (params.limit) qs.set("limit", String(params.limit));
-  if (params.libraryId) qs.set("library_id", params.libraryId);
-  return apiFetch<JobListItem[]>(`/jobs?${qs.toString()}`);
 }
 
 export async function getCurrentUser(): Promise<CurrentUser> {

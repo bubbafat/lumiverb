@@ -1,8 +1,8 @@
 import { useMemo } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { getLibraryRevision, listJobs, listLibraries, logout } from "../api/client";
-import type { JobListItem, LibraryListItem } from "../api/types";
+import { getLibraryRevision, listLibraries, logout } from "../api/client";
+import type { LibraryListItem } from "../api/types";
 import { DirectoryTree } from "./DirectoryTree";
 
 const SIDEBAR_COLLAPSED_KEY = "lv_sidebar_collapsed";
@@ -143,14 +143,6 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette }: Sidebar
     refetchInterval: 10_000,
   });
   const revision = revisionQuery.data?.revision ?? 0;
-
-  const { data: jobs } = useQuery<JobListItem[]>({
-    queryKey: ["jobs", "running"],
-    queryFn: () => listJobs({ status: "running", limit: 5 }),
-    refetchInterval: 10_000,
-  });
-
-  const runningCount = jobs?.length ?? 0;
 
   const isLibrariesRootActive = location.pathname === "/";
 
@@ -312,34 +304,12 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette }: Sidebar
       <div className="px-2 py-2 space-y-1">
         <Link
           to="/admin"
-          className={`flex items-center justify-between gap-2 rounded-lg px-2 py-3 text-xs text-gray-400 transition-colors duration-150 hover:bg-gray-800/80 ${
-            location.pathname === "/admin" ? "bg-indigo-600/20 text-indigo-300" : ""
+          className={`flex items-center gap-2 rounded-lg px-2 py-3 text-xs text-gray-400 transition-colors duration-150 hover:bg-gray-800/80 ${
+            location.pathname === "/admin" || location.pathname.startsWith("/admin/") ? "bg-indigo-600/20 text-indigo-300" : ""
           }`}
         >
-          <div className="flex items-center gap-2">
-            {showLabels ? (
-              <>
-                {gearIcon()}
-                <span className="font-medium text-gray-300">Workers</span>
-              </>
-            ) : (
-              gearIcon()
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            <span
-              className={`h-2 w-2 rounded-full ${
-                runningCount > 0
-                  ? "bg-emerald-500 animate-pulse"
-                  : "bg-gray-500"
-              }`}
-            />
-            {showLabels && (
-              <span>
-                {runningCount > 0 ? `${runningCount} running` : "Idle"}
-              </span>
-            )}
-          </div>
+          {gearIcon()}
+          {showLabels && <span className="font-medium text-gray-300">Admin</span>}
         </Link>
         <Link
           to="/settings"

@@ -76,7 +76,7 @@ export function BottomNav() {
 
       <NavLink to="/admin" className={linkClass}>
         <GearIcon />
-        <span>Workers</span>
+        <span>Admin</span>
       </NavLink>
 
       {libraryId && (
