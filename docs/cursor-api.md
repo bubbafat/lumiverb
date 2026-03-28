@@ -37,12 +37,11 @@ Two-layer Postgres architecture:
 - `libraries` — library_id, name, root_path, scan_status, revision (int, bumped on asset changes), created_at
 - `library_path_filters` — filter_id (lpf_+ULID), library_id FK, type (include|exclude), pattern, created_at. Controls which paths are ingested per library.
 - `tenant_path_filter_defaults` — default_id (tpfd_+ULID), tenant_id, type (include|exclude), pattern, created_at. Tenant defaults and library filters are merged at evaluation time (see filter evaluation rules below).
-- `assets` — asset_id, library_id, sha256, file_path, file_size, media_type, width, height, duration_ms, duration_sec, captured_at, proxy_key, proxy_sha256, thumbnail_key, thumbnail_sha256, availability, video_indexed, created_at
+- `assets` — asset_id, library_id, sha256, file_path, file_size, media_type, width, height, duration_sec, proxy_key, proxy_sha256, thumbnail_key, thumbnail_sha256, availability, video_indexed, status, deleted_at, created_at
 - `video_scenes` — scene_id, asset_id, start_ms, end_ms, rep_frame_ms, proxy_key, thumbnail_key, rep_frame_sha256, description, tags, sharpness_score, keep_reason, phash, created_at
 - `video_index_chunks` — chunk_id, asset_id, chunk_index, start_ms, end_ms, status, worker_id, claimed_at, lease_expires_at, completed_at, error_message, anchor_phash, scene_start_ms, created_at
 - `asset_metadata` — asset_id, exif_json, sharpness_score, face_count, ai_description, ai_description_at, embedding_vector vector(512) [nullable]
 - `search_sync_queue` — asset_id, scene_id, operation, status, created_at
-- `worker_jobs` — job_id, job_type, asset_id, status, worker_id, claimed_at, completed_at, error
 - `system_metadata` — key, value
 - `faces` — face_id, asset_id, bounding_box_json, embedding_vector vector(512), detection_confidence, created_at [phase 2, empty until then]
 - `people` — person_id, display_name, created_by_user, created_at [phase 2]
@@ -62,9 +61,8 @@ SELECT * FROM assets WHERE deleted_at IS NULL
 
 1. **Never query `FROM assets` directly** in any read path that should return live assets. Always use `FROM active_assets` in raw SQL, or add `.where(Asset.deleted_at.is_(None))` in ORM queries.
 2. **`AssetRepository.get_by_id()` returns `None` for trashed assets.** Do not use `session.get(Asset, id)` as a substitute — it bypasses the filter.
-3. **`get_by_library_and_rel_path()` intentionally returns trashed assets** because the scan upsert path needs to detect them to avoid a unique-constraint violation on `(library_id, rel_path)`. It is the only read method that does this. All callers must check `deleted_at` explicitly, or call a write method (`update_for_scan`, `create_or_update_for_scan_bulk`) that clears it.
-4. **Scan write methods clear `deleted_at` unconditionally.** Both `update_for_scan` and the `ON CONFLICT DO UPDATE` in `create_or_update_for_scan_bulk` set `deleted_at = NULL`. A file present on disk during a scan is by definition active — this is the correct restore behaviour.
-5. **`search_sync_queue.pending_count()` must include expired-processing rows**, matching the scope of `claim_batch()`. Using only `status = 'pending'` produces a misleading count when rows are stuck in `processing` after an interrupted run.
+3. **`get_by_library_and_rel_path()` intentionally returns trashed assets** because the ingest upsert path needs to detect them to avoid a unique-constraint violation on `(library_id, rel_path)`. It is the only read method that does this. Ingest clears `deleted_at` on update — a file present on disk is by definition active.
+4. **`search_sync_queue.pending_count()` must include expired-processing rows**, matching the scope of `claim_batch()`. Using only `status = 'pending'` produces a misleading count when rows are stuck in `processing` after an interrupted run.
 
 When writing queries, always use the tenant DB session, not the control plane session. The middleware resolves this from the bearer token before the route handler runs.
 
@@ -88,7 +86,7 @@ All routes under `/v1/keys` require tenant auth and **editor or admin** role.
 
 ## Tenant Maintenance API
 
-All routes under `/v1/tenant/maintenance` require tenant auth and **tenant admin** role (`require_tenant_admin`). Maintenance mode is stored as a JSON value in `system_metadata` under the key `maintenance_mode`. When active, `GET /v1/jobs/next` returns 204 immediately so workers idle without claiming jobs.
+All routes under `/v1/tenant/maintenance` require tenant auth and **tenant admin** role (`require_tenant_admin`). Maintenance mode is stored as a JSON value in `system_metadata` under the key `maintenance_mode`. Used to pause operations during upgrades.
 
 - **GET /v1/tenant/maintenance/status** — Returns `{ active, message, started_at }`.
 - **POST /v1/tenant/maintenance/start** — Body: `{ "message": "..." }`. Enables maintenance mode. Returns `{ active: true, message, started_at }`.
@@ -105,40 +103,6 @@ All routes under `/v1/tenant/upgrade` require tenant auth and **tenant admin** r
   - Without `force`, the server refuses to run a targeted step when any preceding step is still `pending` or `failed`.
   - Returns `{ ran_steps, steps_completed_now, has_work_after, remaining_pending_step_ids, total_steps, done_steps, completed_steps, failed_steps }`.
 
-## Jobs API
-
-All under `/v1/jobs`; require tenant auth.
-
-- **POST /v1/jobs/enqueue** — Body: `{ "job_type", "filter", "force" }`. `filter` is an AssetFilterSpec: `library_id` (required), optional `asset_id`, `path_prefix`, `path_exact`, `mtime_after`, `mtime_before`, `missing_proxy`, `missing_thumbnail`, `retry_failed`. `force` (default false): if true, cancels existing pending/claimed jobs for matching assets then enqueues. `filter.retry_failed` (default false): if true, re-enqueues only assets with failed jobs (mutually exclusive with `force`). Returns `{ "enqueued" }` (count of jobs created).
-- **GET /v1/jobs/next** — Query: `job_type` (required), `library_id` (optional). Claims next pending job; returns 204 if none. On success returns `{ "job_id", "job_type", "asset_id", "rel_path", "media_type", "library_id", "root_path", "proxy_key", "thumbnail_key", "vision_model_id", "vision_api_url", "vision_api_key" }`. `vision_api_url` and `vision_api_key` come from the tenant record (control plane); workers use these to call the OpenAI-compatible vision API. For video assets, also includes `"duration_sec"` (from asset.duration_sec or duration_ms/1000). 404 if asset or library not found (job is failed server-side).
-- **GET /v1/jobs/pending** — Query: `job_type` (required), `library_id` (optional). Returns `{ "pending": N }` count of pending/claimed jobs. Same filters as `/next`. Used by workers for progress display (total work remaining).
-- **POST /v1/jobs/{job_id}/complete** — Body depends on job_type: **proxy** — `proxy_key`, `thumbnail_key`, `width`, `height` (or empty body to skip, e.g. video proxy deferred); **exif** — `sha256`, `exif`, `camera_make`, `camera_model`, `taken_at`, `gps_lat`, `gps_lon`; **ai_vision** — `model_id`, `model_version`, `description`, `tags`; **embed** — `embeddings`; **video-index** — no body (chunk work done via video API); **video-vision** — same as ai_vision; marks asset `video_indexed` true and enqueues search sync. Returns `{ "job_id", "status": "completed" }`. 404 if job not found, 409 if job not claimed.
-- **POST /v1/jobs/{job_id}/fail** — Body: `{ "error_message" }`. Marks job failed. Returns `{ "job_id", "status": "failed" }`.
-- **GET /v1/jobs** — Query: `library_id` (optional). List jobs; filter by library when provided. Returns list of `{ "job_id", "job_type", "asset_id", "status" }`.
-- **GET /v1/jobs/{job_id}/status** — Returns `{ "job_id", "status", "error_message" }`. 404 if not found.
-- **GET /v1/jobs/failures** — Query: `library_id` (required), `job_type` (required), `path_prefix` (optional), `limit` (optional, default 20). Returns `{ "rows": [{ "rel_path", "error_message", "failed_at" }], "total_count" }`. Most recent failed job per asset, ordered by `rel_path`. `failed_at` is ISO 8601 or null.
-
-Valid `job_type` values: `proxy`, `exif`, `ai_vision`, `embed`, `video-index`, `video-vision`. For `video-index`, the worker claims one job per asset, then uses the video chunk API to claim and complete 30-second chunks; when all chunks are done the server enqueues a `video-vision` job for that asset.
-
-## Pipeline API
-
-All under `/v1/pipeline`; require tenant auth. These endpoints allow the CLI to operate the pipeline supervisor without direct database access, enabling the databases to be hosted remotely.
-
-### Lock
-
-One lock per tenant. The lock_id returned on acquire must be stored by the supervisor and supplied on release to prevent a crashed-then-restarted process from accidentally releasing a lock reacquired by a newer instance.
-
-- **POST /v1/pipeline/lock/acquire** — Body: `{ "lock_timeout_minutes": 5, "force": false }`. Acquires the pipeline lock. Returns `{ "lock_id", "tenant_id" }` on success. Returns 409 with `{ "code": "lock_held", "message": "...", "details": { "hostname", "pid", "started_at" } }` if a fresh lock is held by another process and `force=false`. `force=true` overwrites any existing lock unconditionally.
-- **POST /v1/pipeline/lock/heartbeat** — No body. Updates `heartbeat_at` for the tenant's lock. Returns 204. Call every ~30s from the supervisor's background thread to keep the lock fresh.
-- **POST /v1/pipeline/lock/release** — Body: `{ "lock_id": "lock_..." }` (optional). Deletes the lock for this tenant. If `lock_id` is provided, the lock is only deleted when the stored `lock_id` matches — a stale `lock_id` is a no-op. Returns 204.
-
-### Status
-
-- **GET /v1/pipeline/status** — Query: `library_id` (optional). Returns pipeline stage counts in the same shape as `lumiverb status --output json`.
-  - With `library_id`: `{ "library", "library_id", "total_assets", "workers", "stages": [{ "name", "label", "done", "inflight", "pending", "failed", "blocked" }] }`. 404 if library not found.
-  - Without `library_id` (tenant-wide): `{ "workers", "libraries": [{ "library", "library_id", "total_assets", "stages": [...] }] }`.
-  - Stage names: `proxy`, `exif`, `ai_vision`, `search_sync`, `embed`, `video-index`, `video-vision`, `video-preview`. Only stages with non-zero total counts are included.
-
 ## Search Sync API
 
 All under `/v1/search-sync`; require tenant auth. These endpoints drive Quickwit indexing server-side so that CLI/worker processes do not need direct Quickwit or DB access.
@@ -153,7 +117,7 @@ All under `/v1/video`; require tenant auth. Used by the video-index worker to pr
 
 - **POST /v1/video/{asset_id}/chunks** — Body: `{ "duration_sec" }`. Initialize chunks for the asset (idempotent). Returns `{ "chunk_count", "already_initialized" }`.
 - **GET /v1/video/{asset_id}/chunks/next** — Claim next pending chunk for the asset. Returns 204 if none. On success returns `{ "chunk_id", "worker_id", "chunk_index", "start_ts", "end_ts", "overlap_sec", "anchor_phash", "scene_start_ts", "video_duration_sec", "is_last" }`. Worker must send `worker_id` when completing or failing the chunk.
-- **POST /v1/video/chunks/{chunk_id}/complete** — Body: `{ "worker_id", "scenes", "next_anchor_phash", "next_scene_start_ms" }`. `scenes`: list of `{ "scene_index", "start_ms", "end_ms", "rep_frame_ms", "proxy_key", "thumbnail_key", "description", "tags", "sharpness_score", "keep_reason", "phash" }`. Persists scenes, updates next chunk anchor state, marks chunk completed. When all chunks for the asset are complete, enqueues a `video-vision` job. Returns `{ "chunk_id", "scenes_saved", "all_complete" }`. 409 if chunk not owned by worker.
+- **POST /v1/video/chunks/{chunk_id}/complete** — Body: `{ "worker_id", "scenes", "next_anchor_phash", "next_scene_start_ms" }`. `scenes`: list of `{ "scene_index", "start_ms", "end_ms", "rep_frame_ms", "proxy_key", "thumbnail_key", "description", "tags", "sharpness_score", "keep_reason", "phash" }`. Persists scenes, updates next chunk anchor state, marks chunk completed. When all chunks for the asset are complete, marks the asset as `video_indexed`. Returns `{ "chunk_id", "scenes_saved", "all_complete" }`. 409 if chunk not owned by worker.
 - **POST /v1/video/chunks/{chunk_id}/fail** — Body: `{ "worker_id", "error_message" }`. Marks chunk failed. Returns `{ "chunk_id", "status": "failed" }`. 409 if chunk not owned by worker.
 - **GET /v1/video/{asset_id}/scenes** — Returns all scenes for an asset ordered by `start_ms`. Used by VideoVisionWorker. Response: `{ "scenes": [ { "scene_id", "start_ms", "end_ms", "rep_frame_ms", "thumbnail_key", "description", "tags", "sharpness_score", "keep_reason", "phash" } ] }`.
 - **PATCH /v1/video/scenes/{scene_id}** — Body: `{ "model_id", "model_version", "description", "tags" }`. Updates vision results on a scene after describing its rep frame. Response: `{ "scene_id", "status": "updated" }`.
@@ -166,8 +130,8 @@ All under `/v1/libraries`; require tenant auth (middleware).
 - **POST /v1/libraries** — Body: `{ "name", "root_path", "vision_model_id" }` (`vision_model_id` optional, defaults to `""`). Name must be unique per tenant (409 if duplicate). New libraries inherit the tenant's path filter defaults at creation time (subsequent changes to defaults do not affect existing libraries). Returns `{ "library_id", "name", "root_path", "scan_status", "vision_model_id", "is_public" }` (scan_status initially `"idle"`, is_public initially `false`).
 - **PATCH /v1/libraries/{library_id}** — Body: `{ "name", "vision_model_id", "is_public" }` (all optional). Updates library name, vision model ID, and/or public visibility. Setting `is_public: true` inserts a row in the `public_libraries` control plane table, enabling unauthenticated access (Phase 3). Setting `is_public: false` removes it. Returns full library response including `is_public`.
 - **GET /v1/libraries** — Query: `include_trashed` (optional, default false). Returns list of libraries with `library_id`, `name`, `root_path`, `scan_status`, `last_scan_at`, `status` (`"active"` or `"trashed"`), `is_public`. Trashed libraries excluded unless `include_trashed=true`.
-- **DELETE /v1/libraries/{library_id}** — Soft delete: set library `status` to `"trashed"`, cancel pending/claimed worker jobs for its assets. If library was public, removes its `public_libraries` control plane row. Returns 204 on success, 404 if not found, 409 if already trashed.
-- **POST /v1/libraries/empty-trash** — Hard delete all trashed libraries for this tenant (cascade: worker_jobs, search_sync_queue, asset_metadata, video_scenes, assets, scans, library_path_filters, libraries). Removes `public_libraries` control plane rows for any trashed libraries that were public. Returns `{ "deleted": N }`.
+- **DELETE /v1/libraries/{library_id}** — Soft delete: set library `status` to `"trashed"`, soft-delete all assets (`deleted_at` set). If library was public, removes its `public_libraries` control plane row. Returns 204 on success, 404 if not found, 409 if already trashed.
+- **POST /v1/libraries/empty-trash** — Hard delete all trashed libraries for this tenant (cascade: asset_metadata, asset_embeddings, video_scenes, video_index_chunks, assets, library_path_filters, libraries). Removes `public_libraries` control plane rows for any trashed libraries that were public. Returns `{ "deleted": N }`.
 - **GET /v1/libraries/{library_id}/revision** — Lightweight polling endpoint. Returns `{ "library_id", "revision", "asset_count" }`. The `revision` counter increments atomically on asset create/update (ingest) and vision metadata submission. UI clients poll this every 10 seconds and use `revision` in query keys to trigger cache invalidation when data changes.
 
 ## Library path filters API
@@ -198,16 +162,6 @@ Tenant defaults and library filters are merged at evaluation time with "library 
 
 This is enforced both client-side (during filesystem walk for efficiency) and server-side (POST /v1/ingest returns 422 for filtered paths).
 
-## Scans API
-
-All under `/v1/scans`; require tenant auth.
-
-- **POST /v1/scans** — Body: `{ "library_id", "status": "running|aborted|error", "root_path_override": null, "worker_id": null, "error_message": null }`. Creates scan record; if status is `running` sets library `scan_status` to `"scanning"`; if `aborted` or `error` updates library `scan_status` and `last_scan_error`. Returns `{ "scan_id" }`.
-- **GET /v1/scans/running?library_id=** — Returns list of running scans: `{ "scan_id", "library_id", "started_at", "worker_id" }`.
-- **POST /v1/scans/{scan_id}/batch** — Body: `{ "items": [{ "action": "skip"|"update"|"missing"|"add", ... }] }`. Process bulk scan actions: skip (touch), update (file_size, file_mtime), missing (set availability), add (insert/upsert by rel_path). Accumulates counts on scan record. Returns `{ "added", "updated", "skipped", "missing" }`.
-- **POST /v1/scans/{scan_id}/complete** — Body: optional (ignored for backward compat). Marks assets not seen in this scan as missing, completes scan, updates library `scan_status` and `last_scan_at`. Counts are accumulated server-side via batch endpoint. Returns `{ "scan_id", "files_discovered", "files_added", "files_updated", "files_skipped", "files_missing", "status" }`.
-- **POST /v1/scans/{scan_id}/abort** — Body: `{ "error_message": null }`. Aborts scan, updates library `scan_status` to `"error"` or `"aborted"`. Returns `{ "scan_id", "status" }`.
-
 ## Assets API
 
 All under `/v1/assets`; require tenant auth. List/get endpoints return only active (non-trashed) assets.
@@ -220,7 +174,7 @@ All under `/v1/assets`; require tenant auth. List/get endpoints return only acti
 - **POST /v1/assets/{asset_id}/restore** — Restore a trashed asset (clear `deleted_at`). Returns 204 on success, 404 if not found or not trashed.
 - **POST /v1/assets/{asset_id}/thumbnail-key** — Body: `{ "thumbnail_key" }`. Records a thumbnail_key on the asset. Used by VideoIndexWorker after extracting the first frame of a video. Returns `{ "asset_id", "thumbnail_key" }`.
 - **POST /v1/assets/{asset_id}/artifacts/{artifact_type}** — Multipart file upload. `artifact_type` must be one of: `proxy`, `thumbnail`, `video_preview`, `scene_rep`. Form fields: `file` (binary, required), `width` (int, optional, images only), `height` (int, optional, images only), `rep_frame_ms` (int, required for `scene_rep`, ignored for other types). Streams the upload to disk in 64 KB chunks, computes SHA-256 incrementally, and atomic-renames into place. Updates DB after file is safely on disk. Returns `{ "key", "sha256" }`. Errors: 400 invalid type or missing `rep_frame_ms` for `scene_rep`, 404 asset not found or trashed, 413 file too large. Does NOT advance `asset.status` — that remains the job-complete path's responsibility.
-- **POST /v1/assets/upsert** — Legacy single-file upsert. Prefer POST /v1/scans/{scan_id}/batch for bulk operations. Body: `{ "library_id", "rel_path", "file_size", "file_mtime" (ISO8601), "media_type", "scan_id", "force": false }`. Upserts by `(library_id, rel_path)`. Returns `{ "action": "added|updated|skipped" }`.
+- **POST /v1/assets/upsert** — Single-file upsert. Body: `{ "library_id", "rel_path", "file_size", "file_mtime" (ISO8601), "media_type", "force": false }`. Upserts by `(library_id, rel_path)`. Returns `{ "action": "added|updated|skipped" }`.
 
 ## Ingest API
 
@@ -244,22 +198,12 @@ Admin routes live under `/v1/admin` and require `Authorization: Bearer {ADMIN_KE
 - **GET /v1/admin/tenants/{tenant_id}/keys** — Returns list of key metadata: `name`, `tenant_id`, `created_at` (never raw keys). 404 if tenant does not exist or is soft-deleted.
 - **DELETE /v1/admin/tenants/{tenant_id}** — Soft delete: sets tenant status to `deleted`, revokes all API keys. Returns 204.
 
-## Worker Job Pattern
-
-Workers are API-only: they never touch the database directly. They use the jobs API (same auth as CLI).
-
-- **Claim:** GET /v1/jobs/next?job_type=…&library_id=… → 204 if no work, else job payload.
-- **Complete:** POST /v1/jobs/{job_id}/complete with result body. Per job_type: **proxy** — `proxy_key`, `thumbnail_key`, `width`, `height`, `proxy_sha256` (optional), `thumbnail_sha256` (optional) — or empty body to skip (e.g. video proxy deferred); **exif** — `sha256`, `exif`, `camera_make`, `camera_model`, `taken_at`, `gps_lat`, `gps_lon`; **ai_vision** — `model_id`, `model_version`, `description`, `tags`; **embed** — `embeddings`: list of `{ "model_id", "model_version", "vector" }` (CLIP only — one entry per job); **video-index** — no body (worker uses video chunk API, then calls complete when all chunks done); **video-vision** — same as ai_vision; sets asset `video_indexed` and enqueues search sync.
-- **Fail:** POST /v1/jobs/{job_id}/fail with `{ "error_message" }`.
-
-Lease is server-managed (worker_id generated per claim). Expired leases are reclaimed on next poll. Worker types: `proxy`, `exif`, `ai_vision`, `embed`, `video-index`, `video-vision`. Type `face` is reserved for phase 2 — do not implement.
-
 ## SHA256 Deduplication
 
-When an asset is submitted via POST /v1/assets:
-1. Check if sha256 already exists in tenant DB
-2. If yes — return existing asset_id with 200 (not 201), do not re-store
-3. If no — create new asset record, store proxy/thumbnail, enqueue jobs
+When an asset is submitted via POST /v1/ingest:
+1. Check if `(library_id, rel_path)` already exists in tenant DB
+2. If yes — update existing asset record with new metadata
+3. If no — create new asset record, store proxy/thumbnail/metadata atomically
 
 ## Search
 

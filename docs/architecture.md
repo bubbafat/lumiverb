@@ -63,7 +63,7 @@ Each tenant gets a dedicated Postgres database on the same Postgres instance (sc
 
 ```
 libraries         — library_id, name, root_path, scan_status, last_scan_at,
-                    last_scan_error, status, created_at
+                    status, created_at
 assets            — asset_id, library_id, sha256, file_path, file_size,
                     media_type, width, height, duration_sec (canonical; duration_ms removed),
                     proxy_key, proxy_sha256, thumbnail_key, thumbnail_sha256,
@@ -83,9 +83,6 @@ asset_embeddings  — embedding_id, asset_id, model_id, model_version,
                     embedding_vector vector(512), created_at
 search_sync_queue — sync_id, asset_id, scene_id, operation, status,
                     created_at, processing_started_at
-worker_jobs       — job_id, job_type, asset_id, status, priority,
-                    fail_count, worker_id, claimed_at, lease_expires_at,
-                    completed_at, error_message, created_at
 system_metadata   — key, value (schema version, last sync, etc.)
 ```
 
@@ -93,13 +90,12 @@ system_metadata   — key, value (schema version, last sync, etc.)
 - `active_assets` — non-trashed assets (deleted_at IS NULL). All pipeline queries use this view. Trashing a library sets deleted_at on all its assets, removing them from this view immediately.
 
 **Key constraints:**
-- `worker_jobs`: partial unique index on `(job_type, asset_id) WHERE status IN ('pending', 'claimed')` — prevents duplicate active jobs per asset per type (enforces at the DB level; `try_create_unique` uses `ON CONFLICT ... DO NOTHING` for concurrent safety).
 - `search_sync_queue`: atomic dedup via partial unique index `uq_ssq_pending_asset_scene` on `(asset_id, COALESCE(scene_id, '')) WHERE status IN ('pending', 'processing')` — `enqueue()` uses `ON CONFLICT DO NOTHING` for race-free deduplication.
 - `video_index_chunks`: failed chunks are automatically reset to `pending` on the next `claim_next_chunk` call for the same asset, preventing permanent pipeline stalls after transient errors.
 
 **Artifact lifecycle:**
 - When a library is trashed (`DELETE /v1/libraries/{id}`), all its assets get `deleted_at` set (soft-deleted) and all pending/processing `search_sync_queue` rows are set to `synced`. This ensures no further pipeline work runs on deleted content.
-- When a file changes on re-scan (size or mtime differs), artifact keys (`proxy_key`, `thumbnail_key`, `proxy_sha256`, `thumbnail_sha256`, `video_preview_key`) are cleared and the asset is reset to `pending`. The stale proxy/thumbnail endpoints return 202 and re-enqueue the appropriate job (`proxy` for images, `video-index` for videos).
+- If a proxy or thumbnail key points to a missing file, the endpoint returns 404 and clears the stale key from the asset record.
 - On empty-trash (hard delete), artifact files in object storage are deleted best-effort, then DB rows are removed in FK-safe order.
 
 **Phase 2 tables (schema created now, populated later):**
@@ -126,12 +122,13 @@ A dedicated vector database (Qdrant etc.) is not used in v1. Revisit at phase 2 
 Python + FastAPI + SQLModel. Stateless. Runs in Docker (self-hosted) or Cloud Run (cloud-hosted).
 
 Responsibilities:
-- Authenticate requests via API key → route to tenant DB
+- Authenticate requests via API key or JWT → route to tenant DB
 - Library and asset CRUD
-- Work queue management (claim jobs, post results)
+- Atomic ingest (proxy + metadata in one request)
 - File serving (thumbnails, proxies — never source files)
 - Search endpoint (BM25 via Quickwit)
 - Similarity search endpoint
+- Video chunk coordination (scene segmentation metadata)
 - Webhook delivery (future)
 
 ### 3.4 Local Agent (CLI first, then Mac app)
@@ -148,26 +145,34 @@ Responsibilities:
 
 The local agent has no direct Postgres, Quickwit, or object storage access. The API is its only interface.
 
-### 3.5 AI Workers
+### 3.5 Processing Model
 
-Stateless worker processes. Can run anywhere with API access. Claim jobs from the work queue via lease-based claiming (prevents duplicate processing).
+There are no server-side worker queues. All processing happens client-side via the CLI `ingest` command, which is the single entry point for assets.
 
-**Worker types:**
-- `proxy_worker` — generates JPEG proxy (2048px) and thumbnail (400px) from source file; advances asset status to `proxy_ready`
-- `exif_worker` — extracts EXIF metadata, GPS, and duration from proxy; stores in `asset_metadata`
-- `vision_worker` (`ai_vision` job) — runs Moondream against image proxy, generates AI description and tags; enqueues search_sync
-- `embed_worker` (`embed` job) — generates embedding vectors for image assets
-- `video_index_worker` (`video-index` job) — chunks video, segments scenes, extracts rep frames, stores in `video_scenes`; triggers `video-vision` when all chunks complete
-- `video_vision_worker` (`video-vision` job) — describes each scene's rep frame; sets `video_indexed=true` on completion, enqueues search_sync
-- `video_preview_worker` (`video-preview` job) — generates a lower-resolution preview MP4; enqueues search_sync on completion
-- `search_sync_worker` (`search-sync`) — drains `search_sync_queue`, keeps Quickwit in sync with Postgres
-- `face_worker` — face detection, embedding generation, cluster assignment (phase 2)
+**Image ingest (client-side):**
+The CLI scans the filesystem, then for each image:
+1. Generates WebP proxy (2048px max) and thumbnail (512px) in memory
+2. Extracts EXIF metadata (camera, GPS, duration, taken_at)
+3. Runs vision AI (OpenAI-compatible API) to generate description and tags
+4. Calls `POST /v1/ingest` with proxy + all metadata atomically
+5. The asset only appears on the server once fully populated
 
-**Image pipeline stage order:** proxy → exif → ai_vision → embed → search_sync
+**Video ingest (client-side, stage 1):**
+1. Extracts poster frame and generates proxy/thumbnail
+2. Extracts EXIF metadata
+3. Generates 10-second preview MP4
+4. Calls `POST /v1/ingest` atomically
 
-**Video pipeline stage order:** proxy → video-index (parallel: video-preview) → video-vision → search_sync
+**Video scene indexing (server-coordinated):**
+After video ingest, the CLI uses the video chunk API to process scenes:
+1. `POST /v1/video/{asset_id}/chunks` — initialize 30-second chunks
+2. `GET /v1/video/{asset_id}/chunks/next` — claim next chunk
+3. Client segments scenes, extracts rep frames, uploads via artifact API
+4. `POST /v1/video/chunks/{chunk_id}/complete` — submit scene metadata
+5. When all chunks complete, server marks asset as `video_indexed`
 
-Workers poll the API for available jobs via lease-based claiming (`FOR UPDATE SKIP LOCKED`). Permanent failures (wrong media type, missing required artifact) raise `BlockJob` to immediately block without retrying. Transient failures increment `fail_count`; jobs are blocked after 3 consecutive failures.
+**Search sync:**
+The CLI `worker search-sync` command drains `search_sync_queue`, keeping Quickwit in sync with Postgres. This is the only remaining server-coordinated queue.
 
 ### 3.6 Search Engine (Quickwit)
 
@@ -195,66 +200,35 @@ Key naming convention: `{tenant_id}/{asset_id}/proxy.jpg`, `{tenant_id}/{asset_i
 
 ```
 Local filesystem
-    → Local Agent scans, hashes files
-    → Agent generates proxy (JPEG, max 2048px) + thumbnail (JPEG, 400px) in memory
-    → Agent extracts EXIF metadata
-    → Agent calls POST /assets with proxy, thumbnail, metadata, SHA256
-    → API checks SHA256 — if exists, returns existing asset_id (dedup)
-    → API stores metadata in tenant DB
-    → API stores proxy + thumbnail in object storage
-    → API enqueues vision_worker job
-    → API returns asset_id to agent
-    → Agent writes filepath → asset_id to local SQLite
+    → CLI scans directory, discovers media files
+    → For each image:
+        → Generate WebP proxy (2048px max) + thumbnail (512px) in memory
+        → Extract EXIF metadata (camera, GPS, taken_at, duration)
+        → Run vision AI (OpenAI-compatible) → description + tags
+        → POST /v1/ingest (multipart: proxy + all metadata, atomic)
+        → API normalizes proxy, generates thumbnail, stores everything
+        → API enqueues search_sync for Quickwit indexing
+        → Asset appears fully populated on first creation
+    → For each video (stage 1):
+        → Extract poster frame, generate proxy/thumbnail
+        → Extract EXIF metadata
+        → Generate 10-second preview MP4
+        → POST /v1/ingest (atomic)
+    → For each video (stage 2 — scene indexing):
+        → POST /v1/video/{asset_id}/chunks (init 30-sec chunks)
+        → Loop: claim chunk → segment scenes → extract rep frames → complete
+        → When all chunks complete, server marks video_indexed=true
 ```
 
-### 4.2 AI Processing Flow
+### 4.2 Search Sync Flow
 
-**Image pipeline:**
 ```
-proxy_worker claims video-index job
-    → Generates JPEG proxy (2048px) + thumbnail (400px) from source
-    → POST /v1/jobs/{id}/complete → API sets proxy_key, status=proxy_ready
-    → Supervisor enqueues: exif, ai_vision, embed
-
-exif_worker → extracts EXIF, duration, GPS
-    → POST /v1/jobs/{id}/complete
-
-vision_worker (ai_vision) → fetches proxy bytes from artifact store
-    → Runs Moondream inference
-    → POST /v1/jobs/{id}/complete → API writes asset_metadata, enqueues search_sync, sets status=described
-
-embed_worker → generates embedding vector
-    → POST /v1/jobs/{id}/complete → API writes asset_embeddings
-
-search_sync_worker → drains search_sync_queue, upserts Quickwit document
-```
-
-**Video pipeline:**
-```
-proxy_worker → generates video proxy frame (first frame), thumbnail
-    → Supervisor enqueues: video-index, video-preview (parallel)
-
-video_index_worker (video-index job):
-    → POST /v1/video/{asset_id}/chunks (init; idempotent)
-    → loop: GET /v1/video/{asset_id}/chunks/next (claim chunk; 204 when done)
-        → Transcode chunk to 720p proxy
-        → Run VideoScanner + SceneSegmenter
-        → Extract rep frames from source via FFmpeg → artifact store
-        → POST /v1/video/chunks/{chunk_id}/complete (with scene list)
-            → On last chunk complete: enqueue video-vision (ON CONFLICT DO NOTHING)
-
-video_vision_worker (video-vision job):
-    → GET /v1/video/{asset_id}/scenes
-    → For each scene: fetch rep frame bytes → Moondream → PATCH /v1/video/scenes/{id}
-    → POST /v1/video/scenes/{id}/sync per scene (enqueues scene-level search_sync per scene)
-    → POST /v1/jobs/{id}/complete → API sets video_indexed=true
-      NOTE: asset-level search_sync is NOT enqueued here; scene-level syncs cover all content
-
-video_preview_worker (video-preview job):
-    → Generates preview MP4
-    → POST /v1/jobs/{id}/complete → API sets video_preview_key, enqueues search_sync
-
-search_sync_worker → drains search_sync_queue, upserts Quickwit documents for both asset and scene entries
+CLI runs: lumiverb repair --library <name> --job-type search-sync
+    → POST /v1/search-sync/process-batch (loop until empty)
+    → Server claims batch from search_sync_queue
+    → Builds Quickwit documents from Postgres metadata
+    → Ingests to Quickwit
+    → Marks rows synced
 ```
 
 ### 4.3 Search Flow
@@ -411,9 +385,9 @@ GCS standard tier provides 11 nines durability with built-in multi-AZ replicatio
 ### Phase 1: Foundation (CLI + API)
 - Control plane + tenant provisioning
 - Tenant database schema + Alembic migrations
-- Core API endpoints (libraries, assets, jobs)
-- Local agent CLI (scan, ingest, status)
-- Vision worker (Moondream)
+- Core API endpoints (libraries, assets, ingest, search)
+- Local agent CLI (ingest, repair, search, similar)
+- Client-side vision AI integration
 - Search sync + Quickwit integration
 - Docker Compose for self-hosted deployment
 
@@ -453,7 +427,7 @@ GCS standard tier provides 11 nines durability with built-in multi-AZ replicatio
 - `api` — FastAPI server
 - `postgres` — PostgreSQL 16
 - `quickwit` — Search engine
-- `worker` — AI vision worker (optional, can run separately)
+- `worker` — Search sync worker (optional, can run separately)
 - `minio` — Object storage (optional, can point at S3/B2)
 
 Configuration via environment variables. No cloud dependencies required. A NAS or $5/month VPS is sufficient for personal use.
@@ -465,12 +439,10 @@ Configuration via environment variables. No cloud dependencies required. A NAS o
 The following algorithms and patterns are extracted from the PoC codebase (`media-search`) and reimplemented in the new architecture:
 
 - Video scene segmentation and representative frame extraction
-- Moondream integration and vision analysis pipeline
+- Vision AI integration and analysis pipeline
 - BM25 similarity search with adaptive threshold
-- Lease-based worker job claiming (prevents duplicate processing)
 - Quickwit schema and index management
 - EXIF extraction, sharpness scoring, face detection
-- Proxy format: JPEG (not WebP — cross-platform compatibility)
-- Worker base class pattern
+- Proxy format: WebP (compact, widely supported)
 
 The PoC codebase is frozen as a reference. The new codebase is a clean start — no migration path, no backward compatibility burden.
