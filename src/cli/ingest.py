@@ -180,24 +180,19 @@ def _build_exif_payload(source_path: Path, media_type: str) -> dict:
 def _call_vision_ai(
     proxy_bytes: bytes,
     vision_model_id: str,
-    vision_api_url: str,
-    vision_api_key: str | None,
+    vision_provider: object | None,
 ) -> dict | None:
     """Call the vision AI provider. Returns result dict or None if not configured."""
-    if not vision_api_url or not vision_model_id:
+    if vision_provider is None or not vision_model_id:
         return None
 
     import tempfile
 
-    from src.workers.captions.factory import get_caption_provider
-
-    provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key)
-    # PIL auto-detects format regardless of extension; suffix is cosmetic
     with tempfile.NamedTemporaryFile(suffix=".img", delete=False) as tmp:
         tmp.write(proxy_bytes)
         tmp_path = Path(tmp.name)
     try:
-        result = provider.describe(tmp_path)
+        result = vision_provider.describe(tmp_path)
     finally:
         tmp_path.unlink(missing_ok=True)
 
@@ -432,9 +427,7 @@ def _process_and_ingest_one(
     file_mtime: datetime | None,
     media_type: str,
     vision_model_id: str,
-    vision_api_url: str,
-    vision_api_key: str | None,
-    skip_vision: bool,
+    vision_provider: object | None,
     clip_provider: object | None,
     stats: "_IngestStats",
     progress: Progress | None = None,
@@ -456,11 +449,9 @@ def _process_and_ingest_one(
         exif_payload = _build_exif_payload(source_path, media_type)
 
         # 3. Call vision AI with JPEG (optional)
-        vision_payload = None
-        if not skip_vision:
-            vision_payload = _call_vision_ai(
-                jpeg_bytes, vision_model_id, vision_api_url, vision_api_key,
-            )
+        vision_payload = _call_vision_ai(
+            jpeg_bytes, vision_model_id, vision_provider,
+        )
 
         # 4. Generate CLIP embedding from JPEG proxy
         embedding = _generate_clip_embedding(jpeg_bytes, clip_provider)
@@ -686,6 +677,7 @@ def run_ingest(
     include_images = media_type_filter in ("all", "image")
     include_videos = media_type_filter in ("all", "video")
 
+    vision_provider = None
     if include_images:
         if skip_vision:
             console.print("Vision AI: skipped (--skip-vision)")
@@ -695,6 +687,8 @@ def run_ingest(
             console.print("  Or to ingest without AI: lumiverb ingest --library <name> --skip-vision")
             raise SystemExit(1)
         else:
+            from src.workers.captions.factory import get_caption_provider
+            vision_provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key)
             console.print(f"Vision AI: {vision_model_id} via {vision_api_url} ({vision_source})")
 
     # Step 3b: Load CLIP embedding model (lazy — first embed_image call loads weights)
@@ -761,9 +755,7 @@ def run_ingest(
                     file_mtime=f["file_mtime"],
                     media_type=f["media_type"],
                     vision_model_id=vision_model_id,
-                    vision_api_url=vision_api_url,
-                    vision_api_key=vision_api_key,
-                    skip_vision=skip_vision,
+                    vision_provider=vision_provider,
                     clip_provider=clip_provider,
                     stats=stats,
                     progress=progress,
@@ -812,8 +804,7 @@ def _backfill_one(
     asset_id: str,
     rel_path: str,
     vision_model_id: str,
-    vision_api_url: str,
-    vision_api_key: str | None,
+    vision_provider: object,
     stats: _IngestStats,
     progress: Progress | None = None,
     task_id: object = None,
@@ -824,7 +815,7 @@ def _backfill_one(
         proxy_bytes = resp.content
 
         vision_result = _call_vision_ai(
-            proxy_bytes, vision_model_id, vision_api_url, vision_api_key,
+            proxy_bytes, vision_model_id, vision_provider,
         )
         if not vision_result:
             logger.warning("Vision returned no result for %s", rel_path)
@@ -880,6 +871,8 @@ def run_backfill_vision(
         console.print("  Set it via: lumiverb config set --vision-api-url <url>")
         raise SystemExit(1)
 
+    from src.workers.captions.factory import get_caption_provider
+    vision_provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key)
     console.print(f"Vision AI: {vision_model_id} via {vision_api_url} ({vision_source})")
 
     # Page through assets missing vision
@@ -925,8 +918,7 @@ def run_backfill_vision(
                 asset_id=a["asset_id"],
                 rel_path=a["rel_path"],
                 vision_model_id=vision_model_id,
-                vision_api_url=vision_api_url,
-                vision_api_key=vision_api_key,
+                vision_provider=vision_provider,
                 stats=stats,
                 progress=progress,
                 task_id=tid,

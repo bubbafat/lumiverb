@@ -34,17 +34,31 @@ def _print_and_raise(response: httpx.Response) -> None:
 
 
 class LumiverbClient:
-    """HTTP client that uses CLI config for base_url and Authorization header."""
+    """HTTP client that uses CLI config for base_url and Authorization header.
+
+    Reuses a single httpx.Client with connection pooling for the lifetime of the
+    instance.  Call .close() when done, or use as a context manager.
+    """
 
     def __init__(self, api_key_override: str | None = None) -> None:
         self._base_url = get_api_url().rstrip("/")
         self._api_key = api_key_override if api_key_override is not None else get_api_key()
-
-    def _headers(self) -> dict[str, str]:
         headers: dict[str, str] = {}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
-        return headers
+        self._client = httpx.Client(headers=headers, timeout=120.0)
+
+    def close(self) -> None:
+        self._client.close()
+
+    def __enter__(self) -> "LumiverbClient":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
+
+    def _url(self, path: str) -> str:
+        return f"{self._base_url}{path}" if path.startswith("/") else f"{self._base_url}/{path}"
 
     def _handle_response(self, response: httpx.Response) -> httpx.Response:
         if 200 <= response.status_code < 300:
@@ -53,10 +67,8 @@ class LumiverbClient:
 
     def get(self, path: str, **kwargs: object) -> httpx.Response:
         """GET request; on non-2xx prints error envelope and raises LumiverbAPIError."""
-        url = f"{self._base_url}{path}" if path.startswith("/") else f"{self._base_url}/{path}"
-        with httpx.Client() as client:
-            response = client.get(url, headers=self._headers(), timeout=120.0, **kwargs)
-            return self._handle_response(response)
+        response = self._client.get(self._url(path), **kwargs)
+        return self._handle_response(response)
 
     @contextmanager
     def stream(self, path: str, **kwargs: object) -> Iterator[httpx.Response]:
@@ -68,47 +80,34 @@ class LumiverbClient:
         handle "not found" gracefully. Other non-2xx responses are printed and
         raise LumiverbAPIError.
         """
-        url = f"{self._base_url}{path}" if path.startswith("/") else f"{self._base_url}/{path}"
-        with httpx.Client() as client:
-            with client.stream("GET", url, headers=self._headers(), timeout=120.0, **kwargs) as response:
-                if response.status_code == 404:
-                    # Let the caller handle "not found" (e.g. CLI friendly message).
-                    yield response
-                    return
-                if 200 <= response.status_code < 300:
-                    yield response
-                    return
-
-                # Non-2xx, non-404: mirror _handle_response behavior.
-                _print_and_raise(response)
+        with self._client.stream("GET", self._url(path), **kwargs) as response:
+            if response.status_code == 404:
+                yield response
+                return
+            if 200 <= response.status_code < 300:
+                yield response
+                return
+            _print_and_raise(response)
 
     def post(self, path: str, **kwargs: object) -> httpx.Response:
         """POST request; on non-2xx prints error envelope and raises LumiverbAPIError."""
-        url = f"{self._base_url}{path}" if path.startswith("/") else f"{self._base_url}/{path}"
-        with httpx.Client() as client:
-            response = client.post(url, headers=self._headers(), timeout=120.0, **kwargs)
-            return self._handle_response(response)
+        response = self._client.post(self._url(path), **kwargs)
+        return self._handle_response(response)
 
     def patch(self, path: str, **kwargs: object) -> httpx.Response:
         """PATCH request; on non-2xx prints error envelope and raises LumiverbAPIError."""
-        url = f"{self._base_url}{path}" if path.startswith("/") else f"{self._base_url}/{path}"
-        with httpx.Client() as client:
-            response = client.patch(url, headers=self._headers(), timeout=120.0, **kwargs)
-            return self._handle_response(response)
+        response = self._client.patch(self._url(path), **kwargs)
+        return self._handle_response(response)
 
     def delete(self, path: str, **kwargs: object) -> httpx.Response:
         """DELETE request; on non-2xx prints error envelope and raises LumiverbAPIError."""
-        url = f"{self._base_url}{path}" if path.startswith("/") else f"{self._base_url}/{path}"
-        with httpx.Client() as client:
-            response = client.request("DELETE", url, headers=self._headers(), timeout=120.0, **kwargs)
-            return self._handle_response(response)
+        response = self._client.request("DELETE", self._url(path))
+        return self._handle_response(response)
 
     def raw(self, method: str, path: str, **kwargs: object) -> httpx.Response:
         """
         Raw request that always returns the response without error handling or sys.exit.
         Use this when the caller needs to inspect non-2xx status codes (e.g. 204, 409).
         """
-        url = f"{self._base_url}{path}" if path.startswith("/") else f"{self._base_url}/{path}"
-        with httpx.Client() as client:
-            return client.request(method, url, headers=self._headers(), timeout=120.0, **kwargs)
+        return self._client.request(method, self._url(path), **kwargs)
 
