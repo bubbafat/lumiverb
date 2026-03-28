@@ -247,11 +247,29 @@ def _detect_media_type(ext: str) -> str:
     return "image"
 
 
+def _probe_video_dimensions(source_path: Path) -> tuple[int, int]:
+    """Get the original video dimensions via ffprobe. Returns (width, height)."""
+    import subprocess
+
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=width,height",
+        "-of", "csv=p=0:s=x",
+        str(source_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    w, h = result.stdout.strip().split("x")
+    return int(w), int(h)
+
+
 def _extract_video_poster(source_path: Path) -> tuple[bytes, int, int]:
     """Extract a poster frame (first frame) from a video. Returns (jpeg_bytes, width, height)."""
     import tempfile
     from src.video.clip_extractor import extract_video_frame
     import pyvips
+
+    width_orig, height_orig = _probe_video_dimensions(source_path)
 
     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
         tmp_path = Path(tmp.name)
@@ -260,11 +278,6 @@ def _extract_video_poster(source_path: Path) -> tuple[bytes, int, int]:
         ok = extract_video_frame(source_path, tmp_path, timestamp=0.0)
         if not ok or not tmp_path.exists() or tmp_path.stat().st_size == 0:
             raise RuntimeError(f"Failed to extract poster frame from {source_path}")
-
-        # Read the frame, get dimensions, resize to proxy size
-        img = pyvips.Image.new_from_file(str(tmp_path))
-        width_orig = img.width
-        height_orig = img.height
 
         proxy_img = pyvips.Image.thumbnail(
             str(tmp_path), PROXY_LONG_EDGE,

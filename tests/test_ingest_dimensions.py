@@ -1,0 +1,326 @@
+"""Tests for ingest dimension extraction, proxy generation, EXIF parsing,
+and resilience against bad input.
+
+Uses real fixture files (tests/fixtures/) to verify end-to-end behavior.
+"""
+
+import pytest
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+FIXTURES = Path(__file__).parent / "fixtures"
+SAMPLE_VIDEO = FIXTURES / "sample_4k.mp4"
+SAMPLE_IMAGE = FIXTURES / "sample_4k.jpg"
+TRUNCATED_VIDEO = FIXTURES / "truncated.mp4"
+EMPTY_VIDEO = FIXTURES / "empty.mp4"
+GARBAGE_VIDEO = FIXTURES / "garbage.mp4"
+
+_has_pyvips = False
+try:
+    import pyvips
+
+    _has_pyvips = hasattr(pyvips, "Image")
+except Exception:
+    pass
+
+_has_ffprobe = False
+try:
+    import subprocess
+
+    subprocess.run(["ffprobe", "-version"], capture_output=True, check=True)
+    _has_ffprobe = True
+except Exception:
+    pass
+
+_skip_no_libvips = pytest.mark.skipif(not _has_pyvips, reason="libvips not installed")
+_skip_no_ffprobe = pytest.mark.skipif(not _has_ffprobe, reason="ffprobe not installed")
+
+
+# ---------------------------------------------------------------------------
+# Video dimension tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+@_skip_no_ffprobe
+def test_probe_video_dimensions_returns_source_resolution():
+    from src.cli.ingest import _probe_video_dimensions
+
+    w, h = _probe_video_dimensions(SAMPLE_VIDEO)
+    assert w == 3840
+    assert h == 2160
+
+
+@pytest.mark.fast
+@_skip_no_ffprobe
+@_skip_no_libvips
+def test_extract_video_poster_returns_source_dimensions():
+    """The poster frame is resized, but reported dimensions must be the original."""
+    from src.cli.ingest import _extract_video_poster
+
+    jpeg_bytes, w, h = _extract_video_poster(SAMPLE_VIDEO)
+
+    assert w == 3840
+    assert h == 2160
+
+    assert jpeg_bytes[:2] == b"\xff\xd8"  # JPEG magic
+    img = pyvips.Image.new_from_buffer(jpeg_bytes, "")
+    assert img.width <= 2048  # PROXY_LONG_EDGE
+
+
+@pytest.mark.fast
+@_skip_no_ffprobe
+@_skip_no_libvips
+def test_video_poster_preserves_aspect_ratio():
+    from src.cli.ingest import _extract_video_poster
+
+    jpeg_bytes, w, h = _extract_video_poster(SAMPLE_VIDEO)
+    source_ratio = w / h  # 16:9
+
+    img = pyvips.Image.new_from_buffer(jpeg_bytes, "")
+    proxy_ratio = img.width / img.height
+    assert proxy_ratio == pytest.approx(source_ratio, abs=0.02)
+
+
+# ---------------------------------------------------------------------------
+# Video preview tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+@_skip_no_ffprobe
+def test_video_preview_is_valid_mp4():
+    from src.cli.ingest import _generate_video_preview
+
+    preview_bytes = _generate_video_preview(SAMPLE_VIDEO)
+    # MP4 files start with a box: 4 bytes size + "ftyp"
+    assert b"ftyp" in preview_bytes[:12]
+    assert len(preview_bytes) > 100
+
+
+@pytest.mark.fast
+@_skip_no_ffprobe
+def test_video_preview_capped_at_720p():
+    from src.cli.ingest import _generate_video_preview, _probe_video_dimensions
+    import subprocess
+    import tempfile
+
+    preview_bytes = _generate_video_preview(SAMPLE_VIDEO)
+
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+        tmp.write(preview_bytes)
+        tmp_path = Path(tmp.name)
+
+    try:
+        w, h = _probe_video_dimensions(tmp_path)
+        assert h <= 720, f"Preview height {h} exceeds 720p cap"
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Image dimension tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+@_skip_no_libvips
+def test_generate_proxy_returns_source_dimensions_for_jpeg():
+    from src.cli.ingest import _generate_proxy_bytes
+
+    jpeg_bytes, w, h = _generate_proxy_bytes(SAMPLE_IMAGE)
+
+    assert w == 4000
+    assert h == 3000
+
+    img = pyvips.Image.new_from_buffer(jpeg_bytes, "")
+    assert img.width <= 2048
+
+
+@pytest.mark.fast
+@_skip_no_libvips
+def test_image_proxy_preserves_aspect_ratio():
+    from src.cli.ingest import _generate_proxy_bytes
+
+    jpeg_bytes, w, h = _generate_proxy_bytes(SAMPLE_IMAGE)
+    source_ratio = w / h
+
+    img = pyvips.Image.new_from_buffer(jpeg_bytes, "")
+    proxy_ratio = img.width / img.height
+    assert proxy_ratio == pytest.approx(source_ratio, abs=0.02)
+
+
+# ---------------------------------------------------------------------------
+# WebP conversion tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+@_skip_no_libvips
+def test_jpeg_to_webp_produces_valid_output():
+    from src.cli.ingest import _generate_proxy_bytes, _jpeg_to_webp
+
+    jpeg_bytes, _, _ = _generate_proxy_bytes(SAMPLE_IMAGE)
+    webp_bytes = _jpeg_to_webp(jpeg_bytes)
+
+    # WebP magic: "RIFF" + 4 bytes size + "WEBP"
+    assert webp_bytes[:4] == b"RIFF"
+    assert webp_bytes[8:12] == b"WEBP"
+
+    # Dimensions should match the JPEG proxy
+    jpeg_img = pyvips.Image.new_from_buffer(jpeg_bytes, "")
+    webp_img = pyvips.Image.new_from_buffer(webp_bytes, "")
+    assert webp_img.width == jpeg_img.width
+    assert webp_img.height == jpeg_img.height
+
+
+# ---------------------------------------------------------------------------
+# EXIF extraction tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+@_skip_no_ffprobe
+def test_build_exif_payload_image():
+    from src.cli.ingest import _build_exif_payload
+
+    payload = _build_exif_payload(SAMPLE_IMAGE, "image")
+
+    assert payload["camera_make"] == "TestCamera"
+    assert payload["camera_model"] == "TestModel X100"
+    assert payload["iso"] == 400
+    assert payload["aperture"] == pytest.approx(2.8, abs=0.1)
+    assert payload["focal_length"] == pytest.approx(35.0, abs=0.1)
+    assert payload["lens_model"] == "TestLens 35mm f/2.8"
+    assert payload["sha256"] is not None
+    assert payload["duration_sec"] is None
+
+
+@pytest.mark.fast
+@_skip_no_ffprobe
+def test_exif_gps_coordinates_parsed_correctly():
+    from src.cli.ingest import _build_exif_payload
+
+    payload = _build_exif_payload(SAMPLE_IMAGE, "image")
+
+    # Fixture: N 33°44'55", W 84°23'17"
+    assert payload["gps_lat"] == pytest.approx(33.748611, abs=0.01)
+    assert payload["gps_lon"] == pytest.approx(-84.388056, abs=0.01)  # West = negative
+
+
+@pytest.mark.fast
+@_skip_no_ffprobe
+def test_exif_exposure_time_in_microseconds():
+    from src.cli.ingest import _build_exif_payload
+
+    payload = _build_exif_payload(SAMPLE_IMAGE, "image")
+
+    # 1/250s = 4000 microseconds
+    assert payload["exposure_time_us"] == 4000
+
+
+@pytest.mark.fast
+@_skip_no_ffprobe
+def test_build_exif_payload_video():
+    from src.cli.ingest import _build_exif_payload
+
+    payload = _build_exif_payload(SAMPLE_VIDEO, "video")
+
+    assert payload["sha256"] is not None
+    assert payload["duration_sec"] is not None
+    assert payload["duration_sec"] > 0
+
+
+# ---------------------------------------------------------------------------
+# Resilience — corrupt / missing input
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+@_skip_no_ffprobe
+def test_probe_dimensions_truncated_video_raises():
+    from src.cli.ingest import _probe_video_dimensions
+
+    with pytest.raises(Exception):
+        _probe_video_dimensions(TRUNCATED_VIDEO)
+
+
+@pytest.mark.fast
+@_skip_no_ffprobe
+def test_probe_dimensions_empty_file_raises():
+    from src.cli.ingest import _probe_video_dimensions
+
+    with pytest.raises(Exception):
+        _probe_video_dimensions(EMPTY_VIDEO)
+
+
+@pytest.mark.fast
+@_skip_no_ffprobe
+def test_probe_dimensions_garbage_file_raises():
+    from src.cli.ingest import _probe_video_dimensions
+
+    with pytest.raises(Exception):
+        _probe_video_dimensions(GARBAGE_VIDEO)
+
+
+@pytest.mark.fast
+@_skip_no_ffprobe
+@_skip_no_libvips
+def test_extract_poster_from_truncated_video_raises():
+    from src.cli.ingest import _extract_video_poster
+
+    with pytest.raises(Exception):
+        _extract_video_poster(TRUNCATED_VIDEO)
+
+
+# ---------------------------------------------------------------------------
+# Integration: verify POST body contains source dimensions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+@_skip_no_ffprobe
+@_skip_no_libvips
+def test_video_stage1_posts_source_dimensions(tmp_path):
+    """The actual POST to /v1/ingest must contain the original video dimensions,
+    not the proxy/poster dimensions."""
+    from src.cli.ingest import _process_and_ingest_video_stage1, _IngestStats
+    import shutil
+
+    # Copy fixture into a "library root" so path validation passes
+    lib_root = tmp_path / "library"
+    lib_root.mkdir()
+    video_copy = lib_root / "test_video.mp4"
+    shutil.copy2(SAMPLE_VIDEO, video_copy)
+
+    stats = _IngestStats()
+    posted_data = {}
+
+    def fake_post(path, **kwargs):
+        if path == "/v1/ingest":
+            posted_data.update(kwargs.get("data", {}))
+            resp = MagicMock()
+            resp.json.return_value = {"asset_id": "fake-asset-id"}
+            return resp
+        return MagicMock()
+
+    mock_client = MagicMock()
+    mock_client.post = fake_post
+
+    _process_and_ingest_video_stage1(
+        client=mock_client,
+        library_id="lib-123",
+        root_path=lib_root,
+        rel_path="test_video.mp4",
+        file_size=video_copy.stat().st_size,
+        file_mtime=None,
+        stats=stats,
+        progress=None,
+        task_id=None,
+    )
+
+    assert stats.processed == 1
+    assert stats.failed == 0
+    assert posted_data["width"] == "3840"
+    assert posted_data["height"] == "2160"
+    assert posted_data["media_type"] == "video"
