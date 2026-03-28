@@ -259,7 +259,12 @@ def _probe_video_dimensions(source_path: Path) -> tuple[int, int]:
         str(source_path),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    w, h = result.stdout.strip().split("x")
+    output = result.stdout.strip()
+    if "x" not in output:
+        raise RuntimeError(
+            f"ffprobe returned no video dimensions for {source_path}: {output!r}"
+        )
+    w, h = output.split("x", 1)
     return int(w), int(h)
 
 
