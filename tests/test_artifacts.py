@@ -106,14 +106,6 @@ def artifact_env(tmp_path_factory):
                     assert r_lib.status_code == 200
                     library_id = r_lib.json()["library_id"]
 
-                    r_scan = raw_client.post(
-                        "/v1/scans",
-                        json={"library_id": library_id, "status": "running"},
-                        headers=auth_headers,
-                    )
-                    assert r_scan.status_code == 200
-                    scan_id = r_scan.json()["scan_id"]
-
                     raw_client.post(
                         "/v1/assets/upsert",
                         json={
@@ -122,7 +114,6 @@ def artifact_env(tmp_path_factory):
                             "file_size": 1000,
                             "file_mtime": "2025-01-01T12:00:00Z",
                             "media_type": "image",
-                            "scan_id": scan_id,
                         },
                         headers=auth_headers,
                     )
@@ -316,11 +307,6 @@ def test_upload_video_preview_writes_file_no_sha256_col(artifact_env) -> None:
 
     # Re-use the raw_client from artifact_env by calling the fixture differently.
     # Instead, use the auth client directly to create a video asset.
-    r_scan = auth.post(
-        "/v1/scans",
-        json={"library_id": library_id, "status": "running"},
-    )
-    scan_id = r_scan.json()["scan_id"]
     auth.post(
         "/v1/assets/upsert",
         json={
@@ -329,7 +315,6 @@ def test_upload_video_preview_writes_file_no_sha256_col(artifact_env) -> None:
             "file_size": 5000,
             "file_mtime": "2025-01-01T12:00:00Z",
             "media_type": "video",
-            "scan_id": scan_id,
         },
     )
     r_vid = auth.get(
@@ -365,8 +350,6 @@ def test_upload_scene_rep_writes_file_to_scenes_path(artifact_env) -> None:
     auth, _, library_id, _, storage, _, _ = artifact_env
 
     # Create a video asset for scene representative frame uploads.
-    r_scan = auth.post("/v1/scans", json={"library_id": library_id, "status": "running"})
-    scan_id = r_scan.json()["scan_id"]
     rel_path = f"scene_rep_{secrets.token_hex(4)}.mp4"
     auth.post(
         "/v1/assets/upsert",
@@ -376,7 +359,6 @@ def test_upload_scene_rep_writes_file_to_scenes_path(artifact_env) -> None:
             "file_size": 5000,
             "file_mtime": "2025-01-01T12:00:00Z",
             "media_type": "video",
-            "scan_id": scan_id,
         },
     )
     r_vid = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
@@ -401,8 +383,6 @@ def test_upload_scene_rep_writes_file_to_scenes_path(artifact_env) -> None:
 def test_upload_scene_rep_requires_rep_frame_ms(artifact_env) -> None:
     auth, _, library_id, _, _, _, _ = artifact_env
 
-    r_scan = auth.post("/v1/scans", json={"library_id": library_id, "status": "running"})
-    scan_id = r_scan.json()["scan_id"]
     rel_path = f"scene_rep_missing_ms_{secrets.token_hex(4)}.mp4"
     auth.post(
         "/v1/assets/upsert",
@@ -412,7 +392,6 @@ def test_upload_scene_rep_requires_rep_frame_ms(artifact_env) -> None:
             "file_size": 5000,
             "file_mtime": "2025-01-01T12:00:00Z",
             "media_type": "video",
-            "scan_id": scan_id,
         },
     )
     r_vid = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
@@ -494,8 +473,6 @@ def test_upload_soft_deleted_asset_returns_404(artifact_env) -> None:
     auth, _, library_id, _, _, tenant_url, _ = artifact_env
 
     # Create a fresh asset.
-    r_scan = auth.post("/v1/scans", json={"library_id": library_id, "status": "running"})
-    scan_id = r_scan.json()["scan_id"]
     rel_path = f"to_trash_{secrets.token_hex(4)}.jpg"
     auth.post(
         "/v1/assets/upsert",
@@ -505,7 +482,6 @@ def test_upload_soft_deleted_asset_returns_404(artifact_env) -> None:
             "file_size": 100,
             "file_mtime": "2025-01-01T00:00:00Z",
             "media_type": "image",
-            "scan_id": scan_id,
         },
     )
     r_a = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
@@ -570,8 +546,6 @@ def test_download_thumbnail_returns_bytes(artifact_env) -> None:
 def test_download_video_preview_returns_bytes(artifact_env) -> None:
     auth, _, library_id, _, _, _, _ = artifact_env
 
-    r_scan = auth.post("/v1/scans", json={"library_id": library_id, "status": "running"})
-    scan_id = r_scan.json()["scan_id"]
     rel_path = f"dl_clip_{secrets.token_hex(4)}.mp4"
     auth.post(
         "/v1/assets/upsert",
@@ -581,7 +555,6 @@ def test_download_video_preview_returns_bytes(artifact_env) -> None:
             "file_size": 5000,
             "file_mtime": "2025-01-01T12:00:00Z",
             "media_type": "video",
-            "scan_id": scan_id,
         },
     )
     r_vid = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
@@ -603,8 +576,6 @@ def test_download_video_preview_returns_bytes(artifact_env) -> None:
 def test_download_scene_rep_returns_bytes(artifact_env) -> None:
     auth, _, library_id, _, _, _, _ = artifact_env
 
-    r_scan = auth.post("/v1/scans", json={"library_id": library_id, "status": "running"})
-    scan_id = r_scan.json()["scan_id"]
     rel_path = f"dl_scene_rep_{secrets.token_hex(4)}.mp4"
     auth.post(
         "/v1/assets/upsert",
@@ -614,7 +585,6 @@ def test_download_scene_rep_returns_bytes(artifact_env) -> None:
             "file_size": 5000,
             "file_mtime": "2025-01-01T12:00:00Z",
             "media_type": "video",
-            "scan_id": scan_id,
         },
     )
     r_vid = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
@@ -644,8 +614,6 @@ def test_download_proxy_not_ready_returns_404(artifact_env) -> None:
     """Asset with no proxy uploaded returns 404 with artifact_not_ready code."""
     auth, _, library_id, _, _, _, _ = artifact_env
 
-    r_scan = auth.post("/v1/scans", json={"library_id": library_id, "status": "running"})
-    scan_id = r_scan.json()["scan_id"]
     rel_path = f"fresh_{secrets.token_hex(4)}.jpg"
     auth.post(
         "/v1/assets/upsert",
@@ -655,7 +623,6 @@ def test_download_proxy_not_ready_returns_404(artifact_env) -> None:
             "file_size": 100,
             "file_mtime": "2025-01-01T00:00:00Z",
             "media_type": "image",
-            "scan_id": scan_id,
         },
     )
     r_a = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
@@ -672,8 +639,6 @@ def test_download_proxy_file_missing_returns_404(artifact_env) -> None:
     auth, _, library_id, _, storage, _, _ = artifact_env
 
     # Use a fresh asset so deleting the file doesn't affect other tests.
-    r_scan = auth.post("/v1/scans", json={"library_id": library_id, "status": "running"})
-    scan_id = r_scan.json()["scan_id"]
     rel_path = f"missing_{secrets.token_hex(4)}.jpg"
     auth.post(
         "/v1/assets/upsert",
@@ -683,7 +648,6 @@ def test_download_proxy_file_missing_returns_404(artifact_env) -> None:
             "file_size": 100,
             "file_mtime": "2025-01-01T00:00:00Z",
             "media_type": "image",
-            "scan_id": scan_id,
         },
     )
     r_a = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})

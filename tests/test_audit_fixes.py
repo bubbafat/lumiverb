@@ -111,15 +111,7 @@ def _upsert_asset(
     rel_path: str,
     media_type: str = "image",
 ) -> str:
-    """Create a scan, upsert an asset, return its asset_id."""
-    r_scan = client.post(
-        "/v1/scans",
-        json={"library_id": library_id, "status": "running"},
-        headers=auth,
-    )
-    assert r_scan.status_code == 200, (r_scan.status_code, r_scan.text)
-    scan_id = r_scan.json()["scan_id"]
-
+    """Upsert an asset, return its asset_id."""
     r_up = client.post(
         "/v1/assets/upsert",
         json={
@@ -128,7 +120,6 @@ def _upsert_asset(
             "file_size": 5000,
             "file_mtime": "2025-01-01T12:00:00Z",
             "media_type": media_type,
-            "scan_id": scan_id,
         },
         headers=auth,
     )
@@ -294,86 +285,6 @@ def test_asset_detail_duration_sec_from_duration_sec(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.slow
-def test_last_scan_error_cleared_on_success(
-    audit_fixes_client: tuple[TestClient, str, str, str],
-) -> None:
-    """update_scan_status('complete') clears last_scan_error set by a prior error status."""
-    client, api_key, library_id, tenant_url = audit_fixes_client
-    auth = {"Authorization": f"Bearer {api_key}"}
-
-    # Create a dedicated library for this test
-    r_lib = client.post(
-        "/v1/libraries",
-        json={"name": "ScanErrorLib", "root_path": "/scan-error"},
-        headers=auth,
-    )
-    assert r_lib.status_code == 200, (r_lib.status_code, r_lib.text)
-    test_library_id = r_lib.json()["library_id"]
-
-    from sqlmodel import Session as SQLModelSession
-    from src.repository.tenant import LibraryRepository
-
-    engine = create_engine(tenant_url)
-    try:
-        with SQLModelSession(engine) as session:
-            lib_repo = LibraryRepository(session)
-            # Set error status first
-            lib_repo.update_scan_status(test_library_id, "error", "some error message")
-            lib_check = lib_repo.get_by_id(test_library_id)
-            assert lib_check is not None
-            assert lib_check.last_scan_error == "some error message"
-
-            # Now complete successfully — error should be cleared
-            lib_repo.update_scan_status(test_library_id, "complete")
-            lib_check2 = lib_repo.get_by_id(test_library_id)
-            assert lib_check2 is not None
-            assert lib_check2.last_scan_error is None, (
-                f"Expected last_scan_error=None after complete, got {lib_check2.last_scan_error!r}"
-            )
-    finally:
-        engine.dispose()
-
-
-@pytest.mark.slow
-def test_last_scan_error_preserved_when_error_message_is_none(
-    audit_fixes_client: tuple[TestClient, str, str, str],
-) -> None:
-    """update_scan_status('error', error=None) must not clear a previously set last_scan_error."""
-    client, api_key, library_id, tenant_url = audit_fixes_client
-    auth = {"Authorization": f"Bearer {api_key}"}
-
-    r_lib = client.post(
-        "/v1/libraries",
-        json={"name": "ScanErrorPreserveLib", "root_path": "/scan-error-preserve"},
-        headers=auth,
-    )
-    assert r_lib.status_code == 200, (r_lib.status_code, r_lib.text)
-    test_library_id = r_lib.json()["library_id"]
-
-    from sqlmodel import Session as SQLModelSession
-    from src.repository.tenant import LibraryRepository
-
-    engine = create_engine(tenant_url)
-    try:
-        with SQLModelSession(engine) as session:
-            lib_repo = LibraryRepository(session)
-            lib_repo.update_scan_status(test_library_id, "error", "original error")
-            lib_check = lib_repo.get_by_id(test_library_id)
-            assert lib_check is not None
-            assert lib_check.last_scan_error == "original error"
-
-            # Calling error with no message must NOT wipe the previous error
-            lib_repo.update_scan_status(test_library_id, "error", error=None)
-            lib_check2 = lib_repo.get_by_id(test_library_id)
-            assert lib_check2 is not None
-            assert lib_check2.last_scan_error == "original error", (
-                f"Expected last_scan_error preserved, got {lib_check2.last_scan_error!r}"
-            )
-    finally:
-        engine.dispose()
-
-
 # ---------------------------------------------------------------------------
 # FIX-4 (BUG-4): Library trash soft-deletes assets
 # ---------------------------------------------------------------------------
@@ -434,70 +345,5 @@ def test_library_trash_soft_deletes_assets(
 # FIX-12 (BUG-8): Scan update clears stale artifact keys
 # ---------------------------------------------------------------------------
 
-
-@pytest.mark.slow
-def test_scan_update_clears_stale_proxy_keys(
-    audit_fixes_client: tuple[TestClient, str, str, str],
-) -> None:
-    """update_for_scan with status=pending clears proxy_key and thumbnail_key."""
-    client, api_key, library_id, tenant_url = audit_fixes_client
-    auth = {"Authorization": f"Bearer {api_key}"}
-
-    asset_id = _upsert_asset(client, auth, library_id, "scan_clear_proxy.jpg")
-
-    # Set proxy_key and thumbnail_key directly
-    engine = create_engine(tenant_url)
-    try:
-        with engine.connect() as conn:
-            conn.execute(
-                text(
-                    "UPDATE assets SET proxy_key = 'old_proxy', thumbnail_key = 'old_thumb' "
-                    "WHERE asset_id = :asset_id"
-                ),
-                {"asset_id": asset_id},
-            )
-            conn.commit()
-    finally:
-        engine.dispose()
-
-    # Call update_for_scan directly via the repo
-    from datetime import datetime, timezone
-    from sqlmodel import Session as SQLModelSession
-    from src.repository.tenant import AssetRepository
-    from src.core import asset_status
-
-    # Fetch the real last_scan_id so we don't violate the FK constraint
-    engine = create_engine(tenant_url)
-    with engine.connect() as conn:
-        row = conn.execute(
-            text("SELECT last_scan_id FROM assets WHERE asset_id = :aid"),
-            {"aid": asset_id},
-        ).fetchone()
-        real_scan_id = row[0]
-    engine.dispose()
-
-    engine = create_engine(tenant_url)
-    try:
-        with SQLModelSession(engine) as session:
-            asset_repo = AssetRepository(session)
-            # Simulate file changed → reset to pending
-            asset_repo.update_for_scan(
-                asset_id=asset_id,
-                file_size=9999,
-                file_mtime=datetime(2025, 6, 1, tzinfo=timezone.utc),
-                availability="online",
-                status=asset_status.PENDING,
-                last_scan_id=real_scan_id,
-            )
-            updated = asset_repo.get_by_id(asset_id)
-            assert updated is not None
-            assert updated.proxy_key is None, (
-                f"Expected proxy_key=None after update_for_scan(pending), got {updated.proxy_key!r}"
-            )
-            assert updated.thumbnail_key is None, (
-                f"Expected thumbnail_key=None after update_for_scan(pending), got {updated.thumbnail_key!r}"
-            )
-    finally:
-        engine.dispose()
 
 

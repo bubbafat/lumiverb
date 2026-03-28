@@ -76,14 +76,6 @@ def page_api_client() -> tuple[TestClient, str, str, list[str]]:
                 assert r_lib.status_code == 200
                 library_id = r_lib.json()["library_id"]
 
-                r_scan = client.post(
-                    "/v1/scans",
-                    json={"library_id": library_id, "status": "running"},
-                    headers=auth,
-                )
-                assert r_scan.status_code == 200
-                scan_id = r_scan.json()["scan_id"]
-
                 rel_paths = ["one.jpg", "two.jpg", "three.jpg", "four.jpg", "five.png"]
                 asset_ids: list[str] = []
                 for i, rp in enumerate(rel_paths):
@@ -95,7 +87,6 @@ def page_api_client() -> tuple[TestClient, str, str, list[str]]:
                             "file_size": 1000 + i,
                             "file_mtime": "2025-01-01T12:00:00Z",
                             "media_type": "image",
-                            "scan_id": scan_id,
                         },
                         headers=auth,
                     )

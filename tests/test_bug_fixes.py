@@ -103,15 +103,7 @@ def _upsert_asset(
     rel_path: str,
     media_type: str = "image",
 ) -> str:
-    """Create a scan, upsert an asset, return its asset_id."""
-    r_scan = client.post(
-        "/v1/scans",
-        json={"library_id": library_id, "status": "running"},
-        headers=auth,
-    )
-    assert r_scan.status_code == 200, (r_scan.status_code, r_scan.text)
-    scan_id = r_scan.json()["scan_id"]
-
+    """Upsert an asset, return its asset_id."""
     r_up = client.post(
         "/v1/assets/upsert",
         json={
@@ -120,7 +112,6 @@ def _upsert_asset(
             "file_size": 5000,
             "file_mtime": "2025-01-01T12:00:00Z",
             "media_type": media_type,
-            "scan_id": scan_id,
         },
         headers=auth,
     )
@@ -133,45 +124,6 @@ def _upsert_asset(
     )
     assert r_asset.status_code == 200, (r_asset.status_code, r_asset.text)
     return r_asset.json()["asset_id"]
-
-
-def _upsert_asset_with_scan(
-    client: TestClient,
-    auth: dict,
-    library_id: str,
-    rel_path: str,
-    media_type: str = "image",
-) -> tuple[str, str]:
-    """Create a scan, upsert an asset, return (asset_id, scan_id)."""
-    r_scan = client.post(
-        "/v1/scans",
-        json={"library_id": library_id, "status": "running"},
-        headers=auth,
-    )
-    assert r_scan.status_code == 200, (r_scan.status_code, r_scan.text)
-    scan_id = r_scan.json()["scan_id"]
-
-    r_up = client.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": rel_path,
-            "file_size": 5000,
-            "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": media_type,
-            "scan_id": scan_id,
-        },
-        headers=auth,
-    )
-    assert r_up.status_code == 200, (r_up.status_code, r_up.text)
-
-    r_asset = client.get(
-        "/v1/assets/by-path",
-        params={"library_id": library_id, "rel_path": rel_path},
-        headers=auth,
-    )
-    assert r_asset.status_code == 200, (r_asset.status_code, r_asset.text)
-    return r_asset.json()["asset_id"], scan_id
 
 
 # ---------------------------------------------------------------------------
@@ -237,119 +189,4 @@ def test_hard_delete_library_with_asset_embeddings_no_fk_crash(
     assert r_trash.status_code == 200, (r_trash.status_code, r_trash.text)
     assert r_trash.json()["deleted"] >= 1
 
-@pytest.mark.slow
-def test_mark_missing_for_scan_bulk_sql(
-    bug_fixes_api_client: tuple[TestClient, str, str, str],
-) -> None:
-    """
-    After a scan that only sees 1 out of 3 pre-existing assets, completing the
-    scan must mark the other 2 as availability='missing' via bulk SQL.
-
-    This verifies the fix changed from an O(n) Python loop to a single bulk
-    UPDATE statement and that it correctly identifies assets not seen by scan_id.
-    """
-    client, api_key, library_id, tenant_url = bug_fixes_api_client
-    auth = {"Authorization": f"Bearer {api_key}"}
-
-    suffix = os.urandom(4).hex()
-
-    # Create a dedicated scan and upsert 3 assets with the same scan, making
-    # them all availability='online'.
-    r_scan1 = client.post(
-        "/v1/scans",
-        json={"library_id": library_id, "status": "running"},
-        headers=auth,
-    )
-    assert r_scan1.status_code == 200
-    scan1_id = r_scan1.json()["scan_id"]
-
-    paths = [f"missing_test_{suffix}_{i}.jpg" for i in range(3)]
-    asset_ids = []
-    for path in paths:
-        r_up = client.post(
-            "/v1/assets/upsert",
-            json={
-                "library_id": library_id,
-                "rel_path": path,
-                "file_size": 1000,
-                "file_mtime": "2025-01-01T12:00:00Z",
-                "media_type": "image",
-                "scan_id": scan1_id,
-            },
-            headers=auth,
-        )
-        assert r_up.status_code == 200
-        r_asset = client.get(
-            "/v1/assets/by-path",
-            params={"library_id": library_id, "rel_path": path},
-            headers=auth,
-        )
-        assert r_asset.status_code == 200
-        asset_ids.append(r_asset.json()["asset_id"])
-
-    # Complete scan1 so assets get availability='online'.
-    r_comp1 = client.post(f"/v1/scans/{scan1_id}/complete", headers=auth)
-    assert r_comp1.status_code == 200
-
-    # Verify all 3 are online before the test.
-    engine = create_engine(tenant_url)
-    try:
-        with engine.connect() as conn:
-            rows = conn.execute(
-                text(
-                    "SELECT asset_id, availability FROM assets WHERE asset_id = ANY(:ids)"
-                ),
-                {"ids": asset_ids},
-            ).fetchall()
-    finally:
-        engine.dispose()
-    assert all(r[1] == "online" for r in rows), f"Expected all online: {rows}"
-
-    # Start a new scan that only sees assets[0].
-    r_scan2 = client.post(
-        "/v1/scans",
-        json={"library_id": library_id, "status": "running"},
-        headers=auth,
-    )
-    assert r_scan2.status_code == 200
-    scan2_id = r_scan2.json()["scan_id"]
-
-    r_up2 = client.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": paths[0],
-            "file_size": 1000,
-            "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": "image",
-            "scan_id": scan2_id,
-        },
-        headers=auth,
-    )
-    assert r_up2.status_code == 200
-
-    # Complete scan2 — this triggers mark_missing_for_scan.
-    r_comp2 = client.post(f"/v1/scans/{scan2_id}/complete", headers=auth)
-    assert r_comp2.status_code == 200
-    # The response should report 2 missing.
-    assert r_comp2.json()["files_missing"] >= 2
-
-    # Verify DB state: assets[0] stays online; assets[1] and assets[2] → missing.
-    engine = create_engine(tenant_url)
-    try:
-        with engine.connect() as conn:
-            avail_map = dict(
-                conn.execute(
-                    text(
-                        "SELECT asset_id, availability FROM assets WHERE asset_id = ANY(:ids)"
-                    ),
-                    {"ids": asset_ids},
-                ).fetchall()
-            )
-    finally:
-        engine.dispose()
-
-    assert avail_map[asset_ids[0]] == "online", "Seen asset must stay online"
-    assert avail_map[asset_ids[1]] == "missing", "Unseen asset must be marked missing"
-    assert avail_map[asset_ids[2]] == "missing", "Unseen asset must be marked missing"
 

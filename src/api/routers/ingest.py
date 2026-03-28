@@ -336,17 +336,12 @@ async def create_and_ingest(
     created = False
 
     if existing is None:
-        # Create a minimal scan record for the asset (required by create_for_scan).
-        from src.repository.tenant import ScanRepository
-        scan_repo = ScanRepository(session)
-        scan = scan_repo.create(library_id=library_id, status="complete")
-        asset = asset_repo.create_for_scan(
+        asset = asset_repo.create_asset(
             library_id=library_id,
             rel_path=rel_path,
             file_size=file_size,
             file_mtime=file_mtime_dt,
             media_type=media_type,
-            scan_id=scan.scan_id,
         )
         asset_id = asset.asset_id
         created = True

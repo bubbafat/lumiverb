@@ -22,7 +22,6 @@ from src.models.tenant import (
     AssetMetadata,
     Library,
     LibraryPathFilter,
-    Scan,
     TenantPathFilterDefault,
     VideoIndexChunk,
     VideoScene,
@@ -126,7 +125,7 @@ class LibraryRepository:
 
     def hard_delete(self, library_id: str) -> None:
         """Permanently delete library and all related data in FK-safe order. Single transaction."""
-        # Order: asset_metadata, video_scenes, video_index_chunks, assets, scans, libraries
+        # Order: asset_metadata, video_scenes, video_index_chunks, assets, libraries
         params = {"library_id": library_id}
         self._session.execute(
             text(
@@ -165,34 +164,11 @@ class LibraryRepository:
             params,
         )
         self._session.execute(text("DELETE FROM assets WHERE library_id = :library_id"), params)
-        self._session.execute(text("DELETE FROM scans WHERE library_id = :library_id"), params)
         self._session.execute(
             text("DELETE FROM library_path_filters WHERE library_id = :library_id"), params
         )
         self._session.execute(text("DELETE FROM libraries WHERE library_id = :library_id"), params)
         self._session.commit()
-
-    def update_scan_status(
-        self,
-        library_id: str,
-        status: str,
-        error: str | None = None,
-    ) -> Library:
-        """Update scan_status; when status is 'complete' also clears last_scan_error; when 'error' sets it."""
-        library = self.get_by_id(library_id)
-        if library is None:
-            raise ValueError(f"Library not found: {library_id}")
-        library.scan_status = status
-        if status in ("complete", "error"):
-            library.last_scan_at = utcnow()
-        if status == "complete":
-            library.last_scan_error = None  # always clear on success
-        elif status == "error" and error is not None:
-            library.last_scan_error = error  # only overwrite if message provided
-        self._session.add(library)
-        self._session.commit()
-        self._session.refresh(library)
-        return library
 
 
 class PathFilterRepository:
@@ -278,115 +254,6 @@ class PathFilterRepository:
             count += 1
         return count
 
-
-class ScanRepository:
-    """Repository for scans table."""
-
-    def __init__(self, session: Session) -> None:
-        self._session = session
-
-    def create(
-        self,
-        library_id: str,
-        root_path_override: str | None = None,
-        worker_id: str | None = None,
-        status: str = "running",
-        error_message: str | None = None,
-    ) -> Scan:
-        """Generate scan_id as scan_ + ULID(), insert, return Scan."""
-        scan_id = "scan_" + str(ULID())
-        scan = Scan(
-            scan_id=scan_id,
-            library_id=library_id,
-            status=status,
-            root_path_override=root_path_override,
-            worker_id=worker_id,
-            error_message=error_message,
-        )
-        self._session.add(scan)
-        self._session.commit()
-        self._session.refresh(scan)
-        return scan
-
-    def get_by_id(self, scan_id: str) -> Scan | None:
-        """Return scan by id or None."""
-        stmt = select(Scan).where(Scan.scan_id == scan_id)
-        return self._session.exec(stmt).first()
-
-    def get_running_scans(self, library_id: str) -> list[Scan]:
-        """Return scans with status='running' and started_at within last 2 minutes (staleness threshold)."""
-        threshold = utcnow() - timedelta(minutes=2)
-        stmt = (
-            select(Scan)
-            .where(Scan.library_id == library_id)
-            .where(Scan.status == "running")
-            .where(Scan.started_at > threshold)
-        )
-        return list(self._session.exec(stmt).all())
-
-    def record_batch_counts(
-        self,
-        scan_id: str,
-        added: int,
-        updated: int,
-        skipped: int,
-        missing: int,
-    ) -> None:
-        """Accumulate batch counts on scan record. Use COALESCE for initial NULLs."""
-        self._session.execute(
-            text(
-                """
-                UPDATE scans SET
-                    files_added = COALESCE(files_added, 0) + :added,
-                    files_updated = COALESCE(files_updated, 0) + :updated,
-                    files_skipped = COALESCE(files_skipped, 0) + :skipped,
-                    files_missing = COALESCE(files_missing, 0) + :missing,
-                    files_discovered = COALESCE(files_discovered, 0) + :added + :updated + :skipped
-                WHERE scan_id = :scan_id
-                """
-            ),
-            {
-                "scan_id": scan_id,
-                "added": added,
-                "updated": updated,
-                "skipped": skipped,
-                "missing": missing,
-            },
-        )
-        self._session.commit()
-
-    def complete(self, scan_id: str, counts: dict) -> Scan:
-        """Set status='complete', completed_at=now(), and count fields from counts dict."""
-        scan = self.get_by_id(scan_id)
-        if scan is None:
-            raise ValueError(f"Scan not found: {scan_id}")
-        scan.status = "complete"
-        scan.completed_at = utcnow()
-        scan.files_discovered = counts.get("files_discovered")
-        scan.files_added = counts.get("files_added")
-        scan.files_updated = counts.get("files_updated")
-        scan.files_skipped = counts.get("files_skipped")
-        scan.files_missing = counts.get("files_missing")
-        self._session.add(scan)
-        self._session.commit()
-        self._session.refresh(scan)
-        return scan
-
-    def abort(self, scan_id: str, error_message: str | None = None) -> Scan:
-        """Set status='aborted' or 'error', completed_at=now()."""
-        scan = self.get_by_id(scan_id)
-        if scan is None:
-            raise ValueError(f"Scan not found: {scan_id}")
-        scan.status = "error" if error_message else "aborted"
-        scan.completed_at = utcnow()
-        if error_message is not None:
-            scan.error_message = error_message
-        self._session.add(scan)
-        self._session.commit()
-        self._session.refresh(scan)
-        return scan
-
-
 class AssetRepository:
     """Repository for assets table."""
 
@@ -400,74 +267,15 @@ class AssetRepository:
             Asset.rel_path == rel_path,
         )
         return self._session.exec(stmt).first()
-
-    def create_or_update_for_scan_bulk(
-        self,
-        library_id: str,
-        scan_id: str,
-        items: list[dict],
-    ) -> int:
-        """Insert or update assets by (library_id, rel_path). Each item: rel_path, file_size, file_mtime, media_type."""
-        if not items:
-            return 0
-        now = utcnow()
-        values = []
-        for it in items:
-            file_mtime_dt: datetime | None = None
-            if it.get("file_mtime"):
-                try:
-                    fm = it["file_mtime"]
-                    if isinstance(fm, str):
-                        fm = fm.replace("Z", "+00:00")
-                    file_mtime_dt = datetime.fromisoformat(fm) if isinstance(fm, str) else fm
-                except (ValueError, TypeError):
-                    pass
-            asset_id = "ast_" + str(ULID())
-            values.append({
-                "asset_id": asset_id,
-                "library_id": library_id,
-                "rel_path": it["rel_path"],
-                "file_size": it["file_size"],
-                "file_mtime": file_mtime_dt,
-                "media_type": it["media_type"],
-                "status": asset_status.PENDING,
-                "availability": "online",
-                "last_scan_id": scan_id,
-                "created_at": now,
-                "updated_at": now,
-            })
-        stmt = pg_insert(Asset).values(values)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["library_id", "rel_path"],
-            set_={
-                "file_size": stmt.excluded.file_size,
-                "file_mtime": stmt.excluded.file_mtime,
-                "status": "pending",
-                "availability": "online",
-                "last_scan_id": scan_id,
-                "updated_at": now,
-                "deleted_at": None,  # restore if previously trashed
-                "proxy_key": None,
-                "thumbnail_key": None,
-                "proxy_sha256": None,
-                "thumbnail_sha256": None,
-                "video_preview_key": None,
-            },
-        )
-        self._session.execute(stmt)
-        self._session.commit()
-        return len(items)
-
-    def create_for_scan(
+    def create_asset(
         self,
         library_id: str,
         rel_path: str,
         file_size: int,
         file_mtime: datetime | None,
         media_type: str,
-        scan_id: str,
     ) -> Asset:
-        """Create asset with status='pending', availability='online', last_scan_id=scan_id."""
+        """Create a new asset."""
         asset_id = "ast_" + str(ULID())
         asset = Asset(
             asset_id=asset_id,
@@ -478,164 +286,11 @@ class AssetRepository:
             media_type=media_type,
             status=asset_status.PENDING,
             availability="online",
-            last_scan_id=scan_id,
         )
         self._session.add(asset)
         self._session.commit()
         self._session.refresh(asset)
         return asset
-
-    def update_for_scan(
-        self,
-        asset_id: str,
-        file_size: int,
-        file_mtime: datetime | None,
-        availability: str,
-        status: str,
-        last_scan_id: str,
-        media_type: str | None = None,
-    ) -> Asset:
-        """Update asset file_size, file_mtime, availability, status, last_scan_id.
-
-        Also clears deleted_at: a file present on disk during a scan is by definition
-        active, so this implicitly restores a previously-trashed asset.
-        """
-        asset = self._session.get(Asset, asset_id)
-        if asset is None:
-            raise ValueError(f"Asset not found: {asset_id}")
-        asset.file_size = file_size
-        asset.file_mtime = file_mtime
-        asset.availability = availability
-        asset.status = status
-        asset.last_scan_id = last_scan_id
-        asset.deleted_at = None
-        if media_type is not None:
-            asset.media_type = media_type
-        # When resetting to pending (file changed), clear stale artifact keys
-        if status == asset_status.PENDING:
-            asset.proxy_key = None
-            asset.thumbnail_key = None
-            asset.proxy_sha256 = None
-            asset.thumbnail_sha256 = None
-            asset.video_preview_key = None
-        self._session.add(asset)
-        self._session.commit()
-        self._session.refresh(asset)
-        return asset
-
-    def update_for_scan_bulk(self, items: list[dict], scan_id: str) -> int:
-        """Bulk update assets for a scan. Each item: asset_id, file_size, file_mtime (datetime|None), media_type (str|None).
-        Sets availability='online', status='pending', last_scan_id, deleted_at=NULL. Returns count updated."""
-        if not items:
-            return 0
-        now = utcnow()
-        for batch_start in range(0, len(items), 500):
-            batch = items[batch_start : batch_start + 500]
-            asset_ids = [it["asset_id"] for it in batch]
-            file_sizes = [it["file_size"] for it in batch]
-            file_mtimes = [it.get("file_mtime") for it in batch]
-            media_types = [it.get("media_type") for it in batch]
-            self._session.execute(
-                text(
-                    """
-                    UPDATE assets AS a
-                    SET
-                        file_size = v.file_size,
-                        file_mtime = v.file_mtime,
-                        media_type = COALESCE(v.media_type, a.media_type),
-                        availability = 'online',
-                        status = 'pending',
-                        last_scan_id = :scan_id,
-                        deleted_at = NULL,
-                        updated_at = :now,
-                        proxy_key = NULL,
-                        thumbnail_key = NULL,
-                        proxy_sha256 = NULL,
-                        thumbnail_sha256 = NULL,
-                        video_preview_key = NULL
-                    FROM unnest(
-                        CAST(:asset_ids AS text[]),
-                        CAST(:file_sizes AS bigint[]),
-                        CAST(:file_mtimes AS timestamptz[]),
-                        CAST(:media_types AS text[])
-                    ) AS v(asset_id, file_size, file_mtime, media_type)
-                    WHERE a.asset_id = v.asset_id
-                    """
-                ),
-                {
-                    "scan_id": scan_id,
-                    "now": now,
-                    "asset_ids": asset_ids,
-                    "file_sizes": file_sizes,
-                    "file_mtimes": file_mtimes,
-                    "media_types": media_types,
-                },
-            )
-        self._session.commit()
-        return len(items)
-
-    def touch_for_scan(self, asset_id: str, last_scan_id: str) -> Asset:
-        """Update last_scan_id and availability='online' only (for skipped)."""
-        asset = self._session.get(Asset, asset_id)
-        if asset is None:
-            raise ValueError(f"Asset not found: {asset_id}")
-        asset.last_scan_id = last_scan_id
-        asset.availability = "online"
-        self._session.add(asset)
-        self._session.commit()
-        self._session.refresh(asset)
-        return asset
-
-    def touch_for_scan_bulk(self, asset_ids: list[str], scan_id: str) -> int:
-        """Bulk update last_scan_id and availability='online'. Returns count updated."""
-        if not asset_ids:
-            return 0
-        for batch_start in range(0, len(asset_ids), 500):
-            batch = asset_ids[batch_start : batch_start + 500]
-            self._session.execute(
-                text(
-                    """
-                    UPDATE assets SET last_scan_id = :scan_id, availability = 'online'
-                    WHERE asset_id = ANY(:asset_ids)
-                    """
-                ),
-                {"scan_id": scan_id, "asset_ids": batch},
-            )
-        self._session.commit()
-        return len(asset_ids)
-
-    def set_missing_bulk(self, asset_ids: list[str], scan_id: str) -> int:
-        """Set availability='missing' and last_scan_id for given asset_ids. Returns count updated."""
-        if not asset_ids:
-            return 0
-        for batch_start in range(0, len(asset_ids), 500):
-            batch = asset_ids[batch_start : batch_start + 500]
-            self._session.execute(
-                text(
-                    """
-                    UPDATE assets SET availability = 'missing', last_scan_id = :scan_id
-                    WHERE asset_id = ANY(:asset_ids)
-                    """
-                ),
-                {"scan_id": scan_id, "asset_ids": batch},
-            )
-        self._session.commit()
-        return len(asset_ids)
-
-    def mark_missing_for_scan(self, library_id: str, scan_id: str) -> int:
-        """Set availability='missing' for active assets in library not seen in this scan (online only). Return count updated."""
-        result = self._session.execute(
-            text("""
-                UPDATE assets
-                SET availability = 'missing'
-                WHERE library_id = :library_id
-                  AND deleted_at IS NULL
-                  AND availability = 'online'
-                  AND (last_scan_id != :scan_id OR last_scan_id IS NULL)
-            """),
-            {"library_id": library_id, "scan_id": scan_id},
-        )
-        return result.rowcount
 
     def get_by_id(self, asset_id: str) -> Asset | None:
         """Return active (non-trashed) asset by id or None."""

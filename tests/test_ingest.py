@@ -105,14 +105,6 @@ def ingest_env(tmp_path_factory):
                     assert r_lib.status_code == 200
                     library_id = r_lib.json()["library_id"]
 
-                    r_scan = raw_client.post(
-                        "/v1/scans",
-                        json={"library_id": library_id, "status": "running"},
-                        headers=auth_headers,
-                    )
-                    assert r_scan.status_code == 200
-                    scan_id = r_scan.json()["scan_id"]
-
                     # Helper to create assets
                     def create_asset(rel_path: str) -> str:
                         raw_client.post(
@@ -123,7 +115,6 @@ def ingest_env(tmp_path_factory):
                                 "file_size": 1000,
                                 "file_mtime": "2025-01-01T12:00:00Z",
                                 "media_type": "image",
-                                "scan_id": scan_id,
                             },
                             headers=auth_headers,
                         )

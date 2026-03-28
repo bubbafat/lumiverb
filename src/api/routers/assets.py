@@ -15,7 +15,7 @@ from sqlmodel import Session
 from src.api.dependencies import get_tenant_session
 from src.core import asset_status
 from src.core.io_utils import normalize_path_prefix
-from src.repository.tenant import AssetMetadataRepository, AssetRepository, LibraryRepository, ScanRepository
+from src.repository.tenant import AssetMetadataRepository, AssetRepository, LibraryRepository
 from src.storage.local import get_storage
 from src.core.utils import utcnow
 
@@ -32,7 +32,7 @@ class UpsertAssetRequest(BaseModel):
     file_size: int
     file_mtime: str | None  # ISO8601
     media_type: str
-    scan_id: str
+    scan_id: str | None = None  # deprecated, ignored
     force: bool = False
 
 
@@ -823,17 +823,12 @@ def upsert_asset(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> UpsertAssetResponse:
     """
-    Legacy single-file upsert. Prefer POST /v1/scans/{scan_id}/batch for bulk operations.
     Upsert by (library_id, rel_path): creates if not found; otherwise updates or skips.
     """
     lib_repo = LibraryRepository(session)
     library = lib_repo.get_by_id(body.library_id)
     if library is None:
         raise HTTPException(status_code=404, detail="Library not found")
-    scan_repo = ScanRepository(session)
-    scan = scan_repo.get_by_id(body.scan_id)
-    if scan is None:
-        raise HTTPException(status_code=404, detail="Scan not found")
 
     file_mtime_dt: datetime | None = None
     if body.file_mtime:
@@ -846,41 +841,21 @@ def upsert_asset(
     existing = asset_repo.get_by_library_and_rel_path(body.library_id, body.rel_path)
 
     if existing is None:
-        asset_repo.create_for_scan(
+        asset_repo.create_asset(
             library_id=body.library_id,
             rel_path=body.rel_path,
             file_size=body.file_size,
             file_mtime=file_mtime_dt,
             media_type=body.media_type,
-            scan_id=body.scan_id,
         )
         return UpsertAssetResponse(action="added")
 
-    if body.force:
-        asset_repo.update_for_scan(
-            asset_id=existing.asset_id,
-            file_size=body.file_size,
-            file_mtime=file_mtime_dt,
-            availability="online",
-            status="pending",
-            last_scan_id=body.scan_id,
-        )
+    if body.force or existing.file_size != body.file_size or existing.file_mtime != file_mtime_dt:
+        existing.file_size = body.file_size
+        existing.file_mtime = file_mtime_dt
+        existing.availability = "online"
+        session.add(existing)
+        session.commit()
         return UpsertAssetResponse(action="updated")
 
-    if (
-        existing.sha256 is not None
-        and existing.file_size == body.file_size
-        and existing.file_mtime == file_mtime_dt
-    ):
-        asset_repo.touch_for_scan(existing.asset_id, body.scan_id)
-        return UpsertAssetResponse(action="skipped")
-
-    asset_repo.update_for_scan(
-        asset_id=existing.asset_id,
-        file_size=body.file_size,
-        file_mtime=file_mtime_dt,
-        availability="online",
-        status="pending",
-        last_scan_id=body.scan_id,
-    )
-    return UpsertAssetResponse(action="updated")
+    return UpsertAssetResponse(action="skipped")

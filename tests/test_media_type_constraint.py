@@ -74,15 +74,7 @@ def media_type_client():
                 assert r_lib.status_code == 200
                 library_id = r_lib.json()["library_id"]
 
-                r_scan = client.post(
-                    "/v1/scans",
-                    json={"library_id": library_id, "status": "running"},
-                    headers=auth,
-                )
-                assert r_scan.status_code == 200
-                scan_id = r_scan.json()["scan_id"]
-
-                yield client, auth, library_id, scan_id, tenant_engine
+                yield client, auth, library_id, tenant_engine
 
         _engines.clear()
 
@@ -90,7 +82,7 @@ def media_type_client():
 @pytest.mark.slow
 def test_image_media_type_accepted(media_type_client):
     """media_type='image' is accepted."""
-    client, auth, library_id, scan_id, _ = media_type_client
+    client, auth, library_id, _ = media_type_client
     r = client.post(
         "/v1/assets/upsert",
         json={
@@ -99,7 +91,6 @@ def test_image_media_type_accepted(media_type_client):
             "file_size": 1000,
             "file_mtime": "2025-01-01T12:00:00Z",
             "media_type": "image",
-            "scan_id": scan_id,
         },
         headers=auth,
     )
@@ -109,7 +100,7 @@ def test_image_media_type_accepted(media_type_client):
 @pytest.mark.slow
 def test_video_media_type_accepted(media_type_client):
     """media_type='video' is accepted."""
-    client, auth, library_id, scan_id, _ = media_type_client
+    client, auth, library_id, _ = media_type_client
     r = client.post(
         "/v1/assets/upsert",
         json={
@@ -118,7 +109,6 @@ def test_video_media_type_accepted(media_type_client):
             "file_size": 5000,
             "file_mtime": "2025-01-01T12:00:00Z",
             "media_type": "video",
-            "scan_id": scan_id,
         },
         headers=auth,
     )
@@ -128,7 +118,7 @@ def test_video_media_type_accepted(media_type_client):
 @pytest.mark.slow
 def test_invalid_media_type_rejected(media_type_client):
     """media_type='image/jpeg' (or any non-allowed value) is rejected by the DB constraint."""
-    _, _, library_id, scan_id, tenant_engine = media_type_client
+    _, _, library_id, tenant_engine = media_type_client
     with tenant_engine.connect() as conn:
         from sqlalchemy.exc import IntegrityError
         with pytest.raises(IntegrityError, match="ck_assets_media_type"):

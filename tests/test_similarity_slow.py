@@ -17,7 +17,7 @@ from src.api.main import app
 from src.core.config import get_settings
 from src.core.database import _engines, get_control_session
 from src.repository.control_plane import TenantDbRoutingRepository
-from src.repository.tenant import AssetEmbeddingRepository, AssetRepository, LibraryRepository, ScanRepository
+from src.repository.tenant import AssetEmbeddingRepository, AssetRepository, LibraryRepository
 from tests.conftest import _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 
@@ -100,16 +100,13 @@ def test_similar_no_embedding(similarity_client: Tuple[_AuthClient, str, str]) -
     close_id: str
     far_id: str
     with Session(engine) as session:
-        scan_repo = ScanRepository(session)
-        scan = scan_repo.create(library_id=library_id)
         asset_repo = AssetRepository(session)
-        asset = asset_repo.create_for_scan(
+        asset = asset_repo.create_asset(
             library_id=library_id,
             rel_path="photos/a.jpg",
             file_size=123,
             file_mtime=None,
             media_type="image",
-            scan_id=scan.scan_id,
         )
 
     resp = auth_client.get(
@@ -129,35 +126,30 @@ def test_similar_with_embeddings(similarity_client: Tuple[_AuthClient, str, str]
 
     engine = create_engine(tenant_url)
     with Session(engine) as session:
-        scan_repo = ScanRepository(session)
-        scan = scan_repo.create(library_id=library_id)
         asset_repo = AssetRepository(session)
         # Base, close, far vectors
         base_vec, close_vec, far_vec = _asset_vectors()
 
-        base_asset = asset_repo.create_for_scan(
+        base_asset = asset_repo.create_asset(
             library_id=library_id,
             rel_path="photos/base.jpg",
             file_size=100,
             file_mtime=None,
             media_type="image",
-            scan_id=scan.scan_id,
         )
-        close_asset = asset_repo.create_for_scan(
+        close_asset = asset_repo.create_asset(
             library_id=library_id,
             rel_path="photos/close.jpg",
             file_size=100,
             file_mtime=None,
             media_type="image",
-            scan_id=scan.scan_id,
         )
-        far_asset = asset_repo.create_for_scan(
+        far_asset = asset_repo.create_asset(
             library_id=library_id,
             rel_path="photos/far.jpg",
             file_size=100,
             file_mtime=None,
             media_type="image",
-            scan_id=scan.scan_id,
         )
 
         emb_repo = AssetEmbeddingRepository(session)
@@ -208,34 +200,29 @@ def test_similar_date_range_filter(similarity_client: Tuple[_AuthClient, str, st
 
     engine = create_engine(tenant_url)
     with Session(engine) as session:
-        scan_repo = ScanRepository(session)
-        scan = scan_repo.create(library_id=library_id)
         asset_repo = AssetRepository(session)
         base_vec, close_vec, far_vec = _asset_vectors()
 
-        base_asset = asset_repo.create_for_scan(
+        base_asset = asset_repo.create_asset(
             library_id=library_id,
             rel_path="date_filter/base.jpg",
             file_size=100,
             file_mtime=None,
             media_type="image",
-            scan_id=scan.scan_id,
         )
-        close_asset = asset_repo.create_for_scan(
+        close_asset = asset_repo.create_asset(
             library_id=library_id,
             rel_path="date_filter/close_oct.jpg",
             file_size=100,
             file_mtime=None,
             media_type="image",
-            scan_id=scan.scan_id,
         )
-        far_asset = asset_repo.create_for_scan(
+        far_asset = asset_repo.create_asset(
             library_id=library_id,
             rel_path="date_filter/far_nov.jpg",
             file_size=100,
             file_mtime=None,
             media_type="image",
-            scan_id=scan.scan_id,
         )
         base_asset.taken_at = datetime(2025, 10, 15, 12, 0, 0, tzinfo=timezone.utc)
         close_asset.taken_at = datetime(2025, 10, 20, 12, 0, 0, tzinfo=timezone.utc)
@@ -304,34 +291,29 @@ def test_search_by_image_basic(similarity_client: Tuple[_AuthClient, str, str]) 
 
     engine = create_engine(tenant_url)
     with Session(engine) as session:
-        scan_repo = ScanRepository(session)
-        scan = scan_repo.create(library_id=library_id)
         asset_repo = AssetRepository(session)
         base_vec, close_vec, far_vec = _asset_vectors()
 
-        base_asset = asset_repo.create_for_scan(
+        base_asset = asset_repo.create_asset(
             library_id=library_id,
             rel_path="image_search/base.jpg",
             file_size=100,
             file_mtime=None,
             media_type="image",
-            scan_id=scan.scan_id,
         )
-        close_asset = asset_repo.create_for_scan(
+        close_asset = asset_repo.create_asset(
             library_id=library_id,
             rel_path="image_search/close.jpg",
             file_size=100,
             file_mtime=None,
             media_type="image",
-            scan_id=scan.scan_id,
         )
-        far_asset = asset_repo.create_for_scan(
+        far_asset = asset_repo.create_asset(
             library_id=library_id,
             rel_path="image_search/far.jpg",
             file_size=100,
             file_mtime=None,
             media_type="image",
-            scan_id=scan.scan_id,
         )
 
         emb_repo = AssetEmbeddingRepository(session)
@@ -382,34 +364,29 @@ def test_similar_asset_types_filter(similarity_client: Tuple[_AuthClient, str, s
 
     engine = create_engine(tenant_url)
     with Session(engine) as session:
-        scan_repo = ScanRepository(session)
-        scan = scan_repo.create(library_id=library_id)
         asset_repo = AssetRepository(session)
         base_vec, close_vec, far_vec = _asset_vectors()
 
-        base_asset = asset_repo.create_for_scan(
+        base_asset = asset_repo.create_asset(
             library_id=library_id,
             rel_path="type_filter/base.jpg",
             file_size=100,
             file_mtime=None,
             media_type="image",
-            scan_id=scan.scan_id,
         )
-        close_asset = asset_repo.create_for_scan(
+        close_asset = asset_repo.create_asset(
             library_id=library_id,
             rel_path="type_filter/close_image.jpg",
             file_size=100,
             file_mtime=None,
             media_type="image",
-            scan_id=scan.scan_id,
         )
-        far_asset = asset_repo.create_for_scan(
+        far_asset = asset_repo.create_asset(
             library_id=library_id,
             rel_path="type_filter/far_video.mp4",
             file_size=100,
             file_mtime=None,
             media_type="video",
-            scan_id=scan.scan_id,
         )
 
         emb_repo = AssetEmbeddingRepository(session)
@@ -463,34 +440,29 @@ def test_similar_camera_filter(similarity_client: Tuple[_AuthClient, str, str]) 
 
     engine = create_engine(tenant_url)
     with Session(engine) as session:
-        scan_repo = ScanRepository(session)
-        scan = scan_repo.create(library_id=library_id)
         asset_repo = AssetRepository(session)
         base_vec, close_vec, far_vec = _asset_vectors()
 
-        base_asset = asset_repo.create_for_scan(
+        base_asset = asset_repo.create_asset(
             library_id=library_id,
             rel_path="camera_filter/base.jpg",
             file_size=100,
             file_mtime=None,
             media_type="image",
-            scan_id=scan.scan_id,
         )
-        close_asset = asset_repo.create_for_scan(
+        close_asset = asset_repo.create_asset(
             library_id=library_id,
             rel_path="camera_filter/close_canon.jpg",
             file_size=100,
             file_mtime=None,
             media_type="image",
-            scan_id=scan.scan_id,
         )
-        far_asset = asset_repo.create_for_scan(
+        far_asset = asset_repo.create_asset(
             library_id=library_id,
             rel_path="camera_filter/far_nikon.jpg",
             file_size=100,
             file_mtime=None,
             media_type="image",
-            scan_id=scan.scan_id,
         )
         base_asset.camera_make = "Canon"
         base_asset.camera_model = "EOS R5"

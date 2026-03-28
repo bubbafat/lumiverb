@@ -19,14 +19,6 @@ from tests.conftest import _ensure_psycopg2, _provision_tenant_db, _run_control_
 
 def _create_asset_for_test(client: TestClient, auth: dict[str, str], library_id: str, rel_path: str) -> str:
     """Create a new asset in library and return its asset_id (order-independent for module fixtures)."""
-    r_scan = client.post(
-        "/v1/scans",
-        json={"library_id": library_id, "status": "running"},
-        headers=auth,
-    )
-    assert r_scan.status_code == 200, (r_scan.status_code, r_scan.text)
-    scan_id = r_scan.json()["scan_id"]
-
     r_up = client.post(
         "/v1/assets/upsert",
         json={
@@ -35,7 +27,6 @@ def _create_asset_for_test(client: TestClient, auth: dict[str, str], library_id:
             "file_size": 1234,
             "file_mtime": "2025-01-01T12:00:00Z",
             "media_type": "image",
-            "scan_id": scan_id,
         },
         headers=auth,
     )
@@ -106,14 +97,6 @@ def trash_api_client() -> tuple[TestClient, str, str, list[str]]:
                 assert r_lib.status_code == 200
                 library_id = r_lib.json()["library_id"]
 
-                r_scan = client.post(
-                    "/v1/scans",
-                    json={"library_id": library_id, "status": "running"},
-                    headers=auth,
-                )
-                assert r_scan.status_code == 200
-                scan_id = r_scan.json()["scan_id"]
-
                 asset_ids: list[str] = []
                 for i, rel_path in enumerate(["x.jpg", "y.jpg", "z.png"]):
                     r_up = client.post(
@@ -124,7 +107,6 @@ def trash_api_client() -> tuple[TestClient, str, str, list[str]]:
                             "file_size": 1000 + i,
                             "file_mtime": "2025-01-01T12:00:00Z",
                             "media_type": "image",
-                            "scan_id": scan_id,
                         },
                         headers=auth,
                     )

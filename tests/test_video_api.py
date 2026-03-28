@@ -78,14 +78,6 @@ def video_api_client() -> tuple[TestClient, str, str, str, str]:
                 assert r_lib.status_code == 200
                 library_id = r_lib.json()["library_id"]
 
-                r_scan = client.post(
-                    "/v1/scans",
-                    json={"library_id": library_id, "status": "running"},
-                    headers=auth,
-                )
-                assert r_scan.status_code == 200
-                scan_id = r_scan.json()["scan_id"]
-
                 client.post(
                     "/v1/assets/upsert",
                     json={
@@ -94,7 +86,6 @@ def video_api_client() -> tuple[TestClient, str, str, str, str]:
                         "file_size": 5000000,
                         "file_mtime": "2025-01-01T12:00:00Z",
                         "media_type": "video",
-                        "scan_id": scan_id,
                     },
                     headers=auth,
                 )
@@ -246,13 +237,6 @@ def test_get_scenes_empty(video_api_client: tuple[TestClient, str, str, str, str
     auth = {"Authorization": f"Bearer {api_key}"}
 
     # Create a second video asset with no chunks completed
-    r_scan = client.post(
-        "/v1/scans",
-        json={"library_id": library_id, "status": "running"},
-        headers=auth,
-    )
-    assert r_scan.status_code == 200
-    scan_id = r_scan.json()["scan_id"]
     client.post(
         "/v1/assets/upsert",
         json={
@@ -261,7 +245,6 @@ def test_get_scenes_empty(video_api_client: tuple[TestClient, str, str, str, str
             "file_size": 1000,
             "file_mtime": "2025-01-01T12:00:00Z",
             "media_type": "video",
-            "scan_id": scan_id,
         },
         headers=auth,
     )
@@ -286,13 +269,6 @@ def test_get_scenes_after_completion(video_api_client: tuple[TestClient, str, st
     auth = {"Authorization": f"Bearer {api_key}"}
 
     # Use a fresh asset to avoid interference
-    r_scan = client.post(
-        "/v1/scans",
-        json={"library_id": library_id, "status": "running"},
-        headers=auth,
-    )
-    assert r_scan.status_code == 200
-    scan_id = r_scan.json()["scan_id"]
     client.post(
         "/v1/assets/upsert",
         json={
@@ -301,7 +277,6 @@ def test_get_scenes_after_completion(video_api_client: tuple[TestClient, str, st
             "file_size": 2000,
             "file_mtime": "2025-01-01T12:00:00Z",
             "media_type": "video",
-            "scan_id": scan_id,
         },
         headers=auth,
     )
@@ -360,12 +335,6 @@ def test_update_scene_vision(video_api_client: tuple[TestClient, str, str, str, 
     r_claim = client.get(f"/v1/video/{asset_id}/chunks/next", headers=auth)
     if r_claim.status_code == 204:
         # Use a fresh asset and complete a chunk
-        r_scan = client.post(
-            "/v1/scans",
-            json={"library_id": library_id, "status": "running"},
-            headers=auth,
-        )
-        scan_id = r_scan.json()["scan_id"]
         client.post(
             "/v1/assets/upsert",
             json={
@@ -374,7 +343,6 @@ def test_update_scene_vision(video_api_client: tuple[TestClient, str, str, str, 
                 "file_size": 3000,
                 "file_mtime": "2025-01-01T12:00:00Z",
                 "media_type": "video",
-                "scan_id": scan_id,
             },
             headers=auth,
         )

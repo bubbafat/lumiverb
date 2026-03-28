@@ -81,14 +81,6 @@ def directory_api_client() -> tuple[TestClient, str, str, str]:
                 assert r_lib_nested.status_code == 200
                 nested_library_id = r_lib_nested.json()["library_id"]
 
-                r_scan_nested = client.post(
-                    "/v1/scans",
-                    json={"library_id": nested_library_id, "status": "running"},
-                    headers=auth,
-                )
-                assert r_scan_nested.status_code == 200
-                scan_id_nested = r_scan_nested.json()["scan_id"]
-
                 nested_paths = [
                     "2024/Europe/France/Paris/img1.jpg",
                     "2024/Europe/France/Lyon/img2.jpg",
@@ -104,7 +96,6 @@ def directory_api_client() -> tuple[TestClient, str, str, str]:
                             "file_size": 2000 + i,
                             "file_mtime": "2025-01-01T12:00:00Z",
                             "media_type": "image",
-                            "scan_id": scan_id_nested,
                         },
                         headers=auth,
                     )
@@ -119,14 +110,6 @@ def directory_api_client() -> tuple[TestClient, str, str, str]:
                 assert r_lib_flat.status_code == 200
                 flat_library_id = r_lib_flat.json()["library_id"]
 
-                r_scan_flat = client.post(
-                    "/v1/scans",
-                    json={"library_id": flat_library_id, "status": "running"},
-                    headers=auth,
-                )
-                assert r_scan_flat.status_code == 200
-                scan_id_flat = r_scan_flat.json()["scan_id"]
-
                 flat_paths = ["a.jpg", "b.png", "c.heic"]
                 for i, rp in enumerate(flat_paths):
                     r_up = client.post(
@@ -137,7 +120,6 @@ def directory_api_client() -> tuple[TestClient, str, str, str]:
                             "file_size": 3000 + i,
                             "file_mtime": "2025-01-02T12:00:00Z",
                             "media_type": "image",
-                            "scan_id": scan_id_flat,
                         },
                         headers=auth,
                     )

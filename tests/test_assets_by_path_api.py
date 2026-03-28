@@ -121,28 +121,15 @@ def test_get_asset_by_path_happy_path(assets_client: tuple[TestClient, str]) -> 
     assert r_lib.status_code == 200
     library_id = r_lib.json()["library_id"]
 
-    # Use scans API to create an asset via batch add
-    r_scan = client.post(
-        "/v1/scans",
-        json={"library_id": library_id, "status": "running"},
-        headers=auth,
-    )
-    assert r_scan.status_code == 200
-    scan_id = r_scan.json()["scan_id"]
-
     rel_path = "photos/one.jpg"
     client.post(
-        f"/v1/scans/{scan_id}/batch",
+        "/v1/assets/upsert",
         json={
-            "items": [
-                {
-                    "action": "add",
-                    "rel_path": rel_path,
-                    "file_size": 123,
-                    "file_mtime": "2025-01-01T12:00:00Z",
-                    "media_type": "image",
-                }
-            ]
+            "library_id": library_id,
+            "rel_path": rel_path,
+            "file_size": 123,
+            "file_mtime": "2025-01-01T12:00:00Z",
+            "media_type": "image",
         },
         headers=auth,
     )
@@ -183,28 +170,15 @@ def test_stream_proxy_happy_path(assets_client: tuple[TestClient, str], tmp_path
     assert r_lib.status_code == 200
     library_id = r_lib.json()["library_id"]
 
-    # Create asset via scans API
-    r_scan = client.post(
-        "/v1/scans",
-        json={"library_id": library_id, "status": "running"},
-        headers=auth,
-    )
-    assert r_scan.status_code == 200
-    scan_id = r_scan.json()["scan_id"]
-
     rel_path = "photos/proxy.jpg"
     client.post(
-        f"/v1/scans/{scan_id}/batch",
+        "/v1/assets/upsert",
         json={
-            "items": [
-                {
-                    "action": "add",
-                    "rel_path": rel_path,
-                    "file_size": 123,
-                    "file_mtime": "2025-01-01T12:00:00Z",
-                    "media_type": "image",
-                }
-            ]
+            "library_id": library_id,
+            "rel_path": rel_path,
+            "file_size": 123,
+            "file_mtime": "2025-01-01T12:00:00Z",
+            "media_type": "image",
         },
         headers=auth,
     )
