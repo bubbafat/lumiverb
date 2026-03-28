@@ -75,7 +75,10 @@ class LibraryRepository:
         engine = self._session.get_bind()
         with engine.connect() as conn:
             conn.execute(
-                text("UPDATE libraries SET revision = revision + 1 WHERE library_id = :lid"),
+                text(
+                    "UPDATE libraries SET revision = revision + 1,"
+                    " last_scan_at = now() WHERE library_id = :lid"
+                ),
                 {"lid": library_id},
             )
             conn.commit()
