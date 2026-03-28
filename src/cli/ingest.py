@@ -149,13 +149,13 @@ def _generate_proxy_bytes(source_path: Path) -> tuple[bytes, int, int]:
 
 def _build_exif_payload(source_path: Path, media_type: str) -> dict:
     """Extract EXIF and build the JSON payload for the ingest endpoint."""
-    from src.metadata.normalization import _parse_duration
+    from src.workers.exif_extract import parse_duration
 
     exif_data = extract_exif(source_path)
     sha256 = compute_sha256(source_path)
     gps_lat, gps_lon = parse_gps(exif_data)
     taken_at = parse_taken_at(exif_data)
-    duration_sec = _parse_duration(exif_data, media_type == "video")
+    duration_sec = parse_duration(exif_data, media_type == "video")
 
     return {
         "sha256": sha256,

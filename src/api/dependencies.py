@@ -66,12 +66,3 @@ def require_editor(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Editor access required")
 
 
-def require_auth(request: Request) -> None:
-    """
-    Raise 403 if this is a public (unauthenticated) request.
-    Defense-in-depth for write routes that must never be reachable via public access.
-    The middleware already blocks non-GET from the public path, but this makes the
-    restriction explicit in route definitions.
-    """
-    if getattr(request.state, "is_public_request", False):
-        raise HTTPException(status_code=403, detail="This operation requires authentication")

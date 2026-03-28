@@ -1,8 +1,7 @@
 """Tests for audit fixes implemented during the audit session.
 
-FIX-1 (BUG-1): Stale proxy/thumbnail recovery re-enqueues correct job type
+FIX-1 (BUG-1): Stale proxy/thumbnail returns 404 and clears key
 FIX-2 (BUG-2): AssetResponse includes duration_sec
-FIX-3 (BUG-3): last_scan_error cleared on success
 FIX-4 (BUG-4): Library trash soft-deletes assets
 FIX-6 (BUG-7): video-vision complete does NOT enqueue asset-level search sync
 FIX-8 (RISK-1): duration_sec consolidation (duration_ms removed)
@@ -278,11 +277,6 @@ def test_asset_detail_duration_sec_from_duration_sec(
     r = client.get(f"/v1/assets/{asset_id}", headers=auth)
     assert r.status_code == 200, (r.status_code, r.text)
     assert r.json()["duration_sec"] == pytest.approx(90.25)
-
-
-# ---------------------------------------------------------------------------
-# FIX-3 (BUG-3): last_scan_error cleared on success
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------

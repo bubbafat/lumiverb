@@ -51,24 +51,6 @@ def test_openai_strips_thinking_blocks():
 
 
 @pytest.mark.fast
-def test_embedding_config_default_model_is_clip():
-    from src.models.registry import get_embedding_config
-
-    config = get_embedding_config("test-vision-model")
-    assert config.embedding_provider == "clip"
-    assert config.embedding_dim == 512
-
-
-@pytest.mark.fast
-def test_embedding_config_default_fallback():
-    from src.models.registry import get_embedding_config
-
-    config = get_embedding_config("qwen3-visioncaption-2b")
-    assert config.embedding_provider == "clip"
-    assert config.embedding_dim == 512
-
-
-@pytest.mark.fast
 def test_openai_provider_sends_auth_header_when_api_key_set() -> None:
     """When api_key is provided, _chat sends Authorization: Bearer <key>."""
     from unittest.mock import MagicMock, patch

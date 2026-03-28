@@ -51,9 +51,6 @@ workers = [
     "imagehash>=4.3.0",
     "opencv-python-headless>=4.8.0",
     "pyexiftool>=0.5",
-    "mediapipe>=0.10.0,<0.11",
-    "rapidfuzz>=3.0.0",
-    "reverse_geocoder>=1.5",
     "torch>=2.10.0",
     "open-clip-torch>=3.3.0",
 ]

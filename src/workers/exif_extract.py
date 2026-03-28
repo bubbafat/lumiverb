@@ -242,3 +242,33 @@ def parse_orientation(exif: dict) -> int | None:
         return int(val)
     except (TypeError, ValueError):
         return None
+
+
+def parse_duration(raw_exif: dict, is_video: bool) -> float | None:
+    """Parse video duration from EXIF Duration field. Returns seconds or None."""
+    if not is_video:
+        return None
+    val = raw_exif.get("Duration")
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str):
+        s = val.strip()
+        if not s:
+            return None
+        if ":" in s:
+            parts = s.split(":")
+            try:
+                parts_f = [float(p) for p in parts]
+            except ValueError:
+                return None
+            if len(parts_f) == 3:
+                h, m, sec = parts_f
+                return h * 3600 + m * 60 + sec
+            if len(parts_f) == 2:
+                m, sec = parts_f
+                return m * 60 + sec
+        try:
+            return float(s)
+        except ValueError:
+            return None
+    return None
