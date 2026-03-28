@@ -27,22 +27,23 @@
 Two-layer Postgres architecture:
 
 **Control plane DB** (shared, tiny):
-- `tenants` — tenant_id, name, plan, status, vision_api_url, vision_api_key, created_at
-- `api_keys` — key_hash, tenant_id, name, scopes, role (`admin`), created_at
+- `tenants` — tenant_id, name, plan, status, vision_api_url, vision_api_key, vision_model_id, created_at
+- `api_keys` — key_id, key_hash, tenant_id, name, label, scopes, role (`admin`|`editor`|`viewer`), created_at, last_used_at, revoked_at
 - `users` — user_id, tenant_id, email, password_hash, role (`admin`|`editor`|`viewer`), created_at, last_login_at
 - `password_reset_tokens` — token_hash, user_id, expires_at, used_at
+- `public_libraries` — library_id, tenant_id, connection_string, created_at
 - `tenant_db_routing` — tenant_id, connection_string, region
 
 **Tenant DB** (one per tenant, same Postgres instance):
-- `libraries` — library_id, name, root_path, scan_status, revision (int, bumped on asset changes), created_at
+- `libraries` — library_id, name, root_path, status, scan_status, last_scan_at, is_public, revision (int, bumped on asset ingest), created_at, updated_at
 - `library_path_filters` — filter_id (lpf_+ULID), library_id FK, type (include|exclude), pattern, created_at. Controls which paths are ingested per library.
 - `tenant_path_filter_defaults` — default_id (tpfd_+ULID), tenant_id, type (include|exclude), pattern, created_at. Tenant defaults and library filters are merged at evaluation time (see filter evaluation rules below).
-- `assets` — asset_id, library_id, sha256, file_path, file_size, media_type, width, height, duration_sec, proxy_key, proxy_sha256, thumbnail_key, thumbnail_sha256, availability, video_indexed, status, deleted_at, created_at
-- `video_scenes` — scene_id, asset_id, start_ms, end_ms, rep_frame_ms, proxy_key, thumbnail_key, rep_frame_sha256, description, tags, sharpness_score, keep_reason, phash, created_at
+- `assets` — asset_id, library_id, rel_path, sha256, file_size, file_mtime, media_type, width, height, duration_sec, proxy_key, proxy_sha256, thumbnail_key, thumbnail_sha256, exif (JSON), exif_extracted_at, camera_make, camera_model, taken_at, gps_lat, gps_lon, iso, exposure_time_us, aperture, focal_length, focal_length_35mm, lens_model, flash_fired, orientation, availability, status, video_indexed, video_preview_key, error_message, created_at, updated_at, deleted_at, search_synced_at
+- `video_scenes` — scene_id, asset_id, scene_index, start_ms, end_ms, rep_frame_ms, proxy_key, thumbnail_key, rep_frame_sha256, description, tags (JSONB), sharpness_score, keep_reason, phash, created_at, search_synced_at
 - `video_index_chunks` — chunk_id, asset_id, chunk_index, start_ms, end_ms, status, worker_id, claimed_at, lease_expires_at, completed_at, error_message, anchor_phash, scene_start_ms, created_at
-- `asset_metadata` — asset_id, exif_json, sharpness_score, face_count, ai_description, ai_description_at, embedding_vector vector(512) [nullable]
-- `search_sync_queue` — asset_id, scene_id, operation, status, created_at
-- `system_metadata` — key, value
+- `asset_metadata` — metadata_id, asset_id, model_id, model_version, generated_at, data (JSONB)
+- `asset_embeddings` — embedding_id, asset_id, model_id, model_version, embedding_vector vector(512), created_at
+- `system_metadata` — key, value, updated_at
 - `faces` — face_id, asset_id, bounding_box_json, embedding_vector vector(512), detection_confidence, created_at [phase 2, empty until then]
 - `people` — person_id, display_name, created_by_user, created_at [phase 2]
 - `face_person_matches` — face_id, person_id, confidence, confirmed bool, confirmed_at [phase 2]
@@ -62,15 +63,31 @@ SELECT * FROM assets WHERE deleted_at IS NULL
 1. **Never query `FROM assets` directly** in any read path that should return live assets. Always use `FROM active_assets` in raw SQL, or add `.where(Asset.deleted_at.is_(None))` in ORM queries.
 2. **`AssetRepository.get_by_id()` returns `None` for trashed assets.** Do not use `session.get(Asset, id)` as a substitute — it bypasses the filter.
 3. **`get_by_library_and_rel_path()` intentionally returns trashed assets** because the ingest upsert path needs to detect them to avoid a unique-constraint violation on `(library_id, rel_path)`. It is the only read method that does this. Ingest clears `deleted_at` on update — a file present on disk is by definition active.
-4. **`search_sync_queue.pending_count()` must include expired-processing rows**, matching the scope of `claim_batch()`. Using only `status = 'pending'` produces a misleading count when rows are stuck in `processing` after an interrupted run.
-
 When writing queries, always use the tenant DB session, not the control plane session. The middleware resolves this from the bearer token before the route handler runs.
 
 Tenant resolution runs for every request except `/health`, `/v1/admin/*`, and `/v1/auth/*`: reads `Authorization: Bearer <token>`, attempts JWT decode first (signature + expiry + required claims: `sub`, `tenant_id`, `role`), falls through to API key lookup on JWT failure, looks up `TenantDbRouting` for the connection string, and stores `tenant_id`, `connection_string`, `user_id`, `key_id`, `role`, and `is_public_request` in `request.state`. Use the `get_tenant_session` dependency in route handlers to obtain a tenant DB session.
 
 ## Tenant Context
 
-- **GET /v1/tenant/context** — Tenant auth required. Returns `{ "tenant_id", "vision_api_url", "vision_api_key" }`. Used by CLI/worker for storage path computation and vision config fallback. Workers must not have direct DB access; they use the jobs API only. Client-side `vision_api_url`/`vision_api_key` in `~/.lumiverb/config.json` override the tenant values (hybrid config).
+- **GET /v1/tenant/context** — Tenant auth required. Returns `{ "tenant_id", "vision_api_url", "vision_api_key", "vision_model_id" }`. Used by CLI for vision config fallback. Client-side `vision_api_url`/`vision_api_key` in `~/.lumiverb/config.json` override the tenant values (hybrid config).
+
+## Auth API
+
+Routes under `/v1/auth`; no tenant auth required (these establish auth).
+
+- **POST /v1/auth/login** — Body: `{ "email", "password" }`. Returns `{ "access_token", "token_type": "bearer", "expires_in" }`. JWT contains `sub` (user_id), `tenant_id`, `role`, `email`.
+- **POST /v1/auth/forgot-password** — Body: `{ "email" }`. Sends password reset email if SMTP configured. Always returns 204 (no user enumeration).
+- **POST /v1/auth/reset-password** — Body: `{ "token", "password" }`. Resets password using a reset token. Returns 204.
+- **POST /v1/auth/logout** — Stateless JWT logout (client discards token). Returns 204.
+
+## Users API
+
+All routes under `/v1/users`; require tenant auth and **admin** role.
+
+- **GET /v1/users** — List all users for the current tenant. Returns list of `{ "user_id", "email", "role", "created_at", "last_login_at" }`.
+- **POST /v1/users** — Body: `{ "email", "password", "role": "viewer" }`. Creates user. Returns 201 with user details.
+- **PATCH /v1/users/{user_id}** — Body: `{ "role" }`. Updates user role. Enforces last-admin invariant (cannot demote the last admin). Returns updated user.
+- **DELETE /v1/users/{user_id}** — Removes user. Enforces last-admin invariant and blocks self-deletion. Returns 204.
 
 ## Current User
 
@@ -103,13 +120,13 @@ All routes under `/v1/tenant/upgrade` require tenant auth and **tenant admin** r
   - Without `force`, the server refuses to run a targeted step when any preceding step is still `pending` or `failed`.
   - Returns `{ ran_steps, steps_completed_now, has_work_after, remaining_pending_step_ids, total_steps, done_steps, completed_steps, failed_steps }`.
 
-## Search Sync API
+## Upkeep API
 
-All under `/v1/search-sync`; require tenant auth. These endpoints drive Quickwit indexing server-side so that CLI/worker processes do not need direct Quickwit or DB access.
+All under `/v1/upkeep`. Periodic server-side maintenance tasks. Search sync uses timestamp-based tracking (`search_synced_at` on assets and video_scenes) instead of a queue table.
 
-- **GET /v1/search-sync/pending** — Query: `library_id` (required), `path_prefix` (optional). Returns `{ "count": N }` — number of rows in `search_sync_queue` that are pending or have an expired processing lease. Matches the scope of `process-batch`.
-- **POST /v1/search-sync/process-batch** — Body: `{ "library_id", "path_prefix": null, "batch_size": 100 }`. Claims one batch from the queue using `FOR UPDATE SKIP LOCKED`, builds Quickwit documents server-side, ingests them, and marks the rows synced. Returns `{ "processed": bool, "synced": int, "skipped": int }`. `processed=false` means the queue was empty (no rows claimed). `synced` = assets ingested; `skipped` = assets with missing metadata or missing asset record. Call in a loop until `processed=false`. 404 if library not found.
-- **POST /v1/search-sync/resync** — Body: `{ "library_id", "path_prefix": null }`. Re-enqueues all active (non-trashed) assets for the library into `search_sync_queue` (equivalent to `--force-resync`). Returns `{ "enqueued": N }`. 404 if library not found.
+- **POST /v1/upkeep** — Runs all periodic upkeep tasks (currently: search sync). Returns `{ "search_sync": { "synced", "failed", "scenes_synced", "scenes_failed" } }`.
+- **POST /v1/upkeep/search-sync** — Run search sync sweep only. Finds assets/scenes where `search_synced_at` is null or older than the last update, builds Quickwit documents, and ingests them. Returns `{ "synced", "failed", "scenes_synced", "scenes_failed" }`.
+- **POST /v1/upkeep/cleanup** — Query: `dry_run` (default `"true"`), `library` (optional name). Removes orphaned proxy/thumbnail files from storage. Returns `{ "orphan_tenants", "orphan_libraries", "orphan_files", "bytes_freed", "skipped_libraries", "errors", "dry_run" }`.
 
 ## Video chunk API
 
@@ -127,12 +144,14 @@ All under `/v1/video`; require tenant auth. Used by the video-index worker to pr
 
 All under `/v1/libraries`; require tenant auth (middleware).
 
-- **POST /v1/libraries** — Body: `{ "name", "root_path", "vision_model_id" }` (`vision_model_id` optional, defaults to `""`). Name must be unique per tenant (409 if duplicate). New libraries inherit the tenant's path filter defaults at creation time (subsequent changes to defaults do not affect existing libraries). Returns `{ "library_id", "name", "root_path", "scan_status", "vision_model_id", "is_public" }` (scan_status initially `"idle"`, is_public initially `false`).
-- **PATCH /v1/libraries/{library_id}** — Body: `{ "name", "vision_model_id", "is_public" }` (all optional). Updates library name, vision model ID, and/or public visibility. Setting `is_public: true` inserts a row in the `public_libraries` control plane table, enabling unauthenticated access (Phase 3). Setting `is_public: false` removes it. Returns full library response including `is_public`.
+- **POST /v1/libraries** — Body: `{ "name", "root_path" }`. Name must be unique per tenant (409 if duplicate). New libraries inherit the tenant's path filter defaults at creation time (subsequent changes to defaults do not affect existing libraries). Returns `{ "library_id", "name", "root_path", "scan_status", "is_public" }` (scan_status initially `"idle"`, is_public initially `false`).
 - **GET /v1/libraries** — Query: `include_trashed` (optional, default false). Returns list of libraries with `library_id`, `name`, `root_path`, `scan_status`, `last_scan_at`, `status` (`"active"` or `"trashed"`), `is_public`. Trashed libraries excluded unless `include_trashed=true`.
+- **GET /v1/libraries/{library_id}** — Returns single library. 404 if not found.
+- **PATCH /v1/libraries/{library_id}** — Body: `{ "name", "is_public" }` (all optional). Updates library name and/or public visibility. Setting `is_public: true` inserts a row in the `public_libraries` control plane table, enabling unauthenticated access. Setting `is_public: false` removes it. Returns full library response including `is_public`.
 - **DELETE /v1/libraries/{library_id}** — Soft delete: set library `status` to `"trashed"`, soft-delete all assets (`deleted_at` set). If library was public, removes its `public_libraries` control plane row. Returns 204 on success, 404 if not found, 409 if already trashed.
 - **POST /v1/libraries/empty-trash** — Hard delete all trashed libraries for this tenant (cascade: asset_metadata, asset_embeddings, video_scenes, video_index_chunks, assets, library_path_filters, libraries). Removes `public_libraries` control plane rows for any trashed libraries that were public. Returns `{ "deleted": N }`.
 - **GET /v1/libraries/{library_id}/revision** — Lightweight polling endpoint. Returns `{ "library_id", "revision", "asset_count" }`. The `revision` counter increments atomically on asset create/update (ingest) and vision metadata submission. UI clients poll this every 10 seconds and use `revision` in query keys to trigger cache invalidation when data changes.
+- **GET /v1/libraries/{library_id}/directory** — Query: `path_prefix` (optional). Returns list of subdirectories within a library root. Used by browse UI for directory navigation.
 
 ## Library path filters API
 
@@ -166,15 +185,15 @@ This is enforced both client-side (during filesystem walk for efficiency) and se
 
 All under `/v1/assets`; require tenant auth. List/get endpoints return only active (non-trashed) assets.
 
-- **GET /v1/assets** — Query: `library_id` (optional). List active assets; filter by library when provided. Returns list of `{ "asset_id", "library_id", "rel_path", "media_type", "status", "proxy_key", "thumbnail_key", "width", "height" }`.
-- **GET /v1/assets/page** — Query: `library_id` (required), `after` (cursor), `limit` (default 500, max 500), `missing_vision` (optional bool, filters to assets without AI metadata). Keyset-paginated active assets for bulk reconciliation. Returns list of `{ "asset_id", "rel_path", "file_size", "file_mtime", "sha256", "media_type" }`. Returns 204 if no results (end of pages).
-- **GET /v1/assets/{asset_id}** — Return single asset. 404 if not found or trashed.
+- **POST /v1/assets** — Single-file upsert. Body: `{ "library_id", "rel_path", "file_size", "file_mtime" (ISO8601), "media_type", "force": false }`. Upserts by `(library_id, rel_path)`. Returns `{ "action": "added|updated|skipped" }`.
+- **GET /v1/assets/{asset_id}** — Return single asset with full detail (EXIF, video preview info). 404 if not found or trashed.
+- **GET /v1/assets/by-path** — Query: `library_id`, `rel_path`. Look up asset by library and path. Returns asset detail or 404.
+- **GET /v1/assets/page** — Query: `library_id` (required), `after` (cursor), `limit` (default 500, max 500), `missing_vision` (optional bool, filters to assets without AI metadata). Keyset-paginated active assets for bulk reconciliation. Returns `{ "items": [...], "next_cursor" }`.
+- **PATCH /v1/assets/{asset_id}** — Update asset fields. Returns updated asset.
 - **DELETE /v1/assets/{asset_id}** — Soft-delete (trash) a single asset. Sets `deleted_at`. Returns 204 on success, 404 if not found or already trashed. Quickwit delete is best-effort (log on failure).
-- **DELETE /v1/assets** — Body: `{ "asset_ids": ["ast_...", ...] }`. Soft-delete multiple assets. Returns `{ "trashed": [...], "not_found": [...] }`. Quickwit delete is best-effort.
-- **POST /v1/assets/{asset_id}/restore** — Restore a trashed asset (clear `deleted_at`). Returns 204 on success, 404 if not found or not trashed.
-- **POST /v1/assets/{asset_id}/thumbnail-key** — Body: `{ "thumbnail_key" }`. Records a thumbnail_key on the asset. Used by VideoIndexWorker after extracting the first frame of a video. Returns `{ "asset_id", "thumbnail_key" }`.
-- **POST /v1/assets/{asset_id}/artifacts/{artifact_type}** — Multipart file upload. `artifact_type` must be one of: `proxy`, `thumbnail`, `video_preview`, `scene_rep`. Form fields: `file` (binary, required), `width` (int, optional, images only), `height` (int, optional, images only), `rep_frame_ms` (int, required for `scene_rep`, ignored for other types). Streams the upload to disk in 64 KB chunks, computes SHA-256 incrementally, and atomic-renames into place. Updates DB after file is safely on disk. Returns `{ "key", "sha256" }`. Errors: 400 invalid type or missing `rep_frame_ms` for `scene_rep`, 404 asset not found or trashed, 413 file too large. Does NOT advance `asset.status` — that remains the job-complete path's responsibility.
-- **POST /v1/assets/upsert** — Single-file upsert. Body: `{ "library_id", "rel_path", "file_size", "file_mtime" (ISO8601), "media_type", "force": false }`. Upserts by `(library_id, rel_path)`. Returns `{ "action": "added|updated|skipped" }`.
+- **POST /v1/assets/{asset_id}/artifacts/{artifact_type}** — Multipart file upload. `artifact_type` must be one of: `proxy`, `thumbnail`, `video_preview`, `scene_rep`. Form fields: `file` (binary, required), `width` (int, optional, images only), `height` (int, optional, images only), `rep_frame_ms` (int, required for `scene_rep`, ignored for other types). Streams the upload to disk in 64 KB chunks, computes SHA-256 incrementally, and atomic-renames into place. Updates DB after file is safely on disk. Returns `{ "key", "sha256" }`. Errors: 400 invalid type or missing `rep_frame_ms` for `scene_rep`, 404 asset not found or trashed, 413 file too large.
+- **GET /v1/assets/{asset_id}/{proxy|thumbnail}** — Stream proxy or thumbnail file bytes. Returns `application/octet-stream`.
+- **GET /v1/assets/facets** — Query: `library_id` (required), `path_prefix` (optional). Returns aggregated filter facets: `{ "media_types", "camera_makes", "camera_models", "lens_models", "iso_range", "aperture_range", "focal_length_range", "has_gps_count" }`.
 
 ## Ingest API
 
@@ -193,7 +212,7 @@ Admin routes live under `/v1/admin` and require `Authorization: Bearer {ADMIN_KE
 
 - **POST /v1/admin/tenants** — Body: `{ "name", "plan": "free|pro|enterprise", "email", "vision_api_url", "vision_api_key" }`. Creates tenant, provisions tenant DB (pgvector + Alembic), creates routing row, creates default API key. Returns `{ "tenant_id", "api_key", "database": "provisioned" }`. On failure, cleans up and returns 500.
 - **GET /v1/admin/tenants** — Returns list of tenants with `tenant_id`, `name`, `plan`, `status` (no API keys, no vision credentials).
-- **PATCH /v1/admin/tenants/{tenant_id}** — Body: `{ "vision_api_url", "vision_api_key" }` (both optional; only provided fields are updated). Updates tenant vision API config. Returns `{ "tenant_id", "vision_api_url" }`. 404 if tenant not found or deleted.
+- **PATCH /v1/admin/tenants/{tenant_id}** — Body: `{ "vision_api_url", "vision_api_key", "vision_model_id" }` (all optional; only provided fields are updated). Updates tenant vision API config. Returns `{ "tenant_id", "vision_api_url", "vision_model_id" }`. 404 if tenant not found or deleted.
 - **POST /v1/admin/tenants/{tenant_id}/keys** — Body: `{ "name" }` (human-readable label). Creates new API key for tenant. Returns `{ "api_key", "name", "tenant_id" }`. Raw key returned once and never stored. 404 if tenant does not exist or is soft-deleted.
 - **GET /v1/admin/tenants/{tenant_id}/keys** — Returns list of key metadata: `name`, `tenant_id`, `created_at` (never raw keys). 404 if tenant does not exist or is soft-deleted.
 - **DELETE /v1/admin/tenants/{tenant_id}** — Soft delete: sets tenant status to `deleted`, revokes all API keys. Returns 204.
@@ -209,10 +228,13 @@ When an asset is submitted via POST /v1/ingest:
 
 Search is BM25 via Quickwit. The API queries Quickwit then enriches results with Postgres metadata. Never query Postgres for full-text search.
 
-- **GET /v1/search** — Query: `library_id` (required), `q` (required, 1–500 chars), `limit` (default 20, max 100), `offset` (default 0). Asset-level BM25 search. Tries Quickwit first; falls back to Postgres ILIKE when Quickwit disabled or errors and fallback enabled. Returns `{ "query", "hits", "total", "source" }`.
+- **GET /v1/search** — Query: `library_id` (required), `q` (required, 1–500 chars), `limit` (default 20, max 100), `offset` (default 0), `media_type` (optional: `all`|`image`|`video`), `path_prefix` (optional), `tag` (optional), `date_from`/`date_to` (optional). Asset-level BM25 search. Tries Quickwit first; falls back to Postgres ILIKE when Quickwit disabled or errors and fallback enabled. Returns `{ "query", "hits", "total", "source" }`.
 - **GET /v1/search/scenes** — Query: `library_id` (required), `q` (required, 1–500 chars), `limit` (default 20, max 100), `offset` (default 0). Scene-level BM25 search via Quickwit. Returns `{ "query", "hits": [ { "scene_id", "asset_id", "rel_path", "start_ms", "end_ms", "rep_frame_ms", "thumbnail_key", "duration_sec", "description", "tags", "score", "source" } ], "total", "source" }`. No Postgres fallback. Returns empty hits if Quickwit is disabled.
 
-**Similarity (GET /v1/similar):** Find visually similar assets by vector similarity (pgvector). Query params: `asset_id` (required), `library_id` (required), `limit` (default 20, max 100), `offset` (default 0). Optional scope filters: `from_ts`, `to_ts` (Unix timestamp seconds, inclusive capture-time range; uses `assets.taken_at`); `asset_types` (comma-separated: `image`, `video`; restricts by `media_type` prefix, e.g. `image` matches `image/jpeg`); `camera_make` and `camera_model` (repeatable; pairs by index, OR across pairs — e.g. `camera_make=Canon&camera_model=EOS&camera_make=Nikon&camera_model=Z9`). Returns `{ source_asset_id, hits, total, embedding_available }`. Excludes the source asset from results. If both `from_ts` and `to_ts` are set, `from_ts` must be ≤ `to_ts` (422 otherwise).
+**Similarity:**
+
+- **GET /v1/similar** — Find visually similar assets by vector similarity (pgvector). Query params: `asset_id` (required), `library_id` (required), `limit` (default 20, max 100), `offset` (default 0). Optional scope filters: `from_ts`, `to_ts` (Unix timestamp seconds, inclusive capture-time range; uses `assets.taken_at`); `asset_types` (comma-separated: `image`, `video`; restricts by `media_type` prefix); `camera_make` and `camera_model` (repeatable; pairs by index, OR across pairs). Returns `{ source_asset_id, hits, total, embedding_available }`. Excludes the source asset from results. If both `from_ts` and `to_ts` are set, `from_ts` must be ≤ `to_ts` (422 otherwise).
+- **POST /v1/similar/search-by-image** — Body: `{ "library_id", "image_b64", "limit", "offset", "from_ts", "to_ts", "asset_types", "cameras" }`. Upload a query image (base64) and find similar assets. Returns `{ "hits", "total" }`.
 
 ## File Serving
 

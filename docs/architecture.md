@@ -48,8 +48,14 @@ This follows the Immich model: fully open source, no open-core, with a hosted op
 A single shared Postgres database (tiny) with three tables:
 
 ```
-tenants           — tenant_id, name, plan, status, created_at
-api_keys          — key_hash, tenant_id, name, scopes, created_at
+tenants           — tenant_id, name, plan, status, vision_api_url,
+                    vision_api_key, vision_model_id, created_at
+api_keys          — key_id, key_hash, tenant_id, name, label, scopes,
+                    role, created_at, last_used_at, revoked_at
+users             — user_id, tenant_id, email, password_hash, role,
+                    created_at, last_login_at
+password_reset_tokens — token_hash, user_id, expires_at, used_at
+public_libraries  — library_id, tenant_id, connection_string, created_at
 tenant_db_routing — tenant_id, connection_string, region
 ```
 
@@ -62,39 +68,44 @@ Each tenant gets a dedicated Postgres database on the same Postgres instance (sc
 **Core tables:**
 
 ```
-libraries         — library_id, name, root_path, scan_status, last_scan_at,
-                    status, created_at
-assets            — asset_id, library_id, sha256, file_path, file_size,
-                    media_type, width, height, duration_sec (canonical; duration_ms removed),
+libraries         — library_id, name, root_path, status, scan_status,
+                    last_scan_at, is_public, revision (int), created_at,
+                    updated_at
+assets            — asset_id, library_id, rel_path, sha256, file_size,
+                    file_mtime, media_type, width, height, duration_sec,
                     proxy_key, proxy_sha256, thumbnail_key, thumbnail_sha256,
                     video_preview_key, video_indexed (bool),
-                    availability, status, deleted_at, created_at
-                    NOTE: captured_at removed (was never populated; use taken_at)
-                    NOTE: duration_ms removed (consolidated into duration_sec)
-video_scenes      — scene_id, asset_id, start_ms, end_ms, rep_frame_ms,
-                    thumbnail_key, rep_frame_sha256, description, tags,
-                    sharpness_score, phash
+                    exif (JSON), exif_extracted_at, camera_make,
+                    camera_model, taken_at, gps_lat, gps_lon, iso,
+                    exposure_time_us, aperture, focal_length,
+                    focal_length_35mm, lens_model, flash_fired, orientation,
+                    availability, status, error_message,
+                    created_at, updated_at, deleted_at, search_synced_at
+video_scenes      — scene_id, asset_id, scene_index, start_ms, end_ms,
+                    rep_frame_ms, proxy_key, thumbnail_key,
+                    rep_frame_sha256, description, tags (JSONB),
+                    sharpness_score, keep_reason, phash, created_at,
+                    search_synced_at
 video_index_chunks — chunk_id, asset_id, chunk_index, start_ms, end_ms,
-                    status, worker_id, lease_expires_at, fail_count,
-                    anchor_phash, scene_start_ms
-asset_metadata    — asset_id, model_id, model_version, data (JSONB),
-                    created_at
+                    status, worker_id, claimed_at, lease_expires_at,
+                    completed_at, error_message, anchor_phash,
+                    scene_start_ms, created_at
+asset_metadata    — metadata_id, asset_id, model_id, model_version,
+                    generated_at, data (JSONB)
 asset_embeddings  — embedding_id, asset_id, model_id, model_version,
                     embedding_vector vector(512), created_at
-search_sync_queue — sync_id, asset_id, scene_id, operation, status,
-                    created_at, processing_started_at
-system_metadata   — key, value (schema version, last sync, etc.)
+system_metadata   — key, value, updated_at
 ```
 
 **Views:**
 - `active_assets` — non-trashed assets (deleted_at IS NULL). All pipeline queries use this view. Trashing a library sets deleted_at on all its assets, removing them from this view immediately.
 
 **Key constraints:**
-- `search_sync_queue`: atomic dedup via partial unique index `uq_ssq_pending_asset_scene` on `(asset_id, COALESCE(scene_id, '')) WHERE status IN ('pending', 'processing')` — `enqueue()` uses `ON CONFLICT DO NOTHING` for race-free deduplication.
 - `video_index_chunks`: failed chunks are automatically reset to `pending` on the next `claim_next_chunk` call for the same asset, preventing permanent pipeline stalls after transient errors.
+- `assets`: unique constraint on `(library_id, rel_path)` — ingest upserts by this key.
 
 **Artifact lifecycle:**
-- When a library is trashed (`DELETE /v1/libraries/{id}`), all its assets get `deleted_at` set (soft-deleted) and all pending/processing `search_sync_queue` rows are set to `synced`. This ensures no further pipeline work runs on deleted content.
+- When a library is trashed (`DELETE /v1/libraries/{id}`), all its assets get `deleted_at` set (soft-deleted). Trashed assets are excluded from search sync sweeps.
 - If a proxy or thumbnail key points to a missing file, the endpoint returns 404 and clears the stale key from the asset record.
 - On empty-trash (hard delete), artifact files in object storage are deleted best-effort, then DB rows are removed in FK-safe order.
 
@@ -124,24 +135,28 @@ Python + FastAPI + SQLModel. Stateless. Runs in Docker (self-hosted) or Cloud Ru
 Responsibilities:
 - Authenticate requests via API key or JWT → route to tenant DB
 - Library and asset CRUD
+- User management (email/password auth, JWT sessions)
 - Atomic ingest (proxy + metadata in one request)
-- File serving (thumbnails, proxies — never source files)
+- File serving (thumbnails, proxies, video previews — never source files)
 - Search endpoint (BM25 via Quickwit)
-- Similarity search endpoint
+- Similarity search endpoint (pgvector nearest-neighbor on CLIP embeddings)
 - Video chunk coordination (scene segmentation metadata)
-- Webhook delivery (future)
+- Search sync (timestamp-based sweep to keep Quickwit in sync)
+- Upkeep (periodic cleanup of orphaned files)
 
 ### 3.4 Local Agent (CLI first, then Mac app)
 
 Runs on the machine where source files live. Communicates only via the API.
 
 Responsibilities:
-- Filesystem scanning (recursive, respects ignore patterns)
-- SHA256 deduplication (checked against API before upload)
-- Proxy and thumbnail generation (in memory, never writes source files externally; TIFFs use Pillow to avoid libvips/libtiff memory cap on large files)
+- Filesystem scanning (recursive, respects path filters)
+- Deduplication (checks `rel_path` against API before upload)
+- Proxy generation (WebP 2048px max; TIFFs use Pillow fallback for large files)
 - EXIF and metadata extraction
-- Uploads proxy + thumbnail + metadata to API
-- Maintains local SQLite: `filepath → asset_id` mapping
+- Vision AI captioning (OpenAI-compatible endpoint, configurable)
+- CLIP embedding generation (open-clip-torch, ViT-B/32)
+- Uploads proxy + all metadata to API atomically via `POST /v1/ingest`
+- Video poster frame extraction, 10-second preview generation
 
 The local agent has no direct Postgres, Quickwit, or object storage access. The API is its only interface.
 
@@ -151,17 +166,20 @@ There are no server-side worker queues. All processing happens client-side via t
 
 **Image ingest (client-side):**
 The CLI scans the filesystem, then for each image:
-1. Generates WebP proxy (2048px max) and thumbnail (512px) in memory
-2. Extracts EXIF metadata (camera, GPS, duration, taken_at)
+1. Generates JPEG proxy, then converts to WebP (2048px max)
+2. Extracts EXIF metadata (camera, GPS, duration, taken_at, lens, ISO, aperture, etc.)
 3. Runs vision AI (OpenAI-compatible API) to generate description and tags
-4. Calls `POST /v1/ingest` with proxy + all metadata atomically
-5. The asset only appears on the server once fully populated
+4. Generates CLIP embedding (ViT-B/32, 512-dim vector)
+5. Calls `POST /v1/ingest` with proxy + all metadata atomically
+6. Server normalizes proxy, generates thumbnail (512px), stores everything
+7. The asset only appears on the server once fully populated
 
 **Video ingest (client-side, stage 1):**
-1. Extracts poster frame and generates proxy/thumbnail
-2. Extracts EXIF metadata
-3. Generates 10-second preview MP4
-4. Calls `POST /v1/ingest` atomically
+1. Gets source dimensions via ffprobe
+2. Extracts poster frame and generates proxy/thumbnail
+3. Extracts EXIF metadata
+4. Generates 10-second preview MP4 (capped at 720p)
+5. Calls `POST /v1/ingest` atomically
 
 **Video scene indexing (server-coordinated):**
 After video ingest, the CLI uses the video chunk API to process scenes:
@@ -172,13 +190,13 @@ After video ingest, the CLI uses the video chunk API to process scenes:
 5. When all chunks complete, server marks asset as `video_indexed`
 
 **Search sync:**
-The CLI `worker search-sync` command drains `search_sync_queue`, keeping Quickwit in sync with Postgres. This is the only remaining server-coordinated queue.
+Search sync is timestamp-based: assets and video scenes have a `search_synced_at` column. The `POST /v1/upkeep/search-sync` endpoint sweeps records where `search_synced_at` is stale, builds Quickwit documents, and ingests them. The CLI `lumiverb maintenance search-sync` command triggers this. Inline sync also runs on each ingest. Quickwit is a regenerable cache — if lost, run search-sync to rebuild.
 
 ### 3.6 Search Engine (Quickwit)
 
 Quickwit provides BM25 full-text search over AI descriptions and metadata. Runs in Docker.
 
-The `search_sync_queue` table feeds a sync process that keeps Quickwit in sync with Postgres. Quickwit is a regenerable cache — if lost, run search-sync to rebuild.
+Sync is timestamp-based: assets and video scenes track `search_synced_at`. The upkeep endpoint sweeps stale records and ingests them into Quickwit. Quickwit is a regenerable cache — if lost, run search-sync to rebuild.
 
 ### 3.7 Object Storage
 
@@ -207,7 +225,7 @@ Local filesystem
         → Run vision AI (OpenAI-compatible) → description + tags
         → POST /v1/ingest (multipart: proxy + all metadata, atomic)
         → API normalizes proxy, generates thumbnail, stores everything
-        → API enqueues search_sync for Quickwit indexing
+        → API attempts inline search sync to Quickwit
         → Asset appears fully populated on first creation
     → For each video (stage 1):
         → Extract poster frame, generate proxy/thumbnail
@@ -223,12 +241,16 @@ Local filesystem
 ### 4.2 Search Sync Flow
 
 ```
-CLI runs: lumiverb repair --library <name> --job-type search-sync
-    → POST /v1/search-sync/process-batch (loop until empty)
-    → Server claims batch from search_sync_queue
+Inline (on each ingest):
+    → API calls try_sync_asset() after storing metadata
+    → Builds Quickwit document, ingests, sets search_synced_at
+
+Periodic sweep (CLI or upkeep endpoint):
+    → POST /v1/upkeep/search-sync
+    → Server finds assets/scenes where search_synced_at is stale
     → Builds Quickwit documents from Postgres metadata
-    → Ingests to Quickwit
-    → Marks rows synced
+    → Ingests to Quickwit in batches
+    → Updates search_synced_at on each record
 ```
 
 ### 4.3 Search Flow
@@ -243,11 +265,11 @@ Client calls GET /search?q=...&library_id=...
 ### 4.4 Similarity Flow
 
 ```
-Client calls GET /assets/{id}/similar
-    → API fetches asset's AI description
-    → Runs BM25 search using description as query (excluding self)
-    → Applies adaptive threshold based on corpus size
-    → Returns ranked similar assets
+Client calls GET /v1/similar?asset_id=...&library_id=...
+    → API fetches asset's CLIP embedding from asset_embeddings
+    → Runs pgvector nearest-neighbor search (excluding self)
+    → Applies optional scope filters (date range, media type, camera)
+    → Returns ranked similar assets with similarity scores
 ```
 
 ---
@@ -261,8 +283,9 @@ Client calls GET /assets/{id}/similar
 | Migrations | Alembic | Standard, works with SQLModel |
 | Search | Quickwit | Columnar BM25, Docker-friendly, proven in PoC |
 | Object storage | Abstracted (GCS / S3 / B2 / MinIO) | Deployment-mode flexibility |
-| AI inference | Moondream | Lightweight, runs locally, no API cost |
-| CLI | Python, Click or Typer | Shares models with API server |
+| AI inference | OpenAI-compatible (configurable) | Supports any vision model (e.g. qwen3-visioncaption-2b via LM Studio) |
+| CLIP embeddings | open-clip-torch (ViT-B/32) | 512-dim vectors for similarity search |
+| CLI | Python, Typer | Shares models with API server |
 | Web UI | React, TypeScript, Tailwind | Required for media grid, virtualized scroll |
 | Mac agent | Swift / Electron TBD | Filesystem access, background service |
 | Cloud platform | GCP | Employee discounts, known infrastructure |
@@ -427,7 +450,6 @@ GCS standard tier provides 11 nines durability with built-in multi-AZ replicatio
 - `api` — FastAPI server
 - `postgres` — PostgreSQL 16
 - `quickwit` — Search engine
-- `worker` — Search sync worker (optional, can run separately)
 - `minio` — Object storage (optional, can point at S3/B2)
 
 Configuration via environment variables. No cloud dependencies required. A NAS or $5/month VPS is sufficient for personal use.
