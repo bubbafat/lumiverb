@@ -177,68 +177,6 @@ def test_delete_library_soft_deletes(libraries_client: tuple[TestClient, str]) -
 
 
 @pytest.mark.slow
-def test_delete_library_cancels_pending_jobs(libraries_client: tuple[TestClient, str]) -> None:
-    """Create library, create asset, create pending worker job; DELETE library; query worker_jobs directly: assert status=cancelled."""
-    client, api_key = libraries_client
-    auth = {"Authorization": f"Bearer {api_key}"}
-
-    r_lib = client.post(
-        "/v1/libraries",
-        json={"name": "JobLib_" + __import__("secrets").token_urlsafe(6), "root_path": "/job"},
-        headers=auth,
-    )
-    assert r_lib.status_code == 200
-    library_id = r_lib.json()["library_id"]
-
-    r_scan = client.post(
-        "/v1/scans",
-        json={"library_id": library_id, "status": "running"},
-        headers=auth,
-    )
-    assert r_scan.status_code == 200
-    scan_id = r_scan.json()["scan_id"]
-
-    client.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": "img.jpg",
-            "file_size": 1000,
-            "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": "image",
-            "scan_id": scan_id,
-        },
-        headers=auth,
-    )
-
-    client.post(
-        f"/v1/scans/{scan_id}/complete",
-        json={"files_discovered": 1, "files_added": 1, "files_updated": 0, "files_skipped": 0},
-        headers=auth,
-    )
-
-    r_enq = client.post(
-        "/v1/jobs/enqueue",
-        json={"job_type": "proxy", "filter": {"library_id": library_id}, "force": False},
-        headers=auth,
-    )
-    assert r_enq.status_code == 200
-    assert r_enq.json()["enqueued"] >= 1
-
-    r_jobs = client.get("/v1/jobs", params={"library_id": library_id}, headers=auth)
-    assert r_jobs.status_code == 200
-    jobs = r_jobs.json()
-    assert len(jobs) >= 1
-    job_id = jobs[0]["job_id"]
-
-    client.delete(f"/v1/libraries/{library_id}", headers=auth)
-
-    r_status = client.get(f"/v1/jobs/{job_id}/status", headers=auth)
-    assert r_status.status_code == 200
-    assert r_status.json()["status"] == "cancelled"
-
-
-@pytest.mark.slow
 def test_empty_trash_hard_deletes(libraries_client: tuple[TestClient, str]) -> None:
     """Create library, trash it, call POST /v1/libraries/empty-trash; assert response deleted=1 and library gone from DB."""
     client, api_key = libraries_client

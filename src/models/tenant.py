@@ -283,36 +283,6 @@ class AssetEmbedding(SQLModel, table=True):
     )
 
 
-class WorkerJob(SQLModel, table=True):
-    __tablename__ = "worker_jobs"
-
-    job_id: str = Field(primary_key=True)
-    job_type: str = Field(nullable=False)
-    asset_id: str | None = Field(default=None, foreign_key="assets.asset_id", nullable=True)
-    scene_id: str | None = Field(default=None, foreign_key="video_scenes.scene_id", nullable=True)
-    status: str = Field(default="pending", nullable=False)
-    priority: int = Field(default=10, nullable=False)
-    worker_id: str | None = Field(default=None, nullable=True)
-    claimed_at: datetime | None = Field(
-        default=None,
-        sa_column=Column(DateTime(timezone=True), nullable=True),
-    )
-    lease_expires_at: datetime | None = Field(
-        default=None,
-        sa_column=Column(DateTime(timezone=True), nullable=True),
-    )
-    completed_at: datetime | None = Field(
-        default=None,
-        sa_column=Column(DateTime(timezone=True), nullable=True),
-    )
-    fail_count: int = Field(default=0, nullable=False)
-    error_message: str | None = Field(default=None, nullable=True)
-    created_at: datetime = Field(
-        default_factory=utcnow,
-        sa_column=Column(DateTime(timezone=True), nullable=False),
-    )
-
-
 class SystemMetadata(SQLModel, table=True):
     __tablename__ = "system_metadata"
 

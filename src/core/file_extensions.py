@@ -45,7 +45,7 @@ SUPPORTED_EXTENSIONS = VIDEO_EXTENSIONS | IMAGE_EXTENSIONS
 IMAGE_EXTENSIONS_LIST = sorted(IMAGE_EXTENSIONS)
 VIDEO_EXTENSIONS_LIST = sorted(VIDEO_EXTENSIONS)
 
-# Combined list for ProxyWorker (images + videos); lists are disjoint
+# Combined list (images + videos); lists are disjoint
 PROXYABLE_EXTENSIONS_LIST = IMAGE_EXTENSIONS_LIST + VIDEO_EXTENSIONS_LIST
 
 # Suffixes without leading dot (for regex e.g. repair pattern)

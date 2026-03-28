@@ -198,9 +198,9 @@ def test_unauthenticated_post_blocked(public_lib_client) -> None:
 
 @pytest.mark.slow
 def test_unauthenticated_non_eligible_route_blocked(public_lib_client) -> None:
-    """GET /v1/jobs without auth → 401 regardless of public libraries."""
+    """GET /v1/libraries without auth → 401 regardless of public libraries."""
     client, _, _, _ = public_lib_client
-    r = client.get("/v1/jobs")
+    r = client.get("/v1/libraries")
     assert r.status_code == 401
 
 

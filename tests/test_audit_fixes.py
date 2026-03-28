@@ -171,55 +171,43 @@ def _set_thumbnail_key(tenant_url: str, asset_id: str, thumbnail_key: str) -> No
         engine.dispose()
 
 
-def _count_pending_jobs(tenant_url: str, asset_id: str, job_type: str) -> int:
-    """Count pending/claimed jobs of the given type for the given asset."""
-    engine = create_engine(tenant_url)
-    try:
-        with engine.connect() as conn:
-            row = conn.execute(
-                text(
-                    "SELECT COUNT(*)::int FROM worker_jobs "
-                    "WHERE asset_id = :asset_id AND job_type = :job_type "
-                    "AND status IN ('pending', 'claimed')"
-                ),
-                {"asset_id": asset_id, "job_type": job_type},
-            ).fetchone()
-            return int(row[0]) if row else 0
-    finally:
-        engine.dispose()
-
-
 # ---------------------------------------------------------------------------
-# FIX-1 (BUG-1): Stale proxy/thumbnail recovery re-enqueues correct job type
+# FIX-1 (BUG-1): Stale proxy/thumbnail returns 404 and clears key
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.slow
-def test_stale_proxy_reenqueues_proxy_job(
+def test_stale_proxy_returns_404_and_clears_key(
     audit_fixes_client: tuple[TestClient, str, str, str],
 ) -> None:
-    """GET /assets/{id}/proxy for a stale proxy_key returns 202 and enqueues a proxy job."""
+    """GET /assets/{id}/proxy for a stale proxy_key returns 404 and clears the key."""
     client, api_key, library_id, tenant_url = audit_fixes_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
     asset_id = _upsert_asset(client, auth, library_id, "stale_proxy_test.jpg")
-    # Set a nonexistent proxy_key
     _set_proxy_key(tenant_url, asset_id, "nonexistent/fake_proxy.jpg")
 
     r = client.get(f"/v1/assets/{asset_id}/proxy", headers=auth)
-    assert r.status_code == 202, (r.status_code, r.text)
-    assert r.json().get("status") == "generating"
+    assert r.status_code == 404, (r.status_code, r.text)
 
-    # A proxy job should now be pending
-    count = _count_pending_jobs(tenant_url, asset_id, "proxy")
-    assert count >= 1, f"Expected proxy job to be enqueued, got {count}"
+    # Key should be cleared
+    engine = create_engine(tenant_url)
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT proxy_key FROM assets WHERE asset_id = :aid"),
+                {"aid": asset_id},
+            ).fetchone()
+    finally:
+        engine.dispose()
+    assert row[0] is None, "proxy_key should be cleared after stale download"
 
 
 @pytest.mark.slow
-def test_stale_image_thumbnail_reenqueues_proxy_job(
+def test_stale_thumbnail_returns_404_and_clears_key(
     audit_fixes_client: tuple[TestClient, str, str, str],
 ) -> None:
-    """GET /assets/{id}/thumbnail for a stale thumbnail_key on an image returns 202 and enqueues proxy job."""
+    """GET /assets/{id}/thumbnail for a stale thumbnail_key returns 404 and clears the key."""
     client, api_key, library_id, tenant_url = audit_fixes_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
@@ -227,34 +215,18 @@ def test_stale_image_thumbnail_reenqueues_proxy_job(
     _set_thumbnail_key(tenant_url, asset_id, "nonexistent/fake_thumb.jpg")
 
     r = client.get(f"/v1/assets/{asset_id}/thumbnail", headers=auth)
-    assert r.status_code == 202, (r.status_code, r.text)
-    assert r.json().get("status") == "generating"
+    assert r.status_code == 404, (r.status_code, r.text)
 
-    # For images, a stale thumbnail should enqueue proxy (not video-index)
-    proxy_count = _count_pending_jobs(tenant_url, asset_id, "proxy")
-    assert proxy_count >= 1, f"Expected proxy job enqueued for image stale thumbnail, got {proxy_count}"
-
-    video_index_count = _count_pending_jobs(tenant_url, asset_id, "video-index")
-    assert video_index_count == 0, f"Should NOT enqueue video-index for image thumbnail, got {video_index_count}"
-
-
-@pytest.mark.slow
-def test_stale_video_thumbnail_reenqueues_video_index_job(
-    audit_fixes_client: tuple[TestClient, str, str, str],
-) -> None:
-    """GET /assets/{id}/thumbnail for a stale thumbnail_key on a video returns 202 and enqueues video-index."""
-    client, api_key, library_id, tenant_url = audit_fixes_client
-    auth = {"Authorization": f"Bearer {api_key}"}
-
-    asset_id = _upsert_asset(client, auth, library_id, "stale_thumb_video.mp4", "video")
-    _set_thumbnail_key(tenant_url, asset_id, "nonexistent/fake_video_thumb.jpg")
-
-    r = client.get(f"/v1/assets/{asset_id}/thumbnail", headers=auth)
-    assert r.status_code == 202, (r.status_code, r.text)
-    assert r.json().get("status") == "generating"
-
-    video_index_count = _count_pending_jobs(tenant_url, asset_id, "video-index")
-    assert video_index_count >= 1, f"Expected video-index job enqueued for video stale thumbnail, got {video_index_count}"
+    engine = create_engine(tenant_url)
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT thumbnail_key FROM assets WHERE asset_id = :aid"),
+                {"aid": asset_id},
+            ).fetchone()
+    finally:
+        engine.dispose()
+    assert row[0] is None, "thumbnail_key should be cleared after stale download"
 
 
 # ---------------------------------------------------------------------------

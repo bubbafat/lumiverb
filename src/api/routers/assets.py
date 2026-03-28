@@ -15,14 +15,13 @@ from sqlmodel import Session
 from src.api.dependencies import get_tenant_session
 from src.core import asset_status
 from src.core.io_utils import normalize_path_prefix
-from src.repository.tenant import AssetMetadataRepository, AssetRepository, LibraryRepository, ScanRepository, WorkerJobRepository
+from src.repository.tenant import AssetMetadataRepository, AssetRepository, LibraryRepository, ScanRepository
 from src.storage.local import get_storage
 from src.core.utils import utcnow
 
 logger = logging.getLogger(__name__)
 
 
-PRIORITY_URGENT = 0
 
 router = APIRouter(prefix="/v1/assets", tags=["assets"])
 
@@ -409,24 +408,14 @@ def _stream_asset_file(
     storage = get_storage()
     path = storage.abs_path(key)
     if not path.exists():
-        # Stale key: file was lost. Clear it and re-enqueue so the worker regenerates it.
-        job_repo = WorkerJobRepository(session)
+        # Stale key: file was lost. Clear it so next ingest regenerates it.
         if size == "proxy":
             asset.proxy_key = None
-            if not job_repo.has_pending_job("proxy", asset_id):
-                job_repo.create(job_type="proxy", asset_id=asset_id, priority=PRIORITY_URGENT)
         else:
-            # size == "thumbnail"
             asset.thumbnail_key = None
-            if asset.media_type.startswith("video"):
-                if not job_repo.has_pending_job("video-index", asset_id):
-                    job_repo.create(job_type="video-index", asset_id=asset_id, priority=PRIORITY_URGENT)
-            else:
-                if not job_repo.has_pending_job("proxy", asset_id):
-                    job_repo.create(job_type="proxy", asset_id=asset_id, priority=PRIORITY_URGENT)
         session.add(asset)
         session.commit()
-        return JSONResponse({"status": "generating"}, status_code=202)
+        raise HTTPException(status_code=404, detail=f"No {size} available for this asset")
 
     key_ext = Path(key).suffix.lower()
     if key_ext == ".webp":
@@ -743,16 +732,6 @@ def submit_vision(
     return VisionSubmitResponse(asset_id=asset_id, status="described")
 
 
-def _enqueue_video_preview_job_if_needed(
-    session: Session,
-    asset_id: str,
-) -> None:
-    job_repo = WorkerJobRepository(session)
-    if job_repo.has_pending_job("video-preview", asset_id):
-        return
-    job_repo.create(job_type="video-preview", asset_id=asset_id, priority=PRIORITY_URGENT)
-
-
 class EmbeddingSubmitRequest(BaseModel):
     model_id: str
     model_version: str
@@ -814,16 +793,12 @@ def stream_or_enqueue_preview(
                 session.commit()
             return _stream_file_with_range(path, request, media_type="video/mp4")
 
-        # File is missing on disk – clear key and re-enqueue.
+        # File is missing on disk – clear key.
         asset.video_preview_key = None
         session.add(asset)
         session.commit()
-        _enqueue_video_preview_job_if_needed(session, asset.asset_id)
-        return JSONResponse({"status": "generating"}, status_code=202)
 
-    # No preview yet – enqueue and return 202.
-    _enqueue_video_preview_job_if_needed(session, asset.asset_id)
-    return JSONResponse({"status": "generating"}, status_code=202)
+    raise HTTPException(status_code=404, detail="No video preview available for this asset")
 
 
 class ThumbnailKeyUpdateRequest(BaseModel):

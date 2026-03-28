@@ -12,10 +12,10 @@ from sqlmodel import Session, select
 from src.api.dependencies import get_tenant_session
 from src.models.tenant import VideoIndexChunk
 from src.repository.tenant import (
+    AssetMetadataRepository,
     AssetRepository,
     VideoIndexChunkRepository,
     VideoSceneRepository,
-    WorkerJobRepository,
 )
 
 import logging
@@ -161,32 +161,16 @@ def complete_chunk(
     all_done = chunk_repo.all_chunks_complete(asset_id)
 
     if all_done and asset_id:
-        scene_repo = VideoSceneRepository(session)
-        scene_count = len(scene_repo.get_scenes_for_asset(asset_id))
-        if scene_count > 0:
-            job_repo = WorkerJobRepository(session)
-            # Use try_create_unique to guard the TOCTOU race: two chunk completions
-            # arriving simultaneously could both pass a has_pending_job check before
-            # either inserts. The partial unique index (pending/claimed per job_type+asset_id)
-            # enforces at the DB level; we catch the conflict and treat it as success.
-            job_repo.try_create_unique("video-vision", asset_id)
-            session.commit()
-        else:
-            _log.info(
-                "No scenes produced for asset_id=%s after all chunks complete; "
-                "skipping video-vision and marking asset indexed directly",
-                asset_id,
-            )
-            asset_repo = AssetRepository(session)
-            asset_repo.set_video_indexed(asset_id)
-            session.commit()
-            # Inline search sync (best-effort)
-            asset_obj = asset_repo.get_by_id(asset_id)
-            if asset_obj:
-                meta_obj = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
-                if meta_obj:
-                    from src.search.sync import try_sync_asset
-                    try_sync_asset(session, asset_obj, meta_obj)
+        asset_repo = AssetRepository(session)
+        asset_repo.set_video_indexed(asset_id)
+        session.commit()
+        # Inline search sync (best-effort)
+        asset_obj = asset_repo.get_by_id(asset_id)
+        if asset_obj:
+            meta_obj = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
+            if meta_obj:
+                from src.search.sync import try_sync_asset
+                try_sync_asset(session, asset_obj, meta_obj)
 
     return ChunkCompleteResponse(
         chunk_id=chunk_id,
@@ -219,8 +203,7 @@ def fail_chunk(
 
 
 # ---------------------------------------------------------------------------
-# List scenes (VideoVisionWorker)
-# ---------------------------------------------------------------------------
+# List scenes # ---------------------------------------------------------------------------
 
 
 class SceneListItem(BaseModel):
@@ -245,7 +228,7 @@ def get_scenes_for_asset(
     asset_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> ScenesResponse:
-    """Return all scenes for an asset ordered by start_ms. Used by VideoVisionWorker."""
+    """Return all scenes for an asset ordered by start_ms."""
     scene_repo = VideoSceneRepository(session)
     scenes = scene_repo.get_scenes_for_asset(asset_id)
     return ScenesResponse(
@@ -268,8 +251,7 @@ def get_scenes_for_asset(
 
 
 # ---------------------------------------------------------------------------
-# Update scene vision (VideoVisionWorker)
-# ---------------------------------------------------------------------------
+# Update scene vision # ---------------------------------------------------------------------------
 
 
 class SceneVisionUpdateRequest(BaseModel):
@@ -303,8 +285,7 @@ def update_scene_vision(
 
 
 # ---------------------------------------------------------------------------
-# Enqueue scene-level search sync (VideoVisionWorker)
-# ---------------------------------------------------------------------------
+# Enqueue scene-level search sync # ---------------------------------------------------------------------------
 
 
 class SceneSyncRequest(BaseModel):

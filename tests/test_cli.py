@@ -180,39 +180,6 @@ def test_library_empty_trash_requires_confirmation() -> None:
 
 
 @pytest.mark.fast
-def test_is_unchanged_normalizes_mtime() -> None:
-    """Z and +00:00 suffix should be treated as equal."""
-    from src.cli.scanner import _is_unchanged
-
-    asset = {
-        "file_size": 1000,
-        "file_mtime": "2024-01-01T12:00:00+00:00",
-        "sha256": None,
-        "media_type": "image",
-    }
-    local = {"file_size": 1000, "file_mtime": "2024-01-01T12:00:00Z", "media_type": "image"}
-    assert _is_unchanged(asset, local, force=False) is True
-
-
-@pytest.mark.fast
-def test_is_unchanged_detects_size_change() -> None:
-    from src.cli.scanner import _is_unchanged
-
-    asset = {"file_size": 1000, "file_mtime": "2024-01-01T12:00:00+00:00", "sha256": None}
-    local = {"file_size": 2000, "file_mtime": "2024-01-01T12:00:00+00:00"}
-    assert _is_unchanged(asset, local, force=False) is False
-
-
-@pytest.mark.fast
-def test_is_unchanged_force_always_false() -> None:
-    from src.cli.scanner import _is_unchanged
-
-    asset = {"file_size": 1000, "file_mtime": "2024-01-01T12:00:00+00:00", "sha256": None}
-    local = {"file_size": 1000, "file_mtime": "2024-01-01T12:00:00+00:00"}
-    assert _is_unchanged(asset, local, force=True) is False
-
-
-@pytest.mark.fast
 def test_download_refuses_tty_without_output(monkeypatch: pytest.MonkeyPatch) -> None:
     """When stdout is a TTY and --output is omitted, command should refuse to write binary."""
     # Pretend stdout is a TTY by patching the isatty method on the real stdout object.

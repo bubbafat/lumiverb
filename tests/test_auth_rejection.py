@@ -70,13 +70,6 @@ def test_scans_create_no_auth(auth_rejection_client: TestClient) -> None:
 
 
 @pytest.mark.slow
-def test_jobs_list_no_auth(auth_rejection_client: TestClient) -> None:
-    """GET /v1/jobs without auth returns 401."""
-    r = auth_rejection_client.get("/v1/jobs")
-    assert r.status_code == 401
-
-
-@pytest.mark.slow
 def test_video_scenes_no_auth(auth_rejection_client: TestClient) -> None:
     """GET /v1/video/{asset_id}/scenes without auth returns 401."""
     r = auth_rejection_client.get("/v1/video/ast_00000000000000000000000000/scenes")
