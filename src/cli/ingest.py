@@ -705,15 +705,17 @@ def run_ingest(
             vision_provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key)
             console.print(f"Vision AI: {vision_model_id} via {vision_api_url} ({vision_source})")
 
-    # Step 3b: Load CLIP embedding model (lazy — first embed_image call loads weights)
+    # Step 3b: Load CLIP embedding model eagerly so we fail fast if it can't load
     clip_provider = None
     if include_images and not skip_embeddings:
         try:
             from src.workers.embeddings.clip_provider import CLIPEmbeddingProvider
             clip_provider = CLIPEmbeddingProvider()
+            clip_provider._load()  # force weight loading now to fail fast
             console.print(f"CLIP embeddings: {clip_provider.model_version}")
         except Exception as e:
-            console.print(f"[yellow]CLIP embeddings: unavailable ({e})[/yellow]")
+            console.print(f"[yellow]CLIP embeddings: unavailable ({e}) — continuing without embeddings[/yellow]")
+            clip_provider = None
     elif skip_embeddings:
         console.print("CLIP embeddings: skipped (--skip-embeddings)")
 
