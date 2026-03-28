@@ -187,7 +187,8 @@ def parse_exposure_time_us(exif: dict) -> int | None:
             t = float(s)
     except (TypeError, ValueError, ZeroDivisionError):
         return None
-    if t <= 0:
+    import math
+    if t <= 0 or not math.isfinite(t):
         return None
     return round(t * 1_000_000)
 

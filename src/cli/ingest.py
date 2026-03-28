@@ -393,20 +393,20 @@ def _process_and_ingest_video_stage1(
 
         with stats.lock:
             stats.processed += 1
-            ok, fail = stats.processed, stats.failed
         if progress is not None:
+            task = progress.tasks[task_id]
             progress.advance(task_id, 1)
-            progress.update(task_id, ok=ok, fail=fail)
+            progress.update(task_id, ok=task.fields["ok"] + 1)
 
     except Exception as e:
         logger.exception("Failed to ingest video %s: %s", rel_path, e)
         with stats.lock:
             stats.failed += 1
-            ok, fail = stats.processed, stats.failed
         if progress is not None:
             progress.console.print(f"[red]ingest \u2717[/red] {rel_path}: {e}")
+            task = progress.tasks[task_id]
             progress.advance(task_id, 1)
-            progress.update(task_id, ok=ok, fail=fail)
+            progress.update(task_id, fail=task.fields["fail"] + 1)
 
 
 def _generate_clip_embedding(
@@ -494,20 +494,20 @@ def _process_and_ingest_one(
 
         with stats.lock:
             stats.processed += 1
-            ok, fail = stats.processed, stats.failed
         if progress is not None:
+            task = progress.tasks[task_id]
             progress.advance(task_id, 1)
-            progress.update(task_id, ok=ok, fail=fail)
+            progress.update(task_id, ok=task.fields["ok"] + 1)
 
     except Exception as e:
         logger.exception("Failed to ingest %s: %s", rel_path, e)
         with stats.lock:
             stats.failed += 1
-            ok, fail = stats.processed, stats.failed
         if progress is not None:
             progress.console.print(f"[red]ingest \u2717[/red] {rel_path}: {e}")
+            task = progress.tasks[task_id]
             progress.advance(task_id, 1)
-            progress.update(task_id, ok=ok, fail=fail)
+            progress.update(task_id, fail=task.fields["fail"] + 1)
 
 
 class _IngestStats:
@@ -852,11 +852,11 @@ def _backfill_one(
             logger.warning("Vision returned no result for %s", rel_path)
             with stats.lock:
                 stats.failed += 1
-                ok, fail = stats.processed, stats.failed
             if progress is not None:
                 progress.console.print(f"[red]vision \u2717[/red] {rel_path}: no result")
+                task = progress.tasks[task_id]
                 progress.advance(task_id, 1)
-                progress.update(task_id, ok=ok, fail=fail)
+                progress.update(task_id, fail=task.fields["fail"] + 1)
             return
 
         client.post(f"/v1/assets/{asset_id}/vision", json={
@@ -868,20 +868,20 @@ def _backfill_one(
 
         with stats.lock:
             stats.processed += 1
-            ok, fail = stats.processed, stats.failed
         if progress is not None:
+            task = progress.tasks[task_id]
             progress.advance(task_id, 1)
-            progress.update(task_id, ok=ok, fail=fail)
+            progress.update(task_id, ok=task.fields["ok"] + 1)
 
     except Exception as e:
         logger.exception("Failed to backfill vision for %s: %s", rel_path, e)
         with stats.lock:
             stats.failed += 1
-            ok, fail = stats.processed, stats.failed
         if progress is not None:
             progress.console.print(f"[red]vision \u2717[/red] {rel_path}: {e}")
+            task = progress.tasks[task_id]
             progress.advance(task_id, 1)
-            progress.update(task_id, ok=ok, fail=fail)
+            progress.update(task_id, fail=task.fields["fail"] + 1)
 
 
 def run_backfill_vision(
