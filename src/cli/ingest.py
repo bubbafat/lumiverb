@@ -17,7 +17,7 @@ import json
 import logging
 import os
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -505,6 +505,20 @@ class _IngestStats:
         self.skipped = 0
 
 
+def _drain(inflight: set[Future]) -> tuple[set[Future], set[Future]]:
+    """Wait for at least one future to finish; return (done, still_pending)."""
+    done, pending = _wait_first(inflight)
+    for fut in done:
+        fut.result()  # surfaces exceptions (already caught inside workers)
+    return done, pending
+
+
+def _wait_first(fs: set[Future]) -> tuple[set[Future], set[Future]]:
+    """Thin wrapper so we only import wait once."""
+    from concurrent.futures import wait, FIRST_COMPLETED
+    return wait(fs, return_when=FIRST_COMPLETED)
+
+
 def _make_progress(console: Console) -> Progress:
     return Progress(
         SpinnerColumn(),
@@ -740,10 +754,10 @@ def run_ingest(
             visible=bool(videos_to_ingest),
         )
 
-        # Step 5: Ingest images
+        # Step 5: Ingest images (bounded: at most `concurrency` in-flight)
         if images_to_ingest:
             pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="ingest")
-            futures = []
+            inflight: set[Future] = set()
             for f in images_to_ingest:
                 fut = pool.submit(
                     _process_and_ingest_one,
@@ -761,15 +775,16 @@ def run_ingest(
                     progress=progress,
                     task_id=img_tid,
                 )
-                futures.append(fut)
-            for fut in futures:
-                fut.result()
+                inflight.add(fut)
+                if len(inflight) >= concurrency * 2:
+                    done, inflight = _drain(inflight)
+            _drain(inflight)
             pool.shutdown(wait=True)
 
         # Step 6: Video stage 1 — poster frame + EXIF + 10-sec preview
         if videos_to_ingest:
             pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="video")
-            futures = []
+            inflight = set()
             for f in videos_to_ingest:
                 fut = pool.submit(
                     _process_and_ingest_video_stage1,
@@ -783,9 +798,10 @@ def run_ingest(
                     progress=progress,
                     task_id=vid_tid,
                 )
-                futures.append(fut)
-            for fut in futures:
-                fut.result()
+                inflight.add(fut)
+                if len(inflight) >= concurrency * 2:
+                    done, inflight = _drain(inflight)
+            _drain(inflight)
             pool.shutdown(wait=True)
 
     # TODO: Video stage 2 — scene detection + vision (ADR-005 Phase 6)
@@ -910,7 +926,7 @@ def run_backfill_vision(
     with progress:
         tid = progress.add_task("Vision", total=len(to_backfill), ok=0, fail=0)
         pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="backfill")
-        futures = []
+        inflight: set[Future] = set()
         for a in to_backfill:
             fut = pool.submit(
                 _backfill_one,
@@ -923,10 +939,10 @@ def run_backfill_vision(
                 progress=progress,
                 task_id=tid,
             )
-            futures.append(fut)
-
-        for fut in futures:
-            fut.result()
+            inflight.add(fut)
+            if len(inflight) >= concurrency * 2:
+                done, inflight = _drain(inflight)
+        _drain(inflight)
         pool.shutdown(wait=True)
 
     return stats

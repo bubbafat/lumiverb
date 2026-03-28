@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 
 from src.workers.embeddings.base import EmbeddingProvider
@@ -17,7 +18,7 @@ MODEL_VERSION = "ViT-B-32-openai"
 class CLIPEmbeddingProvider(EmbeddingProvider):
     """
     Produces 512-dim embeddings using CLIP ViT-B/32 (OpenAI weights).
-    Lazy-loads model and preprocessing on first call.
+    Lazy-loads model and preprocessing on first call (thread-safe).
     """
 
     def __init__(
@@ -30,6 +31,7 @@ class CLIPEmbeddingProvider(EmbeddingProvider):
         self._model = None
         self._preprocess = None
         self._device: str | None = None
+        self._lock = threading.Lock()
 
     @property
     def model_id(self) -> str:
@@ -41,22 +43,26 @@ class CLIPEmbeddingProvider(EmbeddingProvider):
 
     def _load(self):
         if self._model is None:
-            import open_clip
-            import torch
+            with self._lock:
+                if self._model is None:
+                    import open_clip
+                    import torch
 
-            self._device = "cuda" if torch.cuda.is_available() else "cpu"
-            self._model, _, self._preprocess = open_clip.create_model_and_transforms(
-                self._model_name,
-                pretrained=self._pretrained,
-                device=self._device,
-            )
-            self._model.eval()
-            logger.info(
-                "Loaded CLIP model %s/%s on %s",
-                self._model_name,
-                self._pretrained,
-                self._device,
-            )
+                    self._device = "cuda" if torch.cuda.is_available() else "cpu"
+                    model, _, preprocess = open_clip.create_model_and_transforms(
+                        self._model_name,
+                        pretrained=self._pretrained,
+                        device=self._device,
+                    )
+                    model.eval()
+                    self._preprocess = preprocess
+                    self._model = model  # publish last so other threads see complete state
+                    logger.info(
+                        "Loaded CLIP model %s/%s on %s",
+                        self._model_name,
+                        self._pretrained,
+                        self._device,
+                    )
         return self._model, self._preprocess, self._device
 
     def embed_image(self, pil_image: "PIL.Image.Image") -> list[float]:
@@ -76,4 +82,3 @@ class CLIPEmbeddingProvider(EmbeddingProvider):
         from PIL import Image as PILImage
 
         return self.embed_image(PILImage.open(proxy_path).convert("RGB"))
-
