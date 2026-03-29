@@ -16,6 +16,7 @@ interface LightboxProps {
   onDateClick?: (dateStr: string) => void;
   onNearbyClick?: (lat: number, lon: number) => void;
   onFilterClick?: (params: Record<string, string>) => void;
+  onPathClick?: (path: string) => void;
   libraryId?: string;
   isPublic?: boolean;
   publicLibraryId?: string;
@@ -109,6 +110,7 @@ export function Lightbox({
   onDateClick,
   onNearbyClick,
   onFilterClick,
+  onPathClick,
   libraryId,
   isPublic,
   publicLibraryId,
@@ -475,7 +477,32 @@ export function Lightbox({
               <div>
                 <div className="text-lg font-medium text-gray-100">{filename}</div>
                 <div className="mt-1 font-mono text-xs text-gray-500">
-                  {asset.rel_path}
+                  {(() => {
+                    const parts = asset.rel_path.split("/");
+                    const dirParts = parts.slice(0, -1);
+                    if (!onPathClick || dirParts.length === 0) return asset.rel_path;
+                    return (
+                      <>
+                        {dirParts.map((seg, i) => {
+                          const path = dirParts.slice(0, i + 1).join("/");
+                          return (
+                            <span key={path}>
+                              {i > 0 && <span className="text-gray-600">/</span>}
+                              <button
+                                type="button"
+                                onClick={() => onPathClick(path)}
+                                className="text-gray-400 hover:text-indigo-300 hover:underline"
+                              >
+                                {seg}
+                              </button>
+                            </span>
+                          );
+                        })}
+                        <span className="text-gray-600">/</span>
+                        <span>{parts[parts.length - 1]}</span>
+                      </>
+                    );
+                  })()}
                 </div>
                 <div className="mt-2 text-sm text-gray-400">
                   {formatFileSize(asset.file_size)} ·{" "}

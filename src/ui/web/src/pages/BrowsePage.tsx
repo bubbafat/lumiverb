@@ -884,6 +884,10 @@ export default function BrowsePage() {
             setParam("tag", tag);
             setLightboxAsset(null);
           }}
+          onPathClick={(path) => {
+            setLightboxAsset(null);
+            setParam("path", path);
+          }}
           onDateClick={handleLightboxDateClick}
           libraryId={libraryId}
           isPublic={isPublicMode}
