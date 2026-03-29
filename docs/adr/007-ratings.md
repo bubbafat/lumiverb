@@ -241,12 +241,15 @@ These match Lightroom conventions. Only active when lightbox is open (not in gri
 
 | Area | File | Notes |
 |------|------|-------|
-| Asset model | `src/models/tenant.py` | New `AssetRating` model goes here, before `SystemMetadata` |
-| Asset repository | `src/repository/tenant.py` | New `RatingRepository` class; extend `page_by_library()` with rating JOINs |
-| Browse endpoint | `src/api/routers/assets.py` | Add rating query params to page endpoint |
-| Search endpoint | `src/api/routers/search.py` | Parse `is:favorite` etc. from query string; post-filter by ratings |
-| User deletion | `src/api/routers/users.py` | Add rating cleanup on user delete |
-| User ID dependency | `src/api/dependencies.py` | `get_current_user_id()` already exists |
+| Rating model | `src/models/tenant.py` | `AssetRating` model + `VALID_COLORS` constant (before `SystemMetadata`) |
+| Rating repository | `src/repository/tenant.py` | `RatingRepository` class at end of file; uses shared `_SENTINEL` |
+| Rating API | `src/api/routers/ratings.py` | 3 endpoints: single rate, batch rate, bulk lookup |
+| Browse endpoint | `src/api/routers/assets.py` | Phase 3: add rating query params to page endpoint |
+| Search endpoint | `src/api/routers/search.py` | Phase 3: parse `is:favorite` etc.; post-filter by ratings |
+| User deletion | `src/api/routers/users.py` | Rating cleanup added (opens tenant session for `delete_for_user`) |
+| User ID dependency | `src/api/dependencies.py` | `get_current_user_id()` — already existed, used by ratings router |
+| Migration | `migrations/tenant/versions/c3d4e5f6a7b9_add_asset_ratings.py` | Phase 1 migration |
+| Tests | `tests/test_ratings_api.py` | 15 integration tests |
 | Selection hook | `src/ui/web/src/lib/useSelection.ts` | No changes needed — already generic |
 | Selection toolbar | `src/ui/web/src/components/SelectionToolbar.tsx` | Add rating action buttons as children |
 | Lightbox | `src/ui/web/src/components/Lightbox.tsx` | Add rating controls to metadata panel |
@@ -309,6 +312,11 @@ Every phase must satisfy all of the following before it is marked complete:
 
 **Read-ahead:** The rating state must be available to the FilterBar (Phase 3) — store ratings in a React Query cache keyed by `["ratings", userId]` so the FilterBar can read filter state without prop drilling. The AssetCell overlay design must not conflict with the selection checkbox (top-left) — ratings go top-right and bottom edge.
 
+**Notes from Phase 1:**
+- The `/ratings/lookup` endpoint returns a sparse map — unrated assets are omitted. The UI must treat missing entries as defaults (favorite=false, stars=0, color=null), not errors.
+- To **clear** a color, the API client must explicitly send `"color": null` in the JSON body. Omitting the `color` field means "don't change." This is because the backend uses a sentinel pattern to distinguish absent from explicit null. The `PUT` body for a single field change (e.g., toggling favorite) should only include that field.
+- The batch endpoint (`PUT /v1/assets/ratings`) validates all assets before writing. A single invalid asset_id (404) fails the entire batch — the UI should handle this gracefully.
+
 ### Phase 3 — Browse Filters + Search Syntax
 
 **Deliverables:**
@@ -326,6 +334,11 @@ Every phase must satisfy all of the following before it is marked complete:
 
 **Read-ahead:** The query parser must be extensible — future ADRs may add more structured filters (e.g., `in:collection`, `type:video`). Design it as a generic `key:value` extractor, not hardcoded to rating filters.
 
+**Notes from Phase 1:**
+- `page_by_library()` in `src/repository/tenant.py` builds raw SQL with dynamic WHERE conditions on the `assets` table. All current filters are direct column checks. Rating filters require a LEFT JOIN on `asset_ratings` keyed on `(user_id, asset_id)` — this is a new pattern for that method. The `user_id` must be threaded through from the API dependency.
+- The rating partial indexes (`ix_asset_ratings_user_favorite WHERE favorite = true`, etc.) are designed to make these filtered queries fast. Use them — don't scan the full table.
+- For search mode (Quickwit), rating filters must be applied as post-filters after enrichment, similar to how `path_prefix` and `tag` work today. Ratings are not in the Quickwit index.
+
 ### Phase 4 — Favorites Sidebar + Cross-Library View
 
 **Deliverables:**
@@ -338,6 +351,17 @@ Every phase must satisfy all of the following before it is marked complete:
 - Docs: update sidebar documentation
 
 **Does NOT include:** CLI commands, smart collections, rating export.
+
+**Notes from Phase 1:**
+- User deletion cleanup crosses DB boundaries: users are in the control plane DB, ratings in the tenant DB. The `DELETE /v1/users/{user_id}` handler opens a separate tenant session via `request.state.connection_string`. The cross-library favorites query in this phase will face a similar pattern — it needs to query `asset_ratings` joined to `assets` across all libraries, which is still within one tenant DB but without the usual `library_id` scope.
+
+## Implementation Notes
+
+These notes capture lessons from completed phases. Consult them before starting any new phase.
+
+- **Sentinel pattern**: `_SENTINEL = object()` lives in `src/repository/tenant.py` (line ~1384). Any code that needs to distinguish "not provided" from `None` must import this exact object — creating a second `_SENTINEL = object()` elsewhere produces a different identity that will never match. This pattern is used by both `CollectionRepository.update()` and `RatingRepository.upsert()` for nullable fields like `color` and `cover_asset_id`.
+- **Manual body parsing for null detection**: FastAPI/Pydantic cannot distinguish an absent field from an explicit `null`. The rating endpoints (`src/api/routers/ratings.py`) use `await request.body()` + raw JSON parsing to detect whether `color` was in the payload. When doing this, `ValidationError.errors()` returns objects that are not JSON-serializable — use `str(e)` for HTTPException detail.
+- **`AssetRepository.get_by_id()` already filters `deleted_at IS NULL`**: No extra trashed-asset check needed in rating endpoints — a `None` return means not found or trashed.
 
 ## Alternatives Considered
 
