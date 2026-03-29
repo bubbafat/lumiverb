@@ -20,11 +20,13 @@ from src.models.tenant import (
     Asset,
     AssetEmbedding,
     AssetMetadata,
+    AssetRating,
     Collection,
     CollectionAsset,
     Library,
     LibraryPathFilter,
     TenantPathFilterDefault,
+    VALID_COLORS,
     VideoIndexChunk,
     VideoScene,
 )
@@ -1674,3 +1676,130 @@ class CollectionRepository:
             .limit(1)
         ).first()
         return row[0] if row else None
+
+
+# ---------------------------------------------------------------------------
+# Ratings (ADR-007)
+# ---------------------------------------------------------------------------
+
+
+class RatingRepository:
+    """Repository for user-scoped asset ratings (favorites, stars, color labels)."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def upsert(
+        self,
+        user_id: str,
+        asset_id: str,
+        *,
+        favorite: bool | None = None,
+        stars: int | None = None,
+        color: str | object = _SENTINEL,
+    ) -> AssetRating | None:
+        """Set or update a rating. Only provided fields are changed.
+
+        Returns the rating, or None if the row was deleted (all-default state).
+        """
+        existing = self._session.exec(
+            select(AssetRating).where(
+                AssetRating.user_id == user_id,
+                AssetRating.asset_id == asset_id,
+            )
+        ).first()
+
+        if existing:
+            if favorite is not None:
+                existing.favorite = favorite
+            if stars is not None:
+                existing.stars = stars
+            if color is not _SENTINEL:
+                existing.color = color  # type: ignore[assignment]
+            existing.updated_at = utcnow()
+
+            # Delete row if all-default
+            if not existing.favorite and existing.stars == 0 and existing.color is None:
+                self._session.delete(existing)
+                self._session.commit()
+                return None
+
+            self._session.add(existing)
+            self._session.commit()
+            self._session.refresh(existing)
+            return existing
+
+        # New row — apply defaults for unprovided fields
+        fav = favorite if favorite is not None else False
+        st = stars if stars is not None else 0
+        col = color if color is not _SENTINEL else None
+
+        # Don't insert if all-default
+        if not fav and st == 0 and col is None:
+            return None
+
+        rating = AssetRating(
+            user_id=user_id,
+            asset_id=asset_id,
+            favorite=fav,
+            stars=st,
+            color=col,  # type: ignore[arg-type]
+            updated_at=utcnow(),
+        )
+        self._session.add(rating)
+        self._session.commit()
+        self._session.refresh(rating)
+        return rating
+
+    def get_for_asset(self, user_id: str, asset_id: str) -> AssetRating | None:
+        return self._session.exec(
+            select(AssetRating).where(
+                AssetRating.user_id == user_id,
+                AssetRating.asset_id == asset_id,
+            )
+        ).first()
+
+    def get_for_assets(
+        self, user_id: str, asset_ids: list[str]
+    ) -> dict[str, AssetRating]:
+        """Bulk read — returns dict keyed by asset_id."""
+        if not asset_ids:
+            return {}
+        rows = self._session.exec(
+            select(AssetRating).where(
+                AssetRating.user_id == user_id,
+                AssetRating.asset_id.in_(asset_ids),  # type: ignore[attr-defined]
+            )
+        ).all()
+        return {r.asset_id: r for r in rows}
+
+    def batch_upsert(
+        self,
+        user_id: str,
+        asset_ids: list[str],
+        *,
+        favorite: bool | None = None,
+        stars: int | None = None,
+        color: str | object = _SENTINEL,
+    ) -> int:
+        """Apply the same rating update to multiple assets. Returns count updated."""
+        if not asset_ids:
+            return 0
+
+        updated = 0
+        for asset_id in asset_ids:
+            self.upsert(
+                user_id, asset_id, favorite=favorite, stars=stars, color=color
+            )
+            updated += 1
+        return updated
+
+    def delete_for_user(self, user_id: str) -> int:
+        """Delete all ratings for a user. Used when a user account is deleted."""
+        from sqlalchemy import delete as sa_delete
+
+        result = self._session.execute(
+            sa_delete(AssetRating).where(AssetRating.user_id == user_id)
+        )
+        self._session.commit()
+        return result.rowcount  # type: ignore[return-value]

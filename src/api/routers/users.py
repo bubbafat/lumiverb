@@ -11,8 +11,9 @@ from pydantic import BaseModel
 
 from src.api.dependencies import require_tenant_admin
 from src.api.middleware import _error_response
-from src.core.database import get_control_session
+from src.core.database import get_control_session, get_engine_for_url
 from src.repository.control_plane import UserRepository
+from src.repository.tenant import RatingRepository
 
 router = APIRouter(prefix="/v1/users", tags=["users"])
 
@@ -159,5 +160,15 @@ def delete_user(
                 return _error_response(409, "last_admin", "Cannot remove the last admin")
 
         repo.delete(user_id)
+
+    # Clean up user's ratings in tenant DB
+    connection_string = getattr(request.state, "connection_string", None)
+    if connection_string:
+        from sqlmodel import Session as TenantSession
+
+        engine = get_engine_for_url(connection_string)
+        with TenantSession(engine) as tenant_session:
+            rating_repo = RatingRepository(tenant_session)
+            rating_repo.delete_for_user(user_id)
 
     return None

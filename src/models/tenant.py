@@ -296,6 +296,37 @@ class CollectionAsset(SQLModel, table=True):
     )
 
 
+# ---------------------------------------------------------------------------
+# Ratings (ADR-007)
+# ---------------------------------------------------------------------------
+
+
+VALID_COLORS = {"red", "orange", "yellow", "green", "blue", "purple"}
+
+
+class AssetRating(SQLModel, table=True):
+    __tablename__ = "asset_ratings"
+    __table_args__ = (
+        CheckConstraint("stars >= 0 AND stars <= 5", name="ck_asset_ratings_stars"),
+        CheckConstraint(
+            "color IS NULL OR color IN ('red', 'orange', 'yellow', 'green', 'blue', 'purple')",
+            name="ck_asset_ratings_color",
+        ),
+    )
+
+    user_id: str = Field(primary_key=True, nullable=False)
+    asset_id: str = Field(
+        foreign_key="assets.asset_id", primary_key=True, nullable=False
+    )
+    favorite: bool = Field(default=False, nullable=False)
+    stars: int = Field(default=0, nullable=False)
+    color: str | None = Field(default=None, nullable=True)
+    updated_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
 class SystemMetadata(SQLModel, table=True):
     __tablename__ = "system_metadata"
 

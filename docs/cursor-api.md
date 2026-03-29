@@ -43,6 +43,7 @@ Two-layer Postgres architecture:
 - `video_index_chunks` — chunk_id, asset_id, chunk_index, start_ms, end_ms, status, worker_id, claimed_at, lease_expires_at, completed_at, error_message, anchor_phash, scene_start_ms, created_at
 - `asset_metadata` — metadata_id, asset_id, model_id, model_version, generated_at, data (JSONB)
 - `asset_embeddings` — embedding_id, asset_id, model_id, model_version, embedding_vector vector(512), created_at
+- `asset_ratings` — user_id (text), asset_id FK (ON DELETE CASCADE), favorite (bool, default false), stars (int 0-5, default 0), color (text, nullable; red|orange|yellow|green|blue|purple), updated_at. PK: (user_id, asset_id). User-scoped ratings — each user has their own independent ratings per asset.
 - `system_metadata` — key, value, updated_at
 - `faces` — face_id, asset_id, bounding_box_json, embedding_vector vector(512), detection_confidence, created_at [phase 2, empty until then]
 - `people` — person_id, display_name, created_by_user, created_at [phase 2]
@@ -231,6 +232,16 @@ Collections are virtual groupings of assets across libraries. See ADR-006 for fu
 - **GET /v1/public/collections/{id}** — Returns privacy-stripped collection metadata: `{ "collection_id", "name", "description", "cover_asset_id", "asset_count" }`. 404 if collection not found or not public. Resolved via `public_collections` control plane table.
 - **GET /v1/public/collections/{id}/assets** — Query: `after` (cursor), `limit`. Returns privacy-stripped asset list: `{ "items": [{ "asset_id", "media_type", "width", "height", "taken_at", "duration_sec" }], "next_cursor" }`. No rel_path, no camera info, no GPS.
 - Asset thumbnails/proxies served via existing `/v1/assets/{id}/proxy?public_collection_id={id}` — verifies asset membership in the public collection.
+
+## Ratings API
+
+User-scoped asset ratings: favorites (heart), stars (1-5), color labels. Each user has independent ratings per asset. Ratings are private — never visible to other users. All endpoints require auth; user identity comes from JWT `sub` or API key `key:{key_id}`.
+
+- **PUT /v1/assets/{asset_id}/rating** — Set or update rating on a single asset. Body: `{ "favorite": bool, "stars": int (0-5), "color": string|null }`. All fields optional — only provided fields are updated. Color values: `red`, `orange`, `yellow`, `green`, `blue`, `purple`, or `null` to clear. If all fields are default (favorite=false, stars=0, color=null), the rating row is deleted. Returns: `{ "asset_id", "favorite", "stars", "color" }`. 404 if asset not found or trashed. 422 for invalid stars/color.
+- **PUT /v1/assets/ratings** — Batch rate multiple assets. Body: `{ "asset_ids": [...], "favorite": bool, "stars": int, "color": string|null }`. Same merge semantics as single — only provided fields are updated across all listed assets. Returns: `{ "updated": int }`. 404 if any asset not found. 422 for invalid values or empty asset_ids. Max 1000 asset_ids.
+- **POST /v1/assets/ratings/lookup** — Bulk read ratings. Body: `{ "asset_ids": [...] }`. Returns: `{ "ratings": { "asset_id": { "favorite", "stars", "color" }, ... } }`. Assets with no rating are omitted from the map. Max 1000 asset_ids.
+
+Ownership: when a user is deleted via `DELETE /v1/users/{user_id}`, all their ratings are removed from the tenant DB.
 
 ## Admin API
 
