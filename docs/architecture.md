@@ -369,9 +369,9 @@ Staged rollout:
 ### 8.1 What Must Be Backed Up
 
 Only Postgres is irreplaceable. Everything else is regenerable:
-- Proxies / thumbnails → regenerable from source files via local agent
+- Proxies / thumbnails → regenerable from source files via `lumiverb ingest`
 - Quickwit index → regenerable via search-sync
-- AI descriptions → regenerable by re-running vision workers
+- AI descriptions → regenerable by re-running ingest
 
 ### 8.2 Postgres Backup Strategy
 

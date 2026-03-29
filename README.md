@@ -43,8 +43,7 @@ Re-run `./scripts/init.sh` after the server is running to complete setup.
 ### First library
 ```bash
 lumiverb library create "My Photos" /path/to/your/photos
-lumiverb scan --library "My Photos"
-lumiverb worker proxy --once --library "My Photos"
+lumiverb ingest --library "My Photos"
 ```
 
 ---
@@ -56,22 +55,15 @@ lumiverb worker proxy --once --library "My Photos"
 │  CLI (local agent)          API Server (FastAPI/v1)      │
 │  - Scans local filesystem   - Multi-tenant              │
 │  - Generates proxies        - JWT + API key auth        │
-│  - Uploads metadata         - Per-tenant DB routing     │
+│  - Runs vision AI           - Per-tenant DB routing     │
+│  - Uploads via /v1/ingest   - Web UI (React/TS)         │
 └───────────────┬─────────────────────┬───────────────────┘
                 │                     │
          ┌──────▼──────┐    ┌─────────▼────────┐
          │  Tenant DB  │    │  Quickwit Search  │
          │  (Postgres) │    │  (BM25 index)     │
          │  per tenant │    │  per model ver    │
-         └──────┬──────┘    └──────────────────┘
-                │
-         ┌──────▼──────────────────────────────┐
-         │  Workers (pull-based, FOR UPDATE     │
-         │  SKIP LOCKED, horizontally scalable) │
-         │  - proxy_worker  - ai_worker         │
-         │  - video_worker  - metadata_worker   │
-         │  - search_sync_worker                │
-         └─────────────────────────────────────┘
+         └─────────────┘    └──────────────────┘
 ```
 
 Two databases per deployment:
@@ -138,29 +130,20 @@ uv run lumiverb admin tenant create --name "My Library" --email me@example.com
 # Returns: tenant_id, api_key
 ```
 
-### 7. Scan your first library
+### 7. Create a library and ingest
 
 ```bash
 uv run lumiverb config set --api-url http://localhost:8000 --api-key <your-key>
 uv run lumiverb library create "My Photos" /path/to/photos
-uv run lumiverb scan
+uv run lumiverb ingest --library "My Photos"
 ```
 
-### 8. Start workers
+The `ingest` command scans the filesystem, generates proxies/thumbnails, extracts EXIF, runs vision AI, generates embeddings, and uploads everything atomically via the API. All processing happens client-side.
 
-In separate terminals (or use a process manager):
+> **Note:** Vision AI requires [Moondream Station](https://moondream.ai) running locally.
+> Start it with `moondream-station` before ingesting.
 
-```bash
-uv run lumiverb worker proxy --once         # generate proxies and thumbnails
-uv run lumiverb worker ai --mode light      # run Moondream vision analysis
-uv run lumiverb worker metadata --phase exif
-uv run lumiverb worker search-sync          # push to Quickwit
-```
-
-> **Note:** AI workers require [Moondream Station](https://moondream.ai) running locally.
-> Start it with `moondream-station` before running the AI worker.
-
-### 9. Search
+### 8. Search
 
 ```bash
 uv run lumiverb search "golden hour portraits"
@@ -191,7 +174,7 @@ curl "http://localhost:8000/v1/search?q=golden+hour+portraits" \
 ├── src/
 │   ├── api/                   # FastAPI application (v1 routes)
 │   ├── cli/                   # Typer CLI (local agent)
-│   ├── workers/               # Background workers (BaseWorker subclasses)
+│   ├── workers/               # Processing modules (used by ingest CLI)
 │   ├── repository/            # DB access layer (Repository pattern)
 │   ├── models/                # SQLModel entities
 │   ├── video/                 # FFmpeg pipeline, scene segmentation
@@ -343,7 +326,6 @@ systemctl restart lumiverb-api
 
 ```bash
 journalctl -u lumiverb-api -f       # API server logs
-journalctl -u lumiverb-worker -f    # Background worker logs
 systemctl restart lumiverb-api      # Restart API
 sudo grep ADMIN_KEY /etc/lumiverb/env   # Admin key (for CLI access)
 ```

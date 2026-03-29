@@ -44,6 +44,7 @@ Two-layer Postgres architecture:
 - `asset_metadata` — metadata_id, asset_id, model_id, model_version, generated_at, data (JSONB)
 - `asset_embeddings` — embedding_id, asset_id, model_id, model_version, embedding_vector vector(512), created_at
 - `asset_ratings` — user_id (text), asset_id FK (ON DELETE CASCADE), favorite (bool, default false), stars (int 0-5, default 0), color (text, nullable; red|orange|yellow|green|blue|purple), updated_at. PK: (user_id, asset_id). User-scoped ratings — each user has their own independent ratings per asset.
+- `saved_views` — view_id (sv_+ULID), name, query_params (URL query string), icon (nullable), owner_user_id, position (int), created_at, updated_at. User-scoped bookmarked filter presets. Navigates to `/browse?{query_params}`.
 - `system_metadata` — key, value, updated_at
 - `faces` — face_id, asset_id, bounding_box_json, embedding_vector vector(512), detection_confidence, created_at [phase 2, empty until then]
 - `people` — person_id, display_name, created_by_user, created_at [phase 2]
@@ -159,7 +160,8 @@ All under `/v1/libraries`; require tenant auth (middleware).
 All under `/v1/libraries/{library_id}/filters`; require tenant auth and **admin** API key. Path filters control which files are included or excluded during library ingest (scanner). Patterns use `**`-style globs (case-insensitive); `**` matches across path segments. Validation rejects patterns containing `..` or null bytes.
 
 - **GET /v1/libraries/{library_id}/filters** — Returns `{ "includes": [{ "filter_id", "pattern", "created_at" }], "excludes": [...] }`. 404 if library not found.
-- **POST /v1/libraries/{library_id}/filters** — Body: `{ "type": "include"|"exclude", "pattern": "..." }`. Creates filter. Returns 201 with `{ "filter_id", "type", "pattern", "created_at" }`. 400 if pattern invalid, 404 if library not found.
+- **POST /v1/libraries/{library_id}/filters** — Body: `{ "type": "include"|"exclude", "pattern": "...", "trash_matching": false }`. Creates filter. When `trash_matching` is `true` and type is `exclude`, also trashes all active assets matching the pattern. Returns 201 with `{ "filter_id", "type", "pattern", "created_at", "trashed_count" }`. 400 if pattern invalid, 404 if library not found.
+- **POST /v1/libraries/{library_id}/filters/preview** — Body: `{ "type": "exclude", "pattern": "..." }`. Returns `{ "matching_asset_count": N }` — count of active assets matching the pattern. Used by UI to show confirmation before creating an exclude filter that would trash assets.
 - **DELETE /v1/libraries/{library_id}/filters/{filter_id}** — Removes filter. Returns 204 on success, 404 if not found.
 
 ## Tenant filter defaults API

@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted (all phases complete)
 
 ## Progress
 
