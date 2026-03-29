@@ -5,14 +5,13 @@ import type { AssetPageItem, AssetRating, RatingColor } from "../api/types";
 import { AssetCell } from "../components/AssetCell";
 import { Lightbox } from "../components/Lightbox";
 import { groupAssetsByDate } from "../lib/groupByDate";
-import { buildFixedGridRows } from "../lib/virtualRows";
+import { buildVirtualRows } from "../lib/virtualRows";
 import { useScrollContainer } from "../context/ScrollContainerContext";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 const PAGE_SIZE = 200;
 const ROW_GAP = 4;
-const TARGET_ROW_HEIGHT = 200;
-const COLUMNS = 5;
+const TARGET_ROW_HEIGHT = 220;
 
 export default function FavoritesPage() {
   const queryClient = useQueryClient();
@@ -72,20 +71,17 @@ export default function FavoritesPage() {
 
   const groups = useMemo(() => groupAssetsByDate(flatAssets), [flatAssets]);
 
-  const cellWidth = containerWidth > 0 ? Math.floor((containerWidth - ROW_GAP * (COLUMNS - 1)) / COLUMNS) : 0;
-  const rowHeight = cellWidth > 0 ? Math.round(cellWidth * 9 / 16) : TARGET_ROW_HEIGHT;
-
   const virtualRows = useMemo(() => {
     if (containerWidth <= 0) return [];
-    return buildFixedGridRows(groups, containerWidth, COLUMNS, rowHeight, ROW_GAP);
-  }, [groups, containerWidth, rowHeight]);
+    return buildVirtualRows(groups, containerWidth, TARGET_ROW_HEIGHT, ROW_GAP);
+  }, [groups, containerWidth]);
 
   const virtualizer = useVirtualizer({
     count: virtualRows.length,
     getScrollElement: () => scrollContainer,
     estimateSize: (i) => {
       const row = virtualRows[i];
-      if (!row) return rowHeight;
+      if (!row) return TARGET_ROW_HEIGHT;
       return row.height;
     },
     overscan: 5,
@@ -150,6 +146,8 @@ export default function FavoritesPage() {
                 }
 
                 const group = groups[row.groupIndex];
+                const { justifiedRow } = row;
+                let x = 0;
                 return (
                   <div
                     key={virtualRow.key}
@@ -158,29 +156,32 @@ export default function FavoritesPage() {
                       top: virtualRow.start,
                       left: 0,
                       width: "100%",
-                      height: row.height,
+                      height: justifiedRow.height,
                     }}
-                    className="flex"
                   >
-                    {row.justifiedRow.items.map((itemIndex: number, cellIdx: number) => {
+                    {justifiedRow.items.map((itemIndex: number, idx: number) => {
                       const asset = group.assets[itemIndex];
                       if (!asset) return null;
-                      const left = cellIdx * (cellWidth + ROW_GAP);
+                      const width = justifiedRow.widths[idx];
+                      const left = x;
+                      x += width + ROW_GAP;
+                      const aspectRatio = width / justifiedRow.height;
+
                       return (
                         <div
                           key={asset.asset_id}
+                          className="absolute"
                           style={{
-                            position: "absolute",
                             left,
                             top: 0,
-                            width: cellWidth,
+                            width,
                             height: "100%",
                           }}
                         >
                           <AssetCell
                             asset={asset}
                             onClick={() => handleAssetClick(asset)}
-                            aspectRatio={16 / 9}
+                            aspectRatio={aspectRatio}
                             rating={ratingsMap[asset.asset_id]}
                             onFavoriteToggle={(id) => handleRatingChange(id, { favorite: !(ratingsMap[id]?.favorite ?? false) })}
                           />
