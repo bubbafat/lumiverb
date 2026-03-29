@@ -275,6 +275,11 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette }: Sidebar
                       activePath={activePath}
                       onNavigate={onNavigate}
                       revision={revision}
+                      onExcludeFolder={(path) =>
+                        navigate(
+                          `/libraries/${libraryId}/settings?tab=filters&exclude=${encodeURIComponent(path + "/**")}`,
+                        )
+                      }
                     />
                   )}
                 </div>

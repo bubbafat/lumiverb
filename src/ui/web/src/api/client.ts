@@ -338,6 +338,11 @@ export interface CreatedFilterResponse {
   type: string;
   pattern: string;
   created_at: string;
+  trashed_count?: number;
+}
+
+export interface PreviewFilterResponse {
+  matching_asset_count: number;
 }
 
 export interface CreatedTenantDefaultResponse {
@@ -359,9 +364,21 @@ export async function addLibraryFilter(
   libraryId: string,
   type: "include" | "exclude",
   pattern: string,
+  trashMatching = false,
 ): Promise<CreatedFilterResponse> {
   return apiFetch<CreatedFilterResponse>(
     `/libraries/${libraryId}/filters`,
+    { method: "POST", body: { type, pattern, trash_matching: trashMatching } },
+  );
+}
+
+export async function previewLibraryFilter(
+  libraryId: string,
+  type: "include" | "exclude",
+  pattern: string,
+): Promise<PreviewFilterResponse> {
+  return apiFetch<PreviewFilterResponse>(
+    `/libraries/${libraryId}/filters/preview`,
     { method: "POST", body: { type, pattern } },
   );
 }

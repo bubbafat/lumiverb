@@ -575,6 +575,12 @@ export default function BrowsePage() {
               setDrawerOpen(false);
             }}
             revision={revision}
+            onExcludeFolder={(path) => {
+              setDrawerOpen(false);
+              navigate(
+                `/libraries/${libraryId}/settings?tab=filters&exclude=${encodeURIComponent(path + "/**")}`,
+              );
+            }}
           />
         </div>
       </DrawerOverlay>

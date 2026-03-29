@@ -10,7 +10,7 @@ from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session, require_editor
 from src.core.path_filter import validate_pattern
-from src.repository.tenant import LibraryRepository, PathFilterRepository
+from src.repository.tenant import AssetRepository, LibraryRepository, PathFilterRepository
 
 router = APIRouter(prefix="/v1/libraries", tags=["path_filters"])
 
@@ -26,6 +26,7 @@ class LibraryFilterItemWithType(BaseModel):
     type: str
     pattern: str
     created_at: str
+    trashed_count: int = 0
 
 
 class LibraryFiltersResponse(BaseModel):
@@ -36,6 +37,16 @@ class LibraryFiltersResponse(BaseModel):
 class CreateLibraryFilterRequest(BaseModel):
     type: str  # "include" | "exclude"
     pattern: str
+    trash_matching: bool = False
+
+
+class PreviewFilterRequest(BaseModel):
+    type: str
+    pattern: str
+
+
+class PreviewFilterResponse(BaseModel):
+    matching_asset_count: int
 
 
 @router.get("/{library_id}/filters", response_model=LibraryFiltersResponse)
@@ -80,12 +91,45 @@ def create_library_filter(
         raise HTTPException(status_code=404, detail="Library not found")
     filter_repo = PathFilterRepository(session)
     row = filter_repo.add_for_library(library_id=library_id, type=body.type, pattern=body.pattern)
+
+    trashed_count = 0
+    if body.trash_matching and body.type == "exclude":
+        asset_repo = AssetRepository(session)
+        matching_ids = asset_repo.list_ids_matching_pattern(library_id, body.pattern)
+        if matching_ids:
+            trashed_ids, _ = asset_repo.trash_many(matching_ids)
+            trashed_count = len(trashed_ids)
+            LibraryRepository(session).bump_revision(library_id)
+
     return LibraryFilterItemWithType(
         filter_id=row.filter_id,
         type=row.type,
         pattern=row.pattern,
         created_at=row.created_at.isoformat(),
+        trashed_count=trashed_count,
     )
+
+
+@router.post("/{library_id}/filters/preview", response_model=PreviewFilterResponse)
+def preview_library_filter(
+    library_id: str,
+    body: PreviewFilterRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
+) -> PreviewFilterResponse:
+    """Preview how many active assets match a filter pattern."""
+    if body.type not in ("include", "exclude"):
+        raise HTTPException(status_code=400, detail="type must be 'include' or 'exclude'")
+    try:
+        validate_pattern(body.pattern)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    lib_repo = LibraryRepository(session)
+    if lib_repo.get_by_id(library_id) is None:
+        raise HTTPException(status_code=404, detail="Library not found")
+    asset_repo = AssetRepository(session)
+    matching_ids = asset_repo.list_ids_matching_pattern(library_id, body.pattern)
+    return PreviewFilterResponse(matching_asset_count=len(matching_ids))
 
 
 @router.delete("/{library_id}/filters/{filter_id}", status_code=204)

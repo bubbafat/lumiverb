@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listDirectories } from "../api/client";
 import type { DirectoryNode } from "../api/types";
 
@@ -7,6 +7,7 @@ export interface DirectoryTreeProps {
   activePath: string | null;
   onNavigate: (path: string | null) => void;
   revision?: number;
+  onExcludeFolder?: (path: string) => void;
 }
 
 export function DirectoryTree({
@@ -14,6 +15,7 @@ export function DirectoryTree({
   activePath,
   onNavigate,
   revision,
+  onExcludeFolder,
 }: DirectoryTreeProps) {
   const [rootNodes, setRootNodes] = useState<DirectoryNode[] | null>(null);
   const [childrenCache, setChildrenCache] = useState<
@@ -21,6 +23,27 @@ export function DirectoryTree({
   >(new Map());
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const [loadingPath, setLoadingPath] = useState<string | null>(null);
+  const [dropdownPath, setDropdownPath] = useState<string | null>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on click-outside or Escape
+  useEffect(() => {
+    if (dropdownPath === null) return;
+    const handleClick = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setDropdownPath(null);
+      }
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setDropdownPath(null);
+    };
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [dropdownPath]);
 
   // Full reset when library changes
   useEffect(() => {
@@ -112,6 +135,7 @@ export function DirectoryTree({
         const showChevron = !hasFetched || children.length > 0;
         const isLoading = loadingPath === node.path;
         const isActive = activePath === node.path;
+        const isDropdownOpen = dropdownPath === node.path;
 
         return (
           <div key={node.path}>
@@ -155,10 +179,48 @@ export function DirectoryTree({
               >
                 <span className="h-2 w-2 shrink-0 rounded-full bg-gray-500" />
                 <span className="min-w-0 flex-1 truncate">{node.name}</span>
-                <span className="ml-auto shrink-0 text-xs text-gray-500">
-                  {node.asset_count}
-                </span>
               </button>
+              {/* Asset count: plain text or clickable with dropdown */}
+              <div className="relative shrink-0">
+                {onExcludeFolder ? (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDropdownPath(isDropdownOpen ? null : node.path);
+                    }}
+                    className="rounded px-1.5 py-0.5 text-xs text-gray-500 hover:bg-gray-700/50 hover:text-gray-300"
+                  >
+                    {node.asset_count}
+                  </button>
+                ) : (
+                  <span className="px-1.5 py-0.5 text-xs text-gray-500">
+                    {node.asset_count}
+                  </span>
+                )}
+                {isDropdownOpen && onExcludeFolder && (
+                  <div
+                    ref={dropdownRef}
+                    className="absolute right-0 top-full z-50 mt-1 w-40 rounded-lg border border-gray-700 bg-gray-800 py-1 shadow-lg"
+                  >
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDropdownPath(null);
+                        onExcludeFolder(node.path);
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-red-400 hover:bg-gray-700/50"
+                    >
+                      <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden>
+                        <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.7" />
+                        <path d="M5.5 18.5l13-13" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+                      </svg>
+                      Exclude folder
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
             {isLoading && (
               <div

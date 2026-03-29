@@ -309,3 +309,133 @@ def test_adding_defaults_after_library_creation_does_not_affect_existing(path_fi
     excludes = r_after.json()["excludes"]
     patterns = [e["pattern"] for e in excludes]
     assert "**/Cache/**" not in patterns
+
+
+# --- Preview and trash_matching ---
+
+
+def _ingest_asset(client, api_key, library_id, rel_path):
+    """Helper: ingest a minimal asset at the given rel_path."""
+    import io
+    from PIL import Image as PILImage
+
+    img = PILImage.new("RGB", (100, 100), color=(50, 100, 150))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    buf.seek(0)
+
+    r = client.post(
+        "/v1/ingest",
+        data={
+            "library_id": library_id,
+            "rel_path": rel_path,
+            "file_size": "1000",
+            "media_type": "image",
+            "width": "100",
+            "height": "100",
+        },
+        files={"proxy": ("proxy.jpg", buf, "image/jpeg")},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert r.status_code == 200, (r.status_code, r.text)
+    return r.json()["asset_id"]
+
+
+@pytest.fixture(scope="module")
+def trash_matching_env(path_filters_client):
+    """Create a library with assets for testing preview and trash_matching."""
+    client, api_key, _ = path_filters_client
+
+    # Create a fresh library for these tests
+    r = client.post(
+        "/v1/libraries",
+        json={"name": "TrashMatchingLib", "root_path": "/tmp/trash-test"},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert r.status_code == 200
+    lib_id = r.json()["library_id"]
+
+    # Ingest assets in two folders (under Photos/ to satisfy inherited tenant include filter)
+    for path in [
+        "Photos/keep/photo1.jpg",
+        "Photos/keep/photo2.jpg",
+        "Photos/dups/copy1.jpg",
+        "Photos/dups/copy2.jpg",
+        "Photos/dups/sub/copy3.jpg",
+    ]:
+        _ingest_asset(client, api_key, lib_id, path)
+
+    return client, api_key, lib_id
+
+
+@pytest.mark.slow
+def test_preview_filter_returns_matching_count(trash_matching_env):
+    client, api_key, lib_id = trash_matching_env
+    r = client.post(
+        f"/v1/libraries/{lib_id}/filters/preview",
+        json={"type": "exclude", "pattern": "Photos/dups/**"},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert r.status_code == 200
+    assert r.json()["matching_asset_count"] == 3
+
+
+@pytest.mark.slow
+def test_preview_filter_no_matches(trash_matching_env):
+    client, api_key, lib_id = trash_matching_env
+    r = client.post(
+        f"/v1/libraries/{lib_id}/filters/preview",
+        json={"type": "exclude", "pattern": "nonexistent/**"},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert r.status_code == 200
+    assert r.json()["matching_asset_count"] == 0
+
+
+@pytest.mark.slow
+def test_create_filter_without_trash_matching(trash_matching_env):
+    """Default trash_matching=false does not trash assets."""
+    client, api_key, lib_id = trash_matching_env
+    r = client.post(
+        f"/v1/libraries/{lib_id}/filters",
+        json={"type": "exclude", "pattern": "Photos/keep/**"},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert r.status_code == 201
+    assert r.json()["trashed_count"] == 0
+
+    # Verify assets still exist
+    preview = client.post(
+        f"/v1/libraries/{lib_id}/filters/preview",
+        json={"type": "exclude", "pattern": "Photos/keep/**"},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert preview.json()["matching_asset_count"] == 2
+
+    # Clean up: delete the filter
+    fid = r.json()["filter_id"]
+    client.delete(
+        f"/v1/libraries/{lib_id}/filters/{fid}",
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+
+
+@pytest.mark.slow
+def test_create_filter_with_trash_matching(trash_matching_env):
+    """trash_matching=true trashes matching assets and returns count."""
+    client, api_key, lib_id = trash_matching_env
+    r = client.post(
+        f"/v1/libraries/{lib_id}/filters",
+        json={"type": "exclude", "pattern": "Photos/dups/**", "trash_matching": True},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert r.status_code == 201
+    assert r.json()["trashed_count"] == 3
+
+    # Preview should now show 0 (assets are trashed)
+    preview = client.post(
+        f"/v1/libraries/{lib_id}/filters/preview",
+        json={"type": "exclude", "pattern": "Photos/dups/**"},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert preview.json()["matching_asset_count"] == 0

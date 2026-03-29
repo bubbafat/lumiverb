@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.core.path_filter import PathFilter, is_path_included, is_path_included_merged, validate_pattern
+from src.core.path_filter import PathFilter, _glob_match, is_path_included, is_path_included_merged, validate_pattern
 
 
 @pytest.mark.fast
@@ -163,3 +163,31 @@ def test_merged_library_exclude_beats_library_include() -> None:
     assert is_path_included_merged("Photos/junk/img.jpg", [], library) is False
     # Non-junk photos still allowed via Rule 2
     assert is_path_included_merged("Photos/good/img.jpg", [], library) is True
+
+
+# --- Folder exclude pattern tests ---
+
+
+@pytest.mark.fast
+def test_folder_exclude_glob_matches_all_descendants() -> None:
+    """folder/** should match all files at any depth under that folder."""
+    assert _glob_match("dups/**", "dups/copy1.jpg") is True
+    assert _glob_match("dups/**", "dups/sub/copy3.jpg") is True
+    assert _glob_match("dups/**", "dups/a/b/c/deep.png") is True
+    assert _glob_match("dups/**", "keep/photo1.jpg") is False
+
+
+@pytest.mark.fast
+def test_doublestar_ext_only_matches_direct_files() -> None:
+    """**.mp4 (no slash) only matches files directly, not nested."""
+    assert _glob_match("folder/**.mp4", "folder/video.mp4") is True
+    assert _glob_match("folder/**.mp4", "folder/sub/video.mp4") is False
+
+
+@pytest.mark.fast
+def test_doublestar_slash_ext_matches_nested() -> None:
+    """**/*.mp4 correctly matches at any depth."""
+    assert _glob_match("folder/**/*.mp4", "folder/video.mp4") is True
+    assert _glob_match("folder/**/*.mp4", "folder/sub/video.mp4") is True
+    assert _glob_match("folder/**/*.mp4", "folder/a/b/video.mp4") is True
+    assert _glob_match("folder/**/*.mp4", "folder/photo.jpg") is False

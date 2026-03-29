@@ -319,6 +319,20 @@ class AssetRepository:
         )
         return list(self._session.exec(stmt).all())
 
+    def list_ids_matching_pattern(self, library_id: str, pattern: str) -> list[str]:
+        """Return asset_ids of active assets whose rel_path matches a glob pattern."""
+        from src.core.path_filter import _glob_match
+
+        stmt = (
+            select(Asset.asset_id, Asset.rel_path)
+            .where(Asset.library_id == library_id)
+            .where(Asset.deleted_at.is_(None))
+        )
+        return [
+            row[0] for row in self._session.execute(stmt).all()
+            if _glob_match(pattern, row[1])
+        ]
+
     def count_by_library(self, library_id: str) -> int:
         """Return total active asset count for library."""
         result = self._session.execute(
