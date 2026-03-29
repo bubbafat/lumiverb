@@ -225,7 +225,7 @@ Every phase must satisfy all of the following before it is marked complete:
 | 2 | Collection management UI: list page, detail page, settings, create/delete | Done |
 | 3 | Multi-select in browse grid + "Add to collection" flow with picker modal | Done |
 | 3.5 | User-scoped collections: ownership, visibility (private/shared/public) | Done |
-| 4 | Public collections: control plane wiring, public endpoints, public view page | Pending |
+| 4 | Public collections: control plane wiring, public endpoints, public view page | Done |
 | 5 | Polish: drag-to-reorder, remove from collection, CLI commands, empty states | Pending |
 
 ### Phase 1 — Backend + Data Model

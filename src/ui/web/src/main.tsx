@@ -9,6 +9,7 @@ import AdminUsersPage from "./pages/AdminUsersPage";
 import BrowsePage from "./pages/BrowsePage";
 import CollectionsPage from "./pages/CollectionsPage";
 import CollectionDetailPage from "./pages/CollectionDetailPage";
+import PublicCollectionPage from "./pages/PublicCollectionPage";
 import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 import LibrariesPage from "./pages/LibrariesPage";
 import LibrarySettingsPage from "./pages/LibrarySettingsPage";
@@ -52,6 +53,7 @@ createRoot(document.getElementById("root")!).render(
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <Routes>
+          <Route path="/public/collections/:collectionId" element={<PublicCollectionPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />

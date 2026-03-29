@@ -55,6 +55,7 @@ export default function CollectionDetailPage() {
   const [editName, setEditName] = useState("");
   const [editDesc, setEditDesc] = useState("");
   const [editSort, setEditSort] = useState("manual");
+  const [editVisibility, setEditVisibility] = useState("private");
   const [settingsError, setSettingsError] = useState("");
 
   // Delete state
@@ -226,6 +227,7 @@ export default function CollectionDetailPage() {
       setEditName(collection.name);
       setEditDesc(collection.description ?? "");
       setEditSort(collection.sort_order);
+      setEditVisibility(collection.visibility);
       setSettingsError("");
     }
     setSettingsOpen(true);
@@ -237,6 +239,7 @@ export default function CollectionDetailPage() {
       name: editName.trim(),
       description: editDesc.trim() || null,
       sort_order: editSort,
+      visibility: editVisibility,
     });
   };
 
@@ -496,6 +499,26 @@ export default function CollectionDetailPage() {
                   <option value="added_at">Date added</option>
                   <option value="taken_at">Date taken</option>
                 </select>
+              </div>
+              <div>
+                <label htmlFor="edit-visibility" className="mb-1 block text-sm text-gray-400">
+                  Visibility
+                </label>
+                <select
+                  id="edit-visibility"
+                  value={editVisibility}
+                  onChange={(e) => setEditVisibility(e.target.value)}
+                  className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-gray-100 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                >
+                  <option value="private">Private (only you)</option>
+                  <option value="shared">Shared (all team members)</option>
+                  <option value="public">Public (anyone with link)</option>
+                </select>
+                {editVisibility === "public" && (
+                  <p className="mt-1 text-xs text-amber-400">
+                    Anyone with the link can view this collection without signing in.
+                  </p>
+                )}
               </div>
               <div className="flex items-center justify-between pt-2">
                 <button

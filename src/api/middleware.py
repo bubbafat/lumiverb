@@ -10,7 +10,7 @@ from starlette.responses import JSONResponse
 
 from src.core.config import get_settings
 from src.core.database import get_control_session
-from src.repository.control_plane import ApiKeyRepository, PublicLibraryRepository, TenantDbRoutingRepository
+from src.repository.control_plane import ApiKeyRepository, PublicCollectionRepository, PublicLibraryRepository, TenantDbRoutingRepository
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +119,7 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # --- Unauthenticated path: attempt public library resolution ---
-        # Only GET requests on eligible routes may reach public libraries.
+        # Only GET requests on eligible routes may reach public libraries/collections.
         if request.method == "GET" and _PUBLIC_ELIGIBLE_PATH.match(request.url.path):
             library_id = (
                 _extract_library_id_from_path(request.url.path)
@@ -135,6 +135,37 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
                     request.state.key_id = None
                     request.state.role = "public"
                     request.state.is_public_request = True
+                    return await call_next(request)
+
+            # Also try public_collection_id for asset proxy/thumbnail
+            collection_id = request.query_params.get("public_collection_id")
+            if collection_id:
+                with get_control_session() as session:
+                    pub = PublicCollectionRepository(session).get(collection_id)
+                if pub is not None:
+                    request.state.tenant_id = pub.tenant_id
+                    request.state.connection_string = pub.connection_string
+                    request.state.key_id = None
+                    request.state.role = "public"
+                    request.state.is_public_request = True
+                    request.state.public_collection_id = collection_id
+                    return await call_next(request)
+
+        # --- Unauthenticated path: attempt public collection resolution ---
+        if request.method == "GET" and request.url.path.startswith("/v1/public/collections/"):
+            parts = request.url.path.split("/")
+            # /v1/public/collections/{collection_id}[/assets]
+            collection_id = parts[4] if len(parts) > 4 else None
+            if collection_id:
+                with get_control_session() as session:
+                    pub = PublicCollectionRepository(session).get(collection_id)
+                if pub is not None:
+                    request.state.tenant_id = pub.tenant_id
+                    request.state.connection_string = pub.connection_string
+                    request.state.key_id = None
+                    request.state.role = "public"
+                    request.state.is_public_request = True
+                    request.state.public_collection_id = collection_id
                     return await call_next(request)
 
         return _error_response(401, "unauthorized", "Missing or invalid Authorization header")

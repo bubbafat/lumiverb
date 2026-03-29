@@ -224,7 +224,13 @@ Collections are virtual groupings of assets across libraries. See ADR-006 for fu
 
 **CollectionAssetItem**: `{ "asset_id", "rel_path", "file_size", "media_type", "width", "height", "taken_at", "status", "duration_sec", "camera_make", "camera_model" }`
 
-**Key behaviors**: Collections are user-owned (`owner_user_id`). Visibility: `private` (owner only), `shared` (all tenant users can view), `public` (unauthenticated, future). Mutations (add/remove/reorder/delete) require ownership. Asset count is computed at query time (no denormalized column). Cover image uses lazy self-healing — if `cover_asset_id` points to a deleted/removed asset, falls back to first-by-position and nulls the stale value. Trashing an asset hides it from collections but preserves the `collection_assets` row; restoring the asset restores collection membership and position. Hard-deleting (empty trash) removes `collection_assets` rows via ON DELETE CASCADE.
+**Key behaviors**: Collections are user-owned (`owner_user_id`). Visibility: `private` (owner only), `shared` (all tenant users can view), `public` (anyone with link). Mutations (add/remove/reorder/delete) require ownership. Asset count is computed at query time (no denormalized column). Cover image uses lazy self-healing — if `cover_asset_id` points to a deleted/removed asset, falls back to first-by-position and nulls the stale value. Trashing an asset hides it from collections but preserves the `collection_assets` row; restoring the asset restores collection membership and position. Hard-deleting (empty trash) removes `collection_assets` rows via ON DELETE CASCADE.
+
+**Public collection endpoints (no auth required):**
+
+- **GET /v1/public/collections/{id}** — Returns privacy-stripped collection metadata: `{ "collection_id", "name", "description", "cover_asset_id", "asset_count" }`. 404 if collection not found or not public. Resolved via `public_collections` control plane table.
+- **GET /v1/public/collections/{id}/assets** — Query: `after` (cursor), `limit`. Returns privacy-stripped asset list: `{ "items": [{ "asset_id", "media_type", "width", "height", "taken_at", "duration_sec" }], "next_cursor" }`. No rel_path, no camera info, no GPS.
+- Asset thumbnails/proxies served via existing `/v1/assets/{id}/proxy?public_collection_id={id}` — verifies asset membership in the public collection.
 
 ## Admin API
 

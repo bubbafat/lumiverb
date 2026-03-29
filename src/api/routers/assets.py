@@ -392,11 +392,32 @@ def _stream_asset_file(
         raise HTTPException(status_code=404, detail="Asset not found")
     if getattr(request.state, "is_public_request", False):
         public_library_id = request.query_params.get("public_library_id")
-        if not public_library_id or asset.library_id != public_library_id:
-            raise HTTPException(status_code=403, detail="Asset does not belong to the requested public library")
-        lib = LibraryRepository(session).get_by_id(public_library_id)
-        if lib is None or not lib.is_public:
-            raise HTTPException(status_code=404, detail="Not found")
+        public_collection_id = request.query_params.get("public_collection_id")
+        if public_library_id:
+            if asset.library_id != public_library_id:
+                raise HTTPException(status_code=403, detail="Asset does not belong to the requested public library")
+            lib = LibraryRepository(session).get_by_id(public_library_id)
+            if lib is None or not lib.is_public:
+                raise HTTPException(status_code=404, detail="Not found")
+        elif public_collection_id:
+            from src.repository.tenant import CollectionRepository, CollectionAsset
+            from src.models.tenant import Collection
+            col_repo = CollectionRepository(session)
+            col = col_repo.get_by_id(public_collection_id)
+            if col is None or col.visibility != "public":
+                raise HTTPException(status_code=404, detail="Not found")
+            # Verify asset is in this collection
+            from sqlmodel import select
+            membership = session.exec(
+                select(CollectionAsset).where(
+                    CollectionAsset.collection_id == public_collection_id,
+                    CollectionAsset.asset_id == asset_id,
+                )
+            ).first()
+            if membership is None:
+                raise HTTPException(status_code=403, detail="Asset not in collection")
+        else:
+            raise HTTPException(status_code=403, detail="Public access requires library or collection context")
 
     key = asset.proxy_key if size == "proxy" else asset.thumbnail_key
     if not key:

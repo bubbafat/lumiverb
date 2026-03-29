@@ -9,6 +9,8 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.api.dependencies import get_current_user_id, get_tenant_session, require_editor
+from src.core.database import get_control_session
+from src.repository.control_plane import PublicCollectionRepository
 from src.repository.tenant import AssetRepository, CollectionRepository
 
 router = APIRouter(prefix="/v1/collections", tags=["collections"])
@@ -93,7 +95,7 @@ class ReorderRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 _VALID_SORT_ORDERS = {"manual", "added_at", "taken_at"}
-_VALID_VISIBILITIES = {"private", "shared"}
+_VALID_VISIBILITIES = {"private", "shared", "public"}
 
 
 def _ownership_label(col, user_id: str) -> str:
@@ -211,6 +213,7 @@ def get_collection(
 def update_collection(
     collection_id: str,
     body: UpdateCollectionRequest,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
     user_id: Annotated[str, Depends(get_current_user_id)],
@@ -219,6 +222,8 @@ def update_collection(
     repo = CollectionRepository(session)
     col = _get_collection_or_404(repo, collection_id)
     _require_owner(col, user_id)
+
+    old_visibility = col.visibility
 
     from src.repository.tenant import _SENTINEL
 
@@ -244,12 +249,26 @@ def update_collection(
         kwargs["cover_asset_id"] = _SENTINEL
 
     col = repo.update(collection_id, **kwargs)
+
+    # Maintain public_collections control plane index
+    if body.visibility is not None and body.visibility != old_visibility:
+        tenant_id = getattr(request.state, "tenant_id", None)
+        connection_string = getattr(request.state, "connection_string", None)
+        if tenant_id and connection_string:
+            with get_control_session() as ctrl_session:
+                pub_repo = PublicCollectionRepository(ctrl_session)
+                if col.visibility == "public":
+                    pub_repo.upsert(collection_id, tenant_id, connection_string)
+                else:
+                    pub_repo.delete(collection_id)
+
     return _collection_to_item(col, repo, user_id)
 
 
 @router.delete("/{collection_id}", status_code=204)
 def delete_collection(
     collection_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
     user_id: Annotated[str, Depends(get_current_user_id)],
@@ -258,7 +277,12 @@ def delete_collection(
     repo = CollectionRepository(session)
     col = _get_collection_or_404(repo, collection_id)
     _require_owner(col, user_id)
+    was_public = col.visibility == "public"
     repo.delete(collection_id)
+
+    if was_public:
+        with get_control_session() as ctrl_session:
+            PublicCollectionRepository(ctrl_session).delete(collection_id)
 
 
 # ---------------------------------------------------------------------------
