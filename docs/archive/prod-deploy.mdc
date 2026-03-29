@@ -1,3 +1,5 @@
+> **Archived 2026-03-29** — Obsolete: prod deploy achieved via different approach; will revisit
+
 # ADR: Production Deployment — VPS + Docker Compose
 
 ## Status

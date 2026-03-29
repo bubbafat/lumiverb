@@ -1,3 +1,5 @@
+> **Archived 2026-03-29** — Fully implemented (all 5 phases complete)
+
 # ADR-006: Collections
 
 ## Status

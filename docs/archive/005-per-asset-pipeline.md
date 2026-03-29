@@ -1,3 +1,5 @@
+> **Archived 2026-03-29** — Obsolete: atomic ingest took a different path
+
 # ADR-005: Per-Asset Pipeline and Atomic Ingest
 
 ## Status

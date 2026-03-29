@@ -1,3 +1,5 @@
+> **Archived 2026-03-29** — Obsolete: built around removed worker queue model
+
 
 # ADR-002: Targeted Reprocessing, Asset Filter Specs, and Model Provenance
 

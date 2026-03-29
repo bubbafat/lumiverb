@@ -1,3 +1,5 @@
+> **Archived 2026-03-29** — Obsolete: built around removed worker queue/pipeline model, never implemented
+
 # ADR-003: Pipeline Resilience and Storage Health
 
 ## Status
