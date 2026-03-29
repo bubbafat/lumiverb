@@ -45,6 +45,54 @@ function photoStackIcon() {
   );
 }
 
+function collectionsIcon() {
+  return (
+    <svg
+      className="h-5 w-5 text-gray-300"
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden
+    >
+      <rect
+        x="3"
+        y="3"
+        width="8"
+        height="8"
+        rx="1.5"
+        className="stroke-gray-400"
+        strokeWidth="1.5"
+      />
+      <rect
+        x="13"
+        y="3"
+        width="8"
+        height="8"
+        rx="1.5"
+        className="stroke-gray-400"
+        strokeWidth="1.5"
+      />
+      <rect
+        x="3"
+        y="13"
+        width="8"
+        height="8"
+        rx="1.5"
+        className="stroke-gray-400"
+        strokeWidth="1.5"
+      />
+      <rect
+        x="13"
+        y="13"
+        width="8"
+        height="8"
+        rx="1.5"
+        className="stroke-gray-500"
+        strokeWidth="1.5"
+      />
+    </svg>
+  );
+}
+
 function gearIcon() {
   return (
     <svg
@@ -288,7 +336,7 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette }: Sidebar
           )}
         </div>
 
-        <div className="mt-3">
+        <div className="mt-3 space-y-1">
           <Link
             to="/"
             className={`flex items-center gap-2 rounded-lg px-2 py-3 text-sm transition-colors duration-150 ${
@@ -300,6 +348,18 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette }: Sidebar
             <span className="h-2 w-2 rounded-full bg-gray-500" />
             {photoStackIcon()}
             {showLabels && <span>Manage libraries</span>}
+          </Link>
+          <Link
+            to="/collections"
+            className={`flex items-center gap-2 rounded-lg px-2 py-3 text-sm transition-colors duration-150 ${
+              location.pathname.startsWith("/collections")
+                ? "bg-indigo-600/30 text-indigo-200"
+                : "text-gray-400 hover:bg-gray-800/80 hover:text-gray-200"
+            }`}
+          >
+            <span className="h-2 w-2 rounded-full bg-gray-500" />
+            {collectionsIcon()}
+            {showLabels && <span>Collections</span>}
           </Link>
         </div>
       </div>

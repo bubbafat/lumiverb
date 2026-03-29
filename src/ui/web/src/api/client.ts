@@ -3,6 +3,11 @@ import type {
   ApiKeyItem,
   AssetDetail,
   AssetPageResponse,
+  BatchAddResponse,
+  BatchRemoveResponse,
+  CollectionAssetsResponse,
+  CollectionItem,
+  CollectionListResponse,
   CurrentUser,
   DirectoryNode,
   EmptyTrashResponse,
@@ -463,5 +468,95 @@ export async function createApiKey(label: string, role?: string): Promise<ApiKey
 
 export async function revokeApiKey(keyId: string): Promise<void> {
   return apiFetch<void>(`/keys/${keyId}`, { method: "DELETE" });
+}
+
+// ---------------------------------------------------------------------------
+// Collections
+// ---------------------------------------------------------------------------
+
+export async function listCollections(): Promise<CollectionItem[]> {
+  const res = await apiFetch<CollectionListResponse>("/collections");
+  return res.items;
+}
+
+export async function getCollection(
+  collectionId: string,
+): Promise<CollectionItem> {
+  return apiFetch<CollectionItem>(`/collections/${collectionId}`);
+}
+
+export async function createCollection(
+  name: string,
+  opts?: { description?: string; sort_order?: string; asset_ids?: string[] },
+): Promise<CollectionItem> {
+  return apiFetch<CollectionItem>("/collections", {
+    method: "POST",
+    body: { name, ...opts },
+  });
+}
+
+export async function updateCollection(
+  collectionId: string,
+  body: {
+    name?: string;
+    description?: string | null;
+    is_public?: boolean;
+    sort_order?: string;
+    cover_asset_id?: string | null;
+  },
+): Promise<CollectionItem> {
+  return apiFetch<CollectionItem>(`/collections/${collectionId}`, {
+    method: "PATCH",
+    body,
+  });
+}
+
+export async function deleteCollection(
+  collectionId: string,
+): Promise<void> {
+  return apiFetch<void>(`/collections/${collectionId}`, { method: "DELETE" });
+}
+
+export async function listCollectionAssets(
+  collectionId: string,
+  after?: string,
+  limit = 200,
+): Promise<CollectionAssetsResponse> {
+  const qs = new URLSearchParams();
+  if (after) qs.set("after", after);
+  qs.set("limit", String(limit));
+  return apiFetch<CollectionAssetsResponse>(
+    `/collections/${collectionId}/assets?${qs.toString()}`,
+  );
+}
+
+export async function addAssetsToCollection(
+  collectionId: string,
+  assetIds: string[],
+): Promise<BatchAddResponse> {
+  return apiFetch<BatchAddResponse>(`/collections/${collectionId}/assets`, {
+    method: "POST",
+    body: { asset_ids: assetIds },
+  });
+}
+
+export async function removeAssetsFromCollection(
+  collectionId: string,
+  assetIds: string[],
+): Promise<BatchRemoveResponse> {
+  return apiFetch<BatchRemoveResponse>(`/collections/${collectionId}/assets`, {
+    method: "DELETE",
+    body: { asset_ids: assetIds },
+  });
+}
+
+export async function reorderCollection(
+  collectionId: string,
+  assetIds: string[],
+): Promise<void> {
+  return apiFetch<void>(`/collections/${collectionId}/reorder`, {
+    method: "PATCH",
+    body: { asset_ids: assetIds },
+  });
 }
 

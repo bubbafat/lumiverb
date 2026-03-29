@@ -7,6 +7,8 @@ import AppShell from "./components/AppShell";
 import AdminPage from "./pages/AdminPage";
 import AdminUsersPage from "./pages/AdminUsersPage";
 import BrowsePage from "./pages/BrowsePage";
+import CollectionsPage from "./pages/CollectionsPage";
+import CollectionDetailPage from "./pages/CollectionDetailPage";
 import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 import LibrariesPage from "./pages/LibrariesPage";
 import LibrarySettingsPage from "./pages/LibrarySettingsPage";
@@ -64,6 +66,22 @@ createRoot(document.getElementById("root")!).render(
               element={
                 <RequireAuth>
                   {<LibrarySettingsPage />}
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="collections"
+              element={
+                <RequireAuth>
+                  {<CollectionsPage />}
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="collections/:collectionId"
+              element={
+                <RequireAuth>
+                  {<CollectionDetailPage />}
                 </RequireAuth>
               }
             />

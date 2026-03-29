@@ -179,3 +179,46 @@ export interface LibraryRevision {
   asset_count: number;
 }
 
+export interface CollectionItem {
+  collection_id: string;
+  name: string;
+  description: string | null;
+  cover_asset_id: string | null;
+  is_public: boolean;
+  sort_order: string;
+  asset_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CollectionListResponse {
+  items: CollectionItem[];
+}
+
+export interface CollectionAssetItem {
+  asset_id: string;
+  rel_path: string;
+  file_size: number;
+  media_type: string;
+  width: number | null;
+  height: number | null;
+  taken_at: string | null;
+  status: string;
+  duration_sec: number | null;
+  camera_make: string | null;
+  camera_model: string | null;
+}
+
+export interface CollectionAssetsResponse {
+  items: CollectionAssetItem[];
+  next_cursor: string | null;
+}
+
+export interface BatchAddResponse {
+  added: number;
+}
+
+export interface BatchRemoveResponse {
+  removed: number;
+}
+

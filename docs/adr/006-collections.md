@@ -221,7 +221,7 @@ Every phase must satisfy all of the following before it is marked complete:
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 1 | Backend: data model, migrations, repository, API endpoints (authenticated only) | Done |
-| 2 | Collection management UI: list page, detail page, settings, create/delete | Pending |
+| 2 | Collection management UI: list page, detail page, settings, create/delete | Done |
 | 3 | Multi-select in browse grid + "Add to collection" flow with picker modal | Pending |
 | 4 | Public collections: control plane wiring, public endpoints, public view page | Pending |
 | 5 | Polish: drag-to-reorder, remove from collection, CLI commands, empty states | Pending |
