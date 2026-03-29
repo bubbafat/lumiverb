@@ -100,6 +100,7 @@ interface FilterBarProps {
   starMax: string | null;
   color: string | null;
   onChangeFilter: (key: string, value: string | null) => void;
+  onChangeFilters?: (changes: Record<string, string | null>) => void;
   facets: FacetsResponse | null;
 }
 
@@ -137,8 +138,18 @@ export function FilterBar({
   starMax,
   color: colorFilter,
   onChangeFilter,
+  onChangeFilters,
   facets,
 }: FilterBarProps) {
+  const setFilters = (changes: Record<string, string | null>) => {
+    if (onChangeFilters) {
+      onChangeFilters(changes);
+    } else {
+      for (const [k, v] of Object.entries(changes)) {
+        onChangeFilter(k, v);
+      }
+    }
+  };
   const [inputValue, setInputValue] = useState(q ?? "");
   const [showDateRow, setShowDateRow] = useState(Boolean(dateFrom));
   const [customFrom, setCustomFrom] = useState(dateFrom ?? "");
@@ -692,20 +703,32 @@ export function FilterBar({
             <div className="flex items-center gap-1">
               <span className="text-xs text-gray-500">Stars</span>
               {[1, 2, 3, 4, 5].map((n) => {
-                const isActive = starMin != null && Number(starMin) <= n && (starMax == null || Number(starMax) >= n);
+                const min = starMin != null ? Number(starMin) : null;
+                const max = starMax != null ? Number(starMax) : null;
+                const isActive = min != null && max != null && n >= min && n <= max;
                 return (
                   <button
                     key={n}
                     type="button"
                     onClick={() => {
-                      if (starMin === String(n)) {
-                        onChangeFilter("star_min", null);
+                      if (min == null || max == null) {
+                        setFilters({ star_min: String(n), star_max: String(n) });
+                      } else if (n < min) {
+                        setFilters({ star_min: String(n) });
+                      } else if (n > max) {
+                        setFilters({ star_max: String(n) });
+                      } else if (n === min && n === max) {
+                        setFilters({ star_min: null, star_max: null });
+                      } else if (n === min) {
+                        setFilters({ star_min: String(n + 1) });
+                      } else if (n === max) {
+                        setFilters({ star_max: String(n - 1) });
                       } else {
-                        onChangeFilter("star_min", String(n));
+                        setFilters({ star_min: String(n) });
                       }
                     }}
                     className={`transition-colors ${isActive ? "text-amber-400" : "text-gray-600 hover:text-amber-300"}`}
-                    title={`${n}+ stars`}
+                    title={`${n} stars`}
                   >
                     <svg className="h-4 w-4" viewBox="0 0 24 24" fill={isActive ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" aria-hidden>
                       <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />

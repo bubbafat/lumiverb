@@ -719,6 +719,16 @@ export default function BrowsePage() {
         starMax={searchParams.get("star_max")}
         color={searchParams.get("color")}
         onChangeFilter={(key, value) => setParam(key, value)}
+        onChangeFilters={(changes) => {
+          setSearchParams((prev) => {
+            const next = new URLSearchParams(prev);
+            for (const [k, v] of Object.entries(changes)) {
+              if (v) next.set(k, v);
+              else next.delete(k);
+            }
+            return next;
+          });
+        }}
         facets={facets}
       />
 
