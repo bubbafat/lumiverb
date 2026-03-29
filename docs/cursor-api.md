@@ -40,7 +40,7 @@ Two-layer Postgres architecture:
 - `tenant_path_filter_defaults` — default_id (tpfd_+ULID), tenant_id, type (include|exclude), pattern, created_at. Tenant defaults and library filters are merged at evaluation time (see filter evaluation rules below).
 - `assets` — asset_id, library_id, rel_path, sha256, file_size, file_mtime, media_type, width, height, duration_sec, proxy_key, proxy_sha256, thumbnail_key, thumbnail_sha256, exif (JSON), exif_extracted_at, camera_make, camera_model, taken_at, gps_lat, gps_lon, iso, exposure_time_us, aperture, focal_length, focal_length_35mm, lens_model, flash_fired, orientation, availability, status, video_indexed, video_preview_key, error_message, created_at, updated_at, deleted_at, search_synced_at
 - `video_scenes` — scene_id, asset_id, scene_index, start_ms, end_ms, rep_frame_ms, proxy_key, thumbnail_key, rep_frame_sha256, description, tags (JSONB), sharpness_score, keep_reason, phash, created_at, search_synced_at
-- `video_index_chunks` — chunk_id, asset_id, chunk_index, start_ms, end_ms, status, worker_id, claimed_at, lease_expires_at, completed_at, error_message, anchor_phash, scene_start_ms, created_at
+- `video_index_chunks` — chunk_id, asset_id, chunk_index, start_ms, end_ms, status, worker_id (CLI-generated session ID), claimed_at, lease_expires_at, completed_at, error_message, anchor_phash, scene_start_ms, created_at
 - `asset_metadata` — metadata_id, asset_id, model_id, model_version, generated_at, data (JSONB)
 - `asset_embeddings` — embedding_id, asset_id, model_id, model_version, embedding_vector vector(512), created_at
 - `asset_ratings` — user_id (text), asset_id FK (ON DELETE CASCADE), favorite (bool, default false), stars (int 0-5, default 0), color (text, nullable; red|orange|yellow|green|blue|purple), updated_at. PK: (user_id, asset_id). User-scoped ratings — each user has their own independent ratings per asset.
@@ -132,7 +132,7 @@ All under `/v1/upkeep`. Periodic server-side maintenance tasks. Search sync uses
 
 ## Video chunk API
 
-All under `/v1/video`; require tenant auth. Used by the video-index worker to process video assets in 30-second chunks (server-owned policy). No video bytes reach the server — only scene rep frame keys and metadata.
+All under `/v1/video`; require tenant auth. Used by the CLI (`lumiverb ingest`) to process video assets in 30-second chunks. The server owns chunk allocation policy (lease expiration, retry on failure). No video bytes reach the server — only scene rep frame keys and metadata. The CLI generates a unique `worker_id` per session for chunk ownership verification.
 
 - **POST /v1/video/{asset_id}/chunks** — Body: `{ "duration_sec" }`. Initialize chunks for the asset (idempotent). Returns `{ "chunk_count", "already_initialized" }`.
 - **GET /v1/video/{asset_id}/chunks/next** — Claim next pending chunk for the asset. Returns 204 if none. On success returns `{ "chunk_id", "worker_id", "chunk_index", "start_ts", "end_ts", "overlap_sec", "anchor_phash", "scene_start_ts", "video_duration_sec", "is_last" }`. Worker must send `worker_id` when completing or failing the chunk.

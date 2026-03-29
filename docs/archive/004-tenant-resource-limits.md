@@ -1,7 +1,9 @@
+> **Archived 2026-03-29.** This ADR assumed server-side worker queues which no longer exist. All processing now happens client-side via `lumiverb ingest`. The problems described (worker concurrency saturation, job queue abuse, `worker_jobs` table bloat) are no longer applicable. If multi-tenant API rate limiting is needed in the future, it should be a new ADR addressing API request rate limiting, not worker concurrency. Upload size limits (Section 4.1) remain valid and can be extracted into a new ADR if needed.
+
 # ADR-004: Tenant Resource Limits and Fair Use Protection
 
 ## Status
-Proposed
+Obsolete — archived
 
 ## Context
 

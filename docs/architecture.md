@@ -120,7 +120,7 @@ face_person_matches — face_id, person_id, confidence,
                     confirmed (bool), confirmed_at
 ```
 
-These tables exist from day one so phase 2 requires no schema migration surprises. All nullable/empty until face workers run.
+These tables exist from day one so phase 2 requires no schema migration surprises. All nullable/empty until the CLI runs face detection (phase 2).
 
 **pgvector:**
 
@@ -358,7 +358,7 @@ Staged rollout:
 | Cloud SQL (Postgres) | ~$100 |
 | Cloud Run (API server) | ~$50 |
 | Quickwit VM | ~$50 |
-| AI workers | ~$100–200 |
+| Vision AI API (tenant-paid) | ~$100–200 |
 | **Total** | **~$500–600** |
 | **Net revenue** | **~$9,400–9,500** |
 
@@ -417,8 +417,8 @@ GCS standard tier provides 11 nines durability with built-in multi-AZ replicatio
 ### Phase 2: Search + Discovery
 - Full-text search endpoint
 - Similarity search endpoint
-- Video worker (scene segmentation, rep frames)
-- Metadata worker (sharpness, face detection)
+- Video scene indexing (CLI-driven, server-coordinated chunk allocation)
+- Enhanced ingest: sharpness scoring, face detection
 - CLI search commands
 
 ### Phase 3: Web UI
