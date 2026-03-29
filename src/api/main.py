@@ -19,6 +19,7 @@ from src.api.routers.similarity import router as similarity_router
 from src.api.routers.public_collections import router as public_collections_router
 from src.api.routers.ratings import router as ratings_router
 from src.api.routers.browse import router as browse_router
+from src.api.routers.views import router as views_router
 from src.api.routers.upkeep import router as upkeep_router
 
 @asynccontextmanager
@@ -40,6 +41,7 @@ app.include_router(artifacts_router)
 app.include_router(ingest_router)
 app.include_router(ratings_router)
 app.include_router(browse_router)
+app.include_router(views_router)
 app.include_router(assets.router)
 app.include_router(collections.router)
 app.include_router(public_collections_router)

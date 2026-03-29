@@ -241,6 +241,20 @@ Cross-library browse endpoint. Queries across all libraries the user has access 
 
 **BrowseItem**: Same fields as `AssetPageItem` plus `library_id` and `library_name`.
 
+## Saved Views API
+
+Named filter presets that navigate to `/browse?{query_params}`. User-scoped — each user only sees their own views.
+
+- **POST /v1/views** — Body: `{ "name", "query_params", "icon" (optional) }`. Creates a saved view. Returns 201 with `ViewItem`. 422 if name is blank.
+- **GET /v1/views** — List saved views for the current user, ordered by position. Returns: `{ "items": [ViewItem] }`.
+- **PATCH /v1/views/reorder** — Body: `{ "view_ids": [...] }`. Reorder views by setting positions from list order. Returns `{ "ok": true }`.
+- **PATCH /v1/views/{id}** — Body: `{ "name", "query_params", "icon" }` (all optional). Update a saved view. Owner only (404 for others). Returns `ViewItem`.
+- **DELETE /v1/views/{id}** — Delete a saved view. Owner only (404 for others). Returns 204.
+
+**ViewItem**: `{ "view_id", "name", "query_params", "icon", "position", "created_at", "updated_at" }`
+
+Ownership: when a user is deleted via `DELETE /v1/users/{user_id}`, all their saved views are removed from the tenant DB.
+
 ## Ratings API
 
 User-scoped asset ratings: favorites (heart), stars (1-5), color labels. Each user has independent ratings per asset. Ratings are private — never visible to other users. All endpoints require auth; user identity comes from JWT `sub` or API key `key:{key_id}`.

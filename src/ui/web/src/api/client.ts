@@ -667,3 +667,53 @@ export async function lookupRatings(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Saved Views (ADR-008)
+// ---------------------------------------------------------------------------
+
+export interface SavedViewItem {
+  view_id: string;
+  name: string;
+  query_params: string;
+  icon: string | null;
+  position: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function listSavedViews(): Promise<{ items: SavedViewItem[] }> {
+  return apiFetch("/views");
+}
+
+export async function createSavedView(
+  name: string,
+  queryParams: string,
+  icon?: string | null,
+): Promise<SavedViewItem> {
+  return apiFetch<SavedViewItem>("/views", {
+    method: "POST",
+    body: { name, query_params: queryParams, icon: icon ?? null },
+  });
+}
+
+export async function updateSavedView(
+  viewId: string,
+  body: { name?: string; query_params?: string; icon?: string | null },
+): Promise<SavedViewItem> {
+  return apiFetch<SavedViewItem>(`/views/${viewId}`, {
+    method: "PATCH",
+    body,
+  });
+}
+
+export async function deleteSavedView(viewId: string): Promise<void> {
+  return apiFetch<void>(`/views/${viewId}`, { method: "DELETE" });
+}
+
+export async function reorderSavedViews(viewIds: string[]): Promise<void> {
+  return apiFetch<void>("/views/reorder", {
+    method: "PATCH",
+    body: { view_ids: viewIds },
+  });
+}
+

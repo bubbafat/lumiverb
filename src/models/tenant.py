@@ -327,6 +327,25 @@ class AssetRating(SQLModel, table=True):
     )
 
 
+class SavedView(SQLModel, table=True):
+    __tablename__ = "saved_views"
+
+    view_id: str = Field(primary_key=True)
+    name: str = Field(nullable=False)
+    query_params: str = Field(nullable=False)
+    icon: str | None = Field(default=None, nullable=True)
+    owner_user_id: str = Field(nullable=False, index=True)
+    position: int = Field(default=0, nullable=False)
+    created_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+    updated_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
 class SystemMetadata(SQLModel, table=True):
     __tablename__ = "system_metadata"
 

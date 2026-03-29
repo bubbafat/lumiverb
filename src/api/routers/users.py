@@ -13,7 +13,7 @@ from src.api.dependencies import require_tenant_admin
 from src.api.middleware import _error_response
 from src.core.database import get_control_session, get_engine_for_url
 from src.repository.control_plane import UserRepository
-from src.repository.tenant import RatingRepository
+from src.repository.tenant import RatingRepository, SavedViewRepository
 
 router = APIRouter(prefix="/v1/users", tags=["users"])
 
@@ -170,5 +170,7 @@ def delete_user(
         with TenantSession(engine) as tenant_session:
             rating_repo = RatingRepository(tenant_session)
             rating_repo.delete_for_user(user_id)
+            views_repo = SavedViewRepository(tenant_session)
+            views_repo.delete_for_user(user_id)
 
     return None

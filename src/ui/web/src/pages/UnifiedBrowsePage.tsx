@@ -5,6 +5,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   batchRateAssets,
   browseAll,
+  createSavedView,
   lookupRatings,
   rateAsset,
 } from "../api/client";
@@ -48,6 +49,9 @@ export default function UnifiedBrowsePage() {
   const [containerWidth, setContainerWidth] = useState(0);
   const [lightboxAsset, setLightboxAsset] = useState<AssetPageItem | null>(null);
   const [zoomLevel, setZoomLevel] = useLocalStorage("lv_grid_zoom", 2);
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [saveViewName, setSaveViewName] = useState("");
+  const [savingView, setSavingView] = useState(false);
 
   function setParam(key: string, value: string | null) {
     setSearchParams((prev) => {
@@ -332,6 +336,21 @@ export default function UnifiedBrowsePage() {
     return "All Photos";
   }, [browseFavorite]);
 
+  const hasActiveFilters = searchParams.toString().length > 0;
+
+  const handleSaveView = useCallback(async () => {
+    if (!saveViewName.trim()) return;
+    setSavingView(true);
+    try {
+      await createSavedView(saveViewName.trim(), searchParams.toString());
+      queryClient.invalidateQueries({ queryKey: ["saved-views"] });
+      setShowSaveModal(false);
+      setSaveViewName("");
+    } finally {
+      setSavingView(false);
+    }
+  }, [saveViewName, searchParams, queryClient]);
+
   return (
     <div className="flex flex-col gap-4 px-6 py-6">
       {/* Breadcrumb + zoom control */}
@@ -339,8 +358,57 @@ export default function UnifiedBrowsePage() {
         <div className="flex items-center gap-2 text-sm text-gray-400 min-w-0">
           <span className="text-gray-300 truncate">{pageTitle}</span>
         </div>
-        <ZoomControl value={zoomLevel} onChange={setZoomLevel} />
+        <div className="flex items-center gap-2">
+          {hasActiveFilters && (
+            <button
+              type="button"
+              onClick={() => {
+                setSaveViewName("");
+                setShowSaveModal(true);
+              }}
+              className="rounded-md bg-gray-700 px-2.5 py-1 text-xs font-medium text-gray-200 hover:bg-gray-600"
+            >
+              Save view
+            </button>
+          )}
+          <ZoomControl value={zoomLevel} onChange={setZoomLevel} />
+        </div>
       </div>
+
+      {/* Save view modal */}
+      {showSaveModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowSaveModal(false)}>
+          <div className="w-80 rounded-lg border border-gray-700 bg-gray-900 p-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="mb-3 text-sm font-semibold text-gray-200">Save current filters as a view</h3>
+            <input
+              type="text"
+              value={saveViewName}
+              onChange={(e) => setSaveViewName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") handleSaveView(); }}
+              placeholder="View name"
+              autoFocus
+              className="mb-3 w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowSaveModal(false)}
+                className="rounded-md px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveView}
+                disabled={!saveViewName.trim() || savingView}
+                className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+              >
+                {savingView ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Filter bar */}
       <FilterBar
