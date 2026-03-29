@@ -944,6 +944,7 @@ export default function BrowsePage() {
                             selectionActive={selection.isActive}
                             onSelect={(e) => selection.toggle(asset.asset_id, { shiftKey: e.shiftKey })}
                             rating={ratingsMap[asset.asset_id]}
+                            onFavoriteToggle={(id) => handleRatingChange(id, { favorite: !(ratingsMap[id]?.favorite ?? false) })}
                           />
                         </div>
                       );

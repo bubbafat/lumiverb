@@ -13,6 +13,7 @@ interface AssetCellProps {
   onSelect?: (e: React.MouseEvent) => void;
   selectionActive?: boolean;
   rating?: AssetRating;
+  onFavoriteToggle?: (assetId: string) => void;
 }
 
 function formatDuration(sec: number): string {
@@ -39,6 +40,7 @@ function AssetCellInner({
   onSelect,
   selectionActive,
   rating,
+  onFavoriteToggle,
 }: AssetCellProps) {
   const { url, isLoading, error } = useAuthenticatedImage(
     asset.asset_id,
@@ -50,6 +52,7 @@ function AssetCellInner({
   const filename = basename(asset.rel_path);
   const isVideo = asset.media_type === "video" || asset.media_type.startsWith("video/");
   const effectiveAspectRatio = aspectRatio ?? 4 / 3;
+  const isFavorite = rating?.favorite ?? false;
 
   const { url: videoUrl } = useAuthenticatedImage(
     asset.asset_id,
@@ -131,7 +134,7 @@ function AssetCellInner({
 
       {/* Video duration badge */}
       {isVideo && (
-        <div className="pointer-events-none absolute right-1.5 top-1.5 flex items-center gap-1 rounded-full bg-black/60 px-1.5 py-0.5">
+        <div className="pointer-events-none absolute left-1.5 top-1.5 flex items-center gap-1 rounded-full bg-black/60 px-1.5 py-0.5">
           <svg className="h-3 w-3 shrink-0 text-white" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
             <path d="M8 5v14l11-7z" />
           </svg>
@@ -161,10 +164,10 @@ function AssetCellInner({
         </div>
       </div>
 
-      {/* Selection checkbox */}
+      {/* Selection checkbox — top-right */}
       {onSelect && (
         <div
-          className={`absolute left-1.5 top-1.5 z-10 flex h-5 w-5 items-center justify-center rounded border transition-all ${
+          className={`absolute right-1.5 top-1.5 z-10 flex h-5 w-5 items-center justify-center rounded border transition-all ${
             selected
               ? "border-indigo-500 bg-indigo-600"
               : "border-white/40 bg-black/30 opacity-0 group-hover:opacity-100"
@@ -187,10 +190,29 @@ function AssetCellInner({
         <div className="pointer-events-none absolute inset-0 rounded-lg ring-2 ring-indigo-500 ring-inset" />
       )}
 
-      {/* Rating indicators */}
+      {/* Heart toggle — bottom-right, always visible */}
+      {onFavoriteToggle && (
+        <div
+          className={`absolute right-1.5 bottom-1.5 z-10 flex h-6 w-6 items-center justify-center rounded-full transition-all ${
+            isFavorite
+              ? "text-red-500"
+              : "text-white/50 opacity-0 group-hover:opacity-100 hover:text-red-400"
+          }`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onFavoriteToggle(asset.asset_id);
+          }}
+        >
+          <svg className="h-4 w-4 drop-shadow-md" viewBox="0 0 24 24" fill={isFavorite ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" aria-hidden>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z" />
+          </svg>
+        </div>
+      )}
+
+      {/* Rating indicators (stars, color — heart handled above) */}
       {rating && (
         <RatingBadges
-          favorite={rating.favorite}
+          favorite={false}
           stars={rating.stars}
           color={rating.color}
           isVideo={isVideo}
