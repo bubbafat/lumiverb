@@ -1,3 +1,5 @@
+> **Archived 2026-03-29** — Fully implemented (all 4 phases complete)
+
 # ADR-007: Ratings — Favorites, Stars, and Color Labels
 
 ## Status
