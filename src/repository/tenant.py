@@ -1891,3 +1891,262 @@ class RatingRepository:
         )
         self._session.commit()
         return result.rowcount  # type: ignore[return-value]
+
+
+class UnifiedBrowseRepository:
+    """Cross-library browse — queries active_assets without library_id constraint."""
+
+    SORTABLE_COLUMNS = {
+        "asset_id", "taken_at", "created_at", "file_size",
+        "iso", "aperture", "focal_length", "rel_path",
+    }
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def page(
+        self,
+        after: str | None,
+        limit: int,
+        library_ids: list[str] | None = None,
+        path_prefix: str | None = None,
+        tag: str | None = None,
+        missing_vision: bool = False,
+        missing_embeddings: bool = False,
+        *,
+        sort: str = "taken_at",
+        direction: str = "desc",
+        media_types: list[str] | None = None,
+        camera_make: str | None = None,
+        camera_model: str | None = None,
+        lens_model: str | None = None,
+        iso_min: int | None = None,
+        iso_max: int | None = None,
+        exposure_min_us: int | None = None,
+        exposure_max_us: int | None = None,
+        aperture_min: float | None = None,
+        aperture_max: float | None = None,
+        focal_length_min: float | None = None,
+        focal_length_max: float | None = None,
+        has_exposure: bool | None = None,
+        has_gps: bool = False,
+        near_lat: float | None = None,
+        near_lon: float | None = None,
+        near_radius_km: float = 1.0,
+        rating_user_id: str | None = None,
+        favorite: bool | None = None,
+        star_min: int | None = None,
+        star_max: int | None = None,
+        color: list[str] | None = None,
+        has_rating: bool | None = None,
+    ) -> list[Asset]:
+        """Keyset pagination across all libraries. Same filter support as page_by_library."""
+        import base64 as _b64
+        import math as _math
+
+        sort_col = sort if sort in self.SORTABLE_COLUMNS else "taken_at"
+        is_desc = direction.lower() == "desc"
+        cmp_op = "<" if is_desc else ">"
+        order_dir = "DESC" if is_desc else "ASC"
+
+        conditions: list[str] = []
+        params: dict[str, object] = {"limit": limit}
+
+        # --- Library filter ---
+        if library_ids:
+            conditions.append("a.library_id = ANY(:library_ids)")
+            params["library_ids"] = library_ids
+
+        # --- Path prefix (requires library_ids) ---
+        if path_prefix:
+            conditions.append(
+                "(a.rel_path = :path_prefix OR a.rel_path LIKE :path_prefix_like)"
+            )
+            params["path_prefix"] = path_prefix
+            params["path_prefix_like"] = path_prefix + "/%"
+
+        # --- Composite cursor ---
+        if after is not None:
+            cursor_value = None
+            cursor_id = after
+            try:
+                decoded = json.loads(_b64.urlsafe_b64decode(after + "=="))
+                cursor_value = decoded["v"]
+                cursor_id = decoded["id"]
+            except Exception:
+                if sort_col != "asset_id":
+                    sort_col = "asset_id"
+
+            if sort_col == "asset_id":
+                conditions.append(f"a.asset_id {cmp_op} :cursor_id")
+                params["cursor_id"] = cursor_id
+            else:
+                conditions.append(f"""(
+                    CASE
+                        WHEN :cursor_value IS NULL THEN
+                            a.{sort_col} IS NOT NULL
+                            OR (a.{sort_col} IS NULL AND a.asset_id {cmp_op} :cursor_id)
+                        WHEN a.{sort_col} IS NULL THEN
+                            FALSE
+                        ELSE
+                            (a.{sort_col}, a.asset_id) {cmp_op} (:cursor_value, :cursor_id)
+                    END
+                )""")
+                params["cursor_value"] = cursor_value
+                params["cursor_id"] = cursor_id
+
+        # --- Tag / missing_vision ---
+        if tag is not None:
+            conditions.append("m.tags @> jsonb_build_array(:tag)")
+            params["tag"] = tag
+        if missing_vision:
+            conditions.append("m.tags IS NULL")
+        if missing_embeddings:
+            conditions.append(
+                "NOT EXISTS (SELECT 1 FROM asset_embeddings ae WHERE ae.asset_id = a.asset_id)"
+            )
+
+        # --- Media type filter ---
+        if media_types:
+            clauses = []
+            if "image" in media_types:
+                clauses.append("a.media_type = 'image'")
+            if "video" in media_types:
+                clauses.append("a.media_type = 'video'")
+            if clauses:
+                conditions.append(f"({' OR '.join(clauses)})")
+
+        # --- Camera / lens filters ---
+        if camera_make:
+            conditions.append("a.camera_make = :camera_make")
+            params["camera_make"] = camera_make
+        if camera_model:
+            conditions.append("a.camera_model = :camera_model")
+            params["camera_model"] = camera_model
+        if lens_model:
+            conditions.append("a.lens_model = :lens_model")
+            params["lens_model"] = lens_model
+
+        # --- EXIF range filters ---
+        if iso_min is not None:
+            conditions.append("a.iso >= :iso_min")
+            params["iso_min"] = iso_min
+        if iso_max is not None:
+            conditions.append("a.iso <= :iso_max")
+            params["iso_max"] = iso_max
+        if exposure_min_us is not None:
+            conditions.append("a.exposure_time_us >= :exposure_min_us")
+            params["exposure_min_us"] = exposure_min_us
+        if exposure_max_us is not None:
+            conditions.append("a.exposure_time_us <= :exposure_max_us")
+            params["exposure_max_us"] = exposure_max_us
+        if aperture_min is not None:
+            conditions.append("a.aperture >= :aperture_min")
+            params["aperture_min"] = aperture_min
+        if aperture_max is not None:
+            conditions.append("a.aperture <= :aperture_max")
+            params["aperture_max"] = aperture_max
+        if focal_length_min is not None:
+            conditions.append("a.focal_length >= :focal_length_min")
+            params["focal_length_min"] = focal_length_min
+        if focal_length_max is not None:
+            conditions.append("a.focal_length <= :focal_length_max")
+            params["focal_length_max"] = focal_length_max
+
+        # --- Exposure data filter ---
+        if has_exposure is True:
+            conditions.append(
+                "(a.iso IS NOT NULL OR a.exposure_time_us IS NOT NULL OR a.aperture IS NOT NULL)"
+            )
+        elif has_exposure is False:
+            conditions.append(
+                "a.iso IS NULL AND a.exposure_time_us IS NULL AND a.aperture IS NULL"
+            )
+
+        # --- GPS filters ---
+        if has_gps:
+            conditions.append("a.gps_lat IS NOT NULL AND a.gps_lon IS NOT NULL")
+        if near_lat is not None and near_lon is not None:
+            lat_delta = near_radius_km / 111.0
+            lon_delta = near_radius_km / (111.0 * _math.cos(_math.radians(near_lat)))
+            conditions.append("a.gps_lat BETWEEN :min_lat AND :max_lat")
+            conditions.append("a.gps_lon BETWEEN :min_lon AND :max_lon")
+            params["min_lat"] = near_lat - lat_delta
+            params["max_lat"] = near_lat + lat_delta
+            params["min_lon"] = near_lon - lon_delta
+            params["max_lon"] = near_lon + lon_delta
+
+        # --- Rating filters (LEFT JOIN on asset_ratings) ---
+        join_ratings = (
+            rating_user_id is not None
+            and (favorite is not None or star_min is not None or star_max is not None or color is not None or has_rating is not None)
+        )
+        if join_ratings:
+            params["rating_user_id"] = rating_user_id
+            if favorite is True:
+                conditions.append("r.favorite = TRUE")
+            elif favorite is False:
+                conditions.append("(r.favorite IS NULL OR r.favorite = FALSE)")
+            if star_min is not None:
+                conditions.append("COALESCE(r.stars, 0) >= :star_min")
+                params["star_min"] = star_min
+            if star_max is not None:
+                conditions.append("COALESCE(r.stars, 0) <= :star_max")
+                params["star_max"] = star_max
+            if color is not None and len(color) > 0:
+                placeholders = ", ".join(f":color_{i}" for i in range(len(color)))
+                conditions.append(f"r.color IN ({placeholders})")
+                for i, c in enumerate(color):
+                    params[f"color_{i}"] = c
+            if has_rating is True:
+                conditions.append("r.user_id IS NOT NULL")
+            elif has_rating is False:
+                conditions.append("r.user_id IS NULL")
+
+        # --- Build query ---
+        join_metadata = tag is not None or missing_vision
+        where_sql = " AND ".join(conditions) if conditions else "TRUE"
+
+        lateral_join = ""
+        if join_metadata:
+            lateral_join = """
+            LEFT JOIN LATERAL (
+                SELECT data->'tags' AS tags
+                FROM asset_metadata
+                WHERE asset_id = a.asset_id
+                ORDER BY generated_at DESC
+                LIMIT 1
+            ) m ON TRUE
+            """
+
+        rating_join = ""
+        if join_ratings:
+            rating_join = """
+            LEFT JOIN asset_ratings r ON r.asset_id = a.asset_id AND r.user_id = :rating_user_id
+            """
+
+        if sort_col == "asset_id":
+            order_clause = f"a.asset_id {order_dir}"
+        else:
+            order_clause = f"a.{sort_col} {order_dir} NULLS LAST, a.asset_id {order_dir}"
+
+        id_sql = f"""
+            SELECT a.asset_id
+            FROM active_assets a
+            {lateral_join}
+            {rating_join}
+            WHERE {where_sql}
+            ORDER BY {order_clause}
+            LIMIT :limit
+        """
+        result = self._session.execute(text(id_sql).bindparams(**params))
+        asset_ids = [row[0] for row in result.all()]
+        if not asset_ids:
+            return []
+        stmt = (
+            select(Asset)
+            .where(Asset.asset_id.in_(asset_ids))
+            .where(Asset.deleted_at.is_(None))
+        )
+        assets_by_id = {a.asset_id: a for a in self._session.exec(stmt).all()}
+        return [assets_by_id[aid] for aid in asset_ids if aid in assets_by_id]

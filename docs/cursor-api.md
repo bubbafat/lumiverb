@@ -233,6 +233,14 @@ Collections are virtual groupings of assets across libraries. See ADR-006 for fu
 - **GET /v1/public/collections/{id}/assets** — Query: `after` (cursor), `limit`. Returns privacy-stripped asset list: `{ "items": [{ "asset_id", "media_type", "width", "height", "taken_at", "duration_sec" }], "next_cursor" }`. No rel_path, no camera info, no GPS.
 - Asset thumbnails/proxies served via existing `/v1/assets/{id}/proxy?public_collection_id={id}` — verifies asset membership in the public collection.
 
+## Unified Browse API
+
+Cross-library browse endpoint. Queries across all libraries the user has access to, with the same filters as `GET /v1/assets/page` plus library selection. Response items include `library_id` and `library_name`.
+
+- **GET /v1/browse** — Query: `after` (cursor), `limit` (default 500, max 500), `library_id` (optional; comma-separated for multiple), `path_prefix` (requires `library_id`; 400 otherwise), `sort`, `dir`, plus all filter params from `/v1/assets/page` (media_type, camera_make, camera_model, lens_model, iso_min, iso_max, exposure_min_us, exposure_max_us, aperture_min, aperture_max, focal_length_min, focal_length_max, has_exposure, has_gps, near_lat, near_lon, near_radius_km, tag). Rating filters: `favorite`, `star_min`, `star_max`, `color`, `has_rating`. Returns: `{ "items": [BrowseItem], "next_cursor" }`.
+
+**BrowseItem**: Same fields as `AssetPageItem` plus `library_id` and `library_name`.
+
 ## Ratings API
 
 User-scoped asset ratings: favorites (heart), stars (1-5), color labels. Each user has independent ratings per asset. Ratings are private — never visible to other users. All endpoints require auth; user identity comes from JWT `sub` or API key `key:{key_id}`.
