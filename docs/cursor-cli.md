@@ -9,7 +9,7 @@ See docs/architecture.md for the full design.
 
 ## Package layout
 - `src/cli/main.py` — Typer app entry point; command groups: `config`, `library`, `tenant`, `filter`, `keys`, `users`, `maintenance`, `admin`
-- `src/cli/commands/` — Subcommand modules: `keys.py`, `users.py`, `maintenance.py`
+- `src/cli/commands/` — Subcommand modules: `collections.py`, `keys.py`, `users.py`, `maintenance.py`
 - `src/cli/config.py` — Local config in `~/.lumiverb/config.json` (`api_url`, `api_key`, `admin_key`, `vision_api_url`, `vision_api_key`, `vision_model_id`): `load_config`, `save_config`, `get_api_url`, `get_api_key`, `get_admin_key`
 - `src/cli/client.py` — `LumiverbClient`: thin httpx wrapper with persistent connection pool, reads config for base URL and `Authorization: Bearer <api_key>`; accepts `api_key_override` for admin commands; on non-2xx prints error envelope and raises `LumiverbAPIError`
 - `src/cli/ingest.py` — Per-asset ingest pipeline: discover files, generate proxies, call vision AI, upload atomically
@@ -50,6 +50,14 @@ Entry point: `lumiverb = "src.cli:main"` (setuptools); `main()` invokes the Type
 - `lumiverb filter list [--library <name>]` — List path filters. Without `--library`, shows tenant defaults. With `--library`, shows library-specific filters.
 - `lumiverb filter add <pattern> --include|--exclude [--library <name>]` — Add a path filter. Without `--library`, adds as tenant default (applies to all libraries). With `--library`, adds to that library only.
 - `lumiverb filter remove <filter_id> [--library <name>]` — Remove a filter by ID. IDs prefixed `tpfd_` for tenant defaults, `lpf_` for library filters.
+
+### Collections
+- `lumiverb collection list [--json]` — List collections you own or that are shared with you. Rich table with ID, name, asset count, visibility, ownership. `--json` for raw JSON.
+- `lumiverb collection create --name <name> [--description <desc>] [--visibility private|shared|public]` — Create a new collection. Default visibility: private.
+- `lumiverb collection show --id <col_id> [--json]` — Show collection details and first 50 assets. `--json` includes full asset list up to 1000.
+- `lumiverb collection add --id <col_id> --asset-id <id> [--asset-id <id> ...]` — Add assets to a collection. Repeat `--asset-id` for multiple.
+- `lumiverb collection remove --id <col_id> --asset-id <id> [--asset-id <id> ...]` — Remove assets from a collection.
+- `lumiverb collection delete --id <col_id>` — Delete a collection (prompt for confirmation). Source assets are not affected.
 
 ### Keys
 - `lumiverb keys list` — List non-revoked API keys for current tenant.

@@ -67,10 +67,22 @@ function CollectionCard({
             >
               {collection.name}
             </Link>
-            <p className="mt-0.5 text-xs text-gray-500">
-              {collection.asset_count}{" "}
-              {collection.asset_count === 1 ? "item" : "items"}
-            </p>
+            <div className="mt-0.5 flex items-center gap-2">
+              <span className="text-xs text-gray-500">
+                {collection.asset_count}{" "}
+                {collection.asset_count === 1 ? "item" : "items"}
+              </span>
+              {collection.ownership === "shared" && (
+                <span className="rounded bg-gray-700/60 px-1.5 py-0.5 text-[10px] text-gray-400">
+                  Shared
+                </span>
+              )}
+              {collection.visibility === "public" && (
+                <span className="rounded bg-indigo-900/40 px-1.5 py-0.5 text-[10px] text-indigo-400">
+                  Public
+                </span>
+              )}
+            </div>
           </div>
           <div className="shrink-0">
             {deleteConfirmId === collection.collection_id ? (
