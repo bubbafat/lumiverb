@@ -713,6 +713,7 @@ def ingest(
         f"\nDone: {stats.processed:,} ingested, "
         f"{stats.failed:,} failed, "
         f"{stats.skipped:,} skipped"
+        + (f", {stats.removed:,} removed" if stats.removed else "")
     )
     if stats.failed > 0:
         raise typer.Exit(1)

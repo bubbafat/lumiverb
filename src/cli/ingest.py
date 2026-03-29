@@ -521,6 +521,7 @@ class _IngestStats:
         self.processed = 0
         self.failed = 0
         self.skipped = 0
+        self.removed = 0
 
 
 def _drain(inflight: set[Future]) -> tuple[set[Future], set[Future]]:
@@ -634,9 +635,9 @@ def _load_library_filters(client: LumiverbClient, library_id: str) -> list[PathF
         return []
 
 
-def _fetch_existing_rel_paths(client: LumiverbClient, library_id: str) -> set[str]:
-    """Page through all assets on the server and collect their rel_paths."""
-    existing: set[str] = set()
+def _fetch_existing_assets(client: LumiverbClient, library_id: str) -> dict[str, str]:
+    """Page through all assets on the server. Returns {rel_path: asset_id}."""
+    existing: dict[str, str] = {}
     cursor: str | None = None
     while True:
         params: dict[str, str] = {"library_id": library_id, "limit": "500", "sort": "asset_id", "dir": "asc"}
@@ -648,7 +649,7 @@ def _fetch_existing_rel_paths(client: LumiverbClient, library_id: str) -> set[st
         if not items:
             break
         for a in items:
-            existing.add(a["rel_path"])
+            existing[a["rel_path"]] = a["asset_id"]
         cursor = data.get("next_cursor")
         if not cursor:
             break
@@ -694,17 +695,30 @@ def run_ingest(
     local_files = _walk_library(root_path, path_override, tenant_filters=tenant_filters, library_filters=library_filters)
     console.print(f"Found {len(local_files):,} media files")
 
-    if not local_files:
-        return _IngestStats()
-
-    # Step 2: Fetch existing assets to skip already-ingested
+    # Step 2b: Fetch existing assets (needed for skip detection and missing file cleanup)
     stats = _IngestStats()
-    if not force:
-        console.print("Checking server for existing assets...")
-        existing = _fetch_existing_rel_paths(client, library_id)
-        console.print(f"Server has {len(existing):,} existing assets")
-    else:
-        existing = set()
+    console.print("Checking server for existing assets...")
+    existing = _fetch_existing_assets(client, library_id)
+    console.print(f"Server has {len(existing):,} existing assets")
+
+    # Step 2c: Detect and trash assets for files no longer on disk
+    if existing and root_path.is_dir():
+        local_rel_paths = {f["rel_path"] for f in local_files}
+        # When using --path, only consider assets under that prefix
+        scope = existing
+        if path_override:
+            prefix = path_override.rstrip("/") + "/"
+            scope = {rp: aid for rp, aid in existing.items() if rp.startswith(prefix)}
+        missing_ids = [aid for rp, aid in scope.items() if rp not in local_rel_paths]
+        if missing_ids:
+            console.print(f"Removing {len(missing_ids):,} assets no longer on disk...")
+            for batch_start in range(0, len(missing_ids), 500):
+                batch = missing_ids[batch_start : batch_start + 500]
+                client.delete("/v1/assets", json={"asset_ids": batch})
+            stats.removed = len(missing_ids)
+
+    if not local_files:
+        return stats
 
     # Step 3: Resolve vision config (client > tenant > auto-discover)
     vision_api_url, vision_api_key, vision_model_id, vision_source = _resolve_vision_config(client)

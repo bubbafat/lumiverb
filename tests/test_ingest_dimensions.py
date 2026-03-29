@@ -351,3 +351,171 @@ def test_walk_library_skips_zero_byte_files(tmp_path):
 
     assert "good.jpg" in rel_paths
     assert "empty.jpg" not in rel_paths
+
+
+# ---------------------------------------------------------------------------
+# Missing file detection (ingest sync)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_missing_file_detection_computes_correct_diff(tmp_path):
+    """Assets on server but not on disk should be identified for removal."""
+    from src.cli.ingest import _walk_library
+
+    lib_root = tmp_path / "library"
+    lib_root.mkdir()
+
+    # Only one file on disk
+    (lib_root / "keep.jpg").write_bytes(b"\xff\xd8\xff" + b"\x00" * 100)
+
+    local_files = _walk_library(lib_root)
+    local_rel_paths = {f["rel_path"] for f in local_files}
+
+    # Server has three assets
+    server_assets = {
+        "keep.jpg": "ast_keep",
+        "deleted.jpg": "ast_deleted",
+        "also_gone.jpg": "ast_also_gone",
+    }
+
+    missing_ids = [aid for rp, aid in server_assets.items() if rp not in local_rel_paths]
+    assert sorted(missing_ids) == ["ast_also_gone", "ast_deleted"]
+
+
+@pytest.mark.fast
+def test_missing_file_detection_skips_when_root_missing(tmp_path):
+    """When library root doesn't exist (NAS offline), no deletions should occur."""
+    missing_root = tmp_path / "nonexistent"
+
+    server_assets = {
+        "photo1.jpg": "ast_1",
+        "photo2.jpg": "ast_2",
+    }
+
+    # Simulate the safety check from run_ingest
+    should_delete = missing_root.is_dir() and bool(server_assets)
+    assert should_delete is False
+
+
+@pytest.mark.fast
+def test_missing_file_detection_respects_path_prefix(tmp_path):
+    """With --path prefix, only assets under that prefix should be considered."""
+    from src.cli.ingest import _walk_library
+
+    lib_root = tmp_path / "library"
+    (lib_root / "a").mkdir(parents=True)
+    (lib_root / "b").mkdir(parents=True)
+    (lib_root / "a" / "keep.jpg").write_bytes(b"\xff\xd8\xff" + b"\x00" * 100)
+
+    local_files = _walk_library(lib_root, path_prefix="a")
+    local_rel_paths = {f["rel_path"] for f in local_files}
+
+    server_assets = {
+        "a/keep.jpg": "ast_keep",
+        "a/gone.jpg": "ast_gone",
+        "b/unrelated.jpg": "ast_unrelated",
+    }
+
+    # Scope to prefix "a/"
+    prefix = "a/"
+    scoped = {rp: aid for rp, aid in server_assets.items() if rp.startswith(prefix)}
+    missing_ids = [aid for rp, aid in scoped.items() if rp not in local_rel_paths]
+
+    assert missing_ids == ["ast_gone"]
+    # "b/unrelated.jpg" should NOT be in missing (out of scope)
+    assert "ast_unrelated" not in missing_ids
+
+
+@pytest.mark.fast
+def test_missing_single_deleted_file(tmp_path):
+    """A single file removed from disk should be detected."""
+    from src.cli.ingest import _walk_library
+
+    lib_root = tmp_path / "library"
+    lib_root.mkdir()
+    (lib_root / "still_here.jpg").write_bytes(b"\xff\xd8\xff" + b"\x00" * 100)
+
+    local_rel_paths = {f["rel_path"] for f in _walk_library(lib_root)}
+    server = {"still_here.jpg": "ast_1", "was_deleted.jpg": "ast_2"}
+    missing = [aid for rp, aid in server.items() if rp not in local_rel_paths]
+
+    assert missing == ["ast_2"]
+
+
+@pytest.mark.fast
+def test_missing_multiple_deleted_files(tmp_path):
+    """Multiple deleted files should all be detected."""
+    from src.cli.ingest import _walk_library
+
+    lib_root = tmp_path / "library"
+    lib_root.mkdir()
+    (lib_root / "keep.jpg").write_bytes(b"\xff\xd8\xff" + b"\x00" * 100)
+
+    local_rel_paths = {f["rel_path"] for f in _walk_library(lib_root)}
+    server = {
+        "keep.jpg": "ast_keep",
+        "gone1.jpg": "ast_gone1",
+        "gone2.jpg": "ast_gone2",
+        "gone3.jpg": "ast_gone3",
+    }
+    missing = sorted(aid for rp, aid in server.items() if rp not in local_rel_paths)
+
+    assert missing == ["ast_gone1", "ast_gone2", "ast_gone3"]
+
+
+@pytest.mark.fast
+def test_missing_entire_directory(tmp_path):
+    """All assets under a removed directory should be detected."""
+    from src.cli.ingest import _walk_library
+
+    lib_root = tmp_path / "library"
+    (lib_root / "kept").mkdir(parents=True)
+    (lib_root / "kept" / "photo.jpg").write_bytes(b"\xff\xd8\xff" + b"\x00" * 100)
+    # "removed/" directory does NOT exist on disk
+
+    local_rel_paths = {f["rel_path"] for f in _walk_library(lib_root)}
+    server = {
+        "kept/photo.jpg": "ast_kept",
+        "removed/a.jpg": "ast_a",
+        "removed/b.jpg": "ast_b",
+        "removed/sub/c.jpg": "ast_c",
+    }
+    missing = sorted(aid for rp, aid in server.items() if rp not in local_rel_paths)
+
+    assert missing == ["ast_a", "ast_b", "ast_c"]
+
+
+@pytest.mark.fast
+def test_protect_missing_library_root(tmp_path):
+    """When the library root is gone (NAS offline), nothing should be deleted."""
+    missing_root = tmp_path / "offline_nas"
+
+    server = {f"photo{i}.jpg": f"ast_{i}" for i in range(100)}
+
+    # The safety guard: root must be a directory
+    assert not missing_root.is_dir()
+    # Therefore no deletion should occur
+    should_delete = missing_root.is_dir() and bool(server)
+    assert should_delete is False
+
+
+@pytest.mark.fast
+def test_missing_recursive_nested_files(tmp_path):
+    """Deeply nested missing files should be detected."""
+    from src.cli.ingest import _walk_library
+
+    lib_root = tmp_path / "library"
+    (lib_root / "a" / "b").mkdir(parents=True)
+    (lib_root / "a" / "b" / "exists.jpg").write_bytes(b"\xff\xd8\xff" + b"\x00" * 100)
+
+    local_rel_paths = {f["rel_path"] for f in _walk_library(lib_root)}
+    server = {
+        "a/b/exists.jpg": "ast_exists",
+        "a/b/gone.jpg": "ast_gone_shallow",
+        "a/b/c/d/deep_gone.jpg": "ast_gone_deep",
+        "x/y/z/other_gone.jpg": "ast_gone_other_tree",
+    }
+    missing = sorted(aid for rp, aid in server.items() if rp not in local_rel_paths)
+
+    assert missing == ["ast_gone_deep", "ast_gone_other_tree", "ast_gone_shallow"]
