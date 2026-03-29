@@ -1,7 +1,8 @@
-import { useMemo } from "react";
+import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { getLibraryRevision, listLibraries, logout } from "../api/client";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { getLibraryRevision, listLibraries, listSavedViews, deleteSavedView, updateSavedView, logout } from "../api/client";
+import type { SavedViewItem } from "../api/client";
 import type { LibraryListItem } from "../api/types";
 import { DirectoryTree } from "./DirectoryTree";
 
@@ -200,6 +201,44 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette }: Sidebar
   );
 
   const showLabels = !collapsed;
+  const queryClient = useQueryClient();
+
+  // Saved views
+  const { data: savedViewsData } = useQuery({
+    queryKey: ["saved-views"],
+    queryFn: listSavedViews,
+    staleTime: 60_000,
+  });
+  const savedViews: SavedViewItem[] = savedViewsData?.items ?? [];
+  const [menuViewId, setMenuViewId] = useState<string | null>(null);
+  const [renamingViewId, setRenamingViewId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Close menu on click outside
+  useEffect(() => {
+    if (!menuViewId) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuViewId(null);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [menuViewId]);
+
+  const handleDeleteView = useCallback(async (viewId: string) => {
+    setMenuViewId(null);
+    await deleteSavedView(viewId);
+    queryClient.invalidateQueries({ queryKey: ["saved-views"] });
+  }, [queryClient]);
+
+  const handleRenameView = useCallback(async (viewId: string, newName: string) => {
+    if (!newName.trim()) return;
+    await updateSavedView(viewId, { name: newName.trim() });
+    queryClient.invalidateQueries({ queryKey: ["saved-views"] });
+    setRenamingViewId(null);
+  }, [queryClient]);
 
   return (
     <aside className="flex h-full flex-col bg-gray-900 border-r border-gray-800 transition-all duration-200">
@@ -381,10 +420,93 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette }: Sidebar
             </svg>
             {showLabels && <span>Favorites</span>}
           </Link>
+          {/* Saved views */}
+          {savedViews.map((sv) => {
+            const viewPath = `/browse?${sv.query_params}`;
+            const isActive = location.pathname === "/browse" && location.search === `?${sv.query_params}`;
+            return (
+              <div key={sv.view_id} className="group/sv relative">
+                {renamingViewId === sv.view_id ? (
+                  <div className="flex items-center gap-1 px-2 py-2">
+                    <span className="h-2 w-2 rounded-full bg-gray-500 shrink-0" />
+                    <input
+                      type="text"
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleRenameView(sv.view_id, renameValue);
+                        if (e.key === "Escape") setRenamingViewId(null);
+                      }}
+                      onBlur={() => handleRenameView(sv.view_id, renameValue)}
+                      autoFocus
+                      className="min-w-0 flex-1 rounded border border-gray-600 bg-gray-800 px-1.5 py-0.5 text-sm text-gray-200 focus:border-indigo-500 focus:outline-none"
+                    />
+                  </div>
+                ) : (
+                  <Link
+                    to={viewPath}
+                    className={`flex items-center gap-2 rounded-lg px-2 py-3 text-sm transition-colors duration-150 ${
+                      isActive
+                        ? "bg-indigo-600/30 text-indigo-200"
+                        : "text-gray-400 hover:bg-gray-800/80 hover:text-gray-200"
+                    }`}
+                  >
+                    <span className="h-2 w-2 rounded-full bg-gray-500" />
+                    {sv.icon && <span className="text-sm">{sv.icon}</span>}
+                    {showLabels && <span className="truncate">{sv.name}</span>}
+                    {showLabels && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setMenuViewId(menuViewId === sv.view_id ? null : sv.view_id);
+                        }}
+                        className="ml-auto shrink-0 rounded p-0.5 text-gray-500 opacity-0 transition-opacity hover:text-gray-300 group-hover/sv:opacity-100"
+                      >
+                        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                          <circle cx="12" cy="5" r="1.5" />
+                          <circle cx="12" cy="12" r="1.5" />
+                          <circle cx="12" cy="19" r="1.5" />
+                        </svg>
+                      </button>
+                    )}
+                  </Link>
+                )}
+                {/* Context menu */}
+                {menuViewId === sv.view_id && (
+                  <div
+                    ref={menuRef}
+                    className="absolute right-0 top-full z-20 w-32 rounded-md border border-gray-700 bg-gray-900 py-1 shadow-lg"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenuViewId(null);
+                        setRenameValue(sv.name);
+                        setRenamingViewId(sv.view_id);
+                      }}
+                      className="flex w-full items-center px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+                    >
+                      Rename
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteView(sv.view_id)}
+                      className="flex w-full items-center px-3 py-1.5 text-xs text-red-400 hover:bg-gray-800"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
           <Link
             to="/browse"
             className={`flex items-center gap-2 rounded-lg px-2 py-3 text-sm transition-colors duration-150 ${
-              location.pathname === "/browse" && !location.search.includes("favorite=true")
+              location.pathname === "/browse" && !location.search
                 ? "bg-indigo-600/30 text-indigo-200"
                 : "text-gray-400 hover:bg-gray-800/80 hover:text-gray-200"
             }`}
