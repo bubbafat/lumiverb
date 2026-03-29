@@ -184,7 +184,9 @@ export interface CollectionItem {
   name: string;
   description: string | null;
   cover_asset_id: string | null;
-  is_public: boolean;
+  owner_user_id: string | null;
+  visibility: string;  // "private" | "shared" | "public"
+  ownership: string;   // "own" | "shared"
   sort_order: string;
   asset_count: number;
   created_at: string;

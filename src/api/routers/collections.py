@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlmodel import Session
 
-from src.api.dependencies import get_tenant_session, require_editor
+from src.api.dependencies import get_current_user_id, get_tenant_session, require_editor
 from src.repository.tenant import AssetRepository, CollectionRepository
 
 router = APIRouter(prefix="/v1/collections", tags=["collections"])
@@ -23,13 +23,14 @@ class CreateCollectionRequest(BaseModel):
     name: str
     description: str | None = None
     sort_order: str = "manual"
+    visibility: str = "private"  # private | shared
     asset_ids: list[str] | None = None  # optional atomic create+populate
 
 
 class UpdateCollectionRequest(BaseModel):
     name: str | None = None
     description: str | None = None
-    is_public: bool | None = None
+    visibility: str | None = None
     sort_order: str | None = None
     cover_asset_id: str | None = None
 
@@ -39,7 +40,9 @@ class CollectionItem(BaseModel):
     name: str
     description: str | None
     cover_asset_id: str | None
-    is_public: bool
+    owner_user_id: str | None
+    visibility: str
+    ownership: str  # "own" | "shared"
     sort_order: str
     asset_count: int
     created_at: str
@@ -90,15 +93,24 @@ class ReorderRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 _VALID_SORT_ORDERS = {"manual", "added_at", "taken_at"}
+_VALID_VISIBILITIES = {"private", "shared"}
 
 
-def _collection_to_item(col, repo: CollectionRepository) -> CollectionItem:
+def _ownership_label(col, user_id: str) -> str:
+    if col.owner_user_id == user_id:
+        return "own"
+    return "shared"
+
+
+def _collection_to_item(col, repo: CollectionRepository, user_id: str) -> CollectionItem:
     return CollectionItem(
         collection_id=col.collection_id,
         name=col.name,
         description=col.description,
         cover_asset_id=repo.resolve_cover(col),
-        is_public=col.is_public,
+        owner_user_id=col.owner_user_id,
+        visibility=col.visibility,
+        ownership=_ownership_label(col, user_id),
         sort_order=col.sort_order,
         asset_count=repo.asset_count(col.collection_id),
         created_at=col.created_at.isoformat(),
@@ -113,6 +125,21 @@ def _get_collection_or_404(repo: CollectionRepository, collection_id: str):
     return col
 
 
+def _require_owner(col, user_id: str) -> None:
+    """Raise 403 if user is not the owner of the collection."""
+    if col.owner_user_id is not None and col.owner_user_id != user_id:
+        raise HTTPException(status_code=403, detail="Only the collection owner can perform this action")
+
+
+def _can_view(col, user_id: str) -> bool:
+    """Check if user can view this collection."""
+    if col.owner_user_id is None:
+        return True  # legacy tenant-wide collection
+    if col.owner_user_id == user_id:
+        return True
+    return col.visibility in ("shared", "public")
+
+
 # ---------------------------------------------------------------------------
 # Collection CRUD
 # ---------------------------------------------------------------------------
@@ -123,16 +150,24 @@ def create_collection(
     body: CreateCollectionRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> CollectionItem:
-    """Create a collection. Optionally populate with asset_ids atomically."""
+    """Create a collection owned by the current user."""
     if body.sort_order not in _VALID_SORT_ORDERS:
         raise HTTPException(status_code=400, detail=f"Invalid sort_order. Must be one of: {', '.join(_VALID_SORT_ORDERS)}")
+    if body.visibility not in _VALID_VISIBILITIES:
+        raise HTTPException(status_code=400, detail=f"Invalid visibility. Must be one of: {', '.join(_VALID_VISIBILITIES)}")
 
     repo = CollectionRepository(session)
-    col = repo.create(name=body.name, description=body.description, sort_order=body.sort_order)
+    col = repo.create(
+        name=body.name,
+        owner_user_id=user_id,
+        description=body.description,
+        sort_order=body.sort_order,
+        visibility=body.visibility,
+    )
 
     if body.asset_ids:
-        # Validate all assets are active
         asset_repo = AssetRepository(session)
         for aid in body.asset_ids:
             asset = asset_repo.get_by_id(aid)
@@ -140,19 +175,20 @@ def create_collection(
                 raise HTTPException(status_code=404, detail=f"Asset {aid} not found or trashed")
         repo.add_assets(col.collection_id, body.asset_ids)
 
-    return _collection_to_item(col, repo)
+    return _collection_to_item(col, repo, user_id)
 
 
 @router.get("", response_model=CollectionListResponse)
 def list_collections(
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> CollectionListResponse:
-    """List all collections with cover and asset count."""
+    """List collections owned by user + shared collections."""
     repo = CollectionRepository(session)
-    collections = repo.list_all()
+    collections = repo.list_for_user(user_id)
     return CollectionListResponse(
-        items=[_collection_to_item(c, repo) for c in collections]
+        items=[_collection_to_item(c, repo, user_id) for c in collections]
     )
 
 
@@ -161,11 +197,14 @@ def get_collection(
     collection_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> CollectionItem:
-    """Get collection detail."""
+    """Get collection detail. Must be owner or collection must be shared."""
     repo = CollectionRepository(session)
     col = _get_collection_or_404(repo, collection_id)
-    return _collection_to_item(col, repo)
+    if not _can_view(col, user_id):
+        raise HTTPException(status_code=404, detail="Collection not found")
+    return _collection_to_item(col, repo, user_id)
 
 
 @router.patch("/{collection_id}", response_model=CollectionItem)
@@ -174,25 +213,27 @@ def update_collection(
     body: UpdateCollectionRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> CollectionItem:
-    """Update collection metadata."""
+    """Update collection metadata. Only the owner can update."""
     repo = CollectionRepository(session)
-    _get_collection_or_404(repo, collection_id)
+    col = _get_collection_or_404(repo, collection_id)
+    _require_owner(col, user_id)
 
-    # Build kwargs, using sentinel for nullable fields that might be intentionally set to None
     from src.repository.tenant import _SENTINEL
 
     kwargs: dict = {}
     if body.name is not None:
         kwargs["name"] = body.name
-    # description and cover_asset_id: only pass if included in request body
     raw = body.model_dump(exclude_unset=True)
     if "description" in raw:
         kwargs["description"] = body.description
     else:
         kwargs["description"] = _SENTINEL
-    if body.is_public is not None:
-        kwargs["is_public"] = body.is_public
+    if body.visibility is not None:
+        if body.visibility not in _VALID_VISIBILITIES:
+            raise HTTPException(status_code=400, detail=f"Invalid visibility. Must be one of: {', '.join(_VALID_VISIBILITIES)}")
+        kwargs["visibility"] = body.visibility
     if body.sort_order is not None:
         if body.sort_order not in _VALID_SORT_ORDERS:
             raise HTTPException(status_code=400, detail=f"Invalid sort_order. Must be one of: {', '.join(_VALID_SORT_ORDERS)}")
@@ -203,7 +244,7 @@ def update_collection(
         kwargs["cover_asset_id"] = _SENTINEL
 
     col = repo.update(collection_id, **kwargs)
-    return _collection_to_item(col, repo)
+    return _collection_to_item(col, repo, user_id)
 
 
 @router.delete("/{collection_id}", status_code=204)
@@ -211,11 +252,13 @@ def delete_collection(
     collection_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> None:
-    """Delete a collection. Source assets are untouched."""
+    """Delete a collection. Only the owner can delete."""
     repo = CollectionRepository(session)
-    if not repo.delete(collection_id):
-        raise HTTPException(status_code=404, detail="Collection not found")
+    col = _get_collection_or_404(repo, collection_id)
+    _require_owner(col, user_id)
+    repo.delete(collection_id)
 
 
 # ---------------------------------------------------------------------------
@@ -229,12 +272,13 @@ def add_assets_to_collection(
     body: AssetIdsRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> BatchAddResponse:
-    """Add assets to a collection. Idempotent — duplicates are ignored."""
+    """Add assets to a collection. Only the owner can add. Idempotent."""
     repo = CollectionRepository(session)
-    _get_collection_or_404(repo, collection_id)
+    col = _get_collection_or_404(repo, collection_id)
+    _require_owner(col, user_id)
 
-    # Reject trashed assets
     asset_repo = AssetRepository(session)
     for aid in body.asset_ids:
         asset = asset_repo.get_by_id(aid)
@@ -251,10 +295,12 @@ def remove_assets_from_collection(
     body: AssetIdsRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> BatchRemoveResponse:
-    """Remove assets from a collection. Does not affect source assets."""
+    """Remove assets from a collection. Only the owner can remove."""
     repo = CollectionRepository(session)
-    _get_collection_or_404(repo, collection_id)
+    col = _get_collection_or_404(repo, collection_id)
+    _require_owner(col, user_id)
     removed = repo.remove_assets(collection_id, body.asset_ids)
     return BatchRemoveResponse(removed=removed)
 
@@ -264,12 +310,15 @@ def list_collection_assets(
     collection_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
     after: str | None = Query(None, description="Pagination cursor"),
     limit: int = Query(200, ge=1, le=1000),
 ) -> CollectionAssetsResponse:
-    """List assets in a collection, paginated and ordered by collection sort_order."""
+    """List assets in a collection. Must be owner or collection must be shared."""
     repo = CollectionRepository(session)
     col = _get_collection_or_404(repo, collection_id)
+    if not _can_view(col, user_id):
+        raise HTTPException(status_code=404, detail="Collection not found")
 
     assets, next_cursor = repo.list_assets(
         collection_id, sort_order=col.sort_order, after_cursor=after, limit=limit
@@ -306,10 +355,12 @@ def reorder_collection(
     body: ReorderRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> dict:
-    """Reorder assets in collection. Must include ALL active asset IDs."""
+    """Reorder assets in collection. Only the owner can reorder."""
     repo = CollectionRepository(session)
-    _get_collection_or_404(repo, collection_id)
+    col = _get_collection_or_404(repo, collection_id)
+    _require_owner(col, user_id)
 
     try:
         repo.reorder(collection_id, body.asset_ids)

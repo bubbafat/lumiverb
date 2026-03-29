@@ -17,6 +17,7 @@ interface LightboxProps {
   onNearbyClick?: (lat: number, lon: number) => void;
   onFilterClick?: (params: Record<string, string>) => void;
   onPathClick?: (path: string) => void;
+  onAddToCollection?: (assetId: string) => void;
   libraryId?: string;
   isPublic?: boolean;
   publicLibraryId?: string;
@@ -111,6 +112,7 @@ export function Lightbox({
   onNearbyClick,
   onFilterClick,
   onPathClick,
+  onAddToCollection,
   libraryId,
   isPublic,
   publicLibraryId,
@@ -831,6 +833,19 @@ export function Lightbox({
                   </dl>
                 )}
               </div>
+
+              {onAddToCollection && (
+                <>
+                  <hr className="border-gray-700" />
+                  <button
+                    type="button"
+                    onClick={() => onAddToCollection(asset.asset_id)}
+                    className="w-full rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-700 hover:text-gray-100"
+                  >
+                    Add to collection
+                  </button>
+                </>
+              )}
 
               {libraryId && (
                 <>

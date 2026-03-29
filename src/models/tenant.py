@@ -267,7 +267,8 @@ class Collection(SQLModel, table=True):
     cover_asset_id: str | None = Field(
         default=None, foreign_key="assets.asset_id", nullable=True
     )
-    is_public: bool = Field(default=False, nullable=False)
+    owner_user_id: str | None = Field(default=None, nullable=True)
+    visibility: str = Field(default="private", nullable=False)  # private | shared | public
     sort_order: str = Field(default="manual", nullable=False)
     created_at: datetime = Field(
         default_factory=utcnow,

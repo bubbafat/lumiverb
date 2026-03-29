@@ -132,7 +132,8 @@ def test_create_collection(collections_env):
     assert data["collection_id"].startswith("col_")
     assert data["asset_count"] == 0
     assert data["sort_order"] == "manual"
-    assert data["is_public"] is False
+    assert data["visibility"] == "private"
+    assert data["ownership"] == "own"
     assert data["cover_asset_id"] is None
 
 

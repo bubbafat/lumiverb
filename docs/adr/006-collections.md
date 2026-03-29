@@ -28,7 +28,8 @@ collections
   name             text, not null
   description      text, nullable
   cover_asset_id   FK → assets.asset_id, nullable (user-set; null = use first item)
-  is_public        bool, default false
+  owner_user_id    text, nullable (user who created; NULL = legacy tenant-wide)
+  visibility       text, default 'private' (private | shared | public)
   sort_order       text, default 'manual' (manual | added_at | taken_at)
   created_at       timestamptz
   updated_at       timestamptz
@@ -210,7 +211,7 @@ One Alembic migration in the control plane context:
 
 Every phase must satisfy all of the following before it is marked complete:
 
-1. **Tests**: New backend tests for every endpoint and repository method. Edge cases from the table above must be covered as they become relevant.
+1. **Tests**: New backend tests for every endpoint and repository method. Edge cases from the table above must be covered as they become relevant. **All tests must pass** — not just new or affected tests, the entire suite (`uv run pytest tests/`). No phase is done until the full suite is clean.
 2. **Documentation**: `docs/cursor-api.md` and `docs/cursor-cli.md` updated to reflect new endpoints, models, and commands added in the phase.
 3. **Progress**: The phase status table below is updated when a phase completes.
 4. **Forward compatibility**: Implementation must read ahead to future phases and ensure the data model, API shapes, and component interfaces are set up correctly. If current work reveals changes needed in a future phase, update that phase's description.
@@ -222,7 +223,8 @@ Every phase must satisfy all of the following before it is marked complete:
 |-------|-------------|--------|
 | 1 | Backend: data model, migrations, repository, API endpoints (authenticated only) | Done |
 | 2 | Collection management UI: list page, detail page, settings, create/delete | Done |
-| 3 | Multi-select in browse grid + "Add to collection" flow with picker modal | Pending |
+| 3 | Multi-select in browse grid + "Add to collection" flow with picker modal | Done |
+| 3.5 | User-scoped collections: ownership, visibility (private/shared/public) | Done |
 | 4 | Public collections: control plane wiring, public endpoints, public view page | Pending |
 | 5 | Polish: drag-to-reorder, remove from collection, CLI commands, empty states | Pending |
 
@@ -273,11 +275,28 @@ Every phase must satisfy all of the following before it is marked complete:
 
 **Read-ahead**: The selection model is a general-purpose primitive. Phase 5 will add more actions (rate, tag, trash) to the same toolbar. Design the toolbar to accept pluggable action buttons.
 
+### Phase 3.5 — User-Scoped Collections
+
+Collections are now user-owned, not tenant-global. This matches the Google Photos model: my albums are mine, I choose to share them.
+
+- Alembic migration: add `owner_user_id` (text, nullable) and `visibility` (text, default `private`) to `collections`; drop `is_public`
+- `visibility` enum: `private` (only owner sees), `shared` (all tenant users can view), `public` (unauthenticated, Phase 4)
+- `owner_user_id` set from JWT `sub` or `key:{key_id}` for API key auth
+- API: `GET /v1/collections` returns owned + shared collections, with `ownership` field (`own` | `shared`)
+- Mutations (create, update, delete, add/remove assets, reorder) restricted to owner (403 for non-owner)
+- Read endpoints (get, list assets) allowed for owner + shared visibility
+- Legacy collections (NULL `owner_user_id`) treated as shared/tenant-wide
+- Backfill: existing `is_public=true` → `visibility=shared`
+- `get_current_user_id` dependency added to `src/api/dependencies.py`
+- UI types updated: `is_public` → `visibility` + `ownership`
+
+**Does NOT include**: public collection viewing (Phase 4), UI for visibility toggle (Phase 4).
+
 ### Phase 4 — Public Collections
 
 - Alembic migration: `public_collections` table (control plane context)
 - SQLModel model: `PublicCollection`
-- Toggle public/private: `PATCH /v1/collections/{id}` with `is_public` manages `public_collections` row
+- Toggle public/private: `PATCH /v1/collections/{id}` with `visibility=public` manages `public_collections` row
 - Public API endpoints: `GET /v1/public/collections/{id}`, `GET /v1/public/collections/{id}/assets`
 - Auth bypass: public collection endpoints resolve tenant via `public_collections` lookup, no bearer token required
 - Proxy/thumbnail serving: accept `?collection_id=` for public access, verify asset membership

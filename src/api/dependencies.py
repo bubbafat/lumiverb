@@ -66,3 +66,15 @@ def require_editor(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Editor access required")
 
 
+def get_current_user_id(request: Request) -> str:
+    """Return user_id from JWT or API key context. Raises 401 if not available."""
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        # For API key auth, use key_id as the owner identity
+        key_id = getattr(request.state, "key_id", None)
+        if not key_id:
+            raise HTTPException(status_code=401, detail="User identity not available")
+        return f"key:{key_id}"
+    return user_id
+
+

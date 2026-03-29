@@ -8,6 +8,9 @@ interface AssetCellProps {
   aspectRatio?: number;
   isPublic?: boolean;
   publicLibraryId?: string;
+  selected?: boolean;
+  onSelect?: (e: React.MouseEvent) => void;
+  selectionActive?: boolean;
 }
 
 function formatDuration(sec: number): string {
@@ -30,6 +33,9 @@ function AssetCellInner({
   aspectRatio,
   isPublic,
   publicLibraryId,
+  selected,
+  onSelect,
+  selectionActive,
 }: AssetCellProps) {
   const { url, isLoading, error } = useAuthenticatedImage(
     asset.asset_id,
@@ -51,7 +57,13 @@ function AssetCellInner({
   return (
     <button
       type="button"
-      onClick={onClick}
+      onClick={(e) => {
+        if (selectionActive && onSelect) {
+          onSelect(e);
+        } else {
+          onClick();
+        }
+      }}
       onMouseEnter={() => {
         hoverTimerRef.current = setTimeout(() => setHovered(true), 200);
       }}
@@ -145,6 +157,32 @@ function AssetCellInner({
           )}
         </div>
       </div>
+
+      {/* Selection checkbox */}
+      {onSelect && (
+        <div
+          className={`absolute left-1.5 top-1.5 z-10 flex h-5 w-5 items-center justify-center rounded border transition-all ${
+            selected
+              ? "border-indigo-500 bg-indigo-600"
+              : "border-white/40 bg-black/30 opacity-0 group-hover:opacity-100"
+          } ${selectionActive ? "opacity-100" : ""}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSelect(e);
+          }}
+        >
+          {selected && (
+            <svg className="h-3 w-3 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          )}
+        </div>
+      )}
+
+      {/* Selection ring */}
+      {selected && (
+        <div className="pointer-events-none absolute inset-0 rounded-lg ring-2 ring-indigo-500 ring-inset" />
+      )}
     </button>
   );
 }

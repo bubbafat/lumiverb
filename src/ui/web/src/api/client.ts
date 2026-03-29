@@ -487,7 +487,7 @@ export async function getCollection(
 
 export async function createCollection(
   name: string,
-  opts?: { description?: string; sort_order?: string; asset_ids?: string[] },
+  opts?: { description?: string; sort_order?: string; visibility?: string; asset_ids?: string[] },
 ): Promise<CollectionItem> {
   return apiFetch<CollectionItem>("/collections", {
     method: "POST",
@@ -500,7 +500,7 @@ export async function updateCollection(
   body: {
     name?: string;
     description?: string | null;
-    is_public?: boolean;
+    visibility?: string;
     sort_order?: string;
     cover_asset_id?: string | null;
   },

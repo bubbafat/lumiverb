@@ -210,21 +210,21 @@ Atomic ingest: create + populate assets in one request. The server normalizes th
 
 Collections are virtual groupings of assets across libraries. See ADR-006 for full design.
 
-- **POST /v1/collections** — Body: `{ "name", "description" (optional), "sort_order": "manual"|"added_at"|"taken_at" (default "manual"), "asset_ids": [...] (optional) }`. Creates collection. When `asset_ids` provided, creates and populates atomically. Returns 201 with `CollectionItem`.
-- **GET /v1/collections** — List all collections. Returns `{ "items": [CollectionItem] }`. Each item includes resolved `cover_asset_id` and computed `asset_count`.
-- **GET /v1/collections/{id}** — Get collection detail. Returns `CollectionItem`. 404 if not found.
-- **PATCH /v1/collections/{id}** — Body: `{ "name", "description", "is_public", "sort_order", "cover_asset_id" }` (all optional, only provided fields updated). Returns updated `CollectionItem`. 400 for invalid sort_order.
-- **DELETE /v1/collections/{id}** — Delete collection. Source assets untouched. Returns 204. 404 if not found.
-- **POST /v1/collections/{id}/assets** — Body: `{ "asset_ids": [...] }`. Add assets to collection. Idempotent (duplicates ignored via ON CONFLICT DO NOTHING). Rejects trashed assets (404). Returns `{ "added": N }`.
-- **DELETE /v1/collections/{id}/assets** — Body: `{ "asset_ids": [...] }`. Remove assets from collection. Does not affect source assets. Returns `{ "removed": N }`.
-- **GET /v1/collections/{id}/assets** — Query: `after` (cursor), `limit` (1–1000, default 200). Paginated asset list ordered by collection's `sort_order`. Returns `{ "items": [CollectionAssetItem], "next_cursor" }`.
-- **PATCH /v1/collections/{id}/reorder** — Body: `{ "asset_ids": [...] }`. Reorder assets. Must include ALL active asset IDs in the collection. 400 if partial. Returns `{ "ok": true }`.
+- **POST /v1/collections** — Body: `{ "name", "description" (optional), "sort_order": "manual"|"added_at"|"taken_at" (default "manual"), "visibility": "private"|"shared" (default "private"), "asset_ids": [...] (optional) }`. Creates collection owned by current user. When `asset_ids` provided, creates and populates atomically. Returns 201 with `CollectionItem`.
+- **GET /v1/collections** — List collections owned by user + shared collections. Returns `{ "items": [CollectionItem] }`. Each item includes `ownership` ("own" or "shared"), resolved `cover_asset_id` and computed `asset_count`.
+- **GET /v1/collections/{id}** — Get collection detail. Returns `CollectionItem`. 404 if not found or not visible to user.
+- **PATCH /v1/collections/{id}** — Body: `{ "name", "description", "visibility", "sort_order", "cover_asset_id" }` (all optional, only provided fields updated). Owner only (403). Returns updated `CollectionItem`. 400 for invalid sort_order/visibility.
+- **DELETE /v1/collections/{id}** — Delete collection. Owner only (403). Source assets untouched. Returns 204. 404 if not found.
+- **POST /v1/collections/{id}/assets** — Body: `{ "asset_ids": [...] }`. Add assets to collection. Owner only (403). Idempotent (duplicates ignored via ON CONFLICT DO NOTHING). Rejects trashed assets (404). Returns `{ "added": N }`.
+- **DELETE /v1/collections/{id}/assets** — Body: `{ "asset_ids": [...] }`. Remove assets from collection. Owner only (403). Does not affect source assets. Returns `{ "removed": N }`.
+- **GET /v1/collections/{id}/assets** — Query: `after` (cursor), `limit` (1–1000, default 200). Paginated asset list ordered by collection's `sort_order`. Owner or shared visibility required. Returns `{ "items": [CollectionAssetItem], "next_cursor" }`.
+- **PATCH /v1/collections/{id}/reorder** — Body: `{ "asset_ids": [...] }`. Reorder assets. Owner only (403). Must include ALL active asset IDs in the collection. 400 if partial. Returns `{ "ok": true }`.
 
-**CollectionItem**: `{ "collection_id", "name", "description", "cover_asset_id", "is_public", "sort_order", "asset_count", "created_at", "updated_at" }`
+**CollectionItem**: `{ "collection_id", "name", "description", "cover_asset_id", "owner_user_id", "visibility", "ownership", "sort_order", "asset_count", "created_at", "updated_at" }`
 
 **CollectionAssetItem**: `{ "asset_id", "rel_path", "file_size", "media_type", "width", "height", "taken_at", "status", "duration_sec", "camera_make", "camera_model" }`
 
-**Key behaviors**: Asset count is computed at query time (no denormalized column). Cover image uses lazy self-healing — if `cover_asset_id` points to a deleted/removed asset, falls back to first-by-position and nulls the stale value. Trashing an asset hides it from collections but preserves the `collection_assets` row; restoring the asset restores collection membership and position. Hard-deleting (empty trash) removes `collection_assets` rows via ON DELETE CASCADE.
+**Key behaviors**: Collections are user-owned (`owner_user_id`). Visibility: `private` (owner only), `shared` (all tenant users can view), `public` (unauthenticated, future). Mutations (add/remove/reorder/delete) require ownership. Asset count is computed at query time (no denormalized column). Cover image uses lazy self-healing — if `cover_asset_id` points to a deleted/removed asset, falls back to first-by-position and nulls the stale value. Trashing an asset hides it from collections but preserves the `collection_assets` row; restoring the asset restores collection membership and position. Hard-deleting (empty trash) removes `collection_assets` rows via ON DELETE CASCADE.
 
 ## Admin API
 

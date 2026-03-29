@@ -1393,15 +1393,19 @@ class CollectionRepository:
     def create(
         self,
         name: str,
+        owner_user_id: str | None = None,
         description: str | None = None,
         sort_order: str = "manual",
+        visibility: str = "private",
     ) -> Collection:
         collection_id = "col_" + str(ULID())
         collection = Collection(
             collection_id=collection_id,
             name=name,
+            owner_user_id=owner_user_id,
             description=description,
             sort_order=sort_order,
+            visibility=visibility,
         )
         self._session.add(collection)
         self._session.commit()
@@ -1413,10 +1417,19 @@ class CollectionRepository:
             select(Collection).where(Collection.collection_id == collection_id)
         ).first()
 
-    def list_all(self) -> list[Collection]:
+    def list_for_user(self, user_id: str) -> list[Collection]:
+        """Return collections owned by user + shared collections."""
         return list(
             self._session.exec(
-                select(Collection).order_by(Collection.created_at.desc())  # type: ignore[attr-defined]
+                select(Collection)
+                .where(
+                    or_(
+                        Collection.owner_user_id == user_id,
+                        Collection.owner_user_id.is_(None),  # type: ignore[union-attr]
+                        Collection.visibility.in_(["shared", "public"]),  # type: ignore[union-attr]
+                    )
+                )
+                .order_by(Collection.created_at.desc())  # type: ignore[attr-defined]
             ).all()
         )
 
@@ -1426,7 +1439,7 @@ class CollectionRepository:
         *,
         name: str | None = None,
         description: str | None = _SENTINEL,
-        is_public: bool | None = None,
+        visibility: str | None = None,
         sort_order: str | None = None,
         cover_asset_id: str | None = _SENTINEL,
     ) -> Collection | None:
@@ -1437,8 +1450,8 @@ class CollectionRepository:
             col.name = name
         if description is not _SENTINEL:
             col.description = description
-        if is_public is not None:
-            col.is_public = is_public
+        if visibility is not None:
+            col.visibility = visibility
         if sort_order is not None:
             col.sort_order = sort_order
         if cover_asset_id is not _SENTINEL:

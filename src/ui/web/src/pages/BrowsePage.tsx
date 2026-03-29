@@ -14,14 +14,17 @@ import {
 } from "../api/client";
 import type { PageAssetsOptions } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
+import { CollectionPicker } from "../components/CollectionPicker";
 import { Lightbox } from "../components/Lightbox";
 import { FilterBar } from "../components/FilterBar";
+import { SelectionToolbar } from "../components/SelectionToolbar";
 import { ZoomControl } from "../components/ZoomControl";
 import { DrawerOverlay } from "../components/DrawerOverlay";
 import { DirectoryTree } from "../components/DirectoryTree";
 import type { AssetPageItem, FacetsResponse } from "../api/types";
 import { useScrollContainer } from "../context/ScrollContainerContext";
 import { groupAssetsByDate } from "../lib/groupByDate";
+import { useSelection } from "../lib/useSelection";
 import { buildVirtualRows, buildFixedGridRows } from "../lib/virtualRows";
 import { useLocalStorage } from "../lib/useLocalStorage";
 import type { VirtualRowKind } from "../lib/virtualRows";
@@ -354,6 +357,18 @@ export default function BrowsePage() {
     () => groups.flatMap((g) => g.assets),
     [groups],
   );
+
+  const orderedAssetIds = useMemo(
+    () => orderedAssets.map((a) => a.asset_id),
+    [orderedAssets],
+  );
+  const selection = useSelection(orderedAssetIds);
+  const [pickerAssetIds, setPickerAssetIds] = useState<string[] | null>(null);
+
+  // Clear selection on navigation
+  useEffect(() => {
+    selection.clear();
+  }, [location.pathname, location.search]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const zoom = ZOOM_LEVELS[zoomLevel] ?? ZOOM_LEVELS[2];
 
@@ -797,15 +812,33 @@ export default function BrowsePage() {
               };
 
               if (vr.type === "header") {
+                const headerGroup = groups[vr.groupIndex];
+                const groupIds = headerGroup?.assets.map((a) => a.asset_id) ?? [];
+                const allSelected = groupIds.length > 0 && groupIds.every((id) => selection.has(id));
                 return (
                   <div
                     key={virtualItem.key}
                     style={commonStyle}
                     className="flex items-end"
                   >
-                    <div className="px-1 py-2 text-sm font-semibold text-gray-400">
+                    <button
+                      type="button"
+                      onClick={() => selection.selectGroup(groupIds)}
+                      className="flex items-center gap-2 px-1 py-2 text-sm font-semibold text-gray-400 hover:text-gray-200"
+                    >
+                      <span className={`inline-flex h-4 w-4 items-center justify-center rounded border transition-all ${
+                        allSelected
+                          ? "border-indigo-500 bg-indigo-600"
+                          : "border-gray-600 opacity-0 group-hover:opacity-100"
+                      } ${selection.isActive ? "opacity-100" : ""}`}>
+                        {allSelected && (
+                          <svg className="h-2.5 w-2.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                            <polyline points="20 6 9 17 4 12" />
+                          </svg>
+                        )}
+                      </span>
                       {vr.label}
-                    </div>
+                    </button>
                   </div>
                 );
               }
@@ -852,6 +885,9 @@ export default function BrowsePage() {
                             aspectRatio={aspectRatio}
                             isPublic={isPublicMode}
                             publicLibraryId={libraryId}
+                            selected={selection.has(asset.asset_id)}
+                            selectionActive={selection.isActive}
+                            onSelect={(e) => selection.toggle(asset.asset_id, { shiftKey: e.shiftKey })}
                           />
                         </div>
                       );
@@ -889,6 +925,7 @@ export default function BrowsePage() {
             setParam("path", path);
           }}
           onDateClick={handleLightboxDateClick}
+          onAddToCollection={(assetId) => setPickerAssetIds([assetId])}
           libraryId={libraryId}
           isPublic={isPublicMode}
           publicLibraryId={libraryId}
@@ -915,6 +952,26 @@ export default function BrowsePage() {
               return next;
             });
           }}
+        />
+      )}
+
+      {/* Selection toolbar */}
+      <SelectionToolbar count={selection.count} onClear={selection.clear}>
+        <button
+          type="button"
+          onClick={() => setPickerAssetIds(selection.toArray())}
+          className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-indigo-500"
+        >
+          Add to collection
+        </button>
+      </SelectionToolbar>
+
+      {/* Collection picker */}
+      {pickerAssetIds && (
+        <CollectionPicker
+          assetIds={pickerAssetIds}
+          onClose={() => setPickerAssetIds(null)}
+          onDone={selection.clear}
         />
       )}
     </div>

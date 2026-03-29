@@ -7,14 +7,18 @@ import {
   listCollectionAssets,
   updateCollection,
   deleteCollection,
+  removeAssetsFromCollection,
   ApiError,
 } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
+import { CollectionPicker } from "../components/CollectionPicker";
 import { Lightbox } from "../components/Lightbox";
+import { SelectionToolbar } from "../components/SelectionToolbar";
 import { ZoomControl } from "../components/ZoomControl";
 import type { AssetPageItem } from "../api/types";
 import { useScrollContainer } from "../context/ScrollContainerContext";
 import { groupAssetsByDate } from "../lib/groupByDate";
+import { useSelection } from "../lib/useSelection";
 import { buildVirtualRows, buildFixedGridRows } from "../lib/virtualRows";
 import { useLocalStorage } from "../lib/useLocalStorage";
 import type { VirtualRowKind } from "../lib/virtualRows";
@@ -104,6 +108,13 @@ export default function CollectionDetailPage() {
     () => groupAssetsByDate(orderedAssets),
     [orderedAssets],
   );
+
+  const orderedAssetIds = useMemo(
+    () => orderedAssets.map((a) => a.asset_id),
+    [orderedAssets],
+  );
+  const selection = useSelection(orderedAssetIds);
+  const [pickerAssetIds, setPickerAssetIds] = useState<string[] | null>(null);
 
   // Measure container width
   useLayoutEffect(() => {
@@ -197,6 +208,17 @@ export default function CollectionDetailPage() {
   const deleteMutation = useMutation({
     mutationFn: () => deleteCollection(collectionId!),
     onSuccess: () => navigate("/collections"),
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: () =>
+      removeAssetsFromCollection(collectionId!, selection.toArray()),
+    onSuccess: () => {
+      selection.clear();
+      queryClient.invalidateQueries({ queryKey: ["collection-assets", collectionId] });
+      queryClient.invalidateQueries({ queryKey: ["collection", collectionId] });
+      queryClient.invalidateQueries({ queryKey: ["collections"] });
+    },
   });
 
   const openSettings = () => {
@@ -360,6 +382,9 @@ export default function CollectionDetailPage() {
                             asset={asset}
                             onClick={() => handleAssetClick(asset)}
                             aspectRatio={aspectRatio}
+                            selected={selection.has(asset.asset_id)}
+                            selectionActive={selection.isActive}
+                            onSelect={(e) => selection.toggle(asset.asset_id, { shiftKey: e.shiftKey })}
                           />
                         </div>
                       );
@@ -380,7 +405,36 @@ export default function CollectionDetailPage() {
           hasMore={hasNextPage}
           onClose={handleLightboxClose}
           onNavigate={handleLightboxNavigate}
+          onAddToCollection={(assetId) => setPickerAssetIds([assetId])}
           onSimilarClick={(similarAsset) => setLightboxAsset(similarAsset)}
+        />
+      )}
+
+      {/* Selection toolbar */}
+      <SelectionToolbar count={selection.count} onClear={selection.clear}>
+        <button
+          type="button"
+          onClick={() => setPickerAssetIds(selection.toArray())}
+          className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-indigo-500"
+        >
+          Add to collection
+        </button>
+        <button
+          type="button"
+          onClick={() => removeMutation.mutate()}
+          disabled={removeMutation.isPending}
+          className="rounded-lg border border-red-700/50 px-3 py-1.5 text-sm font-medium text-red-400 transition-colors hover:bg-red-900/30 disabled:opacity-50"
+        >
+          {removeMutation.isPending ? "Removing..." : "Remove from collection"}
+        </button>
+      </SelectionToolbar>
+
+      {/* Collection picker */}
+      {pickerAssetIds && (
+        <CollectionPicker
+          assetIds={pickerAssetIds}
+          onClose={() => setPickerAssetIds(null)}
+          onDone={selection.clear}
         />
       )}
 
