@@ -73,7 +73,7 @@ export default function FavoritesPage() {
   const groups = useMemo(() => groupAssetsByDate(flatAssets), [flatAssets]);
 
   const cellWidth = containerWidth > 0 ? Math.floor((containerWidth - ROW_GAP * (COLUMNS - 1)) / COLUMNS) : 0;
-  const rowHeight = cellWidth > 0 ? cellWidth : TARGET_ROW_HEIGHT;
+  const rowHeight = cellWidth > 0 ? Math.round(cellWidth * 9 / 16) : TARGET_ROW_HEIGHT;
 
   const virtualRows = useMemo(() => {
     if (containerWidth <= 0) return [];
@@ -180,7 +180,7 @@ export default function FavoritesPage() {
                           <AssetCell
                             asset={asset}
                             onClick={() => handleAssetClick(asset)}
-                            aspectRatio={1}
+                            aspectRatio={16 / 9}
                             rating={ratingsMap[asset.asset_id]}
                             onFavoriteToggle={(id) => handleRatingChange(id, { favorite: !(ratingsMap[id]?.favorite ?? false) })}
                           />
