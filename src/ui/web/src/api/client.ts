@@ -2,6 +2,7 @@ import type {
   ApiKeyCreateResponse,
   ApiKeyItem,
   AssetDetail,
+  AssetPageItem,
   AssetPageResponse,
   BatchAddResponse,
   BatchRemoveResponse,
@@ -605,6 +606,16 @@ export async function batchRateAssets(
     method: "PUT",
     body: { asset_ids: assetIds, ...body },
   });
+}
+
+export async function listFavorites(
+  cursor?: string,
+  limit = 200,
+): Promise<{ items: (AssetPageItem & { library_id: string; library_name: string })[]; next_cursor: string | null }> {
+  const qs = new URLSearchParams();
+  if (cursor) qs.set("after", cursor);
+  qs.set("limit", String(limit));
+  return apiFetch(`/assets/favorites?${qs}`);
 }
 
 export async function lookupRatings(

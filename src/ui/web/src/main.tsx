@@ -8,6 +8,7 @@ import AdminPage from "./pages/AdminPage";
 import AdminUsersPage from "./pages/AdminUsersPage";
 import BrowsePage from "./pages/BrowsePage";
 import CollectionsPage from "./pages/CollectionsPage";
+import FavoritesPage from "./pages/FavoritesPage";
 import CollectionDetailPage from "./pages/CollectionDetailPage";
 import PublicCollectionPage from "./pages/PublicCollectionPage";
 import ForgotPasswordPage from "./pages/ForgotPasswordPage";
@@ -68,6 +69,14 @@ createRoot(document.getElementById("root")!).render(
               element={
                 <RequireAuth>
                   {<LibrarySettingsPage />}
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="favorites"
+              element={
+                <RequireAuth>
+                  {<FavoritesPage />}
                 </RequireAuth>
               }
             />

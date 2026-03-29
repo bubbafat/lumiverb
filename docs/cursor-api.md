@@ -243,6 +243,8 @@ Rating filters are available on both browse and search endpoints:
 
 **Search** (`GET /v1/search`): Same params. Applied as post-filters after Quickwit/Postgres results are enriched.
 
+- **GET /v1/assets/favorites** — List favorited assets across all libraries for the current user, newest first. Query: `after` (cursor), `limit`. Returns: `{ "items": [{ "asset_id", "library_id", "library_name", "rel_path", ... }], "next_cursor" }`. Paginated by `updated_at DESC`.
+
 - **PUT /v1/assets/{asset_id}/rating** — Set or update rating on a single asset. Body: `{ "favorite": bool, "stars": int (0-5), "color": string|null }`. All fields optional — only provided fields are updated. Color values: `red`, `orange`, `yellow`, `green`, `blue`, `purple`, or `null` to clear. If all fields are default (favorite=false, stars=0, color=null), the rating row is deleted. Returns: `{ "asset_id", "favorite", "stars", "color" }`. 404 if asset not found or trashed. 422 for invalid stars/color.
 - **PUT /v1/assets/ratings** — Batch rate multiple assets. Body: `{ "asset_ids": [...], "favorite": bool, "stars": int, "color": string|null }`. Same merge semantics as single — only provided fields are updated across all listed assets. Returns: `{ "updated": int }`. 404 if any asset not found. 422 for invalid values or empty asset_ids. Max 1000 asset_ids.
 - **POST /v1/assets/ratings/lookup** — Bulk read ratings. Body: `{ "asset_ids": [...] }`. Returns: `{ "ratings": { "asset_id": { "favorite", "stars", "color" }, ... } }`. Assets with no rating are omitted from the map. Max 1000 asset_ids.

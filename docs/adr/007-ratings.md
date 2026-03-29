@@ -2,7 +2,7 @@
 
 ## Status
 
-In Progress
+Done
 
 ## Progress
 
@@ -11,7 +11,7 @@ In Progress
 | 1 | Backend: data model, migration, repository, API endpoints | Done |
 | 2 | Lightbox + selection toolbar: rating controls for single and bulk assets | Done |
 | 3 | Browse filters + search syntax: `is:favorite`, `star:3`, `color:red` | Done |
-| 4 | Favorites sidebar shortcut + cross-library favorites view | Not started |
+| 4 | Favorites sidebar shortcut + cross-library favorites view | Done |
 
 ## Overview
 

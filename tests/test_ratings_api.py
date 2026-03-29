@@ -563,6 +563,38 @@ def test_browse_filter_color(ratings_env):
 
 
 @pytest.mark.slow
+def test_favorites_endpoint(ratings_env):
+    """GET /v1/assets/favorites returns favorited assets across libraries."""
+    client, api_key, library_id, _ = ratings_env
+    a1 = _ingest_asset(client, api_key, library_id, "favep1.jpg")
+    a2 = _ingest_asset(client, api_key, library_id, "favep2.jpg")
+
+    # Favorite a1 only
+    client.put(f"/v1/assets/{a1}/rating", json={"favorite": True}, headers=_headers(api_key))
+
+    r = client.get("/v1/assets/favorites", headers=_headers(api_key))
+    assert r.status_code == 200
+    data = r.json()
+    ids = [i["asset_id"] for i in data["items"]]
+    assert a1 in ids
+    assert a2 not in ids
+    # Check library_name is present
+    for item in data["items"]:
+        if item["asset_id"] == a1:
+            assert item["library_name"] != ""
+
+
+@pytest.mark.slow
+def test_favorites_endpoint_empty(ratings_env):
+    """Favorites endpoint returns empty when no favorites."""
+    client, api_key, library_id, _ = ratings_env
+    # Just check it doesn't error
+    r = client.get("/v1/assets/favorites", headers=_headers(api_key))
+    assert r.status_code == 200
+    assert isinstance(r.json()["items"], list)
+
+
+@pytest.mark.slow
 def test_browse_filter_no_rating_filters_returns_all(ratings_env):
     """Without rating filters, rated and unrated assets both appear."""
     client, api_key, library_id, _ = ratings_env

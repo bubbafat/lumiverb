@@ -1834,6 +1834,54 @@ class RatingRepository:
             updated += 1
         return updated
 
+    def list_favorites(
+        self, user_id: str, after: str | None = None, limit: int = 200
+    ) -> tuple[list[Asset], str | None]:
+        """Return active favorited assets across all libraries, newest first.
+
+        Uses cursor pagination on asset_ratings.updated_at DESC.
+        Returns (assets, next_cursor).
+        """
+        conditions = [
+            "r.user_id = :user_id",
+            "r.favorite = TRUE",
+            "a.deleted_at IS NULL",
+        ]
+        params: dict = {"user_id": user_id, "limit": limit + 1}
+
+        if after:
+            conditions.append("r.updated_at < :after_ts")
+            from datetime import datetime as _dt, timezone as _tz
+            params["after_ts"] = _dt.fromisoformat(after.replace("Z", "+00:00"))
+
+        where_sql = " AND ".join(conditions)
+        sql = f"""
+            SELECT a.asset_id, r.updated_at
+            FROM asset_ratings r
+            JOIN assets a ON a.asset_id = r.asset_id
+            WHERE {where_sql}
+            ORDER BY r.updated_at DESC
+            LIMIT :limit
+        """
+        rows = self._session.execute(text(sql).bindparams(**params)).all()
+
+        asset_ids = [row[0] for row in rows[:limit]]
+        next_cursor: str | None = None
+        if len(rows) > limit:
+            next_cursor = rows[limit - 1][1].isoformat()
+
+        if not asset_ids:
+            return [], None
+
+        stmt = (
+            select(Asset)
+            .where(Asset.asset_id.in_(asset_ids))
+            .where(Asset.deleted_at.is_(None))
+        )
+        assets_by_id = {a.asset_id: a for a in self._session.exec(stmt).all()}
+        ordered = [assets_by_id[aid] for aid in asset_ids if aid in assets_by_id]
+        return ordered, next_cursor
+
     def delete_for_user(self, user_id: str) -> int:
         """Delete all ratings for a user. Used when a user account is deleted."""
         from sqlalchemy import delete as sa_delete

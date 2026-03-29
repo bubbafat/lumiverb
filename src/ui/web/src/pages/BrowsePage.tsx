@@ -31,6 +31,7 @@ import { groupAssetsByDate } from "../lib/groupByDate";
 import { useSelection } from "../lib/useSelection";
 import { buildVirtualRows, buildFixedGridRows } from "../lib/virtualRows";
 import { useLocalStorage } from "../lib/useLocalStorage";
+import { parseSearchQuery } from "../lib/parseSearchQuery";
 import type { VirtualRowKind } from "../lib/virtualRows";
 
 const PAGE_SIZE = 100;
@@ -675,7 +676,22 @@ export default function BrowsePage() {
         path={pathPrefix ?? null}
         dateFrom={dateFrom ?? null}
         dateTo={dateTo ?? null}
-        onChangeQ={(v) => setParam("q", v)}
+        onChangeQ={(v) => {
+          if (v) {
+            const { text, filters } = parseSearchQuery(v);
+            setSearchParams((prev) => {
+              const next = new URLSearchParams(prev);
+              next.set("q", text || "");
+              if (!text) next.delete("q");
+              for (const [k, val] of Object.entries(filters)) {
+                next.set(k, val);
+              }
+              return next;
+            });
+          } else {
+            setParam("q", null);
+          }
+        }}
         onChangeTag={(v) => setParam("tag", v)}
         onChangePath={(v) => setParam("path", v)}
         onChangeDateRange={handleChangeDateRange}

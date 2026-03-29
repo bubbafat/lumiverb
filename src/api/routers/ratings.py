@@ -10,7 +10,7 @@ from sqlmodel import Session
 
 from src.api.dependencies import get_current_user_id, get_tenant_session
 from src.models.tenant import VALID_COLORS
-from src.repository.tenant import AssetRepository, RatingRepository, _SENTINEL
+from src.repository.tenant import AssetRepository, LibraryRepository, RatingRepository, _SENTINEL
 
 router = APIRouter(prefix="/v1/assets", tags=["ratings"])
 
@@ -222,3 +222,51 @@ def lookup_ratings(
             for aid, r in ratings.items()
         }
     }
+
+
+@router.get("/favorites")
+def list_favorites(
+    session: Annotated[Session, Depends(get_tenant_session)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
+    after: str | None = None,
+    limit: int = 200,
+) -> dict:
+    """List favorited assets across all libraries, newest first."""
+    if limit > 500:
+        limit = 500
+    if limit < 1:
+        limit = 1
+
+    rating_repo = RatingRepository(session)
+    assets, next_cursor = rating_repo.list_favorites(user_id, after=after, limit=limit)
+
+    # Look up library names for grouping
+    lib_repo = LibraryRepository(session)
+    lib_ids = list({a.library_id for a in assets})
+    libs_by_id = {}
+    for lid in lib_ids:
+        lib = lib_repo.get_by_id(lid)
+        if lib:
+            libs_by_id[lid] = lib.name
+
+    items = [
+        {
+            "asset_id": a.asset_id,
+            "library_id": a.library_id,
+            "library_name": libs_by_id.get(a.library_id, ""),
+            "rel_path": a.rel_path,
+            "file_size": a.file_size,
+            "file_mtime": a.file_mtime.isoformat() if a.file_mtime else None,
+            "media_type": a.media_type,
+            "width": a.width,
+            "height": a.height,
+            "taken_at": a.taken_at.isoformat() if a.taken_at else None,
+            "status": a.status,
+            "duration_sec": a.duration_sec,
+            "camera_make": a.camera_make,
+            "camera_model": a.camera_model,
+        }
+        for a in assets
+    ]
+
+    return {"items": items, "next_cursor": next_cursor}
