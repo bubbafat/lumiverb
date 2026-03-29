@@ -197,6 +197,10 @@ export default function BrowsePage() {
   const browseNearLat = searchParams.get("near_lat") ? Number(searchParams.get("near_lat")) : undefined;
   const browseNearLon = searchParams.get("near_lon") ? Number(searchParams.get("near_lon")) : undefined;
   const browseNearRadiusKm = searchParams.get("near_radius_km") ? Number(searchParams.get("near_radius_km")) : undefined;
+  const browseFavorite = searchParams.has("favorite") ? searchParams.get("favorite") === "true" : undefined;
+  const browseStarMin = searchParams.get("star_min") ? Number(searchParams.get("star_min")) : undefined;
+  const browseStarMax = searchParams.get("star_max") ? Number(searchParams.get("star_max")) : undefined;
+  const browseColor = searchParams.get("color") ?? undefined;
 
   const browseOpts: PageAssetsOptions = useMemo(() => ({
     pathPrefix,
@@ -220,6 +224,10 @@ export default function BrowsePage() {
     nearLat: browseNearLat,
     nearLon: browseNearLon,
     nearRadiusKm: browseNearRadiusKm,
+    favorite: browseFavorite,
+    starMin: browseStarMin,
+    starMax: browseStarMax,
+    color: browseColor,
   }), [
     pathPrefix, activeTag, browseSort, browseDir, browseMediaType,
     browseCameraMake, browseCameraModel, browseLensModel,
@@ -227,6 +235,7 @@ export default function BrowsePage() {
     browseApertureMin, browseApertureMax,
     browseFocalLengthMin, browseFocalLengthMax, browseHasExposure, browseHasGps,
     browseNearLat, browseNearLon, browseNearRadiusKm,
+    browseFavorite, browseStarMin, browseStarMax, browseColor,
   ]);
 
   const browseQuery = useInfiniteQuery({
@@ -257,6 +266,10 @@ export default function BrowsePage() {
         dateFrom,
         dateTo,
         limit: SEARCH_RESULT_CAP,
+        favorite: browseFavorite,
+        starMin: browseStarMin,
+        starMax: browseStarMax,
+        color: browseColor,
       }),
     enabled: !!libraryId && isSearchMode && canFetchAssets,
   });
@@ -685,6 +698,10 @@ export default function BrowsePage() {
         nearLat={searchParams.get("near_lat")}
         nearLon={searchParams.get("near_lon")}
         nearRadiusKm={searchParams.get("near_radius_km")}
+        favorite={browseFavorite ?? null}
+        starMin={searchParams.get("star_min")}
+        starMax={searchParams.get("star_max")}
+        color={searchParams.get("color")}
         onChangeFilter={(key, value) => setParam(key, value)}
         facets={facets}
       />

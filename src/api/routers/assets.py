@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, field_validator
 from sqlmodel import Session
 
-from src.api.dependencies import get_tenant_session
+from src.api.dependencies import get_current_user_id, get_tenant_session
 from src.core import asset_status
 from src.core.io_utils import normalize_path_prefix
 from src.repository.tenant import AssetMetadataRepository, AssetRepository, LibraryRepository
@@ -192,6 +192,11 @@ def page_assets(
     near_lat: float | None = None,
     near_lon: float | None = None,
     near_radius_km: float = 1.0,
+    favorite: bool | None = None,
+    star_min: int | None = None,
+    star_max: int | None = None,
+    color: str | None = None,
+    has_rating: bool | None = None,
 ) -> AssetPageResponse:
     """
     Keyset-paginated assets with sorting and filtering.
@@ -224,6 +229,20 @@ def page_assets(
     if media_type:
         media_types = [m.strip() for m in media_type.split(",") if m.strip()]
 
+    # Rating filters require user identity
+    rating_user_id: str | None = None
+    color_list: list[str] | None = None
+    needs_rating_filter = favorite is not None or star_min is not None or star_max is not None or color is not None or has_rating is not None
+    if needs_rating_filter:
+        uid = getattr(request.state, "user_id", None)
+        if not uid:
+            key_id = getattr(request.state, "key_id", None)
+            rating_user_id = f"key:{key_id}" if key_id else None
+        else:
+            rating_user_id = uid
+        if color is not None:
+            color_list = [c.strip() for c in color.split(",") if c.strip()]
+
     assets = asset_repo.page_by_library(
         library_id=library_id,
         after=after,
@@ -251,6 +270,12 @@ def page_assets(
         near_lat=near_lat,
         near_lon=near_lon,
         near_radius_km=near_radius_km,
+        rating_user_id=rating_user_id,
+        favorite=favorite,
+        star_min=star_min,
+        star_max=star_max,
+        color=color_list,
+        has_rating=has_rating,
     )
 
     items = [

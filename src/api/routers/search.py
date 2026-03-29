@@ -89,6 +89,11 @@ def search(
         default=None,
         description="ISO date YYYY-MM-DD, inclusive upper bound",
     ),
+    favorite: bool | None = None,
+    star_min: int | None = None,
+    star_max: int | None = None,
+    color: str | None = None,
+    has_rating: bool | None = None,
 ) -> SearchResponse:
     """
     Search assets and video scenes by natural language query and/or date range.
@@ -314,6 +319,42 @@ def search(
 
         image_hits = [h for h in image_hits if _date_in_range(h)]
         scene_hits = [h for h in scene_hits if _date_in_range(h)]
+
+    # --- Rating post-filter ---
+    needs_rating_filter = favorite is not None or star_min is not None or star_max is not None or color is not None or has_rating is not None
+    if needs_rating_filter and (image_hits or scene_hits):
+        from src.repository.tenant import RatingRepository
+
+        uid = getattr(request.state, "user_id", None)
+        if not uid:
+            key_id = getattr(request.state, "key_id", None)
+            uid = f"key:{key_id}" if key_id else None
+        if uid:
+            all_asset_ids = list({h["asset_id"] for h in image_hits + scene_hits})
+            rating_repo = RatingRepository(session)
+            ratings_by_id = rating_repo.get_for_assets(uid, all_asset_ids)
+            color_list = [c.strip() for c in color.split(",") if c.strip()] if color else None
+
+            def _rating_matches(asset_id: str) -> bool:
+                r = ratings_by_id.get(asset_id)
+                if favorite is True and (not r or not r.favorite):
+                    return False
+                if favorite is False and r and r.favorite:
+                    return False
+                if star_min is not None and (r.stars if r else 0) < star_min:
+                    return False
+                if star_max is not None and (r.stars if r else 0) > star_max:
+                    return False
+                if color_list and (not r or r.color not in color_list):
+                    return False
+                if has_rating is True and r is None:
+                    return False
+                if has_rating is False and r is not None:
+                    return False
+                return True
+
+            image_hits = [h for h in image_hits if _rating_matches(h["asset_id"])]
+            scene_hits = [h for h in scene_hits if _rating_matches(h["asset_id"])]
 
     # --- Merge, deduplicate images by asset_id, sort by score ---
     seen_images: dict[str, dict] = {}

@@ -237,6 +237,12 @@ Collections are virtual groupings of assets across libraries. See ADR-006 for fu
 
 User-scoped asset ratings: favorites (heart), stars (1-5), color labels. Each user has independent ratings per asset. Ratings are private — never visible to other users. All endpoints require auth; user identity comes from JWT `sub` or API key `key:{key_id}`.
 
+Rating filters are available on both browse and search endpoints:
+
+**Browse** (`GET /v1/assets/page`): `?favorite=true`, `?star_min=3`, `?star_max=5`, `?color=red` (comma-separated for multiple), `?has_rating=true`. LEFT JOINs `asset_ratings` for the current user. Without rating filters, no JOIN is added (zero cost).
+
+**Search** (`GET /v1/search`): Same params. Applied as post-filters after Quickwit/Postgres results are enriched.
+
 - **PUT /v1/assets/{asset_id}/rating** — Set or update rating on a single asset. Body: `{ "favorite": bool, "stars": int (0-5), "color": string|null }`. All fields optional — only provided fields are updated. Color values: `red`, `orange`, `yellow`, `green`, `blue`, `purple`, or `null` to clear. If all fields are default (favorite=false, stars=0, color=null), the rating row is deleted. Returns: `{ "asset_id", "favorite", "stars", "color" }`. 404 if asset not found or trashed. 422 for invalid stars/color.
 - **PUT /v1/assets/ratings** — Batch rate multiple assets. Body: `{ "asset_ids": [...], "favorite": bool, "stars": int, "color": string|null }`. Same merge semantics as single — only provided fields are updated across all listed assets. Returns: `{ "updated": int }`. 404 if any asset not found. 422 for invalid values or empty asset_ids. Max 1000 asset_ids.
 - **POST /v1/assets/ratings/lookup** — Bulk read ratings. Body: `{ "asset_ids": [...] }`. Returns: `{ "ratings": { "asset_id": { "favorite", "stars", "color" }, ... } }`. Assets with no rating are omitted from the map. Max 1000 asset_ids.

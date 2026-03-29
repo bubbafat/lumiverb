@@ -495,3 +495,88 @@ def test_user_deletion_cleans_ratings(ratings_env):
         headers=_headers(api_key),
     )
     assert asset_id in lookup.json()["ratings"]
+
+
+# ---------------------------------------------------------------------------
+# Browse filters
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_browse_filter_favorite(ratings_env):
+    """Browse with favorite=true only returns favorited assets."""
+    client, api_key, library_id, _ = ratings_env
+    a1 = _ingest_asset(client, api_key, library_id, "filt_fav1.jpg")
+    a2 = _ingest_asset(client, api_key, library_id, "filt_fav2.jpg")
+
+    # Favorite a1 only
+    client.put(f"/v1/assets/{a1}/rating", json={"favorite": True}, headers=_headers(api_key))
+
+    r = client.get(
+        f"/v1/assets/page?library_id={library_id}&favorite=true",
+        headers=_headers(api_key),
+    )
+    assert r.status_code == 200
+    ids = [i["asset_id"] for i in r.json()["items"]]
+    assert a1 in ids
+    assert a2 not in ids
+
+
+@pytest.mark.slow
+def test_browse_filter_star_min(ratings_env):
+    """Browse with star_min filters to assets with at least N stars."""
+    client, api_key, library_id, _ = ratings_env
+    a1 = _ingest_asset(client, api_key, library_id, "filt_star1.jpg")
+    a2 = _ingest_asset(client, api_key, library_id, "filt_star2.jpg")
+
+    client.put(f"/v1/assets/{a1}/rating", json={"stars": 5}, headers=_headers(api_key))
+    client.put(f"/v1/assets/{a2}/rating", json={"stars": 2}, headers=_headers(api_key))
+
+    r = client.get(
+        f"/v1/assets/page?library_id={library_id}&star_min=4",
+        headers=_headers(api_key),
+    )
+    assert r.status_code == 200
+    ids = [i["asset_id"] for i in r.json()["items"]]
+    assert a1 in ids
+    assert a2 not in ids
+
+
+@pytest.mark.slow
+def test_browse_filter_color(ratings_env):
+    """Browse with color filter returns matching assets."""
+    client, api_key, library_id, _ = ratings_env
+    a1 = _ingest_asset(client, api_key, library_id, "filt_col1.jpg")
+    a2 = _ingest_asset(client, api_key, library_id, "filt_col2.jpg")
+
+    client.put(f"/v1/assets/{a1}/rating", json={"color": "red"}, headers=_headers(api_key))
+    client.put(f"/v1/assets/{a2}/rating", json={"color": "blue"}, headers=_headers(api_key))
+
+    r = client.get(
+        f"/v1/assets/page?library_id={library_id}&color=red",
+        headers=_headers(api_key),
+    )
+    assert r.status_code == 200
+    ids = [i["asset_id"] for i in r.json()["items"]]
+    assert a1 in ids
+    assert a2 not in ids
+
+
+@pytest.mark.slow
+def test_browse_filter_no_rating_filters_returns_all(ratings_env):
+    """Without rating filters, rated and unrated assets both appear."""
+    client, api_key, library_id, _ = ratings_env
+    a1 = _ingest_asset(client, api_key, library_id, "filt_all1.jpg")
+    a2 = _ingest_asset(client, api_key, library_id, "filt_all2.jpg")
+
+    client.put(f"/v1/assets/{a1}/rating", json={"favorite": True}, headers=_headers(api_key))
+    # a2 has no rating
+
+    r = client.get(
+        f"/v1/assets/page?library_id={library_id}",
+        headers=_headers(api_key),
+    )
+    assert r.status_code == 200
+    ids = [i["asset_id"] for i in r.json()["items"]]
+    assert a1 in ids
+    assert a2 in ids

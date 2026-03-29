@@ -224,6 +224,11 @@ export interface PageAssetsOptions {
   nearLat?: number;
   nearLon?: number;
   nearRadiusKm?: number;
+  favorite?: boolean;
+  starMin?: number;
+  starMax?: number;
+  color?: string;
+  hasRating?: boolean;
 }
 
 /** Paginated assets for a library with sort/filter support. */
@@ -257,6 +262,11 @@ export async function pageAssets(
   if (opts?.nearLat != null) params.set("near_lat", String(opts.nearLat));
   if (opts?.nearLon != null) params.set("near_lon", String(opts.nearLon));
   if (opts?.nearRadiusKm != null) params.set("near_radius_km", String(opts.nearRadiusKm));
+  if (opts?.favorite != null) params.set("favorite", String(opts.favorite));
+  if (opts?.starMin != null) params.set("star_min", String(opts.starMin));
+  if (opts?.starMax != null) params.set("star_max", String(opts.starMax));
+  if (opts?.color) params.set("color", opts.color);
+  if (opts?.hasRating != null) params.set("has_rating", String(opts.hasRating));
   return apiFetch<AssetPageResponse>(`/assets/page?${params}`);
 }
 
@@ -279,6 +289,11 @@ export async function searchAssets(params: {
   dateTo?: string;
   limit?: number;
   offset?: number;
+  favorite?: boolean;
+  starMin?: number;
+  starMax?: number;
+  color?: string;
+  hasRating?: boolean;
 }): Promise<SearchResponse> {
   const qs = new URLSearchParams({ library_id: params.libraryId, q: params.q });
   if (params.pathPrefix) qs.set("path_prefix", params.pathPrefix);
@@ -287,6 +302,11 @@ export async function searchAssets(params: {
   if (params.dateTo) qs.set("date_to", params.dateTo);
   if (params.limit) qs.set("limit", String(params.limit));
   if (params.offset) qs.set("offset", String(params.offset));
+  if (params.favorite != null) qs.set("favorite", String(params.favorite));
+  if (params.starMin != null) qs.set("star_min", String(params.starMin));
+  if (params.starMax != null) qs.set("star_max", String(params.starMax));
+  if (params.color) qs.set("color", params.color);
+  if (params.hasRating != null) qs.set("has_rating", String(params.hasRating));
   return apiFetch<SearchResponse>(`/search?${qs.toString()}`);
 }
 

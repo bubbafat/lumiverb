@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FacetsResponse } from "../api/types";
+import { RATING_COLORS, COLOR_HEX } from "../api/types";
 import { formatExposure } from "../lib/format";
 
 interface DatePreset {
@@ -94,6 +95,10 @@ interface FilterBarProps {
   nearLat: string | null;
   nearLon: string | null;
   nearRadiusKm: string | null;
+  favorite: boolean | null;
+  starMin: string | null;
+  starMax: string | null;
+  color: string | null;
   onChangeFilter: (key: string, value: string | null) => void;
   facets: FacetsResponse | null;
 }
@@ -127,6 +132,10 @@ export function FilterBar({
   nearLat,
   nearLon,
   nearRadiusKm,
+  favorite,
+  starMin,
+  starMax,
+  color: colorFilter,
   onChangeFilter,
   facets,
 }: FilterBarProps) {
@@ -223,7 +232,8 @@ export function FilterBar({
   const hasActiveFilters = !!(
     mediaType || cameraMake || cameraModel || lensModel ||
     isoMin || isoMax || exposureMinUs || exposureMaxUs || apertureMin || apertureMax ||
-    focalLengthMin || focalLengthMax || hasExposure != null || hasGps || nearLat
+    focalLengthMin || focalLengthMax || hasExposure != null || hasGps || nearLat ||
+    favorite != null || starMin || starMax || colorFilter
   );
 
   const showQChiclet = q !== null && q.length > 0;
@@ -456,6 +466,23 @@ export function FilterBar({
               }}
             />
           )}
+          {favorite === true && (
+            <Chiclet label="Favorites" onClear={() => onChangeFilter("favorite", null)} />
+          )}
+          {(starMin || starMax) && (
+            <Chiclet
+              label={starMin && starMax && starMin === starMax
+                ? `${starMin} star${starMin === "1" ? "" : "s"}`
+                : `${starMin ? `${starMin}+` : ""}${starMax ? `≤${starMax}` : ""} stars`}
+              onClear={() => { onChangeFilter("star_min", null); onChangeFilter("star_max", null); }}
+            />
+          )}
+          {colorFilter && (
+            <Chiclet
+              label={colorFilter.includes(",") ? "Multiple colors" : colorFilter.charAt(0).toUpperCase() + colorFilter.slice(1)}
+              onClear={() => onChangeFilter("color", null)}
+            />
+          )}
         </div>
       </div>
 
@@ -645,6 +672,69 @@ export function FilterBar({
             </div>
           )}
 
+          {/* Rating filters */}
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-xs font-medium text-gray-400">Rating</span>
+            <button
+              type="button"
+              onClick={() => onChangeFilter("favorite", favorite === true ? null : "true")}
+              className={`flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors ${
+                favorite === true
+                  ? "border-red-500/50 bg-red-900/20 text-red-400"
+                  : "border-gray-700 text-gray-400 hover:border-gray-600"
+              }`}
+            >
+              <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill={favorite === true ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" aria-hidden>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z" />
+              </svg>
+              Favorites
+            </button>
+            <div className="flex items-center gap-1">
+              <span className="text-xs text-gray-500">Stars</span>
+              {[1, 2, 3, 4, 5].map((n) => {
+                const isActive = starMin != null && Number(starMin) <= n && (starMax == null || Number(starMax) >= n);
+                return (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => {
+                      if (starMin === String(n) && starMax === String(n)) {
+                        onChangeFilter("star_min", null);
+                        onChangeFilter("star_max", null);
+                      } else {
+                        onChangeFilter("star_min", String(n));
+                        onChangeFilter("star_max", null);
+                      }
+                    }}
+                    className={`transition-colors ${isActive ? "text-amber-400" : "text-gray-600 hover:text-amber-300"}`}
+                    title={`${n}+ stars`}
+                  >
+                    <svg className="h-4 w-4" viewBox="0 0 24 24" fill={isActive ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" aria-hidden>
+                      <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                    </svg>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="text-xs text-gray-500">Color</span>
+              {RATING_COLORS.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => onChangeFilter("color", colorFilter === c ? null : c)}
+                  className={`h-4 w-4 rounded-full transition-all ${
+                    colorFilter === c
+                      ? "ring-2 ring-white/70 ring-offset-1 ring-offset-gray-900"
+                      : "hover:ring-1 hover:ring-white/30 hover:ring-offset-1 hover:ring-offset-gray-900"
+                  }`}
+                  style={{ backgroundColor: COLOR_HEX[c] }}
+                  title={c.charAt(0).toUpperCase() + c.slice(1)}
+                />
+              ))}
+            </div>
+          </div>
+
           {hasActiveFilters && (
             <button
               type="button"
@@ -654,6 +744,7 @@ export function FilterBar({
                   "iso_min", "iso_max", "aperture_min", "aperture_max",
                   "focal_length_min", "focal_length_max", "has_gps",
                   "near_lat", "near_lon", "near_radius_km",
+                  "favorite", "star_min", "star_max", "color",
                 ]) {
                   onChangeFilter(key, null);
                 }

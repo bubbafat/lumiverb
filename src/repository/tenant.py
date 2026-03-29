@@ -392,6 +392,12 @@ class AssetRepository:
         near_lat: float | None = None,
         near_lon: float | None = None,
         near_radius_km: float = 1.0,
+        rating_user_id: str | None = None,
+        favorite: bool | None = None,
+        star_min: int | None = None,
+        star_max: int | None = None,
+        color: list[str] | None = None,
+        has_rating: bool | None = None,
     ) -> list[Asset]:
         """Keyset pagination with composite cursor, sorting, and filtering.
 
@@ -539,6 +545,33 @@ class AssetRepository:
             params["min_lon"] = near_lon - lon_delta
             params["max_lon"] = near_lon + lon_delta
 
+        # --- Rating filters (LEFT JOIN on asset_ratings) ---
+        join_ratings = (
+            rating_user_id is not None
+            and (favorite is not None or star_min is not None or star_max is not None or color is not None or has_rating is not None)
+        )
+        if join_ratings:
+            params["rating_user_id"] = rating_user_id
+            if favorite is True:
+                conditions.append("r.favorite = TRUE")
+            elif favorite is False:
+                conditions.append("(r.favorite IS NULL OR r.favorite = FALSE)")
+            if star_min is not None:
+                conditions.append("COALESCE(r.stars, 0) >= :star_min")
+                params["star_min"] = star_min
+            if star_max is not None:
+                conditions.append("COALESCE(r.stars, 0) <= :star_max")
+                params["star_max"] = star_max
+            if color is not None and len(color) > 0:
+                placeholders = ", ".join(f":color_{i}" for i in range(len(color)))
+                conditions.append(f"r.color IN ({placeholders})")
+                for i, c in enumerate(color):
+                    params[f"color_{i}"] = c
+            if has_rating is True:
+                conditions.append("r.user_id IS NOT NULL")
+            elif has_rating is False:
+                conditions.append("r.user_id IS NULL")
+
         # --- Build query ---
         join_metadata = tag is not None or missing_vision
         where_sql = " AND ".join(conditions)
@@ -555,6 +588,12 @@ class AssetRepository:
             ) m ON TRUE
             """
 
+        rating_join = ""
+        if join_ratings:
+            rating_join = """
+            LEFT JOIN asset_ratings r ON r.asset_id = a.asset_id AND r.user_id = :rating_user_id
+            """
+
         if sort_col == "asset_id":
             order_clause = f"a.asset_id {order_dir}"
         else:
@@ -564,6 +603,7 @@ class AssetRepository:
             SELECT a.asset_id
             FROM active_assets a
             {lateral_join}
+            {rating_join}
             WHERE {where_sql}
             ORDER BY {order_clause}
             LIMIT :limit
