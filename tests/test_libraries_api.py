@@ -92,7 +92,6 @@ def test_create_library(libraries_client: tuple[TestClient, str]) -> None:
     assert data["library_id"].startswith("lib_")
     assert data["name"] == "My Photos"
     assert data["root_path"] == "/photos"
-    assert data["scan_status"] == "idle"
 
 
 @pytest.mark.slow
@@ -132,7 +131,6 @@ def test_list_libraries(libraries_client: tuple[TestClient, str]) -> None:
         assert lib["library_id"].startswith("lib_")
         assert "name" in lib
         assert "root_path" in lib
-        assert "scan_status" in lib
         assert "last_scan_at" in lib
 
 

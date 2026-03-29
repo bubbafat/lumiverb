@@ -32,7 +32,6 @@ class UpsertAssetRequest(BaseModel):
     file_size: int
     file_mtime: str | None  # ISO8601
     media_type: str
-    scan_id: str | None = None  # deprecated, ignored
     force: bool = False
 
 

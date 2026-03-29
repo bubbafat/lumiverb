@@ -35,7 +35,7 @@ Two-layer Postgres architecture:
 - `tenant_db_routing` — tenant_id, connection_string, region
 
 **Tenant DB** (one per tenant, same Postgres instance):
-- `libraries` — library_id, name, root_path, status, scan_status, last_scan_at, is_public, revision (int, bumped on asset ingest), created_at, updated_at
+- `libraries` — library_id, name, root_path, status, last_scan_at (updated on each ingest via bump_revision), is_public, revision (int, bumped on asset ingest), created_at, updated_at
 - `library_path_filters` — filter_id (lpf_+ULID), library_id FK, type (include|exclude), pattern, created_at. Controls which paths are ingested per library.
 - `tenant_path_filter_defaults` — default_id (tpfd_+ULID), tenant_id, type (include|exclude), pattern, created_at. Tenant defaults and library filters are merged at evaluation time (see filter evaluation rules below).
 - `assets` — asset_id, library_id, rel_path, sha256, file_size, file_mtime, media_type, width, height, duration_sec, proxy_key, proxy_sha256, thumbnail_key, thumbnail_sha256, exif (JSON), exif_extracted_at, camera_make, camera_model, taken_at, gps_lat, gps_lon, iso, exposure_time_us, aperture, focal_length, focal_length_35mm, lens_model, flash_fired, orientation, availability, status, video_indexed, video_preview_key, error_message, created_at, updated_at, deleted_at, search_synced_at

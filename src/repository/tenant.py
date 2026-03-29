@@ -64,7 +64,6 @@ class LibraryRepository:
             library_id=library_id,
             name=name,
             root_path=root_path,
-            scan_status="idle",
         )
         self._session.add(library)
         self._session.commit()
@@ -111,7 +110,7 @@ class LibraryRepository:
         return list(self._session.exec(stmt).all())
 
     def trash(self, library_id: str) -> Library:
-        """Set library status to trashed, cancel pending/claimed worker jobs for its assets, return updated library."""
+        """Set library status to trashed, soft-delete all its assets, return updated library."""
         library = self.get_by_id(library_id)
         if library is None:
             raise ValueError(f"Library not found: {library_id}")

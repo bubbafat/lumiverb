@@ -37,8 +37,7 @@ def test_library_create_prints_id() -> None:
         "library_id": "lib_01HXYZ",
         "name": "My Library",
         "root_path": "/photos",
-        "scan_status": "idle",
-    }
+            }
     mock_client = MagicMock()
     mock_client.post.return_value = mock_response
 
@@ -72,14 +71,12 @@ def test_library_list_shows_table() -> None:
             "library_id": "lib_01A",
             "name": "First Lib",
             "root_path": "/path/a",
-            "scan_status": "idle",
-            "last_scan_at": None,
+                        "last_scan_at": None,
         },
         {
             "library_id": "lib_01B",
             "name": "Second Lib",
             "root_path": "/path/b",
-            "scan_status": "scanning",
             "last_scan_at": "2025-01-15T10:00:00",
         },
     ]
@@ -100,7 +97,7 @@ def test_library_delete_requires_confirmation() -> None:
     """Mock client.get to return one library, mock input to return 'n'; assert DELETE never called, exit code 0."""
     mock_response = MagicMock()
     mock_response.json.return_value = [
-        {"library_id": "lib_01DEL", "name": "ToDelete", "root_path": "/path", "scan_status": "idle", "status": "active"},
+        {"library_id": "lib_01DEL", "name": "ToDelete", "root_path": "/path", "status": "active"},
     ]
     mock_client = MagicMock()
     mock_client.get.return_value = mock_response
@@ -122,7 +119,7 @@ def test_library_delete_confirms_and_calls_api() -> None:
     """Mock client.get to return one library, mock input to return 'y'; assert DELETE /v1/libraries/{id} called, success message printed."""
     mock_response = MagicMock()
     mock_response.json.return_value = [
-        {"library_id": "lib_01DEL", "name": "ToDelete", "root_path": "/path", "scan_status": "idle", "status": "active"},
+        {"library_id": "lib_01DEL", "name": "ToDelete", "root_path": "/path", "status": "active"},
     ]
     mock_client = MagicMock()
     mock_client.get.return_value = mock_response
@@ -166,7 +163,7 @@ def test_library_empty_trash_requires_confirmation() -> None:
     """Mock GET to return one trashed library, mock input to return 'n'; assert POST /v1/libraries/empty-trash never called."""
     mock_response = MagicMock()
     mock_response.json.return_value = [
-        {"library_id": "lib_trash1", "name": "TrashedLib", "root_path": "/x", "scan_status": "idle", "status": "trashed"},
+        {"library_id": "lib_trash1", "name": "TrashedLib", "root_path": "/x", "status": "trashed"},
     ]
     mock_client = MagicMock()
     mock_client.get.return_value = mock_response

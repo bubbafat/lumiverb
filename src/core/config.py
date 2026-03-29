@@ -25,11 +25,6 @@ class Settings(BaseSettings):
     api_secret_key: str = ""
     admin_key: str = ""
 
-    # Workers
-    worker_idle_poll_seconds: float = 5.0
-    worker_lease_minutes: int = 10
-    search_sync_lease_minutes: int = 5
-
     # Metadata
     exiftool_path: str = "exiftool"
     sharpness_max_variance: float = 1000.0

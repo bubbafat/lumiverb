@@ -30,7 +30,6 @@ class LibraryResponse(BaseModel):
     library_id: str
     name: str
     root_path: str
-    scan_status: str
     is_public: bool = False
 
 
@@ -38,7 +37,6 @@ class LibraryListItem(BaseModel):
     library_id: str
     name: str
     root_path: str
-    scan_status: str
     last_scan_at: str | None
     status: str = "active"
     is_public: bool = False
@@ -79,7 +77,6 @@ def create_library(
         library_id=library.library_id,
         name=library.name,
         root_path=library.root_path,
-        scan_status=library.scan_status,
         is_public=library.is_public,
     )
 
@@ -89,7 +86,7 @@ def list_libraries(
     session: Annotated[Session, Depends(get_tenant_session)],
     include_trashed: Annotated[bool, Query(description="Include libraries with status=trashed")] = False,
 ) -> list[LibraryListItem]:
-    """Return all libraries for the tenant with id, name, root_path, scan_status, last_scan_at, status."""
+    """Return all libraries for the tenant."""
     repo = LibraryRepository(session)
     libraries = repo.list_all(include_trashed=include_trashed)
     return [
@@ -97,7 +94,6 @@ def list_libraries(
             library_id=lib.library_id,
             name=lib.name,
             root_path=lib.root_path,
-            scan_status=lib.scan_status,
             last_scan_at=lib.last_scan_at.isoformat() if lib.last_scan_at else None,
             status=lib.status,
             is_public=lib.is_public,
@@ -142,7 +138,6 @@ def get_library(
         library_id=library.library_id,
         name=library.name,
         root_path=library.root_path,
-        scan_status=library.scan_status,
         is_public=library.is_public,
     )
 
@@ -184,7 +179,6 @@ def update_library(
         library_id=library.library_id,
         name=library.name,
         root_path=library.root_path,
-        scan_status=library.scan_status,
         is_public=library.is_public,
     )
 
@@ -195,7 +189,7 @@ def delete_library(
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
 ) -> None:
-    """Soft delete: move library to trash (status=trashed), cancel pending/claimed jobs. Returns 409 if already trashed."""
+    """Soft delete: move library to trash (status=trashed). Returns 409 if already trashed."""
     repo = LibraryRepository(session)
     library = repo.get_by_id(library_id)
     if library is None:

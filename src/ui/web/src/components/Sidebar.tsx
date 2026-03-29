@@ -3,18 +3,9 @@ import { Link, useLocation, useNavigate, useParams, useSearchParams } from "reac
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getLibraryRevision, listLibraries, listSavedViews, deleteSavedView, updateSavedView, logout } from "../api/client";
 import type { SavedViewItem } from "../api/client";
-import type { LibraryListItem } from "../api/types";
 import { DirectoryTree } from "./DirectoryTree";
 
 const SIDEBAR_COLLAPSED_KEY = "lv_sidebar_collapsed";
-
-type LibraryScanStatus = LibraryListItem["scan_status"];
-
-function scanStatusColor(status: LibraryScanStatus): string {
-  if (status === "running" || status === "scanning") return "bg-amber-500";
-  if (status === "error") return "bg-red-500";
-  return "bg-emerald-500";
-}
 
 function photoStackIcon() {
   return (
@@ -346,11 +337,7 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette }: Sidebar
                         : "text-gray-300 hover:bg-gray-800/80"
                     }`}
                   >
-                    <span
-                      className={`h-2 w-2 rounded-full ${scanStatusColor(
-                        lib.scan_status,
-                      )}`}
-                    />
+                    <span className="h-2 w-2 rounded-full bg-emerald-500" />
                     {photoStackIcon()}
                     {showLabels && (
                       <span className="truncate">{lib.name}</span>

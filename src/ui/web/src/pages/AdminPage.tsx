@@ -19,17 +19,6 @@ function relativeTime(iso: string | null): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-function ScanDot({ status }: { status: string }) {
-  const cls =
-    status === "running" || status === "scanning"
-      ? "bg-amber-400 animate-pulse"
-      : status === "error"
-        ? "bg-red-500"
-        : "bg-emerald-500";
-  return <span className={`inline-block h-2 w-2 rounded-full ${cls}`} />;
-}
-
-
 function SectionHeader({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
     <div className="mb-4">
@@ -46,13 +35,10 @@ function LibraryRow({ lib }: { lib: LibraryListItem }) {
 
   return (
     <div className="flex items-center gap-3 rounded-lg border border-gray-700/50 bg-gray-900/50 px-4 py-3">
-      <ScanDot status={lib.scan_status} />
+      <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="font-medium text-gray-100">{lib.name}</span>
-          <span className="rounded px-1.5 py-0.5 text-xs font-medium bg-gray-800 text-gray-400">
-            {lib.scan_status}
-          </span>
         </div>
         <p className="mt-0.5 font-mono text-xs text-gray-500 truncate">
           {lib.root_path}

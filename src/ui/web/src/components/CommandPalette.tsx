@@ -134,15 +134,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                     <rect x="7" y="4" width="13" height="11" rx="2" stroke="currentColor" strokeWidth="1.5" strokeOpacity="0.5" />
                   </svg>
                   <span className="flex-1 truncate">{lib.name}</span>
-                  <span
-                    className={`h-2 w-2 rounded-full shrink-0 ${
-                      lib.scan_status === "running" || lib.scan_status === "scanning"
-                        ? "bg-amber-500"
-                        : lib.scan_status === "error"
-                          ? "bg-red-500"
-                          : "bg-emerald-500"
-                    }`}
-                  />
+                  <span className="h-2 w-2 rounded-full shrink-0 bg-emerald-500" />
                 </button>
               </li>
             ))

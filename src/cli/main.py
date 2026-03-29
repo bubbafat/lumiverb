@@ -123,14 +123,12 @@ def library_list() -> None:
     table.add_column("ID", style="dim")
     table.add_column("Name")
     table.add_column("Root path")
-    table.add_column("Scan status")
-    table.add_column("Last scan")
+    table.add_column("Last ingest")
     for lib in libraries:
         table.add_row(
             lib.get("library_id", ""),
             lib.get("name", ""),
             lib.get("root_path", ""),
-            lib.get("scan_status", ""),
             lib.get("last_scan_at") or "—",
         )
     console.print(table)
@@ -396,7 +394,7 @@ def admin_maintenance(
 
     if end:
         client.post("/v1/tenant/maintenance/end", json={})
-        console.print("[green]Maintenance mode disabled. Workers will resume claiming jobs.[/green]")
+        console.print("[green]Maintenance mode disabled.[/green]")
         return
 
     # No flags — show status.

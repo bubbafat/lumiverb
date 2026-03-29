@@ -2,7 +2,6 @@ export interface LibraryListItem {
   library_id: string;
   name: string;
   root_path: string;
-  scan_status: string;
   last_scan_at: string | null;
   status: string;
   is_public: boolean;
@@ -18,7 +17,6 @@ export interface LibraryResponse {
   library_id: string;
   name: string;
   root_path: string;
-  scan_status: string;
   is_public: boolean;
 }
 

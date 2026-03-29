@@ -13,8 +13,8 @@ import { Badge } from "../components/Badge";
 import { Modal } from "../components/Modal";
 import { SkeletonRow } from "../components/SkeletonRow";
 
-function formatLastScan(lastScanAt: string | null): string {
-  if (!lastScanAt) return "Never";
+function formatLastIngest(lastScanAt: string | null): string {
+  if (!lastScanAt) return "Never ingested";
   const d = new Date(lastScanAt);
   const now = new Date();
   const diffMs = now.getTime() - d.getTime();
@@ -24,14 +24,6 @@ function formatLastScan(lastScanAt: string | null): string {
   if (diffDays < 7) return `${diffDays} days ago`;
   if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
   return `${Math.floor(diffDays / 30)} months ago`;
-}
-
-function scanStatusVariant(
-  scanStatus: string,
-): "idle" | "running" | "error" {
-  if (scanStatus === "running" || scanStatus === "scanning") return "running";
-  if (scanStatus === "error") return "error";
-  return "idle";
 }
 
 export default function LibrariesPage() {
@@ -250,11 +242,8 @@ export default function LibrariesPage() {
                           )}
                         </>
                       )}
-                      <Badge variant={scanStatusVariant(lib.scan_status)}>
-                        {lib.scan_status}
-                      </Badge>
                       <span className="text-sm text-gray-500">
-                        {formatLastScan(lib.last_scan_at)}
+                        {formatLastIngest(lib.last_scan_at)}
                       </span>
                       {lib.status !== "trashed" && (
                         <div>
