@@ -14,6 +14,7 @@ interface AssetCellProps {
   selectionActive?: boolean;
   rating?: AssetRating;
   onFavoriteToggle?: (assetId: string) => void;
+  libraryName?: string;
 }
 
 function formatDuration(sec: number): string {
@@ -41,6 +42,7 @@ function AssetCellInner({
   selectionActive,
   rating,
   onFavoriteToggle,
+  libraryName,
 }: AssetCellProps) {
   const { url, isLoading, error } = useAuthenticatedImage(
     asset.asset_id,
@@ -162,6 +164,9 @@ function AssetCellInner({
             </span>
           )}
         </div>
+        {libraryName && (
+          <div className="mt-0.5 truncate text-xs text-gray-400">{libraryName}</div>
+        )}
       </div>
 
       {/* Selection checkbox — top-left */}

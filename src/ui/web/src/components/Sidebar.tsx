@@ -361,10 +361,16 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette }: Sidebar
             {collectionsIcon()}
             {showLabels && <span>Collections</span>}
           </Link>
+        </div>
+
+        {/* Divider between manual curation and automatic views */}
+        <div className="border-t border-gray-700/50 mx-2" />
+
+        <div className="px-2 py-1 space-y-1">
           <Link
-            to="/favorites"
+            to="/browse?favorite=true"
             className={`flex items-center gap-2 rounded-lg px-2 py-3 text-sm transition-colors duration-150 ${
-              location.pathname === "/favorites"
+              location.pathname === "/browse" && location.search.includes("favorite=true")
                 ? "bg-indigo-600/30 text-indigo-200"
                 : "text-gray-400 hover:bg-gray-800/80 hover:text-gray-200"
             }`}
@@ -374,6 +380,22 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette }: Sidebar
               <path strokeLinecap="round" strokeLinejoin="round" d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z" />
             </svg>
             {showLabels && <span>Favorites</span>}
+          </Link>
+          <Link
+            to="/browse"
+            className={`flex items-center gap-2 rounded-lg px-2 py-3 text-sm transition-colors duration-150 ${
+              location.pathname === "/browse" && !location.search.includes("favorite=true")
+                ? "bg-indigo-600/30 text-indigo-200"
+                : "text-gray-400 hover:bg-gray-800/80 hover:text-gray-200"
+            }`}
+          >
+            <span className="h-2 w-2 rounded-full bg-gray-500" />
+            <svg className="h-5 w-5 text-gray-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
+              <rect x="3" y="5" width="18" height="14" rx="2" strokeLinecap="round" strokeLinejoin="round" />
+              <circle cx="8.5" cy="10.5" r="1.5" />
+              <path d="M21 15l-5-5L5 19" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            {showLabels && <span>All photos</span>}
           </Link>
         </div>
       </div>

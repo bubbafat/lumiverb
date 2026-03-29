@@ -22,6 +22,7 @@ import type {
   RatingResponse,
   RatingLookupResponse,
   BatchRatingResponse,
+  BrowseResponse,
 } from "./types";
 
 export class ApiError extends Error {
@@ -269,6 +270,45 @@ export async function pageAssets(
   if (opts?.color) params.set("color", opts.color);
   if (opts?.hasRating != null) params.set("has_rating", String(opts.hasRating));
   return apiFetch<AssetPageResponse>(`/assets/page?${params}`);
+}
+
+/** Cross-library paginated browse with full filter support. */
+export async function browseAll(
+  cursor?: string,
+  limit = 100,
+  opts?: PageAssetsOptions & { libraryId?: string },
+): Promise<BrowseResponse> {
+  const params = new URLSearchParams();
+  if (cursor) params.set("after", cursor);
+  params.set("limit", String(limit));
+  if (opts?.libraryId) params.set("library_id", opts.libraryId);
+  if (opts?.pathPrefix) params.set("path_prefix", opts.pathPrefix);
+  if (opts?.tag) params.set("tag", opts.tag);
+  if (opts?.sort) params.set("sort", opts.sort);
+  if (opts?.dir) params.set("dir", opts.dir);
+  if (opts?.mediaType) params.set("media_type", opts.mediaType);
+  if (opts?.cameraMake) params.set("camera_make", opts.cameraMake);
+  if (opts?.cameraModel) params.set("camera_model", opts.cameraModel);
+  if (opts?.lensModel) params.set("lens_model", opts.lensModel);
+  if (opts?.isoMin != null) params.set("iso_min", String(opts.isoMin));
+  if (opts?.isoMax != null) params.set("iso_max", String(opts.isoMax));
+  if (opts?.exposureMinUs != null) params.set("exposure_min_us", String(opts.exposureMinUs));
+  if (opts?.exposureMaxUs != null) params.set("exposure_max_us", String(opts.exposureMaxUs));
+  if (opts?.apertureMin != null) params.set("aperture_min", String(opts.apertureMin));
+  if (opts?.apertureMax != null) params.set("aperture_max", String(opts.apertureMax));
+  if (opts?.focalLengthMin != null) params.set("focal_length_min", String(opts.focalLengthMin));
+  if (opts?.focalLengthMax != null) params.set("focal_length_max", String(opts.focalLengthMax));
+  if (opts?.hasExposure != null) params.set("has_exposure", String(opts.hasExposure));
+  if (opts?.hasGps) params.set("has_gps", "true");
+  if (opts?.nearLat != null) params.set("near_lat", String(opts.nearLat));
+  if (opts?.nearLon != null) params.set("near_lon", String(opts.nearLon));
+  if (opts?.nearRadiusKm != null) params.set("near_radius_km", String(opts.nearRadiusKm));
+  if (opts?.favorite != null) params.set("favorite", String(opts.favorite));
+  if (opts?.starMin != null) params.set("star_min", String(opts.starMin));
+  if (opts?.starMax != null) params.set("star_max", String(opts.starMax));
+  if (opts?.color) params.set("color", opts.color);
+  if (opts?.hasRating != null) params.set("has_rating", String(opts.hasRating));
+  return apiFetch<BrowseResponse>(`/browse?${params}`);
 }
 
 /** Fetch aggregated filter facets for a library. */

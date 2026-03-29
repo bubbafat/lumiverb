@@ -225,6 +225,20 @@ export interface BatchRemoveResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Unified Browse (ADR-008)
+// ---------------------------------------------------------------------------
+
+export interface BrowseItem extends AssetPageItem {
+  library_id: string;
+  library_name: string;
+}
+
+export interface BrowseResponse {
+  items: BrowseItem[];
+  next_cursor: string | null;
+}
+
+// ---------------------------------------------------------------------------
 // Ratings (ADR-007)
 // ---------------------------------------------------------------------------
 

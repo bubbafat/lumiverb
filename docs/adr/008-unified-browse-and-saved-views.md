@@ -9,7 +9,7 @@ Proposed
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 1 | Backend: cross-library browse endpoint + repository | **Complete** |
-| 2 | Unified browse page UI with full filter support | Not started |
+| 2 | Unified browse page UI with full filter support | **Complete** |
 | 3 | Saved views: data model, CRUD API, sidebar rendering | Not started |
 | 4 | Sidebar restructure: manual vs. automatic sections | Not started |
 

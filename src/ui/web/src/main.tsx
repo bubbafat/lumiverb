@@ -8,7 +8,7 @@ import AdminPage from "./pages/AdminPage";
 import AdminUsersPage from "./pages/AdminUsersPage";
 import BrowsePage from "./pages/BrowsePage";
 import CollectionsPage from "./pages/CollectionsPage";
-import FavoritesPage from "./pages/FavoritesPage";
+import UnifiedBrowsePage from "./pages/UnifiedBrowsePage";
 import CollectionDetailPage from "./pages/CollectionDetailPage";
 import PublicCollectionPage from "./pages/PublicCollectionPage";
 import ForgotPasswordPage from "./pages/ForgotPasswordPage";
@@ -73,12 +73,16 @@ createRoot(document.getElementById("root")!).render(
               }
             />
             <Route
-              path="favorites"
+              path="browse"
               element={
                 <RequireAuth>
-                  {<FavoritesPage />}
+                  {<UnifiedBrowsePage />}
                 </RequireAuth>
               }
+            />
+            <Route
+              path="favorites"
+              element={<Navigate to="/browse?favorite=true" replace />}
             />
             <Route
               path="collections"
