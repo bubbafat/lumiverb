@@ -259,13 +259,17 @@ def _probe_video_dimensions(source_path: Path) -> tuple[int, int]:
         str(source_path),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    output = result.stdout.strip()
-    if "x" not in output:
-        raise RuntimeError(
-            f"ffprobe returned no video dimensions for {source_path}: {output!r}"
-        )
-    w, h = output.split("x", 1)
-    return int(w), int(h)
+    # ffprobe may output multiple lines for multiple streams; take the first valid WxH pair.
+    for line in result.stdout.strip().splitlines():
+        line = line.strip()
+        if "x" not in line:
+            continue
+        parts = line.split("x")
+        if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+            return int(parts[0]), int(parts[1])
+    raise RuntimeError(
+        f"ffprobe returned no valid video dimensions for {source_path}: {result.stdout.strip()!r}"
+    )
 
 
 def _extract_video_poster(source_path: Path) -> tuple[bytes, int, int]:
