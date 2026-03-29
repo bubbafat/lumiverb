@@ -2,7 +2,8 @@ import { useEffect, useCallback, useState, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getAsset, findSimilar } from "../api/client";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
-import type { AssetPageItem, SimilarHit } from "../api/types";
+import type { AssetPageItem, AssetRating, RatingColor, SimilarHit } from "../api/types";
+import { HeartButton, StarPicker, ColorPicker } from "./RatingControls";
 import { basename, formatFileSize, formatDate, formatExposure } from "../lib/format";
 
 interface LightboxProps {
@@ -18,6 +19,8 @@ interface LightboxProps {
   onFilterClick?: (params: Record<string, string>) => void;
   onPathClick?: (path: string) => void;
   onAddToCollection?: (assetId: string) => void;
+  rating?: AssetRating;
+  onRatingChange?: (assetId: string, update: { favorite?: boolean; stars?: number; color?: RatingColor | null }) => void;
   libraryId?: string;
   isPublic?: boolean;
   publicLibraryId?: string;
@@ -113,6 +116,8 @@ export function Lightbox({
   onFilterClick,
   onPathClick,
   onAddToCollection,
+  rating,
+  onRatingChange,
   libraryId,
   isPublic,
   publicLibraryId,
@@ -251,8 +256,37 @@ export function Lightbox({
           }
           break;
         case "f":
+          // f = toggle favorite (Lightroom convention); Shift+F = fullscreen
+          if (onRatingChange) {
+            onRatingChange(asset.asset_id, { favorite: !(rating?.favorite ?? false) });
+          }
+          break;
         case "F":
           toggleFullscreen();
+          break;
+        case "1": case "2": case "3": case "4": case "5":
+          if (onRatingChange) {
+            const n = Number(e.key);
+            onRatingChange(asset.asset_id, { stars: n === (rating?.stars ?? 0) ? 0 : n });
+          }
+          break;
+        case "0":
+          if (onRatingChange) {
+            onRatingChange(asset.asset_id, { stars: 0 });
+          }
+          break;
+        case "6": case "7": case "8": case "9": {
+          if (onRatingChange) {
+            const colorMap: Record<string, string> = { "6": "red", "7": "orange", "8": "yellow", "9": "green" };
+            const c = colorMap[e.key] as import("../api/types").RatingColor;
+            onRatingChange(asset.asset_id, { color: c === (rating?.color ?? null) ? null : c });
+          }
+          break;
+        }
+        case "`":
+          if (onRatingChange) {
+            onRatingChange(asset.asset_id, { color: null });
+          }
           break;
         case " ":
           e.preventDefault();
@@ -278,6 +312,9 @@ export function Lightbox({
       isFullscreen,
       toggleFullscreen,
       resetHintTimer,
+      onRatingChange,
+      asset.asset_id,
+      rating,
     ],
   );
 
@@ -432,8 +469,11 @@ export function Lightbox({
             <div className="flex flex-wrap justify-center gap-3 rounded-lg bg-black/60 px-4 py-2 text-xs text-gray-400 backdrop-blur-sm">
               <span><kbd className="font-mono">←/→</kbd> Navigate</span>
               <span><kbd className="font-mono">Esc</kbd> Close</span>
-              <span><kbd className="font-mono">F</kbd> Fullscreen</span>
+              <span><kbd className="font-mono">Shift+F</kbd> Fullscreen</span>
               <span><kbd className="font-mono">Space</kbd> Slideshow</span>
+              <span><kbd className="font-mono">f</kbd> Favorite</span>
+              <span><kbd className="font-mono">1-5</kbd> Stars</span>
+              <span><kbd className="font-mono">6-9</kbd> Colors</span>
               <span><kbd className="font-mono">?</kbd> Hints</span>
             </div>
           </div>
@@ -565,6 +605,33 @@ export function Lightbox({
                         )}
                       </div>
                     )}
+                  </div>
+                </>
+              )}
+
+              {/* Section: Rating */}
+              {onRatingChange && (
+                <>
+                  <hr className="border-gray-700" />
+                  <div className="space-y-2.5">
+                    <div className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">
+                      Rating
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <HeartButton
+                        favorite={rating?.favorite ?? false}
+                        onClick={() => onRatingChange(asset.asset_id, { favorite: !(rating?.favorite ?? false) })}
+                      />
+                      <div className="h-4 w-px bg-gray-700" />
+                      <StarPicker
+                        stars={rating?.stars ?? 0}
+                        onChange={(stars) => onRatingChange(asset.asset_id, { stars })}
+                      />
+                    </div>
+                    <ColorPicker
+                      color={rating?.color ?? null}
+                      onChange={(color) => onRatingChange(asset.asset_id, { color })}
+                    />
                   </div>
                 </>
               )}

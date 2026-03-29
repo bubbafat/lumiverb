@@ -4,12 +4,15 @@ import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-quer
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ApiError,
+  batchRateAssets,
   getApiKey,
   getFacets,
   getLibrary,
   getLibraryRevision,
   listDirectories,
+  lookupRatings,
   pageAssets,
+  rateAsset,
   searchAssets,
 } from "../api/client";
 import type { PageAssetsOptions } from "../api/client";
@@ -21,7 +24,8 @@ import { SelectionToolbar } from "../components/SelectionToolbar";
 import { ZoomControl } from "../components/ZoomControl";
 import { DrawerOverlay } from "../components/DrawerOverlay";
 import { DirectoryTree } from "../components/DirectoryTree";
-import type { AssetPageItem, FacetsResponse } from "../api/types";
+import type { AssetPageItem, AssetRating, FacetsResponse, RatingColor } from "../api/types";
+import { HeartButton, StarPicker, ColorPicker } from "../components/RatingControls";
 import { useScrollContainer } from "../context/ScrollContainerContext";
 import { groupAssetsByDate } from "../lib/groupByDate";
 import { useSelection } from "../lib/useSelection";
@@ -364,6 +368,57 @@ export default function BrowsePage() {
   );
   const selection = useSelection(orderedAssetIds);
   const [pickerAssetIds, setPickerAssetIds] = useState<string[] | null>(null);
+
+  // ---------------------------------------------------------------------------
+  // Ratings
+  // ---------------------------------------------------------------------------
+
+  const ratingsQuery = useQuery({
+    queryKey: ["ratings", orderedAssetIds.slice(0, 500)],
+    queryFn: () => lookupRatings(orderedAssetIds.slice(0, 500)),
+    enabled: orderedAssetIds.length > 0,
+    staleTime: 30_000,
+  });
+  const ratingsMap: Record<string, AssetRating> = ratingsQuery.data?.ratings ?? {};
+
+  const handleRatingChange = useCallback(
+    async (assetId: string, update: { favorite?: boolean; stars?: number; color?: RatingColor | null }) => {
+      // Optimistic update
+      const prev = ratingsMap[assetId] ?? { favorite: false, stars: 0, color: null };
+      const optimistic: AssetRating = {
+        favorite: update.favorite !== undefined ? update.favorite : prev.favorite,
+        stars: update.stars !== undefined ? update.stars : prev.stars,
+        color: update.color !== undefined ? update.color : prev.color,
+      };
+      queryClient.setQueryData(
+        ["ratings", orderedAssetIds.slice(0, 500)],
+        (old: { ratings: Record<string, AssetRating> } | undefined) => ({
+          ratings: { ...(old?.ratings ?? {}), [assetId]: optimistic },
+        }),
+      );
+      try {
+        await rateAsset(assetId, update);
+      } catch {
+        // Revert on failure
+        queryClient.invalidateQueries({ queryKey: ["ratings"] });
+      }
+    },
+    [ratingsMap, orderedAssetIds, queryClient],
+  );
+
+  const handleBatchRating = useCallback(
+    async (update: { favorite?: boolean; stars?: number; color?: RatingColor | null }) => {
+      const ids = selection.toArray();
+      if (ids.length === 0) return;
+      try {
+        await batchRateAssets(ids, update);
+        queryClient.invalidateQueries({ queryKey: ["ratings"] });
+      } catch {
+        // silently fail — user can retry
+      }
+    },
+    [selection, queryClient],
+  );
 
   // Clear selection on navigation
   useEffect(() => {
@@ -888,6 +943,7 @@ export default function BrowsePage() {
                             selected={selection.has(asset.asset_id)}
                             selectionActive={selection.isActive}
                             onSelect={(e) => selection.toggle(asset.asset_id, { shiftKey: e.shiftKey })}
+                            rating={ratingsMap[asset.asset_id]}
                           />
                         </div>
                       );
@@ -926,6 +982,8 @@ export default function BrowsePage() {
           }}
           onDateClick={handleLightboxDateClick}
           onAddToCollection={(assetId) => setPickerAssetIds([assetId])}
+          rating={lightboxAsset ? ratingsMap[lightboxAsset.asset_id] : undefined}
+          onRatingChange={handleRatingChange}
           libraryId={libraryId}
           isPublic={isPublicMode}
           publicLibraryId={libraryId}
@@ -957,6 +1015,22 @@ export default function BrowsePage() {
 
       {/* Selection toolbar */}
       <SelectionToolbar count={selection.count} onClear={selection.clear}>
+        <HeartButton
+          favorite={false}
+          onClick={() => handleBatchRating({ favorite: true })}
+          size="sm"
+        />
+        <StarPicker
+          stars={0}
+          onChange={(stars) => handleBatchRating({ stars })}
+          size="sm"
+        />
+        <ColorPicker
+          color={null}
+          onChange={(color) => handleBatchRating({ color })}
+          size="sm"
+        />
+        <div className="h-4 w-px bg-gray-700" />
         <button
           type="button"
           onClick={() => setPickerAssetIds(selection.toArray())}

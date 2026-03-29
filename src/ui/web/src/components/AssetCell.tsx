@@ -1,6 +1,7 @@
 import { memo, useState, useRef } from "react";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
-import type { AssetPageItem } from "../api/types";
+import type { AssetPageItem, AssetRating } from "../api/types";
+import { RatingBadges } from "./RatingControls";
 
 interface AssetCellProps {
   asset: AssetPageItem;
@@ -11,6 +12,7 @@ interface AssetCellProps {
   selected?: boolean;
   onSelect?: (e: React.MouseEvent) => void;
   selectionActive?: boolean;
+  rating?: AssetRating;
 }
 
 function formatDuration(sec: number): string {
@@ -36,6 +38,7 @@ function AssetCellInner({
   selected,
   onSelect,
   selectionActive,
+  rating,
 }: AssetCellProps) {
   const { url, isLoading, error } = useAuthenticatedImage(
     asset.asset_id,
@@ -182,6 +185,16 @@ function AssetCellInner({
       {/* Selection ring */}
       {selected && (
         <div className="pointer-events-none absolute inset-0 rounded-lg ring-2 ring-indigo-500 ring-inset" />
+      )}
+
+      {/* Rating indicators */}
+      {rating && (
+        <RatingBadges
+          favorite={rating.favorite}
+          stars={rating.stars}
+          color={rating.color}
+          isVideo={isVideo}
+        />
       )}
     </button>
   );

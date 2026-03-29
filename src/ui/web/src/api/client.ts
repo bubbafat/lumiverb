@@ -18,6 +18,9 @@ import type {
   SearchResponse,
   SimilarityResponse,
   UserItem,
+  RatingResponse,
+  RatingLookupResponse,
+  BatchRatingResponse,
 } from "./types";
 
 export class ApiError extends Error {
@@ -556,6 +559,39 @@ export async function reorderCollection(
 ): Promise<void> {
   return apiFetch<void>(`/collections/${collectionId}/reorder`, {
     method: "PATCH",
+    body: { asset_ids: assetIds },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Ratings
+// ---------------------------------------------------------------------------
+
+export async function rateAsset(
+  assetId: string,
+  body: { favorite?: boolean; stars?: number; color?: string | null },
+): Promise<RatingResponse> {
+  return apiFetch<RatingResponse>(`/assets/${assetId}/rating`, {
+    method: "PUT",
+    body,
+  });
+}
+
+export async function batchRateAssets(
+  assetIds: string[],
+  body: { favorite?: boolean; stars?: number; color?: string | null },
+): Promise<BatchRatingResponse> {
+  return apiFetch<BatchRatingResponse>("/assets/ratings", {
+    method: "PUT",
+    body: { asset_ids: assetIds, ...body },
+  });
+}
+
+export async function lookupRatings(
+  assetIds: string[],
+): Promise<RatingLookupResponse> {
+  return apiFetch<RatingLookupResponse>("/assets/ratings/lookup", {
+    method: "POST",
     body: { asset_ids: assetIds },
   });
 }

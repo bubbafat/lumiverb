@@ -224,3 +224,41 @@ export interface BatchRemoveResponse {
   removed: number;
 }
 
+// ---------------------------------------------------------------------------
+// Ratings (ADR-007)
+// ---------------------------------------------------------------------------
+
+export type RatingColor = "red" | "orange" | "yellow" | "green" | "blue" | "purple";
+
+export const RATING_COLORS: RatingColor[] = ["red", "orange", "yellow", "green", "blue", "purple"];
+
+export const COLOR_HEX: Record<RatingColor, string> = {
+  red: "#ef4444",
+  orange: "#f97316",
+  yellow: "#eab308",
+  green: "#22c55e",
+  blue: "#3b82f6",
+  purple: "#a855f7",
+};
+
+export interface AssetRating {
+  favorite: boolean;
+  stars: number;
+  color: RatingColor | null;
+}
+
+export interface RatingResponse {
+  asset_id: string;
+  favorite: boolean;
+  stars: number;
+  color: RatingColor | null;
+}
+
+export interface RatingLookupResponse {
+  ratings: Record<string, AssetRating>;
+}
+
+export interface BatchRatingResponse {
+  updated: number;
+}
+
