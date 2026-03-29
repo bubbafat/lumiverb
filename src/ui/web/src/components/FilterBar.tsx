@@ -698,12 +698,10 @@ export function FilterBar({
                     key={n}
                     type="button"
                     onClick={() => {
-                      if (starMin === String(n) && starMax === String(n)) {
+                      if (starMin === String(n)) {
                         onChangeFilter("star_min", null);
-                        onChangeFilter("star_max", null);
                       } else {
                         onChangeFilter("star_min", String(n));
-                        onChangeFilter("star_max", null);
                       }
                     }}
                     className={`transition-colors ${isActive ? "text-amber-400" : "text-gray-600 hover:text-amber-300"}`}
