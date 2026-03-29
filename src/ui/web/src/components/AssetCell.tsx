@@ -134,7 +134,7 @@ function AssetCellInner({
 
       {/* Video duration badge */}
       {isVideo && (
-        <div className="pointer-events-none absolute left-1.5 top-1.5 flex items-center gap-1 rounded-full bg-black/60 px-1.5 py-0.5">
+        <div className="pointer-events-none absolute right-1.5 top-1.5 flex items-center gap-1 rounded-full bg-black/60 px-1.5 py-0.5">
           <svg className="h-3 w-3 shrink-0 text-white" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
             <path d="M8 5v14l11-7z" />
           </svg>
@@ -164,10 +164,10 @@ function AssetCellInner({
         </div>
       </div>
 
-      {/* Selection checkbox — top-right */}
+      {/* Selection checkbox — top-left */}
       {onSelect && (
         <div
-          className={`absolute right-1.5 top-1.5 z-10 flex h-5 w-5 items-center justify-center rounded border transition-all ${
+          className={`absolute left-1.5 top-1.5 z-10 flex h-5 w-5 items-center justify-center rounded border transition-all ${
             selected
               ? "border-indigo-500 bg-indigo-600"
               : "border-white/40 bg-black/30 opacity-0 group-hover:opacity-100"
