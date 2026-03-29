@@ -324,3 +324,30 @@ def test_video_stage1_posts_source_dimensions(tmp_path):
     assert posted_data["width"] == "3840"
     assert posted_data["height"] == "2160"
     assert posted_data["media_type"] == "video"
+
+
+# ---------------------------------------------------------------------------
+# Discovery: _walk_library
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_walk_library_skips_zero_byte_files(tmp_path):
+    """Zero-byte files should be excluded during discovery."""
+    from src.cli.ingest import _walk_library
+
+    lib_root = tmp_path / "library"
+    lib_root.mkdir()
+
+    # Create a valid-size file and a zero-byte file
+    good = lib_root / "good.jpg"
+    good.write_bytes(b"\xff\xd8\xff" + b"\x00" * 100)
+
+    empty = lib_root / "empty.jpg"
+    empty.write_bytes(b"")
+
+    results = _walk_library(lib_root)
+    rel_paths = [r["rel_path"] for r in results]
+
+    assert "good.jpg" in rel_paths
+    assert "empty.jpg" not in rel_paths

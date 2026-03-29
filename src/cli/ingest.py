@@ -586,6 +586,9 @@ def _walk_library(
             continue
 
         stat = p.stat()
+        if stat.st_size == 0:
+            continue
+
         file_mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
 
         results.append({
