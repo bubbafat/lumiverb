@@ -20,6 +20,8 @@ from src.models.tenant import (
     Asset,
     AssetEmbedding,
     AssetMetadata,
+    Collection,
+    CollectionAsset,
     Library,
     LibraryPathFilter,
     TenantPathFilterDefault,
@@ -1371,3 +1373,291 @@ class VideoIndexChunkRepository:
             )
         )
         return int(result.scalar() or 0)
+
+
+# ---------------------------------------------------------------------------
+# Collections (ADR-006)
+# ---------------------------------------------------------------------------
+
+_SENTINEL = object()  # distinguishes "not provided" from None
+
+
+class CollectionRepository:
+    """Repository for collections and collection_assets tables."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    # ---- Collection CRUD ----
+
+    def create(
+        self,
+        name: str,
+        description: str | None = None,
+        sort_order: str = "manual",
+    ) -> Collection:
+        collection_id = "col_" + str(ULID())
+        collection = Collection(
+            collection_id=collection_id,
+            name=name,
+            description=description,
+            sort_order=sort_order,
+        )
+        self._session.add(collection)
+        self._session.commit()
+        self._session.refresh(collection)
+        return collection
+
+    def get_by_id(self, collection_id: str) -> Collection | None:
+        return self._session.exec(
+            select(Collection).where(Collection.collection_id == collection_id)
+        ).first()
+
+    def list_all(self) -> list[Collection]:
+        return list(
+            self._session.exec(
+                select(Collection).order_by(Collection.created_at.desc())  # type: ignore[attr-defined]
+            ).all()
+        )
+
+    def update(
+        self,
+        collection_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = _SENTINEL,
+        is_public: bool | None = None,
+        sort_order: str | None = None,
+        cover_asset_id: str | None = _SENTINEL,
+    ) -> Collection | None:
+        col = self.get_by_id(collection_id)
+        if col is None:
+            return None
+        if name is not None:
+            col.name = name
+        if description is not _SENTINEL:
+            col.description = description
+        if is_public is not None:
+            col.is_public = is_public
+        if sort_order is not None:
+            col.sort_order = sort_order
+        if cover_asset_id is not _SENTINEL:
+            col.cover_asset_id = cover_asset_id
+        col.updated_at = utcnow()
+        self._session.add(col)
+        self._session.commit()
+        self._session.refresh(col)
+        return col
+
+    def delete(self, collection_id: str) -> bool:
+        col = self.get_by_id(collection_id)
+        if col is None:
+            return False
+        self._session.delete(col)
+        self._session.commit()
+        return True
+
+    # ---- Asset count (no denormalized column) ----
+
+    def asset_count(self, collection_id: str) -> int:
+        result = self._session.execute(
+            select(func.count())
+            .select_from(CollectionAsset)
+            .join(Asset, CollectionAsset.asset_id == Asset.asset_id)
+            .where(
+                CollectionAsset.collection_id == collection_id,
+                Asset.deleted_at.is_(None),  # type: ignore[union-attr]
+            )
+        )
+        return int(result.scalar() or 0)
+
+    # ---- Batch add / remove ----
+
+    def add_assets(self, collection_id: str, asset_ids: list[str]) -> int:
+        """Add assets to collection. Returns count actually inserted (idempotent)."""
+        if not asset_ids:
+            return 0
+
+        # Get current max position
+        max_pos_result = self._session.execute(
+            select(func.max(CollectionAsset.position)).where(
+                CollectionAsset.collection_id == collection_id
+            )
+        )
+        next_pos = (max_pos_result.scalar() or -1) + 1
+
+        inserted = 0
+        for asset_id in asset_ids:
+            stmt = pg_insert(CollectionAsset).values(
+                collection_id=collection_id,
+                asset_id=asset_id,
+                position=next_pos,
+                added_at=utcnow(),
+            ).on_conflict_do_nothing(index_elements=["collection_id", "asset_id"])
+            result = self._session.execute(stmt)
+            if result.rowcount:  # type: ignore[union-attr]
+                inserted += 1
+                next_pos += 1
+        self._session.commit()
+        return inserted
+
+    def remove_assets(self, collection_id: str, asset_ids: list[str]) -> int:
+        """Remove assets from collection. Returns count removed."""
+        if not asset_ids:
+            return 0
+        from sqlalchemy import delete as sa_delete
+
+        result = self._session.execute(
+            sa_delete(CollectionAsset).where(
+                CollectionAsset.collection_id == collection_id,
+                CollectionAsset.asset_id.in_(asset_ids),  # type: ignore[attr-defined]
+            )
+        )
+        self._session.commit()
+        return result.rowcount  # type: ignore[return-value]
+
+    # ---- List assets (paginated, ordered) ----
+
+    def list_assets(
+        self,
+        collection_id: str,
+        sort_order: str = "manual",
+        after_cursor: str | None = None,
+        limit: int = 200,
+    ) -> tuple[list[Asset], str | None]:
+        """Return active assets in collection with cursor pagination.
+
+        Returns (assets, next_cursor). Cursor is the position/added_at/taken_at value
+        of the last returned row, encoded as a string.
+        """
+        import base64 as _b64
+
+        query = (
+            select(Asset, CollectionAsset.position, CollectionAsset.added_at)
+            .join(CollectionAsset, CollectionAsset.asset_id == Asset.asset_id)
+            .where(
+                CollectionAsset.collection_id == collection_id,
+                Asset.deleted_at.is_(None),  # type: ignore[union-attr]
+            )
+        )
+
+        if sort_order == "added_at":
+            order_col = CollectionAsset.added_at
+        elif sort_order == "taken_at":
+            order_col = Asset.taken_at
+        else:  # manual
+            order_col = CollectionAsset.position
+
+        query = query.order_by(order_col.asc(), Asset.asset_id.asc())  # type: ignore[union-attr]
+
+        if after_cursor:
+            try:
+                padded = after_cursor + "=" * (-len(after_cursor) % 4)
+                decoded = json.loads(_b64.urlsafe_b64decode(padded))
+                cursor_val = decoded["v"]
+                cursor_id = decoded["id"]
+                query = query.where(
+                    or_(
+                        order_col > cursor_val,  # type: ignore[operator]
+                        and_(order_col == cursor_val, Asset.asset_id > cursor_id),  # type: ignore[operator]
+                    )
+                )
+            except Exception:
+                pass  # ignore bad cursors
+
+        rows = self._session.execute(query.limit(limit + 1)).all()
+
+        assets: list[Asset] = []
+        next_cursor: str | None = None
+        for i, row in enumerate(rows):
+            if i >= limit:
+                # Encode cursor from last returned row
+                last_asset = assets[-1]
+                last_row = rows[i - 1]
+                cursor_payload = json.dumps(
+                    {"v": str(last_row[1] if sort_order == "manual" else last_row[2]), "id": last_asset.asset_id},
+                    default=str,
+                )
+                next_cursor = _b64.urlsafe_b64encode(cursor_payload.encode()).decode().rstrip("=")
+                break
+            assets.append(row[0])
+
+        return assets, next_cursor
+
+    # ---- Reorder ----
+
+    def reorder(self, collection_id: str, asset_ids: list[str]) -> bool:
+        """Reorder assets in collection. asset_ids must include ALL active assets.
+
+        Returns True on success. Raises ValueError if list is incomplete/has extras.
+        """
+        # Get current active asset IDs in collection
+        rows = self._session.execute(
+            select(CollectionAsset.asset_id)
+            .join(Asset, CollectionAsset.asset_id == Asset.asset_id)
+            .where(
+                CollectionAsset.collection_id == collection_id,
+                Asset.deleted_at.is_(None),  # type: ignore[union-attr]
+            )
+        ).all()
+        current_ids = {r[0] for r in rows}
+        submitted_ids = set(asset_ids)
+
+        if current_ids != submitted_ids:
+            raise ValueError(
+                f"Submitted {len(submitted_ids)} asset IDs but collection has {len(current_ids)} active assets. "
+                "Reorder must include all active assets in the collection."
+            )
+
+        for position, asset_id in enumerate(asset_ids):
+            self._session.execute(
+                sa_text(
+                    "UPDATE collection_assets SET position = :pos "
+                    "WHERE collection_id = :cid AND asset_id = :aid"
+                ),
+                {"pos": position, "cid": collection_id, "aid": asset_id},
+            )
+        self._session.commit()
+        return True
+
+    # ---- Cover resolution ----
+
+    def resolve_cover(self, collection: Collection) -> str | None:
+        """Return the effective cover asset_id, applying lazy self-healing.
+
+        If cover_asset_id is set and the asset is active and in the collection,
+        return it. Otherwise fall back to first-by-position, and null out the
+        stale cover_asset_id.
+        """
+        if collection.cover_asset_id:
+            # Check if cover asset is still active and in collection
+            row = self._session.execute(
+                select(CollectionAsset.asset_id)
+                .join(Asset, CollectionAsset.asset_id == Asset.asset_id)
+                .where(
+                    CollectionAsset.collection_id == collection.collection_id,
+                    CollectionAsset.asset_id == collection.cover_asset_id,
+                    Asset.deleted_at.is_(None),  # type: ignore[union-attr]
+                )
+            ).first()
+            if row:
+                return collection.cover_asset_id
+
+            # Stale — null it out (lazy self-healing)
+            collection.cover_asset_id = None
+            collection.updated_at = utcnow()
+            self._session.add(collection)
+            self._session.commit()
+
+        # Fallback: first active asset by position
+        row = self._session.execute(
+            select(CollectionAsset.asset_id)
+            .join(Asset, CollectionAsset.asset_id == Asset.asset_id)
+            .where(
+                CollectionAsset.collection_id == collection.collection_id,
+                Asset.deleted_at.is_(None),  # type: ignore[union-attr]
+            )
+            .order_by(CollectionAsset.position.asc())  # type: ignore[union-attr]
+            .limit(1)
+        ).first()
+        return row[0] if row else None

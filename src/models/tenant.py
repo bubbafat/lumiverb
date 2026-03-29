@@ -253,6 +253,48 @@ class AssetEmbedding(SQLModel, table=True):
     )
 
 
+# ---------------------------------------------------------------------------
+# Collections (ADR-006)
+# ---------------------------------------------------------------------------
+
+
+class Collection(SQLModel, table=True):
+    __tablename__ = "collections"
+
+    collection_id: str = Field(primary_key=True)
+    name: str = Field(nullable=False)
+    description: str | None = Field(default=None, nullable=True)
+    cover_asset_id: str | None = Field(
+        default=None, foreign_key="assets.asset_id", nullable=True
+    )
+    is_public: bool = Field(default=False, nullable=False)
+    sort_order: str = Field(default="manual", nullable=False)
+    created_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+    updated_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
+class CollectionAsset(SQLModel, table=True):
+    __tablename__ = "collection_assets"
+
+    collection_id: str = Field(
+        foreign_key="collections.collection_id", primary_key=True, nullable=False
+    )
+    asset_id: str = Field(
+        foreign_key="assets.asset_id", primary_key=True, nullable=False
+    )
+    position: int = Field(nullable=False)
+    added_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
 class SystemMetadata(SQLModel, table=True):
     __tablename__ = "system_metadata"
 
