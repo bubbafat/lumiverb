@@ -101,7 +101,7 @@ class LumiverbClient:
 
     def delete(self, path: str, **kwargs: object) -> httpx.Response:
         """DELETE request; on non-2xx prints error envelope and raises LumiverbAPIError."""
-        response = self._client.request("DELETE", self._url(path))
+        response = self._client.request("DELETE", self._url(path), **kwargs)
         return self._handle_response(response)
 
     def raw(self, method: str, path: str, **kwargs: object) -> httpx.Response:
