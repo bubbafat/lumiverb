@@ -178,14 +178,17 @@ def _face_batch_worker(
     from PIL import Image as PILImage
 
     processed = failed = skipped = 0
+    errors: list[dict] = []
     for item in batch:
         asset_id = item["asset_id"]
+        rel_path = item.get("rel_path", asset_id)
         try:
             # Use _client directly to avoid _handle_response raising on
             # non-200 (e.g. 404 missing proxy, 500 server error).
             resp = client._client.get(client._url(f"/v1/assets/{asset_id}/proxy"))
             if resp.status_code != 200:
                 skipped += 1
+                errors.append({"rel_path": rel_path, "error": f"proxy HTTP {resp.status_code}"})
                 resp.close()
                 continue
 
@@ -216,10 +219,11 @@ def _face_batch_worker(
             })
             del payload
             processed += 1
-        except Exception:
+        except Exception as e:
             failed += 1
+            errors.append({"rel_path": rel_path, "error": str(e)})
 
-    return {"processed": processed, "failed": failed, "skipped": skipped}
+    return {"processed": processed, "failed": failed, "skipped": skipped, "errors": errors}
 
 
 def get_repair_summary(client: LumiverbClient, library_id: str) -> dict:
@@ -375,7 +379,12 @@ def run_repair(
                             )
                     except Exception as e:
                         console.print(f"[red]Batch failed: {e}[/red]")
-                        result = {"processed": 0, "failed": len(batch), "skipped": 0}
+                        result = {"processed": 0, "failed": len(batch), "skipped": 0, "errors": []}
+
+                    for err in result.get("errors", []):
+                        progress.console.print(
+                            f"[red]faces ✗[/red] {err['rel_path']}: {err['error']}"
+                        )
 
                     with stats.lock:
                         stats.processed += result["processed"]
