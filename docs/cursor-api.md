@@ -243,6 +243,16 @@ Cross-library browse endpoint. Queries across all libraries the user has access 
 
 **BrowseItem**: Same fields as `AssetPageItem` plus `library_id` and `library_name`.
 
+### Quickwit Index Architecture
+
+Quickwit indexes are **per-tenant** (not per-library). Two indexes per tenant:
+- `lumiverb_tenant_{tenant_id}` — asset documents (description, tags, path tokens, camera, GPS)
+- `lumiverb_tenant_{tenant_id}_scenes` — video scene documents (description, tags, scene metadata)
+
+Every document includes a `library_id` field (indexed, fast, raw tokenizer) for per-library filtering. Cross-library search omits the library_id filter. Per-library search prepends `library_id:"{id}" AND` to the Quickwit query.
+
+After deploying, run `POST /v1/upkeep/search-sync` to populate the new tenant indexes from existing asset metadata.
+
 ## Saved Views API
 
 Named filter presets that navigate to `/browse?{query_params}`. User-scoped — each user only sees their own views.
@@ -297,7 +307,7 @@ When an asset is submitted via POST /v1/ingest:
 
 Search is BM25 via Quickwit. The API queries Quickwit then enriches results with Postgres metadata. Never query Postgres for full-text search.
 
-- **GET /v1/search** — Query: `library_id` (required), `q` (required, 1–500 chars), `limit` (default 20, max 100), `offset` (default 0), `media_type` (optional: `all`|`image`|`video`), `path_prefix` (optional), `tag` (optional), `date_from`/`date_to` (optional). Asset-level BM25 search. Tries Quickwit first; falls back to Postgres ILIKE when Quickwit disabled or errors and fallback enabled. Returns `{ "query", "hits", "total", "source" }`.
+- **GET /v1/search** — Query: `library_id` (optional — omit for cross-library search), `q` (up to 500 chars), `limit` (default 20, max 500), `offset` (default 0), `media_type` (optional: `all`|`image`|`video`), `path_prefix` (optional), `tag` (optional), `date_from`/`date_to` (optional). Requires `q` or `date_from`/`date_to`. Asset-level BM25 search via per-tenant Quickwit index; falls back to Postgres when Quickwit disabled/errors and fallback enabled (per-library only). SearchHit includes `library_id` and `library_name`. Returns `{ "query", "hits", "total", "source" }`.
 - **GET /v1/search/scenes** — Query: `library_id` (required), `q` (required, 1–500 chars), `limit` (default 20, max 100), `offset` (default 0). Scene-level BM25 search via Quickwit. Returns `{ "query", "hits": [ { "scene_id", "asset_id", "rel_path", "start_ms", "end_ms", "rep_frame_ms", "thumbnail_key", "duration_sec", "description", "tags", "score", "source" } ], "total", "source" }`. No Postgres fallback. Returns empty hits if Quickwit is disabled.
 
 **Similarity:**

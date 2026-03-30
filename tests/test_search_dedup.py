@@ -46,7 +46,7 @@ def test_ingest_batching() -> None:
 
         qw = QuickwitClient()
         docs = [{"id": f"doc_{i}", "asset_id": f"ast_{i}"} for i in range(1100)]
-        qw.ingest_documents_for_library("lib_test", docs)
+        qw.ingest_tenant_documents("tnt_test", docs)
 
     assert mock_post.call_count == 3
     calls = mock_post.call_args_list

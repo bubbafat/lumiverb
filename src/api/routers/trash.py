@@ -79,10 +79,10 @@ def empty_trash(
     try:
         from src.search.quickwit_client import QuickwitClient
         qw = QuickwitClient()
+        tenant_id = getattr(request.state, "tenant_id", None)
         for aid in asset_ids:
-            lib_id = library_by_asset.get(aid)
-            if lib_id:
-                qw.delete_documents_by_asset_id(lib_id, aid)
+            if tenant_id:
+                qw.delete_tenant_documents_by_asset_id(tenant_id, aid)
     except Exception as e:
         logger.warning("Quickwit delete after empty trash failed: %s", e)
     return EmptyTrashResponse(deleted=deleted_count)

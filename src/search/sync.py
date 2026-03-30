@@ -118,12 +118,9 @@ def try_sync_asset(
     try:
         if tenant_id:
             qw.ensure_tenant_index(tenant_id)
-            doc = build_asset_document(asset, meta)
+        doc = build_asset_document(asset, meta)
+        if tenant_id:
             qw.ingest_tenant_documents(tenant_id, [doc])
-        else:
-            qw.ensure_index_for_library(asset.library_id)
-            doc = build_asset_document(asset, meta)
-            qw.ingest_documents_for_library(asset.library_id, [doc])
         asset.search_synced_at = utcnow()
         session.add(asset)
         session.commit()
@@ -148,12 +145,9 @@ def try_sync_scene(
     try:
         if tenant_id:
             qw.ensure_tenant_scene_index(tenant_id)
-            doc = build_scene_document(scene, asset)
+        doc = build_scene_document(scene, asset)
+        if tenant_id:
             qw.ingest_tenant_scene_documents(tenant_id, [doc])
-        else:
-            qw.ensure_scene_index_for_library(asset.library_id)
-            doc = build_scene_document(scene, asset)
-            qw.ingest_scene_documents_for_library(asset.library_id, [doc])
         scene.search_synced_at = utcnow()
         session.add(scene)
         session.commit()
@@ -170,15 +164,11 @@ def try_sync_scene(
 def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dict:
     """Find and sync all assets/scenes with stale or missing search_synced_at.
 
-    An asset needs sync when it has AI metadata but either:
-    - search_synced_at IS NULL, or
-    - search_synced_at < asset_metadata.generated_at
-
-    When tenant_id is provided, uses per-tenant indexes (preferred).
+    Uses per-tenant indexes. tenant_id is required for Quickwit sync.
     Returns {"synced": N, "failed": M, "scenes_synced": S, "scenes_failed": F}.
     """
     qw = _get_quickwit()
-    if qw is None:
+    if qw is None or not tenant_id:
         return {"synced": 0, "failed": 0, "scenes_synced": 0, "scenes_failed": 0}
 
     from src.repository.tenant import AssetMetadataRepository
@@ -204,85 +194,39 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
     failed = 0
     meta_repo = AssetMetadataRepository(session)
 
-    # Ensure tenant index once if using per-tenant mode
-    if tenant_id:
-        try:
-            qw.ensure_tenant_index(tenant_id)
-        except Exception as exc:
-            logger.warning("Cannot ensure tenant Quickwit index for %s: %s", tenant_id, exc)
-            return {"synced": 0, "failed": len(rows), "scenes_synced": 0, "scenes_failed": 0}
+    try:
+        qw.ensure_tenant_index(tenant_id)
+    except Exception as exc:
+        logger.warning("Cannot ensure tenant Quickwit index for %s: %s", tenant_id, exc)
+        return {"synced": 0, "failed": len(rows), "scenes_synced": 0, "scenes_failed": 0}
 
-    # Collect all docs (no need to group by library for tenant indexes)
     all_docs: list[dict] = []
     all_asset_ids: list[str] = []
 
-    if not tenant_id:
-        # Legacy per-library path
-        from collections import defaultdict
-        by_library: dict[str, list] = defaultdict(list)
-        for r in rows:
-            by_library[r.library_id].append(r.asset_id)
+    for r in rows:
+        asset = session.get(Asset, r.asset_id)
+        if asset is None:
+            continue
+        meta = meta_repo.get_latest(asset_id=r.asset_id)
+        if meta is None:
+            continue
+        all_docs.append(build_asset_document(asset, meta))
+        all_asset_ids.append(r.asset_id)
 
-        for library_id, asset_ids in by_library.items():
-            try:
-                qw.ensure_index_for_library(library_id)
-            except Exception as exc:
-                logger.warning("Cannot ensure Quickwit index for %s: %s", library_id, exc)
-                failed += len(asset_ids)
-                continue
-
-            docs = []
-            assets_to_stamp: list[str] = []
-            for asset_id in asset_ids:
-                asset = session.get(Asset, asset_id)
-                if asset is None:
-                    continue
-                meta = meta_repo.get_latest(asset_id=asset_id)
-                if meta is None:
-                    continue
-                docs.append(build_asset_document(asset, meta))
-                assets_to_stamp.append(asset_id)
-
-            if docs:
-                try:
-                    qw.ingest_documents_for_library(library_id, docs)
-                    now = utcnow()
-                    session.execute(
-                        text("UPDATE assets SET search_synced_at = :now WHERE asset_id = ANY(:ids)"),
-                        {"now": now, "ids": assets_to_stamp},
-                    )
-                    session.commit()
-                    synced += len(assets_to_stamp)
-                except Exception as exc:
-                    logger.warning("Quickwit batch ingest failed for library %s: %s", library_id, exc)
-                    session.rollback()
-                    failed += len(docs)
-    else:
-        # Per-tenant path
-        for r in rows:
-            asset = session.get(Asset, r.asset_id)
-            if asset is None:
-                continue
-            meta = meta_repo.get_latest(asset_id=r.asset_id)
-            if meta is None:
-                continue
-            all_docs.append(build_asset_document(asset, meta))
-            all_asset_ids.append(r.asset_id)
-
-        if all_docs:
-            try:
-                qw.ingest_tenant_documents(tenant_id, all_docs)
-                now = utcnow()
-                session.execute(
-                    text("UPDATE assets SET search_synced_at = :now WHERE asset_id = ANY(:ids)"),
-                    {"now": now, "ids": all_asset_ids},
-                )
-                session.commit()
-                synced += len(all_asset_ids)
-            except Exception as exc:
-                logger.warning("Quickwit tenant batch ingest failed for %s: %s", tenant_id, exc)
-                session.rollback()
-                failed += len(all_docs)
+    if all_docs:
+        try:
+            qw.ingest_tenant_documents(tenant_id, all_docs)
+            now = utcnow()
+            session.execute(
+                text("UPDATE assets SET search_synced_at = :now WHERE asset_id = ANY(:ids)"),
+                {"now": now, "ids": all_asset_ids},
+            )
+            session.commit()
+            synced += len(all_asset_ids)
+        except Exception as exc:
+            logger.warning("Quickwit tenant batch ingest failed for %s: %s", tenant_id, exc)
+            session.rollback()
+            failed += len(all_docs)
 
     # --- Scene sync ---
     scene_rows = session.execute(text("""
@@ -298,78 +242,36 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
     scenes_synced = 0
     scenes_failed = 0
 
-    if tenant_id:
+    try:
+        qw.ensure_tenant_scene_index(tenant_id)
+    except Exception as exc:
+        logger.warning("Cannot ensure tenant scene index for %s: %s", tenant_id, exc)
+        return {"synced": synced, "failed": failed, "scenes_synced": 0, "scenes_failed": len(scene_rows)}
+
+    all_scene_docs: list[dict] = []
+    all_scene_ids: list[str] = []
+    for r in scene_rows:
+        scene = session.get(VideoScene, r.scene_id)
+        asset = session.get(Asset, r.asset_id)
+        if scene is None or asset is None:
+            continue
+        all_scene_docs.append(build_scene_document(scene, asset))
+        all_scene_ids.append(r.scene_id)
+
+    if all_scene_docs:
         try:
-            qw.ensure_tenant_scene_index(tenant_id)
+            qw.ingest_tenant_scene_documents(tenant_id, all_scene_docs)
+            now = utcnow()
+            session.execute(
+                text("UPDATE video_scenes SET search_synced_at = :now WHERE scene_id = ANY(:ids)"),
+                {"now": now, "ids": all_scene_ids},
+            )
+            session.commit()
+            scenes_synced += len(all_scene_ids)
         except Exception as exc:
-            logger.warning("Cannot ensure tenant scene index for %s: %s", tenant_id, exc)
-            return {"synced": synced, "failed": failed, "scenes_synced": 0, "scenes_failed": len(scene_rows)}
-
-    if not tenant_id:
-        # Legacy per-library path
-        from collections import defaultdict
-        scene_by_lib: dict[str, list] = defaultdict(list)
-        for r in scene_rows:
-            scene_by_lib[r.library_id].append((r.scene_id, r.asset_id))
-
-        for library_id, scene_pairs in scene_by_lib.items():
-            try:
-                qw.ensure_scene_index_for_library(library_id)
-            except Exception as exc:
-                logger.warning("Cannot ensure Quickwit scene index for %s: %s", library_id, exc)
-                scenes_failed += len(scene_pairs)
-                continue
-
-            docs = []
-            scene_ids_to_stamp: list[str] = []
-            for scene_id, asset_id in scene_pairs:
-                scene = session.get(VideoScene, scene_id)
-                asset = session.get(Asset, asset_id)
-                if scene is None or asset is None:
-                    continue
-                docs.append(build_scene_document(scene, asset))
-                scene_ids_to_stamp.append(scene_id)
-
-            if docs:
-                try:
-                    qw.ingest_scene_documents_for_library(library_id, docs)
-                    now = utcnow()
-                    session.execute(
-                        text("UPDATE video_scenes SET search_synced_at = :now WHERE scene_id = ANY(:ids)"),
-                        {"now": now, "ids": scene_ids_to_stamp},
-                    )
-                    session.commit()
-                    scenes_synced += len(scene_ids_to_stamp)
-                except Exception as exc:
-                    logger.warning("Quickwit scene batch ingest failed for library %s: %s", library_id, exc)
-                    session.rollback()
-                    scenes_failed += len(docs)
-    else:
-        # Per-tenant path
-        all_scene_docs: list[dict] = []
-        all_scene_ids: list[str] = []
-        for r in scene_rows:
-            scene = session.get(VideoScene, r.scene_id)
-            asset = session.get(Asset, r.asset_id)
-            if scene is None or asset is None:
-                continue
-            all_scene_docs.append(build_scene_document(scene, asset))
-            all_scene_ids.append(r.scene_id)
-
-        if all_scene_docs:
-            try:
-                qw.ingest_tenant_scene_documents(tenant_id, all_scene_docs)
-                now = utcnow()
-                session.execute(
-                    text("UPDATE video_scenes SET search_synced_at = :now WHERE scene_id = ANY(:ids)"),
-                    {"now": now, "ids": all_scene_ids},
-                )
-                session.commit()
-                scenes_synced += len(all_scene_ids)
-            except Exception as exc:
-                logger.warning("Quickwit tenant scene batch ingest failed for %s: %s", tenant_id, exc)
-                session.rollback()
-                scenes_failed += len(all_scene_docs)
+            logger.warning("Quickwit tenant scene batch ingest failed for %s: %s", tenant_id, exc)
+            session.rollback()
+            scenes_failed += len(all_scene_docs)
 
     return {
         "synced": synced,

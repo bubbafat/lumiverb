@@ -349,11 +349,15 @@ def reset_video_pipeline(
     chunks_deleted = chunk_repo.delete_for_library(library_id)
     assets_reset = asset_repo.reset_video_indexed_for_library(library_id)
 
-    # Delete the Quickwit scene index (recreated on next search-sync run).
-    quickwit_index_deleted = QuickwitClient().delete_scene_index_for_library(library_id)
+    # Delete scene documents from Quickwit (for this library in the tenant index).
+    tenant_id = getattr(request.state, "tenant_id", None)
+    quickwit_index_deleted = False
+    if tenant_id:
+        qw = QuickwitClient()
+        qw.delete_tenant_documents_by_library_id(tenant_id, library_id)
+        quickwit_index_deleted = True
 
     # Delete scene rep-frame files from the data dir.
-    tenant_id = getattr(request.state, "tenant_id", None)
     scene_files_deleted = 0
     if tenant_id:
         settings = get_settings()

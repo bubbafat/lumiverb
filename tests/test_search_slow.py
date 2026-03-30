@@ -194,8 +194,8 @@ def test_search_quickwit_fallback_on_error(search_client: Tuple[_AuthClient, str
     description = "A quiet forest path at dawn."
     _insert_asset_with_metadata(tenant_url, library_id, description, "forest")
 
-    # Make QuickwitClient.search raise to trigger fallback path.
-    with patch("src.search.quickwit_client.QuickwitClient.search") as mock_search:
+    # Make QuickwitClient.search_tenant raise to trigger fallback path.
+    with patch("src.search.quickwit_client.QuickwitClient.search_tenant") as mock_search:
         mock_search.side_effect = ConnectionError("Quickwit unavailable")
 
         r = auth_client.get(
