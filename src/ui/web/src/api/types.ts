@@ -68,6 +68,8 @@ export interface FacetsResponse {
 export interface SearchHit {
   type: "image" | "scene";
   asset_id: string;
+  library_id: string | null;
+  library_name: string | null;
   rel_path: string;
   thumbnail_key: string | null;
   proxy_key: string | null;

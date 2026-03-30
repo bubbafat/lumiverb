@@ -8,6 +8,7 @@ import {
   createSavedView,
   lookupRatings,
   rateAsset,
+  searchAssets,
 } from "../api/client";
 import type { PageAssetsOptions } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
@@ -76,6 +77,12 @@ export default function UnifiedBrowsePage() {
     [setSearchParams],
   );
 
+  // Search query from URL
+  const activeQ = searchParams.get("q");
+  const dateFrom = searchParams.get("date_from") ?? undefined;
+  const dateTo = searchParams.get("date_to") ?? undefined;
+  const isSearchMode = !!(activeQ || dateFrom);
+
   // Build filter/sort options from URL search params
   const browseSort = searchParams.get("sort") ?? "taken_at";
   const browseDir = (searchParams.get("dir") as "asc" | "desc" | null) ?? "desc";
@@ -138,18 +145,65 @@ export default function UnifiedBrowsePage() {
     browseLibraryId,
   ]);
 
+  const SEARCH_RESULT_CAP = 500;
+
   const browseQuery = useInfiniteQuery({
     queryKey: ["unified-browse", browseOpts],
     queryFn: ({ pageParam }) =>
       browseAll(pageParam, PAGE_SIZE, browseOpts),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage?.next_cursor ?? undefined,
+    enabled: !isSearchMode,
+  });
+
+  const searchQuery = useQuery({
+    queryKey: ["unified-search", activeQ, dateFrom, dateTo, browseFavorite, browseStarMin, browseStarMax, browseColor],
+    queryFn: () =>
+      searchAssets({
+        q: activeQ ?? "",
+        dateFrom,
+        dateTo,
+        limit: SEARCH_RESULT_CAP,
+        favorite: browseFavorite,
+        starMin: browseStarMin,
+        starMax: browseStarMax,
+        color: browseColor,
+      }),
+    enabled: isSearchMode,
   });
 
   const flatAssets: BrowseItem[] = useMemo(() => {
+    if (isSearchMode) {
+      return (searchQuery.data?.hits ?? []).map((h): BrowseItem => ({
+        asset_id: h.asset_id,
+        library_id: h.library_id ?? "",
+        library_name: h.library_name ?? "",
+        rel_path: h.rel_path,
+        file_size: h.file_size ?? 0,
+        file_mtime: null,
+        sha256: null,
+        media_type: h.media_type ?? "image",
+        width: h.width ?? null,
+        height: h.height ?? null,
+        taken_at: h.taken_at ?? null,
+        status: "indexed",
+        duration_sec: h.duration_sec ?? null,
+        camera_make: h.camera_make ?? null,
+        camera_model: h.camera_model ?? null,
+        iso: null,
+        aperture: null,
+        focal_length: null,
+        focal_length_35mm: null,
+        lens_model: null,
+        flash_fired: null,
+        gps_lat: null,
+        gps_lon: null,
+        created_at: null,
+      }));
+    }
     if (!browseQuery.data?.pages) return [];
     return browseQuery.data.pages.flatMap((p) => p?.items ?? []);
-  }, [browseQuery.data]);
+  }, [isSearchMode, searchQuery.data, browseQuery.data]);
 
   // Build a library name lookup from the browse results
   const libraryNames: Record<string, string> = useMemo(() => {
@@ -162,14 +216,12 @@ export default function UnifiedBrowsePage() {
     return map;
   }, [flatAssets]);
 
-  const isLoading = browseQuery.isLoading;
-  const isFetchingNextPage = browseQuery.isFetchingNextPage;
-  const hasNextPage = browseQuery.hasNextPage;
+  const isLoading = isSearchMode ? searchQuery.isLoading : browseQuery.isLoading;
+  const isFetchingNextPage = isSearchMode ? false : browseQuery.isFetchingNextPage;
+  const hasNextPage = isSearchMode ? false : browseQuery.hasNextPage;
   const fetchNextPage = browseQuery.fetchNextPage;
 
-  const browseCount = useMemo(() => {
-    return browseQuery.data?.pages.flatMap((p) => p?.items ?? []).length ?? 0;
-  }, [browseQuery.data]);
+  const browseCount = flatAssets.length;
 
   const groups = useMemo(
     () => groupAssetsByDate(flatAssets),
@@ -412,12 +464,12 @@ export default function UnifiedBrowsePage() {
 
       {/* Filter bar */}
       <FilterBar
-        q={null}
+        q={activeQ}
         tag={searchParams.get("tag")}
         path={null}
         dateFrom={searchParams.get("date_from")}
         dateTo={searchParams.get("date_to")}
-        onChangeQ={() => {}}
+        onChangeQ={(v) => setParam("q", v)}
         onChangeTag={(v) => setParam("tag", v)}
         onChangePath={() => {}}
         onChangeDateRange={handleChangeDateRange}
@@ -461,7 +513,7 @@ export default function UnifiedBrowsePage() {
       {/* Status line */}
       {!isLoading && browseCount > 0 && (
         <p className="text-xs text-gray-500">
-          {browseCount.toLocaleString()} photo{browseCount === 1 ? "" : "s"}
+          {browseCount.toLocaleString()} {isSearchMode ? "result" : "photo"}{browseCount === 1 ? "" : "s"}
         </p>
       )}
 
