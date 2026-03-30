@@ -31,6 +31,10 @@ class InsightFaceProvider:
     def __init__(self) -> None:
         self._app = None
         self._lock = threading.Lock()
+        # FaceAnalysis wraps ONNX Runtime; InferenceSession is not safe for concurrent
+        # Run() from multiple threads — shared use from ingest/repair thread pools caused
+        # unbounded RSS growth (~tens of MB per image). Serialize inference.
+        self._infer_lock = threading.Lock()
 
     @property
     def model_id(self) -> str:
@@ -44,20 +48,46 @@ class InsightFaceProvider:
         if self._app is None:
             with self._lock:
                 if self._app is None:
+                    import onnxruntime as ort
                     from insightface.app import FaceAnalysis
+                    from insightface.model_zoo.model_zoo import PickableInferenceSession
 
-                    app = FaceAnalysis(
-                        name=MODEL_VERSION,
-                        providers=["CPUExecutionProvider"],
-                    )
-                    app.prepare(ctx_id=-1, det_size=(640, 640))
+                    # Disable ONNX Runtime's BFC memory arena — it never
+                    # returns memory to the OS, causing monotonic growth
+                    # when processing many images. Monkey-patch the session
+                    # constructor to inject sess_options before InsightFace
+                    # creates its sessions.
+                    _no_arena_opts = ort.SessionOptions()
+                    _no_arena_opts.enable_cpu_mem_arena = False
+
+                    _orig_init = PickableInferenceSession.__init__
+                    def _patched_init(self_sess, model_path, **kwargs):
+                        if "sess_options" not in kwargs:
+                            kwargs["sess_options"] = _no_arena_opts
+                        _orig_init(self_sess, model_path, **kwargs)
+                    PickableInferenceSession.__init__ = _patched_init
+
+                    try:
+                        app = FaceAnalysis(
+                            name=MODEL_VERSION,
+                            providers=["CPUExecutionProvider"],
+                        )
+                        app.prepare(ctx_id=-1, det_size=(640, 640))
+                    finally:
+                        PickableInferenceSession.__init__ = _orig_init
+
                     self._app = app
-                    logger.info("Loaded InsightFace model %s (CPU)", MODEL_VERSION)
+                    logger.info("Loaded InsightFace model %s (CPU, arena disabled)", MODEL_VERSION)
         return self._app
 
     def ensure_loaded(self) -> None:
         """Force model loading now (fail fast). Thread-safe."""
         self._load()
+
+    # Max long edge for face detection input. InsightFace resizes to 640x640
+    # internally for detection anyway — larger inputs just waste memory.
+    # Bounding boxes are returned as fractions, so resizing is transparent.
+    _MAX_DETECT_EDGE = 1280
 
     def detect_faces(self, pil_image: "PIL.Image.Image") -> list[FaceDetection]:
         """Detect faces and generate ArcFace embeddings in one pass.
@@ -73,6 +103,16 @@ class InsightFaceProvider:
 
         app = self._load()
 
+        # Downscale if larger than _MAX_DETECT_EDGE to reduce memory.
+        # Bounding boxes are normalized to fractions, so this is transparent.
+        w_orig, h_orig = pil_image.size
+        long_edge = max(w_orig, h_orig)
+        if long_edge > self._MAX_DETECT_EDGE:
+            scale = self._MAX_DETECT_EDGE / long_edge
+            new_w = int(w_orig * scale)
+            new_h = int(h_orig * scale)
+            pil_image = pil_image.resize((new_w, new_h))
+
         # Convert PIL RGB to BGR numpy array for InsightFace
         img_array = np.array(pil_image)
         if img_array.ndim == 2:
@@ -80,7 +120,8 @@ class InsightFaceProvider:
         img_bgr = img_array[:, :, ::-1].copy()
         del img_array  # free RGB copy
 
-        faces = app.get(img_bgr)
+        with self._infer_lock:
+            faces = app.get(img_bgr)
         h, w = img_bgr.shape[:2]
         del img_bgr  # free BGR copy
 
