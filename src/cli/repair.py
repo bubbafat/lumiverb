@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import json
 import logging
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, wait, FIRST_COMPLETED
 from typing import Literal
 
 from rich.console import Console
@@ -15,6 +15,15 @@ from rich.table import Table
 from src.cli.client import LumiverbClient
 
 logger = logging.getLogger(__name__)
+
+
+def _drain(inflight: set[Future]) -> set[Future]:
+    """Wait for at least one future to complete and return the remaining set."""
+    done, inflight = wait(inflight, return_when=FIRST_COMPLETED)
+    for fut in done:
+        fut.result()  # re-raise if failed
+    return inflight
+
 
 REPAIR_TYPES = ("embed", "vision", "faces", "search-sync", "all")
 RepairType = Literal["embed", "vision", "faces", "search-sync", "all"]
@@ -288,7 +297,7 @@ def run_repair(
             with progress:
                 tid = progress.add_task("Embeddings", total=len(assets), ok=0, fail=0)
                 pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="embed")
-                futures = []
+                inflight: set[Future] = set()
                 for a in assets:
                     fut = pool.submit(
                         _repair_embed_one,
@@ -300,9 +309,11 @@ def run_repair(
                         progress=progress,
                         task_id=tid,
                     )
-                    futures.append(fut)
-                for fut in futures:
-                    fut.result()
+                    inflight.add(fut)
+                    if len(inflight) >= concurrency * 2:
+                        inflight = _drain(inflight)
+                while inflight:
+                    inflight = _drain(inflight)
                 pool.shutdown(wait=True)
 
         elif repair_type == "vision":
@@ -330,7 +341,7 @@ def run_repair(
             with progress:
                 tid = progress.add_task("Faces", total=len(assets), ok=0, fail=0)
                 pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="faces")
-                futures = []
+                inflight: set[Future] = set()
                 for a in assets:
                     fut = pool.submit(
                         _repair_face_one,
@@ -342,9 +353,11 @@ def run_repair(
                         progress=progress,
                         task_id=tid,
                     )
-                    futures.append(fut)
-                for fut in futures:
-                    fut.result()
+                    inflight.add(fut)
+                    if len(inflight) >= concurrency * 2:
+                        inflight = _drain(inflight)
+                while inflight:
+                    inflight = _drain(inflight)
                 pool.shutdown(wait=True)
 
         elif repair_type == "search-sync":
