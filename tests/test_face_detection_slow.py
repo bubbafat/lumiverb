@@ -312,9 +312,14 @@ def test_has_faces_filter_on_page(face_client: Tuple[_AuthClient, str, str]) -> 
     # has_faces=true -> only asset_with
     r = auth_client.get(f"/v1/assets/page?library_id={library_id}&has_faces=true")
     assert r.status_code == 200
-    ids = [i["asset_id"] for i in r.json()["items"]]
+    items = r.json()["items"]
+    ids = [i["asset_id"] for i in items]
     assert asset_with in ids
     assert asset_zero not in ids
+    # Regression: face_count must be in the page response for the lightbox overlay
+    matched = [i for i in items if i["asset_id"] == asset_with][0]
+    assert "face_count" in matched, "face_count missing from page response"
+    assert matched["face_count"] == 1
 
     # has_faces=false -> includes asset_zero and unprocessed
     r = auth_client.get(f"/v1/assets/page?library_id={library_id}&has_faces=false")

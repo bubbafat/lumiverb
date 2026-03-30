@@ -305,6 +305,7 @@ def page_assets(
             flash_fired=a.flash_fired,
             gps_lat=a.gps_lat,
             gps_lon=a.gps_lon,
+            face_count=a.face_count,
             created_at=a.created_at.isoformat() if a.created_at else None,
         )
         for a in assets
