@@ -147,7 +147,10 @@ def _repair_embed_one(
             progress.advance(task_id, 1)
             progress.update(task_id, ok=ok, fail=fail)
     finally:
-        gc.collect()
+        with stats.lock:
+            total = stats.processed + stats.failed + stats.skipped
+        if total % 10 == 0:
+            gc.collect()
 
 
 def _repair_face_one(
@@ -219,7 +222,12 @@ def _repair_face_one(
             progress.advance(task_id, 1)
             progress.update(task_id, ok=ok, fail=fail)
     finally:
-        gc.collect()
+        # Periodic GC to catch any cyclic refs. The concurrency cap (2 threads)
+        # is the primary memory control; this is belt-and-suspenders.
+        with stats.lock:
+            total = stats.processed + stats.failed + stats.skipped
+        if total % 10 == 0:
+            gc.collect()
 
 
 def get_repair_summary(client: LumiverbClient, library_id: str) -> dict:
