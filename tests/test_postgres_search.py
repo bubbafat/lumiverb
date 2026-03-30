@@ -17,6 +17,7 @@ def test_search_assets_finds_qwen_captioned_asset() -> None:
     # Simulate DB with two assets: one moondream, one qwen. Query matches only qwen's description.
     qwen_row = SimpleNamespace(
         asset_id="ast_qwen123",
+        library_id="lib_001",
         rel_path="photos/qwen_photo.jpg",
         thumbnail_key="t/00/ast_qwen123.jpg",
         proxy_key="p/00/ast_qwen123.jpg",

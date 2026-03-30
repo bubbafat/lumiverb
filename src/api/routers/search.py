@@ -189,11 +189,11 @@ def search(
         if not image_hits and (
             not settings.quickwit_enabled or settings.quickwit_fallback_to_postgres
         ):
-            if library_id:
-                from src.search.postgres_search import search_assets
-                image_hits = search_assets(
-                    session, library_id, q, limit=fetch_limit, offset=0
-                )
+            from src.search.postgres_search import search_assets
+            image_hits = search_assets(
+                session, library_id, q, limit=fetch_limit, offset=0
+            )
+            if image_hits:
                 source_parts.append("postgres")
 
         # Enrich image hits from DB; drop trashed assets; resolve library names
