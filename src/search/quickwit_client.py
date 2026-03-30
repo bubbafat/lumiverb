@@ -342,6 +342,175 @@ class QuickwitClient:
             )
         return results
 
+    # ------------------------------------------------------------------
+    # Tenant-scoped methods (per-tenant indexes for cross-library search)
+    # ------------------------------------------------------------------
+
+    def tenant_index_id(self, tenant_id: str) -> str:
+        return f"lumiverb_tenant_{tenant_id}"
+
+    def tenant_scene_index_id(self, tenant_id: str) -> str:
+        return f"lumiverb_tenant_{tenant_id}_scenes"
+
+    def ensure_tenant_index(self, tenant_id: str) -> None:
+        """Ensure the per-tenant asset index exists."""
+        self._ensure_index(self.tenant_index_id(tenant_id), self._schema_path())
+
+    def ensure_tenant_scene_index(self, tenant_id: str) -> None:
+        """Ensure the per-tenant scene index exists."""
+        self._ensure_index(self.tenant_scene_index_id(tenant_id), self._scene_schema_path())
+
+    def _ensure_index(self, index_id: str, schema_path: Path) -> None:
+        if not self._enabled:
+            return
+        exists_resp = requests.get(f"{self._base_url}/api/v1/indexes/{index_id}", timeout=5)
+        if exists_resp.status_code == 200:
+            return
+        if exists_resp.status_code not in (404, 400):
+            logger.warning("Quickwit index check failed for %s: %s %s", index_id, exists_resp.status_code, exists_resp.text)
+        if not schema_path.exists():
+            raise FileNotFoundError(f"Quickwit schema not found: {schema_path}")
+        data = json.loads(schema_path.read_text(encoding="utf-8"))
+        data["index_id"] = index_id
+        resp = requests.post(
+            f"{self._base_url}/api/v1/indexes",
+            headers={"Content-Type": "application/json"},
+            data=json.dumps(data),
+            timeout=10,
+        )
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(f"Quickwit index create failed for {index_id}: {resp.status_code} {resp.text}")
+
+    def _ingest_to_index(self, index_id: str, docs: Iterable[dict]) -> None:
+        if not self._enabled:
+            return
+        docs_list = list(docs)
+        if not docs_list:
+            return
+        for i in range(0, len(docs_list), INGEST_BATCH_SIZE):
+            batch = docs_list[i : i + INGEST_BATCH_SIZE]
+            ndjson = "\n".join(json.dumps(d) for d in batch) + "\n"
+            resp = requests.post(
+                f"{self._base_url}/api/v1/{index_id}/ingest?commit=force",
+                headers={"Content-Type": "application/json"},
+                data=ndjson,
+                timeout=30,
+            )
+            if resp.status_code not in (200, 202):
+                raise RuntimeError(f"Quickwit ingest failed for {index_id}: {resp.status_code} {resp.text}")
+
+    def ingest_tenant_documents(self, tenant_id: str, docs: Iterable[dict]) -> None:
+        """Ingest asset documents into the per-tenant index."""
+        self._ingest_to_index(self.tenant_index_id(tenant_id), docs)
+
+    def ingest_tenant_scene_documents(self, tenant_id: str, docs: Iterable[dict]) -> None:
+        """Ingest scene documents into the per-tenant scene index."""
+        self._ingest_to_index(self.tenant_scene_index_id(tenant_id), docs)
+
+    def _search_index(self, index_id: str, query: str, max_hits: int, start_offset: int) -> list[dict]:
+        """Raw search against an index. Returns Quickwit hit dicts."""
+        if not self._enabled:
+            return []
+        resp = requests.post(
+            f"{self._base_url}/api/v1/{index_id}/search",
+            json={"query": query, "max_hits": max_hits, "start_offset": start_offset, "sort_by": "_score"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json().get("hits", [])
+
+    def search_tenant(
+        self,
+        tenant_id: str,
+        query: str,
+        library_id: str | None = None,
+        max_hits: int = 20,
+        start_offset: int = 0,
+    ) -> list[dict]:
+        """BM25 search on the per-tenant asset index. Optionally filter by library_id."""
+        effective_query = f'library_id:"{library_id}" AND ({query})' if library_id else query
+        index_id = self.tenant_index_id(tenant_id)
+        raw_hits = self._search_index(index_id, effective_query, max_hits, start_offset)
+        results: list[dict] = []
+        for hit in raw_hits:
+            doc = hit.get("_source", hit)
+            results.append({
+                "asset_id": doc.get("asset_id", ""),
+                "library_id": doc.get("library_id", ""),
+                "rel_path": doc.get("rel_path", ""),
+                "thumbnail_key": doc.get("thumbnail_key"),
+                "proxy_key": doc.get("proxy_key"),
+                "camera_make": doc.get("camera_make"),
+                "camera_model": doc.get("camera_model"),
+                "description": doc.get("description", ""),
+                "tags": doc.get("tags", []),
+                "score": 0.0,
+                "source": "quickwit",
+            })
+        return results
+
+    def search_tenant_scenes(
+        self,
+        tenant_id: str,
+        query: str,
+        library_id: str | None = None,
+        max_hits: int = 20,
+        start_offset: int = 0,
+    ) -> list[dict]:
+        """BM25 search on the per-tenant scene index. Optionally filter by library_id."""
+        effective_query = f'library_id:"{library_id}" AND ({query})' if library_id else query
+        index_id = self.tenant_scene_index_id(tenant_id)
+        raw_hits = self._search_index(index_id, effective_query, max_hits, start_offset)
+        results: list[dict] = []
+        for hit in raw_hits:
+            doc = hit.get("_source", hit)
+            results.append({
+                "scene_id": doc.get("scene_id", ""),
+                "asset_id": doc.get("asset_id", ""),
+                "library_id": doc.get("library_id", ""),
+                "rel_path": doc.get("rel_path", ""),
+                "start_ms": doc.get("start_ms"),
+                "end_ms": doc.get("end_ms"),
+                "rep_frame_ms": doc.get("rep_frame_ms"),
+                "thumbnail_key": doc.get("thumbnail_key"),
+                "duration_sec": doc.get("duration_sec"),
+                "description": doc.get("description", ""),
+                "tags": doc.get("tags", []),
+                "score": 0.0,
+                "source": "quickwit_scenes",
+            })
+        return results
+
+    def delete_tenant_documents_by_asset_id(self, tenant_id: str, asset_id: str) -> None:
+        """Best-effort delete documents for an asset from both tenant indexes."""
+        if not self._enabled:
+            return
+        query = f'asset_id:"{asset_id}"'
+        for index_id in (self.tenant_index_id(tenant_id), self.tenant_scene_index_id(tenant_id)):
+            try:
+                resp = requests.post(f"{self._base_url}/api/v1/{index_id}/delete-tasks", json={"query": query}, timeout=10)
+                if resp.status_code not in (200, 201, 202):
+                    logger.warning("Quickwit delete-tasks failed for %s asset_id=%s: %s %s", index_id, asset_id, resp.status_code, resp.text)
+            except requests.RequestException as exc:
+                logger.warning("Quickwit delete-tasks request failed for %s asset_id=%s: %s", index_id, asset_id, exc)
+
+    def delete_tenant_documents_by_library_id(self, tenant_id: str, library_id: str) -> None:
+        """Best-effort delete all documents for a library from both tenant indexes."""
+        if not self._enabled:
+            return
+        query = f'library_id:"{library_id}"'
+        for index_id in (self.tenant_index_id(tenant_id), self.tenant_scene_index_id(tenant_id)):
+            try:
+                resp = requests.post(f"{self._base_url}/api/v1/{index_id}/delete-tasks", json={"query": query}, timeout=10)
+                if resp.status_code not in (200, 201, 202):
+                    logger.warning("Quickwit delete-tasks failed for %s library_id=%s: %s %s", index_id, library_id, resp.status_code, resp.text)
+            except requests.RequestException as exc:
+                logger.warning("Quickwit delete-tasks request failed for %s library_id=%s: %s", index_id, library_id, exc)
+
+    # ------------------------------------------------------------------
+    # Legacy per-library methods (to be removed after migration)
+    # ------------------------------------------------------------------
+
     def delete_documents_by_asset_id(self, library_id: str, asset_id: str) -> None:
         """
         Best-effort delete: create delete tasks for this asset in both asset and scene indexes.

@@ -212,7 +212,7 @@ def _do_ingest(
             meta_obj = meta_repo.get_latest(asset_id=asset_id)
             if asset_obj and meta_obj:
                 from src.search.sync import try_sync_asset
-                try_sync_asset(session, asset_obj, meta_obj)
+                try_sync_asset(session, asset_obj, meta_obj, tenant_id=tenant_id)
             final_status = asset_status.DESCRIBED
 
     # --- Store embeddings if provided ---

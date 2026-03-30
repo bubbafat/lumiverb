@@ -140,6 +140,7 @@ class ChunkCompleteResponse(BaseModel):
 def complete_chunk(
     chunk_id: str,
     body: ChunkCompleteRequest,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> ChunkCompleteResponse:
     chunk_repo = VideoIndexChunkRepository(session)
@@ -170,7 +171,7 @@ def complete_chunk(
             meta_obj = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
             if meta_obj:
                 from src.search.sync import try_sync_asset
-                try_sync_asset(session, asset_obj, meta_obj)
+                try_sync_asset(session, asset_obj, meta_obj, tenant_id=getattr(request.state, "tenant_id", None))
 
     return ChunkCompleteResponse(
         chunk_id=chunk_id,
@@ -296,6 +297,7 @@ class SceneSyncRequest(BaseModel):
 def sync_scene(
     scene_id: str,
     body: SceneSyncRequest,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> dict:
     """Sync a scene to Quickwit search index."""
@@ -306,7 +308,7 @@ def sync_scene(
     asset = AssetRepository(session).get_by_id(body.asset_id)
     if asset is None:
         raise HTTPException(status_code=404, detail="Asset not found")
-    ok = try_sync_scene(session, scene, asset)
+    ok = try_sync_scene(session, scene, asset, tenant_id=getattr(request.state, "tenant_id", None))
     return {"scene_id": scene_id, "status": "synced" if ok else "deferred"}
 
 

@@ -68,7 +68,7 @@ def _run_sweep_all_tenants() -> dict:
     for tenant in tenants:
         try:
             with get_tenant_session(tenant.tenant_id) as session:
-                result = run_search_sync_sweep(session)
+                result = run_search_sync_sweep(session, tenant_id=tenant.tenant_id)
                 for key in totals:
                     totals[key] += result.get(key, 0)
         except Exception as exc:
@@ -83,9 +83,10 @@ def _run_sweep_single_tenant(request: Request) -> dict:
     from src.search.sync import run_search_sync_sweep
     from src.api.dependencies import get_tenant_session as dep_get_tenant_session
 
+    tenant_id = getattr(request.state, "tenant_id", None)
     session = next(dep_get_tenant_session(request))
     try:
-        return run_search_sync_sweep(session)
+        return run_search_sync_sweep(session, tenant_id=tenant_id)
     finally:
         session.close()
 

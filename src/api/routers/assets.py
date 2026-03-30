@@ -733,6 +733,7 @@ def restore_asset(
 def submit_vision(
     asset_id: str,
     body: VisionSubmitRequest,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> VisionSubmitResponse:
     """Submit AI vision results for an asset with optional proxy hash validation.
@@ -769,7 +770,7 @@ def submit_vision(
     meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
     if meta:
         from src.search.sync import try_sync_asset
-        try_sync_asset(session, asset, meta)
+        try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
 
     # Bump library revision for UI polling
     LibraryRepository(session).bump_revision(asset.library_id)

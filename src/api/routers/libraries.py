@@ -104,15 +104,17 @@ def list_libraries(
 
 @router.post("/empty-trash", response_model=EmptyTrashResponse)
 def empty_trash(
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
 ) -> EmptyTrashResponse:
     """Hard delete all trashed libraries for this tenant. Returns count of libraries deleted."""
+    tenant_id = getattr(request.state, "tenant_id", None)
     repo = LibraryRepository(session)
     trashed = repo.get_trashed()
     deleted = 0
     for lib in trashed:
-        purge_library_from_quickwit(lib.library_id)
+        purge_library_from_quickwit(lib.library_id, tenant_id=tenant_id)
         if lib.is_public:
             with get_control_session() as ctrl_session:
                 PublicLibraryRepository(ctrl_session).delete(lib.library_id)
