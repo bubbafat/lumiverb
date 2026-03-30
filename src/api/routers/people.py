@@ -330,6 +330,107 @@ def merge_person(
 faces_router = APIRouter(prefix="/v1/faces", tags=["faces"])
 
 
+class ClusterNameRequest(BaseModel):
+    display_name: str
+    person_id: str | None = None  # assign to existing person instead of creating new
+
+
+@faces_router.post("/clusters/{cluster_index}/name", response_model=PersonItem, status_code=201)
+def name_cluster(
+    cluster_index: int,
+    body: ClusterNameRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> PersonItem:
+    """Name all faces in a cluster. Creates a new person or assigns to existing.
+
+    Uses the cached cluster data — if cache is stale, recomputes first.
+    """
+    from src.repository.system_metadata import SystemMetadataRepository
+    from src.repository.tenant import PersonRepository, FaceRepository
+
+    if not body.display_name.strip() and not body.person_id:
+        raise HTTPException(status_code=400, detail="Provide display_name or person_id")
+
+    # Get cluster face IDs from cache
+    meta = SystemMetadataRepository(session)
+    dirty = meta.get_value("face_clusters_dirty")
+    cached = meta.get_value("face_clusters_cache")
+
+    # If dirty or no cache, recompute
+    if dirty or not cached:
+        repo = FaceRepository(session)
+        clusters_raw, all_face_ids, truncated = repo.compute_clusters(
+            max_clusters=50, faces_per_cluster=20,
+        )
+        cache_clusters = [
+            {"cluster_index": i, "size": len(ids), "faces": c, "face_ids": ids}
+            for i, (c, ids) in enumerate(zip(clusters_raw, all_face_ids))
+        ]
+        from datetime import datetime, timezone
+        cache_data = json.dumps({
+            "clusters": cache_clusters,
+            "truncated": truncated,
+            "computed_at": datetime.now(timezone.utc).isoformat(),
+        })
+        meta.set_value("face_clusters_cache", cache_data)
+        meta.set_value("face_clusters_dirty", "false")
+    else:
+        try:
+            cache_clusters = json.loads(cached).get("clusters", [])
+        except (json.JSONDecodeError, KeyError):
+            raise HTTPException(status_code=500, detail="Cluster cache corrupted")
+
+    # Find the cluster
+    if cluster_index < 0 or cluster_index >= len(cache_clusters):
+        raise HTTPException(status_code=404, detail="Cluster not found")
+
+    face_ids = cache_clusters[cluster_index].get("face_ids", [])
+    if not face_ids:
+        raise HTTPException(status_code=404, detail="Cluster has no faces")
+
+    person_repo = PersonRepository(session)
+
+    if body.person_id:
+        # Assign to existing person
+        person = person_repo.get_by_id(body.person_id)
+        if person is None:
+            raise HTTPException(status_code=404, detail="Person not found")
+        # Assign each face (skip already-assigned)
+        from sqlalchemy import text as sa_text
+        already = {r[0] for r in session.execute(
+            sa_text("SELECT face_id FROM face_person_matches WHERE face_id = ANY(:fids)"),
+            {"fids": face_ids},
+        ).all()}
+        new_face_ids = [fid for fid in face_ids if fid not in already]
+        if new_face_ids:
+            person_repo._assign_faces(body.person_id, new_face_ids)
+            person_repo._recompute_centroid(body.person_id)
+            from src.repository.tenant import _mark_clusters_dirty
+            _mark_clusters_dirty(session)
+            session.commit()
+    else:
+        # Create new person with all cluster faces
+        person = person_repo.create(body.display_name.strip(), face_ids=face_ids)
+
+    face_count = person_repo.get_face_count(person.person_id)
+
+    rep_asset_id = None
+    if person.representative_face_id:
+        from src.models.tenant import Face
+        rep_face = session.get(Face, person.representative_face_id)
+        if rep_face:
+            rep_asset_id = rep_face.asset_id
+
+    return PersonItem(
+        person_id=person.person_id,
+        display_name=person.display_name,
+        face_count=face_count,
+        representative_face_id=person.representative_face_id,
+        representative_asset_id=rep_asset_id,
+        confirmation_count=person.confirmation_count,
+    )
+
+
 @faces_router.get("/{face_id}/crop")
 def get_face_crop(
     face_id: str,
@@ -462,15 +563,15 @@ def get_clusters(
 
     # Compute fresh clusters
     repo = FaceRepository(session)
-    clusters_raw, truncated = repo.compute_clusters(
+    clusters_raw, all_face_ids, truncated = repo.compute_clusters(
         max_clusters=50,  # cache max, apply limit on read
         faces_per_cluster=20,  # cache max
     )
 
-    # Build cache payload
+    # Build cache payload — includes all face IDs per cluster for server-side naming
     cache_clusters = [
-        {"cluster_index": i, "size": len(c), "faces": c}
-        for i, c in enumerate(clusters_raw)
+        {"cluster_index": i, "size": len(ids), "faces": c, "face_ids": ids}
+        for i, (c, ids) in enumerate(zip(clusters_raw, all_face_ids))
     ]
     from datetime import datetime, timezone
     cache_data = json.dumps({
@@ -483,12 +584,10 @@ def get_clusters(
 
     # Apply requested limits
     result_clusters = cache_clusters[:limit]
-    for c in result_clusters:
-        c["faces"] = c["faces"][:faces_per_cluster]
 
     return ClustersResponse(
         clusters=[
-            ClusterItem(cluster_index=i, size=c["size"], faces=c["faces"])
+            ClusterItem(cluster_index=i, size=c["size"], faces=c["faces"][:faces_per_cluster])
             for i, c in enumerate(result_clusters)
         ],
         truncated=truncated,

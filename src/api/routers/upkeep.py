@@ -221,11 +221,11 @@ def run_recluster(
         try:
             with get_tenant_session(tenant.tenant_id) as tsession:
                 repo = FaceRepository(tsession)
-                clusters, truncated = repo.compute_clusters(max_clusters=50, faces_per_cluster=20)
+                clusters, all_face_ids, truncated = repo.compute_clusters(max_clusters=50, faces_per_cluster=20)
 
                 cache_clusters = [
-                    {"cluster_index": i, "size": len(c), "faces": c}
-                    for i, c in enumerate(clusters)
+                    {"cluster_index": i, "size": len(ids), "faces": c, "face_ids": ids}
+                    for i, (c, ids) in enumerate(zip(clusters, all_face_ids))
                 ]
                 cache_data = _json.dumps({
                     "clusters": cache_clusters,

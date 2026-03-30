@@ -4,8 +4,7 @@ import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tansta
 import {
   listPeople,
   getClusters,
-  createPerson,
-  assignFace,
+  nameCluster,
   getApiKey,
 } from "../api/client";
 import type { PersonItem, ClusterItem, PersonFaceItem } from "../api/client";
@@ -121,10 +120,8 @@ function ClusterCard({
   const [selectedPersonId, setSelectedPersonId] = useState("");
 
   const nameMutation = useMutation({
-    mutationFn: (name: string) => {
-      const faceIds = cluster.faces.map((f) => f.face_id);
-      return createPerson(name, faceIds);
-    },
+    mutationFn: (name: string) =>
+      nameCluster(cluster.cluster_index, { displayName: name }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["people"] });
       queryClient.invalidateQueries({ queryKey: ["face-clusters"] });
@@ -135,12 +132,8 @@ function ClusterCard({
   });
 
   const assignMutation = useMutation({
-    mutationFn: async (personId: string) => {
-      // Assign all faces in this cluster to the existing person
-      for (const face of cluster.faces) {
-        await assignFace(face.face_id, { personId });
-      }
-    },
+    mutationFn: (personId: string) =>
+      nameCluster(cluster.cluster_index, { personId, displayName: "" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["people"] });
       queryClient.invalidateQueries({ queryKey: ["face-clusters"] });

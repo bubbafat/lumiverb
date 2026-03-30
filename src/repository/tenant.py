@@ -2459,10 +2459,13 @@ class FaceRepository:
             asset_map = {a.asset_id: a for a in self._session.exec(asset_stmt).all()}
 
         result = []
+        all_ids_per_cluster = []
         for cluster_face_ids in clusters:
             # Sort by confidence desc within cluster
             cluster_faces = [faces_by_id[fid] for fid in cluster_face_ids if fid in faces_by_id]
             cluster_faces.sort(key=lambda f: f.detection_confidence or 0, reverse=True)
+
+            all_ids_per_cluster.append([f.face_id for f in cluster_faces])
 
             # Limit to faces_per_cluster samples
             sample = cluster_faces[:faces_per_cluster]
@@ -2478,7 +2481,7 @@ class FaceRepository:
                 })
             result.append(cluster_data)
 
-        return result, truncated
+        return result, all_ids_per_cluster, truncated
 
 
 class PersonRepository:

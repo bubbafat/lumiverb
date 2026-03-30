@@ -417,6 +417,19 @@ export async function getClusters(limit = 20, facesPerCluster = 6): Promise<Clus
   return apiFetch<ClustersResponse>(`/faces/clusters?${params}`);
 }
 
+/** Name a cluster: creates a new person or assigns to existing, for ALL faces in the cluster. */
+export async function nameCluster(
+  clusterIndex: number,
+  opts: { displayName: string } | { personId: string; displayName: string },
+): Promise<PersonItem> {
+  const body: Record<string, unknown> = { display_name: opts.displayName };
+  if ("personId" in opts) body.person_id = opts.personId;
+  return apiFetch<PersonItem>(`/faces/clusters/${clusterIndex}/name`, {
+    method: "POST",
+    body,
+  });
+}
+
 /** Assign a face to a person (existing or new). */
 export async function assignFace(
   faceId: string,
