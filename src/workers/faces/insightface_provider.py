@@ -88,10 +88,10 @@ class InsightFaceProvider:
             x1, y1, x2, y2 = bbox
 
             # Normalize to fractions of image dimensions, clamp to [0, 1]
-            bx = max(0.0, float(x1) / w)
-            by = max(0.0, float(y1) / h)
-            bw = min(1.0, float(x2 - x1) / w)
-            bh = min(1.0, float(y2 - y1) / h)
+            bx = max(0.0, min(1.0, float(x1) / w))
+            by = max(0.0, min(1.0, float(y1) / h))
+            bw = max(0.0, min(1.0, float(x2 - x1) / w))
+            bh = max(0.0, min(1.0, float(y2 - y1) / h))
 
             confidence = float(face.det_score)
 

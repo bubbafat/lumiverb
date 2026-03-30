@@ -46,11 +46,11 @@ Two-layer Postgres architecture:
 - `asset_ratings` — user_id (text), asset_id FK (ON DELETE CASCADE), favorite (bool, default false), stars (int 0-5, default 0), color (text, nullable; red|orange|yellow|green|blue|purple), updated_at. PK: (user_id, asset_id). User-scoped ratings — each user has their own independent ratings per asset.
 - `saved_views` — view_id (sv_+ULID), name, query_params (URL query string), icon (nullable), owner_user_id, position (int), created_at, updated_at. User-scoped bookmarked filter presets. Navigates to `/browse?{query_params}`.
 - `system_metadata` — key, value, updated_at
-- `faces` — face_id, asset_id, bounding_box_json, embedding_vector vector(512), detection_confidence, created_at [phase 2, empty until then]
-- `people` — person_id, display_name, created_by_user, created_at [phase 2]
-- `face_person_matches` — face_id, person_id, confidence, confirmed bool, confirmed_at [phase 2]
+- `faces` — face_id, asset_id, bounding_box_json, embedding_vector vector(512), detection_confidence, detection_model, detection_model_version, created_at. Populated by CLI face detection (InsightFace). HNSW index on embedding_vector for future clustering.
+- `people` — person_id, display_name, created_by_user, centroid_vector vector(512), confirmation_count, representative_face_id FK, created_at. Clustering-ready; not yet populated.
+- `face_person_matches` — face_id, person_id, confidence, confirmed bool, confirmed_at. Not yet populated; used when person clustering ships.
 
-pgvector extension is enabled at provisioning time. The `vector(512)` columns exist from day one but are nullable and unpopulated until phase 2 workers run. Do not query these columns in phase 1 code.
+pgvector extension is enabled at provisioning time. Used for asset embeddings (CLIP), face embeddings (ArcFace), and similarity search.
 
 ### Soft delete — always use `active_assets`
 

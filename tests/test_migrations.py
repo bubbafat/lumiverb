@@ -386,6 +386,136 @@ def test_tenant_schema_upgrade_and_downgrade() -> None:
 
 
 @pytest.mark.migration
+def test_face_detection_migration_columns_and_indexes() -> None:
+    """Tenant migration f6g7h8i9j0k1 adds face detection columns and indexes."""
+    prev_rev = "e5f6g7h8i9j0"
+    target_rev = "f6g7h8i9j0k1"
+
+    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
+        url = postgres.get_connection_url()
+        if url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+
+        engine = create_engine(url)
+        with engine.connect() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            conn.commit()
+
+        env = os.environ.copy()
+        env["ALEMBIC_TENANT_URL"] = url
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+        # Upgrade to revision before face detection
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "-c", "alembic-tenant.ini", "upgrade", prev_rev],
+            cwd=project_root, env=env, capture_output=True, text=True,
+        )
+        assert result.returncode == 0, (result.stdout, result.stderr)
+
+        # Apply face detection migration
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "-c", "alembic-tenant.ini", "upgrade", target_rev],
+            cwd=project_root, env=env, capture_output=True, text=True,
+        )
+        assert result.returncode == 0, (result.stdout, result.stderr)
+
+        with engine.connect() as conn:
+            # assets.face_count exists and is nullable
+            cols = {
+                row[0] for row in conn.execute(text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'assets' "
+                    "AND column_name = 'face_count'"
+                ))
+            }
+            assert "face_count" in cols
+
+            # faces has detection_model and detection_model_version
+            face_cols = {
+                row[0] for row in conn.execute(text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'faces' "
+                    "AND column_name IN ('detection_model', 'detection_model_version')"
+                ))
+            }
+            assert face_cols == {"detection_model", "detection_model_version"}
+
+            # people has centroid_vector, confirmation_count, representative_face_id
+            people_cols = {
+                row[0] for row in conn.execute(text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'people' "
+                    "AND column_name IN ('centroid_vector', 'confirmation_count', 'representative_face_id')"
+                ))
+            }
+            assert people_cols == {"centroid_vector", "confirmation_count", "representative_face_id"}
+
+            # HNSW index on faces.embedding_vector exists
+            indexes = {
+                row[0] for row in conn.execute(text(
+                    "SELECT indexname FROM pg_indexes "
+                    "WHERE tablename = 'faces' AND indexname = 'ix_faces_embedding_hnsw'"
+                ))
+            }
+            assert "ix_faces_embedding_hnsw" in indexes
+
+            # B-tree index on faces.asset_id exists
+            indexes2 = {
+                row[0] for row in conn.execute(text(
+                    "SELECT indexname FROM pg_indexes "
+                    "WHERE tablename = 'faces' AND indexname = 'ix_faces_asset_id'"
+                ))
+            }
+            assert "ix_faces_asset_id" in indexes2
+
+            # active_assets view still exists (recreated after column add)
+            views = {
+                row[0] for row in conn.execute(text(
+                    "SELECT table_name FROM information_schema.views "
+                    "WHERE table_schema = 'public' AND table_name = 'active_assets'"
+                ))
+            }
+            assert "active_assets" in views
+
+            # active_assets view includes face_count
+            view_cols = {
+                row[0] for row in conn.execute(text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'active_assets' "
+                    "AND column_name = 'face_count'"
+                ))
+            }
+            assert "face_count" in view_cols
+
+        # Downgrade back
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "-c", "alembic-tenant.ini", "downgrade", prev_rev],
+            cwd=project_root, env=env, capture_output=True, text=True,
+        )
+        assert result.returncode == 0, (result.stdout, result.stderr)
+
+        with engine.connect() as conn:
+            # face_count should be gone
+            cols = {
+                row[0] for row in conn.execute(text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'assets' "
+                    "AND column_name = 'face_count'"
+                ))
+            }
+            assert "face_count" not in cols
+
+            # HNSW index should be gone
+            indexes = {
+                row[0] for row in conn.execute(text(
+                    "SELECT indexname FROM pg_indexes "
+                    "WHERE tablename = 'faces' AND indexname = 'ix_faces_embedding_hnsw'"
+                ))
+            }
+            assert "ix_faces_embedding_hnsw" not in indexes
+
+
+@pytest.mark.migration
 def test_migration_marks_invalid_ai_vision_missing_proxy_failed() -> None:
     """
     Regression for x1y2z3a4b5c6:
