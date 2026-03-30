@@ -378,6 +378,11 @@ class Face(SQLModel, table=True):
     detection_confidence: float | None = Field(default=None, nullable=True)
     detection_model: str = Field(default="insightface", nullable=False)
     detection_model_version: str = Field(default="buffalo_l", nullable=False)
+    person_id: str | None = Field(
+        default=None,
+        foreign_key="people.person_id",
+        nullable=True,
+    )
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),

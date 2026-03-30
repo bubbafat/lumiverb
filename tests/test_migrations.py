@@ -516,6 +516,130 @@ def test_face_detection_migration_columns_and_indexes() -> None:
 
 
 @pytest.mark.migration
+def test_faces_person_id_denormalized_migration() -> None:
+    """Tenant migration h8i9j0k1l2m4 adds faces.person_id, backfills from matches, reversible."""
+    prev_rev = "g7h8i9j0k1l3"
+    target_rev = "h8i9j0k1l2m4"
+
+    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
+        url = postgres.get_connection_url()
+        if url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+
+        engine = create_engine(url)
+        with engine.connect() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            conn.commit()
+
+        env = os.environ.copy()
+        env["ALEMBIC_TENANT_URL"] = url
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "-c", "alembic-tenant.ini", "upgrade", prev_rev],
+            cwd=project_root, env=env, capture_output=True, text=True,
+        )
+        assert result.returncode == 0, (result.stdout, result.stderr)
+
+        lib_id = "lib_" + uuid4().hex
+        ast_id = "ast_" + uuid4().hex
+        face_id = "face_" + uuid4().hex
+        person_id = "person_" + uuid4().hex
+        match_id = "fpm_" + uuid4().hex
+
+        with engine.connect() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO libraries (library_id, name, root_path, status,
+                        created_at, updated_at, is_public, revision)
+                    VALUES (:lib, 't', '/tmp', 'active', NOW(), NOW(), false, 0)
+                    """
+                ),
+                {"lib": lib_id},
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO assets (asset_id, library_id, rel_path, file_size, media_type,
+                        availability, status, created_at, updated_at)
+                    VALUES (:ast, :lib, 'a.jpg', 1, 'image', 'online', 'pending', NOW(), NOW())
+                    """
+                ),
+                {"ast": ast_id, "lib": lib_id},
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO people (person_id, display_name, created_by_user, created_at)
+                    VALUES (:pid, 'Alice', true, NOW())
+                    """
+                ),
+                {"pid": person_id},
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO faces (face_id, asset_id, detection_confidence, created_at,
+                        detection_model, detection_model_version)
+                    VALUES (:fid, :ast, 0.9, NOW(), 'insightface', 'buffalo_l')
+                    """
+                ),
+                {"fid": face_id, "ast": ast_id},
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO face_person_matches (match_id, face_id, person_id, confirmed, created_at)
+                    VALUES (:mid, :fid, :pid, false, NOW())
+                    """
+                ),
+                {"mid": match_id, "fid": face_id, "pid": person_id},
+            )
+            conn.commit()
+
+            assert not conn.execute(
+                text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'faces' AND column_name = 'person_id'"
+                )
+            ).first()
+
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "-c", "alembic-tenant.ini", "upgrade", target_rev],
+            cwd=project_root, env=env, capture_output=True, text=True,
+        )
+        assert result.returncode == 0, (result.stdout, result.stderr)
+
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT person_id FROM faces WHERE face_id = :fid"), {"fid": face_id}
+            ).scalar()
+            assert row == person_id
+
+            ix = conn.execute(
+                text(
+                    "SELECT 1 FROM pg_indexes WHERE tablename = 'faces' AND indexname = 'ix_faces_person_id'"
+                )
+            ).first()
+            assert ix is not None
+
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "-c", "alembic-tenant.ini", "downgrade", prev_rev],
+            cwd=project_root, env=env, capture_output=True, text=True,
+        )
+        assert result.returncode == 0, (result.stdout, result.stderr)
+
+        with engine.connect() as conn:
+            assert not conn.execute(
+                text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'faces' AND column_name = 'person_id'"
+                )
+            ).first()
+
+
+@pytest.mark.migration
 def test_migration_marks_invalid_ai_vision_missing_proxy_failed() -> None:
     """
     Regression for x1y2z3a4b5c6:
