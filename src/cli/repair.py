@@ -16,8 +16,8 @@ from src.cli.client import LumiverbClient
 
 logger = logging.getLogger(__name__)
 
-REPAIR_TYPES = ("embed", "vision", "search-sync", "all")
-RepairType = Literal["embed", "vision", "search-sync", "all"]
+REPAIR_TYPES = ("embed", "vision", "faces", "search-sync", "all")
+RepairType = Literal["embed", "vision", "faces", "search-sync", "all"]
 
 
 class _RepairStats:
@@ -48,6 +48,7 @@ def _page_missing(
     *,
     missing_vision: bool = False,
     missing_embeddings: bool = False,
+    missing_faces: bool = False,
 ) -> list[dict]:
     """Page through assets matching the given missing filter."""
     results: list[dict] = []
@@ -63,6 +64,8 @@ def _page_missing(
             params["missing_vision"] = "true"
         if missing_embeddings:
             params["missing_embeddings"] = "true"
+        if missing_faces:
+            params["missing_faces"] = "true"
         if cursor:
             params["after"] = cursor
         resp = client.get("/v1/assets/page", params=params)
@@ -128,6 +131,64 @@ def _repair_embed_one(
             progress.update(task_id, ok=ok, fail=fail)
 
 
+def _repair_face_one(
+    *,
+    client: LumiverbClient,
+    asset_id: str,
+    rel_path: str,
+    face_provider: object,
+    stats: _RepairStats,
+    progress: Progress,
+    task_id: object,
+) -> None:
+    """Download proxy and detect faces for one asset."""
+    try:
+        resp = client.get(f"/v1/assets/{asset_id}/proxy")
+        if resp.status_code != 200:
+            logger.warning("No proxy for %s (status %d)", rel_path, resp.status_code)
+            with stats.lock:
+                stats.skipped += 1
+                ok, fail = stats.processed, stats.failed
+            if progress is not None:
+                progress.advance(task_id, 1)
+                progress.update(task_id, ok=ok, fail=fail)
+            return
+
+        from PIL import Image as PILImage
+        img = PILImage.open(io.BytesIO(resp.content)).convert("RGB")
+        detections = face_provider.detect_faces(img)
+
+        client.post(f"/v1/assets/{asset_id}/faces", json={
+            "detection_model": face_provider.model_id,
+            "detection_model_version": face_provider.model_version,
+            "faces": [
+                {
+                    "bounding_box": d.bounding_box,
+                    "detection_confidence": d.detection_confidence,
+                    "embedding": d.embedding,
+                }
+                for d in detections
+            ],
+        })
+
+        with stats.lock:
+            stats.processed += 1
+            ok, fail = stats.processed, stats.failed
+        if progress is not None:
+            progress.advance(task_id, 1)
+            progress.update(task_id, ok=ok, fail=fail)
+
+    except Exception as e:
+        logger.exception("Failed to detect faces %s: %s", rel_path, e)
+        with stats.lock:
+            stats.failed += 1
+            ok, fail = stats.processed, stats.failed
+        if progress is not None:
+            progress.console.print(f"[red]faces ✗[/red] {rel_path}: {e}")
+            progress.advance(task_id, 1)
+            progress.update(task_id, ok=ok, fail=fail)
+
+
 def get_repair_summary(client: LumiverbClient, library_id: str) -> dict:
     """Fetch repair summary counts from the API."""
     resp = client.get("/v1/assets/repair-summary", params={"library_id": library_id})
@@ -159,6 +220,8 @@ def run_repair(
         plan.append(("embed", summary["missing_embeddings"], "missing CLIP embeddings"))
     if job_type in ("vision", "all") and summary.get("missing_vision", 0) > 0:
         plan.append(("vision", summary["missing_vision"], "missing AI descriptions"))
+    if job_type in ("faces", "all") and summary.get("missing_faces", 0) > 0:
+        plan.append(("faces", summary["missing_faces"], "missing face detection"))
     if job_type in ("search-sync", "all"):
         stale = summary.get("stale_search_sync", 0)
         if force:
@@ -180,6 +243,7 @@ def run_repair(
         ("EXIF", "missing_exif", job_type in ("exif", "all")),
         ("Embeddings", "missing_embeddings", job_type in ("embed", "all")),
         ("Vision AI", "missing_vision", job_type in ("vision", "all")),
+        ("Faces", "missing_faces", job_type in ("faces", "all")),
         ("Search sync", "stale_search_sync", job_type in ("search-sync", "all")),
     ]:
         count = summary.get(key, 0)
@@ -245,6 +309,43 @@ def run_repair(
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
             from src.cli.ingest import run_backfill_vision
             run_backfill_vision(client, library, concurrency=concurrency, console=console)
+
+        elif repair_type == "faces":
+            console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
+            try:
+                from src.workers.faces.insightface_provider import InsightFaceProvider
+                face_provider = InsightFaceProvider()
+                face_provider.ensure_loaded()
+                console.print(f"InsightFace model: {face_provider.model_version}")
+            except Exception as e:
+                console.print(f"[red]Cannot load InsightFace model: {e}[/red]")
+                continue
+
+            assets = _page_missing(client, library_id, missing_faces=True)
+            if not assets:
+                console.print("No assets found (already repaired?).")
+                continue
+
+            progress = _make_progress(console)
+            with progress:
+                tid = progress.add_task("Faces", total=len(assets), ok=0, fail=0)
+                pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="faces")
+                futures = []
+                for a in assets:
+                    fut = pool.submit(
+                        _repair_face_one,
+                        client=client,
+                        asset_id=a["asset_id"],
+                        rel_path=a["rel_path"],
+                        face_provider=face_provider,
+                        stats=stats,
+                        progress=progress,
+                        task_id=tid,
+                    )
+                    futures.append(fut)
+                for fut in futures:
+                    fut.result()
+                pool.shutdown(wait=True)
 
         elif repair_type == "search-sync":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")

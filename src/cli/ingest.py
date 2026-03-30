@@ -439,6 +439,34 @@ def _generate_clip_embedding(
         return None
 
 
+def _detect_faces(
+    jpeg_bytes: bytes,
+    face_provider: object | None,
+) -> dict | None:
+    """Detect faces in image. Returns face submission payload or None."""
+    if face_provider is None:
+        return None
+    try:
+        from PIL import Image as PILImage
+        img = PILImage.open(io.BytesIO(jpeg_bytes)).convert("RGB")
+        detections = face_provider.detect_faces(img)
+        return {
+            "detection_model": face_provider.model_id,
+            "detection_model_version": face_provider.model_version,
+            "faces": [
+                {
+                    "bounding_box": d.bounding_box,
+                    "detection_confidence": d.detection_confidence,
+                    "embedding": d.embedding,
+                }
+                for d in detections
+            ],
+        }
+    except Exception as e:
+        logger.warning("Face detection failed: %s", e)
+        return None
+
+
 def _process_and_ingest_one(
     *,
     client: LumiverbClient,
@@ -451,6 +479,7 @@ def _process_and_ingest_one(
     vision_model_id: str,
     vision_provider: object | None,
     clip_provider: object | None,
+    face_provider: object | None,
     stats: "_IngestStats",
     progress: Progress | None = None,
     task_id: object = None,
@@ -478,10 +507,13 @@ def _process_and_ingest_one(
         # 4. Generate CLIP embedding from JPEG proxy
         embedding = _generate_clip_embedding(jpeg_bytes, clip_provider)
 
-        # 5. Convert to WebP for upload (server stores as-is, skips re-encoding)
+        # 5. Detect faces (non-blocking — failure logged, ingest continues)
+        face_payload = _detect_faces(jpeg_bytes, face_provider)
+
+        # 6. Convert to WebP for upload (server stores as-is, skips re-encoding)
         webp_bytes = _jpeg_to_webp(jpeg_bytes)
 
-        # 6. POST /v1/ingest — create asset + ingest atomically
+        # 7. POST /v1/ingest — create asset + ingest atomically
         files = {"proxy": ("proxy.webp", io.BytesIO(webp_bytes), "image/webp")}
         data: dict[str, str] = {
             "library_id": library_id,
@@ -499,7 +531,16 @@ def _process_and_ingest_one(
         if embedding is not None:
             data["embeddings"] = json.dumps([embedding])
 
-        client.post("/v1/ingest", files=files, data=data)
+        resp = client.post("/v1/ingest", files=files, data=data)
+
+        # 8. POST faces after asset exists (best-effort)
+        if face_payload is not None:
+            try:
+                asset_id = resp.json().get("asset_id")
+                if asset_id:
+                    client.post(f"/v1/assets/{asset_id}/faces", json=face_payload)
+            except Exception as e:
+                logger.warning("Face submission failed for %s: %s", rel_path, e)
 
         with stats.lock:
             stats.processed += 1
@@ -758,6 +799,18 @@ def run_ingest(
     elif skip_embeddings:
         console.print("CLIP embeddings: skipped (--skip-embeddings)")
 
+    # Step 3c: Load InsightFace model for face detection
+    face_provider = None
+    if include_images:
+        try:
+            from src.workers.faces.insightface_provider import InsightFaceProvider
+            face_provider = InsightFaceProvider()
+            face_provider.ensure_loaded()
+            console.print(f"Face detection: {face_provider.model_version}")
+        except Exception as e:
+            console.print(f"[yellow]Face detection: unavailable ({e}) — continuing without faces[/yellow]")
+            face_provider = None
+
     # Step 4: Separate images and videos
     images_to_ingest = []
     videos_to_ingest = []
@@ -812,6 +865,7 @@ def run_ingest(
                     vision_model_id=vision_model_id,
                     vision_provider=vision_provider,
                     clip_provider=clip_provider,
+                    face_provider=face_provider,
                     stats=stats,
                     progress=progress,
                     task_id=img_tid,

@@ -55,6 +55,10 @@ class InsightFaceProvider:
                     logger.info("Loaded InsightFace model %s (CPU)", MODEL_VERSION)
         return self._app
 
+    def ensure_loaded(self) -> None:
+        """Force model loading now (fail fast). Thread-safe."""
+        self._load()
+
     def detect_faces(self, pil_image: "PIL.Image.Image") -> list[FaceDetection]:
         """Detect faces and generate ArcFace embeddings in one pass.
 
@@ -69,14 +73,14 @@ class InsightFaceProvider:
 
         app = self._load()
 
-        # InsightFace expects BGR numpy array
+        # Convert PIL RGB to BGR numpy array for InsightFace
         img_array = np.array(pil_image)
         if img_array.ndim == 2:
             img_array = np.stack([img_array] * 3, axis=-1)
-        # RGB to BGR
         img_bgr = img_array[:, :, ::-1].copy()
 
         faces = app.get(img_bgr)
+
         if not faces:
             return []
 

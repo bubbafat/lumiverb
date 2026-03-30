@@ -374,6 +374,7 @@ class AssetRepository:
         missing_vision: bool = False,
         missing_embeddings: bool = False,
         missing_faces: bool = False,
+        has_faces: bool | None = None,
         *,
         sort: str = "taken_at",
         direction: str = "desc",
@@ -478,6 +479,10 @@ class AssetRepository:
             )
         if missing_faces:
             conditions.append("a.face_count IS NULL")
+        if has_faces is True:
+            conditions.append("a.face_count > 0")
+        elif has_faces is False:
+            conditions.append("(a.face_count IS NULL OR a.face_count = 0)")
 
         # --- Media type filter ---
         if media_types:
@@ -1944,6 +1949,7 @@ class UnifiedBrowseRepository:
         star_max: int | None = None,
         color: list[str] | None = None,
         has_rating: bool | None = None,
+        has_faces: bool | None = None,
     ) -> list[Asset]:
         """Keyset pagination across all libraries. Same filter support as page_by_library."""
         import base64 as _b64
@@ -2012,6 +2018,10 @@ class UnifiedBrowseRepository:
             )
         if missing_faces:
             conditions.append("a.face_count IS NULL")
+        if has_faces is True:
+            conditions.append("a.face_count > 0")
+        elif has_faces is False:
+            conditions.append("(a.face_count IS NULL OR a.face_count = 0)")
 
         # --- Media type filter ---
         if media_types:

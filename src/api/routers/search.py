@@ -96,6 +96,7 @@ def search(
     star_max: int | None = None,
     color: str | None = None,
     has_rating: bool | None = None,
+    has_faces: bool | None = None,
 ) -> SearchResponse:
     """
     Search assets and video scenes by natural language query and/or date range.
@@ -156,6 +157,7 @@ def search(
     settings = get_settings()
     image_hits: list[dict] = []
     scene_hits: list[dict] = []
+    assets_by_id: dict = {}
     source_parts: list[str] = []
 
     search_images = media_type in ("image", "all")
@@ -255,12 +257,13 @@ def search(
         # Enrich scene hits; drop trashed
         if scene_hits:
             asset_repo = AssetRepository(session)
-            assets_by_id = {
+            scene_assets = {
                 a.asset_id: a
                 for a in asset_repo.get_by_ids(
                     list({h["asset_id"] for h in scene_hits})
                 )
             }
+            assets_by_id.update(scene_assets)
             for hit in scene_hits:
                 asset = assets_by_id.get(hit["asset_id"])
                 if asset:
@@ -373,6 +376,21 @@ def search(
 
             image_hits = [h for h in image_hits if _rating_matches(h["asset_id"])]
             scene_hits = [h for h in scene_hits if _rating_matches(h["asset_id"])]
+
+    # --- has_faces post-filter ---
+    if has_faces is not None and (image_hits or scene_hits):
+        def _face_matches(asset_id: str) -> bool:
+            asset = assets_by_id.get(asset_id)
+            if asset is None:
+                return not has_faces
+            fc = asset.face_count
+            if has_faces:
+                return fc is not None and fc > 0
+            else:
+                return fc is None or fc == 0
+
+        image_hits = [h for h in image_hits if _face_matches(h["asset_id"])]
+        scene_hits = [h for h in scene_hits if _face_matches(h["asset_id"])]
 
     # --- Merge, deduplicate images by asset_id, sort by score ---
     seen_images: dict[str, dict] = {}

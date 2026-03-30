@@ -279,6 +279,8 @@ Rating filters are available on both browse and search endpoints:
 
 **Search** (`GET /v1/search`): Same params. Applied as post-filters after Quickwit/Postgres results are enriched.
 
+**Face filter** (`has_faces`): Available on `GET /v1/assets/page`, `GET /v1/browse`, and `GET /v1/search`. `?has_faces=true` returns only assets with `face_count > 0`. `?has_faces=false` returns assets with no detected faces (face_count=0 or NULL). On search, applied as post-filter; on browse/page, applied in SQL.
+
 - **GET /v1/assets/favorites** — List favorited assets across all libraries for the current user, newest first. Query: `after` (cursor), `limit`. Returns: `{ "items": [{ "asset_id", "library_id", "library_name", "rel_path", ... }], "next_cursor" }`. Paginated by `updated_at DESC`.
 
 - **PUT /v1/assets/{asset_id}/rating** — Set or update rating on a single asset. Body: `{ "favorite": bool, "stars": int (0-5), "color": string|null }`. All fields optional — only provided fields are updated. Color values: `red`, `orange`, `yellow`, `green`, `blue`, `purple`, or `null` to clear. If all fields are default (favorite=false, stars=0, color=null), the rating row is deleted. Returns: `{ "asset_id", "favorite", "stars", "color" }`. 404 if asset not found or trashed. 422 for invalid stars/color.

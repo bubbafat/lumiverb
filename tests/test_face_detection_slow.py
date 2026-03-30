@@ -14,6 +14,7 @@ from testcontainers.postgres import PostgresContainer
 
 from src.api.main import app
 from src.core.config import get_settings
+from sqlalchemy import create_engine, text
 from src.core.database import _engines, get_control_session
 from src.repository.control_plane import TenantDbRoutingRepository
 from src.repository.tenant import AssetRepository, LibraryRepository
@@ -290,3 +291,105 @@ def test_submit_faces_without_embedding(face_client: Tuple[_AuthClient, str, str
     # Verify it's retrievable
     r = auth_client.get(f"/v1/assets/{asset_id}/faces")
     assert len(r.json()["faces"]) == 1
+
+
+@pytest.mark.slow
+def test_has_faces_filter_on_page(face_client: Tuple[_AuthClient, str, str]) -> None:
+    """GET /v1/assets/page?has_faces=true filters to assets with detected faces."""
+    auth_client, library_id, _ = face_client
+
+    # Asset with faces
+    asset_with = _create_asset(auth_client, library_id, "has_faces_with")
+    auth_client.post(
+        f"/v1/assets/{asset_with}/faces",
+        json={"faces": [{"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "detection_confidence": 0.9}]},
+    )
+
+    # Asset with no faces (processed, face_count=0)
+    asset_zero = _create_asset(auth_client, library_id, "has_faces_zero")
+    auth_client.post(f"/v1/assets/{asset_zero}/faces", json={"faces": []})
+
+    # has_faces=true -> only asset_with
+    r = auth_client.get(f"/v1/assets/page?library_id={library_id}&has_faces=true")
+    assert r.status_code == 200
+    ids = [i["asset_id"] for i in r.json()["items"]]
+    assert asset_with in ids
+    assert asset_zero not in ids
+
+    # has_faces=false -> includes asset_zero and unprocessed
+    r = auth_client.get(f"/v1/assets/page?library_id={library_id}&has_faces=false")
+    assert r.status_code == 200
+    ids = [i["asset_id"] for i in r.json()["items"]]
+    assert asset_zero in ids
+    assert asset_with not in ids
+
+
+@pytest.mark.slow
+def test_has_faces_filter_on_browse(face_client: Tuple[_AuthClient, str, str]) -> None:
+    """GET /v1/browse?has_faces=true filters via SQL in UnifiedBrowseRepository."""
+    auth_client, library_id, _ = face_client
+
+    # Asset with faces
+    asset_with = _create_asset(auth_client, library_id, "browse_faces_with")
+    auth_client.post(
+        f"/v1/assets/{asset_with}/faces",
+        json={"faces": [{"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "detection_confidence": 0.9}]},
+    )
+
+    # Asset without faces (processed)
+    asset_zero = _create_asset(auth_client, library_id, "browse_faces_zero")
+    auth_client.post(f"/v1/assets/{asset_zero}/faces", json={"faces": []})
+
+    # has_faces=true -> only asset_with
+    r = auth_client.get("/v1/browse?has_faces=true")
+    assert r.status_code == 200
+    ids = [i["asset_id"] for i in r.json()["items"]]
+    assert asset_with in ids
+    assert asset_zero not in ids
+
+
+@pytest.mark.slow
+def test_has_faces_filter_on_search(face_client: Tuple[_AuthClient, str, str]) -> None:
+    """GET /v1/search?has_faces=true post-filters search results correctly."""
+    auth_client, library_id, tenant_url = face_client
+
+    import json as _json
+
+    # Create asset with faces + metadata (so Postgres search can find it)
+    asset_with = _create_asset(auth_client, library_id, "search_faces_sunset")
+    auth_client.post(
+        f"/v1/assets/{asset_with}/faces",
+        json={"faces": [{"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "detection_confidence": 0.9}]},
+    )
+    engine = create_engine(tenant_url)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO asset_metadata (metadata_id, asset_id, model_id, model_version, generated_at, data) "
+            "VALUES (:mid, :aid, 'test', '1', NOW(), :data)"
+        ), {"mid": "meta_sf_" + asset_with[:8], "aid": asset_with,
+            "data": _json.dumps({"description": "sunset over mountains", "tags": ["sunset"]})})
+    engine.dispose()
+
+    # Create asset without faces but also searchable
+    asset_no = _create_asset(auth_client, library_id, "search_nofaces_sunset")
+    auth_client.post(f"/v1/assets/{asset_no}/faces", json={"faces": []})
+    engine = create_engine(tenant_url)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO asset_metadata (metadata_id, asset_id, model_id, model_version, generated_at, data) "
+            "VALUES (:mid, :aid, 'test', '1', NOW(), :data)"
+        ), {"mid": "meta_snf_" + asset_no[:8], "aid": asset_no,
+            "data": _json.dumps({"description": "sunset at the beach", "tags": ["sunset"]})})
+    engine.dispose()
+
+    # Search with has_faces=true (Postgres fallback)
+    os.environ["QUICKWIT_ENABLED"] = "false"
+    os.environ["QUICKWIT_FALLBACK_TO_POSTGRES"] = "true"
+    get_settings.cache_clear()
+
+    r = auth_client.get("/v1/search", params={"q": "sunset", "has_faces": "true"})
+    assert r.status_code == 200
+    data = r.json()
+    hit_ids = [h["asset_id"] for h in data["hits"]]
+    assert asset_with in hit_ids
+    assert asset_no not in hit_ids

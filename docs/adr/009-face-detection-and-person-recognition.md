@@ -9,7 +9,7 @@ Proposed
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 1 | Schema migration, InsightFace provider, face submission API | Done |
-| 2 | CLI integration (ingest + repair), `has_faces` search/browse filter | Not started |
+| 2 | CLI integration (ingest + repair), `has_faces` search/browse filter | Done |
 
 ## Scope Note
 
