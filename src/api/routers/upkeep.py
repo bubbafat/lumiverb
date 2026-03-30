@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, Query, Request
 from pydantic import BaseModel
 from sqlmodel import Session
 
@@ -54,7 +54,15 @@ def _is_admin_key(authorization: str | None) -> bool:
     return bool(settings.admin_key and token == settings.admin_key)
 
 
-def _run_sweep_all_tenants() -> dict:
+def _reset_search_synced_at(session) -> None:
+    """Clear search_synced_at on all assets and scenes to force full re-index."""
+    from sqlalchemy import text
+    session.execute(text("UPDATE assets SET search_synced_at = NULL"))
+    session.execute(text("UPDATE video_scenes SET search_synced_at = NULL"))
+    session.commit()
+
+
+def _run_sweep_all_tenants(force: bool = False) -> dict:
     """Run search sync sweep across all tenants, aggregating results."""
     from src.core.database import get_control_session, get_tenant_session
     from src.repository.control_plane import TenantRepository
@@ -68,6 +76,8 @@ def _run_sweep_all_tenants() -> dict:
     for tenant in tenants:
         try:
             with get_tenant_session(tenant.tenant_id) as session:
+                if force:
+                    _reset_search_synced_at(session)
                 result = run_search_sync_sweep(session, tenant_id=tenant.tenant_id)
                 for key in totals:
                     totals[key] += result.get(key, 0)
@@ -78,7 +88,7 @@ def _run_sweep_all_tenants() -> dict:
     return totals
 
 
-def _run_sweep_single_tenant(request: Request) -> dict:
+def _run_sweep_single_tenant(request: Request, force: bool = False) -> dict:
     """Run search sync sweep for the tenant resolved from the API key."""
     from src.search.sync import run_search_sync_sweep
     from src.api.dependencies import get_tenant_session as dep_get_tenant_session
@@ -86,6 +96,8 @@ def _run_sweep_single_tenant(request: Request) -> dict:
     tenant_id = getattr(request.state, "tenant_id", None)
     session = next(dep_get_tenant_session(request))
     try:
+        if force:
+            _reset_search_synced_at(session)
         return run_search_sync_sweep(session, tenant_id=tenant_id)
     finally:
         session.close()
@@ -111,15 +123,17 @@ def run_upkeep(
 def run_search_sync(
     request: Request,
     authorization: Annotated[str | None, Header()] = None,
+    force: bool = Query(default=False, description="Reset all search_synced_at timestamps and re-index everything"),
 ) -> SearchSyncResult:
     """Run search sync sweep.
 
     With admin key: sweeps all tenants. With tenant API key: sweeps that tenant only.
+    force=true: clears search_synced_at on all assets/scenes so everything is re-indexed.
     """
     if _is_admin_key(authorization):
-        result = _run_sweep_all_tenants()
+        result = _run_sweep_all_tenants(force=force)
     else:
-        result = _run_sweep_single_tenant(request)
+        result = _run_sweep_single_tenant(request, force=force)
     return SearchSyncResult(**result)
 
 

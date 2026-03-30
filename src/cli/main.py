@@ -725,6 +725,7 @@ def repair(
     job_type: Annotated[str, typer.Option("--job-type", "-j", help="Repair type: embed, vision, search-sync, or all.")] = "all",
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be repaired without making changes.")] = False,
     concurrency: Annotated[int, typer.Option("--concurrency", help="Number of parallel workers.")] = 4,
+    force: Annotated[bool, typer.Option("--force", help="Force full re-index (search-sync: clear timestamps and re-index all).")] = False,
 ) -> None:
     """Detect and repair missing pipeline outputs.
 
@@ -757,6 +758,7 @@ def repair(
         job_type=job_type,
         dry_run=dry_run,
         concurrency=concurrency,
+        force=force,
         console=console,
     )
 

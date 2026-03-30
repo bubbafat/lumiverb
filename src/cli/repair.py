@@ -141,6 +141,7 @@ def run_repair(
     job_type: RepairType = "all",
     dry_run: bool = False,
     concurrency: int = 4,
+    force: bool = False,
     console: Console,
 ) -> None:
     """Detect and fix missing pipeline outputs."""
@@ -158,8 +159,12 @@ def run_repair(
         plan.append(("embed", summary["missing_embeddings"], "missing CLIP embeddings"))
     if job_type in ("vision", "all") and summary.get("missing_vision", 0) > 0:
         plan.append(("vision", summary["missing_vision"], "missing AI descriptions"))
-    if job_type in ("search-sync", "all") and summary.get("stale_search_sync", 0) > 0:
-        plan.append(("search-sync", summary["stale_search_sync"], "stale search index"))
+    if job_type in ("search-sync", "all"):
+        stale = summary.get("stale_search_sync", 0)
+        if force:
+            plan.append(("search-sync", summary.get("total_assets", 0), "full re-index (--force)"))
+        elif stale > 0:
+            plan.append(("search-sync", stale, "stale search index"))
 
     # Display summary table
     table = Table(title=f"Repair Summary — {library_name}", show_lines=False)
@@ -243,7 +248,8 @@ def run_repair(
 
         elif repair_type == "search-sync":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
-            resp = client.post("/v1/upkeep/search-sync")
+            qs = "?force=true" if force else ""
+            resp = client.post(f"/v1/upkeep/search-sync{qs}")
             result = resp.json()
             synced = result.get("synced", 0)
             sync_failed = result.get("failed", 0)
