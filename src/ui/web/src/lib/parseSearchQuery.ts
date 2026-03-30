@@ -62,6 +62,10 @@ const FILTER_PATTERNS: { regex: RegExp; handler: (match: RegExpMatchArray) => Re
     regex: /\bcolor:none\b/i,
     handler: () => ({ color: "none" }),
   },
+  {
+    regex: /\bhas:faces\b/i,
+    handler: () => ({ has_faces: "true" }),
+  },
 ];
 
 export function parseSearchQuery(query: string): ParsedQuery {

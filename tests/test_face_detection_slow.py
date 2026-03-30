@@ -393,3 +393,57 @@ def test_has_faces_filter_on_search(face_client: Tuple[_AuthClient, str, str]) -
     hit_ids = [h["asset_id"] for h in data["hits"]]
     assert asset_with in hit_ids
     assert asset_no not in hit_ids
+
+
+@pytest.mark.slow
+def test_facets_has_face_count(face_client: Tuple[_AuthClient, str, str]) -> None:
+    """GET /v1/assets/facets returns has_face_count field."""
+    auth_client, library_id, _ = face_client
+
+    # Create an asset with faces
+    asset_id = _create_asset(auth_client, library_id, "facets_face")
+    auth_client.post(
+        f"/v1/assets/{asset_id}/faces",
+        json={"faces": [{"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "detection_confidence": 0.9}]},
+    )
+
+    r = auth_client.get(f"/v1/assets/facets?library_id={library_id}")
+    assert r.status_code == 200, (r.status_code, r.text)
+    data = r.json()
+    assert "has_face_count" in data
+    assert data["has_face_count"] >= 1
+
+
+@pytest.mark.slow
+def test_list_faces_response_shape(face_client: Tuple[_AuthClient, str, str]) -> None:
+    """Regression: GET /v1/assets/{id}/faces response shape matches what the lightbox expects."""
+    auth_client, library_id, _ = face_client
+    asset_id = _create_asset(auth_client, library_id, "face_shape")
+
+    auth_client.post(
+        f"/v1/assets/{asset_id}/faces",
+        json={
+            "faces": [
+                {
+                    "bounding_box": {"x": 0.1, "y": 0.2, "w": 0.15, "h": 0.25},
+                    "detection_confidence": 0.92,
+                    "embedding": [0.3] * 512,
+                },
+            ],
+        },
+    )
+
+    r = auth_client.get(f"/v1/assets/{asset_id}/faces")
+    assert r.status_code == 200
+    data = r.json()
+    assert "faces" in data
+    face = data["faces"][0]
+    # All fields the lightbox overlay depends on
+    assert "face_id" in face
+    assert "bounding_box" in face
+    bbox = face["bounding_box"]
+    for key in ("x", "y", "w", "h"):
+        assert key in bbox, f"bounding_box missing '{key}'"
+        assert isinstance(bbox[key], (int, float))
+    assert "detection_confidence" in face
+    assert "person" in face  # null until clustering ships

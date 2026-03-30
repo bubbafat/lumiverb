@@ -46,6 +46,7 @@ export interface AssetPageItem {
   flash_fired: boolean | null;
   gps_lat: number | null;
   gps_lon: number | null;
+  face_count?: number | null;
   created_at: string | null;
 }
 
@@ -63,6 +64,18 @@ export interface FacetsResponse {
   aperture_range: (number | null)[];
   focal_length_range: (number | null)[];
   has_gps_count: number;
+  has_face_count: number;
+}
+
+export interface FaceItem {
+  face_id: string;
+  bounding_box: { x: number; y: number; w: number; h: number } | null;
+  detection_confidence: number | null;
+  person: { person_id: string; display_name: string } | null;
+}
+
+export interface FaceListResponse {
+  faces: FaceItem[];
 }
 
 export interface SearchHit {

@@ -26,6 +26,7 @@ class FacetsResponse(BaseModel):
     aperture_range: list[float | None]  # [min, max]
     focal_length_range: list[float | None]  # [min, max]
     has_gps_count: int = 0
+    has_face_count: int = 0
 
 
 @router.get("/facets", response_model=FacetsResponse)
@@ -68,7 +69,8 @@ def get_facets(
             MAX(focal_length) AS fl_max,
             bool_or(media_type = 'image') AS has_images,
             bool_or(media_type = 'video') AS has_videos,
-            COUNT(*) FILTER (WHERE gps_lat IS NOT NULL AND gps_lon IS NOT NULL) AS gps_count
+            COUNT(*) FILTER (WHERE gps_lat IS NOT NULL AND gps_lon IS NOT NULL) AS gps_count,
+            COUNT(*) FILTER (WHERE face_count > 0) AS face_count
         FROM active_assets
         WHERE {where_sql}
     """
@@ -90,4 +92,5 @@ def get_facets(
         aperture_range=[row.aperture_min, row.aperture_max],
         focal_length_range=[row.fl_min, row.fl_max],
         has_gps_count=row.gps_count or 0,
+        has_face_count=row.face_count or 0,
     )

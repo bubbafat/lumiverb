@@ -1,6 +1,7 @@
 import { useEffect, useCallback, useState, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { getAsset, findSimilar } from "../api/client";
+import { getAsset, findSimilar, listFaces } from "../api/client";
+import { useLocalStorage } from "../lib/useLocalStorage";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 import type { AssetPageItem, AssetRating, RatingColor, SimilarHit } from "../api/types";
 import { HeartButton, StarPicker, ColorPicker } from "./RatingControls";
@@ -123,6 +124,7 @@ export function Lightbox({
   publicLibraryId,
 }: LightboxProps) {
   const [showSimilar, setShowSimilar] = useState(false);
+  const [showFaces, setShowFaces] = useLocalStorage("lv_show_faces", false);
   const [metaOpen, setMetaOpen] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showHints, setShowHints] = useState(true);
@@ -223,6 +225,15 @@ export function Lightbox({
     enabled: showSimilar && !!libraryId,
   });
 
+  const isImage = !isVideo;
+  const hasFaces = isImage && (asset.face_count ?? 0) > 0;
+
+  const { data: facesData } = useQuery({
+    queryKey: ["faces", asset.asset_id],
+    queryFn: () => listFaces(asset.asset_id),
+    enabled: showFaces && hasFaces,
+  });
+
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       const el = document.activeElement as HTMLElement | null;
@@ -254,6 +265,9 @@ export function Lightbox({
             onNavigate(currentIndex + 1);
             resetHintTimer();
           }
+          break;
+        case "d":
+          if (hasFaces) setShowFaces(!showFaces);
           break;
         case "f":
           // f = toggle favorite (Lightroom convention); Shift+F = fullscreen
@@ -315,6 +329,8 @@ export function Lightbox({
       onRatingChange,
       asset.asset_id,
       rating,
+      hasFaces,
+      showFaces,
     ],
   );
 
@@ -415,11 +431,27 @@ export function Lightbox({
                 className="max-h-[calc(100vh-4rem)] max-w-full"
               />
             ) : mediaUrl ? (
-              <img
-                src={mediaUrl}
-                alt={filename}
-                className="max-h-[calc(100vh-4rem)] max-w-full object-contain"
-              />
+              <div className="relative inline-block">
+                <img
+                  src={mediaUrl}
+                  alt={filename}
+                  className="max-h-[calc(100vh-4rem)] max-w-full object-contain"
+                />
+                {showFaces && facesData?.faces.map((face) =>
+                  face.bounding_box && (
+                    <div
+                      key={face.face_id}
+                      className="absolute border-2 border-indigo-400 rounded pointer-events-none"
+                      style={{
+                        left: `${face.bounding_box.x * 100}%`,
+                        top: `${face.bounding_box.y * 100}%`,
+                        width: `${face.bounding_box.w * 100}%`,
+                        height: `${face.bounding_box.h * 100}%`,
+                      }}
+                    />
+                  )
+                )}
+              </div>
             ) : (
               <div className="text-gray-500">
                 {isVideo ? "Preview unavailable" : "Image unavailable"}
@@ -471,6 +503,7 @@ export function Lightbox({
               <span><kbd className="font-mono">Esc</kbd> Close</span>
               <span><kbd className="font-mono">Shift+F</kbd> Fullscreen</span>
               <span><kbd className="font-mono">Space</kbd> Slideshow</span>
+              <span><kbd className="font-mono">d</kbd> Faces</span>
               <span><kbd className="font-mono">f</kbd> Favorite</span>
               <span><kbd className="font-mono">1-5</kbd> Stars</span>
               <span><kbd className="font-mono">6-9</kbd> Colors</span>
@@ -910,6 +943,19 @@ export function Lightbox({
                     className="w-full rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-700 hover:text-gray-100"
                   >
                     Add to collection
+                  </button>
+                </>
+              )}
+
+              {hasFaces && (
+                <>
+                  <hr className="border-gray-700" />
+                  <button
+                    type="button"
+                    onClick={() => setShowFaces(!showFaces)}
+                    className="w-full rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-700 hover:text-gray-100"
+                  >
+                    {showFaces ? "Hide faces" : "Show faces"}
                   </button>
                 </>
               )}

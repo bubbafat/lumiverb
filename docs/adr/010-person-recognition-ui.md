@@ -8,7 +8,7 @@ Proposed
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | Face search filter + lightbox bounding box overlay | Not started |
+| 1 | Face search filter + lightbox bounding box overlay | Done |
 | 2 | Clustering API + people CRUD + people page | Not started |
 | 3 | Cluster management UI + merge/rename/fix | Not started |
 | 4 | Search by person name + similarity integration | Not started |

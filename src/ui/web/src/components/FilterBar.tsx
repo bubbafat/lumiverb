@@ -92,6 +92,7 @@ interface FilterBarProps {
   focalLengthMax: string | null;
   hasExposure: boolean | null;
   hasGps: boolean;
+  hasFaces: boolean;
   nearLat: string | null;
   nearLon: string | null;
   nearRadiusKm: string | null;
@@ -130,6 +131,7 @@ export function FilterBar({
   focalLengthMax,
   hasExposure,
   hasGps,
+  hasFaces,
   nearLat,
   nearLon,
   nearRadiusKm,
@@ -243,7 +245,7 @@ export function FilterBar({
   const hasActiveFilters = !!(
     mediaType || cameraMake || cameraModel || lensModel ||
     isoMin || isoMax || exposureMinUs || exposureMaxUs || apertureMin || apertureMax ||
-    focalLengthMin || focalLengthMax || hasExposure != null || hasGps || nearLat ||
+    focalLengthMin || focalLengthMax || hasExposure != null || hasGps || hasFaces || nearLat ||
     favorite != null || starMin || starMax || colorFilter
   );
 
@@ -467,6 +469,9 @@ export function FilterBar({
           {hasGps && !nearLat && (
             <Chiclet label="Has location" onClear={() => onChangeFilter("has_gps", null)} />
           )}
+          {hasFaces && (
+            <Chiclet label="Has faces" onClear={() => onChangeFilter("has_faces", null)} />
+          )}
           {nearLat && nearLon && (
             <Chiclet
               label={`Within ${nearRadiusKm ?? "1"}km`}
@@ -665,6 +670,19 @@ export function FilterBar({
             </label>
           )}
 
+          {/* Faces toggle */}
+          {facets && facets.has_face_count > 0 && (
+            <label className="flex items-center gap-1.5 text-xs text-gray-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={hasFaces}
+                onChange={(e) => onChangeFilter("has_faces", e.target.checked ? "true" : null)}
+                className="rounded border-gray-700 bg-gray-800 text-indigo-600 focus:ring-indigo-500"
+              />
+              Has faces ({facets.has_face_count})
+            </label>
+          )}
+
           {/* Geo-proximity radius selector (only when near_lat is set) */}
           {nearLat && nearLon && (
             <div className="flex items-center gap-1.5">
@@ -763,7 +781,7 @@ export function FilterBar({
                 for (const key of [
                   "media_type", "camera_make", "camera_model", "lens_model",
                   "iso_min", "iso_max", "aperture_min", "aperture_max",
-                  "focal_length_min", "focal_length_max", "has_gps",
+                  "focal_length_min", "focal_length_max", "has_gps", "has_faces",
                   "near_lat", "near_lon", "near_radius_km",
                   "favorite", "star_min", "star_max", "color",
                 ]) {

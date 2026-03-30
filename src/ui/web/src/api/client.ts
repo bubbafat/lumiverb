@@ -12,6 +12,7 @@ import type {
   CurrentUser,
   DirectoryNode,
   EmptyTrashResponse,
+  FaceListResponse,
   FacetsResponse,
   LibraryListItem,
   LibraryResponse,
@@ -223,6 +224,7 @@ export interface PageAssetsOptions {
   focalLengthMax?: number;
   hasExposure?: boolean;
   hasGps?: boolean;
+  hasFaces?: boolean;
   nearLat?: number;
   nearLon?: number;
   nearRadiusKm?: number;
@@ -261,6 +263,7 @@ export async function pageAssets(
   if (opts?.focalLengthMax != null) params.set("focal_length_max", String(opts.focalLengthMax));
   if (opts?.hasExposure != null) params.set("has_exposure", String(opts.hasExposure));
   if (opts?.hasGps) params.set("has_gps", "true");
+  if (opts?.hasFaces) params.set("has_faces", "true");
   if (opts?.nearLat != null) params.set("near_lat", String(opts.nearLat));
   if (opts?.nearLon != null) params.set("near_lon", String(opts.nearLon));
   if (opts?.nearRadiusKm != null) params.set("near_radius_km", String(opts.nearRadiusKm));
@@ -300,6 +303,7 @@ export async function browseAll(
   if (opts?.focalLengthMax != null) params.set("focal_length_max", String(opts.focalLengthMax));
   if (opts?.hasExposure != null) params.set("has_exposure", String(opts.hasExposure));
   if (opts?.hasGps) params.set("has_gps", "true");
+  if (opts?.hasFaces) params.set("has_faces", "true");
   if (opts?.nearLat != null) params.set("near_lat", String(opts.nearLat));
   if (opts?.nearLon != null) params.set("near_lon", String(opts.nearLon));
   if (opts?.nearRadiusKm != null) params.set("near_radius_km", String(opts.nearRadiusKm));
@@ -319,6 +323,11 @@ export async function getFacets(
   const params = new URLSearchParams({ library_id: libraryId });
   if (pathPrefix) params.set("path_prefix", pathPrefix);
   return apiFetch<FacetsResponse>(`/assets/facets?${params}`);
+}
+
+/** List detected faces for an asset. */
+export async function listFaces(assetId: string): Promise<FaceListResponse> {
+  return apiFetch<FaceListResponse>(`/assets/${assetId}/faces`);
 }
 
 export async function searchAssets(params: {
