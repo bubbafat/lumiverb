@@ -15,6 +15,7 @@ from rich.progress import Progress, BarColumn, TextColumn, MofNCompleteColumn, T
 from rich.table import Table
 
 from src.cli.client import LumiverbClient
+from src.workers.faces.insightface_provider import InsightFaceProvider
 
 logger = logging.getLogger(__name__)
 
@@ -244,10 +245,7 @@ def _face_batch_worker(
 
     Returns {"processed": N, "failed": N, "skipped": N}.
     """
-    from src.cli.client import LumiverbClient as _Client
-    from src.workers.faces.insightface_provider import InsightFaceProvider
-
-    client = _Client(base_url=base_url, token=token)
+    client = LumiverbClient(base_url=base_url, token=token)
     provider = InsightFaceProvider()
     provider.ensure_loaded()
 
