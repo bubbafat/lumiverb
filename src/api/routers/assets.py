@@ -96,6 +96,7 @@ class AssetPageItem(BaseModel):
     flash_fired: bool | None = None
     gps_lat: float | None = None
     gps_lon: float | None = None
+    face_count: int | None = None
     created_at: str | None = None  # ISO8601
 
 
