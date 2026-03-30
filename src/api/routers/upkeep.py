@@ -88,24 +88,36 @@ def _run_sweep_all_tenants(force: bool = False) -> dict:
     return totals
 
 
-def _run_sweep_single_tenant(request: Request, force: bool = False) -> dict:
+def _run_sweep_single_tenant(authorization: str | None, force: bool = False) -> dict:
     """Run search sync sweep for the tenant resolved from the API key."""
     from src.search.sync import run_search_sync_sweep
-    from src.api.dependencies import get_tenant_session as dep_get_tenant_session
+    from src.core.database import get_control_session, get_engine_for_url
+    from src.repository.control_plane import ApiKeyRepository, TenantDbRoutingRepository
+    from sqlmodel import Session as TenantSession
 
-    tenant_id = getattr(request.state, "tenant_id", None)
-    session = next(dep_get_tenant_session(request))
-    try:
+    if not authorization or not authorization.startswith("Bearer "):
+        return {"synced": 0, "failed": 0, "scenes_synced": 0, "scenes_failed": 0}
+
+    token = authorization[7:].strip()
+    with get_control_session() as ctrl_session:
+        key_repo = ApiKeyRepository(ctrl_session)
+        api_key = key_repo.get_by_plaintext(token)
+        if api_key is None:
+            return {"synced": 0, "failed": 0, "scenes_synced": 0, "scenes_failed": 0}
+        tenant_id = api_key.tenant_id
+        routing = TenantDbRoutingRepository(ctrl_session).get_by_tenant_id(tenant_id)
+        if routing is None:
+            return {"synced": 0, "failed": 0, "scenes_synced": 0, "scenes_failed": 0}
+
+    engine = get_engine_for_url(routing.connection_string)
+    with TenantSession(engine) as session:
         if force:
             _reset_search_synced_at(session)
         return run_search_sync_sweep(session, tenant_id=tenant_id)
-    finally:
-        session.close()
 
 
 @router.post("", response_model=UpkeepResult)
 def run_upkeep(
-    request: Request,
     authorization: Annotated[str | None, Header()] = None,
 ) -> UpkeepResult:
     """Run all periodic upkeep tasks.
@@ -115,13 +127,12 @@ def run_upkeep(
     if _is_admin_key(authorization):
         sync_result = _run_sweep_all_tenants()
     else:
-        sync_result = _run_sweep_single_tenant(request)
+        sync_result = _run_sweep_single_tenant(authorization)
     return UpkeepResult(search_sync=SearchSyncResult(**sync_result))
 
 
 @router.post("/search-sync", response_model=SearchSyncResult)
 def run_search_sync(
-    request: Request,
     authorization: Annotated[str | None, Header()] = None,
     force: bool = Query(default=False, description="Reset all search_synced_at timestamps and re-index everything"),
 ) -> SearchSyncResult:
@@ -133,7 +144,7 @@ def run_search_sync(
     if _is_admin_key(authorization):
         result = _run_sweep_all_tenants(force=force)
     else:
-        result = _run_sweep_single_tenant(request, force=force)
+        result = _run_sweep_single_tenant(authorization, force=force)
     return SearchSyncResult(**result)
 
 
