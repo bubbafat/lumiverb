@@ -122,6 +122,14 @@ POST   /v1/people/{person_id}/merge        — { source_person_id } — merge so
 - Image wrapped in `<div className="relative inline-block">` so parent shrinks to image size
 - Keyboard shortcut: `d` (detect/display) — `f` is taken by favorite (Lightroom convention)
 - Border style: `border-2 border-indigo-400 rounded` — subtle, non-distracting
+- Phase 1 treats all boxes identically (indigo border, no labels, no interactivity)
+
+#### Phase 2 Lightbox Enhancements
+
+Once `FaceItem.person` is populated:
+- **Color-coded boxes**: identified faces use `border-emerald-400` (green), unidentified faces use `border-gray-500` (gray). Replaces the uniform indigo border from Phase 1.
+- **Name labels**: identified faces show a small label (`person.display_name`) anchored below the bounding box. Style: `bg-black/70 text-xs text-white px-1 rounded` — readable but unobtrusive.
+- **Clickable identified faces**: remove `pointer-events-none` from boxes with a person match. Click navigates to `/people/{personId}`. Unidentified faces remain non-interactive until Phase 3 adds assignment UI.
 
 #### Phase 2 — People Page (named people only)
 
@@ -143,6 +151,11 @@ POST   /v1/people/{person_id}/merge        — { source_person_id } — merge so
 - Each cluster: grid of face crop thumbnails (up to `faces_per_cluster` samples)
 - Actions per cluster: "Name this person" (creates new), "This is [existing person]" (merge into existing)
 - Single-face corrections: reassign face to different person, remove match
+
+**Lightbox — unidentified face interactivity:**
+- Gray (unidentified) face boxes become clickable in Phase 3
+- Click opens an inline popover: "Name this person" (create new) or "This is [dropdown of existing people]"
+- Uses `POST /v1/faces/{face_id}/assign` endpoint
 
 #### Phase 4 — Search by Person
 
@@ -265,7 +278,7 @@ Every phase must satisfy all of the following before it is marked complete:
 - People page (`/people`): grid of named people sorted by face count
 - Person detail page (`/people/{id}`): photos of this person
 - Sidebar nav link to People page
-- Lightbox: populate `person` field on face items (show name label on overlay)
+- Lightbox: populate `person` field on face items; color-coded boxes (green=identified, gray=unknown); name labels on identified faces; click identified face → navigate to `/people/{personId}`
 
 **Does NOT include:** Cluster assignment UI, merge, fix bad tags, search by person
 
