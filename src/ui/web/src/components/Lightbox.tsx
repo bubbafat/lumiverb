@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { getAsset, findSimilar, listFaces } from "../api/client";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { getAsset, findSimilar, listFaces, listPeople, assignFace } from "../api/client";
 import { useLocalStorage } from "../lib/useLocalStorage";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 import type { AssetPageItem, AssetRating, RatingColor, SimilarHit } from "../api/types";
@@ -230,10 +230,44 @@ export function Lightbox({
   const isImage = !isVideo;
   const hasFaces = isImage && (asset.face_count ?? 0) > 0;
 
+  const queryClient = useQueryClient();
+
   const { data: facesData } = useQuery({
     queryKey: ["faces", asset.asset_id],
     queryFn: () => listFaces(asset.asset_id),
     enabled: showFaces && hasFaces,
+  });
+
+  // Face assignment popover state
+  const [assignFaceId, setAssignFaceId] = useState<string | null>(null);
+  const [assignMode, setAssignMode] = useState<"pick" | "name">("pick");
+  const [newPersonName, setNewPersonName] = useState("");
+
+  // Reset popover when asset changes
+  useEffect(() => {
+    setAssignFaceId(null);
+  }, [asset.asset_id]);
+
+  const { data: peopleData } = useQuery({
+    queryKey: ["people-for-assign"],
+    queryFn: () => listPeople(undefined, 100),
+    enabled: assignFaceId != null,
+  });
+
+  const assignMutation = useMutation({
+    mutationFn: (opts: { faceId: string } & ({ personId: string } | { newPersonName: string })) => {
+      const { faceId, ...rest } = opts;
+      return assignFace(faceId, "personId" in rest ? { personId: rest.personId } : { newPersonName: rest.newPersonName });
+    },
+    onSuccess: () => {
+      setAssignFaceId(null);
+      setNewPersonName("");
+      setAssignMode("pick");
+      queryClient.invalidateQueries({ queryKey: ["faces", asset.asset_id] });
+      queryClient.invalidateQueries({ queryKey: ["people"] });
+      queryClient.invalidateQueries({ queryKey: ["people-for-assign"] });
+      queryClient.invalidateQueries({ queryKey: ["face-clusters"] });
+    },
   });
 
   const handleKeyDown = useCallback(
@@ -443,22 +477,106 @@ export function Lightbox({
                   if (!face.bounding_box) return null;
                   const identified = face.person != null;
                   const borderColor = identified ? "border-emerald-400" : "border-gray-500";
+                  const isPopoverTarget = assignFaceId === face.face_id;
                   return (
                     <div
                       key={face.face_id}
-                      className={`absolute border-2 ${borderColor} rounded ${identified ? "cursor-pointer" : "pointer-events-none"}`}
+                      className={`absolute border-2 ${borderColor} rounded cursor-pointer`}
                       style={{
                         left: `${face.bounding_box.x * 100}%`,
                         top: `${face.bounding_box.y * 100}%`,
                         width: `${face.bounding_box.w * 100}%`,
                         height: `${face.bounding_box.h * 100}%`,
                       }}
-                      onClick={identified ? () => navigate(`/people/${face.person!.person_id}`) : undefined}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (identified) {
+                          navigate(`/people/${face.person!.person_id}`);
+                        } else {
+                          setAssignFaceId(isPopoverTarget ? null : face.face_id);
+                          setAssignMode("pick");
+                          setNewPersonName("");
+                        }
+                      }}
                     >
                       {identified && (
                         <span className="absolute -bottom-5 left-0 whitespace-nowrap rounded bg-black/70 px-1 text-xs text-white">
                           {face.person!.display_name}
                         </span>
+                      )}
+                      {/* Assignment popover */}
+                      {isPopoverTarget && (
+                        <div
+                          className="absolute left-0 top-full z-50 mt-1 w-56 rounded-lg border border-gray-600 bg-gray-800 p-3 shadow-xl"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {assignMode === "pick" ? (
+                            <div className="space-y-2">
+                              <p className="text-xs font-medium text-gray-300">Who is this?</p>
+                              {(peopleData?.items ?? []).length > 0 && (
+                                <div className="max-h-32 space-y-1 overflow-y-auto">
+                                  {peopleData!.items.map((p) => (
+                                    <button
+                                      key={p.person_id}
+                                      type="button"
+                                      onClick={() => assignMutation.mutate({ faceId: face.face_id, personId: p.person_id })}
+                                      disabled={assignMutation.isPending}
+                                      className="w-full rounded px-2 py-1 text-left text-xs text-gray-200 hover:bg-gray-700"
+                                    >
+                                      {p.display_name} <span className="text-gray-500">({p.face_count})</span>
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => setAssignMode("name")}
+                                className="w-full rounded-lg border border-dashed border-gray-600 px-2 py-1.5 text-xs text-indigo-400 hover:border-indigo-500 hover:text-indigo-300"
+                              >
+                                + New person
+                              </button>
+                            </div>
+                          ) : (
+                            <form
+                              onSubmit={(e) => {
+                                e.preventDefault();
+                                if (newPersonName.trim()) {
+                                  assignMutation.mutate({ faceId: face.face_id, newPersonName: newPersonName.trim() });
+                                }
+                              }}
+                              className="space-y-2"
+                            >
+                              <p className="text-xs font-medium text-gray-300">New person name</p>
+                              <input
+                                type="text"
+                                value={newPersonName}
+                                onChange={(e) => setNewPersonName(e.target.value)}
+                                placeholder="Enter name..."
+                                className="w-full rounded-lg border border-gray-600 bg-gray-900 px-2 py-1.5 text-xs text-white focus:border-indigo-500 focus:outline-none"
+                                autoFocus
+                              />
+                              <div className="flex gap-2">
+                                <button
+                                  type="submit"
+                                  disabled={assignMutation.isPending || !newPersonName.trim()}
+                                  className="flex-1 rounded-lg bg-indigo-600 px-2 py-1 text-xs text-white hover:bg-indigo-500 disabled:opacity-50"
+                                >
+                                  {assignMutation.isPending ? "..." : "Create"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setAssignMode("pick")}
+                                  className="rounded-lg border border-gray-600 px-2 py-1 text-xs text-gray-400 hover:text-white"
+                                >
+                                  Back
+                                </button>
+                              </div>
+                            </form>
+                          )}
+                          {assignMutation.isError && (
+                            <p className="mt-1 text-xs text-red-400">{assignMutation.error?.message ?? "Failed"}</p>
+                          )}
+                        </div>
                       )}
                     </div>
                   );

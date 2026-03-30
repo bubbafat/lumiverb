@@ -2579,7 +2579,12 @@ class PersonRepository:
         person = self.get_by_id(person_id)
         if person is None:
             return False
-        # Delete matches first
+        # Clear denormalized faces.person_id
+        self._session.execute(
+            text("UPDATE faces SET person_id = NULL WHERE person_id = :pid"),
+            {"pid": person_id},
+        )
+        # Delete matches
         self._session.execute(
             text("DELETE FROM face_person_matches WHERE person_id = :pid"),
             {"pid": person_id},
@@ -2631,18 +2636,37 @@ class PersonRepository:
             confirmed_at=utcnow() if confirmed else None,
         )
         self._session.add(match)
+        # Sync denormalized faces.person_id
+        self._session.execute(
+            text("UPDATE faces SET person_id = :pid WHERE face_id = :fid"),
+            {"pid": person_id, "fid": face_id},
+        )
+        self._recompute_centroid(person_id)
         self._session.commit()
         self._session.refresh(match)
         return match
 
     def unassign_face(self, face_id: str) -> bool:
-        """Remove face-person assignment."""
+        """Remove face-person assignment and clear denormalized faces.person_id."""
+        # Get the person_id before deleting (for centroid recomputation)
+        old_pid = self._session.execute(
+            text("SELECT person_id FROM face_person_matches WHERE face_id = :fid"),
+            {"fid": face_id},
+        ).scalar()
         result = self._session.execute(
             text("DELETE FROM face_person_matches WHERE face_id = :fid"),
             {"fid": face_id},
         )
-        self._session.commit()
-        return result.rowcount > 0  # type: ignore[union-attr]
+        if result.rowcount > 0:  # type: ignore[union-attr]
+            self._session.execute(
+                text("UPDATE faces SET person_id = NULL WHERE face_id = :fid"),
+                {"fid": face_id},
+            )
+            if old_pid:
+                self._recompute_centroid(old_pid)
+            self._session.commit()
+            return True
+        return False
 
     def _assign_faces(self, person_id: str, face_ids: list[str]) -> None:
         """Batch assign faces to a person (no commit)."""
@@ -2654,6 +2678,12 @@ class PersonRepository:
                 person_id=person_id,
             ))
         self._session.flush()
+        # Sync denormalized faces.person_id
+        if face_ids:
+            self._session.execute(
+                text("UPDATE faces SET person_id = :pid WHERE face_id = ANY(:fids)"),
+                {"pid": person_id, "fids": face_ids},
+            )
 
     def _recompute_centroid(self, person_id: str) -> None:
         """Recompute centroid_vector as mean of all matched face embeddings (no commit)."""
@@ -2679,3 +2709,60 @@ class PersonRepository:
             text("UPDATE people SET confirmation_count = :cnt WHERE person_id = :pid"),
             {"cnt": count, "pid": person_id},
         )
+
+    def merge(self, target_person_id: str, source_person_id: str) -> Person | None:
+        """Merge source person into target. Returns updated target, or None if either not found.
+
+        Atomic: reassign all matches from source to target, update faces.person_id,
+        recompute centroid, pick best representative, delete source.
+        Uses SELECT ... FOR UPDATE on source to serialize concurrent merges.
+        """
+        # Lock source to serialize concurrent merges
+        source = self._session.execute(
+            text("SELECT person_id FROM people WHERE person_id = :pid FOR UPDATE"),
+            {"pid": source_person_id},
+        ).first()
+        if source is None:
+            return None
+
+        target = self.get_by_id(target_person_id)
+        if target is None:
+            return None
+
+        # Reassign face_person_matches from source to target
+        self._session.execute(
+            text("UPDATE face_person_matches SET person_id = :tid WHERE person_id = :sid"),
+            {"tid": target_person_id, "sid": source_person_id},
+        )
+        # Update denormalized faces.person_id
+        self._session.execute(
+            text("UPDATE faces SET person_id = :tid WHERE person_id = :sid"),
+            {"tid": target_person_id, "sid": source_person_id},
+        )
+
+        # Recompute centroid on target
+        self._recompute_centroid(target_person_id)
+
+        # Pick best representative face from merged set
+        best_face_id = self._session.execute(
+            text(
+                "SELECT f.face_id FROM faces f "
+                "JOIN face_person_matches m ON m.face_id = f.face_id "
+                "WHERE m.person_id = :pid "
+                "ORDER BY f.detection_confidence DESC NULLS LAST "
+                "LIMIT 1"
+            ),
+            {"pid": target_person_id},
+        ).scalar()
+        if best_face_id:
+            target.representative_face_id = best_face_id
+
+        # Delete source person
+        self._session.execute(
+            text("DELETE FROM people WHERE person_id = :pid"),
+            {"pid": source_person_id},
+        )
+
+        self._session.commit()
+        self._session.refresh(target)
+        return target

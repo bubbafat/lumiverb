@@ -271,3 +271,144 @@ def test_create_person_conflict_already_assigned(people_client: Tuple[_AuthClien
     # Try to create new person with same faces
     r = auth_client.post("/v1/people", json={"display_name": "Duplicate", "face_ids": face_ids})
     assert r.status_code == 409
+
+
+# ---------- Phase 3: assign / unassign / merge ----------
+
+
+@pytest.mark.slow
+def test_assign_face_to_existing_person(people_client: Tuple[_AuthClient, str, str]) -> None:
+    """POST /v1/faces/{face_id}/assign assigns face to an existing person."""
+    auth_client, library_id, _ = people_client
+
+    # Create an unassigned face
+    _, face_ids = _create_asset_with_faces(auth_client, library_id, "assign_test", 1)
+    face_id = face_ids[0]
+
+    # Create a person
+    r = auth_client.post("/v1/people", json={"display_name": "AssignTarget"})
+    assert r.status_code == 201
+    person_id = r.json()["person_id"]
+
+    # Assign face to person
+    r = auth_client.post(f"/v1/faces/{face_id}/assign", json={"person_id": person_id})
+    assert r.status_code == 200
+    assert r.json()["person_id"] == person_id
+
+    # Verify face is now matched
+    r = auth_client.get(f"/v1/people/{person_id}/faces")
+    face_ids_matched = [f["face_id"] for f in r.json()["items"]]
+    assert face_id in face_ids_matched
+
+
+@pytest.mark.slow
+def test_assign_face_new_person(people_client: Tuple[_AuthClient, str, str]) -> None:
+    """POST /v1/faces/{face_id}/assign with new_person_name creates person and assigns."""
+    auth_client, library_id, _ = people_client
+
+    _, face_ids = _create_asset_with_faces(auth_client, library_id, "assign_new_test", 1)
+    face_id = face_ids[0]
+
+    r = auth_client.post(f"/v1/faces/{face_id}/assign", json={"new_person_name": "NewPerson"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["display_name"] == "NewPerson"
+    assert data["person_id"].startswith("person_")
+
+
+@pytest.mark.slow
+def test_assign_face_conflict(people_client: Tuple[_AuthClient, str, str]) -> None:
+    """POST /v1/faces/{face_id}/assign returns 409 if face already assigned."""
+    auth_client, library_id, _ = people_client
+
+    _, face_ids = _create_asset_with_faces(auth_client, library_id, "assign_conflict", 1)
+    face_id = face_ids[0]
+
+    # Create person and assign
+    r = auth_client.post(f"/v1/faces/{face_id}/assign", json={"new_person_name": "ConflictTest"})
+    assert r.status_code == 200
+
+    # Try to assign again
+    r = auth_client.post(f"/v1/faces/{face_id}/assign", json={"new_person_name": "AnotherPerson"})
+    assert r.status_code == 409
+
+
+@pytest.mark.slow
+def test_unassign_face(people_client: Tuple[_AuthClient, str, str]) -> None:
+    """DELETE /v1/faces/{face_id}/assign removes face from person."""
+    auth_client, library_id, _ = people_client
+
+    _, face_ids = _create_asset_with_faces(auth_client, library_id, "unassign_test", 1)
+    face_id = face_ids[0]
+
+    r = auth_client.post(f"/v1/faces/{face_id}/assign", json={"new_person_name": "UnassignTarget"})
+    assert r.status_code == 200
+    person_id = r.json()["person_id"]
+
+    # Unassign
+    r = auth_client._client.delete(
+        f"/v1/faces/{face_id}/assign",
+        headers=auth_client._headers,
+    )
+    assert r.status_code == 204
+
+    # Verify face is no longer matched
+    r = auth_client.get(f"/v1/people/{person_id}/faces")
+    face_ids_matched = [f["face_id"] for f in r.json()["items"]]
+    assert face_id not in face_ids_matched
+
+
+@pytest.mark.slow
+def test_unassign_face_not_found(people_client: Tuple[_AuthClient, str, str]) -> None:
+    """DELETE /v1/faces/{face_id}/assign returns 404 if not assigned."""
+    auth_client, library_id, _ = people_client
+
+    _, face_ids = _create_asset_with_faces(auth_client, library_id, "unassign_404", 1)
+    face_id = face_ids[0]
+
+    r = auth_client._client.delete(
+        f"/v1/faces/{face_id}/assign",
+        headers=auth_client._headers,
+    )
+    assert r.status_code == 404
+
+
+@pytest.mark.slow
+def test_merge_person(people_client: Tuple[_AuthClient, str, str]) -> None:
+    """POST /v1/people/{id}/merge merges source into target, deletes source."""
+    auth_client, library_id, _ = people_client
+
+    # Create two people with faces
+    _, face_ids_a = _create_asset_with_faces(auth_client, library_id, "merge_a", 1)
+    _, face_ids_b = _create_asset_with_faces(auth_client, library_id, "merge_b", 1)
+
+    r = auth_client.post("/v1/people", json={"display_name": "MergeTarget", "face_ids": face_ids_a})
+    assert r.status_code == 201
+    target_id = r.json()["person_id"]
+
+    r = auth_client.post("/v1/people", json={"display_name": "MergeSource", "face_ids": face_ids_b})
+    assert r.status_code == 201
+    source_id = r.json()["person_id"]
+
+    # Merge source into target
+    r = auth_client.post(f"/v1/people/{target_id}/merge", json={"source_person_id": source_id})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["face_count"] == 2
+    assert data["display_name"] == "MergeTarget"
+
+    # Source should be gone
+    r = auth_client.get(f"/v1/people/{source_id}")
+    assert r.status_code == 404
+
+
+@pytest.mark.slow
+def test_merge_self_returns_400(people_client: Tuple[_AuthClient, str, str]) -> None:
+    """POST /v1/people/{id}/merge with self returns 400."""
+    auth_client, _, _ = people_client
+
+    r = auth_client.post("/v1/people", json={"display_name": "SelfMerge"})
+    pid = r.json()["person_id"]
+
+    r = auth_client.post(f"/v1/people/{pid}/merge", json={"source_person_id": pid})
+    assert r.status_code == 400

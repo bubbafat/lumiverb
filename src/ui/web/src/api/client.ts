@@ -418,6 +418,34 @@ export async function getClusters(limit = 20, facesPerCluster = 6): Promise<Clus
   return apiFetch<ClustersResponse>(`/faces/clusters?${params}`);
 }
 
+/** Assign a face to a person (existing or new). */
+export async function assignFace(
+  faceId: string,
+  opts: { personId: string } | { newPersonName: string },
+): Promise<{ person_id: string; display_name: string }> {
+  const body: Record<string, string> =
+    "personId" in opts ? { person_id: opts.personId } : { new_person_name: opts.newPersonName };
+  return apiFetch(`/faces/${faceId}/assign`, {
+    method: "POST",
+    body: JSON.stringify(body),
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+/** Remove a face from its assigned person. */
+export async function unassignFace(faceId: string): Promise<void> {
+  await apiFetch<void>(`/faces/${faceId}/assign`, { method: "DELETE" });
+}
+
+/** Merge source person into target person. Source is deleted. */
+export async function mergePerson(targetPersonId: string, sourcePersonId: string): Promise<PersonItem> {
+  return apiFetch<PersonItem>(`/people/${targetPersonId}/merge`, {
+    method: "POST",
+    body: JSON.stringify({ source_person_id: sourcePersonId }),
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 export async function searchAssets(params: {
   libraryId?: string;
   q: string;

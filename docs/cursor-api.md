@@ -47,8 +47,8 @@ Two-layer Postgres architecture:
 - `saved_views` — view_id (sv_+ULID), name, query_params (URL query string), icon (nullable), owner_user_id, position (int), created_at, updated_at. User-scoped bookmarked filter presets. Navigates to `/browse?{query_params}`.
 - `system_metadata` — key, value, updated_at
 - `faces` — face_id, asset_id, bounding_box_json, embedding_vector vector(512), detection_confidence, detection_model, detection_model_version, created_at. Populated by CLI face detection (InsightFace). HNSW index on embedding_vector for future clustering.
-- `people` — person_id, display_name, created_by_user, centroid_vector vector(512), confirmation_count, representative_face_id FK, created_at. Clustering-ready; not yet populated.
-- `face_person_matches` — face_id, person_id, confidence, confirmed bool, confirmed_at. Not yet populated; used when person clustering ships.
+- `people` — person_id, display_name, created_by_user, centroid_vector vector(512), confirmation_count, representative_face_id FK, created_at. Populated via People API and cluster management UI.
+- `face_person_matches` — face_id, person_id, confidence, confirmed bool, confirmed_at. Populated when faces are assigned to people. Unique constraint on face_id (one person per face).
 
 pgvector extension is enabled at provisioning time. Used for asset embeddings (CLIP), face embeddings (ArcFace), and similarity search.
 
@@ -211,6 +211,9 @@ People are tenant-scoped — a person named in one library is recognized across 
 - **DELETE /v1/people/{person_id}** — Delete person and all face matches. Returns 204 or 404.
 - **GET /v1/people/{person_id}/faces** — Cursor-paginated faces matched to a person. Query: `after`, `limit`. Returns `{ "items": [{ "face_id", "asset_id", "bounding_box", "detection_confidence", "rel_path" }], "next_cursor" }`.
 - **GET /v1/faces/clusters** — Compute clusters of unassigned faces. Query: `limit` (default 20, max 50), `faces_per_cluster` (default 6, max 20). Returns `{ "clusters": [{ "cluster_index", "size", "faces": [...] }], "truncated": bool }`. Not paginated — bounded by `limit` clusters.
+- **POST /v1/faces/{face_id}/assign** — Assign a face to a person. Body: `{ "person_id": str }` (existing person) or `{ "new_person_name": str }` (creates new person). Returns 409 if face is already assigned. Returns `{ "person_id", "display_name" }`.
+- **DELETE /v1/faces/{face_id}/assign** — Remove a face from its assigned person. Clears `faces.person_id` and recomputes person centroid. Returns 204 or 404.
+- **POST /v1/people/{person_id}/merge** — Merge source person into target. Body: `{ "source_person_id": str }`. Reassigns all face matches, updates `faces.person_id`, recomputes centroid, picks best representative face, deletes source. Serialized via `SELECT ... FOR UPDATE` on source. Returns updated target `PersonItem`. Returns 400 if merging into self.
 
 ## Ingest API
 

@@ -43,6 +43,15 @@ class PersonUpdateRequest(BaseModel):
     display_name: str
 
 
+class FaceAssignRequest(BaseModel):
+    person_id: str | None = None
+    new_person_name: str | None = None
+
+
+class MergeRequest(BaseModel):
+    source_person_id: str
+
+
 class PersonFaceItem(BaseModel):
     face_id: str
     asset_id: str
@@ -280,9 +289,107 @@ def list_person_faces(
     return PersonFacesResponse(items=items, next_cursor=next_cursor)
 
 
+@router.post("/{person_id}/merge", response_model=PersonItem)
+def merge_person(
+    person_id: str,
+    body: MergeRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> PersonItem:
+    """Merge source person into target (person_id). Source is deleted."""
+    from src.repository.tenant import PersonRepository
+
+    if body.source_person_id == person_id:
+        raise HTTPException(status_code=400, detail="Cannot merge a person into themselves")
+
+    repo = PersonRepository(session)
+    target = repo.merge(person_id, body.source_person_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    face_count = repo.get_face_count(person_id)
+
+    rep_asset_id = None
+    if target.representative_face_id:
+        from src.models.tenant import Face
+        rep_face = session.get(Face, target.representative_face_id)
+        if rep_face:
+            rep_asset_id = rep_face.asset_id
+
+    return PersonItem(
+        person_id=target.person_id,
+        display_name=target.display_name,
+        face_count=face_count,
+        representative_face_id=target.representative_face_id,
+        representative_asset_id=rep_asset_id,
+        confirmation_count=target.confirmation_count,
+    )
+
+
 # ---------- Clusters endpoint (on /v1/faces prefix) ----------
 
 faces_router = APIRouter(prefix="/v1/faces", tags=["faces"])
+
+
+@faces_router.post("/{face_id}/assign", status_code=200)
+def assign_face(
+    face_id: str,
+    body: FaceAssignRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> dict:
+    """Assign a face to a person (existing or new).
+
+    Provide either person_id (existing) or new_person_name (creates new person).
+    Returns 409 if face is already assigned.
+    """
+    from src.repository.tenant import PersonRepository
+    from src.models.tenant import Face
+
+    if not body.person_id and not body.new_person_name:
+        raise HTTPException(status_code=400, detail="Provide person_id or new_person_name")
+    if body.person_id and body.new_person_name:
+        raise HTTPException(status_code=400, detail="Provide person_id or new_person_name, not both")
+
+    # Verify face exists
+    face = session.get(Face, face_id)
+    if face is None:
+        raise HTTPException(status_code=404, detail="Face not found")
+
+    repo = PersonRepository(session)
+
+    # Check if already assigned
+    from sqlalchemy import text as sa_text
+    existing = session.execute(
+        sa_text("SELECT person_id FROM face_person_matches WHERE face_id = :fid"),
+        {"fid": face_id},
+    ).scalar()
+    if existing:
+        raise HTTPException(status_code=409, detail={
+            "message": "Face already assigned",
+            "current_person_id": existing,
+        })
+
+    if body.new_person_name:
+        person = repo.create(body.new_person_name.strip(), face_ids=[face_id])
+        return {"person_id": person.person_id, "display_name": person.display_name}
+    else:
+        person = repo.get_by_id(body.person_id)  # type: ignore[arg-type]
+        if person is None:
+            raise HTTPException(status_code=404, detail="Person not found")
+        repo.assign_face(face_id, body.person_id, confirmed=True)  # type: ignore[arg-type]
+        return {"person_id": person.person_id, "display_name": person.display_name}
+
+
+@faces_router.delete("/{face_id}/assign", status_code=204)
+def unassign_face(
+    face_id: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> None:
+    """Remove a face from its assigned person."""
+    from src.repository.tenant import PersonRepository
+
+    repo = PersonRepository(session)
+    if not repo.unassign_face(face_id):
+        raise HTTPException(status_code=404, detail="Face assignment not found")
 
 
 @faces_router.get("/clusters", response_model=ClustersResponse)

@@ -1,7 +1,13 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { listPeople, getClusters } from "../api/client";
-import type { PersonItem } from "../api/client";
+import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  listPeople,
+  getClusters,
+  createPerson,
+  assignFace,
+} from "../api/client";
+import type { PersonItem, ClusterItem, PersonFaceItem } from "../api/client";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 
 function PersonCard({ person }: { person: PersonItem }) {
@@ -41,7 +47,186 @@ function PersonCard({ person }: { person: PersonItem }) {
   );
 }
 
+function ClusterFaceThumbnail({ face }: { face: PersonFaceItem }) {
+  const { url, isLoading } = useAuthenticatedImage(face.asset_id, "thumbnail");
+
+  return (
+    <div className="relative aspect-square overflow-hidden rounded-lg bg-gray-800">
+      {isLoading ? (
+        <div className="h-full w-full animate-pulse bg-gray-700" />
+      ) : url ? (
+        <img src={url} alt={face.rel_path ?? ""} className="h-full w-full object-cover" />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center text-gray-600 text-xs">
+          No image
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ClusterCard({
+  cluster,
+  people,
+  onNamed,
+}: {
+  cluster: ClusterItem;
+  people: PersonItem[];
+  onNamed: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [mode, setMode] = useState<"idle" | "name" | "assign">("idle");
+  const [newName, setNewName] = useState("");
+  const [selectedPersonId, setSelectedPersonId] = useState("");
+
+  const nameMutation = useMutation({
+    mutationFn: (name: string) => {
+      const faceIds = cluster.faces.map((f) => f.face_id);
+      return createPerson(name, faceIds);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["people"] });
+      queryClient.invalidateQueries({ queryKey: ["face-clusters"] });
+      setMode("idle");
+      setNewName("");
+      onNamed();
+    },
+  });
+
+  const assignMutation = useMutation({
+    mutationFn: async (personId: string) => {
+      // Assign all faces in this cluster to the existing person
+      for (const face of cluster.faces) {
+        await assignFace(face.face_id, { personId });
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["people"] });
+      queryClient.invalidateQueries({ queryKey: ["face-clusters"] });
+      setMode("idle");
+      setSelectedPersonId("");
+      onNamed();
+    },
+  });
+
+  return (
+    <div className="rounded-xl border border-gray-700 bg-gray-800/30 p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <span className="text-sm font-medium text-gray-300">
+          {cluster.size} {cluster.size === 1 ? "photo" : "photos"}
+        </span>
+      </div>
+
+      {/* Face thumbnails */}
+      <div className="mb-3 grid grid-cols-3 gap-1.5">
+        {cluster.faces.map((face) => (
+          <ClusterFaceThumbnail key={face.face_id} face={face} />
+        ))}
+      </div>
+
+      {/* Actions */}
+      {mode === "idle" && (
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setMode("name")}
+            className="flex-1 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500"
+          >
+            Name this person
+          </button>
+          {people.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setMode("assign")}
+              className="flex-1 rounded-lg border border-gray-600 px-3 py-1.5 text-xs font-medium text-gray-300 hover:bg-gray-700"
+            >
+              This is...
+            </button>
+          )}
+        </div>
+      )}
+
+      {mode === "name" && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (newName.trim()) nameMutation.mutate(newName.trim());
+          }}
+          className="flex gap-2"
+        >
+          <input
+            type="text"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="Enter name..."
+            className="flex-1 rounded-lg border border-gray-600 bg-gray-800 px-3 py-1.5 text-xs text-white focus:border-indigo-500 focus:outline-none"
+            autoFocus
+          />
+          <button
+            type="submit"
+            disabled={nameMutation.isPending || !newName.trim()}
+            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+          >
+            {nameMutation.isPending ? "..." : "Save"}
+          </button>
+          <button
+            type="button"
+            onClick={() => { setMode("idle"); setNewName(""); }}
+            className="rounded-lg border border-gray-600 px-2 py-1.5 text-xs text-gray-400 hover:text-white"
+          >
+            Cancel
+          </button>
+        </form>
+      )}
+
+      {mode === "assign" && (
+        <div className="flex gap-2">
+          <select
+            value={selectedPersonId}
+            onChange={(e) => setSelectedPersonId(e.target.value)}
+            className="flex-1 rounded-lg border border-gray-600 bg-gray-800 px-3 py-1.5 text-xs text-white focus:border-indigo-500 focus:outline-none"
+            autoFocus
+          >
+            <option value="">Select person...</option>
+            {people.map((p) => (
+              <option key={p.person_id} value={p.person_id}>
+                {p.display_name} ({p.face_count})
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => {
+              if (selectedPersonId) assignMutation.mutate(selectedPersonId);
+            }}
+            disabled={assignMutation.isPending || !selectedPersonId}
+            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+          >
+            {assignMutation.isPending ? "..." : "Assign"}
+          </button>
+          <button
+            type="button"
+            onClick={() => { setMode("idle"); setSelectedPersonId(""); }}
+            className="rounded-lg border border-gray-600 px-2 py-1.5 text-xs text-gray-400 hover:text-white"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {(nameMutation.isError || assignMutation.isError) && (
+        <p className="mt-2 text-xs text-red-400">
+          {(nameMutation.error || assignMutation.error)?.message ?? "Failed"}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function PeoplePage() {
+  const queryClient = useQueryClient();
+  const [clustersExpanded, setClustersExpanded] = useState(true);
+
   const peopleQuery = useInfiniteQuery({
     queryKey: ["people"],
     queryFn: ({ pageParam }) => listPeople(pageParam, 50),
@@ -50,21 +235,26 @@ export default function PeoplePage() {
   });
 
   const clustersQuery = useQuery({
-    queryKey: ["face-clusters-summary"],
-    queryFn: () => getClusters(1, 1),
+    queryKey: ["face-clusters"],
+    queryFn: () => getClusters(20, 6),
   });
 
   const people = peopleQuery.data?.pages.flatMap((p) => p.items) ?? [];
-  const unnamedCount = clustersQuery.data?.clusters.reduce((sum, c) => sum + c.size, 0) ?? 0;
-  const hasClusters = (clustersQuery.data?.clusters.length ?? 0) > 0;
+  const clusters = clustersQuery.data?.clusters ?? [];
+  const truncated = clustersQuery.data?.truncated ?? false;
+
+  const handleClusterNamed = () => {
+    queryClient.invalidateQueries({ queryKey: ["face-clusters"] });
+    queryClient.invalidateQueries({ queryKey: ["people"] });
+  };
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
       <h1 className="mb-6 text-2xl font-bold text-white">People</h1>
 
-      {people.length === 0 && !peopleQuery.isLoading && (
+      {people.length === 0 && !peopleQuery.isLoading && clusters.length === 0 && (
         <p className="text-sm text-gray-500">
-          No named people yet. Use face clustering to identify and name people in your photos.
+          No named people yet. Use face clustering below to identify and name people in your photos.
         </p>
       )}
 
@@ -87,12 +277,53 @@ export default function PeoplePage() {
         </button>
       )}
 
-      {hasClusters && (
-        <div className="rounded-lg border border-gray-700 bg-gray-800/30 p-4">
-          <p className="text-sm text-gray-400">
-            {unnamedCount} unnamed face{unnamedCount !== 1 ? " clusters" : " cluster"} detected.
-            <span className="text-gray-500"> Cluster management coming soon.</span>
-          </p>
+      {/* Unnamed clusters */}
+      {clusters.length > 0 && (
+        <div className="mt-4">
+          <button
+            type="button"
+            onClick={() => setClustersExpanded(!clustersExpanded)}
+            className="mb-4 flex items-center gap-2 text-lg font-semibold text-gray-200 hover:text-white"
+          >
+            <svg
+              className={`h-4 w-4 transition-transform ${clustersExpanded ? "rotate-90" : ""}`}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+            Unnamed clusters
+            <span className="text-sm font-normal text-gray-500">
+              ({clusters.reduce((sum, c) => sum + c.size, 0)} faces in {clusters.length} clusters)
+            </span>
+          </button>
+
+          {clustersExpanded && (
+            <>
+              {truncated && (
+                <p className="mb-4 text-xs text-yellow-500">
+                  Showing top clusters. Name the largest clusters first to see more.
+                </p>
+              )}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+                {clusters.map((cluster) => (
+                  <ClusterCard
+                    key={cluster.cluster_index}
+                    cluster={cluster}
+                    people={people}
+                    onNamed={handleClusterNamed}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {clustersQuery.isLoading && (
+        <div className="mt-4">
+          <div className="h-6 w-48 animate-pulse rounded bg-gray-700" />
         </div>
       )}
 
