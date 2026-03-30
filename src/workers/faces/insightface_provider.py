@@ -48,36 +48,15 @@ class InsightFaceProvider:
         if self._app is None:
             with self._lock:
                 if self._app is None:
-                    import onnxruntime as ort
                     from insightface.app import FaceAnalysis
-                    from insightface.model_zoo.model_zoo import PickableInferenceSession
 
-                    # Disable ONNX Runtime's BFC memory arena — it never
-                    # returns memory to the OS, causing monotonic growth
-                    # when processing many images. Monkey-patch the session
-                    # constructor to inject sess_options before InsightFace
-                    # creates its sessions.
-                    _no_arena_opts = ort.SessionOptions()
-                    _no_arena_opts.enable_cpu_mem_arena = False
-
-                    _orig_init = PickableInferenceSession.__init__
-                    def _patched_init(self_sess, model_path, **kwargs):
-                        if "sess_options" not in kwargs:
-                            kwargs["sess_options"] = _no_arena_opts
-                        _orig_init(self_sess, model_path, **kwargs)
-                    PickableInferenceSession.__init__ = _patched_init
-
-                    try:
-                        app = FaceAnalysis(
-                            name=MODEL_VERSION,
-                            providers=["CPUExecutionProvider"],
-                        )
-                        app.prepare(ctx_id=-1, det_size=(640, 640))
-                    finally:
-                        PickableInferenceSession.__init__ = _orig_init
-
+                    app = FaceAnalysis(
+                        name=MODEL_VERSION,
+                        providers=["CPUExecutionProvider"],
+                    )
+                    app.prepare(ctx_id=-1, det_size=(640, 640))
                     self._app = app
-                    logger.info("Loaded InsightFace model %s (CPU, arena disabled)", MODEL_VERSION)
+                    logger.info("Loaded InsightFace model %s (CPU)", MODEL_VERSION)
         return self._app
 
     def ensure_loaded(self) -> None:
