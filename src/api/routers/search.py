@@ -35,6 +35,8 @@ class SearchHit(BaseModel):
 
     # Common fields
     asset_id: str
+    library_id: str | None = None
+    library_name: str | None = None
     rel_path: str
     thumbnail_key: str | None = None
     proxy_key: str | None = None
@@ -74,7 +76,7 @@ MediaType = Literal["image", "video", "all"]
 def search(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
-    library_id: str,
+    library_id: str | None = None,
     q: str = Query(default="", max_length=500),
     limit: int = Query(default=20, ge=1, le=500),
     offset: int = Query(default=0, ge=0, le=10000),
@@ -108,9 +110,13 @@ def search(
     a direct DB query is used (no BM25).
     """
     if getattr(request.state, "is_public_request", False):
+        if not library_id:
+            raise HTTPException(status_code=400, detail="library_id required for public access")
         lib = LibraryRepository(session).get_by_id(library_id)
         if lib is None or not lib.is_public:
             raise HTTPException(status_code=404, detail="Not found")
+
+    tenant_id = getattr(request.state, "tenant_id", None)
 
     # Require at least a text query or a date filter
     if not q and not date_from and not date_to:
@@ -161,14 +167,15 @@ def search(
 
     # --- Image search ---
     if search_images:
-        if settings.quickwit_enabled:
+        if settings.quickwit_enabled and tenant_id:
             try:
                 from src.search.quickwit_client import QuickwitClient
 
                 qw = QuickwitClient()
-                image_hits = qw.search(
-                    library_id=library_id,
+                image_hits = qw.search_tenant(
+                    tenant_id=tenant_id,
                     query=q,
+                    library_id=library_id,
                     max_hits=fetch_limit,
                     start_offset=0,
                 )
@@ -182,23 +189,34 @@ def search(
         if not image_hits and (
             not settings.quickwit_enabled or settings.quickwit_fallback_to_postgres
         ):
-            from src.search.postgres_search import search_assets
+            if library_id:
+                from src.search.postgres_search import search_assets
+                image_hits = search_assets(
+                    session, library_id, q, limit=fetch_limit, offset=0
+                )
+                source_parts.append("postgres")
 
-            image_hits = search_assets(
-                session, library_id, q, limit=fetch_limit, offset=0
-            )
-            source_parts.append("postgres")
-
-        # Enrich image hits from DB; drop trashed assets
+        # Enrich image hits from DB; drop trashed assets; resolve library names
         if image_hits:
             asset_repo = AssetRepository(session)
             assets_by_id = {
                 a.asset_id: a
                 for a in asset_repo.get_by_ids([h["asset_id"] for h in image_hits])
             }
+            # Resolve library names for cross-library results
+            lib_repo = LibraryRepository(session)
+            lib_ids = list({a.library_id for a in assets_by_id.values()})
+            libs_by_id: dict[str, str] = {}
+            for lid in lib_ids:
+                lib = lib_repo.get_by_id(lid)
+                if lib:
+                    libs_by_id[lid] = lib.name
+
             for hit in image_hits:
                 asset = assets_by_id.get(hit["asset_id"])
                 if asset:
+                    hit["library_id"] = asset.library_id
+                    hit["library_name"] = libs_by_id.get(asset.library_id, "")
                     hit["thumbnail_key"] = asset.thumbnail_key
                     hit["proxy_key"] = asset.proxy_key
                     hit["camera_make"] = asset.camera_make
@@ -210,7 +228,6 @@ def search(
                     hit["taken_at"] = (
                         asset.taken_at.isoformat() if asset.taken_at else None
                     )
-                    # Temp key for date-range post-filter; popped before serialization
                     hit["_file_mtime"] = asset.file_mtime
                 if hit.get("tags") is None:
                     hit["tags"] = []
@@ -218,14 +235,15 @@ def search(
             image_hits = [h for h in image_hits if h["asset_id"] in assets_by_id]
 
     # --- Scene search ---
-    if search_scenes and settings.quickwit_enabled:
+    if search_scenes and settings.quickwit_enabled and tenant_id:
         try:
             from src.search.quickwit_client import QuickwitClient
 
             qw = QuickwitClient()
-            scene_hits = qw.search_scenes(
-                library_id=library_id,
+            scene_hits = qw.search_tenant_scenes(
+                tenant_id=tenant_id,
                 query=q,
+                library_id=library_id,
                 max_hits=fetch_limit,
                 start_offset=0,
             )
@@ -390,7 +408,7 @@ def search(
 def _search_by_date(
     *,
     session: Session,
-    library_id: str,
+    library_id: str | None,
     dt_from: datetime | None,
     dt_to: datetime | None,
     path_prefix: str | None,
@@ -399,8 +417,12 @@ def _search_by_date(
     offset: int,
 ) -> SearchResponse:
     """Direct DB query for date-only search (no text query)."""
-    conditions = ["a.library_id = :library_id"]
-    params: dict = {"library_id": library_id, "limit": limit, "offset": offset}
+    conditions: list[str] = []
+    params: dict = {"limit": limit, "offset": offset}
+
+    if library_id:
+        conditions.append("a.library_id = :library_id")
+        params["library_id"] = library_id
 
     if dt_from:
         conditions.append("COALESCE(a.taken_at, a.file_mtime) >= :dt_from")
@@ -429,7 +451,7 @@ def _search_by_date(
             ) m ON TRUE
         """
 
-    where_sql = " AND ".join(conditions)
+    where_sql = " AND ".join(conditions) if conditions else "TRUE"
 
     # Count total matching rows for accurate capped-results messaging
     count_params = {k: v for k, v in params.items() if k not in ("limit", "offset")}
@@ -440,7 +462,7 @@ def _search_by_date(
 
     sql = text(
         f"""
-        SELECT a.asset_id, a.rel_path, a.media_type, a.file_size,
+        SELECT a.asset_id, a.library_id, a.rel_path, a.media_type, a.file_size,
                a.width, a.height, a.thumbnail_key, a.proxy_key,
                a.camera_make, a.camera_model, a.taken_at
         FROM active_assets a
@@ -452,10 +474,22 @@ def _search_by_date(
     ).bindparams(**params)
 
     rows = session.execute(sql).all()
+
+    # Resolve library names
+    lib_repo = LibraryRepository(session)
+    lib_ids = list({row.library_id for row in rows})
+    libs_by_id: dict[str, str] = {}
+    for lid in lib_ids:
+        lib = lib_repo.get_by_id(lid)
+        if lib:
+            libs_by_id[lid] = lib.name
+
     hits = [
         SearchHit(
             type="image",
             asset_id=row.asset_id,
+            library_id=row.library_id,
+            library_name=libs_by_id.get(row.library_id, ""),
             rel_path=row.rel_path,
             thumbnail_key=row.thumbnail_key,
             proxy_key=row.proxy_key,
