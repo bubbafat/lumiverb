@@ -356,22 +356,20 @@ def run_repair(
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Faces", total=len(assets), ok=0, fail=0)
-                ctx = mp.get_context("fork")
-
                 for batch_start in range(0, len(assets), FACE_BATCH_SIZE):
                     batch = assets[batch_start:batch_start + FACE_BATCH_SIZE]
-                    pool = ctx.Pool(1)
                     try:
-                        result = pool.apply(
-                            _face_batch_worker,
-                            (client.base_url, client.token, batch),
-                        )
+                        # Use spawn context to avoid fork+threads deadlock
+                        # on macOS (Rich progress bar has a live-render thread).
+                        ctx = mp.get_context("spawn")
+                        with ctx.Pool(1) as pool:
+                            result = pool.apply(
+                                _face_batch_worker,
+                                (client.base_url, client.token, batch),
+                            )
                     except Exception as e:
                         console.print(f"[red]Batch failed: {e}[/red]")
                         result = {"processed": 0, "failed": len(batch), "skipped": 0}
-                    finally:
-                        pool.terminate()
-                        pool.join()
 
                     with stats.lock:
                         stats.processed += result["processed"]
