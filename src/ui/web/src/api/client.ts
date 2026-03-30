@@ -382,7 +382,7 @@ export async function listPeople(cursor?: string, limit = 50): Promise<PersonLis
 export async function createPerson(displayName: string, faceIds?: string[]): Promise<PersonItem> {
   const body: Record<string, unknown> = { display_name: displayName };
   if (faceIds) body.face_ids = faceIds;
-  return apiFetch<PersonItem>("/people", { method: "POST", body: JSON.stringify(body), headers: { "Content-Type": "application/json" } });
+  return apiFetch<PersonItem>("/people", { method: "POST", body });
 }
 
 /** Get a person by ID. */
@@ -394,8 +394,7 @@ export async function getPerson(personId: string): Promise<PersonItem> {
 export async function updatePerson(personId: string, displayName: string): Promise<PersonItem> {
   return apiFetch<PersonItem>(`/people/${personId}`, {
     method: "PATCH",
-    body: JSON.stringify({ display_name: displayName }),
-    headers: { "Content-Type": "application/json" },
+    body: { display_name: displayName },
   });
 }
 
@@ -427,8 +426,7 @@ export async function assignFace(
     "personId" in opts ? { person_id: opts.personId } : { new_person_name: opts.newPersonName };
   return apiFetch(`/faces/${faceId}/assign`, {
     method: "POST",
-    body: JSON.stringify(body),
-    headers: { "Content-Type": "application/json" },
+    body,
   });
 }
 
@@ -441,8 +439,7 @@ export async function unassignFace(faceId: string): Promise<void> {
 export async function mergePerson(targetPersonId: string, sourcePersonId: string): Promise<PersonItem> {
   return apiFetch<PersonItem>(`/people/${targetPersonId}/merge`, {
     method: "POST",
-    body: JSON.stringify({ source_person_id: sourcePersonId }),
-    headers: { "Content-Type": "application/json" },
+    body: { source_person_id: sourcePersonId },
   });
 }
 
