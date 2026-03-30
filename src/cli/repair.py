@@ -178,9 +178,12 @@ def _face_batch_worker(
     for item in batch:
         asset_id = item["asset_id"]
         try:
-            resp = client.get(f"/v1/assets/{asset_id}/proxy")
+            # Use _client directly to avoid _handle_response raising on
+            # non-200 (e.g. 404 missing proxy, 500 server error).
+            resp = client._client.get(client._url(f"/v1/assets/{asset_id}/proxy"))
             if resp.status_code != 200:
                 skipped += 1
+                resp.close()
                 continue
 
             image_bytes = resp.content

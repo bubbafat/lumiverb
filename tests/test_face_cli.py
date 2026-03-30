@@ -101,16 +101,20 @@ def test_face_batch_worker_processes_assets() -> None:
     """_face_batch_worker downloads proxies, runs detection, and posts results."""
     from unittest.mock import MagicMock, patch, call
 
-    mock_client_instance = MagicMock()
+    mock_http_client = MagicMock()
     # Simulate proxy download returning JPEG bytes
     proxy_resp = MagicMock()
     proxy_resp.status_code = 200
     proxy_resp.content = _make_jpeg_bytes()
     proxy_resp.close = MagicMock()
-    # Simulate face POST returning 201
+    mock_http_client.get.return_value = proxy_resp
+
+    mock_client_instance = MagicMock()
+    mock_client_instance._client = mock_http_client
+    mock_client_instance._url = lambda path: f"http://localhost{path}"
+    # POST for face submission goes through the wrapper
     post_resp = MagicMock()
     post_resp.status_code = 201
-    mock_client_instance.get.return_value = proxy_resp
     mock_client_instance.post.return_value = post_resp
 
     from src.workers.faces.insightface_provider import FaceDetection
@@ -133,7 +137,7 @@ def test_face_batch_worker_processes_assets() -> None:
         {"asset_id": "ast_003"},
     ]
 
-    with patch("src.cli.repair.LumiverbClient", return_value=mock_client_instance) as mock_cls, \
+    with patch("src.cli.repair.LumiverbClient", return_value=mock_client_instance), \
          patch("src.cli.repair.InsightFaceProvider", return_value=mock_provider):
         from src.cli.repair import _face_batch_worker
         result = _face_batch_worker("http://localhost", "test-token", batch)
@@ -141,7 +145,6 @@ def test_face_batch_worker_processes_assets() -> None:
     assert result["processed"] == 3
     assert result["failed"] == 0
     assert result["skipped"] == 0
-    # Should have posted faces for each asset
     assert mock_client_instance.post.call_count == 3
 
 
@@ -150,10 +153,15 @@ def test_face_batch_worker_skips_missing_proxy() -> None:
     """_face_batch_worker skips assets where proxy returns non-200."""
     from unittest.mock import MagicMock, patch
 
-    mock_client_instance = MagicMock()
+    mock_http_client = MagicMock()
     proxy_resp = MagicMock()
     proxy_resp.status_code = 404
-    mock_client_instance.get.return_value = proxy_resp
+    proxy_resp.close = MagicMock()
+    mock_http_client.get.return_value = proxy_resp
+
+    mock_client_instance = MagicMock()
+    mock_client_instance._client = mock_http_client
+    mock_client_instance._url = lambda path: f"http://localhost{path}"
 
     mock_provider = MagicMock()
     mock_provider.ensure_loaded = MagicMock()
@@ -174,12 +182,16 @@ def test_face_batch_worker_counts_failures() -> None:
     """_face_batch_worker counts exceptions as failures."""
     from unittest.mock import MagicMock, patch
 
-    mock_client_instance = MagicMock()
+    mock_http_client = MagicMock()
     proxy_resp = MagicMock()
     proxy_resp.status_code = 200
     proxy_resp.content = _make_jpeg_bytes()
     proxy_resp.close = MagicMock()
-    mock_client_instance.get.return_value = proxy_resp
+    mock_http_client.get.return_value = proxy_resp
+
+    mock_client_instance = MagicMock()
+    mock_client_instance._client = mock_http_client
+    mock_client_instance._url = lambda path: f"http://localhost{path}"
 
     mock_provider = MagicMock()
     mock_provider.ensure_loaded = MagicMock()
