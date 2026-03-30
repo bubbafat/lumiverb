@@ -168,6 +168,9 @@ def _face_batch_worker(
 
     Returns {"processed": N, "failed": N, "skipped": N}.
     """
+    import warnings
+    warnings.filterwarnings("ignore", category=FutureWarning, module="insightface")
+
     client = LumiverbClient(base_url=base_url, token=token)
     provider = InsightFaceProvider()
     provider.ensure_loaded()
