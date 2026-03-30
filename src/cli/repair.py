@@ -6,6 +6,7 @@ import gc
 import io
 import json
 import logging
+import multiprocessing as mp
 from concurrent.futures import Future, ThreadPoolExecutor, wait, FIRST_COMPLETED
 from typing import Literal
 
@@ -230,6 +231,70 @@ def _repair_face_one(
             gc.collect()
 
 
+def _face_batch_worker(
+    base_url: str,
+    token: str,
+    batch: list[dict],
+) -> dict:
+    """Run face detection on a batch of assets in a subprocess.
+
+    ONNX Runtime leaks ~35MB per inference call with no fix available.
+    Running in a subprocess ensures all native memory is reclaimed by
+    the OS when the process exits.
+
+    Returns {"processed": N, "failed": N, "skipped": N}.
+    """
+    from src.cli.client import LumiverbClient as _Client
+    from src.workers.faces.insightface_provider import InsightFaceProvider
+
+    client = _Client(base_url=base_url, token=token)
+    provider = InsightFaceProvider()
+    provider.ensure_loaded()
+
+    from PIL import Image as PILImage
+
+    processed = failed = skipped = 0
+    for item in batch:
+        asset_id = item["asset_id"]
+        try:
+            resp = client.get(f"/v1/assets/{asset_id}/proxy")
+            if resp.status_code != 200:
+                skipped += 1
+                continue
+
+            image_bytes = resp.content
+            resp.close()
+            del resp
+
+            img = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
+            del image_bytes
+            detections = provider.detect_faces(img)
+            img.close()
+            del img
+
+            payload = [
+                {
+                    "bounding_box": d.bounding_box,
+                    "detection_confidence": d.detection_confidence,
+                    "embedding": d.embedding,
+                }
+                for d in detections
+            ]
+            del detections
+
+            client.post(f"/v1/assets/{asset_id}/faces", json={
+                "detection_model": provider.model_id,
+                "detection_model_version": provider.model_version,
+                "faces": payload,
+            })
+            del payload
+            processed += 1
+        except Exception:
+            failed += 1
+
+    return {"processed": processed, "failed": failed, "skipped": skipped}
+
+
 def get_repair_summary(client: LumiverbClient, library_id: str) -> dict:
     """Fetch repair summary counts from the API."""
     resp = client.get("/v1/assets/repair-summary", params={"library_id": library_id})
@@ -355,45 +420,46 @@ def run_repair(
 
         elif repair_type == "faces":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
-            try:
-                from src.workers.faces.insightface_provider import InsightFaceProvider
-                face_provider = InsightFaceProvider()
-                face_provider.ensure_loaded()
-                console.print(f"InsightFace model: {face_provider.model_version}")
-            except Exception as e:
-                console.print(f"[red]Cannot load InsightFace model: {e}[/red]")
-                continue
 
             assets = _page_missing(client, library_id, missing_faces=True)
             if not assets:
                 console.print("No assets found (already repaired?).")
                 continue
 
-            # Face detection is CPU-bound (ONNX uses all cores per inference).
-            # More threads just queue decoded images in memory. Cap at 2.
-            face_concurrency = min(concurrency, 2)
+            # ONNX Runtime leaks ~35MB per session.run() call in its C++
+            # layer — no Python-level fix (arena disable, gc, del) works.
+            # Workaround: run each batch in a subprocess. When the child
+            # exits, the OS reclaims all native memory. Model reload cost
+            # (~2s per batch) is acceptable vs unbounded memory growth.
+            FACE_BATCH_SIZE = 50
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Faces", total=len(assets), ok=0, fail=0)
-                pool = ThreadPoolExecutor(max_workers=face_concurrency, thread_name_prefix="faces")
-                inflight: set[Future] = set()
-                for a in assets:
-                    fut = pool.submit(
-                        _repair_face_one,
-                        client=client,
-                        asset_id=a["asset_id"],
-                        rel_path=a["rel_path"],
-                        face_provider=face_provider,
-                        stats=stats,
-                        progress=progress,
-                        task_id=tid,
-                    )
-                    inflight.add(fut)
-                    if len(inflight) >= concurrency * 2:
-                        inflight = _drain(inflight)
-                while inflight:
-                    inflight = _drain(inflight)
-                pool.shutdown(wait=True)
+                ctx = mp.get_context("fork")
+
+                for batch_start in range(0, len(assets), FACE_BATCH_SIZE):
+                    batch = assets[batch_start:batch_start + FACE_BATCH_SIZE]
+                    pool = ctx.Pool(1)
+                    try:
+                        result = pool.apply(
+                            _face_batch_worker,
+                            (client.base_url, client.token, batch),
+                        )
+                    except Exception as e:
+                        console.print(f"[red]Batch failed: {e}[/red]")
+                        result = {"processed": 0, "failed": len(batch), "skipped": 0}
+                    finally:
+                        pool.terminate()
+                        pool.join()
+
+                    with stats.lock:
+                        stats.processed += result["processed"]
+                        stats.failed += result["failed"]
+                        stats.skipped += result["skipped"]
+                        ok, fail = stats.processed, stats.failed
+                    batch_total = result["processed"] + result["failed"] + result["skipped"]
+                    progress.advance(tid, batch_total)
+                    progress.update(tid, ok=ok, fail=fail)
 
         elif repair_type == "search-sync":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")

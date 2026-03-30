@@ -40,13 +40,21 @@ class LumiverbClient:
     instance.  Call .close() when done, or use as a context manager.
     """
 
-    def __init__(self, api_key_override: str | None = None) -> None:
-        self._base_url = get_api_url().rstrip("/")
-        self._api_key = api_key_override if api_key_override is not None else get_api_key()
+    def __init__(self, api_key_override: str | None = None, *, base_url: str | None = None, token: str | None = None) -> None:
+        self._base_url = (base_url or get_api_url()).rstrip("/")
+        self._api_key = token or api_key_override if (token or api_key_override) is not None else get_api_key()
         headers: dict[str, str] = {}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         self._client = httpx.Client(headers=headers, timeout=120.0)
+
+    @property
+    def base_url(self) -> str:
+        return self._base_url
+
+    @property
+    def token(self) -> str | None:
+        return self._api_key
 
     def close(self) -> None:
         self._client.close()
