@@ -470,6 +470,14 @@ def _stream_asset_file(
         content_type = "image/jpeg"
         filename = Path(asset.rel_path).stem + ".jpg"
 
+    # HTTP headers must be latin-1 encodable. macOS screenshot filenames
+    # contain \u202f (narrow no-break space) which is not latin-1 safe.
+    # Use RFC 5987 filename* for the full UTF-8 name, and a sanitized
+    # ASCII fallback for the plain filename.
+    from urllib.parse import quote
+    ascii_filename = filename.encode("ascii", errors="replace").decode("ascii")
+    utf8_filename = quote(filename)
+
     def _iter() -> bytes:
         with open(path, "rb") as f:
             while chunk := f.read(65536):
@@ -478,7 +486,12 @@ def _stream_asset_file(
     return StreamingResponse(
         _iter(),
         media_type=content_type,
-        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+        headers={
+            "Content-Disposition": (
+                f'inline; filename="{ascii_filename}"; '
+                f"filename*=UTF-8''{utf8_filename}"
+            ),
+        },
     )
 
 
