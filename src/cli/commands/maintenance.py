@@ -81,8 +81,13 @@ def cleanup(
 @maintenance_app.command("search-sync")
 def search_sync(
     library: Annotated[str | None, typer.Option("--library", "-l", help="Library name (optional, sync all if omitted).")] = None,
+    force: Annotated[bool, typer.Option("--force", help="Clear timestamps and re-index everything.")] = False,
 ) -> None:
-    """Push stale assets to the Quickwit search index."""
+    """Push stale assets to the Quickwit search index.
+
+    Use --force to clear all search_synced_at timestamps and re-index
+    everything into the tenant index. Useful after index migrations.
+    """
     client = LumiverbClient()
 
     if library:
@@ -92,7 +97,8 @@ def search_sync(
             console.print(f"[red]Library not found: {library}[/red]")
             raise typer.Exit(1)
 
-    resp = client.post("/v1/upkeep/search-sync")
+    qs = "?force=true" if force else ""
+    resp = client.post(f"/v1/upkeep/search-sync{qs}")
     result = resp.json()
 
     table = Table(show_header=False, box=None, padding=(0, 2))
