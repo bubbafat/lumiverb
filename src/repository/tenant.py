@@ -2350,14 +2350,21 @@ class FaceRepository:
         max_clusters: int = 20,
         faces_per_cluster: int = 6,
     ) -> tuple[list[list[dict]], bool]:
-        """Compute clusters of unassigned faces using pgvector nearest-neighbor.
+        """Compute clusters of unassigned faces.
+
+        Fetches all unassigned face embeddings in one query, computes the
+        cosine distance matrix in numpy, then builds connected components
+        via union-find. This avoids N per-face SQL round-trips which caused
+        the endpoint to hang (the cross-join query couldn't use HNSW).
 
         Returns (clusters, truncated) where each cluster is a list of face dicts
         sorted by detection_confidence desc, and clusters are sorted by size desc.
         """
-        # Get unassigned face IDs (those not in face_person_matches)
+        import numpy as np
+
+        # Get unassigned face IDs + embeddings in one query
         sql = """
-            SELECT f.face_id
+            SELECT f.face_id, f.embedding_vector::text
             FROM faces f
             LEFT JOIN face_person_matches m ON m.face_id = f.face_id
             WHERE m.match_id IS NULL AND f.embedding_vector IS NOT NULL
@@ -2365,62 +2372,58 @@ class FaceRepository:
             LIMIT :max_faces
         """
         rows = self._session.execute(text(sql).bindparams(max_faces=max_faces)).all()
-        face_ids = [r[0] for r in rows]
 
-        truncated = len(face_ids) == max_faces
+        truncated = len(rows) == max_faces
 
-        if len(face_ids) < min_cluster_size:
+        if len(rows) < min_cluster_size:
             return [], truncated
 
-        # Build adjacency: for each face, find K nearest neighbors within threshold
-        # Use a single bulk query for efficiency
-        adjacency: dict[str, set[str]] = {fid: set() for fid in face_ids}
-        face_id_set = set(face_ids)
+        face_ids = [r[0] for r in rows]
+        # Parse pgvector text format "[0.1,0.2,...]" → numpy array
+        vectors = np.array(
+            [[float(x) for x in r[1].strip("[]").split(",")] for r in rows],
+            dtype=np.float32,
+        )
 
-        # Batch: for each face, find neighbors
-        for fid in face_ids:
-            nn_sql = """
-                SELECT f2.face_id,
-                       f.embedding_vector <=> f2.embedding_vector AS distance
-                FROM faces f, faces f2
-                WHERE f.face_id = :fid
-                  AND f2.face_id != :fid
-                  AND f2.embedding_vector IS NOT NULL
-                  AND f2.face_id = ANY(:candidates)
-                ORDER BY distance ASC
-                LIMIT :k
-            """
-            neighbors = self._session.execute(
-                text(nn_sql).bindparams(fid=fid, candidates=face_ids, k=k)
-            ).all()
-            for neighbor_id, dist in neighbors:
-                if dist < similarity_threshold and neighbor_id in face_id_set:
-                    adjacency[fid].add(neighbor_id)
-                    adjacency[neighbor_id].add(fid)
+        # L2-normalize (ArcFace embeddings should already be normalized, belt-and-suspenders)
+        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        vectors = vectors / norms
 
-        # Union-Find to build connected components
-        parent: dict[str, str] = {fid: fid for fid in face_ids}
+        # Cosine distance matrix: 1 - dot(a, b). Shape: (N, N)
+        cosine_sim = vectors @ vectors.T
+        dist_matrix = 1.0 - cosine_sim
 
-        def find(x: str) -> str:
+        # Build adjacency from K nearest neighbors within threshold
+        n = len(face_ids)
+        parent: dict[int, int] = {i: i for i in range(n)}
+
+        def find(x: int) -> int:
             while parent[x] != x:
                 parent[x] = parent[parent[x]]
                 x = parent[x]
             return x
 
-        def union(a: str, b: str) -> None:
+        def union(a: int, b: int) -> None:
             ra, rb = find(a), find(b)
             if ra != rb:
                 parent[ra] = rb
 
-        for fid, neighbors in adjacency.items():
-            for nid in neighbors:
-                union(fid, nid)
+        for i in range(n):
+            # Get K nearest neighbors (excluding self)
+            dists = dist_matrix[i]
+            # Set self-distance to infinity so it's excluded
+            dists[i] = float("inf")
+            nearest_k = np.argpartition(dists, min(k, n - 1))[:k]
+            for j in nearest_k:
+                if dists[j] < similarity_threshold:
+                    union(i, j)
 
         # Group into clusters
         from collections import defaultdict
-        clusters_map: dict[str, list[str]] = defaultdict(list)
-        for fid in face_ids:
-            clusters_map[find(fid)].append(fid)
+        clusters_map: dict[int, list[str]] = defaultdict(list)
+        for i in range(n):
+            clusters_map[find(i)].append(face_ids[i])
 
         # Filter by min size, sort by size desc
         clusters = [c for c in clusters_map.values() if len(c) >= min_cluster_size]
