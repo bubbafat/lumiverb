@@ -2255,6 +2255,18 @@ class SavedViewRepository:
         return result.rowcount  # type: ignore[return-value]
 
 
+def _mark_clusters_dirty(session: Session) -> None:
+    """Mark face cluster cache as stale. Called after any face mutation."""
+    session.execute(
+        text("""
+            INSERT INTO system_metadata (key, value, updated_at)
+            VALUES ('face_clusters_dirty', 'true', NOW())
+            ON CONFLICT (key) DO UPDATE
+              SET value = 'true', updated_at = NOW()
+        """)
+    )
+
+
 class FaceRepository:
     """CRUD for detected faces. Operates within a tenant session."""
 
@@ -2307,6 +2319,7 @@ class FaceRepository:
             text("UPDATE assets SET face_count = :count WHERE asset_id = :aid"),
             {"count": len(faces), "aid": asset_id},
         )
+        _mark_clusters_dirty(self._session)
         self._session.commit()
         return face_ids
 
@@ -2502,6 +2515,8 @@ class PersonRepository:
             if rep:
                 person.representative_face_id = rep
 
+        if face_ids:
+            _mark_clusters_dirty(self._session)
         self._session.commit()
         self._session.refresh(person)
         return person
@@ -2593,6 +2608,7 @@ class PersonRepository:
             {"pid": person_id},
         )
         self._session.delete(person)
+        _mark_clusters_dirty(self._session)
         self._session.commit()
         return True
 
@@ -2645,6 +2661,7 @@ class PersonRepository:
             {"pid": person_id, "fid": face_id},
         )
         self._recompute_centroid(person_id)
+        _mark_clusters_dirty(self._session)
         self._session.commit()
         self._session.refresh(match)
         return match
@@ -2667,6 +2684,7 @@ class PersonRepository:
             )
             if old_pid:
                 self._recompute_centroid(old_pid)
+            _mark_clusters_dirty(self._session)
             self._session.commit()
             return True
         return False
@@ -2766,6 +2784,7 @@ class PersonRepository:
             {"pid": source_person_id},
         )
 
+        _mark_clusters_dirty(self._session)
         self._session.commit()
         self._session.refresh(target)
         return target

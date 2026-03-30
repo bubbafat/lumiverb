@@ -330,6 +330,37 @@ def merge_person(
 faces_router = APIRouter(prefix="/v1/faces", tags=["faces"])
 
 
+@faces_router.get("/{face_id}/crop")
+def get_face_crop(
+    face_id: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+):
+    """Serve the 128x128 face crop thumbnail."""
+    from pathlib import Path
+
+    from fastapi.responses import StreamingResponse
+
+    from src.models.tenant import Face
+    from src.storage.local import get_storage
+
+    face = session.get(Face, face_id)
+    if face is None:
+        raise HTTPException(status_code=404, detail="Face not found")
+    if not face.crop_key:
+        raise HTTPException(status_code=404, detail="No crop available for this face")
+
+    storage = get_storage()
+    crop_path = storage.abs_path(face.crop_key)
+    if not crop_path.exists():
+        raise HTTPException(status_code=404, detail="Crop file missing")
+
+    return StreamingResponse(
+        open(crop_path, "rb"),
+        media_type="image/webp",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
 @faces_router.post("/{face_id}/assign", status_code=200)
 def assign_face(
     face_id: str,
@@ -398,7 +429,8 @@ def get_clusters(
     limit: int = 20,
     faces_per_cluster: int = 6,
 ) -> ClustersResponse:
-    """Compute clusters of unassigned faces, sorted by size descending."""
+    """Return clusters of unassigned faces. Uses cache; recomputes if dirty."""
+    from src.repository.system_metadata import SystemMetadataRepository
     from src.repository.tenant import FaceRepository
 
     if limit > 50:
@@ -406,20 +438,58 @@ def get_clusters(
     if faces_per_cluster > 20:
         faces_per_cluster = 20
 
+    meta = SystemMetadataRepository(session)
+    dirty = meta.get_value("face_clusters_dirty")
+    cached = meta.get_value("face_clusters_cache")
+
+    # Return cache if clean and exists
+    if not dirty and cached:
+        try:
+            data = json.loads(cached)
+            # Apply limit/faces_per_cluster to cached data
+            clusters = data.get("clusters", [])[:limit]
+            for c in clusters:
+                c["faces"] = c.get("faces", [])[:faces_per_cluster]
+            return ClustersResponse(
+                clusters=[
+                    ClusterItem(cluster_index=i, size=c["size"], faces=c["faces"])
+                    for i, c in enumerate(clusters)
+                ],
+                truncated=data.get("truncated", False),
+            )
+        except (json.JSONDecodeError, KeyError):
+            pass  # corrupted cache, recompute
+
+    # Compute fresh clusters
     repo = FaceRepository(session)
-    clusters, truncated = repo.compute_clusters(
-        max_clusters=limit,
-        faces_per_cluster=faces_per_cluster,
+    clusters_raw, truncated = repo.compute_clusters(
+        max_clusters=50,  # cache max, apply limit on read
+        faces_per_cluster=20,  # cache max
     )
+
+    # Build cache payload
+    cache_clusters = [
+        {"cluster_index": i, "size": len(c), "faces": c}
+        for i, c in enumerate(clusters_raw)
+    ]
+    from datetime import datetime, timezone
+    cache_data = json.dumps({
+        "clusters": cache_clusters,
+        "truncated": truncated,
+        "computed_at": datetime.now(timezone.utc).isoformat(),
+    })
+    meta.set_value("face_clusters_cache", cache_data)
+    meta.set_value("face_clusters_dirty", "false")
+
+    # Apply requested limits
+    result_clusters = cache_clusters[:limit]
+    for c in result_clusters:
+        c["faces"] = c["faces"][:faces_per_cluster]
 
     return ClustersResponse(
         clusters=[
-            ClusterItem(
-                cluster_index=i,
-                size=len(c),
-                faces=c,
-            )
-            for i, c in enumerate(clusters)
+            ClusterItem(cluster_index=i, size=c["size"], faces=c["faces"])
+            for i, c in enumerate(result_clusters)
         ],
         truncated=truncated,
     )

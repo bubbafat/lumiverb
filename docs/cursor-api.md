@@ -129,6 +129,8 @@ All under `/v1/upkeep`. Periodic server-side maintenance tasks. Search sync uses
 - **POST /v1/upkeep** — Runs all periodic upkeep tasks (currently: search sync). Returns `{ "search_sync": { "synced", "failed", "scenes_synced", "scenes_failed" } }`.
 - **POST /v1/upkeep/search-sync** — Run search sync sweep only. Finds assets/scenes where `search_synced_at` is null or older than the last update, builds Quickwit documents, and ingests them. Returns `{ "synced", "failed", "scenes_synced", "scenes_failed" }`.
 - **POST /v1/upkeep/cleanup** — Query: `dry_run` (default `"true"`), `library` (optional name). Removes orphaned proxy/thumbnail files from storage. Returns `{ "orphan_tenants", "orphan_libraries", "orphan_files", "bytes_freed", "skipped_libraries", "errors", "dry_run" }`.
+- **POST /v1/upkeep/recluster** — Force recompute face clusters for all tenants. Stores result in materialized cache. Returns `{ "clusters", "total_faces" }`.
+- **POST /v1/upkeep/face-crops** — Backfill face crop thumbnails for faces missing `crop_key`. Query: `batch_size` (default 500). Returns `{ "generated", "skipped", "failed" }`.
 
 ## Video chunk API
 
@@ -210,7 +212,8 @@ People are tenant-scoped — a person named in one library is recognized across 
 - **PATCH /v1/people/{person_id}** — Update display name. Body: `{ "display_name": str }`. Returns `PersonItem` or 404.
 - **DELETE /v1/people/{person_id}** — Delete person and all face matches. Returns 204 or 404.
 - **GET /v1/people/{person_id}/faces** — Cursor-paginated faces matched to a person. Query: `after`, `limit`. Returns `{ "items": [{ "face_id", "asset_id", "bounding_box", "detection_confidence", "rel_path" }], "next_cursor" }`.
-- **GET /v1/faces/clusters** — Compute clusters of unassigned faces. Query: `limit` (default 20, max 50), `faces_per_cluster` (default 6, max 20). Returns `{ "clusters": [{ "cluster_index", "size", "faces": [...] }], "truncated": bool }`. Not paginated — bounded by `limit` clusters.
+- **GET /v1/faces/{face_id}/crop** — Serve the 128x128 WebP face crop thumbnail. Generated at face submission time from the asset proxy using bounding box + 40% padding. Returns 404 if no crop available (old faces). Immutable caching (1 year).
+- **GET /v1/faces/clusters** — Return clusters of unassigned faces. Uses materialized cache; recomputes lazily when dirty (faces added/assigned/unassigned). Query: `limit` (default 20, max 50), `faces_per_cluster` (default 6, max 20). Returns `{ "clusters": [{ "cluster_index", "size", "faces": [...] }], "truncated": bool }`. Not paginated — bounded by `limit` clusters.
 - **POST /v1/faces/{face_id}/assign** — Assign a face to a person. Body: `{ "person_id": str }` (existing person) or `{ "new_person_name": str }` (creates new person). Returns 409 if face is already assigned. Returns `{ "person_id", "display_name" }`.
 - **DELETE /v1/faces/{face_id}/assign** — Remove a face from its assigned person. Clears `faces.person_id` and recomputes person centroid. Returns 204 or 404.
 - **POST /v1/people/{person_id}/merge** — Merge source person into target. Body: `{ "source_person_id": str }`. Reassigns all face matches, updates `faces.person_id`, recomputes centroid, picks best representative face, deletes source. Serialized via `SELECT ... FOR UPDATE` on source. Returns updated target `PersonItem`. Returns 400 if merging into self.

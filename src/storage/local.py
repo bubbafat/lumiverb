@@ -69,6 +69,19 @@ class LocalStorage:
             f"{asset_id}_{original_stem}.mp4"
         )
 
+    @staticmethod
+    def _bucket_from_face_id(face_id: str) -> int:
+        """Extract ULID from face_id (strip face_ prefix) and return bucket 0-99."""
+        ulid_str = face_id.removeprefix("face_")
+        ulid = ULID.from_str(ulid_str)
+        return int(ulid) % 100
+
+    def face_crop_key(
+        self, tenant_id: str, library_id: str, face_id: str
+    ) -> str:
+        bucket = self._bucket_from_face_id(face_id)
+        return f"{tenant_id}/{library_id}/face_crops/{bucket:02d}/{face_id}.webp"
+
     def abs_path(self, key: str) -> Path:
         return Path(self._data_dir) / key
 

@@ -24,6 +24,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/upkeep", tags=["upkeep"])
 
 
+class ReclusterResult(BaseModel):
+    clusters: int = 0
+    total_faces: int = 0
+
+
+class FaceCropsResult(BaseModel):
+    generated: int = 0
+    skipped: int = 0
+    failed: int = 0
+
+
 class SearchSyncResult(BaseModel):
     synced: int = 0
     failed: int = 0
@@ -184,3 +195,115 @@ def run_cleanup(
         errors=result.errors,
         dry_run=dry_run,
     )
+
+
+@router.post("/recluster", response_model=ReclusterResult)
+def run_recluster(
+    request: Request,
+    _admin: Annotated[None, Depends(require_admin)],
+    authorization: Annotated[str | None, Header()] = None,
+) -> ReclusterResult:
+    """Force recompute face clusters for all tenants."""
+    import json as _json
+    from datetime import datetime, timezone
+
+    from src.core.database import get_control_session, get_tenant_session
+    from src.repository.control_plane import TenantRepository
+    from src.repository.system_metadata import SystemMetadataRepository
+    from src.repository.tenant import FaceRepository
+
+    totals = {"clusters": 0, "total_faces": 0}
+
+    with get_control_session() as ctrl:
+        tenants = TenantRepository(ctrl).list_all()
+
+    for tenant in tenants:
+        try:
+            with get_tenant_session(tenant.tenant_id) as tsession:
+                repo = FaceRepository(tsession)
+                clusters, truncated = repo.compute_clusters(max_clusters=50, faces_per_cluster=20)
+
+                cache_clusters = [
+                    {"cluster_index": i, "size": len(c), "faces": c}
+                    for i, c in enumerate(clusters)
+                ]
+                cache_data = _json.dumps({
+                    "clusters": cache_clusters,
+                    "truncated": truncated,
+                    "computed_at": datetime.now(timezone.utc).isoformat(),
+                })
+                meta = SystemMetadataRepository(tsession)
+                meta.set_value("face_clusters_cache", cache_data)
+                meta.set_value("face_clusters_dirty", "false")
+
+                totals["clusters"] += len(clusters)
+                totals["total_faces"] += sum(len(c) for c in clusters)
+        except Exception as exc:
+            logger.warning("Recluster failed for tenant %s: %s", tenant.tenant_id, exc)
+
+    return ReclusterResult(**totals)
+
+
+@router.post("/face-crops", response_model=FaceCropsResult)
+def run_face_crops(
+    request: Request,
+    _admin: Annotated[None, Depends(require_admin)],
+    authorization: Annotated[str | None, Header()] = None,
+    batch_size: int = Query(default=500, description="Max faces to process per call"),
+) -> FaceCropsResult:
+    """Backfill face crop thumbnails for faces missing crop_key."""
+    from sqlalchemy import text
+
+    from src.core.database import get_control_session, get_tenant_session
+    from src.repository.control_plane import TenantRepository, TenantDbRoutingRepository
+    from src.api.routers.assets import _generate_face_crops
+    from src.repository.tenant import AssetRepository
+
+    totals = {"generated": 0, "skipped": 0, "failed": 0}
+
+    with get_control_session() as ctrl:
+        tenants = TenantRepository(ctrl).list_all()
+
+    for tenant in tenants:
+        try:
+            with get_tenant_session(tenant.tenant_id) as tsession:
+                # Find faces without crops (with bounding boxes)
+                rows = tsession.execute(
+                    text("""
+                        SELECT f.face_id, f.asset_id, f.bounding_box_json
+                        FROM faces f
+                        WHERE f.crop_key IS NULL AND f.bounding_box_json IS NOT NULL
+                        LIMIT :limit
+                    """),
+                    {"limit": batch_size},
+                ).all()
+
+                if not rows:
+                    continue
+
+                # Group by asset
+                from collections import defaultdict
+                by_asset: dict[str, list] = defaultdict(list)
+                for face_id, asset_id, bb in rows:
+                    by_asset[asset_id].append({"face_id": face_id, "bounding_box": bb})
+
+                asset_repo = AssetRepository(tsession)
+                for asset_id, face_entries in by_asset.items():
+                    asset = asset_repo.get_by_id(asset_id)
+                    if not asset or not asset.proxy_key:
+                        totals["skipped"] += len(face_entries)
+                        continue
+
+                    face_ids = [e["face_id"] for e in face_entries]
+                    faces_data = [{"bounding_box": e["bounding_box"]} for e in face_entries]
+                    try:
+                        _generate_face_crops(tenant.tenant_id, asset, face_ids, faces_data, tsession)
+                        totals["generated"] += len(face_ids)
+                    except Exception as exc:
+                        logger.warning("Face crop backfill failed for asset %s: %s", asset_id, exc)
+                        totals["failed"] += len(face_ids)
+
+        except Exception as exc:
+            logger.warning("Face crop backfill failed for tenant %s: %s", tenant.tenant_id, exc)
+
+    return FaceCropsResult(**totals)

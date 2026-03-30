@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -6,9 +6,45 @@ import {
   getClusters,
   createPerson,
   assignFace,
+  getApiKey,
 } from "../api/client";
 import type { PersonItem, ClusterItem, PersonFaceItem } from "../api/client";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
+
+/** Fetch a face crop thumbnail with auth. Falls back to null if no crop available. */
+function useFaceCrop(faceId: string): { url: string | null; isLoading: boolean } {
+  const [url, setUrl] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    if (!faceId) { setIsLoading(false); return; }
+    setIsLoading(true);
+    let objectUrl: string | null = null;
+    let cancelled = false;
+
+    const key = getApiKey();
+    const headers: HeadersInit = key ? { Authorization: `Bearer ${key}` } : {};
+
+    fetch(`/v1/faces/${faceId}/crop`, { headers })
+      .then(async (res) => {
+        if (cancelled) return;
+        if (!res.ok) return; // no crop available — stay null
+        const blob = await res.blob();
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setUrl(objectUrl);
+      })
+      .finally(() => { if (!cancelled) setIsLoading(false); });
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      setUrl(null);
+    };
+  }, [faceId]);
+
+  return { url, isLoading };
+}
 
 function PersonCard({ person }: { person: PersonItem }) {
   const { url, isLoading } = useAuthenticatedImage(
@@ -48,48 +84,19 @@ function PersonCard({ person }: { person: PersonItem }) {
 }
 
 function ClusterFaceThumbnail({ face }: { face: PersonFaceItem }) {
-  const { url, isLoading } = useAuthenticatedImage(face.asset_id, "thumbnail");
-  const box = face.bounding_box;
+  // Prefer server-generated face crop; fall back to full asset thumbnail
+  const crop = useFaceCrop(face.face_id);
+  const fallback = useAuthenticatedImage(face.asset_id, "thumbnail", { enabled: !crop.url && !crop.isLoading });
 
-  // Crop to face region using CSS. The bounding box is in 0-1 fractions.
-  // Scale the image so the face box fills the container, then offset to center it.
-  let imgStyle: React.CSSProperties | undefined;
-  if (box && url) {
-    // How much to scale: container is 1x1, face box is w x h fraction of image.
-    // Scale so the smaller face dimension fills the container, with some padding.
-    const pad = 0.4; // 40% padding around the face
-    const fw = box.w * (1 + pad);
-    const fh = box.h * (1 + pad);
-    const scale = 1 / Math.max(fw, fh);
-
-    // Center of face in image coordinates (0-1)
-    const cx = box.x + box.w / 2;
-    const cy = box.y + box.h / 2;
-
-    // object-position: percentage that centers the face.
-    // CSS object-position % maps 0%=left edge aligned, 100%=right edge aligned.
-    const px = cx * 100;
-    const py = cy * 100;
-
-    imgStyle = {
-      objectFit: "cover",
-      objectPosition: `${px}% ${py}%`,
-      transform: `scale(${scale})`,
-      transformOrigin: `${px}% ${py}%`,
-    };
-  }
+  const url = crop.url ?? fallback.url;
+  const isLoading = crop.isLoading || (!crop.url && fallback.isLoading);
 
   return (
     <div className="relative aspect-square overflow-hidden rounded-lg bg-gray-800">
       {isLoading ? (
         <div className="h-full w-full animate-pulse bg-gray-700" />
       ) : url ? (
-        <img
-          src={url}
-          alt={face.rel_path ?? ""}
-          className="h-full w-full object-cover"
-          style={imgStyle}
-        />
+        <img src={url} alt={face.rel_path ?? ""} className="h-full w-full object-cover" />
       ) : (
         <div className="flex h-full w-full items-center justify-center text-gray-600 text-xs">
           No image

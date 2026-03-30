@@ -383,6 +383,7 @@ class Face(SQLModel, table=True):
         foreign_key="people.person_id",
         nullable=True,
     )
+    crop_key: str | None = Field(default=None, nullable=True)
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),

@@ -951,6 +951,80 @@ class FaceListResponse(BaseModel):
     faces: list[FaceListItem]
 
 
+def _generate_face_crops(
+    tenant_id: str,
+    asset: object,
+    face_ids: list[str],
+    faces_data: list[dict],
+    session: object,
+) -> None:
+    """Generate 128x128 WebP face crop thumbnails from the asset proxy."""
+    import io
+    from PIL import Image
+
+    from src.storage.local import get_storage
+
+    storage = get_storage()
+    proxy_key = asset.proxy_key  # type: ignore[union-attr]
+    if not proxy_key:
+        return
+
+    proxy_path = storage.abs_path(proxy_key)
+    if not proxy_path.exists():
+        return
+
+    try:
+        img = Image.open(proxy_path).convert("RGB")
+    except Exception:
+        logger.warning("Cannot open proxy for face crops: %s", proxy_key)
+        return
+
+    w, h = img.size
+
+    for face_id, face_data in zip(face_ids, faces_data):
+        bb = face_data.get("bounding_box")
+        if not bb:
+            continue
+
+        # Expand bounding box by 40% padding, clamp to image bounds
+        pad = 0.4
+        fx, fy, fw, fh = bb["x"], bb["y"], bb["w"], bb["h"]
+        cx, cy = fx + fw / 2, fy + fh / 2
+        side = max(fw, fh) * (1 + pad)
+        x1 = max(0.0, cx - side / 2)
+        y1 = max(0.0, cy - side / 2)
+        x2 = min(1.0, cx + side / 2)
+        y2 = min(1.0, cy + side / 2)
+
+        # Convert fractions to pixels
+        px1, py1 = int(x1 * w), int(y1 * h)
+        px2, py2 = int(x2 * w), int(y2 * h)
+        if px2 <= px1 or py2 <= py1:
+            continue
+
+        try:
+            crop = img.crop((px1, py1, px2, py2))
+            crop = crop.resize((128, 128), Image.LANCZOS)
+            buf = io.BytesIO()
+            crop.save(buf, format="WEBP", quality=80)
+            crop_bytes = buf.getvalue()
+
+            crop_key = storage.face_crop_key(tenant_id, asset.library_id, face_id)  # type: ignore[union-attr]
+            storage.write(crop_key, crop_bytes)
+
+            # Update face record
+            from sqlalchemy import text as sa_text
+            session.execute(  # type: ignore[union-attr]
+                sa_text("UPDATE faces SET crop_key = :key WHERE face_id = :fid"),
+                {"key": crop_key, "fid": face_id},
+            )
+        except Exception:
+            logger.warning("Failed to generate crop for face %s", face_id, exc_info=True)
+
+    session.commit()  # type: ignore[union-attr]
+    img.close()
+
+
 @router.post("/{asset_id}/faces", response_model=FaceSubmitResponse, status_code=201)
 def submit_faces(
     asset_id: str,
@@ -980,6 +1054,11 @@ def submit_faces(
         detection_model_version=body.detection_model_version,
         faces=faces_data,
     )
+
+    # Generate face crop thumbnails
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if tenant_id and asset.proxy_key:
+        _generate_face_crops(tenant_id, asset, face_ids, faces_data, session)
 
     # Bump library revision so UI reflects face_count changes
     LibraryRepository(session).bump_revision(asset.library_id)
