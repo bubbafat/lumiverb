@@ -47,6 +47,12 @@ No new tables. All schema was created in ADR-009:
 
 ### API Endpoints
 
+#### Pagination
+
+All list endpoints use cursor-based pagination per project convention (`after` / `next_cursor`). Exceptions:
+
+- `GET /v1/faces/clusters` — **not paginated**. Returns at most `limit` clusters (default 20, max 50) with up to `faces_per_cluster` sample faces each (default 6, max 20). Total response is bounded to ~1000 face references. This is a computed summary, not a raw dump.
+
 #### Phase 1 (existing, wire to UI)
 
 - `GET /v1/assets/facets` — add `has_face_count: int` to response
@@ -58,14 +64,17 @@ No new tables. All schema was created in ADR-009:
 #### Phase 2 (new)
 
 ```
-GET    /v1/people                          — list people, sorted by face count desc
+GET    /v1/people                          — cursor-paginated, sorted by face count desc
+                                             params: after, limit (default 50)
 POST   /v1/people                          — create person { display_name, face_ids?: string[] }
 GET    /v1/people/{person_id}              — get person with face count and representative thumbnail
 PATCH  /v1/people/{person_id}              — update display_name
 DELETE /v1/people/{person_id}              — delete person, remove all matches
 
-GET    /v1/people/{person_id}/faces        — paginated faces with asset thumbnails
-GET    /v1/faces/clusters                  — compute clusters of unassigned faces, sorted by size desc
+GET    /v1/people/{person_id}/faces        — cursor-paginated faces with asset thumbnails
+                                             params: after, limit (default 50)
+GET    /v1/faces/clusters                  — bounded cluster summary (see Pagination above)
+                                             params: limit, faces_per_cluster
 ```
 
 #### Phase 3 (new)
@@ -76,11 +85,16 @@ DELETE /v1/faces/{face_id}/assign          — remove face from person
 POST   /v1/people/{person_id}/merge        — { source_person_id } — merge source into target
 ```
 
+**Validation rules:**
+- `POST /v1/faces/{face_id}/assign` — if face is already assigned to a person, returns 409 Conflict. Client must explicitly `DELETE` the existing assignment first. This prevents silent reassignment.
+- `POST /v1/people/{person_id}/merge` — atomic transaction. Steps: (1) reassign all `face_person_matches` from source to target, (2) update `faces.person_id` for affected faces, (3) recompute target centroid from all matched embeddings, (4) if target's `representative_face_id` pointed to source person's rep, pick highest-confidence face from merged set, (5) delete source person. Concurrent merge requests for the same source person use `SELECT ... FOR UPDATE` on the source to serialize.
+
 #### Phase 4 (extend existing)
 
-- `GET /v1/search?person=Susan` — filter by person display_name
+- `GET /v1/search?person_id=...` — filter by stable person_id (primary API)
 - `GET /v1/browse?person_id=...` — filter by person_id
 - `GET /v1/assets/page?person_id=...` — filter by person_id
+- Search parser: `person:"Susan"` — resolved client-side to `person_id` via typeahead against `GET /v1/people?q=Susan`. If multiple people match (e.g., two "Sam"s), the typeahead shows disambiguated options (name + face count). The API always uses `person_id`, never display name, to avoid ambiguity.
 
 ### UI
 
@@ -109,12 +123,12 @@ POST   /v1/people/{person_id}/merge        — { source_person_id } — merge so
 - Keyboard shortcut: `d` (detect/display) — `f` is taken by favorite (Lightroom convention)
 - Border style: `border-2 border-indigo-400 rounded` — subtle, non-distracting
 
-#### Phase 2 — People Page
+#### Phase 2 — People Page (named people only)
 
 **Route: `/people`**
-- Grid of person cards: representative face thumbnail, display name, face count
+- Grid of named person cards: representative face thumbnail, display name, face count
 - Sorted by face count descending (most photographed person first)
-- "Unnamed" cluster section below named people
+- Summary banner: "N unnamed face clusters detected" with link/count — but **no cluster display or assignment UI** in Phase 2. Cluster management ships in Phase 3.
 - Nav link in sidebar (after Favorites)
 
 **Route: `/people/{personId}`**
@@ -123,15 +137,16 @@ POST   /v1/people/{person_id}/merge        — { source_person_id } — merge so
 
 #### Phase 3 — Cluster Management
 
-**Cluster panel (on People page):**
-- Shows unassigned face clusters sorted by size
-- Each cluster: grid of face crop thumbnails
-- Actions per cluster: "Name this person" (creates new), "This is [existing person]" (merge)
+**Cluster panel (added to `/people` page):**
+- Below named people grid, expandable "Unnamed clusters" section
+- Shows unassigned face clusters sorted by size (from `GET /v1/faces/clusters`)
+- Each cluster: grid of face crop thumbnails (up to `faces_per_cluster` samples)
+- Actions per cluster: "Name this person" (creates new), "This is [existing person]" (merge into existing)
 - Single-face corrections: reassign face to different person, remove match
 
 #### Phase 4 — Search by Person
 
-- `person:"Susan"` search syntax in parseSearchQuery
+- `person:"Susan"` search syntax in parseSearchQuery — resolved to `person_id` via client-side typeahead against `GET /v1/people?q=Susan`. API queries always use stable `person_id`, never display name. If multiple people share a name, typeahead shows "Susan (42 photos)" vs "Susan (3 photos)" for disambiguation.
 - Person name chips in lightbox face overlay (when person is assigned)
 - Click person chip → navigate to `/people/{personId}`
 
@@ -139,11 +154,20 @@ POST   /v1/people/{person_id}/merge        — { source_person_id } — merge so
 
 Server-side, using pgvector:
 
-1. **Find clusters**: For each unassigned face, find its K nearest neighbors (cosine distance < 0.55 threshold). Build connected components via union-find. Filter out clusters smaller than `min_cluster_size` (default 2).
+1. **Find clusters**: For each unassigned face, find its K=10 nearest neighbors within cosine distance < 0.55 (ArcFace empirical threshold). HNSW query uses `SET LOCAL hnsw.ef_search = 40` (default is 40; sufficient for K=10). Build connected components via union-find. Filter out clusters smaller than `min_cluster_size` (default 2).
 2. **Sort by size**: Return clusters largest-first. The largest cluster is the most photographed face.
 3. **Representative face**: Pick the face with highest detection confidence in each cluster.
 4. **Centroid computation**: When a cluster is assigned to a person, compute `centroid_vector = mean(embeddings)` and store on the `people` row.
 5. **Incremental improvement**: When user confirms a match (Phase 3), recompute centroid: `new = (old * count + new_embedding) / (count + 1)`, increment `confirmation_count`. This shifts the centroid toward confirmed faces, improving future nearest-neighbor queries.
+
+**Scalability constraints:**
+- **Cap at 5,000 unassigned faces.** If more exist, cluster the 5,000 with highest detection confidence and return a `truncated: true` flag. Users should name the largest clusters first; subsequent calls will pick up newly-unassigned faces.
+- **Cost**: One HNSW query per unassigned face × K=10 results. For 5,000 faces this is ~5,000 queries. HNSW lookup is O(log N) with the index; at ~0.1ms per query this is ~500ms total. Acceptable for a synchronous endpoint.
+- **Caching**: `GET /v1/faces/clusters` is pure compute — no cached snapshot. Clustering is invalidated by any face assignment or new face detection. Given the sub-second cost this is acceptable for v1. If profiling shows otherwise, add a materialized snapshot invalidated by a `cluster_dirty` flag.
+
+**Known limitation — false merges:** Connected-component clustering can chain-link two different people through intermediate faces that are ambiguous (e.g., siblings, faces at odd angles). This is a known v1 trade-off. Mitigations: (1) the 0.55 threshold is conservative for ArcFace, (2) users can split incorrect clusters in Phase 3 by unassigning faces, (3) future improvement could use stricter intra-cluster density checks. QA should test with faces of similar-looking people (siblings, same ethnicity) to validate threshold quality.
+
+**`faces.person_id` sync:** The denormalized `faces.person_id` column is updated in the same transaction as `face_person_matches` writes (assign, unassign, merge). It is never the source of truth — `face_person_matches` is authoritative. If they diverge, a repair query can reconcile: `UPDATE faces SET person_id = (SELECT person_id FROM face_person_matches WHERE face_id = faces.face_id LIMIT 1)`.
 
 ### CLI (if applicable)
 
@@ -160,9 +184,11 @@ No new CLI commands. Existing `lumiverb repair faces` handles backfill. A future
 | Merge person A into person B | All face_person_matches updated, person A deleted, centroid B recomputed |
 | Same face assigned to two people | Disallowed — `face_person_matches` enforced unique on `face_id` (one person per face) |
 | Cluster with only 1 face | Shown separately in "unclustered" section, not in main cluster list |
+| `POST /v1/people` with `face_ids` already assigned | 409 Conflict listing the already-assigned face_ids and their current person. Client must unassign first. |
+| Concurrent merge of same source person | Serialized via `SELECT ... FOR UPDATE` on source; second request gets 404 (source already deleted) |
 | User names a cluster, then finds more faces of same person | Assign new faces to existing person → centroid updates |
 | Cross-library person search | People are tenant-scoped; search by person works across all libraries |
-| Face overlay on zoomed/panned image | Phase 1 uses CSS % positioning which scales with image; works at any zoom |
+| Face overlay on zoomed/panned image | Phase 1 uses CSS % positioning which scales with image; works at any zoom. **Implementation note:** overlay divs must share the same CSS transform ancestor as the `<img>`. If future zoom uses `transform: scale()` on a wrapper, the overlay container must be inside that same wrapper, not a sibling. |
 | `object-contain` letterboxing | Avoided by `inline-block` wrapper that shrinks to natural image size |
 
 ## Code References
@@ -215,7 +241,7 @@ Every phase must satisfy all of the following before it is marked complete:
 - FilterBar: "Has faces (N)" checkbox + chiclet (mirrors "Has location")
 - BrowsePage + UnifiedBrowsePage: wire `has_faces` URL param through to API
 - Lightbox: face bounding box overlay with toggle button, `useLocalStorage` persistence, `d` keyboard shortcut
-- Tests: facets endpoint returns `has_face_count`; parseSearchQuery handles `has:faces`
+- Tests: facets endpoint returns `has_face_count`; parseSearchQuery handles `has:faces`; regression test for `GET /v1/assets/{id}/faces` response shape (the lightbox depends on this — Phase 2 extends `FaceItem` with person data, so a regression test catches shape breaks early)
 
 **Does NOT include:** Person names on face boxes, people page, clustering, person search
 
@@ -280,6 +306,8 @@ Every phase must satisfy all of the following before it is marked complete:
 - Person name as a factor in similarity scoring (boost images with same named person)
 
 **Does NOT include:** Automatic face recognition on new ingests (future — would auto-assign faces near known centroids)
+
+**Similarity integration detail:** "Boost images with same named person" is an **in-app rerank**, not a Quickwit index change. When the similarity endpoint returns CLIP-based candidates, a post-processing step checks if any candidates share a `person_id` with any face in the source image. Matching candidates get a score boost (e.g., distance *= 0.85). This only activates when the source image has at least one identified face — it does not apply when no faces are present. This is a lightweight change to the existing `find_similar()` reranking pipeline, not a new search index.
 
 **Done when:**
 - [ ] All deliverables implemented
