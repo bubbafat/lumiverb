@@ -78,13 +78,15 @@ class InsightFaceProvider:
         if img_array.ndim == 2:
             img_array = np.stack([img_array] * 3, axis=-1)
         img_bgr = img_array[:, :, ::-1].copy()
+        del img_array  # free RGB copy
 
         faces = app.get(img_bgr)
+        h, w = img_bgr.shape[:2]
+        del img_bgr  # free BGR copy
 
         if not faces:
             return []
 
-        h, w = img_bgr.shape[:2]
         results: list[FaceDetection] = []
 
         for face in faces:
@@ -111,4 +113,5 @@ class InsightFaceProvider:
                 embedding=vec,
             ))
 
+        del faces  # free InsightFace result objects (contain large numpy arrays)
         return results

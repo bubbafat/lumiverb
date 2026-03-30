@@ -450,7 +450,9 @@ def _detect_faces(
         from PIL import Image as PILImage
         img = PILImage.open(io.BytesIO(jpeg_bytes)).convert("RGB")
         detections = face_provider.detect_faces(img)
-        return {
+        img.close()
+        del img
+        payload = {
             "detection_model": face_provider.model_id,
             "detection_model_version": face_provider.model_version,
             "faces": [
@@ -462,6 +464,8 @@ def _detect_faces(
                 for d in detections
             ],
         }
+        del detections
+        return payload
     except Exception as e:
         logger.warning("Face detection failed: %s", e)
         return None

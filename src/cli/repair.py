@@ -114,7 +114,10 @@ def _repair_embed_one(
 
         from PIL import Image as PILImage
         img = PILImage.open(io.BytesIO(resp.content)).convert("RGB")
+        del resp  # free HTTP response bytes immediately
         vector = clip_provider.embed_image(img)
+        img.close()
+        del img
 
         client.post(f"/v1/assets/{asset_id}/embeddings", json={
             "model_id": clip_provider.model_id,
@@ -165,20 +168,27 @@ def _repair_face_one(
 
         from PIL import Image as PILImage
         img = PILImage.open(io.BytesIO(resp.content)).convert("RGB")
+        del resp  # free HTTP response bytes immediately
         detections = face_provider.detect_faces(img)
+        img.close()
+        del img
+
+        payload = [
+            {
+                "bounding_box": d.bounding_box,
+                "detection_confidence": d.detection_confidence,
+                "embedding": d.embedding,
+            }
+            for d in detections
+        ]
+        del detections  # free InsightFace face objects (large numpy arrays)
 
         client.post(f"/v1/assets/{asset_id}/faces", json={
             "detection_model": face_provider.model_id,
             "detection_model_version": face_provider.model_version,
-            "faces": [
-                {
-                    "bounding_box": d.bounding_box,
-                    "detection_confidence": d.detection_confidence,
-                    "embedding": d.embedding,
-                }
-                for d in detections
-            ],
+            "faces": payload,
         })
+        del payload
 
         with stats.lock:
             stats.processed += 1
