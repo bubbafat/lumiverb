@@ -480,7 +480,7 @@ class AssetRepository:
                 "NOT EXISTS (SELECT 1 FROM asset_embeddings ae WHERE ae.asset_id = a.asset_id)"
             )
         if missing_faces:
-            conditions.append("a.face_count IS NULL")
+            conditions.append("a.face_count IS NULL AND a.media_type = 'image'")
         if has_faces is True:
             conditions.append("a.face_count > 0")
         elif has_faces is False:
@@ -2019,7 +2019,7 @@ class UnifiedBrowseRepository:
                 "NOT EXISTS (SELECT 1 FROM asset_embeddings ae WHERE ae.asset_id = a.asset_id)"
             )
         if missing_faces:
-            conditions.append("a.face_count IS NULL")
+            conditions.append("a.face_count IS NULL AND a.media_type = 'image'")
         if has_faces is True:
             conditions.append("a.face_count > 0")
         elif has_faces is False:
