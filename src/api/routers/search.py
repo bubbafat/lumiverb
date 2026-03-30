@@ -175,7 +175,7 @@ def search(
                 image_hits = qw.search_tenant(
                     tenant_id=tenant_id,
                     query=q,
-                    library_id=library_id,
+                    library_ids=[library_id] if library_id else None,
                     max_hits=fetch_limit,
                     start_offset=0,
                 )
@@ -243,7 +243,7 @@ def search(
             scene_hits = qw.search_tenant_scenes(
                 tenant_id=tenant_id,
                 query=q,
-                library_id=library_id,
+                library_ids=[library_id] if library_id else None,
                 max_hits=fetch_limit,
                 start_offset=0,
             )

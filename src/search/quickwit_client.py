@@ -115,16 +115,25 @@ class QuickwitClient:
     # Search
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _apply_library_filter(query: str, library_ids: list[str] | None) -> str:
+        if not library_ids:
+            return query
+        if len(library_ids) == 1:
+            return f'library_id:"{library_ids[0]}" AND ({query})'
+        lib_clause = " OR ".join(f'library_id:"{lid}"' for lid in library_ids)
+        return f"({lib_clause}) AND ({query})"
+
     def search_tenant(
         self,
         tenant_id: str,
         query: str,
-        library_id: str | None = None,
+        library_ids: list[str] | None = None,
         max_hits: int = 20,
         start_offset: int = 0,
     ) -> list[dict]:
-        """BM25 search on the per-tenant asset index. Optionally filter by library_id."""
-        effective_query = f'library_id:"{library_id}" AND ({query})' if library_id else query
+        """BM25 search on the per-tenant asset index. Optionally filter by library_id(s)."""
+        effective_query = self._apply_library_filter(query, library_ids)
         index_id = self.tenant_index_id(tenant_id)
         raw_hits = self._search_index(index_id, effective_query, max_hits, start_offset)
         results: list[dict] = []
@@ -149,12 +158,12 @@ class QuickwitClient:
         self,
         tenant_id: str,
         query: str,
-        library_id: str | None = None,
+        library_ids: list[str] | None = None,
         max_hits: int = 20,
         start_offset: int = 0,
     ) -> list[dict]:
-        """BM25 search on the per-tenant scene index. Optionally filter by library_id."""
-        effective_query = f'library_id:"{library_id}" AND ({query})' if library_id else query
+        """BM25 search on the per-tenant scene index. Optionally filter by library_id(s)."""
+        effective_query = self._apply_library_filter(query, library_ids)
         index_id = self.tenant_scene_index_id(tenant_id)
         raw_hits = self._search_index(index_id, effective_query, max_hits, start_offset)
         results: list[dict] = []
