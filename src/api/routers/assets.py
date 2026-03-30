@@ -342,27 +342,16 @@ def repair_summary(
     lib = LibraryRepository(session).get_by_id(library_id)
     if lib is None:
         raise HTTPException(status_code=404, detail="Library not found")
+    from src.repository.tenant import MISSING_CONDITIONS
     row = session.execute(
-        text("""
+        text(f"""
             SELECT
                 COUNT(*) AS total,
                 COUNT(*) FILTER (WHERE proxy_key IS NULL) AS missing_proxy,
                 COUNT(*) FILTER (WHERE exif_extracted_at IS NULL AND media_type = 'image') AS missing_exif,
-                COUNT(*) FILTER (
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM asset_metadata am
-                        WHERE am.asset_id = a.asset_id
-                    ) AND media_type = 'image'
-                ) AS missing_vision,
-                COUNT(*) FILTER (
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM asset_embeddings ae
-                        WHERE ae.asset_id = a.asset_id
-                    ) AND media_type = 'image'
-                ) AS missing_embeddings,
-                COUNT(*) FILTER (
-                    WHERE a.face_count IS NULL AND media_type = 'image'
-                ) AS missing_faces,
+                COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_vision"]}) AS missing_vision,
+                COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_embeddings"]}) AS missing_embeddings,
+                COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_faces"]}) AS missing_faces,
                 COUNT(*) FILTER (
                     WHERE EXISTS (
                         SELECT 1 FROM asset_metadata am

@@ -39,6 +39,21 @@ from ulid import ULID
 # Canonical view for non-trashed assets. Use in raw SQL (e.g. FROM active_assets).
 ACTIVE_ASSETS = "active_assets"
 
+# Single source of truth for "missing pipeline output" SQL conditions.
+# Used by both repair-summary (counting) and page endpoints (filtering).
+# All image-only filters include the media_type check.
+MISSING_CONDITIONS = {
+    "missing_vision": (
+        "NOT EXISTS (SELECT 1 FROM asset_metadata am WHERE am.asset_id = a.asset_id)"
+        " AND a.media_type = 'image'"
+    ),
+    "missing_embeddings": (
+        "NOT EXISTS (SELECT 1 FROM asset_embeddings ae WHERE ae.asset_id = a.asset_id)"
+        " AND a.media_type = 'image'"
+    ),
+    "missing_faces": "a.face_count IS NULL AND a.media_type = 'image'",
+}
+
 
 def _active_assets_subquery():
     # active_assets is a DB view, not a SQLModel table.
@@ -469,18 +484,16 @@ class AssetRepository:
                 params["cursor_value"] = cursor_value
                 params["cursor_id"] = cursor_id
 
-        # --- Tag / missing_vision ---
+        # --- Tag / missing filters (use shared MISSING_CONDITIONS) ---
         if tag is not None:
             conditions.append("m.tags @> jsonb_build_array(:tag)")
             params["tag"] = tag
         if missing_vision:
-            conditions.append("m.tags IS NULL")
+            conditions.append(MISSING_CONDITIONS["missing_vision"])
         if missing_embeddings:
-            conditions.append(
-                "NOT EXISTS (SELECT 1 FROM asset_embeddings ae WHERE ae.asset_id = a.asset_id)"
-            )
+            conditions.append(MISSING_CONDITIONS["missing_embeddings"])
         if missing_faces:
-            conditions.append("a.face_count IS NULL AND a.media_type = 'image'")
+            conditions.append(MISSING_CONDITIONS["missing_faces"])
         if has_faces is True:
             conditions.append("a.face_count > 0")
         elif has_faces is False:
@@ -584,7 +597,9 @@ class AssetRepository:
                 conditions.append("r.user_id IS NULL")
 
         # --- Build query ---
-        join_metadata = tag is not None or missing_vision
+        # Lateral join only needed for tag filtering (m.tags reference).
+        # missing_vision/embeddings/faces use self-contained subqueries.
+        join_metadata = tag is not None
         where_sql = " AND ".join(conditions)
 
         lateral_join = ""
@@ -2008,18 +2023,16 @@ class UnifiedBrowseRepository:
                 params["cursor_value"] = cursor_value
                 params["cursor_id"] = cursor_id
 
-        # --- Tag / missing_vision ---
+        # --- Tag / missing filters (use shared MISSING_CONDITIONS) ---
         if tag is not None:
             conditions.append("m.tags @> jsonb_build_array(:tag)")
             params["tag"] = tag
         if missing_vision:
-            conditions.append("m.tags IS NULL")
+            conditions.append(MISSING_CONDITIONS["missing_vision"])
         if missing_embeddings:
-            conditions.append(
-                "NOT EXISTS (SELECT 1 FROM asset_embeddings ae WHERE ae.asset_id = a.asset_id)"
-            )
+            conditions.append(MISSING_CONDITIONS["missing_embeddings"])
         if missing_faces:
-            conditions.append("a.face_count IS NULL AND a.media_type = 'image'")
+            conditions.append(MISSING_CONDITIONS["missing_faces"])
         if has_faces is True:
             conditions.append("a.face_count > 0")
         elif has_faces is False:
@@ -2123,7 +2136,7 @@ class UnifiedBrowseRepository:
                 conditions.append("r.user_id IS NULL")
 
         # --- Build query ---
-        join_metadata = tag is not None or missing_vision
+        join_metadata = tag is not None
         where_sql = " AND ".join(conditions) if conditions else "TRUE"
 
         lateral_join = ""
