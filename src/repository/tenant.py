@@ -24,7 +24,9 @@ from src.models.tenant import (
     Collection,
     CollectionAsset,
     Face,
+    FacePersonMatch,
     Library,
+    Person,
     LibraryPathFilter,
     TenantPathFilterDefault,
     SavedView,
@@ -2303,3 +2305,364 @@ class FaceRepository:
             .order_by(Face.detection_confidence.desc())  # type: ignore[union-attr]
         )
         return list(self._session.exec(stmt).all())
+
+    def get_person_for_face(self, face_id: str) -> Person | None:
+        """Return the person matched to a face, or None."""
+        stmt = (
+            select(Person)
+            .join(FacePersonMatch, FacePersonMatch.person_id == Person.person_id)
+            .where(FacePersonMatch.face_id == face_id)
+        )
+        return self._session.exec(stmt).first()
+
+    def get_persons_for_faces(self, face_ids: list[str]) -> dict[str, Person]:
+        """Return {face_id: Person} for all matched faces. Unmatched faces are absent."""
+        if not face_ids:
+            return {}
+        stmt = (
+            select(FacePersonMatch.face_id, Person)
+            .join(Person, Person.person_id == FacePersonMatch.person_id)
+            .where(FacePersonMatch.face_id.in_(face_ids))  # type: ignore[union-attr]
+        )
+        return {row[0]: row[1] for row in self._session.exec(stmt).all()}
+
+
+    def compute_clusters(
+        self,
+        *,
+        similarity_threshold: float = 0.55,
+        k: int = 10,
+        max_faces: int = 5000,
+        min_cluster_size: int = 2,
+        max_clusters: int = 20,
+        faces_per_cluster: int = 6,
+    ) -> tuple[list[list[dict]], bool]:
+        """Compute clusters of unassigned faces using pgvector nearest-neighbor.
+
+        Returns (clusters, truncated) where each cluster is a list of face dicts
+        sorted by detection_confidence desc, and clusters are sorted by size desc.
+        """
+        # Get unassigned face IDs (those not in face_person_matches)
+        sql = """
+            SELECT f.face_id
+            FROM faces f
+            LEFT JOIN face_person_matches m ON m.face_id = f.face_id
+            WHERE m.match_id IS NULL AND f.embedding_vector IS NOT NULL
+            ORDER BY f.detection_confidence DESC NULLS LAST
+            LIMIT :max_faces
+        """
+        rows = self._session.execute(text(sql).bindparams(max_faces=max_faces)).all()
+        face_ids = [r[0] for r in rows]
+
+        truncated = len(face_ids) == max_faces
+
+        if len(face_ids) < min_cluster_size:
+            return [], truncated
+
+        # Build adjacency: for each face, find K nearest neighbors within threshold
+        # Use a single bulk query for efficiency
+        adjacency: dict[str, set[str]] = {fid: set() for fid in face_ids}
+        face_id_set = set(face_ids)
+
+        # Batch: for each face, find neighbors
+        for fid in face_ids:
+            nn_sql = """
+                SELECT f2.face_id,
+                       f.embedding_vector <=> f2.embedding_vector AS distance
+                FROM faces f, faces f2
+                WHERE f.face_id = :fid
+                  AND f2.face_id != :fid
+                  AND f2.embedding_vector IS NOT NULL
+                  AND f2.face_id = ANY(:candidates)
+                ORDER BY distance ASC
+                LIMIT :k
+            """
+            neighbors = self._session.execute(
+                text(nn_sql).bindparams(fid=fid, candidates=face_ids, k=k)
+            ).all()
+            for neighbor_id, dist in neighbors:
+                if dist < similarity_threshold and neighbor_id in face_id_set:
+                    adjacency[fid].add(neighbor_id)
+                    adjacency[neighbor_id].add(fid)
+
+        # Union-Find to build connected components
+        parent: dict[str, str] = {fid: fid for fid in face_ids}
+
+        def find(x: str) -> str:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(a: str, b: str) -> None:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+
+        for fid, neighbors in adjacency.items():
+            for nid in neighbors:
+                union(fid, nid)
+
+        # Group into clusters
+        from collections import defaultdict
+        clusters_map: dict[str, list[str]] = defaultdict(list)
+        for fid in face_ids:
+            clusters_map[find(fid)].append(fid)
+
+        # Filter by min size, sort by size desc
+        clusters = [c for c in clusters_map.values() if len(c) >= min_cluster_size]
+        clusters.sort(key=len, reverse=True)
+        clusters = clusters[:max_clusters]
+
+        # Load face data for each cluster
+        all_face_ids = [fid for c in clusters for fid in c]
+        if not all_face_ids:
+            return [], truncated
+
+        stmt = select(Face).where(Face.face_id.in_(all_face_ids))  # type: ignore[union-attr]
+        faces_by_id = {f.face_id: f for f in self._session.exec(stmt).all()}
+
+        # Also get asset data for thumbnails
+        asset_ids = list({faces_by_id[fid].asset_id for fid in all_face_ids if fid in faces_by_id})
+        asset_map: dict[str, object] = {}
+        if asset_ids:
+            asset_stmt = select(Asset).where(Asset.asset_id.in_(asset_ids))  # type: ignore[union-attr]
+            asset_map = {a.asset_id: a for a in self._session.exec(asset_stmt).all()}
+
+        result = []
+        for cluster_face_ids in clusters:
+            # Sort by confidence desc within cluster
+            cluster_faces = [faces_by_id[fid] for fid in cluster_face_ids if fid in faces_by_id]
+            cluster_faces.sort(key=lambda f: f.detection_confidence or 0, reverse=True)
+
+            # Limit to faces_per_cluster samples
+            sample = cluster_faces[:faces_per_cluster]
+            cluster_data = []
+            for f in sample:
+                asset = asset_map.get(f.asset_id)
+                cluster_data.append({
+                    "face_id": f.face_id,
+                    "asset_id": f.asset_id,
+                    "bounding_box": f.bounding_box_json,
+                    "detection_confidence": f.detection_confidence,
+                    "rel_path": asset.rel_path if asset else None,
+                })
+            result.append(cluster_data)
+
+        return result, truncated
+
+
+class PersonRepository:
+    """CRUD for people (tenant-scoped). Operates within a tenant session."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def create(self, display_name: str, *, face_ids: list[str] | None = None) -> Person:
+        """Create a new person. Optionally assign faces."""
+        person_id = "person_" + str(ULID())
+        person = Person(
+            person_id=person_id,
+            display_name=display_name,
+            created_by_user=True,
+        )
+        self._session.add(person)
+        self._session.flush()
+
+        if face_ids:
+            self._assign_faces(person_id, face_ids)
+            self._recompute_centroid(person_id)
+            # Set representative face = highest confidence
+            rep = self._session.execute(
+                text(
+                    "SELECT f.face_id FROM faces f "
+                    "JOIN face_person_matches m ON m.face_id = f.face_id "
+                    "WHERE m.person_id = :pid "
+                    "ORDER BY f.detection_confidence DESC NULLS LAST "
+                    "LIMIT 1"
+                ),
+                {"pid": person_id},
+            ).scalar()
+            if rep:
+                person.representative_face_id = rep
+
+        self._session.commit()
+        self._session.refresh(person)
+        return person
+
+    def get_by_id(self, person_id: str) -> Person | None:
+        return self._session.get(Person, person_id)
+
+    def list_with_face_counts(
+        self,
+        *,
+        after: str | None = None,
+        limit: int = 50,
+    ) -> list[tuple[Person, int]]:
+        """Return people with face counts, sorted by face count desc.
+
+        Cursor is base64-encoded JSON {"count": N, "id": person_id}.
+        Returns list of (Person, face_count) tuples.
+        """
+        import base64 as _b64
+
+        conditions = []
+        params: dict[str, object] = {"limit": limit}
+
+        if after:
+            try:
+                decoded = json.loads(_b64.urlsafe_b64decode(after + "=="))
+                cursor_count = decoded["count"]
+                cursor_id = decoded["id"]
+                conditions.append(
+                    "(cnt < :cursor_count OR (cnt = :cursor_count AND p.person_id > :cursor_id))"
+                )
+                params["cursor_count"] = cursor_count
+                params["cursor_id"] = cursor_id
+            except Exception:
+                pass
+
+        where_sql = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        sql = f"""
+            SELECT p.person_id, p.display_name, p.created_by_user,
+                   p.representative_face_id, p.confirmation_count, p.created_at,
+                   COUNT(m.match_id)::int AS cnt
+            FROM people p
+            LEFT JOIN face_person_matches m ON m.person_id = p.person_id
+            GROUP BY p.person_id
+            {where_sql}
+            ORDER BY cnt DESC, p.person_id ASC
+            LIMIT :limit
+        """
+        rows = self._session.execute(text(sql).bindparams(**params)).all()
+        result = []
+        for row in rows:
+            person = self.get_by_id(row.person_id)
+            if person:
+                result.append((person, row.cnt))
+        return result
+
+    def get_face_count(self, person_id: str) -> int:
+        """Return the number of faces matched to a person."""
+        result = self._session.execute(
+            text("SELECT COUNT(*)::int FROM face_person_matches WHERE person_id = :pid"),
+            {"pid": person_id},
+        ).scalar()
+        return result or 0
+
+    def update_name(self, person_id: str, display_name: str) -> Person | None:
+        person = self.get_by_id(person_id)
+        if person is None:
+            return None
+        person.display_name = display_name
+        self._session.add(person)
+        self._session.commit()
+        self._session.refresh(person)
+        return person
+
+    def delete(self, person_id: str) -> bool:
+        """Delete a person and all their face matches."""
+        person = self.get_by_id(person_id)
+        if person is None:
+            return False
+        # Delete matches first
+        self._session.execute(
+            text("DELETE FROM face_person_matches WHERE person_id = :pid"),
+            {"pid": person_id},
+        )
+        self._session.delete(person)
+        self._session.commit()
+        return True
+
+    def get_faces(
+        self,
+        person_id: str,
+        *,
+        after: str | None = None,
+        limit: int = 50,
+    ) -> list[Face]:
+        """Return faces matched to a person, cursor-paginated by face_id."""
+        conditions = ["m.person_id = :pid"]
+        params: dict[str, object] = {"pid": person_id, "limit": limit}
+
+        if after:
+            conditions.append("f.face_id > :after")
+            params["after"] = after
+
+        where_sql = " AND ".join(conditions)
+        sql = f"""
+            SELECT f.face_id
+            FROM faces f
+            JOIN face_person_matches m ON m.face_id = f.face_id
+            WHERE {where_sql}
+            ORDER BY f.face_id ASC
+            LIMIT :limit
+        """
+        face_ids = [row[0] for row in self._session.execute(text(sql).bindparams(**params)).all()]
+        if not face_ids:
+            return []
+        stmt = select(Face).where(Face.face_id.in_(face_ids))  # type: ignore[union-attr]
+        faces_by_id = {f.face_id: f for f in self._session.exec(stmt).all()}
+        return [faces_by_id[fid] for fid in face_ids if fid in faces_by_id]
+
+    def assign_face(self, face_id: str, person_id: str, *, confidence: float | None = None, confirmed: bool = False) -> FacePersonMatch:
+        """Assign a face to a person. Raises if face is already assigned (unique constraint)."""
+        match_id = "fpm_" + str(ULID())
+        match = FacePersonMatch(
+            match_id=match_id,
+            face_id=face_id,
+            person_id=person_id,
+            confidence=confidence,
+            confirmed=confirmed,
+            confirmed_at=utcnow() if confirmed else None,
+        )
+        self._session.add(match)
+        self._session.commit()
+        self._session.refresh(match)
+        return match
+
+    def unassign_face(self, face_id: str) -> bool:
+        """Remove face-person assignment."""
+        result = self._session.execute(
+            text("DELETE FROM face_person_matches WHERE face_id = :fid"),
+            {"fid": face_id},
+        )
+        self._session.commit()
+        return result.rowcount > 0  # type: ignore[union-attr]
+
+    def _assign_faces(self, person_id: str, face_ids: list[str]) -> None:
+        """Batch assign faces to a person (no commit)."""
+        for fid in face_ids:
+            match_id = "fpm_" + str(ULID())
+            self._session.add(FacePersonMatch(
+                match_id=match_id,
+                face_id=fid,
+                person_id=person_id,
+            ))
+        self._session.flush()
+
+    def _recompute_centroid(self, person_id: str) -> None:
+        """Recompute centroid_vector as mean of all matched face embeddings (no commit)."""
+        self._session.execute(
+            text("""
+                UPDATE people SET centroid_vector = sub.avg_vec
+                FROM (
+                    SELECT AVG(f.embedding_vector) AS avg_vec
+                    FROM faces f
+                    JOIN face_person_matches m ON m.face_id = f.face_id
+                    WHERE m.person_id = :pid AND f.embedding_vector IS NOT NULL
+                ) sub
+                WHERE person_id = :pid
+            """),
+            {"pid": person_id},
+        )
+        # Update confirmation_count
+        count = self._session.execute(
+            text("SELECT COUNT(*)::int FROM face_person_matches WHERE person_id = :pid AND confirmed = TRUE"),
+            {"pid": person_id},
+        ).scalar() or 0
+        self._session.execute(
+            text("UPDATE people SET confirmation_count = :cnt WHERE person_id = :pid"),
+            {"cnt": count, "pid": person_id},
+        )

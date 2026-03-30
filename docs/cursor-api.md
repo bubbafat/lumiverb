@@ -198,7 +198,19 @@ All under `/v1/assets`; require tenant auth. List/get endpoints return only acti
 - **GET /v1/assets/{asset_id}/{proxy|thumbnail}** — Stream proxy or thumbnail file bytes. Returns `application/octet-stream`.
 - **GET /v1/assets/facets** — Query: `library_id` (required), `path_prefix` (optional). Returns aggregated filter facets: `{ "media_types", "camera_makes", "camera_models", "lens_models", "iso_range", "aperture_range", "focal_length_range", "has_gps_count", "has_face_count" }`.
 - **POST /v1/assets/{asset_id}/faces** — Submit face detections. Body: `{ "detection_model": "insightface", "detection_model_version": "buffalo_l", "faces": [{ "bounding_box": {"x","y","w","h"}, "detection_confidence": float, "embedding": [512 floats] | null }] }`. Replaces existing faces for same model. Sets `assets.face_count`. Bumps library revision. Returns 201 `{ "face_count", "face_ids" }`.
-- **GET /v1/assets/{asset_id}/faces** — List detected faces. Returns `{ "faces": [{ "face_id", "bounding_box", "detection_confidence", "person": null }] }`. The `person` field is reserved for future clustering.
+- **GET /v1/assets/{asset_id}/faces** — List detected faces. Returns `{ "faces": [{ "face_id", "bounding_box", "detection_confidence", "person": { "person_id", "display_name" } | null }] }`. The `person` field is populated when the face is matched to a named person.
+
+## People API
+
+People are tenant-scoped — a person named in one library is recognized across all libraries.
+
+- **GET /v1/people** — Cursor-paginated list of people sorted by face count descending. Query: `after`, `limit` (default 50, max 100). Returns `{ "items": [{ "person_id", "display_name", "face_count", "representative_face_id", "representative_asset_id", "confirmation_count" }], "next_cursor" }`.
+- **POST /v1/people** — Create a named person. Body: `{ "display_name": str, "face_ids": [str] | null }`. If `face_ids` provided, assigns those faces and computes centroid. Returns 409 if any face is already assigned. Returns 201 `PersonItem`.
+- **GET /v1/people/{person_id}** — Get a person by ID. Returns `PersonItem` or 404.
+- **PATCH /v1/people/{person_id}** — Update display name. Body: `{ "display_name": str }`. Returns `PersonItem` or 404.
+- **DELETE /v1/people/{person_id}** — Delete person and all face matches. Returns 204 or 404.
+- **GET /v1/people/{person_id}/faces** — Cursor-paginated faces matched to a person. Query: `after`, `limit`. Returns `{ "items": [{ "face_id", "asset_id", "bounding_box", "detection_confidence", "rel_path" }], "next_cursor" }`.
+- **GET /v1/faces/clusters** — Compute clusters of unassigned faces. Query: `limit` (default 20, max 50), `faces_per_cluster` (default 6, max 20). Returns `{ "clusters": [{ "cluster_index", "size", "faces": [...] }], "truncated": bool }`. Not paginated — bounded by `limit` clusters.
 
 ## Ingest API
 

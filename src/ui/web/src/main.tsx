@@ -16,6 +16,8 @@ import LibrariesPage from "./pages/LibrariesPage";
 import LibrarySettingsPage from "./pages/LibrarySettingsPage";
 import LoginPage from "./pages/LoginPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
+import PeoplePage from "./pages/PeoplePage";
+import PersonDetailPage from "./pages/PersonDetailPage";
 import SettingsPage from "./pages/SettingsPage";
 import AccountSection from "./pages/settings/AccountSection";
 import PreferencesSection from "./pages/settings/PreferencesSection";
@@ -97,6 +99,22 @@ createRoot(document.getElementById("root")!).render(
               element={
                 <RequireAuth>
                   {<CollectionDetailPage />}
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="people"
+              element={
+                <RequireAuth>
+                  {<PeoplePage />}
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="people/:personId"
+              element={
+                <RequireAuth>
+                  {<PersonDetailPage />}
                 </RequireAuth>
               }
             />

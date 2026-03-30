@@ -1,4 +1,5 @@
 import { useEffect, useCallback, useState, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { getAsset, findSimilar, listFaces } from "../api/client";
 import { useLocalStorage } from "../lib/useLocalStorage";
@@ -123,6 +124,7 @@ export function Lightbox({
   isPublic,
   publicLibraryId,
 }: LightboxProps) {
+  const navigate = useNavigate();
   const [showSimilar, setShowSimilar] = useState(false);
   const [showFaces, setShowFaces] = useLocalStorage("lv_show_faces", false);
   const [metaOpen, setMetaOpen] = useState(true);
@@ -437,20 +439,30 @@ export function Lightbox({
                   alt={filename}
                   className="max-h-[calc(100vh-4rem)] max-w-full object-contain"
                 />
-                {showFaces && facesData?.faces.map((face) =>
-                  face.bounding_box && (
+                {showFaces && facesData?.faces.map((face) => {
+                  if (!face.bounding_box) return null;
+                  const identified = face.person != null;
+                  const borderColor = identified ? "border-emerald-400" : "border-gray-500";
+                  return (
                     <div
                       key={face.face_id}
-                      className="absolute border-2 border-indigo-400 rounded pointer-events-none"
+                      className={`absolute border-2 ${borderColor} rounded ${identified ? "cursor-pointer" : "pointer-events-none"}`}
                       style={{
                         left: `${face.bounding_box.x * 100}%`,
                         top: `${face.bounding_box.y * 100}%`,
                         width: `${face.bounding_box.w * 100}%`,
                         height: `${face.bounding_box.h * 100}%`,
                       }}
-                    />
-                  )
-                )}
+                      onClick={identified ? () => navigate(`/people/${face.person!.person_id}`) : undefined}
+                    >
+                      {identified && (
+                        <span className="absolute -bottom-5 left-0 whitespace-nowrap rounded bg-black/70 px-1 text-xs text-white">
+                          {face.person!.display_name}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             ) : (
               <div className="text-gray-500">

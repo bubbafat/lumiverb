@@ -21,6 +21,7 @@ from src.api.routers.ratings import router as ratings_router
 from src.api.routers.browse import router as browse_router
 from src.api.routers.views import router as views_router
 from src.api.routers.upkeep import router as upkeep_router
+from src.api.routers.people import router as people_router, faces_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -42,6 +43,8 @@ app.include_router(ingest_router)
 app.include_router(ratings_router)
 app.include_router(browse_router)
 app.include_router(views_router)
+app.include_router(people_router)
+app.include_router(faces_router)
 app.include_router(facets_router)
 app.include_router(assets.router)
 app.include_router(collections.router)

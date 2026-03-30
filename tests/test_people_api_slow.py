@@ -1,0 +1,273 @@
+"""Slow integration tests for people API endpoints."""
+
+from __future__ import annotations
+
+import os
+import secrets
+from typing import Tuple
+from unittest.mock import patch
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy.engine import make_url
+from testcontainers.postgres import PostgresContainer
+
+from src.api.main import app
+from src.core.config import get_settings
+from src.core.database import _engines, get_control_session
+from src.repository.control_plane import TenantDbRoutingRepository
+from tests.conftest import _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
+
+
+@pytest.fixture(scope="module")
+def people_client() -> Tuple[_AuthClient, str, str]:
+    """Set up two Postgres containers, tenant, library. Yields (auth_client, library_id, tenant_url)."""
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    with PostgresContainer("pgvector/pgvector:pg16") as control_postgres:
+        control_url = _ensure_psycopg2(control_postgres.get_connection_url())
+        _run_control_migrations(control_url)
+
+        u = make_url(control_url)
+        tenant_tpl = str(u.set(database="{tenant_id}"))
+        os.environ["CONTROL_PLANE_DATABASE_URL"] = control_url
+        os.environ["TENANT_DATABASE_URL_TEMPLATE"] = tenant_tpl
+        os.environ["ADMIN_KEY"] = "test-admin-secret"
+        get_settings.cache_clear()
+        _engines.clear()
+
+        with patch("src.api.routers.admin.provision_tenant_database"):
+            with TestClient(app) as client:
+                r = client.post(
+                    "/v1/admin/tenants",
+                    json={"name": "PeopleTenant", "plan": "free"},
+                    headers={"Authorization": "Bearer test-admin-secret"},
+                )
+                assert r.status_code == 200
+                data = r.json()
+                tenant_id = data["tenant_id"]
+                api_key = data["api_key"]
+
+        with PostgresContainer("pgvector/pgvector:pg16") as tenant_postgres:
+            tenant_url = _ensure_psycopg2(tenant_postgres.get_connection_url())
+            _provision_tenant_db(tenant_url, project_root)
+
+            with get_control_session() as session:
+                routing_repo = TenantDbRoutingRepository(session)
+                row = routing_repo.get_by_tenant_id(tenant_id)
+                assert row is not None
+                row.connection_string = tenant_url
+                session.add(row)
+                session.commit()
+
+            with TestClient(app) as client:
+                auth_client = _AuthClient(client, api_key)
+                lib_name = "PeopleLib_" + secrets.token_urlsafe(4)
+                r_lib = auth_client.post(
+                    "/v1/libraries",
+                    json={"name": lib_name, "root_path": "/people"},
+                )
+                assert r_lib.status_code == 200
+                library_id = r_lib.json()["library_id"]
+
+                yield auth_client, library_id, tenant_url
+
+        _engines.clear()
+
+
+def _create_asset_with_faces(auth_client: _AuthClient, library_id: str, name: str, n_faces: int = 1) -> tuple[str, list[str]]:
+    """Create a test asset, submit faces, return (asset_id, face_ids)."""
+    rel_path = f"photos/{name}.jpg"
+    r = auth_client.post(
+        "/v1/assets/upsert",
+        json={
+            "library_id": library_id,
+            "rel_path": rel_path,
+            "file_size": 1000,
+            "file_mtime": "2024-01-01T00:00:00Z",
+            "media_type": "image",
+        },
+    )
+    assert r.status_code == 200
+    r2 = auth_client.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
+    asset_id = r2.json()["asset_id"]
+
+    faces = [
+        {
+            "bounding_box": {"x": 0.1 * i, "y": 0.1, "w": 0.1, "h": 0.15},
+            "detection_confidence": 0.95 - 0.01 * i,
+            "embedding": [0.1 * (i + 1)] * 512,
+        }
+        for i in range(n_faces)
+    ]
+    r3 = auth_client.post(f"/v1/assets/{asset_id}/faces", json={"faces": faces})
+    assert r3.status_code == 201
+    face_ids = r3.json()["face_ids"]
+    return asset_id, face_ids
+
+
+@pytest.mark.slow
+def test_create_person(people_client: Tuple[_AuthClient, str, str]) -> None:
+    """POST /v1/people creates a person."""
+    auth_client, library_id, _ = people_client
+
+    r = auth_client.post("/v1/people", json={"display_name": "Alice"})
+    assert r.status_code == 201, (r.status_code, r.text)
+    data = r.json()
+    assert data["display_name"] == "Alice"
+    assert data["person_id"].startswith("person_")
+    assert data["face_count"] == 0
+
+
+@pytest.mark.slow
+def test_create_person_with_faces(people_client: Tuple[_AuthClient, str, str]) -> None:
+    """POST /v1/people with face_ids assigns faces."""
+    auth_client, library_id, _ = people_client
+
+    _, face_ids = _create_asset_with_faces(auth_client, library_id, "alice_photo", 2)
+
+    r = auth_client.post("/v1/people", json={"display_name": "Bob", "face_ids": face_ids})
+    assert r.status_code == 201
+    data = r.json()
+    assert data["face_count"] == 2
+    assert data["representative_face_id"] is not None
+
+
+@pytest.mark.slow
+def test_list_people(people_client: Tuple[_AuthClient, str, str]) -> None:
+    """GET /v1/people returns people sorted by face count desc."""
+    auth_client, _, _ = people_client
+
+    r = auth_client.get("/v1/people")
+    assert r.status_code == 200
+    data = r.json()
+    assert "items" in data
+    assert "next_cursor" in data
+    # Bob (2 faces) should come before Alice (0 faces)
+    names = [p["display_name"] for p in data["items"]]
+    assert "Bob" in names
+    assert "Alice" in names
+    bob_idx = names.index("Bob")
+    alice_idx = names.index("Alice")
+    assert bob_idx < alice_idx
+
+
+@pytest.mark.slow
+def test_get_person(people_client: Tuple[_AuthClient, str, str]) -> None:
+    """GET /v1/people/{id} returns person details."""
+    auth_client, _, _ = people_client
+
+    # Get Alice's ID from list
+    r = auth_client.get("/v1/people")
+    alice = [p for p in r.json()["items"] if p["display_name"] == "Alice"][0]
+
+    r = auth_client.get(f"/v1/people/{alice['person_id']}")
+    assert r.status_code == 200
+    assert r.json()["display_name"] == "Alice"
+
+
+@pytest.mark.slow
+def test_update_person(people_client: Tuple[_AuthClient, str, str]) -> None:
+    """PATCH /v1/people/{id} updates display_name."""
+    auth_client, _, _ = people_client
+
+    r = auth_client.get("/v1/people")
+    alice = [p for p in r.json()["items"] if p["display_name"] == "Alice"][0]
+
+    r = auth_client.post(  # Using post since _AuthClient doesn't have .patch
+        f"/v1/people/{alice['person_id']}",
+        json={"display_name": "Alice Smith"},
+    )
+    # TestClient doesn't have patch, use raw client
+    r = auth_client._client.patch(
+        f"/v1/people/{alice['person_id']}",
+        json={"display_name": "Alice Smith"},
+        headers=auth_client._headers,
+    )
+    assert r.status_code == 200
+    assert r.json()["display_name"] == "Alice Smith"
+
+
+@pytest.mark.slow
+def test_person_not_found(people_client: Tuple[_AuthClient, str, str]) -> None:
+    """GET /v1/people/{nonexistent} returns 404."""
+    auth_client, _, _ = people_client
+
+    r = auth_client.get("/v1/people/person_nonexistent")
+    assert r.status_code == 404
+
+
+@pytest.mark.slow
+def test_delete_person(people_client: Tuple[_AuthClient, str, str]) -> None:
+    """DELETE /v1/people/{id} removes person and matches."""
+    auth_client, _, _ = people_client
+
+    # Create a temp person to delete
+    r = auth_client.post("/v1/people", json={"display_name": "ToDelete"})
+    assert r.status_code == 201
+    pid = r.json()["person_id"]
+
+    r = auth_client._client.delete(
+        f"/v1/people/{pid}",
+        headers=auth_client._headers,
+    )
+    assert r.status_code == 204
+
+    # Verify gone
+    r = auth_client.get(f"/v1/people/{pid}")
+    assert r.status_code == 404
+
+
+@pytest.mark.slow
+def test_list_person_faces(people_client: Tuple[_AuthClient, str, str]) -> None:
+    """GET /v1/people/{id}/faces returns matched faces."""
+    auth_client, _, _ = people_client
+
+    r = auth_client.get("/v1/people")
+    bob = [p for p in r.json()["items"] if p["display_name"] == "Bob"][0]
+
+    r = auth_client.get(f"/v1/people/{bob['person_id']}/faces")
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data["items"]) == 2
+    assert all("face_id" in f for f in data["items"])
+    assert all("asset_id" in f for f in data["items"])
+
+
+@pytest.mark.slow
+def test_faces_endpoint_populates_person(people_client: Tuple[_AuthClient, str, str]) -> None:
+    """GET /v1/assets/{id}/faces returns person data for matched faces."""
+    auth_client, _, _ = people_client
+
+    # Get Bob's faces to find the asset_id
+    r = auth_client.get("/v1/people")
+    bob = [p for p in r.json()["items"] if p["display_name"] == "Bob"][0]
+    r = auth_client.get(f"/v1/people/{bob['person_id']}/faces")
+    asset_id = r.json()["items"][0]["asset_id"]
+
+    # Now call the faces endpoint on that asset
+    r = auth_client.get(f"/v1/assets/{asset_id}/faces")
+    assert r.status_code == 200
+    faces = r.json()["faces"]
+    assert len(faces) >= 1
+    # At least one face should have person populated
+    matched = [f for f in faces if f["person"] is not None]
+    assert len(matched) >= 1
+    assert matched[0]["person"]["display_name"] == "Bob"
+    assert matched[0]["person"]["person_id"] == bob["person_id"]
+
+
+@pytest.mark.slow
+def test_create_person_conflict_already_assigned(people_client: Tuple[_AuthClient, str, str]) -> None:
+    """POST /v1/people with already-assigned face_ids returns 409."""
+    auth_client, _, _ = people_client
+
+    # Get Bob's face IDs
+    r = auth_client.get("/v1/people")
+    bob = [p for p in r.json()["items"] if p["display_name"] == "Bob"][0]
+    r = auth_client.get(f"/v1/people/{bob['person_id']}/faces")
+    face_ids = [f["face_id"] for f in r.json()["items"]]
+
+    # Try to create new person with same faces
+    r = auth_client.post("/v1/people", json={"display_name": "Duplicate", "face_ids": face_ids})
+    assert r.status_code == 409

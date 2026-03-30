@@ -330,6 +330,94 @@ export async function listFaces(assetId: string): Promise<FaceListResponse> {
   return apiFetch<FaceListResponse>(`/assets/${assetId}/faces`);
 }
 
+// ---------- People ----------
+
+export interface PersonItem {
+  person_id: string;
+  display_name: string;
+  face_count: number;
+  representative_face_id: string | null;
+  representative_asset_id: string | null;
+  confirmation_count: number;
+}
+
+export interface PersonListResponse {
+  items: PersonItem[];
+  next_cursor: string | null;
+}
+
+export interface PersonFaceItem {
+  face_id: string;
+  asset_id: string;
+  bounding_box: { x: number; y: number; w: number; h: number } | null;
+  detection_confidence: number | null;
+  rel_path: string | null;
+}
+
+export interface PersonFacesResponse {
+  items: PersonFaceItem[];
+  next_cursor: string | null;
+}
+
+export interface ClusterItem {
+  cluster_index: number;
+  size: number;
+  faces: PersonFaceItem[];
+}
+
+export interface ClustersResponse {
+  clusters: ClusterItem[];
+  truncated: boolean;
+}
+
+/** List people sorted by face count descending. */
+export async function listPeople(cursor?: string, limit = 50): Promise<PersonListResponse> {
+  const params = new URLSearchParams();
+  if (cursor) params.set("after", cursor);
+  params.set("limit", String(limit));
+  return apiFetch<PersonListResponse>(`/people?${params}`);
+}
+
+/** Create a named person. */
+export async function createPerson(displayName: string, faceIds?: string[]): Promise<PersonItem> {
+  const body: Record<string, unknown> = { display_name: displayName };
+  if (faceIds) body.face_ids = faceIds;
+  return apiFetch<PersonItem>("/people", { method: "POST", body: JSON.stringify(body), headers: { "Content-Type": "application/json" } });
+}
+
+/** Get a person by ID. */
+export async function getPerson(personId: string): Promise<PersonItem> {
+  return apiFetch<PersonItem>(`/people/${personId}`);
+}
+
+/** Update a person's display name. */
+export async function updatePerson(personId: string, displayName: string): Promise<PersonItem> {
+  return apiFetch<PersonItem>(`/people/${personId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ display_name: displayName }),
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+/** Delete a person and all their face matches. */
+export async function deletePerson(personId: string): Promise<void> {
+  await apiFetch<void>(`/people/${personId}`, { method: "DELETE" });
+}
+
+/** List faces matched to a person, cursor-paginated. */
+export async function listPersonFaces(personId: string, cursor?: string, limit = 50): Promise<PersonFacesResponse> {
+  const params = new URLSearchParams();
+  if (cursor) params.set("after", cursor);
+  params.set("limit", String(limit));
+  return apiFetch<PersonFacesResponse>(`/people/${personId}/faces?${params}`);
+}
+
+/** Get face clusters (unassigned faces grouped by similarity). */
+export async function getClusters(limit = 20, facesPerCluster = 6): Promise<ClustersResponse> {
+  const params = new URLSearchParams({ limit: String(limit), faces_per_cluster: String(facesPerCluster) });
+  return apiFetch<ClustersResponse>(`/faces/clusters?${params}`);
+}
+
 export async function searchAssets(params: {
   libraryId?: string;
   q: string;

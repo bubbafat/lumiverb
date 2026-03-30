@@ -997,14 +997,21 @@ def list_faces(
     if asset is None:
         raise HTTPException(status_code=404, detail="Asset not found")
 
-    faces = FaceRepository(session).get_by_asset_id(asset_id)
+    face_repo = FaceRepository(session)
+    faces = face_repo.get_by_asset_id(asset_id)
+    face_ids = [f.face_id for f in faces]
+    persons_by_face = face_repo.get_persons_for_faces(face_ids)
+
     return FaceListResponse(
         faces=[
             FaceListItem(
                 face_id=f.face_id,
                 bounding_box=f.bounding_box_json,
                 detection_confidence=f.detection_confidence,
-                person=None,  # Populated when clustering ships
+                person=(
+                    {"person_id": p.person_id, "display_name": p.display_name}
+                    if (p := persons_by_face.get(f.face_id)) else None
+                ),
             )
             for f in faces
         ]
