@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import io
 import json
 import logging
@@ -112,9 +113,13 @@ def _repair_embed_one(
                 progress.update(task_id, ok=ok, fail=fail)
             return
 
+        image_bytes = resp.content
+        resp.close()
+        del resp
+
         from PIL import Image as PILImage
-        img = PILImage.open(io.BytesIO(resp.content)).convert("RGB")
-        del resp  # free HTTP response bytes immediately
+        img = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
+        del image_bytes
         vector = clip_provider.embed_image(img)
         img.close()
         del img
@@ -141,6 +146,8 @@ def _repair_embed_one(
             progress.console.print(f"[red]embed ✗[/red] {rel_path}: {e}")
             progress.advance(task_id, 1)
             progress.update(task_id, ok=ok, fail=fail)
+    finally:
+        gc.collect()
 
 
 def _repair_face_one(
@@ -166,9 +173,14 @@ def _repair_face_one(
                 progress.update(task_id, ok=ok, fail=fail)
             return
 
+        # Extract bytes, discard response immediately
+        image_bytes = resp.content
+        resp.close()
+        del resp
+
         from PIL import Image as PILImage
-        img = PILImage.open(io.BytesIO(resp.content)).convert("RGB")
-        del resp  # free HTTP response bytes immediately
+        img = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
+        del image_bytes
         detections = face_provider.detect_faces(img)
         img.close()
         del img
@@ -181,7 +193,7 @@ def _repair_face_one(
             }
             for d in detections
         ]
-        del detections  # free InsightFace face objects (large numpy arrays)
+        del detections
 
         client.post(f"/v1/assets/{asset_id}/faces", json={
             "detection_model": face_provider.model_id,
@@ -206,6 +218,8 @@ def _repair_face_one(
             progress.console.print(f"[red]faces ✗[/red] {rel_path}: {e}")
             progress.advance(task_id, 1)
             progress.update(task_id, ok=ok, fail=fail)
+    finally:
+        gc.collect()
 
 
 def get_repair_summary(client: LumiverbClient, library_id: str) -> dict:
@@ -347,10 +361,13 @@ def run_repair(
                 console.print("No assets found (already repaired?).")
                 continue
 
+            # Face detection is CPU-bound (ONNX uses all cores per inference).
+            # More threads just queue decoded images in memory. Cap at 2.
+            face_concurrency = min(concurrency, 2)
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Faces", total=len(assets), ok=0, fail=0)
-                pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="faces")
+                pool = ThreadPoolExecutor(max_workers=face_concurrency, thread_name_prefix="faces")
                 inflight: set[Future] = set()
                 for a in assets:
                     fut = pool.submit(
