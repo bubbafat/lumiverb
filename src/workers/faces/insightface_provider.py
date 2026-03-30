@@ -44,19 +44,32 @@ class InsightFaceProvider:
     def model_version(self) -> str:
         return MODEL_VERSION
 
+    # Preferred ONNX execution providers in priority order.
+    # ONNX Runtime tries each and silently skips unavailable ones.
+    _PROVIDERS = [
+        "CUDAExecutionProvider",      # NVIDIA GPU
+        "CoreMLExecutionProvider",    # Apple Silicon Neural Engine / GPU
+        "CPUExecutionProvider",       # Always available fallback
+    ]
+
     def _load(self):
         if self._app is None:
             with self._lock:
                 if self._app is None:
+                    import onnxruntime as ort
                     from insightface.app import FaceAnalysis
+
+                    available = set(ort.get_available_providers())
+                    providers = [p for p in self._PROVIDERS if p in available]
 
                     app = FaceAnalysis(
                         name=MODEL_VERSION,
-                        providers=["CPUExecutionProvider"],
+                        providers=providers,
                     )
                     app.prepare(ctx_id=-1, det_size=(640, 640))
                     self._app = app
-                    logger.info("Loaded InsightFace model %s (CPU)", MODEL_VERSION)
+                    active = providers[0] if providers else "unknown"
+                    logger.info("Loaded InsightFace model %s (%s)", MODEL_VERSION, active)
         return self._app
 
     def ensure_loaded(self) -> None:
