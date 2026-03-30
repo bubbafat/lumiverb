@@ -431,6 +431,103 @@ def name_cluster(
     )
 
 
+class ClusterFacesResponse(BaseModel):
+    items: list[PersonFaceItem]
+    total: int
+    next_cursor: str | None = None
+
+
+@faces_router.get("/clusters/{cluster_index}/faces", response_model=ClusterFacesResponse)
+def list_cluster_faces(
+    cluster_index: int,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    after: str | None = None,
+    limit: int = 50,
+) -> ClusterFacesResponse:
+    """List all faces in a cluster, cursor-paginated."""
+    from src.repository.system_metadata import SystemMetadataRepository
+    from src.repository.tenant import FaceRepository
+    from src.models.tenant import Face, Asset
+    from sqlmodel import select
+
+    if limit > 100:
+        limit = 100
+
+    # Get cluster face IDs from cache (recompute if needed)
+    meta = SystemMetadataRepository(session)
+    dirty = meta.get_value("face_clusters_dirty")
+    cached = meta.get_value("face_clusters_cache")
+
+    if dirty or not cached:
+        repo = FaceRepository(session)
+        clusters_raw, all_face_ids, truncated = repo.compute_clusters(
+            max_clusters=50, faces_per_cluster=20,
+        )
+        cache_clusters = [
+            {"cluster_index": i, "size": len(ids), "faces": c, "face_ids": ids}
+            for i, (c, ids) in enumerate(zip(clusters_raw, all_face_ids))
+        ]
+        from datetime import datetime, timezone
+        cache_data = json.dumps({
+            "clusters": cache_clusters,
+            "truncated": truncated,
+            "computed_at": datetime.now(timezone.utc).isoformat(),
+        })
+        meta.set_value("face_clusters_cache", cache_data)
+        meta.set_value("face_clusters_dirty", "false")
+    else:
+        try:
+            cache_clusters = json.loads(cached).get("clusters", [])
+        except (json.JSONDecodeError, KeyError):
+            raise HTTPException(status_code=500, detail="Cluster cache corrupted")
+
+    if cluster_index < 0 or cluster_index >= len(cache_clusters):
+        raise HTTPException(status_code=404, detail="Cluster not found")
+
+    all_face_ids = cache_clusters[cluster_index].get("face_ids", [])
+    total = len(all_face_ids)
+
+    # Apply cursor pagination over the sorted face ID list
+    if after:
+        try:
+            start = all_face_ids.index(after) + 1
+        except ValueError:
+            start = 0
+    else:
+        start = 0
+
+    page_ids = all_face_ids[start:start + limit]
+    if not page_ids:
+        return ClusterFacesResponse(items=[], total=total, next_cursor=None)
+
+    # Load face + asset data
+    stmt = select(Face).where(Face.face_id.in_(page_ids))
+    faces_by_id = {f.face_id: f for f in session.exec(stmt).all()}
+
+    asset_ids = list({faces_by_id[fid].asset_id for fid in page_ids if fid in faces_by_id})
+    asset_map: dict[str, str] = {}
+    if asset_ids:
+        rows = session.exec(select(Asset.asset_id, Asset.rel_path).where(Asset.asset_id.in_(asset_ids))).all()
+        asset_map = {r[0]: r[1] for r in rows}
+
+    items = []
+    for fid in page_ids:
+        f = faces_by_id.get(fid)
+        if not f:
+            continue
+        items.append(PersonFaceItem(
+            face_id=f.face_id,
+            asset_id=f.asset_id,
+            bounding_box=f.bounding_box_json,
+            detection_confidence=f.detection_confidence,
+            rel_path=asset_map.get(f.asset_id),
+        ))
+
+    next_cursor = page_ids[-1] if len(page_ids) == limit and start + limit < total else None
+
+    return ClusterFacesResponse(items=items, total=total, next_cursor=next_cursor)
+
+
 @faces_router.get("/{face_id}/crop")
 def get_face_crop(
     face_id: str,

@@ -4,6 +4,7 @@ import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tansta
 import {
   listPeople,
   getClusters,
+  listClusterFaces,
   nameCluster,
   getApiKey,
 } from "../api/client";
@@ -116,8 +117,19 @@ function ClusterCard({
 }) {
   const queryClient = useQueryClient();
   const [mode, setMode] = useState<"idle" | "name" | "assign">("idle");
+  const [expanded, setExpanded] = useState(false);
   const [newName, setNewName] = useState("");
   const [selectedPersonId, setSelectedPersonId] = useState("");
+
+  const allFacesQuery = useInfiniteQuery({
+    queryKey: ["cluster-faces", cluster.cluster_index],
+    queryFn: ({ pageParam }) => listClusterFaces(cluster.cluster_index, pageParam, 50),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+    enabled: expanded,
+  });
+
+  const allFaces = allFacesQuery.data?.pages.flatMap((p) => p.items) ?? [];
 
   const nameMutation = useMutation({
     mutationFn: (name: string) =>
@@ -143,20 +155,48 @@ function ClusterCard({
     },
   });
 
+  const displayFaces = expanded ? allFaces : cluster.faces;
+
   return (
-    <div className="rounded-xl border border-gray-700 bg-gray-800/30 p-4">
+    <div className={`rounded-xl border border-gray-700 bg-gray-800/30 p-4 ${expanded ? "col-span-full" : ""}`}>
       <div className="mb-3 flex items-center justify-between">
-        <span className="text-sm font-medium text-gray-300">
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          className="text-sm font-medium text-gray-300 hover:text-white"
+        >
           {cluster.size} {cluster.size === 1 ? "photo" : "photos"}
-        </span>
+          {!expanded && cluster.size > cluster.faces.length && (
+            <span className="ml-1 text-xs text-gray-500">— click to see all</span>
+          )}
+          {expanded && (
+            <span className="ml-1 text-xs text-gray-500">— click to collapse</span>
+          )}
+        </button>
       </div>
 
       {/* Face thumbnails */}
-      <div className="mb-3 grid grid-cols-3 gap-1.5">
-        {cluster.faces.map((face) => (
+      <div className={`mb-3 grid gap-1.5 ${expanded ? "grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10" : "grid-cols-3"}`}>
+        {displayFaces.map((face) => (
           <ClusterFaceThumbnail key={face.face_id} face={face} />
         ))}
+        {expanded && allFacesQuery.isLoading && (
+          Array.from({ length: 6 }).map((_, i) => (
+            <div key={`skel-${i}`} className="aspect-square animate-pulse rounded-lg bg-gray-700" />
+          ))
+        )}
       </div>
+
+      {expanded && allFacesQuery.hasNextPage && (
+        <button
+          type="button"
+          onClick={() => allFacesQuery.fetchNextPage()}
+          disabled={allFacesQuery.isFetchingNextPage}
+          className="mb-3 rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700"
+        >
+          {allFacesQuery.isFetchingNextPage ? "Loading..." : "Load more"}
+        </button>
+      )}
 
       {/* Actions */}
       {mode === "idle" && (

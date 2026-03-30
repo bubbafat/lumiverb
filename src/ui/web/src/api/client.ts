@@ -430,6 +430,19 @@ export async function nameCluster(
   });
 }
 
+export interface ClusterFacesResponse {
+  items: PersonFaceItem[];
+  total: number;
+  next_cursor: string | null;
+}
+
+/** List all faces in a cluster, paginated. */
+export async function listClusterFaces(clusterIndex: number, cursor?: string, limit = 50): Promise<ClusterFacesResponse> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (cursor) params.set("after", cursor);
+  return apiFetch<ClusterFacesResponse>(`/faces/clusters/${clusterIndex}/faces?${params}`);
+}
+
 /** Assign a face to a person (existing or new). */
 export async function assignFace(
   faceId: string,
