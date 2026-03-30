@@ -53,6 +53,8 @@ workers = [
     "pyexiftool>=0.5",
     "torch>=2.10.0",
     "open-clip-torch>=3.3.0",
+    "insightface>=0.7.3",
+    "onnxruntime>=1.17.0",
 ]
 # All extras: CLI + workers (for local development and client installs)
 all = [

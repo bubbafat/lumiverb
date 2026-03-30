@@ -23,6 +23,7 @@ from src.models.tenant import (
     AssetRating,
     Collection,
     CollectionAsset,
+    Face,
     Library,
     LibraryPathFilter,
     TenantPathFilterDefault,
@@ -372,6 +373,7 @@ class AssetRepository:
         tag: str | None = None,
         missing_vision: bool = False,
         missing_embeddings: bool = False,
+        missing_faces: bool = False,
         *,
         sort: str = "taken_at",
         direction: str = "desc",
@@ -474,6 +476,8 @@ class AssetRepository:
             conditions.append(
                 "NOT EXISTS (SELECT 1 FROM asset_embeddings ae WHERE ae.asset_id = a.asset_id)"
             )
+        if missing_faces:
+            conditions.append("a.face_count IS NULL")
 
         # --- Media type filter ---
         if media_types:
@@ -1913,6 +1917,7 @@ class UnifiedBrowseRepository:
         tag: str | None = None,
         missing_vision: bool = False,
         missing_embeddings: bool = False,
+        missing_faces: bool = False,
         *,
         sort: str = "taken_at",
         direction: str = "desc",
@@ -2005,6 +2010,8 @@ class UnifiedBrowseRepository:
             conditions.append(
                 "NOT EXISTS (SELECT 1 FROM asset_embeddings ae WHERE ae.asset_id = a.asset_id)"
             )
+        if missing_faces:
+            conditions.append("a.face_count IS NULL")
 
         # --- Media type filter ---
         if media_types:
@@ -2221,3 +2228,68 @@ class SavedViewRepository:
         )
         self._session.commit()
         return result.rowcount  # type: ignore[return-value]
+
+
+class FaceRepository:
+    """CRUD for detected faces. Operates within a tenant session."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def submit_faces(
+        self,
+        asset_id: str,
+        detection_model: str,
+        detection_model_version: str,
+        faces: list[dict],
+    ) -> list[str]:
+        """Replace all faces for (asset_id, model, version) and update face_count.
+
+        Args:
+            faces: list of dicts with keys: bounding_box, detection_confidence, embedding (optional).
+
+        Returns:
+            List of created face_ids.
+        """
+        from sqlalchemy import delete as sa_delete
+
+        # Delete existing faces for this asset + model combo
+        self._session.execute(
+            sa_delete(Face).where(
+                Face.asset_id == asset_id,
+                Face.detection_model == detection_model,
+                Face.detection_model_version == detection_model_version,
+            )
+        )
+
+        face_ids: list[str] = []
+        for f in faces:
+            face_id = "face_" + str(ULID())
+            face = Face(
+                face_id=face_id,
+                asset_id=asset_id,
+                bounding_box_json=f.get("bounding_box"),
+                embedding_vector=f.get("embedding"),
+                detection_confidence=f.get("detection_confidence"),
+                detection_model=detection_model,
+                detection_model_version=detection_model_version,
+            )
+            self._session.add(face)
+            face_ids.append(face_id)
+
+        # Update face_count on the asset
+        self._session.execute(
+            text("UPDATE assets SET face_count = :count WHERE asset_id = :aid"),
+            {"count": len(faces), "aid": asset_id},
+        )
+        self._session.commit()
+        return face_ids
+
+    def get_by_asset_id(self, asset_id: str) -> list[Face]:
+        """Return all faces for an asset, ordered by confidence desc."""
+        stmt = (
+            select(Face)
+            .where(Face.asset_id == asset_id)
+            .order_by(Face.detection_confidence.desc())  # type: ignore[union-attr]
+        )
+        return list(self._session.exec(stmt).all())

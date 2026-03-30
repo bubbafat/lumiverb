@@ -191,12 +191,14 @@ All under `/v1/assets`; require tenant auth. List/get endpoints return only acti
 - **POST /v1/assets** — Single-file upsert. Body: `{ "library_id", "rel_path", "file_size", "file_mtime" (ISO8601), "media_type", "force": false }`. Upserts by `(library_id, rel_path)`. Returns `{ "action": "added|updated|skipped" }`.
 - **GET /v1/assets/{asset_id}** — Return single asset with full detail (EXIF, video preview info). 404 if not found or trashed.
 - **GET /v1/assets/by-path** — Query: `library_id`, `rel_path`. Look up asset by library and path. Returns asset detail or 404.
-- **GET /v1/assets/page** — Query: `library_id` (required), `after` (cursor), `limit` (default 500, max 500), `missing_vision` (optional bool, filters to assets without AI metadata). Keyset-paginated active assets for bulk reconciliation. Returns `{ "items": [...], "next_cursor" }`.
+- **GET /v1/assets/page** — Query: `library_id` (required), `after` (cursor), `limit` (default 500, max 500), `missing_vision` (optional bool), `missing_embeddings` (optional bool), `missing_faces` (optional bool, filters to assets where `face_count IS NULL`). Keyset-paginated active assets for bulk reconciliation. Returns `{ "items": [...], "next_cursor" }`.
 - **PATCH /v1/assets/{asset_id}** — Update asset fields. Returns updated asset.
 - **DELETE /v1/assets/{asset_id}** — Soft-delete (trash) a single asset. Sets `deleted_at`. Returns 204 on success, 404 if not found or already trashed. Quickwit delete is best-effort (log on failure).
 - **POST /v1/assets/{asset_id}/artifacts/{artifact_type}** — Multipart file upload. `artifact_type` must be one of: `proxy`, `thumbnail`, `video_preview`, `scene_rep`. Form fields: `file` (binary, required), `width` (int, optional, images only), `height` (int, optional, images only), `rep_frame_ms` (int, required for `scene_rep`, ignored for other types). Streams the upload to disk in 64 KB chunks, computes SHA-256 incrementally, and atomic-renames into place. Updates DB after file is safely on disk. Returns `{ "key", "sha256" }`. Errors: 400 invalid type or missing `rep_frame_ms` for `scene_rep`, 404 asset not found or trashed, 413 file too large.
 - **GET /v1/assets/{asset_id}/{proxy|thumbnail}** — Stream proxy or thumbnail file bytes. Returns `application/octet-stream`.
 - **GET /v1/assets/facets** — Query: `library_id` (required), `path_prefix` (optional). Returns aggregated filter facets: `{ "media_types", "camera_makes", "camera_models", "lens_models", "iso_range", "aperture_range", "focal_length_range", "has_gps_count" }`.
+- **POST /v1/assets/{asset_id}/faces** — Submit face detections. Body: `{ "detection_model": "insightface", "detection_model_version": "buffalo_l", "faces": [{ "bounding_box": {"x","y","w","h"}, "detection_confidence": float, "embedding": [512 floats] | null }] }`. Replaces existing faces for same model. Sets `assets.face_count`. Bumps library revision. Returns 201 `{ "face_count", "face_ids" }`.
+- **GET /v1/assets/{asset_id}/faces** — List detected faces. Returns `{ "faces": [{ "face_id", "bounding_box", "detection_confidence", "person": null }] }`. The `person` field is reserved for future clustering.
 
 ## Ingest API
 
@@ -350,5 +352,4 @@ Vision API config (`vision_api_url`, `vision_api_key`) is stored per-tenant in t
 - Do not add multi-library search in v1 — search is per-library
 - Do not store or serve source files
 - Do not add rate limiting in v1 — that is future work
-- Do not populate or query `embedding_vector`, `faces`, `people`, or `face_person_matches` — phase 2 only
-- Do not implement face clustering or identity assignment — phase 2 only
+- Do not implement face clustering or identity assignment — future ADR

@@ -172,6 +172,7 @@ def page_assets(
     tag: str | None = None,
     missing_vision: bool = False,
     missing_embeddings: bool = False,
+    missing_faces: bool = False,
     sort: str = "taken_at",
     dir: str = "desc",
     media_type: str | None = None,
@@ -250,6 +251,7 @@ def page_assets(
         tag=tag,
         missing_vision=missing_vision,
         missing_embeddings=missing_embeddings,
+        missing_faces=missing_faces,
         sort=sort_col,
         direction=direction,
         media_types=media_types,
@@ -322,6 +324,7 @@ class RepairSummary(BaseModel):
     missing_exif: int = 0
     missing_vision: int = 0
     missing_embeddings: int = 0
+    missing_faces: int = 0
     stale_search_sync: int = 0
 
 
@@ -354,6 +357,9 @@ def repair_summary(
                     ) AND media_type = 'image'
                 ) AS missing_embeddings,
                 COUNT(*) FILTER (
+                    WHERE a.face_count IS NULL AND media_type = 'image'
+                ) AS missing_faces,
+                COUNT(*) FILTER (
                     WHERE EXISTS (
                         SELECT 1 FROM asset_metadata am
                         WHERE am.asset_id = a.asset_id
@@ -377,6 +383,7 @@ def repair_summary(
         missing_exif=row.missing_exif,
         missing_vision=row.missing_vision,
         missing_embeddings=row.missing_embeddings,
+        missing_faces=row.missing_faces,
         stale_search_sync=row.stale_search_sync,
     )
 
@@ -903,3 +910,98 @@ def upsert_asset(
         return UpsertAssetResponse(action="updated")
 
     return UpsertAssetResponse(action="skipped")
+
+
+# ---------------------------------------------------------------------------
+# Face detection endpoints (ADR-009)
+# ---------------------------------------------------------------------------
+
+
+class FaceDetectionItem(BaseModel):
+    bounding_box: dict[str, float]
+    detection_confidence: float
+    embedding: list[float] | None = None
+
+
+class FaceSubmitRequest(BaseModel):
+    detection_model: str = "insightface"
+    detection_model_version: str = "buffalo_l"
+    faces: list[FaceDetectionItem]
+
+
+class FaceSubmitResponse(BaseModel):
+    face_count: int
+    face_ids: list[str]
+
+
+class FaceListItem(BaseModel):
+    face_id: str
+    bounding_box: dict | None
+    detection_confidence: float | None
+    person: dict | None = None
+
+
+class FaceListResponse(BaseModel):
+    faces: list[FaceListItem]
+
+
+@router.post("/{asset_id}/faces", response_model=FaceSubmitResponse, status_code=201)
+def submit_faces(
+    asset_id: str,
+    body: FaceSubmitRequest,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> FaceSubmitResponse:
+    """Submit face detections for an asset. Replaces existing faces for the same model."""
+    from src.repository.tenant import FaceRepository
+
+    asset = AssetRepository(session).get_by_id(asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    face_repo = FaceRepository(session)
+    faces_data = [
+        {
+            "bounding_box": f.bounding_box,
+            "detection_confidence": f.detection_confidence,
+            "embedding": [float(x) for x in f.embedding] if f.embedding else None,
+        }
+        for f in body.faces
+    ]
+    face_ids = face_repo.submit_faces(
+        asset_id=asset_id,
+        detection_model=body.detection_model,
+        detection_model_version=body.detection_model_version,
+        faces=faces_data,
+    )
+
+    # Bump library revision so UI reflects face_count changes
+    LibraryRepository(session).bump_revision(asset.library_id)
+
+    return FaceSubmitResponse(face_count=len(face_ids), face_ids=face_ids)
+
+
+@router.get("/{asset_id}/faces", response_model=FaceListResponse)
+def list_faces(
+    asset_id: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> FaceListResponse:
+    """List all detected faces for an asset."""
+    from src.repository.tenant import FaceRepository
+
+    asset = AssetRepository(session).get_by_id(asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    faces = FaceRepository(session).get_by_asset_id(asset_id)
+    return FaceListResponse(
+        faces=[
+            FaceListItem(
+                face_id=f.face_id,
+                bounding_box=f.bounding_box_json,
+                detection_confidence=f.detection_confidence,
+                person=None,  # Populated when clustering ships
+            )
+            for f in faces
+        ]
+    )

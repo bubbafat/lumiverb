@@ -141,6 +141,7 @@ class Asset(SQLModel, table=True):
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
+    face_count: int | None = Field(default=None, nullable=True)
 
 
 class VideoScene(SQLModel, table=True):
@@ -357,7 +358,7 @@ class SystemMetadata(SQLModel, table=True):
 
 
 # ---------------------------------------------------------------------------
-# Phase 2 stub tables — create now, leave empty, never query in Phase 1
+# Phase 2: Face detection & person recognition (ADR-009)
 # ---------------------------------------------------------------------------
 
 
@@ -375,6 +376,8 @@ class Face(SQLModel, table=True):
         sa_column=Column(Vector(512), nullable=True),
     )
     detection_confidence: float | None = Field(default=None, nullable=True)
+    detection_model: str = Field(default="insightface", nullable=False)
+    detection_model_version: str = Field(default="buffalo_l", nullable=False)
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
@@ -387,6 +390,14 @@ class Person(SQLModel, table=True):
     person_id: str = Field(primary_key=True)
     display_name: str = Field(nullable=False)
     created_by_user: bool = Field(default=True, nullable=False)
+    centroid_vector: Any = Field(
+        default=None,
+        sa_column=Column(Vector(512), nullable=True),
+    )
+    confirmation_count: int = Field(default=0, nullable=False)
+    representative_face_id: str | None = Field(
+        default=None, foreign_key="faces.face_id", nullable=True
+    )
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),

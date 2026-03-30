@@ -109,24 +109,24 @@ system_metadata   — key, value, updated_at
 - If a proxy or thumbnail key points to a missing file, the endpoint returns 404 and clears the stale key from the asset record.
 - On empty-trash (hard delete), artifact files in object storage are deleted best-effort, then DB rows are removed in FK-safe order.
 
-**Phase 2 tables (schema created now, populated later):**
+**Face detection tables (ADR-009):**
 
 ```
 faces             — face_id, asset_id, bounding_box_json,
                     embedding_vector vector(512), detection_confidence,
-                    created_at
-people            — person_id, display_name, created_by_user, created_at
+                    detection_model, detection_model_version, created_at
+people            — person_id, display_name, created_by_user,
+                    centroid_vector vector(512), confirmation_count,
+                    representative_face_id, created_at
 face_person_matches — face_id, person_id, confidence,
                     confirmed (bool), confirmed_at
 ```
 
-These tables exist from day one so phase 2 requires no schema migration surprises. All nullable/empty until the CLI runs face detection (phase 2).
+Face detection runs client-side in the CLI via InsightFace (buffalo_l). Detected faces with ArcFace 512-dim embeddings are POSTed to `POST /v1/assets/{id}/faces`. The `assets.face_count` column tracks detection status (NULL = unprocessed, 0 = no faces, N = N faces). Person clustering and labeling are future work; the schema supports them via `people.centroid_vector` and `face_person_matches`.
 
 **pgvector:**
 
-The `pgvector` extension is enabled on the Postgres instance at provisioning time. Enables `vector` column type and approximate nearest-neighbor index (`ivfflat` or `hnsw`) for similarity queries. Used for face embeddings (phase 2) and optionally image-level semantic embeddings (future).
-
-A dedicated vector database (Qdrant etc.) is not used in v1. Revisit at phase 2 when real embedding data exists to benchmark against pgvector at tenant scale.
+The `pgvector` extension is enabled on the Postgres instance at provisioning time. Enables `vector` column type and approximate nearest-neighbor index (`hnsw`) for similarity queries. Used for asset embeddings (CLIP ViT-B-32), face embeddings (ArcFace via InsightFace), and face-to-face similarity for person clustering.
 
 ### 3.3 API Server
 
