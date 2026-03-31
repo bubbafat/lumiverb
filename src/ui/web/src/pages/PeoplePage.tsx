@@ -9,6 +9,7 @@ import {
   listClusterFaces,
   nameCluster,
   dismissCluster,
+  deletePerson,
   getNearestPeople,
   searchPeople,
   getApiKey,
@@ -169,11 +170,15 @@ function ClusterFaceThumbnail({ face, onClick }: { face: PersonFaceItem; onClick
 function ClusterCard({
   cluster,
   people,
+  fading,
   onProcessed,
+  onDismissed,
 }: {
   cluster: ClusterItem;
   people: PersonItem[];
+  fading: boolean;
   onProcessed: (clusterIndex: number) => void;
+  onDismissed: (clusterIndex: number, personId: string) => void;
 }) {
   const [mode, setMode] = useState<"idle" | "name" | "assign">("idle");
   const [expanded, setExpanded] = useState(false);
@@ -269,13 +274,15 @@ function ClusterCard({
 
   const dismissMutation = useMutation({
     mutationFn: () => dismissCluster(cluster.cluster_index),
-    onSuccess: () => {
-      onProcessed(cluster.cluster_index);
+    onSuccess: (data) => {
+      onDismissed(cluster.cluster_index, data.person_id);
     },
   });
 
   return (
-    <div className={`rounded-xl border border-gray-700 bg-gray-800/30 p-4 ${expanded ? "col-span-full" : ""}`}>
+    <div
+      className={`rounded-xl border border-gray-700 bg-gray-800/30 p-4 transition-all duration-300 ${expanded ? "col-span-full" : ""} ${fading ? "pointer-events-none scale-95 opacity-0" : "opacity-100"}`}
+    >
       <div className="mb-3 flex items-center justify-between">
         <button
           type="button"
@@ -470,6 +477,10 @@ export default function PeoplePage() {
   // Track removed cluster indices for optimistic updates — prevents
   // named/dismissed clusters from re-appearing until next manual refresh.
   const [removedIndices, setRemovedIndices] = useState<Set<number>>(new Set());
+  // Track clusters currently fading out (animated before removal)
+  const [fadingIndices, setFadingIndices] = useState<Set<number>>(new Set());
+  // Undo state for dismissed clusters
+  const [undoState, setUndoState] = useState<{ clusterIndex: number; personId: string; timer: ReturnType<typeof setTimeout> } | null>(null);
 
   const peopleQuery = useInfiniteQuery({
     queryKey: ["people"],
@@ -492,25 +503,57 @@ export default function PeoplePage() {
   const allClusters = clustersQuery.data?.clusters ?? [];
   const truncated = clustersQuery.data?.truncated ?? false;
 
-  // Filter out clusters that have been named/dismissed in this session
+  // Filter out fully removed clusters but keep fading ones visible
   const clusters = useMemo(
     () => allClusters.filter((c) => !removedIndices.has(c.cluster_index)),
     [allClusters, removedIndices],
   );
 
-  const handleClusterProcessed = useCallback((clusterIndex: number) => {
-    // Optimistically remove the cluster from view immediately
+  const finishRemoval = useCallback((clusterIndex: number) => {
+    setFadingIndices((prev) => { const next = new Set(prev); next.delete(clusterIndex); return next; });
     setRemovedIndices((prev) => new Set(prev).add(clusterIndex));
+  }, []);
+
+  const handleClusterProcessed = useCallback((clusterIndex: number) => {
+    // Start fade animation, then remove after transition
+    setFadingIndices((prev) => new Set(prev).add(clusterIndex));
+    setTimeout(() => finishRemoval(clusterIndex), 300);
     // Refresh people list to show newly named person
     queryClient.invalidateQueries({ queryKey: ["people"] });
     // Do NOT invalidate face-clusters here — that would cause the shuffle bug.
     // Clusters will refresh on next page visit (refetchOnMount: true).
-  }, [queryClient]);
+  }, [queryClient, finishRemoval]);
+
+  const handleClusterDismissed = useCallback((clusterIndex: number, personId: string) => {
+    // Start fade animation
+    setFadingIndices((prev) => new Set(prev).add(clusterIndex));
+    setTimeout(() => finishRemoval(clusterIndex), 300);
+    // Clear any previous undo timer
+    if (undoState) clearTimeout(undoState.timer);
+    // Set up undo with 5-second window
+    const timer = setTimeout(() => setUndoState(null), 5000);
+    setUndoState({ clusterIndex, personId, timer });
+    queryClient.invalidateQueries({ queryKey: ["people"] });
+  }, [queryClient, finishRemoval, undoState]);
+
+  const handleUndo = useCallback(async () => {
+    if (!undoState) return;
+    clearTimeout(undoState.timer);
+    try {
+      await deletePerson(undoState.personId);
+      // Re-add the cluster to view and mark clusters dirty for next refresh
+      setRemovedIndices((prev) => { const next = new Set(prev); next.delete(undoState.clusterIndex); return next; });
+      queryClient.invalidateQueries({ queryKey: ["people"] });
+    } catch { /* ignore */ }
+    setUndoState(null);
+  }, [undoState, queryClient]);
 
   const handleRefreshClusters = useCallback(() => {
     setRemovedIndices(new Set());
+    setFadingIndices(new Set());
+    if (undoState) { clearTimeout(undoState.timer); setUndoState(null); }
     queryClient.invalidateQueries({ queryKey: ["face-clusters"] });
-  }, [queryClient]);
+  }, [queryClient, undoState]);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
@@ -587,7 +630,9 @@ export default function PeoplePage() {
                     key={cluster.cluster_index}
                     cluster={cluster}
                     people={people}
+                    fading={fadingIndices.has(cluster.cluster_index)}
                     onProcessed={handleClusterProcessed}
+                    onDismissed={handleClusterDismissed}
                   />
                 ))}
               </div>
@@ -610,6 +655,20 @@ export default function PeoplePage() {
               <div className="h-4 w-16 animate-pulse rounded bg-gray-700" />
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Undo dismiss toast */}
+      {undoState && (
+        <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 animate-fade-in rounded-lg border border-gray-600 bg-gray-800 px-4 py-2.5 shadow-lg">
+          <span className="text-sm text-gray-200">Cluster dismissed.</span>
+          <button
+            type="button"
+            onClick={handleUndo}
+            className="ml-3 text-sm font-medium text-indigo-400 hover:text-indigo-300"
+          >
+            Undo
+          </button>
         </div>
       )}
     </div>

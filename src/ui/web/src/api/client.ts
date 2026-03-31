@@ -530,12 +530,13 @@ export async function getNearestPeople(clusterIndex: number, limit = 5): Promise
   return apiFetch<NearestPersonItem[]>(`/faces/clusters/${clusterIndex}/nearest-people?limit=${limit}`);
 }
 
-/** Dismiss a cluster: creates a dismissed person that absorbs future similar faces. */
-export async function dismissCluster(clusterIndex: number): Promise<void> {
-  await fetch(`/v1/faces/clusters/${clusterIndex}/dismiss`, {
+/** Dismiss a cluster: creates a dismissed person that absorbs future similar faces. Returns person_id for undo. */
+export async function dismissCluster(clusterIndex: number): Promise<{ person_id: string }> {
+  const res = await fetch(`/v1/faces/clusters/${clusterIndex}/dismiss`, {
     method: "POST",
     headers: authHeaders(),
   });
+  return res.json();
 }
 
 export interface ClusterFacesResponse {

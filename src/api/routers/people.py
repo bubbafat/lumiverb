@@ -618,16 +618,20 @@ def name_cluster(
     )
 
 
-@faces_router.post("/clusters/{cluster_index}/dismiss", status_code=204)
+class DismissResult(BaseModel):
+    person_id: str
+
+
+@faces_router.post("/clusters/{cluster_index}/dismiss", response_model=DismissResult)
 def dismiss_cluster(
     cluster_index: int,
     session: Annotated[Session, Depends(get_tenant_session)],
-) -> None:
+) -> DismissResult:
     """Dismiss a cluster by creating a dismissed person.
 
     All faces are assigned to the dismissed person. Future similar faces
     will be auto-absorbed by the upkeep propagation job, preventing the
-    cluster from reforming.
+    cluster from reforming. Returns the person_id for undo support.
     """
     from src.repository.system_metadata import SystemMetadataRepository
     from src.repository.tenant import PersonRepository, FaceRepository, _mark_clusters_dirty
@@ -670,6 +674,7 @@ def dismiss_cluster(
     person = person_repo.create_dismissed(face_ids=face_ids)
     _mark_clusters_dirty(session)
     session.commit()
+    return DismissResult(person_id=person.person_id)
 
 
 @faces_router.get("/clusters/{cluster_index}/nearest-people", response_model=list[NearestPersonItem])
