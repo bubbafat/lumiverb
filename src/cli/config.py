@@ -14,6 +14,7 @@ class CLIConfig(BaseModel):
     vision_api_url: str = ""
     vision_api_key: str = ""
     vision_model_id: str = ""
+    face_batch_size: int = 50
 
 
 def _config_path() -> Path:

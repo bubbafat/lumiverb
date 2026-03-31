@@ -1050,7 +1050,8 @@ def run_ingest(
         import multiprocessing as mp
 
         cache_dir = str(proxy_cache.path) if proxy_cache else None
-        FACE_BATCH_SIZE = 50
+        from src.cli.config import load_config
+        FACE_BATCH_SIZE = load_config().face_batch_size
         console.print(f"\n[bold]Detecting faces ({len(ingested_assets):,} assets)...[/bold]")
         progress = _make_progress(console)
         try:

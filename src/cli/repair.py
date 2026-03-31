@@ -393,7 +393,8 @@ def run_repair(
             # Workaround: run each batch in a subprocess. When the child
             # exits, the OS reclaims all native memory. Model reload cost
             # (~2s per batch) is acceptable vs unbounded memory growth.
-            FACE_BATCH_SIZE = 50
+            from src.cli.config import load_config
+            FACE_BATCH_SIZE = load_config().face_batch_size
             progress = _make_progress(console)
             try:
                 with progress:
