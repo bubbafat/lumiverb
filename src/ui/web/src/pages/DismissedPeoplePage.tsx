@@ -1,9 +1,11 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { listDismissedPeople, undismissPerson, getApiKey } from "../api/client";
 import type { PersonItem } from "../api/client";
+import type { AssetPageItem } from "../api/types";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
+import { Lightbox } from "../components/Lightbox";
 
 function useFaceCrop(faceId: string): { url: string | null; isLoading: boolean } {
   const [url, setUrl] = useState<string | null>(null);
@@ -48,6 +50,7 @@ function DismissedPersonCard({
 }) {
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState("");
+  const [showLightbox, setShowLightbox] = useState(false);
   const crop = useFaceCrop(person.representative_face_id ?? "");
   const hasCrop = !!crop.url;
   const fallback = useAuthenticatedImage(
@@ -58,6 +61,35 @@ function DismissedPersonCard({
   const imgUrl = crop.url ?? fallback.url;
   const imgLoading = crop.isLoading || (!hasCrop && fallback.isLoading);
 
+  const lightboxAsset: AssetPageItem | null = useMemo(() => {
+    if (!person.representative_asset_id) return null;
+    return {
+      asset_id: person.representative_asset_id,
+      rel_path: "",
+      file_size: 0,
+      file_mtime: null,
+      sha256: null,
+      media_type: "image",
+      width: null,
+      height: null,
+      taken_at: null,
+      status: "active",
+      duration_sec: null,
+      camera_make: null,
+      camera_model: null,
+      iso: null,
+      aperture: null,
+      focal_length: null,
+      focal_length_35mm: null,
+      lens_model: null,
+      flash_fired: null,
+      gps_lat: null,
+      gps_lon: null,
+      face_count: 1,
+      created_at: null,
+    };
+  }, [person.representative_asset_id]);
+
   const restoreMutation = useMutation({
     mutationFn: (displayName: string) => undismissPerson(person.person_id, displayName),
     onSuccess: onRestored,
@@ -65,7 +97,11 @@ function DismissedPersonCard({
 
   return (
     <div className="flex items-center gap-4 rounded-xl border border-gray-700 bg-gray-800/30 p-4">
-      <div className="h-16 w-16 flex-shrink-0 overflow-hidden rounded-full bg-gray-700">
+      <button
+        type="button"
+        onClick={() => lightboxAsset && setShowLightbox(true)}
+        className="h-16 w-16 flex-shrink-0 overflow-hidden rounded-full bg-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+      >
         {imgLoading ? (
           <div className="h-full w-full animate-pulse bg-gray-600" />
         ) : imgUrl ? (
@@ -73,7 +109,17 @@ function DismissedPersonCard({
         ) : (
           <div className="flex h-full w-full items-center justify-center text-lg text-gray-500">?</div>
         )}
-      </div>
+      </button>
+
+      {showLightbox && lightboxAsset && (
+        <Lightbox
+          asset={lightboxAsset}
+          assets={[lightboxAsset]}
+          onClose={() => setShowLightbox(false)}
+          onNavigate={() => {}}
+          highlightFaceId={person.representative_face_id ?? undefined}
+        />
+      )}
 
       <div className="flex-1 min-w-0">
         <p className="text-sm text-gray-400">
