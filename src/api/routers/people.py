@@ -538,13 +538,12 @@ def name_cluster(
     if not body.display_name.strip() and not body.person_id:
         raise HTTPException(status_code=400, detail="Provide display_name or person_id")
 
-    # Get cluster face IDs from cache
+    # Get cluster face IDs from cache — use existing cache even if dirty
+    # to preserve stable indices during rapid name/dismiss operations.
     meta = SystemMetadataRepository(session)
-    dirty = meta.get_value("face_clusters_dirty")
     cached = meta.get_value("face_clusters_cache")
 
-    # If dirty or no cache, recompute
-    if dirty or not cached:
+    if not cached:
         repo = FaceRepository(session)
         clusters_raw, all_face_ids, truncated = repo.compute_clusters(
             max_clusters=50, faces_per_cluster=20,
@@ -637,10 +636,9 @@ def dismiss_cluster(
     from src.repository.tenant import PersonRepository, FaceRepository, _mark_clusters_dirty
 
     meta = SystemMetadataRepository(session)
-    dirty = meta.get_value("face_clusters_dirty")
     cached = meta.get_value("face_clusters_cache")
 
-    if dirty or not cached:
+    if not cached:
         repo = FaceRepository(session)
         clusters_raw, all_face_ids, truncated = repo.compute_clusters(
             max_clusters=50, faces_per_cluster=20,
@@ -698,10 +696,9 @@ def nearest_people_for_cluster(
 
     # --- Get cluster face IDs from cache ---
     meta = SystemMetadataRepository(session)
-    dirty = meta.get_value("face_clusters_dirty")
     cached = meta.get_value("face_clusters_cache")
 
-    if dirty or not cached:
+    if not cached:
         repo = FaceRepository(session)
         clusters_raw, all_face_ids, truncated = repo.compute_clusters(
             max_clusters=50, faces_per_cluster=20,
@@ -805,12 +802,11 @@ def list_cluster_faces(
     if limit > 100:
         limit = 100
 
-    # Get cluster face IDs from cache (recompute if needed)
+    # Get cluster face IDs from cache
     meta = SystemMetadataRepository(session)
-    dirty = meta.get_value("face_clusters_dirty")
     cached = meta.get_value("face_clusters_cache")
 
-    if dirty or not cached:
+    if not cached:
         repo = FaceRepository(session)
         clusters_raw, all_face_ids, truncated = repo.compute_clusters(
             max_clusters=50, faces_per_cluster=20,
