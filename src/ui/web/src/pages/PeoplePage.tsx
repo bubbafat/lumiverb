@@ -137,17 +137,17 @@ function ClusterFaceThumbnail({ face, onClick }: { face: PersonFaceItem; onClick
     <button
       type="button"
       onClick={onClick}
-      className="relative aspect-square overflow-hidden rounded-lg bg-gray-800 w-full focus:outline-none focus:ring-2 focus:ring-indigo-500"
+      className={`relative aspect-square overflow-hidden rounded-lg bg-gray-800 w-full focus:outline-none focus:ring-2 focus:ring-indigo-500 ${hasCrop ? "ring-2 ring-red-500/60" : ""}`}
     >
       {isLoading ? (
         <div className="h-full w-full animate-pulse bg-gray-700" />
       ) : url ? (
         <>
           <img src={url} alt={face.rel_path ?? ""} className="h-full w-full object-cover" />
-          {/* If showing full thumbnail (no crop), overlay the bounding box to highlight which face */}
+          {/* If showing full thumbnail (no crop), overlay bounding box in red to highlight the clustered face */}
           {!hasCrop && box && (
             <div
-              className="absolute border-2 border-emerald-400 rounded pointer-events-none"
+              className="absolute border-2 border-red-500 rounded pointer-events-none"
               style={{
                 left: `${box.x * 100}%`,
                 top: `${box.y * 100}%`,
