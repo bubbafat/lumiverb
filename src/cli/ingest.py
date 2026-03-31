@@ -492,13 +492,12 @@ def _face_batch_worker(
             errors.append({"rel_path": rel_path, "error": str(e)})
 
     _elapsed = _time.perf_counter() - _batch_start
-    _log.info("faces worker: %d ok, %d fail, %d skip, %d faces found, "
-              "%d cache hits, %d downloads, %.1fs (%.0fms/img)",
-              processed, failed, skipped, _total_faces,
-              _cache_hits, _downloads, _elapsed,
-              (_elapsed / max(processed + failed + skipped, 1)) * 1000)
     client.close()
-    return {"processed": processed, "failed": failed, "skipped": skipped, "errors": errors}
+    return {
+        "processed": processed, "failed": failed, "skipped": skipped, "errors": errors,
+        "faces_found": _total_faces, "cache_hits": _cache_hits, "downloads": _downloads,
+        "elapsed": _elapsed,
+    }
 
 
 def _process_and_ingest_one(
@@ -1003,6 +1002,14 @@ def run_ingest(
                         except Exception as e:
                             logger.warning("Face batch failed: %s", e)
                             result = {"processed": 0, "failed": len(batch), "skipped": 0, "errors": []}
+
+                        _el = result.get("elapsed", 0)
+                        _n = result["processed"] + result["failed"] + result["skipped"]
+                        logger.info("faces worker: %d ok, %d fail, %d skip, %d faces, "
+                                    "%d cache/%d download, %.1fs (%.0fms/img)",
+                                    result["processed"], result["failed"], result["skipped"],
+                                    result.get("faces_found", 0), result.get("cache_hits", 0),
+                                    result.get("downloads", 0), _el, (_el / max(_n, 1)) * 1000)
 
                         # Remove consumed entries from cache
                         if proxy_cache:
