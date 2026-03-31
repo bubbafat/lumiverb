@@ -2678,6 +2678,27 @@ class PersonRepository:
         self._session.refresh(person)
         return person
 
+    def create_dismissed(self, *, face_ids: list[str]) -> Person:
+        """Create a dismissed person from a cluster. Faces are assigned but
+        the person is hidden from the UI. Future similar faces are auto-absorbed."""
+        person_id = "person_" + str(ULID())
+        person = Person(
+            person_id=person_id,
+            display_name="(dismissed)",
+            created_by_user=True,
+            dismissed=True,
+        )
+        self._session.add(person)
+        self._session.flush()
+
+        if face_ids:
+            self._assign_faces(person_id, face_ids)
+            self._recompute_centroid(person_id)
+
+        self._session.commit()
+        self._session.refresh(person)
+        return person
+
     def get_by_id(self, person_id: str) -> Person | None:
         return self._session.get(Person, person_id)
 
@@ -2696,7 +2717,7 @@ class PersonRepository:
         """
         import base64 as _b64
 
-        conditions = []
+        conditions = ["p.dismissed = false"]
         params: dict[str, object] = {"limit": limit}
 
         if q:

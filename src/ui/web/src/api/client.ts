@@ -498,6 +498,14 @@ export async function nameCluster(
   });
 }
 
+/** Dismiss a cluster: creates a dismissed person that absorbs future similar faces. */
+export async function dismissCluster(clusterIndex: number): Promise<void> {
+  await fetch(`/v1/faces/clusters/${clusterIndex}/dismiss`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+}
+
 export interface ClusterFacesResponse {
   items: PersonFaceItem[];
   total: number;

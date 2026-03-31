@@ -401,6 +401,7 @@ class Person(SQLModel, table=True):
         sa_column=Column(Vector(512), nullable=True),
     )
     confirmation_count: int = Field(default=0, nullable=False)
+    dismissed: bool = Field(default=False, nullable=False)
     representative_face_id: str | None = Field(
         default=None, foreign_key="faces.face_id", nullable=True
     )

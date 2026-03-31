@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { AssetPageItem } from "../api/types";
@@ -8,6 +8,7 @@ import {
   getClusters,
   listClusterFaces,
   nameCluster,
+  dismissCluster,
   getApiKey,
 } from "../api/client";
 import type { PersonItem, ClusterItem, PersonFaceItem } from "../api/client";
@@ -166,13 +167,12 @@ function ClusterFaceThumbnail({ face, onClick }: { face: PersonFaceItem; onClick
 function ClusterCard({
   cluster,
   people,
-  onNamed,
+  onProcessed,
 }: {
   cluster: ClusterItem;
   people: PersonItem[];
-  onNamed: () => void;
+  onProcessed: (clusterIndex: number) => void;
 }) {
-  const queryClient = useQueryClient();
   const [mode, setMode] = useState<"idle" | "name" | "assign">("idle");
   const [expanded, setExpanded] = useState(false);
   const [newName, setNewName] = useState("");
@@ -226,11 +226,7 @@ function ClusterCard({
     mutationFn: (name: string) =>
       nameCluster(cluster.cluster_index, { displayName: name }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["people"] });
-      queryClient.invalidateQueries({ queryKey: ["face-clusters"] });
-      setMode("idle");
-      setNewName("");
-      onNamed();
+      onProcessed(cluster.cluster_index);
     },
   });
 
@@ -238,11 +234,14 @@ function ClusterCard({
     mutationFn: (personId: string) =>
       nameCluster(cluster.cluster_index, { personId, displayName: "" }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["people"] });
-      queryClient.invalidateQueries({ queryKey: ["face-clusters"] });
-      setMode("idle");
-      setSelectedPersonId("");
-      onNamed();
+      onProcessed(cluster.cluster_index);
+    },
+  });
+
+  const dismissMutation = useMutation({
+    mutationFn: () => dismissCluster(cluster.cluster_index),
+    onSuccess: () => {
+      onProcessed(cluster.cluster_index);
     },
   });
 
@@ -303,6 +302,15 @@ function ClusterCard({
               This is...
             </button>
           )}
+          <button
+            type="button"
+            onClick={() => dismissMutation.mutate()}
+            disabled={dismissMutation.isPending}
+            className="rounded-lg border border-gray-600 px-3 py-1.5 text-xs font-medium text-gray-400 hover:text-red-400 hover:border-red-800"
+            title="Dismiss — hide this cluster permanently"
+          >
+            {dismissMutation.isPending ? "..." : "Dismiss"}
+          </button>
         </div>
       )}
 
@@ -374,9 +382,9 @@ function ClusterCard({
         </div>
       )}
 
-      {(nameMutation.isError || assignMutation.isError) && (
+      {(nameMutation.isError || assignMutation.isError || dismissMutation.isError) && (
         <p className="mt-2 text-xs text-red-400">
-          {(nameMutation.error || assignMutation.error)?.message ?? "Failed"}
+          {(nameMutation.error || assignMutation.error || dismissMutation.error)?.message ?? "Failed"}
         </p>
       )}
 
@@ -396,6 +404,9 @@ function ClusterCard({
 export default function PeoplePage() {
   const queryClient = useQueryClient();
   const [clustersExpanded, setClustersExpanded] = useState(true);
+  // Track removed cluster indices for optimistic updates — prevents
+  // named/dismissed clusters from re-appearing until next manual refresh.
+  const [removedIndices, setRemovedIndices] = useState<Set<number>>(new Set());
 
   const peopleQuery = useInfiniteQuery({
     queryKey: ["people"],
@@ -407,16 +418,36 @@ export default function PeoplePage() {
   const clustersQuery = useQuery({
     queryKey: ["face-clusters"],
     queryFn: () => getClusters(20, 6),
+    // No auto-refetch — only refetch on explicit user action.
+    // This prevents clusters from shuffling while the user is naming/dismissing.
+    refetchOnWindowFocus: false,
+    refetchOnMount: true,
+    staleTime: Infinity,
   });
 
   const people = peopleQuery.data?.pages.flatMap((p) => p.items) ?? [];
-  const clusters = clustersQuery.data?.clusters ?? [];
+  const allClusters = clustersQuery.data?.clusters ?? [];
   const truncated = clustersQuery.data?.truncated ?? false;
 
-  const handleClusterNamed = () => {
-    queryClient.invalidateQueries({ queryKey: ["face-clusters"] });
+  // Filter out clusters that have been named/dismissed in this session
+  const clusters = useMemo(
+    () => allClusters.filter((c) => !removedIndices.has(c.cluster_index)),
+    [allClusters, removedIndices],
+  );
+
+  const handleClusterProcessed = useCallback((clusterIndex: number) => {
+    // Optimistically remove the cluster from view immediately
+    setRemovedIndices((prev) => new Set(prev).add(clusterIndex));
+    // Refresh people list to show newly named person
     queryClient.invalidateQueries({ queryKey: ["people"] });
-  };
+    // Do NOT invalidate face-clusters here — that would cause the shuffle bug.
+    // Clusters will refresh on next page visit (refetchOnMount: true).
+  }, [queryClient]);
+
+  const handleRefreshClusters = useCallback(() => {
+    setRemovedIndices(new Set());
+    queryClient.invalidateQueries({ queryKey: ["face-clusters"] });
+  }, [queryClient]);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
@@ -443,26 +474,37 @@ export default function PeoplePage() {
       />
 
       {/* Unnamed clusters */}
-      {clusters.length > 0 && (
+      {(clusters.length > 0 || clustersQuery.isLoading) && (
         <div className="mt-4">
-          <button
-            type="button"
-            onClick={() => setClustersExpanded(!clustersExpanded)}
-            className="mb-4 flex items-center gap-2 text-lg font-semibold text-gray-200 hover:text-white"
-          >
-            <svg
-              className={`h-4 w-4 transition-transform ${clustersExpanded ? "rotate-90" : ""}`}
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
+          <div className="mb-4 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setClustersExpanded(!clustersExpanded)}
+              className="flex items-center gap-2 text-lg font-semibold text-gray-200 hover:text-white"
             >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
-            Unnamed clusters
-            <span className="text-sm font-normal text-gray-500">
-              ({clusters.reduce((sum, c) => sum + c.size, 0)} faces in {clusters.length} clusters)
-            </span>
-          </button>
+              <svg
+                className={`h-4 w-4 transition-transform ${clustersExpanded ? "rotate-90" : ""}`}
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+              Unnamed clusters
+              <span className="text-sm font-normal text-gray-500">
+                ({clusters.reduce((sum, c) => sum + c.size, 0)} faces in {clusters.length} clusters)
+              </span>
+            </button>
+            {removedIndices.size > 0 && (
+              <button
+                type="button"
+                onClick={handleRefreshClusters}
+                className="text-xs text-indigo-400 hover:text-indigo-300"
+              >
+                Refresh clusters
+              </button>
+            )}
+          </div>
 
           {clustersExpanded && (
             <>
@@ -477,7 +519,7 @@ export default function PeoplePage() {
                     key={cluster.cluster_index}
                     cluster={cluster}
                     people={people}
-                    onNamed={handleClusterNamed}
+                    onProcessed={handleClusterProcessed}
                   />
                 ))}
               </div>

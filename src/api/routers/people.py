@@ -432,6 +432,60 @@ def name_cluster(
     )
 
 
+@faces_router.post("/clusters/{cluster_index}/dismiss", status_code=204)
+def dismiss_cluster(
+    cluster_index: int,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> None:
+    """Dismiss a cluster by creating a dismissed person.
+
+    All faces are assigned to the dismissed person. Future similar faces
+    will be auto-absorbed by the upkeep propagation job, preventing the
+    cluster from reforming.
+    """
+    from src.repository.system_metadata import SystemMetadataRepository
+    from src.repository.tenant import PersonRepository, FaceRepository, _mark_clusters_dirty
+
+    meta = SystemMetadataRepository(session)
+    dirty = meta.get_value("face_clusters_dirty")
+    cached = meta.get_value("face_clusters_cache")
+
+    if dirty or not cached:
+        repo = FaceRepository(session)
+        clusters_raw, all_face_ids, truncated = repo.compute_clusters(
+            max_clusters=50, faces_per_cluster=20,
+        )
+        cache_clusters = [
+            {"cluster_index": i, "size": len(ids), "faces": c, "face_ids": ids}
+            for i, (c, ids) in enumerate(zip(clusters_raw, all_face_ids))
+        ]
+        from datetime import datetime, timezone
+        cache_data = json.dumps({
+            "clusters": cache_clusters,
+            "truncated": truncated,
+            "computed_at": datetime.now(timezone.utc).isoformat(),
+        })
+        meta.set_value("face_clusters_cache", cache_data)
+        meta.set_value("face_clusters_dirty", "false")
+    else:
+        try:
+            cache_clusters = json.loads(cached).get("clusters", [])
+        except (json.JSONDecodeError, KeyError):
+            raise HTTPException(status_code=500, detail="Cluster cache corrupted")
+
+    if cluster_index < 0 or cluster_index >= len(cache_clusters):
+        raise HTTPException(status_code=404, detail="Cluster not found")
+
+    face_ids = cache_clusters[cluster_index].get("face_ids", [])
+    if not face_ids:
+        raise HTTPException(status_code=404, detail="Cluster has no faces")
+
+    person_repo = PersonRepository(session)
+    person = person_repo.create_dismissed(face_ids=face_ids)
+    _mark_clusters_dirty(session)
+    session.commit()
+
+
 class ClusterFacesResponse(BaseModel):
     items: list[PersonFaceItem]
     total: int
