@@ -52,6 +52,8 @@ def _silence_subprocess_stdout() -> None:
     os.close(devnull)
 
 
+from src.cli.proxy_gen import PROXY_LONG_EDGE, PROXY_JPEG_QUALITY
+
 PROXY_WEBP_QUALITY = 80
 SUPPORTED_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
 
