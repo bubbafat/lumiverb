@@ -558,11 +558,11 @@ export default function PeoplePage() {
     setUndoState(null);
   }, [undoState, queryClient]);
 
-  const handleRefreshClusters = useCallback(() => {
+  const handleRefreshClusters = useCallback(async () => {
+    if (undoState) { clearTimeout(undoState.timer); setUndoState(null); }
+    await queryClient.refetchQueries({ queryKey: ["face-clusters"] });
     setRemovedIndices(new Set());
     setFadingIndices(new Map());
-    if (undoState) { clearTimeout(undoState.timer); setUndoState(null); }
-    queryClient.invalidateQueries({ queryKey: ["face-clusters"] });
   }, [queryClient, undoState]);
 
   return (
