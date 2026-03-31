@@ -66,20 +66,38 @@ def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE
         except Exception:
             pass
 
-        logger.info("proxy: %s — RAW demosaic", source_path.name)
-        with rawpy.imread(str(source_path)) as raw:
-            rgb = raw.postprocess()
-            _s = raw.sizes
-            width_orig = _s.iwidth
-            height_orig = _s.iheight
-        h, w, bands = rgb.shape
-        img = pyvips.Image.new_from_memory(rgb.tobytes(), w, h, bands, "uchar")
-        proxy_img = img.thumbnail_image(
-            max_long_edge, height=max_long_edge,
-            size=pyvips.enums.Size.DOWN,
-        )
-        proxy_bytes = proxy_img.write_to_buffer(".jpg[Q=%d]" % PROXY_JPEG_QUALITY)
-        return proxy_bytes, width_orig, height_orig
+        try:
+            logger.info("proxy: %s — RAW demosaic", source_path.name)
+            with rawpy.imread(str(source_path)) as raw:
+                rgb = raw.postprocess()
+                _s = raw.sizes
+                width_orig = _s.iwidth
+                height_orig = _s.iheight
+            h, w, bands = rgb.shape
+            img = pyvips.Image.new_from_memory(rgb.tobytes(), w, h, bands, "uchar")
+            proxy_img = img.thumbnail_image(
+                max_long_edge, height=max_long_edge,
+                size=pyvips.enums.Size.DOWN,
+            )
+            proxy_bytes = proxy_img.write_to_buffer(".jpg[Q=%d]" % PROXY_JPEG_QUALITY)
+            return proxy_bytes, width_orig, height_orig
+        except Exception:
+            # rawpy can't handle this file (e.g. Adobe-generated DNG) —
+            # try pyvips directly as it handles many DNG variants
+            logger.info("proxy: %s — rawpy failed, trying pyvips direct", source_path.name)
+            header = pyvips.Image.new_from_file(
+                str(source_path), fail_on=pyvips.enums.FailOn.NONE,
+            )
+            width_orig = header.width
+            height_orig = header.height
+            del header
+            proxy_img = pyvips.Image.thumbnail(
+                str(source_path), max_long_edge,
+                height=max_long_edge,
+                size=pyvips.enums.Size.DOWN,
+            ).copy_memory()
+            proxy_bytes = proxy_img.write_to_buffer(".jpg[Q=%d]" % PROXY_JPEG_QUALITY)
+            return proxy_bytes, width_orig, height_orig
 
     elif ext in TIFF_EXTENSIONS:
         pil_img = PILImage.open(source_path)
