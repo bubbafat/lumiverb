@@ -44,14 +44,6 @@ class InsightFaceProvider:
     def model_version(self) -> str:
         return MODEL_VERSION
 
-    # Preferred ONNX execution providers in priority order.
-    # ONNX Runtime tries each and silently skips unavailable ones.
-    _PROVIDERS = [
-        "CUDAExecutionProvider",      # NVIDIA GPU
-        "CoreMLExecutionProvider",    # Apple Silicon Neural Engine / GPU
-        "CPUExecutionProvider",       # Always available fallback
-    ]
-
     def _load(self):
         if self._app is None:
             with self._lock:
@@ -60,13 +52,21 @@ class InsightFaceProvider:
                     from insightface.app import FaceAnalysis
 
                     available = set(ort.get_available_providers())
-                    providers = [p for p in self._PROVIDERS if p in available]
+
+                    # Build provider list with options for GPU/ANE acceleration
+                    providers: list = []
+                    if "CUDAExecutionProvider" in available:
+                        providers.append("CUDAExecutionProvider")
+                    if "CoreMLExecutionProvider" in available:
+                        # MLComputeUnits=ALL enables GPU + ANE, not just CPU
+                        providers.append(("CoreMLExecutionProvider", {"MLComputeUnits": "ALL"}))
+                    providers.append("CPUExecutionProvider")
 
                     app = FaceAnalysis(
                         name=MODEL_VERSION,
                         providers=providers,
                     )
-                    app.prepare(ctx_id=-1, det_size=(640, 640))
+                    app.prepare(ctx_id=0, det_size=(640, 640))
                     self._app = app
                     active = providers[0] if providers else "unknown"
                     logger.info("Loaded InsightFace model %s (%s)", MODEL_VERSION, active)
