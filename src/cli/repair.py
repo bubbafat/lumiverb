@@ -393,74 +393,77 @@ def run_repair(
             # exits, the OS reclaims all native memory. Model reload cost
             # (~2s per batch) is acceptable vs unbounded memory growth.
             from src.cli.config import load_config
-            FACE_BATCH_SIZE = load_config().face_batch_size
+            cfg = load_config()
+            FACE_BATCH_SIZE = cfg.face_batch_size
+            FACE_BATCH_LIMIT = cfg.face_batch_limit
             progress = _make_progress(console)
+            ctx = mp.get_context("spawn")
             try:
                 with progress:
                     tid = progress.add_task("Faces", total=len(assets), ok=0, fail=0)
-                    for batch_start in range(0, len(assets), FACE_BATCH_SIZE):
-                        batch = assets[batch_start:batch_start + FACE_BATCH_SIZE]
+                    pool = ctx.Pool(1, initializer=_silence_subprocess_stdout, maxtasksperchild=FACE_BATCH_LIMIT)
+                    try:
+                        for batch_start in range(0, len(assets), FACE_BATCH_SIZE):
+                            batch = assets[batch_start:batch_start + FACE_BATCH_SIZE]
 
-                        # Pre-generate proxy bytes from local source where possible
-                        if use_local:
-                            for item in batch:
-                                asset_id = item["asset_id"]
-                                rel_path = item["rel_path"]
-                                source = root_path / rel_path
-                                if not source.is_file():
-                                    continue
-                                expected_hash = item.get("sha256")
-                                if expected_hash:
-                                    local_hash = compute_sha256(source)
-                                    if local_hash != expected_hash:
-                                        # File changed since ingest — skip
-                                        item["_skip"] = True
-                                        progress.console.print(
-                                            f"[yellow]faces ⚠[/yellow] {rel_path}: SHA mismatch (file changed since ingest, re-ingest needed)"
-                                        )
+                            # Pre-generate proxy bytes from local source where possible
+                            if use_local:
+                                for item in batch:
+                                    asset_id = item["asset_id"]
+                                    rel_path = item["rel_path"]
+                                    source = root_path / rel_path
+                                    if not source.is_file():
                                         continue
-                                try:
-                                    jpeg_bytes = generate_face_proxy(source)
-                                    proxy_cache.put(asset_id, jpeg_bytes)
-                                    del jpeg_bytes
-                                except Exception:
-                                    pass  # fall back to server download in worker
+                                    expected_hash = item.get("sha256")
+                                    if expected_hash:
+                                        local_hash = compute_sha256(source)
+                                        if local_hash != expected_hash:
+                                            item["_skip"] = True
+                                            progress.console.print(
+                                                f"[yellow]faces ⚠[/yellow] {rel_path}: SHA mismatch (file changed since ingest, re-ingest needed)"
+                                            )
+                                            continue
+                                    try:
+                                        jpeg_bytes = generate_face_proxy(source)
+                                        proxy_cache.put(asset_id, jpeg_bytes)
+                                        del jpeg_bytes
+                                    except Exception:
+                                        pass  # fall back to server download in worker
 
-                        # Filter out SHA-mismatched assets
-                        batch = [item for item in batch if not item.get("_skip")]
-                        if not batch:
-                            continue
+                            # Filter out SHA-mismatched assets
+                            batch = [item for item in batch if not item.get("_skip")]
+                            if not batch:
+                                continue
 
-                        try:
-                            # Use spawn context to avoid fork+threads deadlock
-                            # on macOS (Rich progress bar has a live-render thread).
-                            ctx = mp.get_context("spawn")
-                            with ctx.Pool(1, initializer=_silence_subprocess_stdout) as pool:
+                            try:
                                 result = pool.apply(
                                     _face_batch_worker,
                                     (client.base_url, client.token, batch, str(proxy_cache.path)),
                                 )
-                        except Exception as e:
-                            console.print(f"[red]Batch failed: {e}[/red]")
-                            result = {"processed": 0, "failed": len(batch), "skipped": 0, "errors": []}
+                            except Exception as e:
+                                console.print(f"[red]Batch failed: {e}[/red]")
+                                result = {"processed": 0, "failed": len(batch), "skipped": 0, "errors": []}
 
-                        # Remove consumed entries from cache
-                        for item in batch:
-                            proxy_cache.remove(item["asset_id"])
+                            # Remove consumed entries from cache
+                            for item in batch:
+                                proxy_cache.remove(item["asset_id"])
 
-                        for err in result.get("errors", []):
-                            progress.console.print(
-                                f"[red]faces ✗[/red] {err['rel_path']}: {err['error']}"
-                            )
+                            for err in result.get("errors", []):
+                                progress.console.print(
+                                    f"[red]faces ✗[/red] {err['rel_path']}: {err['error']}"
+                                )
 
-                        with stats.lock:
-                            stats.processed += result["processed"]
-                            stats.failed += result["failed"]
-                            stats.skipped += result["skipped"]
-                            ok, fail = stats.processed, stats.failed
-                        batch_total = result["processed"] + result["failed"] + result["skipped"]
-                        progress.advance(tid, batch_total)
-                        progress.update(tid, ok=ok, fail=fail)
+                            with stats.lock:
+                                stats.processed += result["processed"]
+                                stats.failed += result["failed"]
+                                stats.skipped += result["skipped"]
+                                ok, fail = stats.processed, stats.failed
+                            batch_total = result["processed"] + result["failed"] + result["skipped"]
+                            progress.advance(tid, batch_total)
+                            progress.update(tid, ok=ok, fail=fail)
+                    finally:
+                        pool.close()
+                        pool.join()
             finally:
                 proxy_cache.cleanup()
 

@@ -965,43 +965,49 @@ def run_ingest(
 
         cache_dir = str(proxy_cache.path) if proxy_cache else None
         from src.cli.config import load_config
-        FACE_BATCH_SIZE = load_config().face_batch_size
+        cfg = load_config()
+        FACE_BATCH_SIZE = cfg.face_batch_size
+        FACE_BATCH_LIMIT = cfg.face_batch_limit
         console.print(f"\n[bold]Detecting faces ({len(ingested_assets):,} assets)...[/bold]")
         progress = _make_progress(console)
+        ctx = mp.get_context("spawn")
         try:
             with progress:
                 face_tid = progress.add_task("Faces", total=len(ingested_assets), ok=0, fail=0)
-                for batch_start in range(0, len(ingested_assets), FACE_BATCH_SIZE):
-                    batch = ingested_assets[batch_start:batch_start + FACE_BATCH_SIZE]
-                    try:
-                        ctx = mp.get_context("spawn")
-                        with ctx.Pool(1, initializer=_silence_subprocess_stdout) as pool:
+                pool = ctx.Pool(1, initializer=_silence_subprocess_stdout, maxtasksperchild=FACE_BATCH_LIMIT)
+                try:
+                    for batch_start in range(0, len(ingested_assets), FACE_BATCH_SIZE):
+                        batch = ingested_assets[batch_start:batch_start + FACE_BATCH_SIZE]
+                        try:
                             result = pool.apply(
                                 _face_batch_worker,
                                 (client.base_url, client.token, batch, cache_dir),
                             )
-                    except Exception as e:
-                        logger.warning("Face batch failed: %s", e)
-                        result = {"processed": 0, "failed": len(batch), "skipped": 0, "errors": []}
+                        except Exception as e:
+                            logger.warning("Face batch failed: %s", e)
+                            result = {"processed": 0, "failed": len(batch), "skipped": 0, "errors": []}
 
-                    # Remove consumed entries from cache
-                    if proxy_cache:
-                        for item in batch:
-                            proxy_cache.remove(item["asset_id"])
+                        # Remove consumed entries from cache
+                        if proxy_cache:
+                            for item in batch:
+                                proxy_cache.remove(item["asset_id"])
 
-                    for err in result.get("errors", []):
-                        progress.console.print(
-                            f"[red]faces \u2717[/red] {err['rel_path']}: {err['error']}"
+                        for err in result.get("errors", []):
+                            progress.console.print(
+                                f"[red]faces \u2717[/red] {err['rel_path']}: {err['error']}"
+                            )
+
+                        batch_total = result["processed"] + result["failed"] + result["skipped"]
+                        task = progress.tasks[face_tid]
+                        progress.advance(face_tid, batch_total)
+                        progress.update(
+                            face_tid,
+                            ok=task.fields["ok"] + result["processed"],
+                            fail=task.fields["fail"] + result["failed"],
                         )
-
-                    batch_total = result["processed"] + result["failed"] + result["skipped"]
-                    task = progress.tasks[face_tid]
-                    progress.advance(face_tid, batch_total)
-                    progress.update(
-                        face_tid,
-                        ok=task.fields["ok"] + result["processed"],
-                        fail=task.fields["fail"] + result["failed"],
-                    )
+                finally:
+                    pool.close()
+                    pool.join()
         finally:
             if proxy_cache:
                 proxy_cache.cleanup()
