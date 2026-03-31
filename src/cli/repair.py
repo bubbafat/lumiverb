@@ -378,12 +378,11 @@ def run_repair(
             # SHA-256 mismatch means the file changed since ingest — skip
             # those assets entirely (bounding boxes would be wrong).
             from pathlib import Path
-            from src.cli.proxy_cache import ProxyCache
+            from src.cli.proxy_cache import ProxyCache, generate_face_proxy
             root_path_str = library.get("root_path")
             root_path = Path(root_path_str).resolve() if root_path_str else None
             use_local = root_path is not None and root_path.is_dir()
             if use_local:
-                from src.cli.ingest import _generate_proxy_bytes
                 from src.workers.exif_extract import compute_sha256
 
             proxy_cache = ProxyCache()
@@ -421,7 +420,7 @@ def run_repair(
                                         )
                                         continue
                                 try:
-                                    jpeg_bytes, _, _ = _generate_proxy_bytes(source)
+                                    jpeg_bytes = generate_face_proxy(source)
                                     proxy_cache.put(asset_id, jpeg_bytes)
                                     del jpeg_bytes
                                 except Exception:

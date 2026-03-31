@@ -82,6 +82,53 @@ class ProxyCache:
         signal.signal(signal.SIGTERM, _signal_handler)
 
 
+_FACE_PROXY_LONG_EDGE = 1280  # InsightFace uses 640x640 internally; 1280 is plenty
+
+
+def generate_face_proxy(source_path: Path) -> bytes:
+    """Generate a JPEG proxy suitable for face detection using PIL.
+
+    This is a lightweight alternative to ``_generate_proxy_bytes`` that
+    does not require pyvips/libvips.  It handles standard image formats
+    and RAW (via rawpy embedded thumbnail or full demosaic).
+
+    Returns JPEG bytes resized to fit within 1280px on the long edge.
+    """
+    import io as _io
+
+    from PIL import Image as PILImage
+
+    ext = source_path.suffix.lower()
+
+    # RAW files: try embedded JPEG thumbnail first, then full demosaic
+    from src.core.file_extensions import RAW_EXTENSIONS
+
+    if ext in RAW_EXTENSIONS:
+        import rawpy
+
+        with rawpy.imread(str(source_path)) as raw:
+            thumb = raw.extract_thumb()
+        if thumb.format == rawpy.ThumbFormat.JPEG:
+            img = PILImage.open(_io.BytesIO(bytes(thumb.data)))
+        else:
+            with rawpy.imread(str(source_path)) as raw:
+                rgb = raw.postprocess()
+            img = PILImage.fromarray(rgb)
+    else:
+        img = PILImage.open(source_path)
+
+    try:
+        img = img.convert("RGB")
+        long_edge = max(img.width, img.height)
+        if long_edge > _FACE_PROXY_LONG_EDGE:
+            img.thumbnail((_FACE_PROXY_LONG_EDGE, _FACE_PROXY_LONG_EDGE), PILImage.LANCZOS)
+        buf = _io.BytesIO()
+        img.save(buf, format="JPEG", quality=75)
+        return buf.getvalue()
+    finally:
+        img.close()
+
+
 def _prune_stale_caches() -> None:
     """Remove cache directories from previous runs whose process is no longer alive."""
     tmp = Path(tempfile.gettempdir())
