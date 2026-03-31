@@ -498,6 +498,18 @@ export async function nameCluster(
   });
 }
 
+export interface NearestPersonItem {
+  person_id: string;
+  display_name: string;
+  face_count: number;
+  distance: number;
+}
+
+/** Get people sorted by similarity to a cluster's centroid. */
+export async function getNearestPeople(clusterIndex: number, limit = 5): Promise<NearestPersonItem[]> {
+  return apiFetch<NearestPersonItem[]>(`/faces/clusters/${clusterIndex}/nearest-people?limit=${limit}`);
+}
+
 /** Dismiss a cluster: creates a dismissed person that absorbs future similar faces. */
 export async function dismissCluster(clusterIndex: number): Promise<void> {
   await fetch(`/v1/faces/clusters/${clusterIndex}/dismiss`, {

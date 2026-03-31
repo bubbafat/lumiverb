@@ -486,6 +486,119 @@ def dismiss_cluster(
     session.commit()
 
 
+class NearestPersonItem(BaseModel):
+    person_id: str
+    display_name: str
+    face_count: int
+    distance: float
+
+
+@faces_router.get("/clusters/{cluster_index}/nearest-people", response_model=list[NearestPersonItem])
+def nearest_people_for_cluster(
+    cluster_index: int,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    limit: int = 5,
+) -> list[NearestPersonItem]:
+    """Return named people sorted by cosine distance to the cluster centroid.
+
+    Computes the cluster centroid from its face embeddings, then ranks all
+    non-dismissed people by distance to that centroid.
+    """
+    import numpy as np
+    from sqlalchemy import text as sa_text
+    from src.repository.system_metadata import SystemMetadataRepository
+    from src.repository.tenant import FaceRepository
+
+    if limit > 20:
+        limit = 20
+
+    # --- Get cluster face IDs from cache ---
+    meta = SystemMetadataRepository(session)
+    dirty = meta.get_value("face_clusters_dirty")
+    cached = meta.get_value("face_clusters_cache")
+
+    if dirty or not cached:
+        repo = FaceRepository(session)
+        clusters_raw, all_face_ids, truncated = repo.compute_clusters(
+            max_clusters=50, faces_per_cluster=20,
+        )
+        cache_clusters = [
+            {"cluster_index": i, "size": len(ids), "faces": c, "face_ids": ids}
+            for i, (c, ids) in enumerate(zip(clusters_raw, all_face_ids))
+        ]
+        from datetime import datetime, timezone
+        cache_data = json.dumps({
+            "clusters": cache_clusters,
+            "truncated": truncated,
+            "computed_at": datetime.now(timezone.utc).isoformat(),
+        })
+        meta.set_value("face_clusters_cache", cache_data)
+        meta.set_value("face_clusters_dirty", "false")
+    else:
+        try:
+            cache_clusters = json.loads(cached).get("clusters", [])
+        except (json.JSONDecodeError, KeyError):
+            raise HTTPException(status_code=500, detail="Cluster cache corrupted")
+
+    if cluster_index < 0 or cluster_index >= len(cache_clusters):
+        raise HTTPException(status_code=404, detail="Cluster not found")
+
+    face_ids = cache_clusters[cluster_index].get("face_ids", [])
+    if not face_ids:
+        return []
+
+    # --- Compute cluster centroid ---
+    # Sample up to 100 faces for centroid computation
+    sample_ids = face_ids[:100]
+    rows = session.execute(
+        sa_text("SELECT embedding_vector::text FROM faces WHERE face_id = ANY(:fids) AND embedding_vector IS NOT NULL"),
+        {"fids": sample_ids},
+    ).all()
+    if not rows:
+        return []
+
+    vectors = np.array(
+        [[float(x) for x in r[0].strip("[]").split(",")] for r in rows],
+        dtype=np.float32,
+    )
+    centroid = vectors.mean(axis=0)
+    norm = np.linalg.norm(centroid)
+    if norm > 0:
+        centroid = centroid / norm
+
+    # --- Rank people by distance to cluster centroid ---
+    people_rows = session.execute(
+        sa_text("""
+            SELECT p.person_id, p.display_name, p.centroid_vector::text,
+                   COUNT(m.match_id)::int AS face_count
+            FROM people p
+            LEFT JOIN face_person_matches m ON m.person_id = p.person_id
+            WHERE p.dismissed = false AND p.centroid_vector IS NOT NULL
+            GROUP BY p.person_id
+        """),
+    ).all()
+
+    if not people_rows:
+        return []
+
+    results = []
+    for row in people_rows:
+        pvec = np.array([float(x) for x in row[2].strip("[]").split(",")], dtype=np.float32)
+        pnorm = np.linalg.norm(pvec)
+        if pnorm > 0:
+            pvec = pvec / pnorm
+        dist = float(1.0 - np.dot(centroid, pvec))
+        results.append(NearestPersonItem(
+            person_id=row[0],
+            display_name=row[1],
+            face_count=row[3],
+            distance=round(dist, 4),
+        ))
+
+    results.sort(key=lambda x: x.distance)
+    return results[:limit]
+
+
 class ClusterFacesResponse(BaseModel):
     items: list[PersonFaceItem]
     total: int

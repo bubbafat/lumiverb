@@ -9,6 +9,8 @@ import {
   listClusterFaces,
   nameCluster,
   dismissCluster,
+  getNearestPeople,
+  searchPeople,
   getApiKey,
 } from "../api/client";
 import type { PersonItem, ClusterItem, PersonFaceItem } from "../api/client";
@@ -176,7 +178,34 @@ function ClusterCard({
   const [mode, setMode] = useState<"idle" | "name" | "assign">("idle");
   const [expanded, setExpanded] = useState(false);
   const [newName, setNewName] = useState("");
-  const [selectedPersonId, setSelectedPersonId] = useState("");
+  const [assignSearch, setAssignSearch] = useState("");
+  const [searchResults, setSearchResults] = useState<PersonItem[]>([]);
+  const [searching, setSearching] = useState(false);
+
+  // Fetch nearest people when assign mode opens
+  const nearestQuery = useQuery({
+    queryKey: ["nearest-people", cluster.cluster_index],
+    queryFn: () => getNearestPeople(cluster.cluster_index, 5),
+    enabled: mode === "assign",
+    staleTime: Infinity,
+  });
+
+  // Debounced search for assign mode
+  useEffect(() => {
+    if (mode !== "assign" || !assignSearch.trim()) {
+      setSearchResults([]);
+      return;
+    }
+    setSearching(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await searchPeople(assignSearch.trim());
+        setSearchResults(res.items);
+      } catch { /* ignore */ }
+      setSearching(false);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [assignSearch, mode]);
 
   const allFacesQuery = useInfiniteQuery({
     queryKey: ["cluster-faces", cluster.cluster_index],
@@ -348,37 +377,70 @@ function ClusterCard({
       )}
 
       {mode === "assign" && (
-        <div className="flex gap-2">
-          <select
-            value={selectedPersonId}
-            onChange={(e) => setSelectedPersonId(e.target.value)}
-            className="flex-1 rounded-lg border border-gray-600 bg-gray-800 px-3 py-1.5 text-xs text-white focus:border-indigo-500 focus:outline-none"
-            autoFocus
-          >
-            <option value="">Select person...</option>
-            {people.map((p) => (
-              <option key={p.person_id} value={p.person_id}>
-                {p.display_name} ({p.face_count})
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            onClick={() => {
-              if (selectedPersonId) assignMutation.mutate(selectedPersonId);
-            }}
-            disabled={assignMutation.isPending || !selectedPersonId}
-            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
-          >
-            {assignMutation.isPending ? "..." : "Assign"}
-          </button>
-          <button
-            type="button"
-            onClick={() => { setMode("idle"); setSelectedPersonId(""); }}
-            className="rounded-lg border border-gray-600 px-2 py-1.5 text-xs text-gray-400 hover:text-white"
-          >
-            Cancel
-          </button>
+        <div className="space-y-2">
+          {/* Top 5 nearest suggestions */}
+          {nearestQuery.isLoading && (
+            <div className="flex gap-2">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="h-7 w-20 animate-pulse rounded-lg bg-gray-700" />
+              ))}
+            </div>
+          )}
+          {nearestQuery.data && nearestQuery.data.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {nearestQuery.data.map((np) => (
+                <button
+                  key={np.person_id}
+                  type="button"
+                  onClick={() => assignMutation.mutate(np.person_id)}
+                  disabled={assignMutation.isPending}
+                  className="rounded-lg bg-gray-700 px-2.5 py-1 text-xs text-gray-200 hover:bg-indigo-600 hover:text-white disabled:opacity-50 transition-colors"
+                >
+                  {np.display_name} <span className="text-gray-500">({np.face_count})</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {/* Search for more */}
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <input
+                type="text"
+                value={assignSearch}
+                onChange={(e) => setAssignSearch(e.target.value)}
+                placeholder="Search by name..."
+                className="w-full rounded-lg border border-gray-600 bg-gray-800 px-3 py-1.5 text-xs text-white focus:border-indigo-500 focus:outline-none"
+                autoFocus
+              />
+              {assignSearch.trim() && searchResults.length > 0 && (
+                <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-40 overflow-y-auto rounded-lg border border-gray-600 bg-gray-800 shadow-lg">
+                  {searchResults.map((p) => (
+                    <button
+                      key={p.person_id}
+                      type="button"
+                      onClick={() => assignMutation.mutate(p.person_id)}
+                      disabled={assignMutation.isPending}
+                      className="block w-full px-3 py-1.5 text-left text-xs text-gray-200 hover:bg-indigo-600 hover:text-white disabled:opacity-50"
+                    >
+                      {p.display_name} <span className="text-gray-500">({p.face_count})</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {assignSearch.trim() && searching && (
+                <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                  <div className="h-3 w-3 animate-spin rounded-full border border-gray-600 border-t-white" />
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => { setMode("idle"); setAssignSearch(""); setSearchResults([]); }}
+              className="rounded-lg border border-gray-600 px-2 py-1.5 text-xs text-gray-400 hover:text-white"
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       )}
 
