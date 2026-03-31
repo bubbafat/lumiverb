@@ -60,6 +60,7 @@ class FacePropagateResult(BaseModel):
 class UpkeepResult(BaseModel):
     search_sync: SearchSyncResult
     face_propagate: FacePropagateResult = FacePropagateResult()
+    face_crops: FaceCropsResult = FaceCropsResult()
 
 
 def _is_admin_key(authorization: str | None) -> bool:
@@ -209,13 +210,16 @@ def run_upkeep(
     if _is_admin_key(authorization):
         sync_result = _run_sweep_all_tenants()
         prop_result = _propagate_faces_all_tenants()
+        crops_result = _backfill_face_crops()
         _cleanup_revoked_tokens()
     else:
         sync_result = _run_sweep_single_tenant(authorization)
         prop_result = _propagate_faces_single_tenant(authorization)
+        crops_result = {"generated": 0, "skipped": 0, "failed": 0}
     return UpkeepResult(
         search_sync=SearchSyncResult(**sync_result),
         face_propagate=FacePropagateResult(**prop_result),
+        face_crops=FaceCropsResult(**crops_result),
     )
 
 
@@ -321,19 +325,15 @@ def run_recluster(
     return ReclusterResult(**totals)
 
 
-@router.post("/face-crops", response_model=FaceCropsResult)
-def run_face_crops(
-    request: Request,
-    _admin: Annotated[None, Depends(require_admin)],
-    authorization: Annotated[str | None, Header()] = None,
-    batch_size: int = Query(default=500, ge=1, le=5000, description="Max faces to process per call"),
-) -> FaceCropsResult:
-    """Backfill face crop thumbnails for faces missing crop_key."""
+def _backfill_face_crops(batch_size: int = 500) -> dict:
+    """Backfill face crop thumbnails for faces missing crop_key across all tenants."""
+    from collections import defaultdict
+
     from sqlalchemy import text
 
-    from src.core.database import get_control_session, get_tenant_session
-    from src.repository.control_plane import TenantRepository, TenantDbRoutingRepository
     from src.api.routers.assets import _generate_face_crops
+    from src.core.database import get_control_session, get_tenant_session
+    from src.repository.control_plane import TenantRepository
     from src.repository.tenant import AssetRepository
 
     totals = {"generated": 0, "skipped": 0, "failed": 0}
@@ -344,7 +344,6 @@ def run_face_crops(
     for tenant in tenants:
         try:
             with get_tenant_session(tenant.tenant_id) as tsession:
-                # Find faces without crops (with bounding boxes)
                 rows = tsession.execute(
                     text("""
                         SELECT f.face_id, f.asset_id, f.bounding_box_json
@@ -358,8 +357,6 @@ def run_face_crops(
                 if not rows:
                     continue
 
-                # Group by asset
-                from collections import defaultdict
                 by_asset: dict[str, list] = defaultdict(list)
                 for face_id, asset_id, bb in rows:
                     by_asset[asset_id].append({"face_id": face_id, "bounding_box": bb})
@@ -383,4 +380,15 @@ def run_face_crops(
         except Exception as exc:
             logger.warning("Face crop backfill failed for tenant %s: %s", tenant.tenant_id, exc)
 
-    return FaceCropsResult(**totals)
+    return totals
+
+
+@router.post("/face-crops", response_model=FaceCropsResult)
+def run_face_crops(
+    request: Request,
+    _admin: Annotated[None, Depends(require_admin)],
+    authorization: Annotated[str | None, Header()] = None,
+    batch_size: int = Query(default=500, ge=1, le=5000, description="Max faces to process per call"),
+) -> FaceCropsResult:
+    """Backfill face crop thumbnails for faces missing crop_key."""
+    return FaceCropsResult(**_backfill_face_crops(batch_size))
