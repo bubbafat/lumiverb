@@ -96,13 +96,16 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         # Precompute request inputs once; on retry we only re-call the API.
         try:
             img = Image.open(proxy_path)
-            max_edge = 1024
-            if max(img.width, img.height) > max_edge:
-                img.thumbnail((max_edge, max_edge), Image.LANCZOS)
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=75)
-            image_b64 = base64.b64encode(buf.getvalue()).decode()
-            data_url = f"data:image/jpeg;base64,{image_b64}"
+            try:
+                max_edge = 1024
+                if max(img.width, img.height) > max_edge:
+                    img.thumbnail((max_edge, max_edge), Image.LANCZOS)
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=75)
+                image_b64 = base64.b64encode(buf.getvalue()).decode()
+                data_url = f"data:image/jpeg;base64,{image_b64}"
+            finally:
+                img.close()
         except Exception as e:  # noqa: BLE001
             logger.warning("OpenAI-compatible caption failed for %s: %s", proxy_path, e)
             return {}

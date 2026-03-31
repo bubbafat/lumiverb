@@ -51,41 +51,47 @@ def _normalize_proxy(data: bytes) -> tuple[bytes, int, int]:
     are the dimensions of the normalized proxy (not the original source).
     """
     img = Image.open(io.BytesIO(data))
-    w, h = img.size
-    long_edge = max(w, h)
+    try:
+        w, h = img.size
+        long_edge = max(w, h)
 
-    # Fast path: already WebP and within size limits — skip re-encoding
-    if img.format == "WEBP" and long_edge <= PROXY_MAX_LONG_EDGE:
-        return data, w, h
+        # Fast path: already WebP and within size limits — skip re-encoding
+        if img.format == "WEBP" and long_edge <= PROXY_MAX_LONG_EDGE:
+            return data, w, h
 
-    img = img.convert("RGB")
-    if long_edge > PROXY_MAX_LONG_EDGE:
-        scale = PROXY_MAX_LONG_EDGE / long_edge
-        w = int(w * scale)
-        h = int(h * scale)
-        img = img.resize((w, h), Image.LANCZOS)
+        img = img.convert("RGB")
+        if long_edge > PROXY_MAX_LONG_EDGE:
+            scale = PROXY_MAX_LONG_EDGE / long_edge
+            w = int(w * scale)
+            h = int(h * scale)
+            img = img.resize((w, h), Image.LANCZOS)
 
-    buf = io.BytesIO()
-    img.save(buf, format="WEBP", quality=WEBP_QUALITY)
-    return buf.getvalue(), w, h
+        buf = io.BytesIO()
+        img.save(buf, format="WEBP", quality=WEBP_QUALITY)
+        return buf.getvalue(), w, h
+    finally:
+        img.close()
 
 
 def _generate_thumbnail(proxy_bytes: bytes) -> bytes:
     """Generate a thumbnail from proxy bytes. Returns WebP bytes."""
     img = Image.open(io.BytesIO(proxy_bytes))
-    img = img.convert("RGB")
+    try:
+        img = img.convert("RGB")
 
-    w, h = img.size
-    long_edge = max(w, h)
-    if long_edge > THUMBNAIL_LONG_EDGE:
-        scale = THUMBNAIL_LONG_EDGE / long_edge
-        w = int(w * scale)
-        h = int(h * scale)
-        img = img.resize((w, h), Image.LANCZOS)
+        w, h = img.size
+        long_edge = max(w, h)
+        if long_edge > THUMBNAIL_LONG_EDGE:
+            scale = THUMBNAIL_LONG_EDGE / long_edge
+            w = int(w * scale)
+            h = int(h * scale)
+            img = img.resize((w, h), Image.LANCZOS)
 
-    buf = io.BytesIO()
-    img.save(buf, format="WEBP", quality=WEBP_QUALITY)
-    return buf.getvalue()
+        buf = io.BytesIO()
+        img.save(buf, format="WEBP", quality=WEBP_QUALITY)
+        return buf.getvalue()
+    finally:
+        img.close()
 
 
 class IngestResponse(BaseModel):

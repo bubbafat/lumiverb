@@ -234,10 +234,12 @@ def search_by_image(
     # Decode image
     image_bytes = base64.b64decode(body.image_b64)
     pil_image = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
-
-    # Generate CLIP embedding in memory
-    provider = CLIPEmbeddingProvider()
-    vector = provider.embed_image(pil_image)
+    try:
+        # Generate CLIP embedding in memory
+        provider = CLIPEmbeddingProvider()
+        vector = provider.embed_image(pil_image)
+    finally:
+        pil_image.close()
 
     # Build scope (same logic as GET endpoint)
     scope: SimilarityScope | None = None

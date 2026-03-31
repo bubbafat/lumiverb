@@ -376,9 +376,11 @@ def _process_and_ingest_video_stage1(
 
         # 4. Convert poster to WebP for upload
         webp_bytes = _jpeg_to_webp(jpeg_bytes)
+        del jpeg_bytes  # free JPEG buffer before HTTP calls
 
         # 5. POST /v1/ingest — create asset with poster frame as proxy
         files = {"proxy": ("proxy.webp", io.BytesIO(webp_bytes), "image/webp")}
+        del webp_bytes  # BytesIO holds a copy; free the original
         data: dict[str, str] = {
             "library_id": library_id,
             "rel_path": rel_path,
@@ -428,7 +430,10 @@ def _generate_clip_embedding(
     try:
         from PIL import Image as PILImage
         img = PILImage.open(io.BytesIO(jpeg_bytes)).convert("RGB")
-        vector = clip_provider.embed_image(img)
+        try:
+            vector = clip_provider.embed_image(img)
+        finally:
+            img.close()
         return {
             "model_id": clip_provider.model_id,
             "model_version": clip_provider.model_version,
@@ -516,9 +521,11 @@ def _process_and_ingest_one(
 
         # 6. Convert to WebP for upload (server stores as-is, skips re-encoding)
         webp_bytes = _jpeg_to_webp(jpeg_bytes)
+        del jpeg_bytes  # free JPEG buffer (~1-2 MB) before HTTP call
 
         # 7. POST /v1/ingest — create asset + ingest atomically
         files = {"proxy": ("proxy.webp", io.BytesIO(webp_bytes), "image/webp")}
+        del webp_bytes  # BytesIO holds a copy; free the original
         data: dict[str, str] = {
             "library_id": library_id,
             "rel_path": rel_path,

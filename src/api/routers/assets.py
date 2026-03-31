@@ -981,50 +981,52 @@ def _generate_face_crops(
         logger.warning("Cannot open proxy for face crops: %s", proxy_key)
         return
 
-    w, h = img.size
+    try:
+        w, h = img.size
 
-    for face_id, face_data in zip(face_ids, faces_data):
-        bb = face_data.get("bounding_box")
-        if not bb:
-            continue
+        for face_id, face_data in zip(face_ids, faces_data):
+            bb = face_data.get("bounding_box")
+            if not bb:
+                continue
 
-        # Expand bounding box by 40% padding, clamp to image bounds
-        pad = 0.4
-        fx, fy, fw, fh = bb["x"], bb["y"], bb["w"], bb["h"]
-        cx, cy = fx + fw / 2, fy + fh / 2
-        side = max(fw, fh) * (1 + pad)
-        x1 = max(0.0, cx - side / 2)
-        y1 = max(0.0, cy - side / 2)
-        x2 = min(1.0, cx + side / 2)
-        y2 = min(1.0, cy + side / 2)
+            # Expand bounding box by 40% padding, clamp to image bounds
+            pad = 0.4
+            fx, fy, fw, fh = bb["x"], bb["y"], bb["w"], bb["h"]
+            cx, cy = fx + fw / 2, fy + fh / 2
+            side = max(fw, fh) * (1 + pad)
+            x1 = max(0.0, cx - side / 2)
+            y1 = max(0.0, cy - side / 2)
+            x2 = min(1.0, cx + side / 2)
+            y2 = min(1.0, cy + side / 2)
 
-        # Convert fractions to pixels
-        px1, py1 = int(x1 * w), int(y1 * h)
-        px2, py2 = int(x2 * w), int(y2 * h)
-        if px2 <= px1 or py2 <= py1:
-            continue
+            # Convert fractions to pixels
+            px1, py1 = int(x1 * w), int(y1 * h)
+            px2, py2 = int(x2 * w), int(y2 * h)
+            if px2 <= px1 or py2 <= py1:
+                continue
 
-        try:
-            crop = img.crop((px1, py1, px2, py2))
-            crop = crop.resize((128, 128), Image.LANCZOS)
-            buf = io.BytesIO()
-            crop.save(buf, format="WEBP", quality=80)
-            crop_bytes = buf.getvalue()
+            try:
+                crop = img.crop((px1, py1, px2, py2))
+                crop = crop.resize((128, 128), Image.LANCZOS)
+                buf = io.BytesIO()
+                crop.save(buf, format="WEBP", quality=80)
+                crop_bytes = buf.getvalue()
 
-            crop_key = storage.face_crop_key(tenant_id, asset.library_id, face_id)  # type: ignore[union-attr]
-            storage.write(crop_key, crop_bytes)
+                crop_key = storage.face_crop_key(tenant_id, asset.library_id, face_id)  # type: ignore[union-attr]
+                storage.write(crop_key, crop_bytes)
 
-            # Update face record
-            from sqlalchemy import text as sa_text
-            session.execute(  # type: ignore[union-attr]
-                sa_text("UPDATE faces SET crop_key = :key WHERE face_id = :fid"),
-                {"key": crop_key, "fid": face_id},
-            )
-        except Exception:
-            logger.warning("Failed to generate crop for face %s", face_id, exc_info=True)
+                # Update face record
+                from sqlalchemy import text as sa_text
+                session.execute(  # type: ignore[union-attr]
+                    sa_text("UPDATE faces SET crop_key = :key WHERE face_id = :fid"),
+                    {"key": crop_key, "fid": face_id},
+                )
+            except Exception:
+                logger.warning("Failed to generate crop for face %s", face_id, exc_info=True)
 
-    session.commit()  # type: ignore[union-attr]
-    img.close()
+        session.commit()  # type: ignore[union-attr]
+    finally:
+        img.close()
 
 
 @router.post("/{asset_id}/faces", response_model=FaceSubmitResponse, status_code=201)

@@ -81,4 +81,8 @@ class CLIPEmbeddingProvider(EmbeddingProvider):
     def embed(self, proxy_path: Path) -> list[float]:
         from PIL import Image as PILImage
 
-        return self.embed_image(PILImage.open(proxy_path).convert("RGB"))
+        img = PILImage.open(proxy_path).convert("RGB")
+        try:
+            return self.embed_image(img)
+        finally:
+            img.close()
