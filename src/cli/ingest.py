@@ -1017,6 +1017,13 @@ def run_ingest(
     # (~2s per batch) is acceptable vs unbounded memory growth.
     if faces_available and ingested_assets:
         import multiprocessing as mp
+        import os as _os
+
+        def _silence_stdout() -> None:
+            """Redirect stdout to /dev/null in subprocess to suppress InsightFace/ONNX print noise."""
+            _devnull = _os.open(_os.devnull, _os.O_WRONLY)
+            _os.dup2(_devnull, 1)
+            _os.close(_devnull)
 
         FACE_BATCH_SIZE = 50
         console.print(f"\n[bold]Detecting faces ({len(ingested_assets):,} assets)...[/bold]")
@@ -1027,7 +1034,7 @@ def run_ingest(
                 batch = ingested_assets[batch_start:batch_start + FACE_BATCH_SIZE]
                 try:
                     ctx = mp.get_context("spawn")
-                    with ctx.Pool(1) as pool:
+                    with ctx.Pool(1, initializer=_silence_stdout) as pool:
                         result = pool.apply(
                             _face_batch_worker,
                             (client.base_url, client.token, batch),
