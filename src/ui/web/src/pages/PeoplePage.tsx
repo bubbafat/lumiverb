@@ -457,6 +457,7 @@ function ClusterCard({
           onClose={() => setLightboxIndex(null)}
           onNavigate={(i) => setLightboxIndex(i)}
           hasMore={expanded && allFacesQuery.hasNextPage}
+          highlightFaceId={displayFaces[lightboxIndex]?.face_id}
         />
       )}
     </div>

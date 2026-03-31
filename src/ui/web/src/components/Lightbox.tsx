@@ -26,6 +26,8 @@ interface LightboxProps {
   libraryId?: string;
   isPublic?: boolean;
   publicLibraryId?: string;
+  /** Highlight a specific face with a red border (e.g. the clustered face). */
+  highlightFaceId?: string;
 }
 
 function SimilarThumbnail({
@@ -123,6 +125,7 @@ export function Lightbox({
   libraryId,
   isPublic,
   publicLibraryId,
+  highlightFaceId,
 }: LightboxProps) {
   const navigate = useNavigate();
   const [showSimilar, setShowSimilar] = useState(false);
@@ -487,7 +490,8 @@ export function Lightbox({
                 {showFaces && facesData?.faces.map((face) => {
                   if (!face.bounding_box) return null;
                   const identified = face.person != null;
-                  const borderColor = identified ? "border-emerald-400" : "border-gray-500";
+                  const isHighlighted = highlightFaceId === face.face_id;
+                  const borderColor = isHighlighted ? "border-red-500" : identified ? "border-emerald-400" : "border-gray-500";
                   const isPopoverTarget = assignFaceId === face.face_id;
                   return (
                     <div
