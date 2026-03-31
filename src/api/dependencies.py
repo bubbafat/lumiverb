@@ -1,5 +1,6 @@
 """FastAPI dependencies for auth and database sessions."""
 
+import hmac
 from typing import Annotated, Generator
 
 from fastapi import Header, HTTPException, Request
@@ -45,7 +46,7 @@ def require_admin(
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
     token = authorization[7:].strip()
-    if token != settings.admin_key:
+    if not hmac.compare_digest(token, settings.admin_key):
         raise HTTPException(status_code=401, detail="Invalid admin key")
 
 

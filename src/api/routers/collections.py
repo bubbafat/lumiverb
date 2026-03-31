@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from src.api.dependencies import get_current_user_id, get_tenant_session, require_editor
@@ -22,16 +22,16 @@ router = APIRouter(prefix="/v1/collections", tags=["collections"])
 
 
 class CreateCollectionRequest(BaseModel):
-    name: str
-    description: str | None = None
+    name: str = Field(..., min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=2000)
     sort_order: str = "manual"
     visibility: str = "private"  # private | shared
-    asset_ids: list[str] | None = None  # optional atomic create+populate
+    asset_ids: list[str] | None = Field(default=None, max_length=10_000)
 
 
 class UpdateCollectionRequest(BaseModel):
-    name: str | None = None
-    description: str | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=2000)
     visibility: str | None = None
     sort_order: str | None = None
     cover_asset_id: str | None = None

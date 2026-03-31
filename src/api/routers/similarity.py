@@ -61,7 +61,7 @@ def find_similar(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, le=10_000),
     from_ts: float | None = Query(default=None, description="Unix timestamp (seconds), inclusive start of capture-time range."),
     to_ts: float | None = Query(default=None, description="Unix timestamp (seconds), inclusive end of capture-time range."),
     asset_types: str | None = Query(

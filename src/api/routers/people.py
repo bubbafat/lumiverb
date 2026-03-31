@@ -8,7 +8,7 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from src.api.dependencies import get_tenant_session
@@ -35,17 +35,17 @@ class PersonListResponse(BaseModel):
 
 
 class PersonCreateRequest(BaseModel):
-    display_name: str
-    face_ids: list[str] | None = None
+    display_name: str = Field(..., min_length=1, max_length=255)
+    face_ids: list[str] | None = Field(default=None, max_length=10_000)
 
 
 class PersonUpdateRequest(BaseModel):
-    display_name: str
+    display_name: str = Field(..., min_length=1, max_length=255)
 
 
 class FaceAssignRequest(BaseModel):
     person_id: str | None = None
-    new_person_name: str | None = None
+    new_person_name: str | None = Field(default=None, max_length=255)
 
 
 class MergeRequest(BaseModel):

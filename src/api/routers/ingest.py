@@ -142,8 +142,9 @@ def _do_ingest(
     # --- Normalize proxy to WebP ---
     try:
         proxy_bytes, proxy_w, proxy_h = _normalize_proxy(raw_proxy)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to process proxy image: {e}")
+    except Exception:
+        logger.exception("Failed to process proxy image for asset %s", asset_id)
+        raise HTTPException(status_code=400, detail="Failed to process proxy image")
 
     # --- Generate thumbnail from normalized proxy ---
     thumb_bytes = _generate_thumbnail(proxy_bytes)
@@ -291,6 +292,17 @@ async def create_and_ingest(
       - width/height: original source dimensions
       - exif, vision, embeddings: JSON strings (same as /v1/assets/{id}/ingest)
     """
+    if media_type not in ("image", "video"):
+        raise HTTPException(status_code=400, detail="media_type must be 'image' or 'video'")
+    if not rel_path or ".." in rel_path.split("/"):
+        raise HTTPException(status_code=400, detail="Invalid rel_path")
+    if width is not None and (width < 1 or width > 100_000):
+        raise HTTPException(status_code=400, detail="width out of range")
+    if height is not None and (height < 1 or height > 100_000):
+        raise HTTPException(status_code=400, detail="height out of range")
+    if proxy.content_type and not proxy.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Proxy must be an image file")
+
     raw_proxy = await proxy.read()
     if len(raw_proxy) > MAX_PROXY_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Proxy upload too large (10 MB max)")

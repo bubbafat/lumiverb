@@ -81,7 +81,7 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
             jwt_secret = get_settings().jwt_secret
             if jwt_secret:
                 try:
-                    claims = jwt.decode(token, jwt_secret, algorithms=[_JWT_ALGORITHM])
+                    claims = jwt.decode(token, jwt_secret, algorithms=[_JWT_ALGORITHM], options={"verify_exp": True})
                     tenant_id = claims["tenant_id"]
                     user_id = claims["sub"]
                     role = claims["role"]

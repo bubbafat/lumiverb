@@ -5,7 +5,22 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+
 from src.api.middleware import TenantResolutionMiddleware
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add security headers to every response."""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        return response
 from src.api.routers import admin, assets, collections, keys, libraries, me, path_filters, tenant, trash, video
 from src.api.routers.auth import router as auth_router
 from src.api.routers.users import router as users_router
@@ -31,6 +46,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Lumiverb API", version="0.1.0", lifespan=lifespan)
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(TenantResolutionMiddleware)
 app.include_router(auth_router)
 app.include_router(users_router)

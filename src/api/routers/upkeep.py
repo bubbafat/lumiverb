@@ -68,7 +68,8 @@ def _is_admin_key(authorization: str | None) -> bool:
         return False
     token = authorization[7:].strip()
     settings = get_settings()
-    return bool(settings.admin_key and token == settings.admin_key)
+    import hmac
+    return bool(settings.admin_key and hmac.compare_digest(token, settings.admin_key))
 
 
 def _propagate_faces_all_tenants() -> dict:
@@ -308,7 +309,7 @@ def run_face_crops(
     request: Request,
     _admin: Annotated[None, Depends(require_admin)],
     authorization: Annotated[str | None, Header()] = None,
-    batch_size: int = Query(default=500, description="Max faces to process per call"),
+    batch_size: int = Query(default=500, ge=1, le=5000, description="Max faces to process per call"),
 ) -> FaceCropsResult:
     """Backfill face crop thumbnails for faces missing crop_key."""
     from sqlalchemy import text

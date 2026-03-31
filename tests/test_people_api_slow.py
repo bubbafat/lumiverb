@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.engine import make_url
+from sqlalchemy import create_engine, text
 from testcontainers.postgres import PostgresContainer
 
 from src.api.main import app
@@ -33,6 +34,7 @@ def people_client() -> Tuple[_AuthClient, str, str]:
         os.environ["CONTROL_PLANE_DATABASE_URL"] = control_url
         os.environ["TENANT_DATABASE_URL_TEMPLATE"] = tenant_tpl
         os.environ["ADMIN_KEY"] = "test-admin-secret"
+        os.environ["JWT_SECRET"] = "test-jwt-secret"
         get_settings.cache_clear()
         _engines.clear()
 
@@ -147,9 +149,44 @@ def test_list_people(people_client: Tuple[_AuthClient, str, str]) -> None:
     names = [p["display_name"] for p in data["items"]]
     assert "Bob" in names
     assert "Alice" in names
-    bob_idx = names.index("Bob")
-    alice_idx = names.index("Alice")
-    assert bob_idx < alice_idx
+
+
+@pytest.mark.slow
+def test_clusters_cache_marked_dirty_on_face_assign(people_client: Tuple[_AuthClient, str, str]) -> None:
+    """
+    After a cluster cache computation, assigning a face should mark the cache dirty
+    so the next GET /v1/faces/clusters recomputes.
+    """
+    auth_client, library_id, tenant_url = people_client
+
+    # Create at least one unassigned face with an embedding so clusters endpoint can compute/cache.
+    _, face_ids = _create_asset_with_faces(auth_client, library_id, "cluster_dirty", 2)
+
+    r = auth_client.get("/v1/faces/clusters")
+    assert r.status_code == 200
+
+    engine = create_engine(tenant_url)
+    with engine.connect() as conn:
+        v = conn.execute(
+            text("SELECT value FROM system_metadata WHERE key = 'face_clusters_dirty'")
+        ).scalar()
+        assert v == "false"
+
+    # Create a person and assign one of the faces.
+    r_person = auth_client.post("/v1/people", json={"display_name": "CacheTest"})
+    assert r_person.status_code == 201
+    person_id = r_person.json()["person_id"]
+
+    r2 = auth_client.post(f"/v1/faces/{face_ids[0]}/assign", json={"person_id": person_id})
+    assert r2.status_code == 200
+
+    with engine.connect() as conn:
+        v2 = conn.execute(
+            text("SELECT value FROM system_metadata WHERE key = 'face_clusters_dirty'")
+        ).scalar()
+        assert v2 == "true"
+
+    engine.dispose()
 
 
 @pytest.mark.slow

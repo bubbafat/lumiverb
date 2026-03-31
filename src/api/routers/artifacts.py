@@ -61,6 +61,14 @@ async def upload_artifact(
             status_code=400,
             detail=f"artifact_type must be one of: {', '.join(sorted(ALLOWED_ARTIFACT_TYPES))}",
         )
+    if width is not None and (width < 1 or width > 100_000):
+        raise HTTPException(status_code=400, detail="width out of range")
+    if height is not None and (height < 1 or height > 100_000):
+        raise HTTPException(status_code=400, detail="height out of range")
+    if file.content_type and artifact_type == "video_preview" and not file.content_type.startswith("video/"):
+        raise HTTPException(status_code=400, detail="video_preview must be a video file")
+    if file.content_type and artifact_type in ("proxy", "thumbnail", "scene_rep") and not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail=f"{artifact_type} must be an image file")
 
     asset_repo = AssetRepository(session)
     asset = asset_repo.get_by_id(asset_id)
