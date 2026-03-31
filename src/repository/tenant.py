@@ -2327,9 +2327,81 @@ class FaceRepository:
             text("UPDATE assets SET face_count = :count WHERE asset_id = :aid"),
             {"count": len(faces), "aid": asset_id},
         )
+
+        # Auto-assign faces to known people by centroid proximity
+        self._auto_assign_by_centroid(face_ids, faces)
+
         _mark_clusters_dirty(self._session)
         self._session.commit()
         return face_ids
+
+    # Auto-assign threshold — tighter than clustering (0.55) because centroids
+    # are averaged over many confirmed faces and more stable.
+    AUTO_ASSIGN_THRESHOLD = 0.45
+
+    def _auto_assign_by_centroid(self, face_ids: list[str], faces_data: list[dict]) -> None:
+        """Auto-assign new faces to known people if embedding is close to a centroid.
+
+        Only assigns faces that have embeddings. Uses cosine distance against
+        person centroid vectors. Assigned with confirmed=false so user can review.
+        """
+        # Collect faces with embeddings
+        faces_with_emb = [
+            (fid, fd["embedding"])
+            for fid, fd in zip(face_ids, faces_data)
+            if fd.get("embedding")
+        ]
+        if not faces_with_emb:
+            return
+
+        # Get all people with centroids
+        rows = self._session.execute(
+            text("SELECT person_id, centroid_vector::text FROM people WHERE centroid_vector IS NOT NULL")
+        ).all()
+        if not rows:
+            return
+
+        import numpy as np
+
+        # Parse centroids
+        person_ids = [r[0] for r in rows]
+        centroids = np.array(
+            [[float(x) for x in r[1].strip("[]").split(",")] for r in rows],
+            dtype=np.float32,
+        )
+        # L2-normalize centroids
+        norms = np.linalg.norm(centroids, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        centroids = centroids / norms
+
+        for face_id, embedding in faces_with_emb:
+            vec = np.array(embedding, dtype=np.float32)
+            norm = np.linalg.norm(vec)
+            if norm > 0:
+                vec = vec / norm
+
+            # Cosine distance to each centroid
+            distances = 1.0 - (centroids @ vec)
+            best_idx = int(np.argmin(distances))
+            best_dist = float(distances[best_idx])
+
+            if best_dist < self.AUTO_ASSIGN_THRESHOLD:
+                best_person_id = person_ids[best_idx]
+                # Create match (confirmed=false for auto-assignment)
+                match_id = "fpm_" + str(ULID())
+                self._session.add(FacePersonMatch(
+                    match_id=match_id,
+                    face_id=face_id,
+                    person_id=best_person_id,
+                    confidence=1.0 - best_dist,
+                    confirmed=False,
+                ))
+                # Sync denormalized column
+                self._session.execute(
+                    text("UPDATE faces SET person_id = :pid WHERE face_id = :fid"),
+                    {"pid": best_person_id, "fid": face_id},
+                )
+        self._session.flush()
 
     def get_by_asset_id(self, asset_id: str) -> list[Face]:
         """Return all faces for an asset, ordered by confidence desc."""
