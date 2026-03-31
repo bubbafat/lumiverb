@@ -170,66 +170,6 @@ def create_person(
     )
 
 
-@router.get("/{person_id}", response_model=PersonItem)
-def get_person(
-    person_id: str,
-    session: Annotated[Session, Depends(get_tenant_session)],
-) -> PersonItem:
-    """Get a person by ID."""
-    from src.repository.tenant import PersonRepository
-
-    repo = PersonRepository(session)
-    person = repo.get_by_id(person_id)
-    if person is None:
-        raise HTTPException(status_code=404, detail="Person not found")
-
-    face_count = repo.get_face_count(person_id)
-
-    rep_asset_id = None
-    if person.representative_face_id:
-        from src.models.tenant import Face
-        rep_face = session.get(Face, person.representative_face_id)
-        if rep_face:
-            rep_asset_id = rep_face.asset_id
-
-    return PersonItem(
-        person_id=person.person_id,
-        display_name=person.display_name,
-        face_count=face_count,
-        representative_face_id=person.representative_face_id,
-        representative_asset_id=rep_asset_id,
-        confirmation_count=person.confirmation_count,
-    )
-
-
-@router.patch("/{person_id}", response_model=PersonItem)
-def update_person(
-    person_id: str,
-    body: PersonUpdateRequest,
-    session: Annotated[Session, Depends(get_tenant_session)],
-) -> PersonItem:
-    """Update a person's display name."""
-    from src.repository.tenant import PersonRepository
-
-    if not body.display_name.strip():
-        raise HTTPException(status_code=400, detail="display_name must not be empty")
-
-    repo = PersonRepository(session)
-    person = repo.update_name(person_id, body.display_name.strip())
-    if person is None:
-        raise HTTPException(status_code=404, detail="Person not found")
-
-    face_count = repo.get_face_count(person_id)
-
-    return PersonItem(
-        person_id=person.person_id,
-        display_name=person.display_name,
-        face_count=face_count,
-        representative_face_id=person.representative_face_id,
-        confirmation_count=person.confirmation_count,
-    )
-
-
 @router.get("/dismissed", response_model=PersonListResponse)
 def list_dismissed_people(
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -298,7 +238,6 @@ def undismiss_person(
     person.display_name = body.display_name.strip()
     session.add(person)
 
-    # Pick best representative face if missing
     if not person.representative_face_id:
         from sqlalchemy import text as sa_text
         rep = session.execute(
@@ -331,6 +270,66 @@ def undismiss_person(
         face_count=face_count,
         representative_face_id=person.representative_face_id,
         representative_asset_id=rep_asset_id,
+        confirmation_count=person.confirmation_count,
+    )
+
+
+@router.get("/{person_id}", response_model=PersonItem)
+def get_person(
+    person_id: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> PersonItem:
+    """Get a person by ID."""
+    from src.repository.tenant import PersonRepository
+
+    repo = PersonRepository(session)
+    person = repo.get_by_id(person_id)
+    if person is None:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    face_count = repo.get_face_count(person_id)
+
+    rep_asset_id = None
+    if person.representative_face_id:
+        from src.models.tenant import Face
+        rep_face = session.get(Face, person.representative_face_id)
+        if rep_face:
+            rep_asset_id = rep_face.asset_id
+
+    return PersonItem(
+        person_id=person.person_id,
+        display_name=person.display_name,
+        face_count=face_count,
+        representative_face_id=person.representative_face_id,
+        representative_asset_id=rep_asset_id,
+        confirmation_count=person.confirmation_count,
+    )
+
+
+@router.patch("/{person_id}", response_model=PersonItem)
+def update_person(
+    person_id: str,
+    body: PersonUpdateRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> PersonItem:
+    """Update a person's display name."""
+    from src.repository.tenant import PersonRepository
+
+    if not body.display_name.strip():
+        raise HTTPException(status_code=400, detail="display_name must not be empty")
+
+    repo = PersonRepository(session)
+    person = repo.update_name(person_id, body.display_name.strip())
+    if person is None:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    face_count = repo.get_face_count(person_id)
+
+    return PersonItem(
+        person_id=person.person_id,
+        display_name=person.display_name,
+        face_count=face_count,
+        representative_face_id=person.representative_face_id,
         confirmation_count=person.confirmation_count,
     )
 
