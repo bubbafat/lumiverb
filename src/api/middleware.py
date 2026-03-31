@@ -10,7 +10,7 @@ from starlette.responses import JSONResponse
 
 from src.core.config import get_settings
 from src.core.database import get_control_session
-from src.repository.control_plane import ApiKeyRepository, PublicCollectionRepository, PublicLibraryRepository, TenantDbRoutingRepository
+from src.repository.control_plane import ApiKeyRepository, PublicCollectionRepository, PublicLibraryRepository, RevokedTokenRepository, TenantDbRoutingRepository
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +86,10 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
                     user_id = claims["sub"]
                     role = claims["role"]
                     with get_control_session() as session:
+                        # Check token revocation
+                        jti = claims.get("jti")
+                        if jti and RevokedTokenRepository(session).is_revoked(jti):
+                            return _error_response(401, "token_revoked", "Token has been revoked")
                         routing_repo = TenantDbRoutingRepository(session)
                         routing = routing_repo.get_by_tenant_id(tenant_id)
                     if routing is None:

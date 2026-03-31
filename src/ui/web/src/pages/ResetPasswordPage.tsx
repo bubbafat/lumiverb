@@ -1,10 +1,16 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import type { FormEvent } from "react";
 
 export default function ResetPasswordPage() {
   const [searchParams] = useSearchParams();
-  const token = searchParams.get("token") ?? "";
+  // Capture the token once, then strip it from the URL to avoid leaking
+  // in browser history, referer headers, or shoulder-surfing.
+  const tokenRef = useRef(searchParams.get("token") ?? "");
+  const token = tokenRef.current;
+  if (searchParams.has("token")) {
+    window.history.replaceState(null, "", "/reset-password");
+  }
 
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");

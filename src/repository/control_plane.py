@@ -9,7 +9,7 @@ from datetime import datetime
 from sqlmodel import Session, select
 
 from src.core.utils import utcnow
-from src.models.control_plane import ApiKey, PasswordResetToken, PublicLibrary, Tenant, TenantDbRouting, User
+from src.models.control_plane import ApiKey, PasswordResetToken, PublicLibrary, RevokedToken, Tenant, TenantDbRouting, User
 from ulid import ULID
 
 
@@ -434,3 +434,30 @@ class PublicCollectionRepository:
         if row:
             self._session.delete(row)
             self._session.commit()
+
+
+class RevokedTokenRepository:
+    """Repository for JWT revocation (logout / token refresh)."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def revoke(self, jti: str) -> None:
+        """Mark a JWT as revoked."""
+        if self._session.get(RevokedToken, jti):
+            return  # already revoked
+        self._session.add(RevokedToken(jti=jti))
+        self._session.commit()
+
+    def is_revoked(self, jti: str) -> bool:
+        return self._session.get(RevokedToken, jti) is not None
+
+    def cleanup_expired(self, before: "datetime") -> int:
+        """Delete revoked tokens older than the given timestamp (housekeeping)."""
+        from sqlalchemy import text
+        result = self._session.execute(
+            text("DELETE FROM revoked_tokens WHERE revoked_at < :cutoff"),
+            {"cutoff": before},
+        )
+        self._session.commit()
+        return result.rowcount

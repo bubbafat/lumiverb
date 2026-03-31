@@ -98,6 +98,16 @@ class PasswordResetToken(SQLModel, table=True):
     )
 
 
+class RevokedToken(SQLModel, table=True):
+    __tablename__ = "revoked_tokens"
+
+    jti: str = Field(primary_key=True)  # JWT ID — unique per token
+    revoked_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
 class PublicLibrary(SQLModel, table=True):
     __tablename__ = "public_libraries"
 

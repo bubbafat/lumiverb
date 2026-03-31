@@ -80,6 +80,37 @@ const authHeaders = (): HeadersInit => {
   return key ? { Authorization: `Bearer ${key}` } : {};
 };
 
+let _refreshing: Promise<boolean> | null = null;
+
+/**
+ * Attempt to refresh the JWT. Returns true if a new token was obtained.
+ * Coalesces concurrent refresh attempts into a single request.
+ */
+async function tryRefresh(): Promise<boolean> {
+  if (_refreshing) return _refreshing;
+  _refreshing = (async () => {
+    try {
+      const res = await fetch("/v1/auth/refresh", {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { access_token: string };
+        setApiKey(data.access_token);
+        return true;
+      }
+    } catch {
+      // Refresh failed — will fall through to logout
+    }
+    return false;
+  })();
+  try {
+    return await _refreshing;
+  } finally {
+    _refreshing = null;
+  }
+}
+
 export function handleUnauthorized(): void {
   const stored = getStoredApiKey();
   if (!stored) return;
@@ -119,6 +150,27 @@ async function apiFetch<T>(
   });
   if (!res.ok) {
     if (res.status === 401) {
+      // Try silent refresh before giving up
+      const refreshed = await tryRefresh();
+      if (refreshed) {
+        // Retry the original request with the new token
+        const retryHeaders: HeadersInit = {
+          "Content-Type": "application/json",
+          ...authHeaders(),
+          ...rest.headers,
+        };
+        const retryBody =
+          body !== undefined ? JSON.stringify(body) : (rest as RequestInit).body;
+        const retryRes = await fetch(`/v1${path}`, {
+          ...rest,
+          headers: retryHeaders,
+          body: retryBody,
+        });
+        if (retryRes.ok) {
+          if (retryRes.status === 204) return null as T;
+          return retryRes.json() as Promise<T>;
+        }
+      }
       handleUnauthorized();
     }
     let message = res.statusText;
@@ -138,9 +190,16 @@ async function apiFetch<T>(
 
 /** Fetch blob (e.g. image) with auth. Used for thumbnail/proxy URLs. */
 export async function apiFetchBlob(path: string): Promise<Blob> {
-  const res = await fetch(`/v1${path}`, { headers: authHeaders() });
+  let res = await fetch(`/v1${path}`, { headers: authHeaders() });
   if (!res.ok) {
-    if (res.status === 401) handleUnauthorized();
+    if (res.status === 401) {
+      const refreshed = await tryRefresh();
+      if (refreshed) {
+        res = await fetch(`/v1${path}`, { headers: authHeaders() });
+        if (res.ok) return res.blob();
+      }
+      handleUnauthorized();
+    }
     throw new ApiError(res.status, res.statusText);
   }
   return res.blob();
