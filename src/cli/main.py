@@ -705,6 +705,7 @@ def ingest(
     skip_vision: Annotated[bool, typer.Option("--skip-vision", help="Skip AI vision processing.")] = False,
     skip_embeddings: Annotated[bool, typer.Option("--skip-embeddings", help="Skip CLIP embedding generation.")] = False,
     media_type: Annotated[str, typer.Option("--media-type", help="Filter: image, video, or all.")] = "all",
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would happen without making changes.")] = False,
 ) -> None:
     """Scan and ingest a library in one pass.
 
@@ -712,7 +713,7 @@ def ingest(
     Videos: extract poster frame, EXIF, 10-sec preview, upload atomically.
 
     Processing order: all images first, then videos. Use --media-type to
-    filter to just images or videos.
+    filter to just images or videos. Use --dry-run to preview changes.
     """
     from src.cli.ingest import run_ingest
 
@@ -736,17 +737,19 @@ def ingest(
         path_override=path,
         force=force,
         media_type_filter=media_type,
+        dry_run=dry_run,
         console=console,
     )
 
-    console.print(
-        f"\nDone: {stats.processed:,} ingested, "
-        f"{stats.failed:,} failed, "
-        f"{stats.skipped:,} skipped"
-        + (f", {stats.removed:,} removed" if stats.removed else "")
-    )
-    if stats.failed > 0:
-        raise typer.Exit(1)
+    if not dry_run:
+        console.print(
+            f"\nDone: {stats.processed:,} ingested, "
+            f"{stats.failed:,} failed, "
+            f"{stats.skipped:,} skipped"
+            + (f", {stats.removed:,} removed" if stats.removed else "")
+        )
+        if stats.failed > 0:
+            raise typer.Exit(1)
 
 
 @app.command("repair")

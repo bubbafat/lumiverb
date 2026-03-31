@@ -715,6 +715,7 @@ def run_ingest(
     path_override: str | None = None,
     force: bool = False,
     media_type_filter: str = "all",
+    dry_run: bool = False,
     console: Console,
 ) -> _IngestStats:
     """Discover files and ingest them.
@@ -751,20 +752,40 @@ def run_ingest(
     console.print(f"Server has {len(existing):,} existing assets")
 
     # Step 2c: Detect and trash assets for files no longer on disk
-    if existing and root_path.is_dir():
-        local_rel_paths = {f["rel_path"] for f in local_files}
-        # When using --path, only consider assets under that prefix
-        scope = existing
-        if path_override:
-            prefix = path_override.rstrip("/") + "/"
-            scope = {rp: aid for rp, aid in existing.items() if rp.startswith(prefix)}
-        missing_ids = [aid for rp, aid in scope.items() if rp not in local_rel_paths]
-        if missing_ids:
-            console.print(f"Removing {len(missing_ids):,} assets no longer on disk...")
-            for batch_start in range(0, len(missing_ids), 500):
-                batch = missing_ids[batch_start : batch_start + 500]
-                client.delete("/v1/assets", json={"asset_ids": batch})
-            stats.removed = len(missing_ids)
+    local_rel_paths = {f["rel_path"] for f in local_files}
+    scope = existing
+    if path_override:
+        prefix = path_override.rstrip("/") + "/"
+        scope = {rp: aid for rp, aid in existing.items() if rp.startswith(prefix)}
+    missing_ids = [aid for rp, aid in scope.items() if rp not in local_rel_paths] if existing and root_path.is_dir() else []
+    matched = len(scope) - len(missing_ids) if scope else 0
+    new_files = [f for f in local_files if f["rel_path"] not in existing]
+
+    if dry_run:
+        console.print()
+        console.print(f"[bold]Root path:[/bold]       {root_path} (exists: {'yes' if root_path.is_dir() else '[red]no[/red]'})")
+        console.print(f"[bold]Files on disk:[/bold]   {len(local_files):,}")
+        console.print(f"[bold]Assets on server:[/bold] {len(scope):,}")
+        console.print(f"[bold]Matched:[/bold]         {matched:,}")
+        console.print(f"[bold]Missing from disk:[/bold] {len(missing_ids):,}")
+        console.print(f"[bold]New on disk:[/bold]      {len(new_files):,}")
+        if missing_ids and len(missing_ids) <= 20:
+            console.print("\n[bold]Missing files:[/bold]")
+            missing_paths = [rp for rp, aid in scope.items() if aid in set(missing_ids)]
+            for rp in sorted(missing_paths)[:20]:
+                console.print(f"  {rp}")
+        if new_files and len(new_files) <= 20:
+            console.print("\n[bold]New files:[/bold]")
+            for f in sorted(new_files, key=lambda f: f["rel_path"])[:20]:
+                console.print(f"  {f['rel_path']}")
+        return stats
+
+    if missing_ids:
+        console.print(f"Removing {len(missing_ids):,} assets no longer on disk...")
+        for batch_start in range(0, len(missing_ids), 500):
+            batch = missing_ids[batch_start : batch_start + 500]
+            client.delete("/v1/assets", json={"asset_ids": batch})
+        stats.removed = len(missing_ids)
 
     if not local_files:
         return stats
