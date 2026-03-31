@@ -489,6 +489,7 @@ def _face_batch_worker(
     base_url: str,
     token: str,
     batch: list[dict],
+    cache_dir: str | None = None,
 ) -> dict:
     """Run face detection on a batch of assets in a subprocess.
 
@@ -497,13 +498,15 @@ def _face_batch_worker(
     reclaimed by the OS when the child exits.
 
     Each item in *batch* must have ``asset_id`` and ``rel_path`` keys.
-    The proxy is downloaded from the server for detection.
+    If *cache_dir* is provided, proxy images are read from disk; otherwise
+    they are downloaded from the server.
 
     Returns {"processed": N, "failed": N, "skipped": N, "errors": [...]}.
     """
     import warnings
     warnings.filterwarnings("ignore", category=FutureWarning, module="insightface")
 
+    from pathlib import Path
     from src.workers.faces.insightface_provider import InsightFaceProvider
     from PIL import Image as PILImage
 
@@ -511,22 +514,30 @@ def _face_batch_worker(
     provider = InsightFaceProvider()
     provider.ensure_loaded()
 
+    cache_path = Path(cache_dir) if cache_dir else None
+
     processed = failed = skipped = 0
     errors: list[dict] = []
     for item in batch:
         asset_id = item["asset_id"]
         rel_path = item.get("rel_path", asset_id)
         try:
-            resp = client._client.get(client._url(f"/v1/assets/{asset_id}/artifacts/proxy"))
-            if resp.status_code != 200:
-                skipped += 1
-                errors.append({"rel_path": rel_path, "error": f"proxy HTTP {resp.status_code}"})
+            # Try cache first, then fall back to server download
+            image_bytes = None
+            if cache_path is not None:
+                cached = cache_path / asset_id
+                if cached.exists():
+                    image_bytes = cached.read_bytes()
+            if image_bytes is None:
+                resp = client._client.get(client._url(f"/v1/assets/{asset_id}/artifacts/proxy"))
+                if resp.status_code != 200:
+                    skipped += 1
+                    errors.append({"rel_path": rel_path, "error": f"proxy HTTP {resp.status_code}"})
+                    resp.close()
+                    continue
+                image_bytes = resp.content
                 resp.close()
-                continue
-
-            image_bytes = resp.content
-            resp.close()
-            del resp
+                del resp
 
             img = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
             del image_bytes
@@ -573,6 +584,7 @@ def _process_and_ingest_one(
     clip_provider: object | None,
     stats: "_IngestStats",
     ingested_assets: list[dict] | None = None,
+    proxy_cache: "ProxyCache | None" = None,
     progress: Progress | None = None,
     task_id: object = None,
 ) -> None:
@@ -606,7 +618,9 @@ def _process_and_ingest_one(
 
         # 5. Convert to WebP for upload (server stores as-is, skips re-encoding)
         webp_bytes = _jpeg_to_webp(jpeg_bytes)
-        del jpeg_bytes  # free JPEG buffer (~1-2 MB) before HTTP call
+        # Cache JPEG proxy on disk for face detection post-pass
+        _proxy_for_cache = jpeg_bytes
+        del jpeg_bytes
 
         # 7. POST /v1/ingest — create asset + ingest atomically
         files = {"proxy": ("proxy.webp", io.BytesIO(webp_bytes), "image/webp")}
@@ -631,6 +645,9 @@ def _process_and_ingest_one(
 
         asset_id = resp.json().get("asset_id")
         if ingested_assets is not None and asset_id:
+            if proxy_cache is not None:
+                proxy_cache.put(asset_id, _proxy_for_cache)
+            del _proxy_for_cache
             with stats.lock:
                 ingested_assets.append({"asset_id": asset_id, "rel_path": rel_path})
 
@@ -967,6 +984,10 @@ def run_ingest(
         # Step 5: Ingest images (bounded: at most `concurrency` in-flight)
         # Collect ingested asset IDs for face detection post-pass.
         ingested_assets: list[dict] = []
+        proxy_cache = None
+        if faces_available and images_to_ingest:
+            from src.cli.proxy_cache import ProxyCache
+            proxy_cache = ProxyCache()
         if images_to_ingest:
             pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="ingest")
             inflight: set[Future] = set()
@@ -985,6 +1006,7 @@ def run_ingest(
                     clip_provider=clip_provider,
                     stats=stats,
                     ingested_assets=ingested_assets,
+                    proxy_cache=proxy_cache,
                     progress=progress,
                     task_id=img_tid,
                 )
@@ -1027,37 +1049,47 @@ def run_ingest(
     if faces_available and ingested_assets:
         import multiprocessing as mp
 
+        cache_dir = str(proxy_cache.path) if proxy_cache else None
         FACE_BATCH_SIZE = 50
         console.print(f"\n[bold]Detecting faces ({len(ingested_assets):,} assets)...[/bold]")
         progress = _make_progress(console)
-        with progress:
-            face_tid = progress.add_task("Faces", total=len(ingested_assets), ok=0, fail=0)
-            for batch_start in range(0, len(ingested_assets), FACE_BATCH_SIZE):
-                batch = ingested_assets[batch_start:batch_start + FACE_BATCH_SIZE]
-                try:
-                    ctx = mp.get_context("spawn")
-                    with ctx.Pool(1, initializer=_silence_subprocess_stdout) as pool:
-                        result = pool.apply(
-                            _face_batch_worker,
-                            (client.base_url, client.token, batch),
+        try:
+            with progress:
+                face_tid = progress.add_task("Faces", total=len(ingested_assets), ok=0, fail=0)
+                for batch_start in range(0, len(ingested_assets), FACE_BATCH_SIZE):
+                    batch = ingested_assets[batch_start:batch_start + FACE_BATCH_SIZE]
+                    try:
+                        ctx = mp.get_context("spawn")
+                        with ctx.Pool(1, initializer=_silence_subprocess_stdout) as pool:
+                            result = pool.apply(
+                                _face_batch_worker,
+                                (client.base_url, client.token, batch, cache_dir),
+                            )
+                    except Exception as e:
+                        logger.warning("Face batch failed: %s", e)
+                        result = {"processed": 0, "failed": len(batch), "skipped": 0, "errors": []}
+
+                    # Remove consumed entries from cache
+                    if proxy_cache:
+                        for item in batch:
+                            proxy_cache.remove(item["asset_id"])
+
+                    for err in result.get("errors", []):
+                        progress.console.print(
+                            f"[red]faces \u2717[/red] {err['rel_path']}: {err['error']}"
                         )
-                except Exception as e:
-                    logger.warning("Face batch failed: %s", e)
-                    result = {"processed": 0, "failed": len(batch), "skipped": 0, "errors": []}
 
-                for err in result.get("errors", []):
-                    progress.console.print(
-                        f"[red]faces \u2717[/red] {err['rel_path']}: {err['error']}"
+                    batch_total = result["processed"] + result["failed"] + result["skipped"]
+                    task = progress.tasks[face_tid]
+                    progress.advance(face_tid, batch_total)
+                    progress.update(
+                        face_tid,
+                        ok=task.fields["ok"] + result["processed"],
+                        fail=task.fields["fail"] + result["failed"],
                     )
-
-                batch_total = result["processed"] + result["failed"] + result["skipped"]
-                task = progress.tasks[face_tid]
-                progress.advance(face_tid, batch_total)
-                progress.update(
-                    face_tid,
-                    ok=task.fields["ok"] + result["processed"],
-                    fail=task.fields["fail"] + result["failed"],
-                )
+        finally:
+            if proxy_cache:
+                proxy_cache.cleanup()
 
     return stats
 
