@@ -52,8 +52,6 @@ def _silence_subprocess_stdout() -> None:
     os.close(devnull)
 
 
-PROXY_LONG_EDGE = 2048
-PROXY_JPEG_QUALITY = 75
 PROXY_WEBP_QUALITY = 80
 SUPPORTED_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
 
@@ -68,92 +66,8 @@ def _jpeg_to_webp(jpeg_bytes: bytes) -> bytes:
 
 def _generate_proxy_bytes(source_path: Path) -> tuple[bytes, int, int]:
     """Generate a resized JPEG proxy from a source image. Returns (bytes, width_orig, height_orig)."""
-    import pyvips
-    import numpy as np
-    from PIL import Image as PILImage
-
-    from src.core.file_extensions import RAW_EXTENSIONS
-
-    ext = source_path.suffix.lower()
-    TIFF_EXTENSIONS = {".tif", ".tiff"}
-
-    if ext in RAW_EXTENSIONS:
-        import rawpy
-
-        try:
-            with rawpy.imread(str(source_path)) as raw:
-                thumb = raw.extract_thumb()
-            if thumb.format == rawpy.ThumbFormat.JPEG:
-                img = pyvips.Image.new_from_buffer(bytes(thumb.data), "")
-                long_edge = max(img.width, img.height)
-                if long_edge >= PROXY_LONG_EDGE:
-                    with rawpy.imread(str(source_path)) as _raw:
-                        _s = _raw.sizes
-                        width_orig = _s.iwidth
-                        height_orig = _s.iheight
-                    proxy_img = img.thumbnail_image(
-                        PROXY_LONG_EDGE, height=PROXY_LONG_EDGE,
-                        size=pyvips.enums.Size.DOWN,
-                    )
-                    proxy_bytes = proxy_img.write_to_buffer(".jpg[Q=%d]" % PROXY_JPEG_QUALITY)
-                    return proxy_bytes, width_orig, height_orig
-        except Exception:
-            pass
-
-        with rawpy.imread(str(source_path)) as raw:
-            rgb = raw.postprocess()
-            _s = raw.sizes
-            width_orig = _s.iwidth
-            height_orig = _s.iheight
-        h, w, bands = rgb.shape
-        img = pyvips.Image.new_from_memory(rgb.tobytes(), w, h, bands, "uchar")
-        proxy_img = img.thumbnail_image(
-            PROXY_LONG_EDGE, height=PROXY_LONG_EDGE,
-            size=pyvips.enums.Size.DOWN,
-        )
-        proxy_bytes = proxy_img.write_to_buffer(".jpg[Q=%d]" % PROXY_JPEG_QUALITY)
-        return proxy_bytes, width_orig, height_orig
-
-    elif ext in TIFF_EXTENSIONS:
-        pil_img = PILImage.open(source_path)
-        width_orig, height_orig = pil_img.size
-        pil_img.close()
-        try:
-            vips_img = pyvips.Image.new_from_file(
-                str(source_path),
-                access=pyvips.enums.Access.SEQUENTIAL,
-                fail_on=pyvips.enums.FailOn.NONE,
-            )
-            proxy_img = vips_img.thumbnail_image(
-                PROXY_LONG_EDGE, height=PROXY_LONG_EDGE,
-                size=pyvips.enums.Size.DOWN,
-            ).copy_memory()
-        except Exception:
-            pil_img = PILImage.open(source_path)
-            pil_img.thumbnail((PROXY_LONG_EDGE, PROXY_LONG_EDGE), PILImage.LANCZOS)
-            pil_img = pil_img.convert("RGB")
-            arr = np.asarray(pil_img, dtype=np.uint8)
-            h, w, bands = arr.shape
-            proxy_img = pyvips.Image.new_from_memory(arr.tobytes(), w, h, bands, "uchar")
-            pil_img.close()
-        proxy_bytes = proxy_img.write_to_buffer(".jpg[Q=%d]" % PROXY_JPEG_QUALITY)
-        return proxy_bytes, width_orig, height_orig
-
-    else:
-        header = pyvips.Image.new_from_file(
-            str(source_path), fail_on=pyvips.enums.FailOn.NONE,
-        )
-        width_orig = header.width
-        height_orig = header.height
-        del header
-
-        proxy_img = pyvips.Image.thumbnail(
-            str(source_path), PROXY_LONG_EDGE,
-            height=PROXY_LONG_EDGE,
-            size=pyvips.enums.Size.DOWN,
-        ).copy_memory()
-        proxy_bytes = proxy_img.write_to_buffer(".jpg[Q=%d]" % PROXY_JPEG_QUALITY)
-        return proxy_bytes, width_orig, height_orig
+    from src.cli.proxy_gen import generate_proxy_bytes
+    return generate_proxy_bytes(source_path)
 
 
 def _build_exif_payload(source_path: Path, media_type: str) -> dict:
