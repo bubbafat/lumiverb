@@ -134,6 +134,36 @@ def library_list() -> None:
     console.print(table)
 
 
+@library_app.command("update")
+def library_update(
+    name: Annotated[str, typer.Option("--name", "-n", help="Library name to update.")],
+    root_path: Annotated[str | None, typer.Option("--root-path", "-p", help="New root path on disk.")] = None,
+    new_name: Annotated[str | None, typer.Option("--new-name", help="New library name.")] = None,
+) -> None:
+    """Update a library's root path or name."""
+    if root_path is None and new_name is None:
+        console.print("[red]Provide at least --root-path or --new-name[/red]")
+        raise typer.Exit(1)
+    client = LumiverbClient()
+    resp = client.get("/v1/libraries")
+    libraries = resp.json()
+    match = next((lib for lib in libraries if lib.get("name") == name), None)
+    if match is None:
+        console.print(f"[red]Library not found: {name}[/red]")
+        raise typer.Exit(1)
+    library_id = match["library_id"]
+    payload: dict[str, str] = {}
+    if root_path is not None:
+        payload["root_path"] = root_path
+    if new_name is not None:
+        payload["name"] = new_name
+    resp = client.patch(f"/v1/libraries/{library_id}", json=payload)
+    data = resp.json()
+    console.print(f"[green]Library updated: {library_id}[/green]")
+    console.print(f"  name: {data.get('name')}")
+    console.print(f"  root_path: {data.get('root_path')}")
+
+
 @library_app.command("delete")
 def library_delete(
     name: Annotated[

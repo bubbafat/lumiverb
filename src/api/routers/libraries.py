@@ -23,6 +23,7 @@ class CreateLibraryRequest(BaseModel):
 
 class LibraryUpdateRequest(BaseModel):
     name: str | None = None
+    root_path: str | None = None
     is_public: bool | None = None
 
 
@@ -159,6 +160,8 @@ def update_library(
         raise HTTPException(status_code=404, detail="Library not found")
     if body.name is not None:
         library.name = body.name
+    if body.root_path is not None:
+        library.root_path = body.root_path
     if body.is_public is not None:
         library.is_public = body.is_public
     library.updated_at = utcnow()
