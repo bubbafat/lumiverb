@@ -514,6 +514,16 @@ export default function PeoplePage() {
     [allClusters, removedIndices],
   );
 
+  // Auto-refresh when all clusters have been dismissed/named
+  useEffect(() => {
+    if (allClusters.length > 0 && clusters.length === 0 && removedIndices.size > 0) {
+      queryClient.refetchQueries({ queryKey: ["face-clusters"] }).then(() => {
+        setRemovedIndices(new Set());
+        setFadingIndices(new Map());
+      });
+    }
+  }, [allClusters.length, clusters.length, removedIndices.size, queryClient]);
+
   const startFadeSequence = useCallback((clusterIndex: number) => {
     // Phase 1: lock (desaturated, disabled) for 400ms
     setFadingIndices((prev) => new Map(prev).set(clusterIndex, "locked"));
