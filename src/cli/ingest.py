@@ -429,14 +429,25 @@ def _face_batch_worker(
     provider.ensure_loaded()
 
     import time as _time
-    import logging as _logging
-    _log = _logging.getLogger(__name__)
+    from concurrent.futures import ThreadPoolExecutor, Future
 
     cache_path = Path(cache_dir) if cache_dir else None
     _batch_start = _time.perf_counter()
     _cache_hits = 0
     _downloads = 0
     _total_faces = 0
+
+    # Submit face results to server in background thread so detection
+    # continues while the previous POST is in flight.
+    submit_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="face-submit")
+    pending: list[tuple[str, str, Future]] = []  # (asset_id, rel_path, future)
+
+    def _submit(asset_id: str, detection_model: str, detection_model_version: str, payload: list[dict]):
+        client.post(f"/v1/assets/{asset_id}/faces", json={
+            "detection_model": detection_model,
+            "detection_model_version": detection_model_version,
+            "faces": payload,
+        })
 
     processed = failed = skipped = 0
     errors: list[dict] = []
@@ -480,16 +491,21 @@ def _face_batch_worker(
             ]
             del detections
 
-            client.post(f"/v1/assets/{asset_id}/faces", json={
-                "detection_model": provider.model_id,
-                "detection_model_version": provider.model_version,
-                "faces": payload,
-            })
-            del payload
+            fut = submit_pool.submit(_submit, asset_id, provider.model_id, provider.model_version, payload)
+            pending.append((asset_id, rel_path, fut))
+        except Exception as e:
+            failed += 1
+            errors.append({"rel_path": rel_path, "error": str(e)})
+
+    # Wait for all submissions to complete
+    for asset_id, rel_path, fut in pending:
+        try:
+            fut.result()
             processed += 1
         except Exception as e:
             failed += 1
             errors.append({"rel_path": rel_path, "error": str(e)})
+    submit_pool.shutdown(wait=True)
 
     _elapsed = _time.perf_counter() - _batch_start
     client.close()
