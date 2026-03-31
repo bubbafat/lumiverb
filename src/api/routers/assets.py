@@ -1092,7 +1092,7 @@ def list_faces(
                 bounding_box=f.bounding_box_json,
                 detection_confidence=f.detection_confidence,
                 person=(
-                    {"person_id": p.person_id, "display_name": p.display_name}
+                    {"person_id": p.person_id, "display_name": p.display_name, "dismissed": p.dismissed}
                     if (p := persons_by_face.get(f.face_id)) else None
                 ),
             )

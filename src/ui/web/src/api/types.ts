@@ -71,7 +71,7 @@ export interface FaceItem {
   face_id: string;
   bounding_box: { x: number; y: number; w: number; h: number } | null;
   detection_confidence: number | null;
-  person: { person_id: string; display_name: string } | null;
+  person: { person_id: string; display_name: string; dismissed: boolean } | null;
 }
 
 export interface FaceListResponse {

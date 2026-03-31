@@ -489,9 +489,10 @@ export function Lightbox({
                 />
                 {showFaces && facesData?.faces.map((face) => {
                   if (!face.bounding_box) return null;
-                  const identified = face.person != null;
                   const isHighlighted = highlightFaceId === face.face_id;
-                  const borderColor = isHighlighted ? "border-red-500" : identified ? "border-emerald-400" : "border-gray-500";
+                  const isDismissed = face.person?.dismissed === true;
+                  const isNamed = face.person != null && !isDismissed;
+                  const borderColor = isHighlighted ? "border-red-500" : isNamed ? "border-emerald-400" : isDismissed ? "border-gray-500" : "border-white";
                   const isPopoverTarget = assignFaceId === face.face_id;
                   return (
                     <div
@@ -510,7 +511,7 @@ export function Lightbox({
                         setNewPersonName("");
                       }}
                     >
-                      {identified && (
+                      {isNamed && (
                         <span className="absolute -bottom-5 left-0 whitespace-nowrap rounded bg-black/70 px-1 text-xs text-white">
                           {face.person!.display_name}
                         </span>
@@ -521,7 +522,7 @@ export function Lightbox({
                           className="absolute left-0 top-full z-50 mt-1 w-56 rounded-lg border border-gray-600 bg-gray-800 p-3 shadow-xl"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          {identified && assignMode === "pick" ? (
+                          {isNamed && assignMode === "pick" ? (
                             <div className="space-y-2">
                               <p className="text-xs font-bold text-white">{face.person!.display_name}</p>
                               <button
