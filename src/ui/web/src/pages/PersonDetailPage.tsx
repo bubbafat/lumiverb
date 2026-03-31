@@ -1,15 +1,21 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getPerson, updatePerson, deletePerson, listPersonFaces } from "../api/client";
 import type { PersonFaceItem } from "../api/client";
+import type { AssetPageItem } from "../api/types";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
+import { Lightbox } from "../components/Lightbox";
 
-function FaceThumbnail({ face }: { face: PersonFaceItem }) {
+function FaceThumbnail({ face, onClick }: { face: PersonFaceItem; onClick: () => void }) {
   const { url, isLoading } = useAuthenticatedImage(face.asset_id, "thumbnail");
 
   return (
-    <div className="group relative aspect-square overflow-hidden rounded-lg bg-gray-800">
+    <button
+      type="button"
+      onClick={onClick}
+      className="group relative aspect-square w-full overflow-hidden rounded-lg bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+    >
       {isLoading ? (
         <div className="h-full w-full animate-pulse bg-gray-700" />
       ) : url ? (
@@ -17,7 +23,7 @@ function FaceThumbnail({ face }: { face: PersonFaceItem }) {
       ) : (
         <div className="flex h-full w-full items-center justify-center text-gray-600">No image</div>
       )}
-    </div>
+    </button>
   );
 }
 
@@ -28,6 +34,7 @@ export default function PersonDetailPage() {
 
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState("");
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   const personQuery = useQuery({
     queryKey: ["person", personId],
@@ -69,6 +76,37 @@ export default function PersonDetailPage() {
 
   const person = personQuery.data;
   const faces = facesQuery.data?.pages.flatMap((p) => p.items) ?? [];
+
+  // Build minimal AssetPageItem[] for Lightbox
+  const lightboxAssets: AssetPageItem[] = useMemo(
+    () =>
+      faces.map((f) => ({
+        asset_id: f.asset_id,
+        rel_path: f.rel_path ?? "",
+        file_size: 0,
+        file_mtime: null,
+        sha256: null,
+        media_type: "image",
+        width: null,
+        height: null,
+        taken_at: null,
+        status: "active",
+        duration_sec: null,
+        camera_make: null,
+        camera_model: null,
+        iso: null,
+        aperture: null,
+        focal_length: null,
+        focal_length_35mm: null,
+        lens_model: null,
+        flash_fired: null,
+        gps_lat: null,
+        gps_lon: null,
+        face_count: 1,
+        created_at: null,
+      })),
+    [faces],
+  );
 
   if (personQuery.isLoading) {
     return (
@@ -163,8 +201,8 @@ export default function PersonDetailPage() {
       {/* Photo grid */}
       {faces.length > 0 && (
         <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
-          {faces.map((face) => (
-            <FaceThumbnail key={face.face_id} face={face} />
+          {faces.map((face, i) => (
+            <FaceThumbnail key={face.face_id} face={face} onClick={() => setLightboxIndex(i)} />
           ))}
         </div>
       )}
@@ -184,6 +222,16 @@ export default function PersonDetailPage() {
 
       {faces.length === 0 && !facesQuery.isLoading && (
         <p className="text-sm text-gray-500">No photos assigned to this person yet.</p>
+      )}
+
+      {lightboxIndex !== null && lightboxAssets[lightboxIndex] && (
+        <Lightbox
+          asset={lightboxAssets[lightboxIndex]}
+          assets={lightboxAssets}
+          hasMore={facesQuery.hasNextPage}
+          onClose={() => setLightboxIndex(null)}
+          onNavigate={(i) => setLightboxIndex(i)}
+        />
       )}
     </div>
   );
