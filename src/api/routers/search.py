@@ -97,6 +97,7 @@ def search(
     color: str | None = None,
     has_rating: bool | None = None,
     has_faces: bool | None = None,
+    person_id: str | None = None,
 ) -> SearchResponse:
     """
     Search assets and video scenes by natural language query and/or date range.
@@ -391,6 +392,19 @@ def search(
 
         image_hits = [h for h in image_hits if _face_matches(h["asset_id"])]
         scene_hits = [h for h in scene_hits if _face_matches(h["asset_id"])]
+
+    # --- person_id post-filter ---
+    if person_id is not None and (image_hits or scene_hits):
+        all_hit_aids = list({h["asset_id"] for h in image_hits + scene_hits})
+        from sqlalchemy import text as _text
+        person_aids = set(
+            session.execute(
+                _text("SELECT asset_id FROM faces WHERE person_id = :pid AND asset_id = ANY(:aids)"),
+                {"pid": person_id, "aids": all_hit_aids},
+            ).scalars().all()
+        )
+        image_hits = [h for h in image_hits if h["asset_id"] in person_aids]
+        scene_hits = [h for h in scene_hits if h["asset_id"] in person_aids]
 
     # --- Merge, deduplicate images by asset_id, sort by score ---
     seen_images: dict[str, dict] = {}

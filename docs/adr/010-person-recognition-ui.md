@@ -11,7 +11,7 @@ Proposed
 | 1 | Face search filter + lightbox bounding box overlay | Done |
 | 2 | Clustering API + people CRUD + people page | Done |
 | 3 | Cluster management UI + merge/rename/fix | Done |
-| 4 | Search by person name + similarity integration | Not started |
+| 4 | Search by person name + similarity integration | Done |
 
 ## Overview
 

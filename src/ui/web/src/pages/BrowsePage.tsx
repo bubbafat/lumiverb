@@ -14,6 +14,7 @@ import {
   pageAssets,
   rateAsset,
   searchAssets,
+  searchPeople,
 } from "../api/client";
 import type { PageAssetsOptions } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
@@ -196,6 +197,7 @@ export default function BrowsePage() {
   const browseHasExposure = searchParams.has("has_exposure") ? searchParams.get("has_exposure") === "true" : undefined;
   const browseHasGps = searchParams.get("has_gps") === "true";
   const browseHasFaces = searchParams.get("has_faces") === "true";
+  const browsePersonId = searchParams.get("person_id") ?? undefined;
   const browseNearLat = searchParams.get("near_lat") ? Number(searchParams.get("near_lat")) : undefined;
   const browseNearLon = searchParams.get("near_lon") ? Number(searchParams.get("near_lon")) : undefined;
   const browseNearRadiusKm = searchParams.get("near_radius_km") ? Number(searchParams.get("near_radius_km")) : undefined;
@@ -224,6 +226,7 @@ export default function BrowsePage() {
     hasExposure: browseHasExposure,
     hasGps: browseHasGps,
     hasFaces: browseHasFaces,
+    personId: browsePersonId,
     nearLat: browseNearLat,
     nearLon: browseNearLon,
     nearRadiusKm: browseNearRadiusKm,
@@ -236,7 +239,7 @@ export default function BrowsePage() {
     browseCameraMake, browseCameraModel, browseLensModel,
     browseIsoMin, browseIsoMax, browseExposureMinUs, browseExposureMaxUs,
     browseApertureMin, browseApertureMax,
-    browseFocalLengthMin, browseFocalLengthMax, browseHasExposure, browseHasGps, browseHasFaces,
+    browseFocalLengthMin, browseFocalLengthMax, browseHasExposure, browseHasGps, browseHasFaces, browsePersonId,
     browseNearLat, browseNearLon, browseNearRadiusKm,
     browseFavorite, browseStarMin, browseStarMax, browseColor,
   ]);
@@ -678,9 +681,17 @@ export default function BrowsePage() {
         path={pathPrefix ?? null}
         dateFrom={dateFrom ?? null}
         dateTo={dateTo ?? null}
-        onChangeQ={(v) => {
+        onChangeQ={async (v) => {
           if (v) {
             const { text, filters } = parseSearchQuery(v);
+            // Resolve person name to person_id
+            if (filters.person) {
+              const res = await searchPeople(filters.person, 1);
+              if (res.items.length > 0) {
+                filters.person_id = res.items[0].person_id;
+              }
+              delete filters.person;
+            }
             setSearchParams((prev) => {
               const next = new URLSearchParams(prev);
               next.set("q", text || "");
@@ -714,6 +725,7 @@ export default function BrowsePage() {
         hasExposure={browseHasExposure ?? null}
         hasGps={browseHasGps}
         hasFaces={browseHasFaces}
+        personId={browsePersonId ?? null}
         nearLat={searchParams.get("near_lat")}
         nearLon={searchParams.get("near_lon")}
         nearRadiusKm={searchParams.get("near_radius_km")}

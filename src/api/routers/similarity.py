@@ -158,6 +158,27 @@ def find_similar(
     )
     scores: dict[str, float] = {cand_id: dist for cand_id, dist in clip_candidates}
 
+    # Person-based rerank: boost candidates that share a named person with source
+    if scores:
+        from sqlalchemy import text as _sa_text
+        source_pids = set(
+            session.execute(
+                _sa_text("SELECT DISTINCT person_id FROM faces WHERE asset_id = :aid AND person_id IS NOT NULL"),
+                {"aid": asset_id},
+            ).scalars().all()
+        )
+        if source_pids:
+            cand_aids = list(scores.keys())
+            matching_aids = set(
+                session.execute(
+                    _sa_text("SELECT DISTINCT asset_id FROM faces WHERE asset_id = ANY(:aids) AND person_id = ANY(:pids)"),
+                    {"aids": cand_aids, "pids": list(source_pids)},
+                ).scalars().all()
+            )
+            for aid in matching_aids:
+                if aid in scores:
+                    scores[aid] *= 0.85  # lower distance = more similar
+
     # Sort by score ascending (lower = more similar), apply offset/limit
     ranked = sorted(scores.items(), key=lambda x: x[1])[offset : offset + limit]
 

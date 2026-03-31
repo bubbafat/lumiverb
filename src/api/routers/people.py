@@ -83,8 +83,9 @@ def list_people(
     session: Annotated[Session, Depends(get_tenant_session)],
     after: str | None = None,
     limit: int = 50,
+    q: str | None = None,
 ) -> PersonListResponse:
-    """List people sorted by face count descending."""
+    """List people sorted by face count descending. Optional q param for name search."""
     from src.repository.tenant import PersonRepository, FaceRepository
 
     if limit > 100:
@@ -93,7 +94,7 @@ def list_people(
         limit = 1
 
     repo = PersonRepository(session)
-    rows = repo.list_with_face_counts(after=after, limit=limit)
+    rows = repo.list_with_face_counts(after=after, limit=limit, q=q)
 
     items = []
     for person, face_count in rows:

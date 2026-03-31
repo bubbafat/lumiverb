@@ -101,6 +101,7 @@ export default function UnifiedBrowsePage() {
   const browseHasExposure = searchParams.has("has_exposure") ? searchParams.get("has_exposure") === "true" : undefined;
   const browseHasGps = searchParams.get("has_gps") === "true";
   const browseHasFaces = searchParams.get("has_faces") === "true";
+  const browsePersonId = searchParams.get("person_id") ?? undefined;
   const browseNearLat = searchParams.get("near_lat") ? Number(searchParams.get("near_lat")) : undefined;
   const browseNearLon = searchParams.get("near_lon") ? Number(searchParams.get("near_lon")) : undefined;
   const browseNearRadiusKm = searchParams.get("near_radius_km") ? Number(searchParams.get("near_radius_km")) : undefined;
@@ -128,6 +129,7 @@ export default function UnifiedBrowsePage() {
     hasExposure: browseHasExposure,
     hasGps: browseHasGps,
     hasFaces: browseHasFaces,
+    personId: browsePersonId,
     nearLat: browseNearLat,
     nearLon: browseNearLon,
     nearRadiusKm: browseNearRadiusKm,
@@ -141,7 +143,7 @@ export default function UnifiedBrowsePage() {
     browseCameraMake, browseCameraModel, browseLensModel,
     browseIsoMin, browseIsoMax, browseExposureMinUs, browseExposureMaxUs,
     browseApertureMin, browseApertureMax,
-    browseFocalLengthMin, browseFocalLengthMax, browseHasExposure, browseHasGps, browseHasFaces,
+    browseFocalLengthMin, browseFocalLengthMax, browseHasExposure, browseHasGps, browseHasFaces, browsePersonId,
     browseNearLat, browseNearLon, browseNearRadiusKm,
     browseFavorite, browseStarMin, browseStarMax, browseColor,
     browseLibraryId,
@@ -492,6 +494,7 @@ export default function UnifiedBrowsePage() {
         hasExposure={browseHasExposure ?? null}
         hasGps={browseHasGps}
         hasFaces={browseHasFaces}
+        personId={browsePersonId ?? null}
         nearLat={searchParams.get("near_lat")}
         nearLon={searchParams.get("near_lon")}
         nearRadiusKm={searchParams.get("near_radius_km")}

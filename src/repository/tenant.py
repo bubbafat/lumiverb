@@ -392,6 +392,7 @@ class AssetRepository:
         missing_embeddings: bool = False,
         missing_faces: bool = False,
         has_faces: bool | None = None,
+        person_id: str | None = None,
         *,
         sort: str = "taken_at",
         direction: str = "desc",
@@ -498,6 +499,9 @@ class AssetRepository:
             conditions.append("a.face_count > 0")
         elif has_faces is False:
             conditions.append("(a.face_count IS NULL OR a.face_count = 0)")
+        if person_id:
+            conditions.append("a.asset_id IN (SELECT asset_id FROM faces WHERE person_id = :person_id)")
+            params["person_id"] = person_id
 
         # --- Media type filter ---
         if media_types:
@@ -1967,6 +1971,7 @@ class UnifiedBrowseRepository:
         color: list[str] | None = None,
         has_rating: bool | None = None,
         has_faces: bool | None = None,
+        person_id: str | None = None,
     ) -> list[Asset]:
         """Keyset pagination across all libraries. Same filter support as page_by_library."""
         import base64 as _b64
@@ -2037,6 +2042,9 @@ class UnifiedBrowseRepository:
             conditions.append("a.face_count > 0")
         elif has_faces is False:
             conditions.append("(a.face_count IS NULL OR a.face_count = 0)")
+        if person_id:
+            conditions.append("a.asset_id IN (SELECT asset_id FROM faces WHERE person_id = :person_id)")
+            params["person_id"] = person_id
 
         # --- Media type filter ---
         if media_types:
@@ -2532,16 +2540,22 @@ class PersonRepository:
         *,
         after: str | None = None,
         limit: int = 50,
+        q: str | None = None,
     ) -> list[tuple[Person, int]]:
         """Return people with face counts, sorted by face count desc.
 
         Cursor is base64-encoded JSON {"count": N, "id": person_id}.
+        Optional q filters by display_name (case-insensitive substring match).
         Returns list of (Person, face_count) tuples.
         """
         import base64 as _b64
 
         conditions = []
         params: dict[str, object] = {"limit": limit}
+
+        if q:
+            conditions.append("LOWER(p.display_name) LIKE '%' || LOWER(:q) || '%'")
+            params["q"] = q
 
         if after:
             try:
@@ -2708,6 +2722,7 @@ class PersonRepository:
                 text("UPDATE faces SET person_id = :pid WHERE face_id = ANY(:fids)"),
                 {"pid": person_id, "fids": face_ids},
             )
+            _mark_clusters_dirty(self._session)
 
     def _recompute_centroid(self, person_id: str) -> None:
         """Recompute centroid_vector as mean of all matched face embeddings (no commit)."""

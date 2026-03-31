@@ -66,6 +66,10 @@ const FILTER_PATTERNS: { regex: RegExp; handler: (match: RegExpMatchArray) => Re
     regex: /\bhas:faces\b/i,
     handler: () => ({ has_faces: "true" }),
   },
+  {
+    regex: /\bperson:"([^"]+)"/i,
+    handler: (m) => ({ person: m[1] }),
+  },
 ];
 
 export function parseSearchQuery(query: string): ParsedQuery {

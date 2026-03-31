@@ -225,6 +225,7 @@ export interface PageAssetsOptions {
   hasExposure?: boolean;
   hasGps?: boolean;
   hasFaces?: boolean;
+  personId?: string;
   nearLat?: number;
   nearLon?: number;
   nearRadiusKm?: number;
@@ -264,6 +265,7 @@ export async function pageAssets(
   if (opts?.hasExposure != null) params.set("has_exposure", String(opts.hasExposure));
   if (opts?.hasGps) params.set("has_gps", "true");
   if (opts?.hasFaces) params.set("has_faces", "true");
+  if (opts?.personId) params.set("person_id", opts.personId);
   if (opts?.nearLat != null) params.set("near_lat", String(opts.nearLat));
   if (opts?.nearLon != null) params.set("near_lon", String(opts.nearLon));
   if (opts?.nearRadiusKm != null) params.set("near_radius_km", String(opts.nearRadiusKm));
@@ -304,6 +306,7 @@ export async function browseAll(
   if (opts?.hasExposure != null) params.set("has_exposure", String(opts.hasExposure));
   if (opts?.hasGps) params.set("has_gps", "true");
   if (opts?.hasFaces) params.set("has_faces", "true");
+  if (opts?.personId) params.set("person_id", opts.personId);
   if (opts?.nearLat != null) params.set("near_lat", String(opts.nearLat));
   if (opts?.nearLon != null) params.set("near_lon", String(opts.nearLon));
   if (opts?.nearRadiusKm != null) params.set("near_radius_km", String(opts.nearRadiusKm));
@@ -383,6 +386,12 @@ export async function createPerson(displayName: string, faceIds?: string[]): Pro
   const body: Record<string, unknown> = { display_name: displayName };
   if (faceIds) body.face_ids = faceIds;
   return apiFetch<PersonItem>("/people", { method: "POST", body });
+}
+
+/** Search people by name (typeahead). */
+export async function searchPeople(q: string, limit = 10): Promise<PersonListResponse> {
+  const params = new URLSearchParams({ q, limit: String(limit) });
+  return apiFetch<PersonListResponse>(`/people?${params}`);
 }
 
 /** Get a person by ID. */
@@ -483,6 +492,8 @@ export async function searchAssets(params: {
   starMax?: number;
   color?: string;
   hasRating?: boolean;
+  hasFaces?: boolean;
+  personId?: string;
 }): Promise<SearchResponse> {
   const qs = new URLSearchParams({ q: params.q });
   if (params.libraryId) qs.set("library_id", params.libraryId);
@@ -497,6 +508,8 @@ export async function searchAssets(params: {
   if (params.starMax != null) qs.set("star_max", String(params.starMax));
   if (params.color) qs.set("color", params.color);
   if (params.hasRating != null) qs.set("has_rating", String(params.hasRating));
+  if (params.hasFaces) qs.set("has_faces", "true");
+  if (params.personId) qs.set("person_id", params.personId);
   return apiFetch<SearchResponse>(`/search?${qs.toString()}`);
 }
 

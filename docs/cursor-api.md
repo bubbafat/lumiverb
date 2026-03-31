@@ -206,7 +206,7 @@ All under `/v1/assets`; require tenant auth. List/get endpoints return only acti
 
 People are tenant-scoped — a person named in one library is recognized across all libraries.
 
-- **GET /v1/people** — Cursor-paginated list of people sorted by face count descending. Query: `after`, `limit` (default 50, max 100). Returns `{ "items": [{ "person_id", "display_name", "face_count", "representative_face_id", "representative_asset_id", "confirmation_count" }], "next_cursor" }`.
+- **GET /v1/people** — Cursor-paginated list of people sorted by face count descending. Query: `after`, `limit` (default 50, max 100), `q` (optional name search, case-insensitive substring match). Returns `{ "items": [{ "person_id", "display_name", "face_count", "representative_face_id", "representative_asset_id", "confirmation_count" }], "next_cursor" }`.
 - **POST /v1/people** — Create a named person. Body: `{ "display_name": str, "face_ids": [str] | null }`. If `face_ids` provided, assigns those faces and computes centroid. Returns 409 if any face is already assigned. Returns 201 `PersonItem`.
 - **GET /v1/people/{person_id}** — Get a person by ID. Returns `PersonItem` or 404.
 - **PATCH /v1/people/{person_id}** — Update display name. Body: `{ "display_name": str }`. Returns `PersonItem` or 404.

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import type { FacetsResponse } from "../api/types";
 import { RATING_COLORS, COLOR_HEX } from "../api/types";
 import { formatExposure } from "../lib/format";
+import { searchPeople, getPerson } from "../api/client";
 
 interface DatePreset {
   label: string;
@@ -93,6 +95,7 @@ interface FilterBarProps {
   hasExposure: boolean | null;
   hasGps: boolean;
   hasFaces: boolean;
+  personId: string | null;
   nearLat: string | null;
   nearLon: string | null;
   nearRadiusKm: string | null;
@@ -103,6 +106,85 @@ interface FilterBarProps {
   onChangeFilter: (key: string, value: string | null) => void;
   onChangeFilters?: (changes: Record<string, string | null>) => void;
   facets: FacetsResponse | null;
+}
+
+function PersonChiclet({ personId, onClear }: { personId: string; onClear: () => void }) {
+  const { data } = useQuery({
+    queryKey: ["person", personId],
+    queryFn: () => getPerson(personId),
+  });
+  return <Chiclet label={`Person: ${data?.display_name ?? "..."}`} onClear={onClear} />;
+}
+
+function PersonFilterDropdown({
+  personId,
+  onSelect,
+}: {
+  personId: string | null;
+  onSelect: (personId: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+
+  const { data } = useQuery({
+    queryKey: ["people-search", q],
+    queryFn: () => searchPeople(q || "", 10),
+    enabled: open,
+  });
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  if (personId) return null; // already filtered, shown as chiclet
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="text-xs text-gray-400 hover:text-gray-200"
+      >
+        Person...
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-50 mt-1 w-56 rounded-lg border border-gray-600 bg-gray-800 p-2 shadow-xl">
+          <input
+            type="text"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search people..."
+            className="w-full rounded border border-gray-600 bg-gray-900 px-2 py-1 text-xs text-white focus:border-indigo-500 focus:outline-none"
+            autoFocus
+          />
+          <div className="mt-1 max-h-40 overflow-y-auto">
+            {(data?.items ?? []).map((p) => (
+              <button
+                key={p.person_id}
+                type="button"
+                onClick={() => {
+                  onSelect(p.person_id);
+                  setOpen(false);
+                  setQ("");
+                }}
+                className="w-full rounded px-2 py-1 text-left text-xs text-gray-200 hover:bg-gray-700"
+              >
+                {p.display_name} <span className="text-gray-500">({p.face_count})</span>
+              </button>
+            ))}
+            {data && data.items.length === 0 && q && (
+              <p className="px-2 py-1 text-xs text-gray-500">No people found</p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function FilterBar({
@@ -132,6 +214,7 @@ export function FilterBar({
   hasExposure,
   hasGps,
   hasFaces,
+  personId,
   nearLat,
   nearLon,
   nearRadiusKm,
@@ -472,6 +555,9 @@ export function FilterBar({
           {hasFaces && (
             <Chiclet label="Has faces" onClear={() => onChangeFilter("has_faces", null)} />
           )}
+          {personId && (
+            <PersonChiclet personId={personId} onClear={() => onChangeFilter("person_id", null)} />
+          )}
           {nearLat && nearLon && (
             <Chiclet
               label={`Within ${nearRadiusKm ?? "1"}km`}
@@ -682,6 +768,12 @@ export function FilterBar({
               Has faces ({facets.has_face_count})
             </label>
           )}
+
+          {/* Person filter */}
+          <PersonFilterDropdown
+            personId={personId}
+            onSelect={(pid) => onChangeFilter("person_id", pid)}
+          />
 
           {/* Geo-proximity radius selector (only when near_lat is set) */}
           {nearLat && nearLon && (

@@ -91,6 +91,7 @@ def browse_assets(
     color: str | None = None,
     has_rating: bool | None = None,
     has_faces: bool | None = None,
+    person_id: str | None = None,
 ) -> BrowseResponse:
     """Cross-library paginated browse with full filter support."""
     if limit > 500:
@@ -166,6 +167,7 @@ def browse_assets(
         color=color_list,
         has_rating=has_rating,
         has_faces=has_faces,
+        person_id=person_id,
     )
 
     # Resolve library names
