@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getAsset, findSimilar, listFaces, listPeople, assignFace } from "../api/client";
+import { getAsset, findSimilar, listFaces, listPeople, assignFace, unassignFace } from "../api/client";
 import { useLocalStorage } from "../lib/useLocalStorage";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 import type { AssetPageItem, AssetRating, RatingColor, SimilarHit } from "../api/types";
@@ -270,6 +270,17 @@ export function Lightbox({
     },
   });
 
+  const unassignMutation = useMutation({
+    mutationFn: (faceId: string) => unassignFace(faceId),
+    onSuccess: () => {
+      setAssignFaceId(null);
+      queryClient.invalidateQueries({ queryKey: ["faces", asset.asset_id] });
+      queryClient.invalidateQueries({ queryKey: ["people"] });
+      queryClient.invalidateQueries({ queryKey: ["people-for-assign"] });
+      queryClient.invalidateQueries({ queryKey: ["face-clusters"] });
+    },
+  });
+
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       const el = document.activeElement as HTMLElement | null;
@@ -490,13 +501,9 @@ export function Lightbox({
                       }}
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (identified) {
-                          navigate(`/people/${face.person!.person_id}`);
-                        } else {
-                          setAssignFaceId(isPopoverTarget ? null : face.face_id);
-                          setAssignMode("pick");
-                          setNewPersonName("");
-                        }
+                        setAssignFaceId(isPopoverTarget ? null : face.face_id);
+                        setAssignMode("pick");
+                        setNewPersonName("");
                       }}
                     >
                       {identified && (
@@ -504,13 +511,57 @@ export function Lightbox({
                           {face.person!.display_name}
                         </span>
                       )}
-                      {/* Assignment popover */}
+                      {/* Face popover — assign (unidentified) or manage (identified) */}
                       {isPopoverTarget && (
                         <div
                           className="absolute left-0 top-full z-50 mt-1 w-56 rounded-lg border border-gray-600 bg-gray-800 p-3 shadow-xl"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          {assignMode === "pick" ? (
+                          {identified && assignMode === "pick" ? (
+                            <div className="space-y-2">
+                              <p className="text-xs font-bold text-white">{face.person!.display_name}</p>
+                              <button
+                                type="button"
+                                onClick={() => { setAssignFaceId(null); navigate(`/people/${face.person!.person_id}`); }}
+                                className="w-full rounded px-2 py-1 text-left text-xs text-gray-200 hover:bg-gray-700"
+                              >
+                                View person
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => unassignMutation.mutate(face.face_id)}
+                                disabled={unassignMutation.isPending}
+                                className="w-full rounded px-2 py-1 text-left text-xs text-red-400 hover:bg-gray-700"
+                              >
+                                {unassignMutation.isPending ? "Removing..." : "Remove tag"}
+                              </button>
+                              <hr className="border-gray-700" />
+                              <p className="text-xs text-gray-500">Change to:</p>
+                              {(peopleData?.items ?? []).filter((p) => p.person_id !== face.person!.person_id).length > 0 && (
+                                <div className="max-h-24 space-y-1 overflow-y-auto">
+                                  {peopleData!.items
+                                    .filter((p) => p.person_id !== face.person!.person_id)
+                                    .map((p) => (
+                                      <button
+                                        key={p.person_id}
+                                        type="button"
+                                        onClick={async () => {
+                                          await unassignFace(face.face_id);
+                                          assignMutation.mutate({ faceId: face.face_id, personId: p.person_id });
+                                        }}
+                                        disabled={assignMutation.isPending}
+                                        className="w-full rounded px-2 py-1 text-left text-xs text-gray-200 hover:bg-gray-700"
+                                      >
+                                        {p.display_name} <span className="text-gray-500">({p.face_count})</span>
+                                      </button>
+                                    ))}
+                                </div>
+                              )}
+                              {unassignMutation.isError && (
+                                <p className="mt-1 text-xs text-red-400">{unassignMutation.error?.message ?? "Failed"}</p>
+                              )}
+                            </div>
+                          ) : assignMode === "pick" ? (
                             <div className="space-y-2">
                               <p className="text-xs font-medium text-gray-300">Who is this?</p>
                               {(peopleData?.items ?? []).length > 0 && (
