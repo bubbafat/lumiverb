@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { listDismissedPeople, undismissPerson, getApiKey } from "../api/client";
 import type { PersonItem } from "../api/client";
+import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 
 function useFaceCrop(faceId: string): { url: string | null; isLoading: boolean } {
   const [url, setUrl] = useState<string | null>(null);
@@ -48,6 +49,14 @@ function DismissedPersonCard({
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState("");
   const crop = useFaceCrop(person.representative_face_id ?? "");
+  const hasCrop = !!crop.url;
+  const fallback = useAuthenticatedImage(
+    person.representative_asset_id ?? "",
+    "thumbnail",
+    { enabled: !hasCrop && !crop.isLoading && !!person.representative_asset_id },
+  );
+  const imgUrl = crop.url ?? fallback.url;
+  const imgLoading = crop.isLoading || (!hasCrop && fallback.isLoading);
 
   const restoreMutation = useMutation({
     mutationFn: (displayName: string) => undismissPerson(person.person_id, displayName),
@@ -57,10 +66,10 @@ function DismissedPersonCard({
   return (
     <div className="flex items-center gap-4 rounded-xl border border-gray-700 bg-gray-800/30 p-4">
       <div className="h-16 w-16 flex-shrink-0 overflow-hidden rounded-full bg-gray-700">
-        {crop.isLoading ? (
+        {imgLoading ? (
           <div className="h-full w-full animate-pulse bg-gray-600" />
-        ) : crop.url ? (
-          <img src={crop.url} alt="" className="h-full w-full object-cover" />
+        ) : imgUrl ? (
+          <img src={imgUrl} alt="" className="h-full w-full object-cover" />
         ) : (
           <div className="flex h-full w-full items-center justify-center text-lg text-gray-500">?</div>
         )}

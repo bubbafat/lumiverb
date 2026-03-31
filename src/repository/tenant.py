@@ -2694,6 +2694,19 @@ class PersonRepository:
         if face_ids:
             self._assign_faces(person_id, face_ids)
             self._recompute_centroid(person_id)
+            # Pick highest-confidence face as representative
+            rep = self._session.execute(
+                text(
+                    "SELECT f.face_id FROM faces f "
+                    "JOIN face_person_matches m ON m.face_id = f.face_id "
+                    "WHERE m.person_id = :pid "
+                    "ORDER BY f.detection_confidence DESC NULLS LAST "
+                    "LIMIT 1"
+                ),
+                {"pid": person_id},
+            ).scalar()
+            if rep:
+                person.representative_face_id = rep
 
         self._session.commit()
         self._session.refresh(person)

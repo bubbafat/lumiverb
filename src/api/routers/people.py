@@ -189,6 +189,23 @@ def list_dismissed_people(
 
     items = []
     for person, face_count in rows:
+        # Backfill representative face if missing (for dismissed people created before the fix)
+        if not person.representative_face_id and face_count > 0:
+            from sqlalchemy import text as sa_text
+            rep = session.execute(
+                sa_text(
+                    "SELECT f.face_id FROM faces f "
+                    "JOIN face_person_matches m ON m.face_id = f.face_id "
+                    "WHERE m.person_id = :pid "
+                    "ORDER BY f.detection_confidence DESC NULLS LAST LIMIT 1"
+                ),
+                {"pid": person.person_id},
+            ).scalar()
+            if rep:
+                person.representative_face_id = rep
+                session.add(person)
+                session.commit()
+
         rep_asset_id = None
         if person.representative_face_id:
             from src.models.tenant import Face
