@@ -86,22 +86,65 @@ _FACE_PROXY_LONG_EDGE = 1280  # InsightFace uses 640x640 internally; 1280 is ple
 
 
 def generate_face_proxy(source_path: Path) -> bytes:
-    """Generate a JPEG proxy suitable for face detection using PIL.
+    """Generate a JPEG proxy suitable for face detection.
 
-    This is a lightweight alternative to ``_generate_proxy_bytes`` that
-    does not require pyvips/libvips.  It handles standard image formats
-    and RAW (via rawpy embedded thumbnail or full demosaic).
+    Tries pyvips first (faster, lower memory for large images), falls
+    back to PIL if pyvips/libvips is unavailable.  Handles standard
+    image formats and RAW (via rawpy).
 
     Returns JPEG bytes resized to fit within 1280px on the long edge.
     """
+    try:
+        return _generate_face_proxy_vips(source_path)
+    except Exception:
+        return _generate_face_proxy_pil(source_path)
+
+
+def _generate_face_proxy_vips(source_path: Path) -> bytes:
+    """Generate face proxy using pyvips (fast path)."""
+    import pyvips
+
+    from src.core.file_extensions import RAW_EXTENSIONS
+
+    ext = source_path.suffix.lower()
+
+    if ext in RAW_EXTENSIONS:
+        import rawpy
+
+        # Try embedded JPEG thumbnail first
+        with rawpy.imread(str(source_path)) as raw:
+            thumb = raw.extract_thumb()
+        if thumb.format == rawpy.ThumbFormat.JPEG:
+            img = pyvips.Image.new_from_buffer(bytes(thumb.data), "")
+        else:
+            with rawpy.imread(str(source_path)) as raw:
+                rgb = raw.postprocess()
+            h, w, bands = rgb.shape
+            img = pyvips.Image.new_from_memory(rgb.tobytes(), w, h, bands, "uchar")
+    else:
+        img = pyvips.Image.new_from_file(
+            str(source_path),
+            access=pyvips.enums.Access.SEQUENTIAL,
+            fail_on=pyvips.enums.FailOn.NONE,
+        )
+
+    proxy = img.thumbnail_image(
+        _FACE_PROXY_LONG_EDGE,
+        height=_FACE_PROXY_LONG_EDGE,
+        size=pyvips.enums.Size.DOWN,
+    )
+    return proxy.write_to_buffer(".jpg[Q=75]")
+
+
+def _generate_face_proxy_pil(source_path: Path) -> bytes:
+    """Generate face proxy using PIL (fallback)."""
     import io as _io
 
     from PIL import Image as PILImage
 
-    ext = source_path.suffix.lower()
-
-    # RAW files: try embedded JPEG thumbnail first, then full demosaic
     from src.core.file_extensions import RAW_EXTENSIONS
+
+    ext = source_path.suffix.lower()
 
     if ext in RAW_EXTENSIONS:
         import rawpy
