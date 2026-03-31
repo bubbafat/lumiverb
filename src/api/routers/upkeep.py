@@ -52,8 +52,14 @@ class CleanupResultModel(BaseModel):
     dry_run: bool = True
 
 
+class FacePropagateResult(BaseModel):
+    assigned: int = 0
+    scanned: int = 0
+
+
 class UpkeepResult(BaseModel):
     search_sync: SearchSyncResult
+    face_propagate: FacePropagateResult = FacePropagateResult()
 
 
 def _is_admin_key(authorization: str | None) -> bool:
@@ -63,6 +69,54 @@ def _is_admin_key(authorization: str | None) -> bool:
     token = authorization[7:].strip()
     settings = get_settings()
     return bool(settings.admin_key and token == settings.admin_key)
+
+
+def _propagate_faces_all_tenants() -> dict:
+    """Run face propagation across all tenants."""
+    from src.core.database import get_control_session, get_tenant_session
+    from src.repository.control_plane import TenantRepository
+    from src.repository.tenant import FaceRepository
+
+    totals = {"assigned": 0, "scanned": 0}
+
+    with get_control_session() as ctrl:
+        tenants = TenantRepository(ctrl).list_all()
+
+    for tenant in tenants:
+        try:
+            with get_tenant_session(tenant.tenant_id) as session:
+                result = FaceRepository(session).propagate_assignments()
+                totals["assigned"] += result["assigned"]
+                totals["scanned"] += result["scanned"]
+        except Exception as exc:
+            logger.warning("Face propagation failed for tenant %s: %s", tenant.tenant_id, exc)
+
+    return totals
+
+
+def _propagate_faces_single_tenant(authorization: str | None) -> dict:
+    """Run face propagation for the tenant resolved from the API key."""
+    from src.core.database import get_control_session, get_engine_for_url
+    from src.repository.control_plane import ApiKeyRepository, TenantDbRoutingRepository
+    from src.repository.tenant import FaceRepository
+    from sqlmodel import Session as TenantSession
+
+    if not authorization or not authorization.startswith("Bearer "):
+        return {"assigned": 0, "scanned": 0}
+
+    token = authorization[7:].strip()
+    with get_control_session() as ctrl:
+        key_repo = ApiKeyRepository(ctrl)
+        api_key = key_repo.get_by_plaintext(token)
+        if api_key is None:
+            return {"assigned": 0, "scanned": 0}
+        routing = TenantDbRoutingRepository(ctrl).get_by_tenant_id(api_key.tenant_id)
+        if routing is None:
+            return {"assigned": 0, "scanned": 0}
+
+    engine = get_engine_for_url(routing.connection_string)
+    with TenantSession(engine) as session:
+        return FaceRepository(session).propagate_assignments()
 
 
 def _reset_search_synced_at(session) -> None:
@@ -131,15 +185,20 @@ def _run_sweep_single_tenant(authorization: str | None, force: bool = False) -> 
 def run_upkeep(
     authorization: Annotated[str | None, Header()] = None,
 ) -> UpkeepResult:
-    """Run all periodic upkeep tasks.
+    """Run all periodic upkeep tasks: search sync + face propagation.
 
     With admin key: sweeps all tenants. With tenant API key: sweeps that tenant only.
     """
     if _is_admin_key(authorization):
         sync_result = _run_sweep_all_tenants()
+        prop_result = _propagate_faces_all_tenants()
     else:
         sync_result = _run_sweep_single_tenant(authorization)
-    return UpkeepResult(search_sync=SearchSyncResult(**sync_result))
+        prop_result = _propagate_faces_single_tenant(authorization)
+    return UpkeepResult(
+        search_sync=SearchSyncResult(**sync_result),
+        face_propagate=FacePropagateResult(**prop_result),
+    )
 
 
 @router.post("/search-sync", response_model=SearchSyncResult)

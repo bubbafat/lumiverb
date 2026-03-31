@@ -2403,6 +2403,80 @@ class FaceRepository:
                 )
         self._session.flush()
 
+    def propagate_assignments(self, batch_size: int = 5000) -> dict:
+        """Scan unassigned faces and auto-assign to known people by centroid proximity.
+
+        Returns {"assigned": N, "scanned": N}.
+        Called by the upkeep timer to continuously improve tagging as users
+        manually assign faces and centroids shift.
+        """
+        import numpy as np
+
+        # Get all people with centroids
+        people_rows = self._session.execute(
+            text("SELECT person_id, centroid_vector::text FROM people WHERE centroid_vector IS NOT NULL")
+        ).all()
+        if not people_rows:
+            return {"assigned": 0, "scanned": 0}
+
+        person_ids = [r[0] for r in people_rows]
+        centroids = np.array(
+            [[float(x) for x in r[1].strip("[]").split(",")] for r in people_rows],
+            dtype=np.float32,
+        )
+        norms = np.linalg.norm(centroids, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        centroids = centroids / norms
+
+        # Get unassigned faces with embeddings
+        rows = self._session.execute(
+            text("""
+                SELECT f.face_id, f.embedding_vector::text
+                FROM faces f
+                LEFT JOIN face_person_matches m ON m.face_id = f.face_id
+                WHERE m.match_id IS NULL AND f.embedding_vector IS NOT NULL
+                ORDER BY f.detection_confidence DESC NULLS LAST
+                LIMIT :limit
+            """),
+            {"limit": batch_size},
+        ).all()
+
+        if not rows:
+            return {"assigned": 0, "scanned": 0}
+
+        assigned = 0
+        for face_id, emb_text in rows:
+            vec = np.array([float(x) for x in emb_text.strip("[]").split(",")], dtype=np.float32)
+            norm = np.linalg.norm(vec)
+            if norm > 0:
+                vec = vec / norm
+
+            distances = 1.0 - (centroids @ vec)
+            best_idx = int(np.argmin(distances))
+            best_dist = float(distances[best_idx])
+
+            if best_dist < self.AUTO_ASSIGN_THRESHOLD:
+                best_person_id = person_ids[best_idx]
+                match_id = "fpm_" + str(ULID())
+                self._session.add(FacePersonMatch(
+                    match_id=match_id,
+                    face_id=face_id,
+                    person_id=best_person_id,
+                    confidence=1.0 - best_dist,
+                    confirmed=False,
+                ))
+                self._session.execute(
+                    text("UPDATE faces SET person_id = :pid WHERE face_id = :fid"),
+                    {"pid": best_person_id, "fid": face_id},
+                )
+                assigned += 1
+
+        if assigned > 0:
+            _mark_clusters_dirty(self._session)
+            self._session.commit()
+
+        return {"assigned": assigned, "scanned": len(rows)}
+
     def get_by_asset_id(self, asset_id: str) -> list[Face]:
         """Return all faces for an asset, ordered by confidence desc."""
         stmt = (
