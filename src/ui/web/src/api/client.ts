@@ -473,6 +473,11 @@ export async function listDismissedPeople(cursor?: string, limit = 50): Promise<
   return apiFetch<PersonListResponse>(`/people/dismissed?${params}`);
 }
 
+/** Get named people sorted by similarity to a person's centroid. */
+export async function getNearestPeopleForPerson(personId: string, limit = 5): Promise<NearestPersonItem[]> {
+  return apiFetch<NearestPersonItem[]>(`/people/${personId}/nearest?limit=${limit}`);
+}
+
 /** Restore a dismissed person and give them a name. */
 export async function undismissPerson(personId: string, displayName: string): Promise<PersonItem> {
   return apiFetch<PersonItem>(`/people/${personId}/undismiss`, {

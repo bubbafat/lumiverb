@@ -233,6 +233,71 @@ def list_dismissed_people(
     return PersonListResponse(items=items, next_cursor=next_cursor)
 
 
+class NearestPersonItem(BaseModel):
+    person_id: str
+    display_name: str
+    face_count: int
+    distance: float
+
+
+@router.get("/{person_id}/nearest", response_model=list[NearestPersonItem])
+def nearest_people_for_person(
+    person_id: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    limit: int = 5,
+) -> list[NearestPersonItem]:
+    """Return named people sorted by cosine distance to this person's centroid."""
+    import numpy as np
+    from sqlalchemy import text as sa_text
+    from src.repository.tenant import PersonRepository
+
+    if limit > 20:
+        limit = 20
+
+    repo = PersonRepository(session)
+    person = repo.get_by_id(person_id)
+    if person is None or person.centroid_vector is None:
+        return []
+
+    centroid = np.array(person.centroid_vector, dtype=np.float32)
+    norm = np.linalg.norm(centroid)
+    if norm > 0:
+        centroid = centroid / norm
+
+    people_rows = session.execute(
+        sa_text("""
+            SELECT p.person_id, p.display_name, p.centroid_vector::text,
+                   COUNT(m.match_id)::int AS face_count
+            FROM people p
+            LEFT JOIN face_person_matches m ON m.person_id = p.person_id
+            WHERE p.dismissed = false AND p.centroid_vector IS NOT NULL
+                  AND p.person_id != :exclude_id
+            GROUP BY p.person_id
+        """),
+        {"exclude_id": person_id},
+    ).all()
+
+    if not people_rows:
+        return []
+
+    results = []
+    for row in people_rows:
+        pvec = np.array([float(x) for x in row[2].strip("[]").split(",")], dtype=np.float32)
+        pnorm = np.linalg.norm(pvec)
+        if pnorm > 0:
+            pvec = pvec / pnorm
+        dist = float(1.0 - np.dot(centroid, pvec))
+        results.append(NearestPersonItem(
+            person_id=row[0],
+            display_name=row[1],
+            face_count=row[3],
+            distance=round(dist, 4),
+        ))
+
+    results.sort(key=lambda x: x.distance)
+    return results[:limit]
+
+
 class UndismissRequest(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=255)
 
@@ -605,13 +670,6 @@ def dismiss_cluster(
     person = person_repo.create_dismissed(face_ids=face_ids)
     _mark_clusters_dirty(session)
     session.commit()
-
-
-class NearestPersonItem(BaseModel):
-    person_id: str
-    display_name: str
-    face_count: int
-    distance: float
 
 
 @faces_router.get("/clusters/{cluster_index}/nearest-people", response_model=list[NearestPersonItem])

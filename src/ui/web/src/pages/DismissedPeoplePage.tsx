@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { Link } from "react-router-dom";
-import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { listDismissedPeople, undismissPerson, getApiKey } from "../api/client";
+import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { listDismissedPeople, undismissPerson, getNearestPeopleForPerson, searchPeople, getApiKey } from "../api/client";
 import type { PersonItem } from "../api/client";
 import type { AssetPageItem } from "../api/types";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
@@ -48,8 +48,11 @@ function DismissedPersonCard({
   person: PersonItem;
   onRestored: () => void;
 }) {
-  const [naming, setNaming] = useState(false);
-  const [name, setName] = useState("");
+  const [mode, setMode] = useState<"idle" | "naming">("idle");
+  const [newName, setNewName] = useState("");
+  const [assignSearch, setAssignSearch] = useState("");
+  const [searchResults, setSearchResults] = useState<PersonItem[]>([]);
+  const [searching, setSearching] = useState(false);
   const [showLightbox, setShowLightbox] = useState(false);
   const crop = useFaceCrop(person.representative_face_id ?? "");
   const hasCrop = !!crop.url;
@@ -90,10 +93,34 @@ function DismissedPersonCard({
     };
   }, [person.representative_asset_id]);
 
+  const nearestQuery = useQuery({
+    queryKey: ["nearest-people-person", person.person_id],
+    queryFn: () => getNearestPeopleForPerson(person.person_id, 5),
+    enabled: mode === "naming",
+    staleTime: Infinity,
+  });
+
+  useEffect(() => {
+    if (mode !== "naming" || !assignSearch.trim()) {
+      setSearchResults([]);
+      return;
+    }
+    setSearching(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await searchPeople(assignSearch.trim());
+        setSearchResults(res.items);
+      } catch { /* ignore */ }
+      setSearching(false);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [assignSearch, mode]);
+
   const restoreMutation = useMutation({
     mutationFn: (displayName: string) => undismissPerson(person.person_id, displayName),
     onSuccess: onRestored,
   });
+
 
   return (
     <div className="flex items-center gap-4 rounded-xl border border-gray-700 bg-gray-800/30 p-4">
@@ -127,49 +154,96 @@ function DismissedPersonCard({
         </p>
       </div>
 
-      {naming ? (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (name.trim()) restoreMutation.mutate(name.trim());
-          }}
-          className="flex items-center gap-2"
-        >
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Enter name..."
-            className="w-40 rounded-lg border border-gray-600 bg-gray-800 px-3 py-1.5 text-xs text-white focus:border-indigo-500 focus:outline-none"
-            autoFocus
-          />
-          <button
-            type="submit"
-            disabled={restoreMutation.isPending || !name.trim()}
-            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+      {mode === "naming" ? (
+        <div className="flex-1 space-y-2">
+          {/* Top 5 nearest suggestions */}
+          {nearestQuery.isLoading && (
+            <div className="flex gap-2">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="h-7 w-20 animate-pulse rounded-lg bg-gray-700" />
+              ))}
+            </div>
+          )}
+          {nearestQuery.data && nearestQuery.data.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {nearestQuery.data.map((np) => (
+                <button
+                  key={np.person_id}
+                  type="button"
+                  onClick={() => restoreMutation.mutate(np.display_name)}
+                  disabled={restoreMutation.isPending}
+                  className="rounded-lg bg-gray-700 px-2.5 py-1 text-xs text-gray-200 hover:bg-indigo-600 hover:text-white disabled:opacity-50 transition-colors"
+                >
+                  {np.display_name} <span className="text-gray-500">({np.face_count})</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {/* New name or search */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (newName.trim()) restoreMutation.mutate(newName.trim());
+            }}
+            className="flex gap-2"
           >
-            {restoreMutation.isPending ? "..." : "Restore"}
-          </button>
-          <button
-            type="button"
-            onClick={() => { setNaming(false); setName(""); }}
-            className="text-xs text-gray-400 hover:text-white"
-          >
-            Cancel
-          </button>
-        </form>
+            <div className="relative flex-1">
+              <input
+                type="text"
+                value={newName}
+                onChange={(e) => { setNewName(e.target.value); setAssignSearch(e.target.value); }}
+                placeholder="New name or search..."
+                className="w-full rounded-lg border border-gray-600 bg-gray-800 px-3 py-1.5 text-xs text-white focus:border-indigo-500 focus:outline-none"
+                autoFocus
+              />
+              {assignSearch.trim() && searchResults.length > 0 && (
+                <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-40 overflow-y-auto rounded-lg border border-gray-600 bg-gray-800 shadow-lg">
+                  {searchResults.map((p) => (
+                    <button
+                      key={p.person_id}
+                      type="button"
+                      onClick={() => restoreMutation.mutate(p.display_name)}
+                      disabled={restoreMutation.isPending}
+                      className="block w-full px-3 py-1.5 text-left text-xs text-gray-200 hover:bg-indigo-600 hover:text-white disabled:opacity-50"
+                    >
+                      {p.display_name} <span className="text-gray-500">({p.face_count})</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {assignSearch.trim() && searching && (
+                <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                  <div className="h-3 w-3 animate-spin rounded-full border border-gray-600 border-t-white" />
+                </div>
+              )}
+            </div>
+            <button
+              type="submit"
+              disabled={restoreMutation.isPending || !newName.trim()}
+              className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+            >
+              {restoreMutation.isPending ? "..." : "Restore"}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setMode("idle"); setNewName(""); setAssignSearch(""); setSearchResults([]); }}
+              className="text-xs text-gray-400 hover:text-white"
+            >
+              Cancel
+            </button>
+          </form>
+          {restoreMutation.isError && (
+            <p className="text-xs text-red-400">{restoreMutation.error?.message ?? "Failed"}</p>
+          )}
+        </div>
       ) : (
         <button
           type="button"
-          onClick={() => setNaming(true)}
+          onClick={() => setMode("naming")}
           className="rounded-lg border border-gray-600 px-3 py-1.5 text-xs font-medium text-gray-300 hover:bg-gray-700"
         >
           Restore &amp; Name
         </button>
-      )}
-
-      {restoreMutation.isError && (
-        <p className="text-xs text-red-400">{restoreMutation.error?.message ?? "Failed"}</p>
       )}
     </div>
   );
