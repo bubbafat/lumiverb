@@ -190,6 +190,12 @@ def _face_batch_worker(
 
     cache_path = Path(cache_dir) if cache_dir else None
 
+    import time as _time
+    _batch_start = _time.perf_counter()
+    _cache_hits = 0
+    _downloads = 0
+    _total_faces = 0
+
     processed = failed = skipped = 0
     errors: list[dict] = []
     for item in batch:
@@ -202,7 +208,9 @@ def _face_batch_worker(
                 cached = cache_path / asset_id
                 if cached.exists():
                     image_bytes = cached.read_bytes()
+                    _cache_hits += 1
             if image_bytes is None:
+                _downloads += 1
                 resp = client._client.get(client._url(f"/v1/assets/{asset_id}/proxy"))
                 if resp.status_code != 200:
                     skipped += 1
@@ -216,6 +224,7 @@ def _face_batch_worker(
             img = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
             del image_bytes
             detections = provider.detect_faces(img)
+            _total_faces += len(detections)
             img.close()
             del img
 
@@ -240,6 +249,12 @@ def _face_batch_worker(
             failed += 1
             errors.append({"rel_path": rel_path, "error": str(e)})
 
+    _elapsed = _time.perf_counter() - _batch_start
+    logger.info("faces worker: %d ok, %d fail, %d skip, %d faces found, "
+                "%d cache hits, %d downloads, %.1fs (%.0fms/img)",
+                processed, failed, skipped, _total_faces,
+                _cache_hits, _downloads, _elapsed,
+                (_elapsed / max(processed + failed + skipped, 1)) * 1000)
     return {"processed": processed, "failed": failed, "skipped": skipped, "errors": errors}
 
 
@@ -403,10 +418,14 @@ def run_repair(
                     tid = progress.add_task("Faces", total=len(assets), ok=0, fail=0)
                     pool = ctx.Pool(1, initializer=_silence_subprocess_stdout, maxtasksperchild=FACE_BATCH_LIMIT)
                     try:
+                        batch_num = 0
                         for batch_start in range(0, len(assets), FACE_BATCH_SIZE):
+                            batch_num += 1
                             batch = assets[batch_start:batch_start + FACE_BATCH_SIZE]
 
                             # Pre-generate proxy bytes from local source where possible
+                            cached_count = 0
+                            skipped_count = 0
                             if use_local:
                                 for item in batch:
                                     asset_id = item["asset_id"]
@@ -419,6 +438,7 @@ def run_repair(
                                         local_hash = compute_sha256(source)
                                         if local_hash != expected_hash:
                                             item["_skip"] = True
+                                            skipped_count += 1
                                             progress.console.print(
                                                 f"[yellow]faces ⚠[/yellow] {rel_path}: SHA mismatch (file changed since ingest, re-ingest needed)"
                                             )
@@ -426,6 +446,7 @@ def run_repair(
                                     try:
                                         jpeg_bytes = generate_face_proxy(source)
                                         proxy_cache.put(asset_id, jpeg_bytes)
+                                        cached_count += 1
                                         del jpeg_bytes
                                     except Exception:
                                         pass  # fall back to server download in worker
@@ -434,6 +455,9 @@ def run_repair(
                             batch = [item for item in batch if not item.get("_skip")]
                             if not batch:
                                 continue
+
+                            logger.info("faces batch %d: %d assets (%d cached locally, %d SHA-skipped)",
+                                        batch_num, len(batch), cached_count, skipped_count)
 
                             try:
                                 result = pool.apply(

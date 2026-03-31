@@ -57,10 +57,16 @@ def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE
                         size=pyvips.enums.Size.DOWN,
                     )
                     proxy_bytes = proxy_img.write_to_buffer(".jpg[Q=%d]" % PROXY_JPEG_QUALITY)
+                    logger.info("proxy: %s — embedded JPEG %dx%d → %dpx (%d bytes)",
+                                source_path.name, img.width, img.height, max_long_edge, len(proxy_bytes))
                     return proxy_bytes, width_orig, height_orig
+                else:
+                    logger.info("proxy: %s — embedded JPEG too small (%dx%d < %dpx), demosaicing",
+                                source_path.name, img.width, img.height, max_long_edge)
         except Exception:
             pass
 
+        logger.info("proxy: %s — RAW demosaic", source_path.name)
         with rawpy.imread(str(source_path)) as raw:
             rgb = raw.postprocess()
             _s = raw.sizes

@@ -428,7 +428,15 @@ def _face_batch_worker(
     provider = InsightFaceProvider()
     provider.ensure_loaded()
 
+    import time as _time
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+
     cache_path = Path(cache_dir) if cache_dir else None
+    _batch_start = _time.perf_counter()
+    _cache_hits = 0
+    _downloads = 0
+    _total_faces = 0
 
     processed = failed = skipped = 0
     errors: list[dict] = []
@@ -442,7 +450,9 @@ def _face_batch_worker(
                 cached = cache_path / asset_id
                 if cached.exists():
                     image_bytes = cached.read_bytes()
+                    _cache_hits += 1
             if image_bytes is None:
+                _downloads += 1
                 resp = client._client.get(client._url(f"/v1/assets/{asset_id}/artifacts/proxy"))
                 if resp.status_code != 200:
                     skipped += 1
@@ -456,6 +466,7 @@ def _face_batch_worker(
             img = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
             del image_bytes
             detections = provider.detect_faces(img)
+            _total_faces += len(detections)
             img.close()
             del img
 
@@ -480,6 +491,12 @@ def _face_batch_worker(
             failed += 1
             errors.append({"rel_path": rel_path, "error": str(e)})
 
+    _elapsed = _time.perf_counter() - _batch_start
+    _log.info("faces worker: %d ok, %d fail, %d skip, %d faces found, "
+              "%d cache hits, %d downloads, %.1fs (%.0fms/img)",
+              processed, failed, skipped, _total_faces,
+              _cache_hits, _downloads, _elapsed,
+              (_elapsed / max(processed + failed + skipped, 1)) * 1000)
     client.close()
     return {"processed": processed, "failed": failed, "skipped": skipped, "errors": errors}
 
