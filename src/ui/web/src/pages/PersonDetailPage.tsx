@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getPerson, updatePerson, deletePerson, listPersonFaces, mergePerson, searchPeople } from "../api/client";
+import { getPerson, updatePerson, deletePerson, listPersonFaces, mergePerson, searchPeople, getNearestPeopleForPerson } from "../api/client";
 import type { PersonFaceItem, PersonItem } from "../api/client";
 import type { AssetPageItem } from "../api/types";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
@@ -104,6 +104,13 @@ export default function PersonDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["people"] });
       navigate("/people");
     },
+  });
+
+  const mergeNearestQuery = useQuery({
+    queryKey: ["nearest-people-person", personId],
+    queryFn: () => getNearestPeopleForPerson(personId!, 5),
+    enabled: mergeMode && !!personId,
+    staleTime: Infinity,
   });
 
   const mergeIntoMutation = useMutation({
@@ -250,7 +257,26 @@ export default function PersonDetailPage() {
 
         <div className="ml-auto flex items-center gap-3">
           {mergeMode ? (
-            <div className="relative flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              {mergeNearestQuery.data && mergeNearestQuery.data.length > 0 && (
+                <>
+                  {mergeNearestQuery.data.map((np) => (
+                    <button
+                      key={np.person_id}
+                      type="button"
+                      onClick={() => {
+                        if (window.confirm(`Merge "${person.display_name}" into "${np.display_name}"? All faces will be moved.`)) {
+                          mergeIntoMutation.mutate(np.person_id);
+                        }
+                      }}
+                      disabled={mergeIntoMutation.isPending}
+                      className="rounded-lg bg-gray-700 px-2.5 py-1 text-xs text-gray-200 hover:bg-indigo-600 hover:text-white disabled:opacity-50 transition-colors"
+                    >
+                      {np.display_name} <span className="text-gray-500">({np.face_count})</span>
+                    </button>
+                  ))}
+                </>
+              )}
               <div className="relative">
                 <input
                   type="text"
