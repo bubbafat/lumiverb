@@ -182,6 +182,22 @@ def _run_sweep_single_tenant(authorization: str | None, force: bool = False) -> 
         return run_search_sync_sweep(session, tenant_id=tenant_id)
 
 
+def _cleanup_revoked_tokens() -> int:
+    """Remove revoked tokens older than 8 days (past any possible refresh window)."""
+    from datetime import timedelta
+    from src.core.database import get_control_session
+    from src.core.utils import utcnow
+    from src.repository.control_plane import RevokedTokenRepository
+
+    cutoff = utcnow() - timedelta(days=8)
+    try:
+        with get_control_session() as session:
+            return RevokedTokenRepository(session).cleanup_expired(cutoff)
+    except Exception as exc:
+        logger.warning("Revoked token cleanup failed: %s", exc)
+        return 0
+
+
 @router.post("", response_model=UpkeepResult)
 def run_upkeep(
     authorization: Annotated[str | None, Header()] = None,
@@ -193,6 +209,7 @@ def run_upkeep(
     if _is_admin_key(authorization):
         sync_result = _run_sweep_all_tenants()
         prop_result = _propagate_faces_all_tenants()
+        _cleanup_revoked_tokens()
     else:
         sync_result = _run_sweep_single_tenant(authorization)
         prop_result = _propagate_faces_single_tenant(authorization)
