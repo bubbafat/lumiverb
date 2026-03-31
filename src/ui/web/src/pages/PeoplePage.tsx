@@ -1,6 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import type { AssetPageItem } from "../api/types";
+import { Lightbox } from "../components/Lightbox";
 import {
   listPeople,
   getClusters,
@@ -83,7 +85,7 @@ function PersonCard({ person }: { person: PersonItem }) {
   );
 }
 
-function ClusterFaceThumbnail({ face }: { face: PersonFaceItem }) {
+function ClusterFaceThumbnail({ face, onClick }: { face: PersonFaceItem; onClick?: () => void }) {
   // Prefer server-generated face crop; fall back to full asset thumbnail with bounding box overlay
   const crop = useFaceCrop(face.face_id);
   const hasCrop = !!crop.url;
@@ -94,7 +96,11 @@ function ClusterFaceThumbnail({ face }: { face: PersonFaceItem }) {
   const box = face.bounding_box;
 
   return (
-    <div className="relative aspect-square overflow-hidden rounded-lg bg-gray-800">
+    <button
+      type="button"
+      onClick={onClick}
+      className="relative aspect-square overflow-hidden rounded-lg bg-gray-800 w-full focus:outline-none focus:ring-2 focus:ring-indigo-500"
+    >
       {isLoading ? (
         <div className="h-full w-full animate-pulse bg-gray-700" />
       ) : url ? (
@@ -118,7 +124,7 @@ function ClusterFaceThumbnail({ face }: { face: PersonFaceItem }) {
           No image
         </div>
       )}
-    </div>
+    </button>
   );
 }
 
@@ -146,6 +152,40 @@ function ClusterCard({
   });
 
   const allFaces = allFacesQuery.data?.pages.flatMap((p) => p.items) ?? [];
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+
+  const displayFaces = expanded ? allFaces : cluster.faces;
+
+  // Build minimal AssetPageItem[] for Lightbox from display faces
+  const lightboxAssets: AssetPageItem[] = useMemo(
+    () =>
+      displayFaces.map((f) => ({
+        asset_id: f.asset_id,
+        rel_path: f.rel_path ?? "",
+        file_size: 0,
+        file_mtime: null,
+        sha256: null,
+        media_type: "image",
+        width: null,
+        height: null,
+        taken_at: null,
+        status: "active",
+        duration_sec: null,
+        camera_make: null,
+        camera_model: null,
+        iso: null,
+        aperture: null,
+        focal_length: null,
+        focal_length_35mm: null,
+        lens_model: null,
+        flash_fired: null,
+        gps_lat: null,
+        gps_lon: null,
+        face_count: 1,
+        created_at: null,
+      })),
+    [displayFaces],
+  );
 
   const nameMutation = useMutation({
     mutationFn: (name: string) =>
@@ -171,8 +211,6 @@ function ClusterCard({
     },
   });
 
-  const displayFaces = expanded ? allFaces : cluster.faces;
-
   return (
     <div className={`rounded-xl border border-gray-700 bg-gray-800/30 p-4 ${expanded ? "col-span-full" : ""}`}>
       <div className="mb-3 flex items-center justify-between">
@@ -193,8 +231,8 @@ function ClusterCard({
 
       {/* Face thumbnails */}
       <div className={`mb-3 grid gap-1.5 ${expanded ? "grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10" : "grid-cols-3"}`}>
-        {displayFaces.map((face) => (
-          <ClusterFaceThumbnail key={face.face_id} face={face} />
+        {displayFaces.map((face, i) => (
+          <ClusterFaceThumbnail key={face.face_id} face={face} onClick={() => setLightboxIndex(i)} />
         ))}
         {expanded && allFacesQuery.isLoading && (
           Array.from({ length: 6 }).map((_, i) => (
@@ -308,6 +346,16 @@ function ClusterCard({
         <p className="mt-2 text-xs text-red-400">
           {(nameMutation.error || assignMutation.error)?.message ?? "Failed"}
         </p>
+      )}
+
+      {lightboxIndex !== null && lightboxAssets[lightboxIndex] && (
+        <Lightbox
+          asset={lightboxAssets[lightboxIndex]}
+          assets={lightboxAssets}
+          onClose={() => setLightboxIndex(null)}
+          onNavigate={(i) => setLightboxIndex(i)}
+          hasMore={expanded && allFacesQuery.hasNextPage}
+        />
       )}
     </div>
   );
