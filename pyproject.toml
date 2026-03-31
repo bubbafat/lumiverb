@@ -31,7 +31,7 @@ dependencies = [
     "python-ulid>=2.0",
     "requests>=2.25",
     # Image normalization (proxy → WebP, thumbnail generation)
-    "pillow>=10.0",
+    "pillow>=11.1",
 ]
 
 [project.scripts]
