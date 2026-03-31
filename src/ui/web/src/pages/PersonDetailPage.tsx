@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getPerson, updatePerson, deletePerson, listPersonFaces } from "../api/client";
@@ -24,6 +24,41 @@ function FaceThumbnail({ face, onClick }: { face: PersonFaceItem; onClick: () =>
         <div className="flex h-full w-full items-center justify-center text-gray-600">No image</div>
       )}
     </button>
+  );
+}
+
+function InfiniteScrollSentinel({
+  hasNextPage,
+  isFetchingNextPage,
+  fetchNextPage,
+}: {
+  hasNextPage?: boolean;
+  isFetchingNextPage: boolean;
+  fetchNextPage: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!hasNextPage || isFetchingNextPage) return;
+    const el = ref.current;
+    if (!el) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) fetchNextPage(); },
+      { rootMargin: "200px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+
+  if (!hasNextPage) return null;
+
+  return (
+    <div ref={ref} className="mt-4 flex justify-center py-4">
+      {isFetchingNextPage && (
+        <div className="h-6 w-6 animate-spin rounded-full border-2 border-gray-600 border-t-white" />
+      )}
+    </div>
   );
 }
 
@@ -207,18 +242,12 @@ export default function PersonDetailPage() {
         </div>
       )}
 
-      {facesQuery.hasNextPage && (
-        <div className="mt-4 text-center">
-          <button
-            type="button"
-            onClick={() => facesQuery.fetchNextPage()}
-            disabled={facesQuery.isFetchingNextPage}
-            className="rounded-lg border border-gray-700 bg-gray-800/50 px-4 py-2 text-sm text-gray-300 hover:bg-gray-700"
-          >
-            {facesQuery.isFetchingNextPage ? "Loading..." : "Load more"}
-          </button>
-        </div>
-      )}
+      {/* Infinite scroll sentinel */}
+      <InfiniteScrollSentinel
+        hasNextPage={facesQuery.hasNextPage}
+        isFetchingNextPage={facesQuery.isFetchingNextPage}
+        fetchNextPage={facesQuery.fetchNextPage}
+      />
 
       {faces.length === 0 && !facesQuery.isLoading && (
         <p className="text-sm text-gray-500">No photos assigned to this person yet.</p>

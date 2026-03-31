@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { Link } from "react-router-dom";
 import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { AssetPageItem } from "../api/types";
@@ -12,6 +12,41 @@ import {
 } from "../api/client";
 import type { PersonItem, ClusterItem, PersonFaceItem } from "../api/client";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
+
+function InfiniteScrollSentinel({
+  hasNextPage,
+  isFetchingNextPage,
+  fetchNextPage,
+}: {
+  hasNextPage?: boolean;
+  isFetchingNextPage: boolean;
+  fetchNextPage: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!hasNextPage || isFetchingNextPage) return;
+    const el = ref.current;
+    if (!el) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) fetchNextPage(); },
+      { rootMargin: "200px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+
+  if (!hasNextPage) return null;
+
+  return (
+    <div ref={ref} className="mt-4 flex justify-center py-4">
+      {isFetchingNextPage && (
+        <div className="h-6 w-6 animate-spin rounded-full border-2 border-gray-600 border-t-white" />
+      )}
+    </div>
+  );
+}
 
 /** Fetch a face crop thumbnail with auth. Falls back to null if no crop available. */
 function useFaceCrop(faceId: string): { url: string | null; isLoading: boolean } {
@@ -241,15 +276,12 @@ function ClusterCard({
         )}
       </div>
 
-      {expanded && allFacesQuery.hasNextPage && (
-        <button
-          type="button"
-          onClick={() => allFacesQuery.fetchNextPage()}
-          disabled={allFacesQuery.isFetchingNextPage}
-          className="mb-3 rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700"
-        >
-          {allFacesQuery.isFetchingNextPage ? "Loading..." : "Load more"}
-        </button>
+      {expanded && (
+        <InfiniteScrollSentinel
+          hasNextPage={allFacesQuery.hasNextPage}
+          isFetchingNextPage={allFacesQuery.isFetchingNextPage}
+          fetchNextPage={allFacesQuery.fetchNextPage}
+        />
       )}
 
       {/* Actions */}
@@ -404,16 +436,11 @@ export default function PeoplePage() {
         </div>
       )}
 
-      {peopleQuery.hasNextPage && (
-        <button
-          type="button"
-          onClick={() => peopleQuery.fetchNextPage()}
-          disabled={peopleQuery.isFetchingNextPage}
-          className="mb-8 rounded-lg border border-gray-700 bg-gray-800/50 px-4 py-2 text-sm text-gray-300 hover:bg-gray-700"
-        >
-          {peopleQuery.isFetchingNextPage ? "Loading..." : "Load more"}
-        </button>
-      )}
+      <InfiniteScrollSentinel
+        hasNextPage={peopleQuery.hasNextPage}
+        isFetchingNextPage={peopleQuery.isFetchingNextPage}
+        fetchNextPage={peopleQuery.fetchNextPage}
+      />
 
       {/* Unnamed clusters */}
       {clusters.length > 0 && (
