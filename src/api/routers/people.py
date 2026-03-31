@@ -7,7 +7,7 @@ import json
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
@@ -878,11 +878,10 @@ def list_cluster_faces(
 @faces_router.get("/{face_id}/crop")
 def get_face_crop(
     face_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ):
-    """Serve the 128x128 face crop thumbnail."""
-    from pathlib import Path
-
+    """Serve the 128x128 face crop thumbnail. Generates on demand if missing."""
     from fastapi.responses import StreamingResponse
 
     from src.models.tenant import Face
@@ -891,10 +890,26 @@ def get_face_crop(
     face = session.get(Face, face_id)
     if face is None:
         raise HTTPException(status_code=404, detail="Face not found")
-    if not face.crop_key:
-        raise HTTPException(status_code=404, detail="No crop available for this face")
 
     storage = get_storage()
+
+    # Generate crop on demand if missing
+    if not face.crop_key or not storage.abs_path(face.crop_key).exists():
+        if not face.bounding_box_json:
+            raise HTTPException(status_code=404, detail="No bounding box for this face")
+        tenant_id = getattr(request.state, "tenant_id", None)
+        if not tenant_id:
+            raise HTTPException(status_code=404, detail="No crop available")
+        from src.repository.tenant import AssetRepository
+        asset = AssetRepository(session).get_by_id(face.asset_id)
+        if not asset or not asset.proxy_key:
+            raise HTTPException(status_code=404, detail="No proxy available to generate crop")
+        from src.api.routers.assets import _generate_face_crops
+        _generate_face_crops(tenant_id, asset, [face_id], [{"bounding_box": face.bounding_box_json}], session)
+        session.refresh(face)
+        if not face.crop_key:
+            raise HTTPException(status_code=404, detail="Crop generation failed")
+
     crop_path = storage.abs_path(face.crop_key)
     if not crop_path.exists():
         raise HTTPException(status_code=404, detail="Crop file missing")

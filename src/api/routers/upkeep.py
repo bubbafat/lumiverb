@@ -326,7 +326,13 @@ def run_recluster(
 
 
 def _backfill_face_crops(batch_size: int = 500) -> dict:
-    """Backfill face crop thumbnails for faces missing crop_key across all tenants."""
+    """Backfill face crop thumbnails prioritizing cluster preview faces.
+
+    Generates crops for the top 6 faces of each unnamed cluster (largest first),
+    so the cluster management UI has previews. Any remaining budget in batch_size
+    is spent on other uncropped faces.
+    """
+    import json as _json
     from collections import defaultdict
 
     from sqlalchemy import text
@@ -337,28 +343,74 @@ def _backfill_face_crops(batch_size: int = 500) -> dict:
     from src.repository.tenant import AssetRepository
 
     totals = {"generated": 0, "skipped": 0, "failed": 0}
+    remaining = batch_size
 
     with get_control_session() as ctrl:
         tenants = TenantRepository(ctrl).list_all()
 
     for tenant in tenants:
+        if remaining <= 0:
+            break
         try:
             with get_tenant_session(tenant.tenant_id) as tsession:
-                rows = tsession.execute(
-                    text("""
-                        SELECT f.face_id, f.asset_id, f.bounding_box_json
-                        FROM faces f
-                        WHERE f.crop_key IS NULL AND f.bounding_box_json IS NOT NULL
-                        LIMIT :limit
-                    """),
-                    {"limit": batch_size},
-                ).all()
+                # Phase 1: Prioritize cluster preview faces (top 6 per cluster, largest first)
+                from src.repository.system_metadata import SystemMetadataRepository
+                meta = SystemMetadataRepository(tsession)
+                cached = meta.get_value("face_clusters_cache")
 
-                if not rows:
+                priority_face_ids: list[str] = []
+                if cached:
+                    try:
+                        data = _json.loads(cached)
+                        for cluster in data.get("clusters", []):
+                            for face in cluster.get("faces", [])[:6]:
+                                priority_face_ids.append(face["face_id"])
+                    except (ValueError, KeyError):
+                        pass
+
+                # Find which priority faces still need crops
+                target_face_ids: list[str] = []
+                if priority_face_ids:
+                    placeholders = ",".join(f":fid{i}" for i in range(len(priority_face_ids)))
+                    params = {f"fid{i}": fid for i, fid in enumerate(priority_face_ids)}
+                    rows = tsession.execute(
+                        text(f"""
+                            SELECT f.face_id, f.asset_id, f.bounding_box_json
+                            FROM faces f
+                            WHERE f.face_id IN ({placeholders})
+                              AND f.crop_key IS NULL
+                              AND f.bounding_box_json IS NOT NULL
+                        """),
+                        params,
+                    ).all()
+                    priority_rows = list(rows)
+                    target_face_ids = [r[0] for r in priority_rows]
+                else:
+                    priority_rows = []
+
+                # Phase 2: Fill remaining budget with any other uncropped faces
+                budget_left = remaining - len(priority_rows)
+                if budget_left > 0:
+                    exclude_ids = set(target_face_ids)
+                    overflow_rows = tsession.execute(
+                        text("""
+                            SELECT f.face_id, f.asset_id, f.bounding_box_json
+                            FROM faces f
+                            WHERE f.crop_key IS NULL AND f.bounding_box_json IS NOT NULL
+                            LIMIT :limit
+                        """),
+                        {"limit": budget_left + len(exclude_ids)},
+                    ).all()
+                    overflow_rows = [r for r in overflow_rows if r[0] not in exclude_ids][:budget_left]
+                    all_rows = priority_rows + list(overflow_rows)
+                else:
+                    all_rows = priority_rows[:remaining]
+
+                if not all_rows:
                     continue
 
                 by_asset: dict[str, list] = defaultdict(list)
-                for face_id, asset_id, bb in rows:
+                for face_id, asset_id, bb in all_rows:
                     by_asset[asset_id].append({"face_id": face_id, "bounding_box": bb})
 
                 asset_repo = AssetRepository(tsession)
@@ -368,14 +420,15 @@ def _backfill_face_crops(batch_size: int = 500) -> dict:
                         totals["skipped"] += len(face_entries)
                         continue
 
-                    face_ids = [e["face_id"] for e in face_entries]
-                    faces_data = [{"bounding_box": e["bounding_box"]} for e in face_entries]
+                    fids = [e["face_id"] for e in face_entries]
+                    fdata = [{"bounding_box": e["bounding_box"]} for e in face_entries]
                     try:
-                        _generate_face_crops(tenant.tenant_id, asset, face_ids, faces_data, tsession)
-                        totals["generated"] += len(face_ids)
+                        _generate_face_crops(tenant.tenant_id, asset, fids, fdata, tsession)
+                        totals["generated"] += len(fids)
+                        remaining -= len(fids)
                     except Exception as exc:
                         logger.warning("Face crop backfill failed for asset %s: %s", asset_id, exc)
-                        totals["failed"] += len(face_ids)
+                        totals["failed"] += len(fids)
 
         except Exception as exc:
             logger.warning("Face crop backfill failed for tenant %s: %s", tenant.tenant_id, exc)
