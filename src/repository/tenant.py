@@ -2743,7 +2743,7 @@ class PersonRepository:
                 cursor_count = decoded["count"]
                 cursor_id = decoded["id"]
                 having_conditions.append(
-                    "(cnt < :cursor_count OR (cnt = :cursor_count AND p.person_id > :cursor_id))"
+                    "(COUNT(m.match_id)::int < :cursor_count OR (COUNT(m.match_id)::int = :cursor_count AND p.person_id > :cursor_id))"
                 )
                 params["cursor_count"] = cursor_count
                 params["cursor_id"] = cursor_id
@@ -2790,7 +2790,7 @@ class PersonRepository:
                 cursor_count = decoded["count"]
                 cursor_id = decoded["id"]
                 having_conditions.append(
-                    "(cnt < :cursor_count OR (cnt = :cursor_count AND p.person_id > :cursor_id))"
+                    "(COUNT(m.match_id)::int < :cursor_count OR (COUNT(m.match_id)::int = :cursor_count AND p.person_id > :cursor_id))"
                 )
                 params["cursor_count"] = cursor_count
                 params["cursor_id"] = cursor_id
