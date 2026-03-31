@@ -176,7 +176,7 @@ function ClusterCard({
 }: {
   cluster: ClusterItem;
   people: PersonItem[];
-  fading: boolean;
+  fading: false | "locked" | "fading";
   onProcessed: (clusterIndex: number) => void;
   onDismissed: (clusterIndex: number, personId: string) => void;
 }) {
@@ -281,7 +281,7 @@ function ClusterCard({
 
   return (
     <div
-      className={`rounded-xl border border-gray-700 bg-gray-800/30 p-4 transition-all duration-300 ${expanded ? "col-span-full" : ""} ${fading ? "pointer-events-none scale-95 opacity-0" : "opacity-100"}`}
+      className={`rounded-xl border border-gray-700 bg-gray-800/30 p-4 transition-all ${expanded ? "col-span-full" : ""} ${fading === "locked" ? "pointer-events-none grayscale opacity-60 duration-150" : fading === "fading" ? "pointer-events-none scale-95 opacity-0 duration-300" : "opacity-100 duration-300"}`}
     >
       <div className="mb-3 flex items-center justify-between">
         <button
@@ -477,8 +477,8 @@ export default function PeoplePage() {
   // Track removed cluster indices for optimistic updates — prevents
   // named/dismissed clusters from re-appearing until next manual refresh.
   const [removedIndices, setRemovedIndices] = useState<Set<number>>(new Set());
-  // Track clusters currently fading out (animated before removal)
-  const [fadingIndices, setFadingIndices] = useState<Set<number>>(new Set());
+  // Track clusters currently fading out: "locked" (desaturated) → "fading" (fade out) → removed
+  const [fadingIndices, setFadingIndices] = useState<Map<number, "locked" | "fading">>(new Map());
   // Undo state for dismissed clusters
   const [undoState, setUndoState] = useState<{ clusterIndex: number; personId: string; timer: ReturnType<typeof setTimeout> } | null>(null);
 
@@ -509,32 +509,32 @@ export default function PeoplePage() {
     [allClusters, removedIndices],
   );
 
-  const finishRemoval = useCallback((clusterIndex: number) => {
-    setFadingIndices((prev) => { const next = new Set(prev); next.delete(clusterIndex); return next; });
-    setRemovedIndices((prev) => new Set(prev).add(clusterIndex));
+  const startFadeSequence = useCallback((clusterIndex: number) => {
+    // Phase 1: lock (desaturated, disabled) for 400ms
+    setFadingIndices((prev) => new Map(prev).set(clusterIndex, "locked"));
+    setTimeout(() => {
+      // Phase 2: fade out over 300ms
+      setFadingIndices((prev) => new Map(prev).set(clusterIndex, "fading"));
+      setTimeout(() => {
+        // Phase 3: remove from DOM
+        setFadingIndices((prev) => { const next = new Map(prev); next.delete(clusterIndex); return next; });
+        setRemovedIndices((prev) => new Set(prev).add(clusterIndex));
+      }, 300);
+    }, 400);
   }, []);
 
   const handleClusterProcessed = useCallback((clusterIndex: number) => {
-    // Start fade animation, then remove after transition
-    setFadingIndices((prev) => new Set(prev).add(clusterIndex));
-    setTimeout(() => finishRemoval(clusterIndex), 300);
-    // Refresh people list to show newly named person
+    startFadeSequence(clusterIndex);
     queryClient.invalidateQueries({ queryKey: ["people"] });
-    // Do NOT invalidate face-clusters here — that would cause the shuffle bug.
-    // Clusters will refresh on next page visit (refetchOnMount: true).
-  }, [queryClient, finishRemoval]);
+  }, [queryClient, startFadeSequence]);
 
   const handleClusterDismissed = useCallback((clusterIndex: number, personId: string) => {
-    // Start fade animation
-    setFadingIndices((prev) => new Set(prev).add(clusterIndex));
-    setTimeout(() => finishRemoval(clusterIndex), 300);
-    // Clear any previous undo timer
+    startFadeSequence(clusterIndex);
     if (undoState) clearTimeout(undoState.timer);
-    // Set up undo with 5-second window
     const timer = setTimeout(() => setUndoState(null), 5000);
     setUndoState({ clusterIndex, personId, timer });
     queryClient.invalidateQueries({ queryKey: ["people"] });
-  }, [queryClient, finishRemoval, undoState]);
+  }, [queryClient, startFadeSequence, undoState]);
 
   const handleUndo = useCallback(async () => {
     if (!undoState) return;
@@ -550,7 +550,7 @@ export default function PeoplePage() {
 
   const handleRefreshClusters = useCallback(() => {
     setRemovedIndices(new Set());
-    setFadingIndices(new Set());
+    setFadingIndices(new Map());
     if (undoState) { clearTimeout(undoState.timer); setUndoState(null); }
     queryClient.invalidateQueries({ queryKey: ["face-clusters"] });
   }, [queryClient, undoState]);
@@ -630,7 +630,7 @@ export default function PeoplePage() {
                     key={cluster.cluster_index}
                     cluster={cluster}
                     people={people}
-                    fading={fadingIndices.has(cluster.cluster_index)}
+                    fading={fadingIndices.get(cluster.cluster_index) ?? false}
                     onProcessed={handleClusterProcessed}
                     onDismissed={handleClusterDismissed}
                   />
