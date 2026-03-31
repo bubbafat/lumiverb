@@ -2717,11 +2717,11 @@ class PersonRepository:
         """
         import base64 as _b64
 
-        conditions = ["p.dismissed = false"]
+        having_conditions: list[str] = []
         params: dict[str, object] = {"limit": limit}
 
         if q:
-            conditions.append("LOWER(p.display_name) LIKE '%' || LOWER(:q) || '%'")
+            having_conditions.append("LOWER(p.display_name) LIKE '%' || LOWER(:q) || '%'")
             params["q"] = q
 
         if after:
@@ -2729,7 +2729,7 @@ class PersonRepository:
                 decoded = json.loads(_b64.urlsafe_b64decode(after + "=="))
                 cursor_count = decoded["count"]
                 cursor_id = decoded["id"]
-                conditions.append(
+                having_conditions.append(
                     "(cnt < :cursor_count OR (cnt = :cursor_count AND p.person_id > :cursor_id))"
                 )
                 params["cursor_count"] = cursor_count
@@ -2737,7 +2737,7 @@ class PersonRepository:
             except Exception:
                 pass
 
-        where_sql = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        having_sql = (" HAVING " + " AND ".join(having_conditions)) if having_conditions else ""
 
         sql = f"""
             SELECT p.person_id, p.display_name, p.created_by_user,
@@ -2745,8 +2745,9 @@ class PersonRepository:
                    COUNT(m.match_id)::int AS cnt
             FROM people p
             LEFT JOIN face_person_matches m ON m.person_id = p.person_id
+            WHERE p.dismissed = false
             GROUP BY p.person_id
-            {where_sql}
+            {having_sql}
             ORDER BY cnt DESC, p.person_id ASC
             LIMIT :limit
         """
