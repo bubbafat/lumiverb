@@ -1,8 +1,8 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getPerson, updatePerson, deletePerson, listPersonFaces } from "../api/client";
-import type { PersonFaceItem } from "../api/client";
+import { getPerson, updatePerson, deletePerson, listPersonFaces, mergePerson, searchPeople } from "../api/client";
+import type { PersonFaceItem, PersonItem } from "../api/client";
 import type { AssetPageItem } from "../api/types";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 import { Lightbox } from "../components/Lightbox";
@@ -70,6 +70,10 @@ export default function PersonDetailPage() {
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState("");
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [mergeMode, setMergeMode] = useState(false);
+  const [mergeSearch, setMergeSearch] = useState("");
+  const [mergeResults, setMergeResults] = useState<PersonItem[]>([]);
+  const [mergeSearching, setMergeSearching] = useState(false);
 
   const personQuery = useQuery({
     queryKey: ["person", personId],
@@ -101,6 +105,32 @@ export default function PersonDetailPage() {
       navigate("/people");
     },
   });
+
+  const mergeIntoMutation = useMutation({
+    mutationFn: (targetPersonId: string) => mergePerson(targetPersonId, personId!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["people"] });
+      navigate("/people");
+    },
+  });
+
+  // Debounced search for merge target
+  useEffect(() => {
+    if (!mergeMode || !mergeSearch.trim()) {
+      setMergeResults([]);
+      return;
+    }
+    setMergeSearching(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await searchPeople(mergeSearch.trim());
+        // Exclude self from results
+        setMergeResults(res.items.filter((p) => p.person_id !== personId));
+      } catch { /* ignore */ }
+      setMergeSearching(false);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [mergeSearch, mergeMode, personId]);
 
   const startEditing = useCallback(() => {
     if (personQuery.data) {
@@ -218,7 +248,60 @@ export default function PersonDetailPage() {
           {person.face_count} {person.face_count === 1 ? "photo" : "photos"}
         </span>
 
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-3">
+          {mergeMode ? (
+            <div className="relative flex items-center gap-2">
+              <div className="relative">
+                <input
+                  type="text"
+                  value={mergeSearch}
+                  onChange={(e) => setMergeSearch(e.target.value)}
+                  placeholder="Merge into..."
+                  className="w-40 rounded-lg border border-gray-600 bg-gray-800 px-3 py-1 text-xs text-white focus:border-indigo-500 focus:outline-none"
+                  autoFocus
+                />
+                {mergeSearch.trim() && mergeResults.length > 0 && (
+                  <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-40 overflow-y-auto rounded-lg border border-gray-600 bg-gray-800 shadow-lg">
+                    {mergeResults.map((p) => (
+                      <button
+                        key={p.person_id}
+                        type="button"
+                        onClick={() => {
+                          if (window.confirm(`Merge "${person.display_name}" into "${p.display_name}"? All faces will be moved.`)) {
+                            mergeIntoMutation.mutate(p.person_id);
+                          }
+                        }}
+                        disabled={mergeIntoMutation.isPending}
+                        className="block w-full px-3 py-1.5 text-left text-xs text-gray-200 hover:bg-indigo-600 hover:text-white disabled:opacity-50"
+                      >
+                        {p.display_name} ({p.face_count})
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {mergeSearch.trim() && mergeSearching && (
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                    <div className="h-3 w-3 animate-spin rounded-full border border-gray-600 border-t-white" />
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => { setMergeMode(false); setMergeSearch(""); setMergeResults([]); }}
+                className="text-xs text-gray-400 hover:text-white"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setMergeMode(true)}
+              className="text-xs text-gray-400 hover:text-gray-200"
+            >
+              Merge into...
+            </button>
+          )}
           <button
             type="button"
             onClick={() => {

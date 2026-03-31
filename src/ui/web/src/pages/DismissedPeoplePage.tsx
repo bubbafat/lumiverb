@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { listDismissedPeople, undismissPerson, getNearestPeopleForPerson, searchPeople, getApiKey } from "../api/client";
+import { listDismissedPeople, undismissPerson, getNearestPeopleForPerson, searchPeople, mergePerson, getApiKey } from "../api/client";
 import type { PersonItem } from "../api/client";
 import type { AssetPageItem } from "../api/types";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
@@ -116,8 +116,19 @@ function DismissedPersonCard({
     return () => clearTimeout(timer);
   }, [assignSearch, mode]);
 
+  // Restore as new name (no existing person to merge into)
   const restoreMutation = useMutation({
     mutationFn: (displayName: string) => undismissPerson(person.person_id, displayName),
+    onSuccess: onRestored,
+  });
+
+  // Merge into existing person: undismiss first, then merge
+  const mergeIntoMutation = useMutation({
+    mutationFn: async (targetPersonId: string) => {
+      // Undismiss with a temp name, then merge into the target
+      await undismissPerson(person.person_id, "(merging)");
+      await mergePerson(targetPersonId, person.person_id);
+    },
     onSuccess: onRestored,
   });
 
@@ -170,8 +181,8 @@ function DismissedPersonCard({
                 <button
                   key={np.person_id}
                   type="button"
-                  onClick={() => restoreMutation.mutate(np.display_name)}
-                  disabled={restoreMutation.isPending}
+                  onClick={() => mergeIntoMutation.mutate(np.person_id)}
+                  disabled={mergeIntoMutation.isPending || restoreMutation.isPending}
                   className="rounded-lg bg-gray-700 px-2.5 py-1 text-xs text-gray-200 hover:bg-indigo-600 hover:text-white disabled:opacity-50 transition-colors"
                 >
                   {np.display_name} <span className="text-gray-500">({np.face_count})</span>
@@ -202,8 +213,8 @@ function DismissedPersonCard({
                     <button
                       key={p.person_id}
                       type="button"
-                      onClick={() => restoreMutation.mutate(p.display_name)}
-                      disabled={restoreMutation.isPending}
+                      onClick={() => mergeIntoMutation.mutate(p.person_id)}
+                      disabled={mergeIntoMutation.isPending || restoreMutation.isPending}
                       className="block w-full px-3 py-1.5 text-left text-xs text-gray-200 hover:bg-indigo-600 hover:text-white disabled:opacity-50"
                     >
                       {p.display_name} <span className="text-gray-500">({p.face_count})</span>
@@ -232,8 +243,8 @@ function DismissedPersonCard({
               Cancel
             </button>
           </form>
-          {restoreMutation.isError && (
-            <p className="text-xs text-red-400">{restoreMutation.error?.message ?? "Failed"}</p>
+          {(restoreMutation.isError || mergeIntoMutation.isError) && (
+            <p className="text-xs text-red-400">{(restoreMutation.error || mergeIntoMutation.error)?.message ?? "Failed"}</p>
           )}
         </div>
       ) : (
