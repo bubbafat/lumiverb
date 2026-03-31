@@ -56,10 +56,12 @@ users             — user_id, tenant_id, email, password_hash, role,
                     created_at, last_login_at
 password_reset_tokens — token_hash, user_id, expires_at, used_at
 public_libraries  — library_id, tenant_id, connection_string, created_at
+public_collections — collection_id, tenant_id, connection_string, created_at
+revoked_tokens    — jti (PK), revoked_at. Server-side JWT revocation.
 tenant_db_routing — tenant_id, connection_string, region
 ```
 
-The control plane handles: tenant provisioning, API key validation, and routing requests to the correct tenant database. It never stores media metadata.
+The control plane handles: tenant provisioning, API key validation, JWT revocation tracking, and routing requests to the correct tenant database. It never stores media metadata.
 
 ### 3.2 Tenant Database (per tenant)
 
@@ -122,7 +124,9 @@ face_person_matches — face_id, person_id, confidence,
                     confirmed (bool), confirmed_at
 ```
 
-Face detection runs client-side in the CLI via InsightFace (buffalo_l). Detected faces with ArcFace 512-dim embeddings are POSTed to `POST /v1/assets/{id}/faces`. The `assets.face_count` column tracks detection status (NULL = unprocessed, 0 = no faces, N = N faces). Person clustering and labeling are future work; the schema supports them via `people.centroid_vector` and `face_person_matches`.
+Face detection runs client-side in the CLI via InsightFace (buffalo_l). Detected faces with ArcFace 512-dim embeddings are POSTed to `POST /v1/assets/{id}/faces`. The `assets.face_count` column tracks detection status (NULL = unprocessed, 0 = no faces, N = N faces). Face crops (128x128 WebP) are generated server-side from the asset proxy on submission.
+
+Person clustering uses cosine distance on ArcFace embeddings (threshold 0.55) with a materialized cache in `system_metadata` (dirty flag invalidation). The People page shows clusters for naming. When a user names a cluster, all faces in it are assigned to a person. New faces are auto-assigned to known people on ingest if centroid distance < 0.45. The upkeep sweep periodically propagates assignments for untagged faces.
 
 **pgvector:**
 
@@ -134,15 +138,19 @@ Python + FastAPI + SQLModel. Stateless. Runs in Docker (self-hosted) or Cloud Ru
 
 Responsibilities:
 - Authenticate requests via API key or JWT → route to tenant DB
+- Security headers middleware (CSP, X-Frame-Options, X-Content-Type-Options)
+- Rate limiting on auth endpoints (in-memory sliding window per IP)
+- JWT token lifecycle: 1-hour access tokens with 7-day refresh window, server-side revocation via `revoked_tokens` table
 - Library and asset CRUD
 - User management (email/password auth, JWT sessions)
 - Atomic ingest (proxy + metadata in one request)
 - File serving (thumbnails, proxies, video previews — never source files)
 - Search endpoint (BM25 via Quickwit)
-- Similarity search endpoint (pgvector nearest-neighbor on CLIP embeddings)
+- Similarity search endpoint (pgvector nearest-neighbor on CLIP embeddings, person-aware reranking)
+- People and face management (clustering, assignment, merge)
 - Video chunk coordination (scene segmentation metadata)
 - Search sync (timestamp-based sweep to keep Quickwit in sync)
-- Upkeep (periodic cleanup of orphaned files)
+- Upkeep (search sync, face propagation, orphaned file cleanup, revoked token cleanup)
 
 ### 3.4 Local Agent (CLI first, then Mac app)
 
@@ -290,7 +298,7 @@ Client calls GET /v1/similar?asset_id=...&library_id=...
 | Mac agent | Swift / Electron TBD | Filesystem access, background service |
 | Cloud platform | GCP | Employee discounts, known infrastructure |
 | Container | Docker Compose (self-hosted), Cloud Run (cloud) | Same image, different orchestration |
-| Auth | Hybrid: email/password + JWT (web), API keys (CLI/automation) | Self-hosted, no external auth service dependency |
+| Auth | Hybrid: email/password + JWT (web), API keys (CLI/automation). 1h access tokens, 7d refresh window, server-side revocation. Rate-limited auth endpoints. | Self-hosted, no external auth service dependency |
 
 ---
 

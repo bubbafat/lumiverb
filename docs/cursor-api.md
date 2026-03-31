@@ -32,6 +32,8 @@ Two-layer Postgres architecture:
 - `users` — user_id, tenant_id, email, password_hash, role (`admin`|`editor`|`viewer`), created_at, last_login_at
 - `password_reset_tokens` — token_hash, user_id, expires_at, used_at
 - `public_libraries` — library_id, tenant_id, connection_string, created_at
+- `public_collections` — collection_id, tenant_id, connection_string, created_at
+- `revoked_tokens` — jti (PK), revoked_at. Tracks revoked JWTs for server-side logout/refresh revocation. Cleaned up by upkeep sweep (entries older than 8 days).
 - `tenant_db_routing` — tenant_id, connection_string, region
 
 **Tenant DB** (one per tenant, same Postgres instance):
@@ -67,7 +69,9 @@ SELECT * FROM assets WHERE deleted_at IS NULL
 3. **`get_by_library_and_rel_path()` intentionally returns trashed assets** because the ingest upsert path needs to detect them to avoid a unique-constraint violation on `(library_id, rel_path)`. It is the only read method that does this. Ingest clears `deleted_at` on update — a file present on disk is by definition active.
 When writing queries, always use the tenant DB session, not the control plane session. The middleware resolves this from the bearer token before the route handler runs.
 
-Tenant resolution runs for every request except `/health`, `/v1/admin/*`, and `/v1/auth/*`: reads `Authorization: Bearer <token>`, attempts JWT decode first (signature + expiry + required claims: `sub`, `tenant_id`, `role`), falls through to API key lookup on JWT failure, looks up `TenantDbRouting` for the connection string, and stores `tenant_id`, `connection_string`, `user_id`, `key_id`, `role`, and `is_public_request` in `request.state`. Use the `get_tenant_session` dependency in route handlers to obtain a tenant DB session.
+Tenant resolution runs for every request except `/health`, `/v1/admin/*`, `/v1/auth/*`, and `/v1/upkeep*`: reads `Authorization: Bearer <token>`, attempts JWT decode first (signature + expiry + required claims: `sub`, `tenant_id`, `role`; checks `jti` against `revoked_tokens` table), falls through to API key lookup on JWT failure, looks up `TenantDbRouting` for the connection string, and stores `tenant_id`, `connection_string`, `user_id`, `key_id`, `role`, and `is_public_request` in `request.state`. Use the `get_tenant_session` dependency in route handlers to obtain a tenant DB session.
+
+All API responses include security headers: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Content-Security-Policy` (script-src 'self', frame-ancestors 'none'), `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy` (camera/microphone/geolocation denied).
 
 ## Tenant Context
 
@@ -77,10 +81,11 @@ Tenant resolution runs for every request except `/health`, `/v1/admin/*`, and `/
 
 Routes under `/v1/auth`; no tenant auth required (these establish auth).
 
-- **POST /v1/auth/login** — Body: `{ "email", "password" }`. Returns `{ "access_token", "token_type": "bearer", "expires_in" }`. JWT contains `sub` (user_id), `tenant_id`, `role`, `email`.
-- **POST /v1/auth/forgot-password** — Body: `{ "email" }`. Sends password reset email if SMTP configured. Always returns 204 (no user enumeration).
-- **POST /v1/auth/reset-password** — Body: `{ "token", "password" }`. Resets password using a reset token. Returns 204.
-- **POST /v1/auth/logout** — Stateless JWT logout (client discards token). Returns 204.
+- **POST /v1/auth/login** — Body: `{ "email", "password" }`. Returns `{ "access_token", "token_type": "bearer", "expires_in" }`. JWT contains `sub` (user_id), `tenant_id`, `role`, `jti` (unique token ID), `iat`, `exp` (1 hour), `refresh_exp` (7 days). Rate limited: 5 requests/min per IP.
+- **POST /v1/auth/refresh** — Requires `Authorization: Bearer {token}` (may be expired). Issues a fresh JWT if the token is within its 7-day refresh window and not revoked. Revokes the old jti. Returns `{ "access_token", "token_type", "expires_in" }`. The frontend calls this transparently on 401.
+- **POST /v1/auth/forgot-password** — Body: `{ "email" }`. Sends password reset email if SMTP configured. Always returns 204 (no user enumeration). Rate limited: 3 requests/min per IP.
+- **POST /v1/auth/reset-password** — Body: `{ "token", "password" }`. Resets password using a reset token. Returns 204. Rate limited: 5 requests/min per IP.
+- **POST /v1/auth/logout** — Revokes the JWT server-side (inserts jti into `revoked_tokens`). The token cannot be used or refreshed after logout. Returns 204.
 
 ## Users API
 
@@ -126,7 +131,7 @@ All routes under `/v1/tenant/upgrade` require tenant auth and **tenant admin** r
 
 All under `/v1/upkeep`. Periodic server-side maintenance tasks. Search sync uses timestamp-based tracking (`search_synced_at` on assets and video_scenes) instead of a queue table.
 
-- **POST /v1/upkeep** — Runs all periodic upkeep tasks (currently: search sync). Returns `{ "search_sync": { "synced", "failed", "scenes_synced", "scenes_failed" } }`.
+- **POST /v1/upkeep** — Runs all periodic upkeep tasks: search sync, face propagation (auto-assign untagged faces to known people by centroid proximity), and revoked token cleanup (purges entries older than 8 days). Returns `{ "search_sync": { "synced", "failed", "scenes_synced", "scenes_failed" }, "face_propagate": { "assigned", "scanned" } }`.
 - **POST /v1/upkeep/search-sync** — Run search sync sweep only. Finds assets/scenes where `search_synced_at` is null or older than the last update, builds Quickwit documents, and ingests them. Returns `{ "synced", "failed", "scenes_synced", "scenes_failed" }`.
 - **POST /v1/upkeep/cleanup** — Query: `dry_run` (default `"true"`), `library` (optional name). Removes orphaned proxy/thumbnail files from storage. Returns `{ "orphan_tenants", "orphan_libraries", "orphan_files", "bytes_freed", "skipped_libraries", "errors", "dry_run" }`.
 - **POST /v1/upkeep/recluster** — Force recompute face clusters for all tenants. Stores result in materialized cache. Returns `{ "clusters", "total_faces" }`.
@@ -193,7 +198,7 @@ All under `/v1/assets`; require tenant auth. List/get endpoints return only acti
 - **POST /v1/assets** — Single-file upsert. Body: `{ "library_id", "rel_path", "file_size", "file_mtime" (ISO8601), "media_type", "force": false }`. Upserts by `(library_id, rel_path)`. Returns `{ "action": "added|updated|skipped" }`.
 - **GET /v1/assets/{asset_id}** — Return single asset with full detail (EXIF, video preview info). 404 if not found or trashed.
 - **GET /v1/assets/by-path** — Query: `library_id`, `rel_path`. Look up asset by library and path. Returns asset detail or 404.
-- **GET /v1/assets/page** — Query: `library_id` (required), `after` (cursor), `limit` (default 500, max 500), `missing_vision` (optional bool), `missing_embeddings` (optional bool), `missing_faces` (optional bool, filters to assets where `face_count IS NULL`). Keyset-paginated active assets for bulk reconciliation. Returns `{ "items": [...], "next_cursor" }`.
+- **GET /v1/assets/page** — Query: `library_id` (required), `after` (cursor), `limit` (default 500, max 500), `missing_vision` (optional bool), `missing_embeddings` (optional bool), `missing_faces` (optional bool, filters to assets where `face_count IS NULL`), `person_id` (optional, filters to assets with a face matched to this person). Keyset-paginated active assets for bulk reconciliation. Returns `{ "items": [...], "next_cursor" }`.
 - **PATCH /v1/assets/{asset_id}** — Update asset fields. Returns updated asset.
 - **DELETE /v1/assets/{asset_id}** — Soft-delete (trash) a single asset. Sets `deleted_at`. Returns 204 on success, 404 if not found or already trashed. Quickwit delete is best-effort (log on failure).
 - **POST /v1/assets/{asset_id}/artifacts/{artifact_type}** — Multipart file upload. `artifact_type` must be one of: `proxy`, `thumbnail`, `video_preview`, `scene_rep`. Form fields: `file` (binary, required), `width` (int, optional, images only), `height` (int, optional, images only), `rep_frame_ms` (int, required for `scene_rep`, ignored for other types). Streams the upload to disk in 64 KB chunks, computes SHA-256 incrementally, and atomic-renames into place. Updates DB after file is safely on disk. Returns `{ "key", "sha256" }`. Errors: 400 invalid type or missing `rep_frame_ms` for `scene_rep`, 404 asset not found or trashed, 413 file too large.
@@ -259,7 +264,7 @@ Collections are virtual groupings of assets across libraries. See ADR-006 for fu
 
 Cross-library browse endpoint. Queries across all libraries the user has access to, with the same filters as `GET /v1/assets/page` plus library selection. Response items include `library_id` and `library_name`.
 
-- **GET /v1/browse** — Query: `after` (cursor), `limit` (default 500, max 500), `library_id` (optional; comma-separated for multiple), `path_prefix` (requires `library_id`; 400 otherwise), `sort`, `dir`, plus all filter params from `/v1/assets/page` (media_type, camera_make, camera_model, lens_model, iso_min, iso_max, exposure_min_us, exposure_max_us, aperture_min, aperture_max, focal_length_min, focal_length_max, has_exposure, has_gps, near_lat, near_lon, near_radius_km, tag). Rating filters: `favorite`, `star_min`, `star_max`, `color`, `has_rating`. Returns: `{ "items": [BrowseItem], "next_cursor" }`.
+- **GET /v1/browse** — Query: `after` (cursor), `limit` (default 500, max 500), `library_id` (optional; comma-separated for multiple), `path_prefix` (requires `library_id`; 400 otherwise), `sort`, `dir`, `person_id` (optional, filters to assets with a face matched to this person), plus all filter params from `/v1/assets/page` (media_type, camera_make, camera_model, lens_model, iso_min, iso_max, exposure_min_us, exposure_max_us, aperture_min, aperture_max, focal_length_min, focal_length_max, has_exposure, has_gps, near_lat, near_lon, near_radius_km, tag). Rating filters: `favorite`, `star_min`, `star_max`, `color`, `has_rating`. Returns: `{ "items": [BrowseItem], "next_cursor" }`.
 
 **BrowseItem**: Same fields as `AssetPageItem` plus `library_id` and `library_name`.
 
@@ -329,12 +334,12 @@ When an asset is submitted via POST /v1/ingest:
 
 Search is BM25 via Quickwit. The API queries Quickwit then enriches results with Postgres metadata. Never query Postgres for full-text search.
 
-- **GET /v1/search** — Query: `library_id` (optional — omit for cross-library search), `q` (up to 500 chars), `limit` (default 20, max 500), `offset` (default 0), `media_type` (optional: `all`|`image`|`video`), `path_prefix` (optional), `tag` (optional), `date_from`/`date_to` (optional). Requires `q` or `date_from`/`date_to`. Asset-level BM25 search via per-tenant Quickwit index; falls back to Postgres when Quickwit disabled/errors and fallback enabled (per-library only). SearchHit includes `library_id` and `library_name`. Returns `{ "query", "hits", "total", "source" }`.
+- **GET /v1/search** — Query: `library_id` (optional — omit for cross-library search), `q` (up to 500 chars), `limit` (default 20, max 500), `offset` (default 0, max 10000), `media_type` (optional: `all`|`image`|`video`), `path_prefix` (optional), `tag` (optional), `date_from`/`date_to` (optional), `person_id` (optional, post-filters results to assets with a face matched to this person). Requires `q` or `date_from`/`date_to`. Asset-level BM25 search via per-tenant Quickwit index; falls back to Postgres when Quickwit disabled/errors and fallback enabled (per-library only). SearchHit includes `library_id` and `library_name`. Returns `{ "query", "hits", "total", "source" }`.
 - **GET /v1/search/scenes** — Query: `library_id` (required), `q` (required, 1–500 chars), `limit` (default 20, max 100), `offset` (default 0). Scene-level BM25 search via Quickwit. Returns `{ "query", "hits": [ { "scene_id", "asset_id", "rel_path", "start_ms", "end_ms", "rep_frame_ms", "thumbnail_key", "duration_sec", "description", "tags", "score", "source" } ], "total", "source" }`. No Postgres fallback. Returns empty hits if Quickwit is disabled.
 
 **Similarity:**
 
-- **GET /v1/similar** — Find visually similar assets by vector similarity (pgvector). Query params: `asset_id` (required), `library_id` (required), `limit` (default 20, max 100), `offset` (default 0). Optional scope filters: `from_ts`, `to_ts` (Unix timestamp seconds, inclusive capture-time range; uses `assets.taken_at`); `asset_types` (comma-separated: `image`, `video`; restricts by `media_type` prefix); `camera_make` and `camera_model` (repeatable; pairs by index, OR across pairs). Returns `{ source_asset_id, hits, total, embedding_available }`. Excludes the source asset from results. If both `from_ts` and `to_ts` are set, `from_ts` must be ≤ `to_ts` (422 otherwise).
+- **GET /v1/similar** — Find visually similar assets by vector similarity (pgvector). Query params: `asset_id` (required), `library_id` (required), `limit` (default 20, max 100), `offset` (default 0, max 10000). Optional scope filters: `from_ts`, `to_ts` (Unix timestamp seconds, inclusive capture-time range; uses `assets.taken_at`); `asset_types` (comma-separated: `image`, `video`; restricts by `media_type` prefix); `camera_make` and `camera_model` (repeatable; pairs by index, OR across pairs). Returns `{ source_asset_id, hits, total, embedding_available }`. Excludes the source asset from results. If both `from_ts` and `to_ts` are set, `from_ts` must be ≤ `to_ts` (422 otherwise). Person-aware reranking: if the source asset has identified faces, candidates containing the same named person(s) receive a similarity boost (distance *= 0.85).
 - **POST /v1/similar/search-by-image** — Body: `{ "library_id", "image_b64", "limit", "offset", "from_ts", "to_ts", "asset_types", "cameras" }`. Upload a query image (base64) and find similar assets. Returns `{ "hits", "total" }`.
 
 ## File Serving
@@ -369,7 +374,4 @@ Vision API config (`vision_api_url`, `vision_api_key`) is stored per-tenant in t
 ## What Not to Build
 
 - Do not add webhooks — that is future work
-- Do not add multi-library search in v1 — search is per-library
 - Do not store or serve source files
-- Do not add rate limiting in v1 — that is future work
-- Do not implement face clustering or identity assignment — future ADR
