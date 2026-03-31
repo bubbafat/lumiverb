@@ -20,6 +20,14 @@ from src.workers.faces.insightface_provider import InsightFaceProvider
 logger = logging.getLogger(__name__)
 
 
+def _silence_subprocess_stdout() -> None:
+    """Redirect stdout to /dev/null in subprocess to suppress InsightFace/ONNX print noise."""
+    import os
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(devnull, 1)
+    os.close(devnull)
+
+
 def _drain(inflight: set[Future]) -> set[Future]:
     """Wait for at least one future to complete and return the remaining set."""
     done, inflight = wait(inflight, return_when=FIRST_COMPLETED)
@@ -362,14 +370,6 @@ def run_repair(
             # Workaround: run each batch in a subprocess. When the child
             # exits, the OS reclaims all native memory. Model reload cost
             # (~2s per batch) is acceptable vs unbounded memory growth.
-            import os as _os
-
-            def _silence_stdout() -> None:
-                """Redirect stdout to /dev/null in subprocess to suppress InsightFace/ONNX print noise."""
-                _devnull = _os.open(_os.devnull, _os.O_WRONLY)
-                _os.dup2(_devnull, 1)
-                _os.close(_devnull)
-
             FACE_BATCH_SIZE = 50
             progress = _make_progress(console)
             with progress:
@@ -380,7 +380,7 @@ def run_repair(
                         # Use spawn context to avoid fork+threads deadlock
                         # on macOS (Rich progress bar has a live-render thread).
                         ctx = mp.get_context("spawn")
-                        with ctx.Pool(1, initializer=_silence_stdout) as pool:
+                        with ctx.Pool(1, initializer=_silence_subprocess_stdout) as pool:
                             result = pool.apply(
                                 _face_batch_worker,
                                 (client.base_url, client.token, batch),
