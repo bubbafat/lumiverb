@@ -16,6 +16,7 @@ import LibrariesPage from "./pages/LibrariesPage";
 import LibrarySettingsPage from "./pages/LibrarySettingsPage";
 import LoginPage from "./pages/LoginPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
+import DismissedPeoplePage from "./pages/DismissedPeoplePage";
 import PeoplePage from "./pages/PeoplePage";
 import PersonDetailPage from "./pages/PersonDetailPage";
 import SettingsPage from "./pages/SettingsPage";
@@ -107,6 +108,14 @@ createRoot(document.getElementById("root")!).render(
               element={
                 <RequireAuth>
                   {<PeoplePage />}
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="people/dismissed"
+              element={
+                <RequireAuth>
+                  {<DismissedPeoplePage />}
                 </RequireAuth>
               }
             />

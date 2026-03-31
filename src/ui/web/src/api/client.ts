@@ -466,6 +466,21 @@ export async function updatePerson(personId: string, displayName: string): Promi
   });
 }
 
+/** List dismissed people. */
+export async function listDismissedPeople(cursor?: string, limit = 50): Promise<PersonListResponse> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (cursor) params.set("after", cursor);
+  return apiFetch<PersonListResponse>(`/people/dismissed?${params}`);
+}
+
+/** Restore a dismissed person and give them a name. */
+export async function undismissPerson(personId: string, displayName: string): Promise<PersonItem> {
+  return apiFetch<PersonItem>(`/people/${personId}/undismiss`, {
+    method: "POST",
+    body: { display_name: displayName },
+  });
+}
+
 /** Delete a person and all their face matches. */
 export async function deletePerson(personId: string): Promise<void> {
   await apiFetch<void>(`/people/${personId}`, { method: "DELETE" });

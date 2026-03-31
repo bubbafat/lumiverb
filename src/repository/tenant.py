@@ -2759,6 +2759,53 @@ class PersonRepository:
                 result.append((person, row.cnt))
         return result
 
+    def list_dismissed(
+        self,
+        *,
+        after: str | None = None,
+        limit: int = 50,
+    ) -> list[tuple[Person, int]]:
+        """Return dismissed people with face counts, sorted by face count desc."""
+        import base64 as _b64
+
+        having_conditions: list[str] = []
+        params: dict[str, object] = {"limit": limit}
+
+        if after:
+            try:
+                decoded = json.loads(_b64.urlsafe_b64decode(after + "=="))
+                cursor_count = decoded["count"]
+                cursor_id = decoded["id"]
+                having_conditions.append(
+                    "(cnt < :cursor_count OR (cnt = :cursor_count AND p.person_id > :cursor_id))"
+                )
+                params["cursor_count"] = cursor_count
+                params["cursor_id"] = cursor_id
+            except Exception:
+                pass
+
+        having_sql = (" HAVING " + " AND ".join(having_conditions)) if having_conditions else ""
+
+        sql = f"""
+            SELECT p.person_id, p.display_name, p.created_by_user,
+                   p.representative_face_id, p.confirmation_count, p.created_at,
+                   COUNT(m.match_id)::int AS cnt
+            FROM people p
+            LEFT JOIN face_person_matches m ON m.person_id = p.person_id
+            WHERE p.dismissed = true
+            GROUP BY p.person_id
+            {having_sql}
+            ORDER BY cnt DESC, p.person_id ASC
+            LIMIT :limit
+        """
+        rows = self._session.execute(text(sql).bindparams(**params)).all()
+        result = []
+        for row in rows:
+            person = self.get_by_id(row.person_id)
+            if person:
+                result.append((person, row.cnt))
+        return result
+
     def get_face_count(self, person_id: str) -> int:
         """Return the number of faces matched to a person."""
         result = self._session.execute(

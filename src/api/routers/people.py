@@ -230,6 +230,111 @@ def update_person(
     )
 
 
+@router.get("/dismissed", response_model=PersonListResponse)
+def list_dismissed_people(
+    session: Annotated[Session, Depends(get_tenant_session)],
+    after: str | None = None,
+    limit: int = 50,
+) -> PersonListResponse:
+    """List dismissed people sorted by face count descending."""
+    from src.repository.tenant import PersonRepository
+
+    if limit > 100:
+        limit = 100
+    if limit < 1:
+        limit = 1
+
+    repo = PersonRepository(session)
+    rows = repo.list_dismissed(after=after, limit=limit)
+
+    items = []
+    for person, face_count in rows:
+        rep_asset_id = None
+        if person.representative_face_id:
+            from src.models.tenant import Face
+            rep_face = session.get(Face, person.representative_face_id)
+            if rep_face:
+                rep_asset_id = rep_face.asset_id
+
+        items.append(PersonItem(
+            person_id=person.person_id,
+            display_name=person.display_name,
+            face_count=face_count,
+            representative_face_id=person.representative_face_id,
+            representative_asset_id=rep_asset_id,
+            confirmation_count=person.confirmation_count,
+        ))
+
+    next_cursor: str | None = None
+    if items and len(items) == limit:
+        last = rows[-1]
+        cursor_data = {"count": last[1], "id": last[0].person_id}
+        next_cursor = base64.urlsafe_b64encode(
+            json.dumps(cursor_data).encode()
+        ).decode().rstrip("=")
+
+    return PersonListResponse(items=items, next_cursor=next_cursor)
+
+
+class UndismissRequest(BaseModel):
+    display_name: str = Field(..., min_length=1, max_length=255)
+
+
+@router.post("/{person_id}/undismiss", response_model=PersonItem)
+def undismiss_person(
+    person_id: str,
+    body: UndismissRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> PersonItem:
+    """Restore a dismissed person and give them a name."""
+    from src.repository.tenant import PersonRepository, _mark_clusters_dirty
+
+    repo = PersonRepository(session)
+    person = repo.get_by_id(person_id)
+    if person is None or not person.dismissed:
+        raise HTTPException(status_code=404, detail="Dismissed person not found")
+
+    person.dismissed = False
+    person.display_name = body.display_name.strip()
+    session.add(person)
+
+    # Pick best representative face if missing
+    if not person.representative_face_id:
+        from sqlalchemy import text as sa_text
+        rep = session.execute(
+            sa_text(
+                "SELECT f.face_id FROM faces f "
+                "JOIN face_person_matches m ON m.face_id = f.face_id "
+                "WHERE m.person_id = :pid "
+                "ORDER BY f.detection_confidence DESC NULLS LAST LIMIT 1"
+            ),
+            {"pid": person_id},
+        ).scalar()
+        if rep:
+            person.representative_face_id = rep
+
+    _mark_clusters_dirty(session)
+    session.commit()
+    session.refresh(person)
+
+    face_count = repo.get_face_count(person_id)
+    rep_asset_id = None
+    if person.representative_face_id:
+        from src.models.tenant import Face
+        rep_face = session.get(Face, person.representative_face_id)
+        if rep_face:
+            rep_asset_id = rep_face.asset_id
+
+    return PersonItem(
+        person_id=person.person_id,
+        display_name=person.display_name,
+        face_count=face_count,
+        representative_face_id=person.representative_face_id,
+        representative_asset_id=rep_asset_id,
+        confirmation_count=person.confirmation_count,
+    )
+
+
 @router.delete("/{person_id}", status_code=204)
 def delete_person(
     person_id: str,

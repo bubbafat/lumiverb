@@ -514,7 +514,12 @@ export default function PeoplePage() {
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
-      <h1 className="mb-6 text-2xl font-bold text-white">People</h1>
+      <div className="mb-6 flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-white">People</h1>
+        <Link to="/people/dismissed" className="text-xs text-gray-400 hover:text-gray-200">
+          Dismissed
+        </Link>
+      </div>
 
       {people.length === 0 && !peopleQuery.isLoading && clusters.length === 0 && (
         <p className="text-sm text-gray-500">
