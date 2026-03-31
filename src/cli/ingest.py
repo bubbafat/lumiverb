@@ -476,6 +476,80 @@ def _detect_faces(
         return None
 
 
+def _face_batch_worker(
+    base_url: str,
+    token: str,
+    batch: list[dict],
+) -> dict:
+    """Run face detection on a batch of assets in a subprocess.
+
+    ONNX Runtime leaks ~35MB per inference call in its C++ layer with no
+    Python-level fix. Running in a subprocess ensures all native memory is
+    reclaimed by the OS when the child exits.
+
+    Each item in *batch* must have ``asset_id`` and ``rel_path`` keys.
+    The proxy is downloaded from the server for detection.
+
+    Returns {"processed": N, "failed": N, "skipped": N, "errors": [...]}.
+    """
+    import warnings
+    warnings.filterwarnings("ignore", category=FutureWarning, module="insightface")
+
+    from src.workers.faces.insightface_provider import InsightFaceProvider
+    from PIL import Image as PILImage
+
+    client = LumiverbClient(base_url=base_url, token=token)
+    provider = InsightFaceProvider()
+    provider.ensure_loaded()
+
+    processed = failed = skipped = 0
+    errors: list[dict] = []
+    for item in batch:
+        asset_id = item["asset_id"]
+        rel_path = item.get("rel_path", asset_id)
+        try:
+            resp = client._client.get(client._url(f"/v1/assets/{asset_id}/artifacts/proxy"))
+            if resp.status_code != 200:
+                skipped += 1
+                errors.append({"rel_path": rel_path, "error": f"proxy HTTP {resp.status_code}"})
+                resp.close()
+                continue
+
+            image_bytes = resp.content
+            resp.close()
+            del resp
+
+            img = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
+            del image_bytes
+            detections = provider.detect_faces(img)
+            img.close()
+            del img
+
+            payload = [
+                {
+                    "bounding_box": d.bounding_box,
+                    "detection_confidence": d.detection_confidence,
+                    "embedding": d.embedding,
+                }
+                for d in detections
+            ]
+            del detections
+
+            client.post(f"/v1/assets/{asset_id}/faces", json={
+                "detection_model": provider.model_id,
+                "detection_model_version": provider.model_version,
+                "faces": payload,
+            })
+            del payload
+            processed += 1
+        except Exception as e:
+            failed += 1
+            errors.append({"rel_path": rel_path, "error": str(e)})
+
+    client.close()
+    return {"processed": processed, "failed": failed, "skipped": skipped, "errors": errors}
+
+
 def _process_and_ingest_one(
     *,
     client: LumiverbClient,
@@ -488,12 +562,17 @@ def _process_and_ingest_one(
     vision_model_id: str,
     vision_provider: object | None,
     clip_provider: object | None,
-    face_provider: object | None,
     stats: "_IngestStats",
+    ingested_assets: list[dict] | None = None,
     progress: Progress | None = None,
     task_id: object = None,
 ) -> None:
-    """Process one image file and POST /v1/ingest to create + populate atomically."""
+    """Process one image file and POST /v1/ingest to create + populate atomically.
+
+    Face detection is NOT run here — ONNX Runtime leaks ~35-70MB per inference
+    in its C++ layer with no Python-level fix. Faces are detected in a
+    subprocess-isolated post-pass after all images are ingested.
+    """
     source_path = (root_path / rel_path).resolve()
     if not source_path.is_relative_to(root_path):
         logger.warning("Skipping %s: escapes library root", rel_path)
@@ -516,10 +595,7 @@ def _process_and_ingest_one(
         # 4. Generate CLIP embedding from JPEG proxy
         embedding = _generate_clip_embedding(jpeg_bytes, clip_provider)
 
-        # 5. Detect faces (non-blocking — failure logged, ingest continues)
-        face_payload = _detect_faces(jpeg_bytes, face_provider)
-
-        # 6. Convert to WebP for upload (server stores as-is, skips re-encoding)
+        # 5. Convert to WebP for upload (server stores as-is, skips re-encoding)
         webp_bytes = _jpeg_to_webp(jpeg_bytes)
         del jpeg_bytes  # free JPEG buffer (~1-2 MB) before HTTP call
 
@@ -544,14 +620,10 @@ def _process_and_ingest_one(
 
         resp = client.post("/v1/ingest", files=files, data=data)
 
-        # 8. POST faces after asset exists (best-effort)
-        if face_payload is not None:
-            try:
-                asset_id = resp.json().get("asset_id")
-                if asset_id:
-                    client.post(f"/v1/assets/{asset_id}/faces", json=face_payload)
-            except Exception as e:
-                logger.warning("Face submission failed for %s: %s", rel_path, e)
+        asset_id = resp.json().get("asset_id")
+        if ingested_assets is not None and asset_id:
+            with stats.lock:
+                ingested_assets.append({"asset_id": asset_id, "rel_path": rel_path})
 
         with stats.lock:
             stats.processed += 1
@@ -831,17 +903,20 @@ def run_ingest(
     elif skip_embeddings:
         console.print("CLIP embeddings: skipped (--skip-embeddings)")
 
-    # Step 3c: Load InsightFace model for face detection
-    face_provider = None
+    # Step 3c: Check InsightFace availability (loaded later in subprocess).
+    # Do NOT load the model here — ONNX Runtime leaks ~35-70MB per inference
+    # and the subprocess needs its own copy anyway.
+    faces_available = False
     if include_images:
         try:
-            from src.workers.faces.insightface_provider import InsightFaceProvider
-            face_provider = InsightFaceProvider()
-            face_provider.ensure_loaded()
-            console.print(f"Face detection: {face_provider.model_version}")
+            from pathlib import Path as _Path
+            _model_dir = _Path.home() / ".insightface" / "models" / "buffalo_l"
+            if not _model_dir.is_dir():
+                raise FileNotFoundError(f"Model not found at {_model_dir}")
+            faces_available = True
+            console.print("Face detection: buffalo_l (subprocess-isolated)")
         except Exception as e:
             console.print(f"[yellow]Face detection: unavailable ({e}) — continuing without faces[/yellow]")
-            face_provider = None
 
     # Step 4: Separate images and videos
     images_to_ingest = []
@@ -881,6 +956,8 @@ def run_ingest(
         )
 
         # Step 5: Ingest images (bounded: at most `concurrency` in-flight)
+        # Collect ingested asset IDs for face detection post-pass.
+        ingested_assets: list[dict] = []
         if images_to_ingest:
             pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="ingest")
             inflight: set[Future] = set()
@@ -897,8 +974,8 @@ def run_ingest(
                     vision_model_id=vision_model_id,
                     vision_provider=vision_provider,
                     clip_provider=clip_provider,
-                    face_provider=face_provider,
                     stats=stats,
+                    ingested_assets=ingested_assets,
                     progress=progress,
                     task_id=img_tid,
                 )
@@ -932,6 +1009,46 @@ def run_ingest(
             pool.shutdown(wait=True)
 
     # TODO: Video stage 2 — scene detection + vision (ADR-005 Phase 6)
+
+    # Step 7: Face detection in subprocess batches.
+    # ONNX Runtime leaks ~35-70MB per inference call in its C++ layer — no
+    # Python-level fix exists. Running each batch in a subprocess ensures all
+    # native memory is reclaimed by the OS when the child exits. Model reload
+    # (~2s per batch) is acceptable vs unbounded memory growth.
+    if faces_available and ingested_assets:
+        import multiprocessing as mp
+
+        FACE_BATCH_SIZE = 50
+        console.print(f"\n[bold]Detecting faces ({len(ingested_assets):,} assets)...[/bold]")
+        progress = _make_progress(console)
+        with progress:
+            face_tid = progress.add_task("Faces", total=len(ingested_assets), ok=0, fail=0)
+            for batch_start in range(0, len(ingested_assets), FACE_BATCH_SIZE):
+                batch = ingested_assets[batch_start:batch_start + FACE_BATCH_SIZE]
+                try:
+                    ctx = mp.get_context("spawn")
+                    with ctx.Pool(1) as pool:
+                        result = pool.apply(
+                            _face_batch_worker,
+                            (client.base_url, client.token, batch),
+                        )
+                except Exception as e:
+                    logger.warning("Face batch failed: %s", e)
+                    result = {"processed": 0, "failed": len(batch), "skipped": 0, "errors": []}
+
+                for err in result.get("errors", []):
+                    progress.console.print(
+                        f"[red]faces \u2717[/red] {err['rel_path']}: {err['error']}"
+                    )
+
+                batch_total = result["processed"] + result["failed"] + result["skipped"]
+                task = progress.tasks[face_tid]
+                progress.advance(face_tid, batch_total)
+                progress.update(
+                    face_tid,
+                    ok=task.fields["ok"] + result["processed"],
+                    fail=task.fields["fail"] + result["failed"],
+                )
 
     return stats
 
