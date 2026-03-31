@@ -84,19 +84,35 @@ function PersonCard({ person }: { person: PersonItem }) {
 }
 
 function ClusterFaceThumbnail({ face }: { face: PersonFaceItem }) {
-  // Prefer server-generated face crop; fall back to full asset thumbnail
+  // Prefer server-generated face crop; fall back to full asset thumbnail with bounding box overlay
   const crop = useFaceCrop(face.face_id);
-  const fallback = useAuthenticatedImage(face.asset_id, "thumbnail", { enabled: !crop.url && !crop.isLoading });
+  const hasCrop = !!crop.url;
+  const fallback = useAuthenticatedImage(face.asset_id, "thumbnail", { enabled: !hasCrop && !crop.isLoading });
 
   const url = crop.url ?? fallback.url;
-  const isLoading = crop.isLoading || (!crop.url && fallback.isLoading);
+  const isLoading = crop.isLoading || (!hasCrop && fallback.isLoading);
+  const box = face.bounding_box;
 
   return (
     <div className="relative aspect-square overflow-hidden rounded-lg bg-gray-800">
       {isLoading ? (
         <div className="h-full w-full animate-pulse bg-gray-700" />
       ) : url ? (
-        <img src={url} alt={face.rel_path ?? ""} className="h-full w-full object-cover" />
+        <>
+          <img src={url} alt={face.rel_path ?? ""} className="h-full w-full object-cover" />
+          {/* If showing full thumbnail (no crop), overlay the bounding box to highlight which face */}
+          {!hasCrop && box && (
+            <div
+              className="absolute border-2 border-emerald-400 rounded pointer-events-none"
+              style={{
+                left: `${box.x * 100}%`,
+                top: `${box.y * 100}%`,
+                width: `${box.w * 100}%`,
+                height: `${box.h * 100}%`,
+              }}
+            />
+          )}
+        </>
       ) : (
         <div className="flex h-full w-full items-center justify-center text-gray-600 text-xs">
           No image
