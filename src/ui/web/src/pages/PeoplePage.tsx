@@ -172,13 +172,15 @@ function ClusterCard({
   people,
   fading,
   onProcessed,
-  onDismissed,
+  onDismissStarted,
+  onDismissComplete,
 }: {
   cluster: ClusterItem;
   people: PersonItem[];
   fading: false | "locked" | "fading";
   onProcessed: (clusterIndex: number) => void;
-  onDismissed: (clusterIndex: number, personId: string) => void;
+  onDismissStarted: (clusterIndex: number) => void;
+  onDismissComplete: (clusterIndex: number, personId: string) => void;
 }) {
   const [mode, setMode] = useState<"idle" | "name" | "assign">("idle");
   const [expanded, setExpanded] = useState(false);
@@ -273,9 +275,12 @@ function ClusterCard({
   });
 
   const dismissMutation = useMutation({
-    mutationFn: () => dismissCluster(cluster.cluster_index),
+    mutationFn: () => {
+      onDismissStarted(cluster.cluster_index);
+      return dismissCluster(cluster.cluster_index);
+    },
     onSuccess: (data) => {
-      onDismissed(cluster.cluster_index, data.person_id);
+      onDismissComplete(cluster.cluster_index, data.person_id);
     },
   });
 
@@ -479,8 +484,8 @@ export default function PeoplePage() {
   const [removedIndices, setRemovedIndices] = useState<Set<number>>(new Set());
   // Track clusters currently fading out: "locked" (desaturated) → "fading" (fade out) → removed
   const [fadingIndices, setFadingIndices] = useState<Map<number, "locked" | "fading">>(new Map());
-  // Undo state for dismissed clusters
-  const [undoState, setUndoState] = useState<{ clusterIndex: number; personId: string; timer: ReturnType<typeof setTimeout> } | null>(null);
+  // Undo state for dismissed clusters — personId is null until API responds
+  const [undoState, setUndoState] = useState<{ clusterIndex: number; personId: string | null; timer: ReturnType<typeof setTimeout> } | null>(null);
 
   const peopleQuery = useInfiniteQuery({
     queryKey: ["people"],
@@ -528,16 +533,21 @@ export default function PeoplePage() {
     queryClient.invalidateQueries({ queryKey: ["people"] });
   }, [queryClient, startFadeSequence]);
 
-  const handleClusterDismissed = useCallback((clusterIndex: number, personId: string) => {
+  const handleDismissStarted = useCallback((clusterIndex: number) => {
     startFadeSequence(clusterIndex);
     if (undoState) clearTimeout(undoState.timer);
     const timer = setTimeout(() => setUndoState(null), 5000);
-    setUndoState({ clusterIndex, personId, timer });
+    setUndoState({ clusterIndex, personId: null, timer });
+  }, [startFadeSequence, undoState]);
+
+  const handleDismissComplete = useCallback((clusterIndex: number, personId: string) => {
+    // Fill in the personId so undo becomes available
+    setUndoState((prev) => prev && prev.clusterIndex === clusterIndex ? { ...prev, personId } : prev);
     queryClient.invalidateQueries({ queryKey: ["people"] });
-  }, [queryClient, startFadeSequence, undoState]);
+  }, [queryClient]);
 
   const handleUndo = useCallback(async () => {
-    if (!undoState) return;
+    if (!undoState || !undoState.personId) return;
     clearTimeout(undoState.timer);
     try {
       await deletePerson(undoState.personId);
@@ -632,7 +642,8 @@ export default function PeoplePage() {
                     people={people}
                     fading={fadingIndices.get(cluster.cluster_index) ?? false}
                     onProcessed={handleClusterProcessed}
-                    onDismissed={handleClusterDismissed}
+                    onDismissStarted={handleDismissStarted}
+                    onDismissComplete={handleDismissComplete}
                   />
                 ))}
               </div>
@@ -665,7 +676,8 @@ export default function PeoplePage() {
           <button
             type="button"
             onClick={handleUndo}
-            className="ml-3 text-sm font-medium text-indigo-400 hover:text-indigo-300"
+            disabled={!undoState.personId}
+            className="ml-3 text-sm font-medium text-indigo-400 hover:text-indigo-300 disabled:text-gray-500"
           >
             Undo
           </button>
