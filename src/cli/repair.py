@@ -36,8 +36,8 @@ def _drain(inflight: set[Future]) -> set[Future]:
     return inflight
 
 
-REPAIR_TYPES = ("embed", "vision", "faces", "video-scenes", "search-sync", "all")
-RepairType = Literal["embed", "vision", "faces", "video-scenes", "search-sync", "all"]
+REPAIR_TYPES = ("embed", "vision", "faces", "video-scenes", "scene-vision", "search-sync", "all")
+RepairType = Literal["embed", "vision", "faces", "video-scenes", "scene-vision", "search-sync", "all"]
 
 
 class _RepairStats:
@@ -70,6 +70,7 @@ def _page_missing(
     missing_embeddings: bool = False,
     missing_faces: bool = False,
     missing_video_scenes: bool = False,
+    missing_scene_vision: bool = False,
 ) -> list[dict]:
     """Page through assets matching the given missing filter."""
     results: list[dict] = []
@@ -89,6 +90,8 @@ def _page_missing(
             params["missing_faces"] = "true"
         if missing_video_scenes:
             params["missing_video_scenes"] = "true"
+        if missing_scene_vision:
+            params["missing_scene_vision"] = "true"
         if cursor:
             params["after"] = cursor
         resp = client.get("/v1/assets/page", params=params)
@@ -311,6 +314,8 @@ def run_repair(
         plan.append(("faces", summary["missing_faces"], "missing face detection"))
     if job_type in ("video-scenes", "all") and summary.get("missing_video_scenes", 0) > 0:
         plan.append(("video-scenes", summary["missing_video_scenes"], "missing video scene detection"))
+    if job_type in ("scene-vision", "all") and summary.get("missing_scene_vision", 0) > 0:
+        plan.append(("scene-vision", summary["missing_scene_vision"], "missing scene vision AI"))
     if job_type in ("search-sync", "all"):
         stale = summary.get("stale_search_sync", 0)
         if force:
@@ -334,6 +339,7 @@ def run_repair(
         ("Vision AI", "missing_vision", job_type in ("vision", "all")),
         ("Faces", "missing_faces", job_type in ("faces", "all")),
         ("Video scenes", "missing_video_scenes", job_type in ("video-scenes", "all")),
+        ("Scene vision", "missing_scene_vision", job_type in ("scene-vision", "all")),
         ("Search sync", "stale_search_sync", job_type in ("search-sync", "all")),
     ]:
         count = summary.get(key, 0)
@@ -552,6 +558,49 @@ def run_repair(
                     client=client,
                     root_path=root_path,
                     videos=indexable,
+                    console=console,
+                    progress=progress,
+                    task_id=tid,
+                )
+
+        elif repair_type == "scene-vision":
+            console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
+
+            from pathlib import Path as _Path
+            root_path_str = library.get("root_path")
+            root_path = _Path(root_path_str).resolve() if root_path_str else None
+            if root_path is None or not root_path.is_dir():
+                console.print("[red]Library root not accessible — cannot run scene vision[/red]")
+                continue
+
+            # Resolve vision config
+            from src.cli.ingest import _resolve_vision_config
+            vision_api_url, vision_api_key, vision_model_id, vision_source = _resolve_vision_config(client)
+            scene_vision_provider = None
+            if vision_api_url and vision_model_id:
+                from src.workers.captions.factory import get_caption_provider
+                scene_vision_provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key)
+                console.print(f"  Vision AI: {vision_model_id} via {vision_api_url} ({vision_source})")
+            else:
+                console.print("  Vision AI: not configured — extracting rep frames only")
+
+            assets = _page_missing(client, library_id, missing_scene_vision=True)
+            if not assets:
+                console.print("No assets found (already repaired?).")
+                continue
+
+            videos = [{"asset_id": a["asset_id"], "rel_path": a["rel_path"]} for a in assets]
+
+            from src.cli.video_index import run_video_enrich
+            progress = _make_progress(console)
+            with progress:
+                tid = progress.add_task("Scene vision", total=len(videos), ok=0, fail=0)
+                run_video_enrich(
+                    client=client,
+                    root_path=root_path,
+                    videos=videos,
+                    vision_provider=scene_vision_provider,
+                    vision_model_id=vision_model_id,
                     console=console,
                     progress=progress,
                     task_id=tid,

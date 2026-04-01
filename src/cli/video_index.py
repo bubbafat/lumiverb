@@ -1,14 +1,19 @@
-"""Video scene detection orchestration for CLI ingest and repair.
+"""Video scene detection and enrichment orchestration for CLI ingest and repair.
 
-Runs scene detection on local video files using VideoScanner + SceneSegmenter,
-then submits scene boundaries to the server via the chunk API.
+Scene detection: runs VideoScanner + SceneSegmenter on local video files,
+submits scene boundaries to the server via the chunk API.
 
-Used by both `lumiverb ingest` (stage 2) and `lumiverb repair --job-type video-scenes`.
+Scene enrichment: extracts rep frame JPEGs at each scene's timestamp,
+uploads as artifacts, runs vision AI, and syncs to search.
+
+Used by `lumiverb ingest` (stages 2+3) and `lumiverb repair`.
 """
 
 from __future__ import annotations
 
+import io
 import logging
+import tempfile
 import time
 from pathlib import Path
 
@@ -16,6 +21,7 @@ from rich.console import Console
 from rich.progress import Progress
 
 from src.cli.client import LumiverbClient
+from src.video.clip_extractor import extract_video_frame_detailed
 from src.video.scene_segmenter import SceneSegmenter
 from src.video.video_scanner import SyncError, VideoScanner
 
@@ -177,6 +183,172 @@ def run_video_index(
             logger.exception("video-index: %s — failed: %s", rel_path, e)
             fail += 1
             progress.console.print(f"[red]video-index \u2717[/red] {rel_path}: {e}")
+
+        progress.advance(task_id, 1)
+        progress.update(task_id, ok=ok, fail=fail)
+
+
+# ---------------------------------------------------------------------------
+# Scene enrichment: rep frame extraction + vision AI + search sync
+# ---------------------------------------------------------------------------
+
+
+def enrich_video_scenes(
+    *,
+    client: LumiverbClient,
+    source_path: Path,
+    asset_id: str,
+    rel_path: str,
+    vision_provider: object | None,
+    vision_model_id: str | None,
+) -> dict:
+    """Extract rep frames, run vision AI, and sync scenes to search.
+
+    Returns {"enriched": N, "skipped": N, "failed": N, "elapsed": float}.
+    """
+    t0 = time.perf_counter()
+    enriched = 0
+    skipped = 0
+    failed = 0
+
+    # List all scenes for this asset
+    resp = client.get(f"/v1/video/{asset_id}/scenes")
+    scenes = resp.json().get("scenes", [])
+
+    for scene in scenes:
+        scene_id = scene["scene_id"]
+        rep_frame_ms = scene["rep_frame_ms"]
+
+        # Skip scenes that already have vision descriptions
+        if scene.get("description"):
+            skipped += 1
+            continue
+
+        tmp_path = None
+        try:
+            # 1. Extract rep frame JPEG
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                tmp_path = Path(tmp.name)
+
+            attempt = extract_video_frame_detailed(
+                source_path, tmp_path,
+                timestamp=rep_frame_ms / 1000.0,
+            )
+            if not attempt.ok or not tmp_path.exists() or tmp_path.stat().st_size == 0:
+                logger.warning(
+                    "scene-enrich: %s scene %s — rep frame extraction failed at %dms",
+                    rel_path, scene_id, rep_frame_ms,
+                )
+                failed += 1
+                continue
+
+            # 2. Upload rep frame artifact
+            with open(tmp_path, "rb") as f:
+                client.post(
+                    f"/v1/assets/{asset_id}/artifacts/scene_rep",
+                    files={"file": ("rep.jpg", f, "image/jpeg")},
+                    data={"rep_frame_ms": str(rep_frame_ms)},
+                )
+
+            # 3. Run vision AI (if provider available)
+            if vision_provider is not None and vision_model_id:
+                result = vision_provider.describe(tmp_path)
+                if result:
+                    description = (result.get("description") or "").strip()
+                    tags = [
+                        t.strip()
+                        for t in (result.get("tags") or [])
+                        if isinstance(t, str) and t.strip()
+                    ]
+
+                    # 4. PATCH scene with vision results
+                    client.patch(
+                        f"/v1/video/scenes/{scene_id}",
+                        json={
+                            "model_id": vision_model_id,
+                            "model_version": "1",
+                            "description": description,
+                            "tags": tags,
+                        },
+                    )
+
+                    # 5. Sync scene to Quickwit
+                    client.post(
+                        f"/v1/video/scenes/{scene_id}/sync",
+                        json={"asset_id": asset_id},
+                    )
+
+            enriched += 1
+            logger.info(
+                "scene-enrich: %s scene %s — rep frame at %dms%s",
+                rel_path, scene_id, rep_frame_ms,
+                " + vision" if vision_provider else "",
+            )
+
+        except Exception as e:
+            logger.exception(
+                "scene-enrich: %s scene %s — failed: %s",
+                rel_path, scene_id, e,
+            )
+            failed += 1
+        finally:
+            if tmp_path is not None:
+                tmp_path.unlink(missing_ok=True)
+
+    elapsed = time.perf_counter() - t0
+    return {"enriched": enriched, "skipped": skipped, "failed": failed, "elapsed": elapsed}
+
+
+def run_video_enrich(
+    *,
+    client: LumiverbClient,
+    root_path: Path,
+    videos: list[dict],
+    vision_provider: object | None,
+    vision_model_id: str | None,
+    console: Console,
+    progress: Progress,
+    task_id: object,
+) -> None:
+    """Run scene enrichment on a batch of videos, updating progress.
+
+    Each video dict must have: asset_id, rel_path.
+    Videos are processed sequentially (vision API is the bottleneck).
+    """
+    ok = 0
+    fail = 0
+
+    for video in videos:
+        asset_id = video["asset_id"]
+        rel_path = video["rel_path"]
+        source_path = (root_path / rel_path).resolve()
+
+        if not source_path.is_file():
+            logger.warning("scene-enrich: %s — source file not found, skipping", rel_path)
+            fail += 1
+            progress.advance(task_id, 1)
+            progress.update(task_id, ok=ok, fail=fail)
+            continue
+
+        try:
+            result = enrich_video_scenes(
+                client=client,
+                source_path=source_path,
+                asset_id=asset_id,
+                rel_path=rel_path,
+                vision_provider=vision_provider,
+                vision_model_id=vision_model_id,
+            )
+            ok += 1
+            logger.info(
+                "scene-enrich: %s — %d enriched, %d skipped, %d failed (%.1fs)",
+                rel_path, result["enriched"], result["skipped"],
+                result["failed"], result["elapsed"],
+            )
+        except Exception as e:
+            logger.exception("scene-enrich: %s — failed: %s", rel_path, e)
+            fail += 1
+            progress.console.print(f"[red]scene-enrich \u2717[/red] {rel_path}: {e}")
 
         progress.advance(task_id, 1)
         progress.update(task_id, ok=ok, fail=fail)

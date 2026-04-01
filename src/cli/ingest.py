@@ -861,18 +861,20 @@ def run_ingest(
     include_videos = media_type_filter in ("all", "video")
 
     vision_provider = None
-    if include_images:
-        if skip_vision:
-            console.print("Vision AI: skipped (--skip-vision)")
-        elif not vision_api_url:
+    if skip_vision:
+        console.print("Vision AI: skipped (--skip-vision)")
+    elif not vision_api_url:
+        if include_images:
             console.print("[red]Vision AI: not configured.[/red]")
             console.print("  Set it via: lumiverb config set --vision-api-url <url>")
             console.print("  Or to ingest without AI: lumiverb ingest --library <name> --skip-vision")
             raise SystemExit(1)
         else:
-            from src.workers.captions.factory import get_caption_provider
-            vision_provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key)
-            console.print(f"Vision AI: {vision_model_id} via {vision_api_url} ({vision_source})")
+            console.print("Vision AI: not configured (video scenes will have no descriptions)")
+    else:
+        from src.workers.captions.factory import get_caption_provider
+        vision_provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key)
+        console.print(f"Vision AI: {vision_model_id} via {vision_api_url} ({vision_source})")
 
     # Step 3b: Load CLIP embedding model eagerly so we fail fast if it can't load
     clip_provider = None
@@ -1016,6 +1018,26 @@ def run_ingest(
                 console=console,
                 progress=vid2_progress,
                 task_id=vid2_tid,
+            )
+
+    # Step 6c: Video stage 3 — rep frame extraction + vision AI on scenes
+    if indexable_videos:
+        from src.cli.video_index import run_video_enrich
+
+        enrichable = [{"asset_id": v["asset_id"], "rel_path": v["rel_path"]} for v in indexable_videos]
+        console.print(f"\n[bold]Scene enrichment ({len(enrichable):,} videos)...[/bold]")
+        vid3_progress = _make_progress(console)
+        with vid3_progress:
+            vid3_tid = vid3_progress.add_task("Scene vision", total=len(enrichable), ok=0, fail=0)
+            run_video_enrich(
+                client=client,
+                root_path=root_path,
+                videos=enrichable,
+                vision_provider=vision_provider,
+                vision_model_id=vision_model_id,
+                console=console,
+                progress=vid3_progress,
+                task_id=vid3_tid,
             )
 
     # Step 7: Face detection in subprocess batches.

@@ -1,4 +1,4 @@
-"""Unit tests for video scene detection orchestration."""
+"""Unit tests for video scene detection and enrichment orchestration."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
 
-from src.cli.video_index import index_video_scenes, run_video_index
+from src.cli.video_index import index_video_scenes, run_video_index, enrich_video_scenes, run_video_enrich
 
 
 class _FakeResponse:
@@ -349,3 +349,194 @@ def test_run_video_index_happy_path(mock_index):
     last_update = progress.update.call_args_list[-1]
     assert last_update.kwargs["ok"] == 2
     assert last_update.kwargs["fail"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Scene enrichment tests
+# ---------------------------------------------------------------------------
+
+
+class _FakeFFmpegAttempt:
+    def __init__(self, ok=True):
+        self.ok = ok
+        self.stderr = ""
+    def stderr_tail(self):
+        return ""
+
+
+def _mock_extract_ok(source, dest, timestamp=0.0):
+    """Mock that writes fake JPEG bytes so the file size check passes."""
+    dest.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 100)
+    return _FakeFFmpegAttempt(ok=True)
+
+
+@patch("src.cli.video_index.extract_video_frame_detailed")
+def test_enrich_video_scenes_with_vision(mock_extract):
+    """Enriches scenes: extracts rep frame, calls vision, patches + syncs."""
+    mock_extract.side_effect = _mock_extract_ok
+
+    client = MagicMock()
+    # GET /v1/video/{asset_id}/scenes
+    client.get.return_value = _FakeResponse(data={
+        "scenes": [
+            {"scene_id": "scn_1", "rep_frame_ms": 5000, "description": None},
+            {"scene_id": "scn_2", "rep_frame_ms": 20000, "description": "already done"},
+        ]
+    })
+    client.post.return_value = _FakeResponse()
+    client.patch.return_value = _FakeResponse()
+
+    vision_provider = MagicMock()
+    vision_provider.describe.return_value = {"description": "A sunset", "tags": ["sunset", "sky"]}
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source = Path(tmpdir) / "video.mp4"
+        source.write_bytes(b"\x00" * 100)
+
+        result = enrich_video_scenes(
+            client=client,
+            source_path=source,
+            asset_id="asset_1",
+            rel_path="video.mp4",
+            vision_provider=vision_provider,
+            vision_model_id="test-model",
+        )
+
+    assert result["enriched"] == 1
+    assert result["skipped"] == 1  # scn_2 already has description
+    assert result["failed"] == 0
+
+    # Vision was called once (only for scn_1)
+    vision_provider.describe.assert_called_once()
+
+    # PATCH was called for scn_1
+    patch_calls = [c for c in client.patch.call_args_list if "scenes" in str(c)]
+    assert len(patch_calls) == 1
+    body = patch_calls[0].kwargs["json"]
+    assert body["description"] == "A sunset"
+    assert body["tags"] == ["sunset", "sky"]
+    assert body["model_id"] == "test-model"
+
+    # Sync was called for scn_1
+    sync_calls = [c for c in client.post.call_args_list if "sync" in str(c)]
+    assert len(sync_calls) == 1
+
+
+@patch("src.cli.video_index.extract_video_frame_detailed")
+def test_enrich_video_scenes_without_vision(mock_extract):
+    """Without vision provider, extracts rep frames but skips vision/sync."""
+    mock_extract.side_effect = _mock_extract_ok
+
+    client = MagicMock()
+    client.get.return_value = _FakeResponse(data={
+        "scenes": [{"scene_id": "scn_1", "rep_frame_ms": 5000, "description": None}]
+    })
+    client.post.return_value = _FakeResponse()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source = Path(tmpdir) / "video.mp4"
+        source.write_bytes(b"\x00" * 100)
+
+        result = enrich_video_scenes(
+            client=client,
+            source_path=source,
+            asset_id="asset_1",
+            rel_path="video.mp4",
+            vision_provider=None,
+            vision_model_id=None,
+        )
+
+    assert result["enriched"] == 1
+    assert result["failed"] == 0
+
+    # Artifact upload was called
+    upload_calls = [c for c in client.post.call_args_list if "scene_rep" in str(c)]
+    assert len(upload_calls) == 1
+
+    # No PATCH or sync (no vision provider)
+    assert client.patch.call_count == 0
+    sync_calls = [c for c in client.post.call_args_list if "sync" in str(c)]
+    assert len(sync_calls) == 0
+
+
+@patch("src.cli.video_index.extract_video_frame_detailed")
+def test_enrich_video_scenes_extraction_failure(mock_extract):
+    """Failed rep frame extraction counts as failure, continues to next scene."""
+    mock_extract.return_value = _FakeFFmpegAttempt(ok=False)
+
+    client = MagicMock()
+    client.get.return_value = _FakeResponse(data={
+        "scenes": [
+            {"scene_id": "scn_1", "rep_frame_ms": 5000, "description": None},
+            {"scene_id": "scn_2", "rep_frame_ms": 20000, "description": None},
+        ]
+    })
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source = Path(tmpdir) / "video.mp4"
+        source.write_bytes(b"\x00" * 100)
+
+        result = enrich_video_scenes(
+            client=client,
+            source_path=source,
+            asset_id="asset_1",
+            rel_path="video.mp4",
+            vision_provider=MagicMock(),
+            vision_model_id="test-model",
+        )
+
+    assert result["enriched"] == 0
+    assert result["failed"] == 2
+
+
+@patch("src.cli.video_index.enrich_video_scenes")
+def test_run_video_enrich_happy_path(mock_enrich):
+    """Processes videos and updates progress."""
+    mock_enrich.return_value = {"enriched": 2, "skipped": 0, "failed": 0, "elapsed": 1.0}
+    progress = MagicMock()
+    progress.console = MagicMock()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        (root / "a.mp4").write_bytes(b"\x00" * 100)
+
+        run_video_enrich(
+            client=MagicMock(),
+            root_path=root,
+            videos=[{"asset_id": "a1", "rel_path": "a.mp4"}],
+            vision_provider=MagicMock(),
+            vision_model_id="test-model",
+            console=MagicMock(),
+            progress=progress,
+            task_id=0,
+        )
+
+    mock_enrich.assert_called_once()
+    progress.advance.assert_called_once_with(0, 1)
+    last_update = progress.update.call_args_list[-1]
+    assert last_update.kwargs["ok"] == 1
+    assert last_update.kwargs["fail"] == 0
+
+
+@patch("src.cli.video_index.enrich_video_scenes")
+def test_run_video_enrich_missing_source(mock_enrich):
+    """Missing source files are skipped."""
+    progress = MagicMock()
+    progress.console = MagicMock()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        run_video_enrich(
+            client=MagicMock(),
+            root_path=Path(tmpdir),
+            videos=[{"asset_id": "a1", "rel_path": "missing.mp4"}],
+            vision_provider=MagicMock(),
+            vision_model_id="test-model",
+            console=MagicMock(),
+            progress=progress,
+            task_id=0,
+        )
+
+    mock_enrich.assert_not_called()
+    last_update = progress.update.call_args_list[-1]
+    assert last_update.kwargs["ok"] == 0
+    assert last_update.kwargs["fail"] == 1
