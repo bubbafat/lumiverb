@@ -196,7 +196,27 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
     meta_repo = AssetMetadataRepository(session)
 
     try:
-        qw.ensure_tenant_index(tenant_id)
+        index_recreated = qw.ensure_tenant_index(tenant_id)
+        if index_recreated:
+            logger.info("Quickwit asset index recreated for %s — forcing full re-sync", tenant_id)
+            session.execute(text("UPDATE assets SET search_synced_at = NULL"))
+            session.commit()
+            # Re-query with cleared timestamps
+            rows = session.execute(text("""
+                SELECT a.asset_id, a.library_id
+                FROM active_assets a
+                JOIN LATERAL (
+                    SELECT generated_at
+                    FROM asset_metadata
+                    WHERE asset_id = a.asset_id
+                    ORDER BY generated_at DESC
+                    LIMIT 1
+                ) m ON TRUE
+                WHERE a.search_synced_at IS NULL
+                   OR a.search_synced_at < m.generated_at
+                ORDER BY a.library_id, a.asset_id
+                LIMIT 1000
+            """)).fetchall()
     except Exception as exc:
         logger.warning("Cannot ensure tenant Quickwit index for %s: %s", tenant_id, exc)
         return {"synced": 0, "failed": len(rows), "scenes_synced": 0, "scenes_failed": 0}
@@ -244,7 +264,20 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
     scenes_failed = 0
 
     try:
-        qw.ensure_tenant_scene_index(tenant_id)
+        scene_index_recreated = qw.ensure_tenant_scene_index(tenant_id)
+        if scene_index_recreated:
+            logger.info("Quickwit scene index recreated for %s — forcing full scene re-sync", tenant_id)
+            session.execute(text("UPDATE video_scenes SET search_synced_at = NULL"))
+            session.commit()
+            scene_rows = session.execute(text("""
+                SELECT vs.scene_id, a.asset_id, a.library_id
+                FROM video_scenes vs
+                JOIN active_assets a ON a.asset_id = vs.asset_id
+                WHERE vs.description IS NOT NULL
+                  AND (vs.search_synced_at IS NULL OR vs.search_synced_at < vs.created_at)
+                ORDER BY a.library_id, vs.scene_id
+                LIMIT 1000
+            """)).fetchall()
     except Exception as exc:
         logger.warning("Cannot ensure tenant scene index for %s: %s", tenant_id, exc)
         return {"synced": synced, "failed": failed, "scenes_synced": 0, "scenes_failed": len(scene_rows)}

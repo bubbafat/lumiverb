@@ -52,13 +52,13 @@ class QuickwitClient:
     # Index lifecycle
     # ------------------------------------------------------------------
 
-    def ensure_tenant_index(self, tenant_id: str) -> None:
-        """Ensure the per-tenant asset index exists."""
-        self._ensure_index(self.tenant_index_id(tenant_id), self._schema_path())
+    def ensure_tenant_index(self, tenant_id: str) -> bool:
+        """Ensure the per-tenant asset index exists. Returns True if recreated."""
+        return self._ensure_index(self.tenant_index_id(tenant_id), self._schema_path())
 
-    def ensure_tenant_scene_index(self, tenant_id: str) -> None:
-        """Ensure the per-tenant scene index exists."""
-        self._ensure_index(self.tenant_scene_index_id(tenant_id), self._scene_schema_path())
+    def ensure_tenant_scene_index(self, tenant_id: str) -> bool:
+        """Ensure the per-tenant scene index exists. Returns True if recreated."""
+        return self._ensure_index(self.tenant_scene_index_id(tenant_id), self._scene_schema_path())
 
     def recreate_tenant_indexes(self, tenant_id: str) -> None:
         """Delete and recreate both tenant indexes (asset + scene) with current schema.
@@ -81,13 +81,21 @@ class QuickwitClient:
             return
         logger.warning("Quickwit index delete failed for %s: %s %s", index_id, resp.status_code, resp.text)
 
-    def _ensure_index(self, index_id: str, schema_path: Path) -> None:
+    def _ensure_index(self, index_id: str, schema_path: Path, *, auto_recreate: bool = True) -> bool:
+        """Ensure index exists with current schema. Returns True if (re)created."""
         if not self._enabled:
-            return
+            return False
+        recreated = False
         exists_resp = requests.get(f"{self._base_url}/api/v1/indexes/{index_id}", timeout=5)
         if exists_resp.status_code == 200:
-            return
-        if exists_resp.status_code not in (404, 400):
+            if auto_recreate and self._schema_fields_changed(exists_resp.json(), schema_path):
+                logger.info("Quickwit index %s has outdated schema — recreating", index_id)
+                self._delete_index(index_id)
+                recreated = True
+                # Fall through to create below
+            else:
+                return False
+        if exists_resp.status_code not in (200, 404, 400):
             logger.warning("Quickwit index check failed for %s: %s %s", index_id, exists_resp.status_code, exists_resp.text)
         if not schema_path.exists():
             raise FileNotFoundError(f"Quickwit schema not found: {schema_path}")
@@ -101,6 +109,25 @@ class QuickwitClient:
         )
         if resp.status_code not in (200, 201):
             raise RuntimeError(f"Quickwit index create failed for {index_id}: {resp.status_code} {resp.text}")
+        return recreated
+
+    @staticmethod
+    def _schema_fields_changed(index_metadata: dict, schema_path: Path) -> bool:
+        """Compare expected schema fields to the live index. Returns True if a recreate is needed."""
+        try:
+            expected = json.loads(schema_path.read_text(encoding="utf-8"))
+            expected_fields = {f["name"] for f in expected.get("doc_mapping", {}).get("field_mappings", [])}
+            # Quickwit returns index metadata with doc_mapping.field_mappings
+            live_mappings = index_metadata.get("index_config", {}).get("doc_mapping", {}).get("field_mappings", [])
+            live_fields = {f["name"] for f in live_mappings}
+            missing = expected_fields - live_fields
+            if missing:
+                logger.info("Quickwit index missing fields: %s", missing)
+                return True
+            return False
+        except Exception as exc:
+            logger.warning("Could not compare Quickwit schema: %s", exc)
+            return False
 
     # ------------------------------------------------------------------
     # Ingest

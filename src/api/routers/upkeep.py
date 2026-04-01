@@ -136,10 +136,6 @@ def _run_sweep_all_tenants(force: bool = False) -> dict:
 
     for tenant in tenants:
         try:
-            if force:
-                from src.search.quickwit_client import QuickwitClient
-                QuickwitClient().recreate_tenant_indexes(tenant.tenant_id)
-                logger.info("Recreated Quickwit indexes for tenant %s", tenant.tenant_id)
             with get_tenant_session(tenant.tenant_id) as session:
                 if force:
                     _reset_search_synced_at(session)
@@ -173,11 +169,6 @@ def _run_sweep_single_tenant(authorization: str | None, force: bool = False) -> 
         routing = TenantDbRoutingRepository(ctrl_session).get_by_tenant_id(tenant_id)
         if routing is None:
             return {"synced": 0, "failed": 0, "scenes_synced": 0, "scenes_failed": 0}
-
-    if force:
-        from src.search.quickwit_client import QuickwitClient
-        QuickwitClient().recreate_tenant_indexes(tenant_id)
-        logger.info("Recreated Quickwit indexes for tenant %s", tenant_id)
 
     engine = get_engine_for_url(routing.connection_string)
     with TenantSession(engine) as session:
