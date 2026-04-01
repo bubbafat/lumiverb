@@ -278,6 +278,7 @@ def _process_and_ingest_video_stage1(
     file_size: int,
     file_mtime: datetime | None,
     stats: "_IngestStats",
+    ingested_videos: list[dict] | None = None,
     progress: Progress | None = None,
     task_id: object = None,
 ) -> None:
@@ -326,6 +327,16 @@ def _process_and_ingest_video_stage1(
             f"/v1/assets/{asset_id}/artifacts/video_preview",
             files={"file": ("preview.mp4", io.BytesIO(preview_bytes), "video/mp4")},
         )
+
+        # Collect for stage 2 (scene detection)
+        if ingested_videos is not None and asset_id:
+            duration = exif_payload.get("duration_sec")
+            with stats.lock:
+                ingested_videos.append({
+                    "asset_id": asset_id,
+                    "rel_path": rel_path,
+                    "duration_sec": duration,
+                })
 
         with stats.lock:
             stats.processed += 1
@@ -965,6 +976,7 @@ def run_ingest(
             pool.shutdown(wait=True)
 
         # Step 6: Video stage 1 — poster frame + EXIF + 10-sec preview
+        ingested_videos: list[dict] = []
         if videos_to_ingest:
             pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="video")
             inflight = set()
@@ -978,6 +990,7 @@ def run_ingest(
                     file_size=f["file_size"],
                     file_mtime=f["file_mtime"],
                     stats=stats,
+                    ingested_videos=ingested_videos,
                     progress=progress,
                     task_id=vid_tid,
                 )
@@ -987,7 +1000,23 @@ def run_ingest(
             _drain(inflight)
             pool.shutdown(wait=True)
 
-    # TODO: Video stage 2 — scene detection + vision (ADR-005 Phase 6)
+    # Step 6b: Video stage 2 — scene detection
+    indexable_videos = [v for v in ingested_videos if v.get("duration_sec")] if ingested_videos else []
+    if indexable_videos:
+        from src.cli.video_index import run_video_index
+
+        console.print(f"\n[bold]Scene detection ({len(indexable_videos):,} videos)...[/bold]")
+        vid2_progress = _make_progress(console)
+        with vid2_progress:
+            vid2_tid = vid2_progress.add_task("Scenes", total=len(indexable_videos), ok=0, fail=0)
+            run_video_index(
+                client=client,
+                root_path=root_path,
+                videos=indexable_videos,
+                console=console,
+                progress=vid2_progress,
+                task_id=vid2_tid,
+            )
 
     # Step 7: Face detection in subprocess batches.
     # ONNX Runtime leaks ~35-70MB per inference call in its C++ layer — no

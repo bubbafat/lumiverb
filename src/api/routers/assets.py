@@ -174,6 +174,7 @@ def page_assets(
     missing_vision: bool = False,
     missing_embeddings: bool = False,
     missing_faces: bool = False,
+    missing_video_scenes: bool = False,
     has_faces: bool | None = None,
     person_id: str | None = None,
     sort: str = "taken_at",
@@ -255,6 +256,7 @@ def page_assets(
         missing_vision=missing_vision,
         missing_embeddings=missing_embeddings,
         missing_faces=missing_faces,
+        missing_video_scenes=missing_video_scenes,
         has_faces=has_faces,
         person_id=person_id,
         sort=sort_col,
@@ -331,6 +333,7 @@ class RepairSummary(BaseModel):
     missing_vision: int = 0
     missing_embeddings: int = 0
     missing_faces: int = 0
+    missing_video_scenes: int = 0
     stale_search_sync: int = 0
 
 
@@ -354,6 +357,7 @@ def repair_summary(
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_vision"]}) AS missing_vision,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_embeddings"]}) AS missing_embeddings,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_faces"]}) AS missing_faces,
+                COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_video_scenes"]}) AS missing_video_scenes,
                 COUNT(*) FILTER (
                     WHERE EXISTS (
                         SELECT 1 FROM asset_metadata am
@@ -379,6 +383,7 @@ def repair_summary(
         missing_vision=row.missing_vision,
         missing_embeddings=row.missing_embeddings,
         missing_faces=row.missing_faces,
+        missing_video_scenes=row.missing_video_scenes,
         stale_search_sync=row.stale_search_sync,
     )
 

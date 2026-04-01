@@ -36,8 +36,8 @@ def _drain(inflight: set[Future]) -> set[Future]:
     return inflight
 
 
-REPAIR_TYPES = ("embed", "vision", "faces", "search-sync", "all")
-RepairType = Literal["embed", "vision", "faces", "search-sync", "all"]
+REPAIR_TYPES = ("embed", "vision", "faces", "video-scenes", "search-sync", "all")
+RepairType = Literal["embed", "vision", "faces", "video-scenes", "search-sync", "all"]
 
 
 class _RepairStats:
@@ -69,6 +69,7 @@ def _page_missing(
     missing_vision: bool = False,
     missing_embeddings: bool = False,
     missing_faces: bool = False,
+    missing_video_scenes: bool = False,
 ) -> list[dict]:
     """Page through assets matching the given missing filter."""
     results: list[dict] = []
@@ -86,6 +87,8 @@ def _page_missing(
             params["missing_embeddings"] = "true"
         if missing_faces:
             params["missing_faces"] = "true"
+        if missing_video_scenes:
+            params["missing_video_scenes"] = "true"
         if cursor:
             params["after"] = cursor
         resp = client.get("/v1/assets/page", params=params)
@@ -306,6 +309,8 @@ def run_repair(
         plan.append(("vision", summary["missing_vision"], "missing AI descriptions"))
     if job_type in ("faces", "all") and summary.get("missing_faces", 0) > 0:
         plan.append(("faces", summary["missing_faces"], "missing face detection"))
+    if job_type in ("video-scenes", "all") and summary.get("missing_video_scenes", 0) > 0:
+        plan.append(("video-scenes", summary["missing_video_scenes"], "missing video scene detection"))
     if job_type in ("search-sync", "all"):
         stale = summary.get("stale_search_sync", 0)
         if force:
@@ -328,6 +333,7 @@ def run_repair(
         ("Embeddings", "missing_embeddings", job_type in ("embed", "all")),
         ("Vision AI", "missing_vision", job_type in ("vision", "all")),
         ("Faces", "missing_faces", job_type in ("faces", "all")),
+        ("Video scenes", "missing_video_scenes", job_type in ("video-scenes", "all")),
         ("Search sync", "stale_search_sync", job_type in ("search-sync", "all")),
     ]:
         count = summary.get(key, 0)
@@ -513,6 +519,43 @@ def run_repair(
                         pool.join()
             finally:
                 proxy_cache.cleanup()
+
+        elif repair_type == "video-scenes":
+            console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
+
+            from pathlib import Path
+            root_path_str = library.get("root_path")
+            root_path = Path(root_path_str).resolve() if root_path_str else None
+            if root_path is None or not root_path.is_dir():
+                console.print("[red]Library root not accessible — cannot run scene detection[/red]")
+                continue
+
+            assets = _page_missing(client, library_id, missing_video_scenes=True)
+            if not assets:
+                console.print("No assets found (already repaired?).")
+                continue
+
+            videos = [
+                {"asset_id": a["asset_id"], "rel_path": a["rel_path"], "duration_sec": a.get("duration_sec")}
+                for a in assets
+            ]
+            indexable = [v for v in videos if v.get("duration_sec")]
+            if not indexable:
+                console.print("No videos with known duration found.")
+                continue
+
+            from src.cli.video_index import run_video_index
+            progress = _make_progress(console)
+            with progress:
+                tid = progress.add_task("Scenes", total=len(indexable), ok=0, fail=0)
+                run_video_index(
+                    client=client,
+                    root_path=root_path,
+                    videos=indexable,
+                    console=console,
+                    progress=progress,
+                    task_id=tid,
+                )
 
         elif repair_type == "search-sync":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")

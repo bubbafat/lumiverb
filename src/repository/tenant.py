@@ -52,6 +52,7 @@ MISSING_CONDITIONS = {
         " AND a.media_type = 'image'"
     ),
     "missing_faces": "a.face_count IS NULL AND a.media_type = 'image'",
+    "missing_video_scenes": "a.video_indexed = false AND a.media_type = 'video' AND a.duration_sec IS NOT NULL",
 }
 
 
@@ -391,6 +392,7 @@ class AssetRepository:
         missing_vision: bool = False,
         missing_embeddings: bool = False,
         missing_faces: bool = False,
+        missing_video_scenes: bool = False,
         has_faces: bool | None = None,
         person_id: str | None = None,
         *,
@@ -495,6 +497,8 @@ class AssetRepository:
             conditions.append(MISSING_CONDITIONS["missing_embeddings"])
         if missing_faces:
             conditions.append(MISSING_CONDITIONS["missing_faces"])
+        if missing_video_scenes:
+            conditions.append(MISSING_CONDITIONS["missing_video_scenes"])
         if has_faces is True:
             conditions.append("a.face_count > 0")
         elif has_faces is False:
@@ -1944,6 +1948,7 @@ class UnifiedBrowseRepository:
         missing_vision: bool = False,
         missing_embeddings: bool = False,
         missing_faces: bool = False,
+        missing_video_scenes: bool = False,
         *,
         sort: str = "taken_at",
         direction: str = "desc",
@@ -2038,6 +2043,8 @@ class UnifiedBrowseRepository:
             conditions.append(MISSING_CONDITIONS["missing_embeddings"])
         if missing_faces:
             conditions.append(MISSING_CONDITIONS["missing_faces"])
+        if missing_video_scenes:
+            conditions.append(MISSING_CONDITIONS["missing_video_scenes"])
         if has_faces is True:
             conditions.append("a.face_count > 0")
         elif has_faces is False:
