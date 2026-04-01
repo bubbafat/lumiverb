@@ -606,24 +606,46 @@ export default function UnifiedBrowsePage() {
                     style={commonStyle}
                     className="flex items-end"
                   >
-                    <button
-                      type="button"
-                      onClick={() => selection.selectGroup(groupIds)}
-                      className="flex items-center gap-2 px-1 py-2 text-sm font-semibold text-gray-400 hover:text-gray-200"
-                    >
-                      <span className={`inline-flex h-4 w-4 items-center justify-center rounded border transition-all ${
-                        allSelected
-                          ? "border-indigo-500 bg-indigo-600"
-                          : "border-gray-600 opacity-0 group-hover:opacity-100"
-                      } ${selection.isActive ? "opacity-100" : ""}`}>
-                        {allSelected && (
-                          <svg className="h-2.5 w-2.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                            <polyline points="20 6 9 17 4 12" />
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => selection.selectGroup(groupIds)}
+                        className="flex items-center gap-2 px-1 py-2 text-sm font-semibold text-gray-400 hover:text-gray-200"
+                      >
+                        <span className={`inline-flex h-4 w-4 items-center justify-center rounded border transition-all ${
+                          allSelected
+                            ? "border-indigo-500 bg-indigo-600"
+                            : "border-gray-600 opacity-0 group-hover:opacity-100"
+                        } ${selection.isActive ? "opacity-100" : ""}`}>
+                          {allSelected && (
+                            <svg className="h-2.5 w-2.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                              <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                          )}
+                        </span>
+                        {vr.label}
+                      </button>
+                      {vr.dateIso && (
+                        <button
+                          type="button"
+                          title="Browse all photos from this date"
+                          onClick={() => {
+                            setSearchParams((prev) => {
+                              const next = new URLSearchParams(prev);
+                              next.set("date_from", vr.dateIso!);
+                              next.set("date_to", vr.dateIso!);
+                              next.delete("q");
+                              return next;
+                            });
+                          }}
+                          className="p-1 text-gray-500 hover:text-indigo-400 transition-colors"
+                        >
+                          <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                            <path d="M5 12h14M12 5l7 7-7 7" />
                           </svg>
-                        )}
-                      </span>
-                      {vr.label}
-                    </button>
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               }

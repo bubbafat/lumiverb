@@ -5,7 +5,7 @@ import { computeJustifiedRows } from "./justifiedLayout";
 export const HEADER_HEIGHT = 40;
 
 export type VirtualRowKind =
-  | { type: "header"; label: string; height: number; groupIndex: number }
+  | { type: "header"; label: string; dateIso: string | null; height: number; groupIndex: number }
   | {
       type: "images";
       groupIndex: number;
@@ -25,7 +25,7 @@ export function buildVirtualRows(
   const virtualRows: VirtualRowKind[] = [];
 
   groups.forEach((group, groupIndex) => {
-    virtualRows.push({ type: "header", label: group.label, height: HEADER_HEIGHT, groupIndex });
+    virtualRows.push({ type: "header", label: group.label, dateIso: group.dateIso, height: HEADER_HEIGHT, groupIndex });
 
     const items: JustifiedItem[] = group.assets.map((asset) => {
       const w = asset.width ?? 0;
@@ -70,7 +70,7 @@ export function buildFixedGridRows(
   const colWidth = Math.floor((containerWidth - rowGap * (columns - 1)) / columns);
 
   groups.forEach((group, groupIndex) => {
-    virtualRows.push({ type: "header", label: group.label, height: HEADER_HEIGHT, groupIndex });
+    virtualRows.push({ type: "header", label: group.label, dateIso: group.dateIso, height: HEADER_HEIGHT, groupIndex });
 
     for (let i = 0; i < group.assets.length; i += columns) {
       const items = group.assets.slice(i, i + columns);

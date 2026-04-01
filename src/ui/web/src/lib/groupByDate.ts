@@ -2,6 +2,7 @@ import type { AssetPageItem } from "../api/types";
 
 export interface DateGroup {
   label: string; // e.g. "Tuesday, June 4, 2024" or "Unknown date"
+  dateIso: string | null; // YYYY-MM-DD or null for "Unknown date"
   assets: AssetPageItem[]; // ordered assets in this group
 }
 
@@ -10,6 +11,7 @@ export function groupAssetsByDate(assets: AssetPageItem[]): DateGroup[] {
 
   type GroupAccumulator = {
     label: string;
+    dateIso: string | null;
     assets: AssetPageItem[];
     latestTimestamp: number | null;
   };
@@ -19,6 +21,7 @@ export function groupAssetsByDate(assets: AssetPageItem[]): DateGroup[] {
   for (const asset of assets) {
     const dateStr = asset.taken_at ?? asset.file_mtime;
     let label: string;
+    let dateIso: string | null = null;
     let timestamp: number | null = null;
 
     if (!dateStr) {
@@ -34,13 +37,14 @@ export function groupAssetsByDate(assets: AssetPageItem[]): DateGroup[] {
           month: "long",
           day: "numeric",
         });
+        dateIso = d.toISOString().slice(0, 10);
         timestamp = d.getTime();
       }
     }
 
     let group = groupsByLabel.get(label);
     if (!group) {
-      group = { label, assets: [], latestTimestamp: timestamp };
+      group = { label, dateIso, assets: [], latestTimestamp: timestamp };
       groupsByLabel.set(label, group);
     }
 
@@ -62,6 +66,6 @@ export function groupAssetsByDate(assets: AssetPageItem[]): DateGroup[] {
     return b.latestTimestamp - a.latestTimestamp; // most recent first
   });
 
-  return groups.map(({ label, assets }) => ({ label, assets }));
+  return groups.map(({ label, dateIso, assets }) => ({ label, dateIso, assets }));
 }
 
