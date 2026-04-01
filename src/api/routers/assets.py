@@ -74,6 +74,9 @@ class AssetResponse(BaseModel):
     transcript_srt: str | None = None
     transcript_language: str | None = None
     transcribed_at: str | None = None
+    note: str | None = None
+    note_author: str | None = None
+    note_updated_at: str | None = None
 
 
 class AssetPageItem(BaseModel):
@@ -613,6 +616,9 @@ def _to_asset_response(asset) -> AssetResponse:
         transcript_srt=asset.transcript_srt,
         transcript_language=asset.transcript_language,
         transcribed_at=asset.transcribed_at.isoformat() if asset.transcribed_at else None,
+        note=asset.note,
+        note_author=asset.note_author,
+        note_updated_at=asset.note_updated_at.isoformat() if asset.note_updated_at else None,
     )
 
 
@@ -898,6 +904,61 @@ def delete_transcript(
         try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
 
     LibraryRepository(session).bump_revision(asset.library_id)
+
+
+class NoteUpdateRequest(BaseModel):
+    text: str
+
+
+class NoteUpdateResponse(BaseModel):
+    asset_id: str
+    note: str | None
+    note_author: str | None
+    note_updated_at: str | None
+
+
+@router.put("/{asset_id}/note", response_model=NoteUpdateResponse)
+def update_note(
+    asset_id: str,
+    body: NoteUpdateRequest,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> NoteUpdateResponse:
+    """Add, update, or clear a freeform note on an asset."""
+    asset_repo = AssetRepository(session)
+    asset = asset_repo.get_by_id(asset_id)
+    if asset is None or asset.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    text = body.text.strip()
+    if text:
+        asset.note = text
+        asset.note_author = user_id
+        asset.note_updated_at = utcnow()
+    else:
+        asset.note = None
+        asset.note_author = None
+        asset.note_updated_at = None
+
+    asset.updated_at = utcnow()
+    session.add(asset)
+    session.commit()
+
+    # Re-sync search
+    meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
+    if meta:
+        from src.search.sync import try_sync_asset
+        try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
+
+    LibraryRepository(session).bump_revision(asset.library_id)
+
+    return NoteUpdateResponse(
+        asset_id=asset_id,
+        note=asset.note,
+        note_author=asset.note_author,
+        note_updated_at=asset.note_updated_at.isoformat() if asset.note_updated_at else None,
+    )
 
 
 class EmbeddingSubmitRequest(BaseModel):

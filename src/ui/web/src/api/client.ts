@@ -996,3 +996,8 @@ export async function deleteTranscript(assetId: string): Promise<void> {
   await apiFetch<void>(`/assets/${assetId}/transcript`, { method: "DELETE" });
 }
 
+/** Add, update, or clear a note on an asset. Empty text clears. */
+export async function updateNote(assetId: string, text: string): Promise<void> {
+  await apiFetch<void>(`/assets/${assetId}/note`, { method: "PUT", body: { text } });
+}
+

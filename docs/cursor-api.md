@@ -207,6 +207,7 @@ All under `/v1/assets`; require tenant auth. List/get endpoints return only acti
 - **POST /v1/assets/{asset_id}/faces** — Submit face detections. Body: `{ "detection_model": "insightface", "detection_model_version": "buffalo_l", "faces": [{ "bounding_box": {"x","y","w","h"}, "detection_confidence": float, "embedding": [512 floats] | null }] }`. Replaces existing faces for same model. Sets `assets.face_count`. Bumps library revision. Returns 201 `{ "face_count", "face_ids" }`.
 - **POST /v1/assets/{asset_id}/transcript** — Upload or replace an SRT transcript for a video asset. Body: `{ "srt": str, "language": str | null, "source": "manual" }`. Parses SRT to extract plain text for search indexing. Triggers search re-sync. Returns `{ "asset_id", "status": "transcribed" }`. Errors: 400 if not a video or invalid SRT, 404 if asset not found.
 - **DELETE /v1/assets/{asset_id}/transcript** — Remove transcript from a video asset. Clears all transcript fields and re-syncs search. Returns 204.
+- **PUT /v1/assets/{asset_id}/note** — Add, update, or clear a freeform note. Body: `{ "text": str }`. Empty text clears the note. Stores last author (user_id) and timestamp. Note text is indexed for search. Returns `{ "asset_id", "note", "note_author", "note_updated_at" }`.
 - **GET /v1/assets/{asset_id}/faces** — List detected faces. Returns `{ "faces": [{ "face_id", "bounding_box", "detection_confidence", "person": { "person_id", "display_name" } | null }] }`. The `person` field is populated when the face is matched to a named person.
 
 ## People API

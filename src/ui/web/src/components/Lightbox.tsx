@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getAsset, findSimilar, listFaces, listPeople, assignFace, unassignFace, uploadTranscript, deleteTranscript } from "../api/client";
+import { getAsset, findSimilar, listFaces, listPeople, assignFace, unassignFace, uploadTranscript, deleteTranscript, updateNote } from "../api/client";
 import TranscriptViewer from "./TranscriptViewer";
 import { useLocalStorage } from "../lib/useLocalStorage";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
@@ -64,6 +64,112 @@ function SimilarThumbnail({
         />
       )}
     </button>
+  );
+}
+
+function NoteSection({
+  asset,
+  note,
+  noteAuthor,
+  noteUpdatedAt,
+  loading,
+  queryClient,
+}: {
+  asset: AssetPageItem;
+  note: string | null;
+  noteAuthor: string | null;
+  noteUpdatedAt: string | null;
+  loading: boolean;
+  queryClient: ReturnType<typeof useQueryClient>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  const startEdit = () => {
+    setDraft(note || "");
+    setEditing(true);
+  };
+
+  const save = async () => {
+    await updateNote(asset.asset_id, draft);
+    queryClient.invalidateQueries({ queryKey: ["asset", asset.asset_id] });
+    setEditing(false);
+  };
+
+  const cancel = () => {
+    setEditing(false);
+  };
+
+  return (
+    <>
+      <hr className="border-gray-700" />
+      <div>
+        <div className="mb-1 flex items-center justify-between">
+          <span className="text-xs font-medium uppercase tracking-wide text-gray-500">
+            Notes
+            {noteAuthor && noteUpdatedAt && (
+              <span className="ml-1 normal-case font-normal">
+                · {noteAuthor} · {formatDate(noteUpdatedAt)}
+              </span>
+            )}
+          </span>
+          {!editing && note && (
+            <button
+              type="button"
+              className="text-xs text-indigo-400 hover:text-indigo-300"
+              onClick={startEdit}
+            >
+              Edit
+            </button>
+          )}
+        </div>
+        {loading ? (
+          <MetadataSkeleton />
+        ) : editing ? (
+          <div className="space-y-2">
+            <textarea
+              className="w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-none resize-y"
+              rows={3}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="Add a note..."
+              autoFocus
+            />
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="rounded bg-indigo-600 px-3 py-1 text-xs text-white hover:bg-indigo-500"
+                onClick={save}
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                className="rounded bg-gray-700 px-3 py-1 text-xs text-gray-300 hover:bg-gray-600"
+                onClick={cancel}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : note ? (
+          <p
+            className="text-sm text-gray-300 whitespace-pre-wrap cursor-pointer hover:text-gray-200"
+            onClick={startEdit}
+          >
+            {note}
+          </p>
+        ) : (
+          <button
+            type="button"
+            className="rounded bg-gray-700/60 px-3 py-1.5 text-xs text-gray-300 hover:bg-indigo-600/40 hover:text-indigo-200 transition-colors"
+            onClick={startEdit}
+          >
+            Add note
+          </button>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -937,6 +1043,16 @@ export function Lightbox({
                   </div>
                 </>
               )}
+
+              {/* Section: Notes */}
+              <NoteSection
+                asset={asset}
+                note={detail?.note ?? null}
+                noteAuthor={detail?.note_author ?? null}
+                noteUpdatedAt={detail?.note_updated_at ?? null}
+                loading={detailLoading}
+                queryClient={queryClient}
+              />
 
               {/* Section 4: Details */}
               <hr className="border-gray-700" />

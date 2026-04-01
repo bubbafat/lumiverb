@@ -149,6 +149,12 @@ class Asset(SQLModel, table=True):
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
+    note: str | None = Field(default=None, nullable=True)
+    note_author: str | None = Field(default=None, nullable=True)
+    note_updated_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
 
 
 class VideoScene(SQLModel, table=True):

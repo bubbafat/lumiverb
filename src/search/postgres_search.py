@@ -56,6 +56,7 @@ def search_assets(
            OR m.data->>'description' ILIKE :like
            OR CAST(m.data->'tags' AS TEXT) ILIKE :like
            OR m.data->>'ocr_text' ILIKE :like
+           OR a.note ILIKE :like
            OR a.transcript_text ILIKE :like
           )
         ORDER BY a.asset_id

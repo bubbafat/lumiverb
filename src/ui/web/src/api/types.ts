@@ -143,6 +143,9 @@ export interface AssetDetail {
   transcript_srt?: string | null;
   transcript_language?: string | null;
   transcribed_at?: string | null;
+  note?: string | null;
+  note_author?: string | null;
+  note_updated_at?: string | null;
 }
 
 export interface SimilarHit {
