@@ -139,6 +139,7 @@ export interface AssetDetail {
   orientation: number | null;
   ai_description?: string | null;
   ai_tags: string[];
+  ocr_text?: string | null;
   transcript_srt?: string | null;
   transcript_language?: string | null;
   transcribed_at?: string | null;

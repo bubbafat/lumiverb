@@ -758,6 +758,7 @@ def ingest(
                 ("Vision AI", "missing_vision"),
                 ("Embeddings", "missing_embeddings"),
                 ("Faces", "missing_faces"),
+                ("OCR", "missing_ocr"),
                 ("Video scenes", "missing_video_scenes"),
                 ("Scene vision", "missing_scene_vision"),
                 ("Search sync", "stale_search_sync"),
@@ -777,7 +778,7 @@ def ingest(
 @app.command("repair")
 def repair(
     library: Annotated[str | None, typer.Option("--library", "-l", help="Library name (omit to repair all libraries).")] = None,
-    job_type: Annotated[str, typer.Option("--job-type", "-j", help="Repair type: embed, vision, faces, video-scenes, scene-vision, search-sync, or all.")] = "all",
+    job_type: Annotated[str, typer.Option("--job-type", "-j", help="Repair type: embed, vision, faces, ocr, video-scenes, scene-vision, search-sync, or all.")] = "all",
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be repaired without making changes.")] = False,
     concurrency: Annotated[int, typer.Option("--concurrency", help="Number of parallel workers.")] = 4,
     force: Annotated[bool, typer.Option("--force", help="Force full re-index (search-sync: clear timestamps and re-index all).")] = False,
@@ -792,6 +793,7 @@ def repair(
       embed        — Generate missing CLIP embeddings (similarity search)
       vision       — Generate missing AI descriptions and tags
       faces        — Detect faces using InsightFace (face recognition)
+      ocr          — Re-run vision to extract text from images (backfill)
       video-scenes — Run scene detection on unindexed videos
       scene-vision — Extract rep frames + run vision AI on scenes
       search-sync  — Push stale assets to Quickwit search index
@@ -799,8 +801,8 @@ def repair(
     """
     from src.cli.repair import run_repair
 
-    if job_type not in ("embed", "vision", "faces", "video-scenes", "scene-vision", "search-sync", "all"):
-        console.print(f"[red]Invalid --job-type: {job_type}. Must be embed, vision, faces, video-scenes, scene-vision, search-sync, or all.[/red]")
+    if job_type not in ("embed", "vision", "faces", "ocr", "video-scenes", "scene-vision", "search-sync", "all"):
+        console.print(f"[red]Invalid --job-type: {job_type}. Must be embed, vision, faces, ocr, video-scenes, scene-vision, search-sync, or all.[/red]")
         raise typer.Exit(1)
 
     client = LumiverbClient()

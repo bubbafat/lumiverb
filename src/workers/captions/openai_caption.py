@@ -113,8 +113,11 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         prompt = (
             "Describe this image in 2-3 sentences, being specific about "
             "the subject, setting, and mood. Then provide 5-10 descriptive "
-            "tags. Respond only with valid JSON in this exact format:\n"
-            '{"description": "...", "tags": ["tag1", "tag2", ...]}'
+            "tags. If there is any visible text in the image (signs, labels, "
+            "documents, screens, watermarks, etc.), include it in the "
+            "ocr_text field. If no text is visible, set ocr_text to an "
+            "empty string. Respond only with valid JSON in this exact format:\n"
+            '{"description": "...", "tags": ["tag1", "tag2", ...], "ocr_text": "..."}'
         )
 
         last_error: Exception | None = None
@@ -137,7 +140,11 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                 parsed = json.loads(json_str)
                 description = parsed.get("description", "").strip()
                 tags = [t.strip() for t in parsed.get("tags", []) if t.strip()]
-                return {"description": description, "tags": tags}
+                ocr_text = (parsed.get("ocr_text") or "").strip()
+                result = {"description": description, "tags": tags}
+                if ocr_text:
+                    result["ocr_text"] = ocr_text
+                return result
             except Exception as e:  # noqa: BLE001
                 last_error = e
                 if attempt < self.MAX_ATTEMPTS:

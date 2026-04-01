@@ -36,8 +36,8 @@ def _drain(inflight: set[Future]) -> set[Future]:
     return inflight
 
 
-REPAIR_TYPES = ("embed", "vision", "faces", "video-scenes", "scene-vision", "search-sync", "all")
-RepairType = Literal["embed", "vision", "faces", "video-scenes", "scene-vision", "search-sync", "all"]
+REPAIR_TYPES = ("embed", "vision", "faces", "ocr", "video-scenes", "scene-vision", "search-sync", "all")
+RepairType = Literal["embed", "vision", "faces", "ocr", "video-scenes", "scene-vision", "search-sync", "all"]
 
 
 class _RepairStats:
@@ -70,6 +70,7 @@ def _page_missing(
     missing_embeddings: bool = False,
     missing_faces: bool = False,
     missing_video_scenes: bool = False,
+    missing_ocr: bool = False,
     missing_scene_vision: bool = False,
 ) -> list[dict]:
     """Page through assets matching the given missing filter."""
@@ -90,6 +91,8 @@ def _page_missing(
             params["missing_faces"] = "true"
         if missing_video_scenes:
             params["missing_video_scenes"] = "true"
+        if missing_ocr:
+            params["missing_ocr"] = "true"
         if missing_scene_vision:
             params["missing_scene_vision"] = "true"
         if cursor:
@@ -312,6 +315,8 @@ def run_repair(
         plan.append(("vision", summary["missing_vision"], "missing AI descriptions"))
     if job_type in ("faces", "all") and summary.get("missing_faces", 0) > 0:
         plan.append(("faces", summary["missing_faces"], "missing face detection"))
+    if job_type in ("ocr", "all") and summary.get("missing_ocr", 0) > 0:
+        plan.append(("ocr", summary["missing_ocr"], "missing OCR text"))
     if job_type in ("video-scenes", "all") and summary.get("missing_video_scenes", 0) > 0:
         plan.append(("video-scenes", summary["missing_video_scenes"], "missing video scene detection"))
     if job_type in ("scene-vision", "all") and summary.get("missing_scene_vision", 0) > 0:
@@ -338,6 +343,7 @@ def run_repair(
         ("Embeddings", "missing_embeddings", job_type in ("embed", "all")),
         ("Vision AI", "missing_vision", job_type in ("vision", "all")),
         ("Faces", "missing_faces", job_type in ("faces", "all")),
+        ("OCR", "missing_ocr", job_type in ("ocr", "all")),
         ("Video scenes", "missing_video_scenes", job_type in ("video-scenes", "all")),
         ("Scene vision", "missing_scene_vision", job_type in ("scene-vision", "all")),
         ("Search sync", "stale_search_sync", job_type in ("search-sync", "all")),
@@ -407,6 +413,48 @@ def run_repair(
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
             from src.cli.ingest import run_backfill_vision
             run_backfill_vision(client, library, concurrency=concurrency, console=console)
+
+        elif repair_type == "ocr":
+            console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
+            # OCR repair re-runs vision (with OCR-enabled prompt) on assets
+            # that have vision descriptions but no ocr_text.
+            from src.cli.ingest import _resolve_vision_config, _backfill_one
+            vision_api_url, vision_api_key, vision_model_id, vision_source = _resolve_vision_config(client)
+            if not vision_api_url:
+                console.print("[red]Vision AI: not configured.[/red]")
+                continue
+            from src.workers.captions.factory import get_caption_provider
+            ocr_vision_provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key)
+            console.print(f"  Vision AI: {vision_model_id} via {vision_api_url} ({vision_source})")
+
+            assets = _page_missing(client, library_id, missing_ocr=True)
+            if not assets:
+                console.print("No assets found (already repaired?).")
+                continue
+
+            progress = _make_progress(console)
+            with progress:
+                tid = progress.add_task("OCR", total=len(assets), ok=0, fail=0)
+                pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="ocr")
+                inflight: set[Future] = set()
+                for a in assets:
+                    fut = pool.submit(
+                        _backfill_one,
+                        client=client,
+                        asset_id=a["asset_id"],
+                        rel_path=a["rel_path"],
+                        vision_model_id=vision_model_id,
+                        vision_provider=ocr_vision_provider,
+                        stats=stats,
+                        progress=progress,
+                        task_id=tid,
+                    )
+                    inflight.add(fut)
+                    if len(inflight) >= concurrency * 2:
+                        inflight = _drain(inflight)
+                while inflight:
+                    inflight = _drain(inflight)
+                pool.shutdown(wait=True)
 
         elif repair_type == "faces":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")

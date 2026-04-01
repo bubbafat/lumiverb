@@ -205,6 +205,7 @@ def _do_ingest(
         model_version = vision_data.get("model_version", "1")
         description = vision_data.get("description", "")
         tags = vision_data.get("tags", [])
+        ocr_text = vision_data.get("ocr_text", "")
 
         if model_id:
             meta_repo = AssetMetadataRepository(session)
@@ -212,7 +213,7 @@ def _do_ingest(
                 asset_id=asset_id,
                 model_id=model_id,
                 model_version=model_version,
-                data={"description": description, "tags": tags},
+                data={"description": description, "tags": tags, "ocr_text": ocr_text},
             )
             # Inline search sync (best-effort)
             asset_obj = asset_repo.get_by_id(asset_id)

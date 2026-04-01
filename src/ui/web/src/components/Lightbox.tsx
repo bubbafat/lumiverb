@@ -788,6 +788,19 @@ export function Lightbox({
                 )}
               </div>
 
+              {/* Section: OCR Text */}
+              {detail?.ocr_text && (
+                <>
+                  <hr className="border-gray-700" />
+                  <div>
+                    <div className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">
+                      Text in Image
+                    </div>
+                    <p className="text-sm text-gray-300 whitespace-pre-wrap">{detail.ocr_text}</p>
+                  </div>
+                </>
+              )}
+
               {/* Section 3: Tags */}
               {(detailLoading ||
                 (detail?.ai_tags && detail.ai_tags.length > 0)) && (

@@ -53,6 +53,11 @@ MISSING_CONDITIONS = {
     ),
     "missing_faces": "a.face_count IS NULL AND a.media_type = 'image'",
     "missing_video_scenes": "a.video_indexed = false AND a.media_type = 'video' AND a.duration_sec IS NOT NULL",
+    "missing_ocr": (
+        "EXISTS (SELECT 1 FROM asset_metadata am WHERE am.asset_id = a.asset_id)"
+        " AND NOT EXISTS (SELECT 1 FROM asset_metadata am2 WHERE am2.asset_id = a.asset_id AND am2.data->>'ocr_text' IS NOT NULL AND am2.data->>'ocr_text' != '')"
+        " AND a.media_type = 'image'"
+    ),
     "missing_scene_vision": (
         "a.video_indexed = true AND a.media_type = 'video'"
         " AND EXISTS (SELECT 1 FROM video_scenes vs WHERE vs.asset_id = a.asset_id AND vs.description IS NULL)"
@@ -397,6 +402,7 @@ class AssetRepository:
         missing_embeddings: bool = False,
         missing_faces: bool = False,
         missing_video_scenes: bool = False,
+        missing_ocr: bool = False,
         missing_scene_vision: bool = False,
         has_faces: bool | None = None,
         person_id: str | None = None,
@@ -504,6 +510,8 @@ class AssetRepository:
             conditions.append(MISSING_CONDITIONS["missing_faces"])
         if missing_video_scenes:
             conditions.append(MISSING_CONDITIONS["missing_video_scenes"])
+        if missing_ocr:
+            conditions.append(MISSING_CONDITIONS["missing_ocr"])
         if missing_scene_vision:
             conditions.append(MISSING_CONDITIONS["missing_scene_vision"])
         if has_faces is True:
@@ -2053,6 +2061,8 @@ class UnifiedBrowseRepository:
             conditions.append(MISSING_CONDITIONS["missing_faces"])
         if missing_video_scenes:
             conditions.append(MISSING_CONDITIONS["missing_video_scenes"])
+        if missing_ocr:
+            conditions.append(MISSING_CONDITIONS["missing_ocr"])
         if missing_scene_vision:
             conditions.append(MISSING_CONDITIONS["missing_scene_vision"])
         if has_faces is True:

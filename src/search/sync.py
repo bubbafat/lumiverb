@@ -56,6 +56,7 @@ def build_asset_document(asset: Asset, meta: AssetMetadata) -> dict:
         "camera_model": asset.camera_model,
         "gps_lat": asset.gps_lat,
         "gps_lon": asset.gps_lon,
+        "ocr_text": data.get("ocr_text", ""),
         "transcript_text": asset.transcript_text or "",
         "searchable": True,
         "model_id": meta.model_id,

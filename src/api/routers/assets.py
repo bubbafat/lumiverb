@@ -70,6 +70,7 @@ class AssetResponse(BaseModel):
     duration_sec: float | None = None
     ai_description: str | None = None
     ai_tags: list[str] = []
+    ocr_text: str | None = None
     transcript_srt: str | None = None
     transcript_language: str | None = None
     transcribed_at: str | None = None
@@ -157,6 +158,7 @@ class VisionSubmitRequest(BaseModel):
     model_version: str = "1"
     description: str
     tags: list[str] = []
+    ocr_text: str | None = None
     client_proxy_sha256: str | None = None
 
 
@@ -178,6 +180,7 @@ def page_assets(
     missing_embeddings: bool = False,
     missing_faces: bool = False,
     missing_video_scenes: bool = False,
+    missing_ocr: bool = False,
     missing_scene_vision: bool = False,
     has_faces: bool | None = None,
     person_id: str | None = None,
@@ -261,6 +264,7 @@ def page_assets(
         missing_embeddings=missing_embeddings,
         missing_faces=missing_faces,
         missing_video_scenes=missing_video_scenes,
+        missing_ocr=missing_ocr,
         missing_scene_vision=missing_scene_vision,
         has_faces=has_faces,
         person_id=person_id,
@@ -338,6 +342,7 @@ class RepairSummary(BaseModel):
     missing_vision: int = 0
     missing_embeddings: int = 0
     missing_faces: int = 0
+    missing_ocr: int = 0
     missing_video_scenes: int = 0
     missing_scene_vision: int = 0
     stale_search_sync: int = 0
@@ -363,6 +368,7 @@ def repair_summary(
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_vision"]}) AS missing_vision,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_embeddings"]}) AS missing_embeddings,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_faces"]}) AS missing_faces,
+                COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_ocr"]}) AS missing_ocr,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_video_scenes"]}) AS missing_video_scenes,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_scene_vision"]}) AS missing_scene_vision,
                 COUNT(*) FILTER (
@@ -390,6 +396,7 @@ def repair_summary(
         missing_vision=row.missing_vision,
         missing_embeddings=row.missing_embeddings,
         missing_faces=row.missing_faces,
+        missing_ocr=row.missing_ocr,
         missing_video_scenes=row.missing_video_scenes,
         missing_scene_vision=row.missing_scene_vision,
         stale_search_sync=row.stale_search_sync,
@@ -648,15 +655,18 @@ def get_asset_by_path(
     response = _to_asset_response(asset)
     ai_description: str | None = None
     ai_tags: list[str] = []
+    ocr_text: str | None = None
 
     meta_repo = AssetMetadataRepository(session)
     meta = meta_repo.get_latest(asset_id=asset.asset_id)
     if meta and meta.data:
         ai_description = meta.data.get("description") or None
         ai_tags = meta.data.get("tags") or []
+        ocr_text = meta.data.get("ocr_text") or None
 
     response.ai_description = ai_description
     response.ai_tags = ai_tags
+    response.ocr_text = ocr_text
     return response
 
 
@@ -714,15 +724,18 @@ def get_asset(
     response = _to_asset_response(asset)
     ai_description: str | None = None
     ai_tags: list[str] = []
+    ocr_text: str | None = None
 
     meta_repo = AssetMetadataRepository(session)
     meta = meta_repo.get_latest(asset_id=asset.asset_id)
     if meta and meta.data:
         ai_description = meta.data.get("description") or None
         ai_tags = meta.data.get("tags") or []
+        ocr_text = meta.data.get("ocr_text") or None
 
     response.ai_description = ai_description
     response.ai_tags = ai_tags
+    response.ocr_text = ocr_text
     return response
 
 
@@ -791,7 +804,7 @@ def submit_vision(
         asset_id=asset_id,
         model_id=body.model_id,
         model_version=body.model_version,
-        data={"description": body.description, "tags": body.tags},
+        data={"description": body.description, "tags": body.tags, "ocr_text": body.ocr_text or ""},
     )
     AssetRepository(session).set_status(asset_id, asset_status.DESCRIBED)
 
