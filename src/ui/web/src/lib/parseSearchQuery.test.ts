@@ -24,4 +24,23 @@ describe("parseSearchQuery", () => {
     expect(result.filters.has_faces).toBe("true");
     expect(result.filters.favorite).toBe("true");
   });
+
+  it('extracts person:"name" filter', () => {
+    const result = parseSearchQuery('person:"Susan"');
+    expect(result.text).toBe("");
+    expect(result.filters).toEqual({ person: "Susan" });
+  });
+
+  it('extracts person:"name" with surrounding text', () => {
+    const result = parseSearchQuery('sunset person:"Susan" beach');
+    expect(result.text).toBe("sunset beach");
+    expect(result.filters.person).toBe("Susan");
+  });
+
+  it('combines person:"name" with other filters', () => {
+    const result = parseSearchQuery('person:"Susan" is:favorite has:faces');
+    expect(result.filters.person).toBe("Susan");
+    expect(result.filters.favorite).toBe("true");
+    expect(result.filters.has_faces).toBe("true");
+  });
 });

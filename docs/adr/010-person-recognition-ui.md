@@ -261,12 +261,12 @@ Every phase must satisfy all of the following before it is marked complete:
 **Read-ahead:** The `FaceItem` type includes a `person` field (null for now) that Phase 2 will populate. The `listFaces()` API client function will be reused by the cluster management UI.
 
 **Done when:**
-- [ ] All deliverables implemented
-- [ ] Tests written and passing (`uv run pytest tests/`)
-- [ ] TypeScript compiles (`npx tsc --noEmit`)
-- [ ] Vite builds (`npx vite build`)
-- [ ] Docs updated
-- [ ] Phase status updated above
+- [x] All deliverables implemented
+- [x] Tests written and passing (`uv run pytest tests/`)
+- [x] TypeScript compiles (`npx tsc --noEmit`)
+- [x] Vite builds (`npx vite build`)
+- [x] Docs updated
+- [x] Phase status updated above
 
 ### Phase 2 — Clustering API + People CRUD + People Page
 
@@ -285,11 +285,11 @@ Every phase must satisfy all of the following before it is marked complete:
 **Read-ahead:** Cluster assignment UI (Phase 3) needs the clusters endpoint and people CRUD from this phase.
 
 **Done when:**
-- [ ] All deliverables implemented
-- [ ] Tests written and passing
-- [ ] TypeScript + Vite clean
-- [ ] Docs updated
-- [ ] Phase status updated above
+- [x] All deliverables implemented
+- [x] Tests written and passing
+- [x] TypeScript + Vite clean
+- [x] Docs updated
+- [x] Phase status updated above
 
 ### Phase 3 — Cluster Management UI + Merge/Rename/Fix
 
@@ -304,11 +304,11 @@ Every phase must satisfy all of the following before it is marked complete:
 **Does NOT include:** Search by person name, similarity integration
 
 **Done when:**
-- [ ] All deliverables implemented
-- [ ] Tests written and passing
-- [ ] TypeScript + Vite clean
-- [ ] Docs updated
-- [ ] Phase status updated above
+- [x] All deliverables implemented
+- [x] Tests written and passing
+- [x] TypeScript + Vite clean
+- [x] Docs updated
+- [x] Phase status updated above
 
 ### Phase 4 — Search by Person Name + Similarity Integration
 
@@ -323,11 +323,11 @@ Every phase must satisfy all of the following before it is marked complete:
 **Similarity integration detail:** "Boost images with same named person" is an **in-app rerank**, not a Quickwit index change. When the similarity endpoint returns CLIP-based candidates, a post-processing step checks if any candidates share a `person_id` with any face in the source image. Matching candidates get a score boost (e.g., distance *= 0.85). This only activates when the source image has at least one identified face — it does not apply when no faces are present. This is a lightweight change to the existing `find_similar()` reranking pipeline, not a new search index.
 
 **Done when:**
-- [ ] All deliverables implemented
-- [ ] Tests written and passing
-- [ ] TypeScript + Vite clean
-- [ ] Docs updated
-- [ ] Phase status updated above
+- [x] All deliverables implemented
+- [x] Tests written and passing
+- [x] TypeScript + Vite clean
+- [x] Docs updated
+- [x] Phase status updated above
 
 ## Alternatives Considered
 
