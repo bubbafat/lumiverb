@@ -472,6 +472,14 @@ def run_repair(
     # Step 2: Execute repairs in logical order
     stats = _RepairStats()
 
+    # Load concurrency config: --concurrency flag acts as max, per-type defaults are lower for GPU ops
+    from src.cli.config import load_config as _load_cfg
+    _cfg = _load_cfg()
+    max_conc = min(concurrency, _cfg.max_concurrency)
+    embed_conc = min(max_conc, concurrency)  # embed is CPU-bound (CLIP), full concurrency
+    vision_conc = min(max_conc, _cfg.vision_concurrency)
+    ocr_conc = min(max_conc, _cfg.ocr_concurrency)
+
     # Resolve library root path for local proxy generation
     from pathlib import Path as _Path
     _root_path_str = library.get("root_path")
@@ -503,7 +511,7 @@ def run_repair(
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Embeddings", total=len(assets), ok=0, fail=0)
-                pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="embed")
+                pool = ThreadPoolExecutor(max_workers=embed_conc, thread_name_prefix="embed")
                 inflight: set[Future] = set()
                 for a in assets:
                     fut = pool.submit(
@@ -519,7 +527,7 @@ def run_repair(
                         task_id=tid,
                     )
                     inflight.add(fut)
-                    if len(inflight) >= concurrency * 2:
+                    if len(inflight) >= embed_conc * 2:
                         inflight = _drain(inflight)
                 while inflight:
                     inflight = _drain(inflight)
@@ -528,7 +536,7 @@ def run_repair(
         elif repair_type == "vision":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
             from src.cli.ingest import run_backfill_vision
-            run_backfill_vision(client, library, concurrency=concurrency, console=console)
+            run_backfill_vision(client, library, concurrency=vision_conc, console=console)
 
         elif repair_type == "ocr":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
@@ -549,7 +557,7 @@ def run_repair(
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("OCR", total=len(assets), ok=0, fail=0)
-                pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="ocr")
+                pool = ThreadPoolExecutor(max_workers=ocr_conc, thread_name_prefix="ocr")
                 inflight: set[Future] = set()
                 for a in assets:
                     fut = pool.submit(
@@ -565,7 +573,7 @@ def run_repair(
                         task_id=tid,
                     )
                     inflight.add(fut)
-                    if len(inflight) >= concurrency * 2:
+                    if len(inflight) >= ocr_conc * 2:
                         inflight = _drain(inflight)
                 while inflight:
                     inflight = _drain(inflight)

@@ -16,6 +16,9 @@ class CLIConfig(BaseModel):
     vision_model_id: str = ""
     face_batch_size: int = 25
     face_batch_limit: int = 20
+    max_concurrency: int = 4
+    vision_concurrency: int = 2
+    ocr_concurrency: int = 1
 
 
 def _config_path() -> Path:

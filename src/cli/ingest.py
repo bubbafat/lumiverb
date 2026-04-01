@@ -930,6 +930,11 @@ def run_ingest(
         console.print("Nothing to ingest.")
         return stats
 
+    # Load per-type concurrency limits from config
+    from src.cli.config import load_config as _load_cfg
+    _cfg = _load_cfg()
+    vision_conc = min(concurrency, _cfg.vision_concurrency)
+
     # One progress bar with a row per phase — all visible simultaneously.
     progress = _make_progress(console)
     with progress:
@@ -950,7 +955,7 @@ def run_ingest(
             from src.cli.proxy_cache import ProxyCache
             proxy_cache = ProxyCache()
         if images_to_ingest:
-            pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="ingest")
+            pool = ThreadPoolExecutor(max_workers=vision_conc if vision_provider else concurrency, thread_name_prefix="ingest")
             inflight: set[Future] = set()
             for f in images_to_ingest:
                 fut = pool.submit(
