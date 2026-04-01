@@ -748,13 +748,35 @@ def ingest(
             f"{stats.skipped:,} skipped"
             + (f", {stats.removed:,} removed" if stats.removed else "")
         )
+
+        # Show repair summary so user can see if anything needs fixing
+        from src.cli.repair import get_repair_summary
+        summary = get_repair_summary(client, match["library_id"])
+        needs_repair = [
+            (label, summary.get(key, 0))
+            for label, key in [
+                ("Vision AI", "missing_vision"),
+                ("Embeddings", "missing_embeddings"),
+                ("Faces", "missing_faces"),
+                ("Video scenes", "missing_video_scenes"),
+                ("Scene vision", "missing_scene_vision"),
+                ("Search sync", "stale_search_sync"),
+            ]
+            if summary.get(key, 0) > 0
+        ]
+        if needs_repair:
+            console.print("\n[yellow]Pending repairs:[/yellow]")
+            for label, count in needs_repair:
+                console.print(f"  {label}: {count:,}")
+            console.print(f"[dim]Run: lumiverb repair --library {escape(library)}[/dim]")
+
         if stats.failed > 0:
             raise typer.Exit(1)
 
 
 @app.command("repair")
 def repair(
-    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
+    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name (omit to repair all libraries).")] = None,
     job_type: Annotated[str, typer.Option("--job-type", "-j", help="Repair type: embed, vision, faces, video-scenes, scene-vision, search-sync, or all.")] = "all",
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be repaired without making changes.")] = False,
     concurrency: Annotated[int, typer.Option("--concurrency", help="Number of parallel workers.")] = 4,
@@ -762,8 +784,8 @@ def repair(
 ) -> None:
     """Detect and repair missing pipeline outputs.
 
-    Checks each pipeline stage and repairs what's missing. Use --dry-run
-    to preview without making changes.
+    Checks each pipeline stage and repairs what's missing. Omit --library
+    to repair all libraries. Use --dry-run to preview without making changes.
 
     \b
     Job types:
@@ -783,20 +805,28 @@ def repair(
 
     client = LumiverbClient()
     libraries = client.get("/v1/libraries").json()
-    match = next((lib for lib in libraries if lib["name"] == library), None)
-    if match is None:
-        console.print(f"[red]Library not found: {library}[/red]")
-        raise typer.Exit(1)
 
-    run_repair(
-        client,
-        match,
-        job_type=job_type,
-        dry_run=dry_run,
-        concurrency=concurrency,
-        force=force,
-        console=console,
-    )
+    if library is not None:
+        targets = [lib for lib in libraries if lib["name"] == library]
+        if not targets:
+            console.print(f"[red]Library not found: {library}[/red]")
+            raise typer.Exit(1)
+    else:
+        targets = libraries
+        if not targets:
+            console.print("No libraries found.")
+            return
+
+    for lib in targets:
+        run_repair(
+            client,
+            lib,
+            job_type=job_type,
+            dry_run=dry_run,
+            concurrency=concurrency,
+            force=force,
+            console=console,
+        )
 
 
 @app.command()
