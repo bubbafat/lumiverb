@@ -136,6 +136,9 @@ def _call_vision_ai(
     ocr_text = (result.get("ocr_text") or "").strip()
     if ocr_text:
         vision_result["ocr_text"] = ocr_text
+        logger.info("OCR found: %s", ocr_text[:200])
+    else:
+        logger.info("OCR: no text detected (raw ocr_text=%r)", result.get("ocr_text"))
     return vision_result
 
 
