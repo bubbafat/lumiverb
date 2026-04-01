@@ -205,6 +205,8 @@ All under `/v1/assets`; require tenant auth. List/get endpoints return only acti
 - **GET /v1/assets/{asset_id}/{proxy|thumbnail}** — Stream proxy or thumbnail file bytes. Returns `application/octet-stream`.
 - **GET /v1/assets/facets** — Query: `library_id` (required), `path_prefix` (optional). Returns aggregated filter facets: `{ "media_types", "camera_makes", "camera_models", "lens_models", "iso_range", "aperture_range", "focal_length_range", "has_gps_count", "has_face_count" }`.
 - **POST /v1/assets/{asset_id}/faces** — Submit face detections. Body: `{ "detection_model": "insightface", "detection_model_version": "buffalo_l", "faces": [{ "bounding_box": {"x","y","w","h"}, "detection_confidence": float, "embedding": [512 floats] | null }] }`. Replaces existing faces for same model. Sets `assets.face_count`. Bumps library revision. Returns 201 `{ "face_count", "face_ids" }`.
+- **POST /v1/assets/{asset_id}/transcript** — Upload or replace an SRT transcript for a video asset. Body: `{ "srt": str, "language": str | null, "source": "manual" }`. Parses SRT to extract plain text for search indexing. Triggers search re-sync. Returns `{ "asset_id", "status": "transcribed" }`. Errors: 400 if not a video or invalid SRT, 404 if asset not found.
+- **DELETE /v1/assets/{asset_id}/transcript** — Remove transcript from a video asset. Clears all transcript fields and re-syncs search. Returns 204.
 - **GET /v1/assets/{asset_id}/faces** — List detected faces. Returns `{ "faces": [{ "face_id", "bounding_box", "detection_confidence", "person": { "person_id", "display_name" } | null }] }`. The `person` field is populated when the face is matched to a named person.
 
 ## People API

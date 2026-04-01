@@ -55,6 +55,7 @@ def search_assets(
            OR a.camera_model   ILIKE :like
            OR m.data->>'description' ILIKE :like
            OR CAST(m.data->'tags' AS TEXT) ILIKE :like
+           OR a.transcript_text ILIKE :like
           )
         ORDER BY a.asset_id
         LIMIT :limit OFFSET :offset

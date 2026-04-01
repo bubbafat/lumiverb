@@ -142,6 +142,13 @@ class Asset(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
     face_count: int | None = Field(default=None, nullable=True)
+    transcript_srt: str | None = Field(default=None, nullable=True)
+    transcript_text: str | None = Field(default=None, nullable=True)
+    transcript_language: str | None = Field(default=None, nullable=True)
+    transcribed_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
 
 
 class VideoScene(SQLModel, table=True):

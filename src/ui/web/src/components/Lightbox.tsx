@@ -1,7 +1,8 @@
 import { useEffect, useCallback, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getAsset, findSimilar, listFaces, listPeople, assignFace, unassignFace } from "../api/client";
+import { getAsset, findSimilar, listFaces, listPeople, assignFace, unassignFace, uploadTranscript, deleteTranscript } from "../api/client";
+import TranscriptViewer from "./TranscriptViewer";
 import { useLocalStorage } from "../lib/useLocalStorage";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 import type { AssetPageItem, AssetRating, RatingColor, SimilarHit } from "../api/types";
@@ -823,6 +824,75 @@ export function Lightbox({
                           ),
                         )}
                       </div>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {/* Section: Transcript (video only) */}
+              {detail?.media_type === "video" && (
+                <>
+                  <hr className="border-gray-700" />
+                  <div>
+                    <div className="mb-1 flex items-center justify-between">
+                      <span className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                        Transcript
+                        {detail.transcript_language && (
+                          <span className="ml-1 normal-case">({detail.transcript_language})</span>
+                        )}
+                      </span>
+                      {detail.transcript_srt && (
+                        <div className="flex gap-2">
+                          <label className="cursor-pointer text-xs text-indigo-400 hover:text-indigo-300">
+                            Replace
+                            <input
+                              type="file"
+                              accept=".srt"
+                              className="hidden"
+                              onChange={async (e) => {
+                                const file = e.target.files?.[0];
+                                if (!file) return;
+                                const text = await file.text();
+                                await uploadTranscript(asset.asset_id, text);
+                                queryClient.invalidateQueries({ queryKey: ["asset", asset.asset_id] });
+                                e.target.value = "";
+                              }}
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            className="text-xs text-red-400 hover:text-red-300"
+                            onClick={async () => {
+                              await deleteTranscript(asset.asset_id);
+                              queryClient.invalidateQueries({ queryKey: ["asset", asset.asset_id] });
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    {detailLoading ? (
+                      <MetadataSkeleton />
+                    ) : detail?.transcript_srt ? (
+                      <TranscriptViewer srt={detail.transcript_srt} />
+                    ) : (
+                      <label className="inline-flex cursor-pointer items-center gap-1.5 rounded bg-gray-700/60 px-3 py-1.5 text-xs text-gray-300 hover:bg-indigo-600/40 hover:text-indigo-200 transition-colors">
+                        Upload SRT
+                        <input
+                          type="file"
+                          accept=".srt"
+                          className="hidden"
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            const text = await file.text();
+                            await uploadTranscript(asset.asset_id, text);
+                            queryClient.invalidateQueries({ queryKey: ["asset", asset.asset_id] });
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
                     )}
                   </div>
                 </>

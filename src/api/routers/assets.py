@@ -70,6 +70,9 @@ class AssetResponse(BaseModel):
     duration_sec: float | None = None
     ai_description: str | None = None
     ai_tags: list[str] = []
+    transcript_srt: str | None = None
+    transcript_language: str | None = None
+    transcribed_at: str | None = None
 
 
 class AssetPageItem(BaseModel):
@@ -600,6 +603,9 @@ def _to_asset_response(asset) -> AssetResponse:
         if asset.video_preview_last_accessed_at
         else None,
         duration_sec=asset.duration_sec,
+        transcript_srt=asset.transcript_srt,
+        transcript_language=asset.transcript_language,
+        transcribed_at=asset.transcribed_at.isoformat() if asset.transcribed_at else None,
     )
 
 
@@ -799,6 +805,86 @@ def submit_vision(
     LibraryRepository(session).bump_revision(asset.library_id)
 
     return VisionSubmitResponse(asset_id=asset_id, status="described")
+
+
+class TranscriptSubmitRequest(BaseModel):
+    srt: str
+    language: str | None = None
+    source: str = "manual"
+
+
+class TranscriptSubmitResponse(BaseModel):
+    asset_id: str
+    status: str
+
+
+@router.post("/{asset_id}/transcript", response_model=TranscriptSubmitResponse)
+def submit_transcript(
+    asset_id: str,
+    body: TranscriptSubmitRequest,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> TranscriptSubmitResponse:
+    """Upload or replace an SRT transcript for a video asset."""
+    from src.core.srt import parse_srt_to_text, validate_srt
+
+    asset_repo = AssetRepository(session)
+    asset = asset_repo.get_by_id(asset_id)
+    if asset is None or asset.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    if asset.media_type != "video":
+        raise HTTPException(status_code=400, detail="Transcripts are only supported for video assets")
+    if not validate_srt(body.srt):
+        raise HTTPException(status_code=400, detail="Invalid SRT format")
+
+    plain_text = parse_srt_to_text(body.srt)
+
+    asset.transcript_srt = body.srt
+    asset.transcript_text = plain_text
+    asset.transcript_language = body.language
+    asset.transcribed_at = utcnow()
+    asset.updated_at = utcnow()
+    session.add(asset)
+    session.commit()
+
+    # Inline search sync (best-effort)
+    meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
+    if meta:
+        from src.search.sync import try_sync_asset
+        try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
+
+    LibraryRepository(session).bump_revision(asset.library_id)
+
+    return TranscriptSubmitResponse(asset_id=asset_id, status="transcribed")
+
+
+@router.delete("/{asset_id}/transcript", status_code=204)
+def delete_transcript(
+    asset_id: str,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> None:
+    """Remove a transcript from a video asset."""
+    asset_repo = AssetRepository(session)
+    asset = asset_repo.get_by_id(asset_id)
+    if asset is None or asset.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    asset.transcript_srt = None
+    asset.transcript_text = None
+    asset.transcript_language = None
+    asset.transcribed_at = None
+    asset.updated_at = utcnow()
+    session.add(asset)
+    session.commit()
+
+    # Re-sync search (remove transcript from index)
+    meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
+    if meta:
+        from src.search.sync import try_sync_asset
+        try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
+
+    LibraryRepository(session).bump_revision(asset.library_id)
 
 
 class EmbeddingSubmitRequest(BaseModel):

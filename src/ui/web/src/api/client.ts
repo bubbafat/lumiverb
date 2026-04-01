@@ -979,3 +979,20 @@ export async function reorderSavedViews(viewIds: string[]): Promise<void> {
   });
 }
 
+/** Upload or replace an SRT transcript for a video asset. */
+export async function uploadTranscript(
+  assetId: string,
+  srt: string,
+  language?: string,
+): Promise<{ asset_id: string; status: string }> {
+  return apiFetch<{ asset_id: string; status: string }>(
+    `/assets/${assetId}/transcript`,
+    { method: "POST", body: { srt, language: language ?? null, source: "manual" } },
+  );
+}
+
+/** Remove a transcript from a video asset. */
+export async function deleteTranscript(assetId: string): Promise<void> {
+  await apiFetch<void>(`/assets/${assetId}/transcript`, { method: "DELETE" });
+}
+

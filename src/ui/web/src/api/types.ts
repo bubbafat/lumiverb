@@ -139,6 +139,9 @@ export interface AssetDetail {
   orientation: number | null;
   ai_description?: string | null;
   ai_tags: string[];
+  transcript_srt?: string | null;
+  transcript_language?: string | null;
+  transcribed_at?: string | null;
 }
 
 export interface SimilarHit {
