@@ -62,6 +62,66 @@ def _make_progress(console: Console) -> Progress:
     )
 
 
+def _ocr_one(
+    *,
+    client: LumiverbClient,
+    asset_id: str,
+    rel_path: str,
+    ocr_provider: object,
+    stats: _RepairStats,
+    progress: Progress,
+    task_id: object,
+) -> None:
+    """Download proxy, run OCR extraction, POST result back."""
+    try:
+        resp = client.get(f"/v1/assets/{asset_id}/artifacts/proxy")
+        if resp.status_code != 200:
+            with stats.lock:
+                stats.skipped += 1
+                ok, fail = stats.processed, stats.failed
+            if progress is not None:
+                progress.advance(task_id, 1)
+                progress.update(task_id, ok=ok, fail=fail)
+            return
+
+        import tempfile
+        from pathlib import Path
+
+        image_bytes = resp.content
+        resp.close()
+
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            tmp.write(image_bytes)
+            tmp_path = Path(tmp.name)
+        del image_bytes
+
+        try:
+            ocr_text = ocr_provider.extract_text(tmp_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+        if ocr_text:
+            logger.info("OCR found: %s", ocr_text[:200])
+        client.post(f"/v1/assets/{asset_id}/ocr", json={"ocr_text": ocr_text or ""})
+
+        with stats.lock:
+            stats.processed += 1
+            ok, fail = stats.processed, stats.failed
+        if progress is not None:
+            progress.advance(task_id, 1)
+            progress.update(task_id, ok=ok, fail=fail)
+
+    except Exception as e:
+        logger.exception("Failed OCR for %s: %s", rel_path, e)
+        with stats.lock:
+            stats.failed += 1
+            ok, fail = stats.processed, stats.failed
+        if progress is not None:
+            progress.console.print(f"[red]ocr \u2717[/red] {rel_path}: {e}")
+            progress.advance(task_id, 1)
+            progress.update(task_id, ok=ok, fail=fail)
+
+
 def _page_missing(
     client: LumiverbClient,
     library_id: str,
@@ -416,15 +476,13 @@ def run_repair(
 
         elif repair_type == "ocr":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
-            # OCR repair re-runs vision (with OCR-enabled prompt) on assets
-            # that have vision descriptions but no ocr_text.
-            from src.cli.ingest import _resolve_vision_config, _backfill_one
+            from src.cli.ingest import _resolve_vision_config
             vision_api_url, vision_api_key, vision_model_id, vision_source = _resolve_vision_config(client)
             if not vision_api_url:
                 console.print("[red]Vision AI: not configured.[/red]")
                 continue
             from src.workers.captions.factory import get_caption_provider
-            ocr_vision_provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key)
+            ocr_provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key)
             console.print(f"  Vision AI: {vision_model_id} via {vision_api_url} ({vision_source})")
 
             assets = _page_missing(client, library_id, missing_ocr=True)
@@ -439,12 +497,11 @@ def run_repair(
                 inflight: set[Future] = set()
                 for a in assets:
                     fut = pool.submit(
-                        _backfill_one,
+                        _ocr_one,
                         client=client,
                         asset_id=a["asset_id"],
                         rel_path=a["rel_path"],
-                        vision_model_id=vision_model_id,
-                        vision_provider=ocr_vision_provider,
+                        ocr_provider=ocr_provider,
                         stats=stats,
                         progress=progress,
                         task_id=tid,

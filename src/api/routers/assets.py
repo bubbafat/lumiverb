@@ -161,7 +161,6 @@ class VisionSubmitRequest(BaseModel):
     model_version: str = "1"
     description: str
     tags: list[str] = []
-    ocr_text: str | None = None
     client_proxy_sha256: str | None = None
 
 
@@ -810,7 +809,7 @@ def submit_vision(
         asset_id=asset_id,
         model_id=body.model_id,
         model_version=body.model_version,
-        data={"description": body.description, "tags": body.tags, "ocr_text": body.ocr_text or ""},
+        data={"description": body.description, "tags": body.tags},
     )
     AssetRepository(session).set_status(asset_id, asset_status.DESCRIBED)
 
@@ -824,6 +823,47 @@ def submit_vision(
     LibraryRepository(session).bump_revision(asset.library_id)
 
     return VisionSubmitResponse(asset_id=asset_id, status="described")
+
+
+class OcrSubmitRequest(BaseModel):
+    ocr_text: str
+
+
+@router.post("/{asset_id}/ocr", status_code=200)
+def submit_ocr(
+    asset_id: str,
+    body: OcrSubmitRequest,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> dict:
+    """Submit OCR text for an asset. Merges into existing metadata."""
+    asset = AssetRepository(session).get_by_id(asset_id)
+    if asset is None or asset.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    meta_repo = AssetMetadataRepository(session)
+    meta = meta_repo.get_latest(asset_id=asset_id)
+    if meta is None:
+        raise HTTPException(status_code=400, detail="Asset has no vision metadata — run vision first")
+
+    # Merge ocr_text into existing metadata data dict
+    data = dict(meta.data) if meta.data else {}
+    data["ocr_text"] = body.ocr_text
+    meta_repo.upsert(
+        asset_id=asset_id,
+        model_id=meta.model_id,
+        model_version=meta.model_version,
+        data=data,
+    )
+
+    # Re-sync search
+    meta = meta_repo.get_latest(asset_id=asset_id)
+    from src.search.sync import try_sync_asset
+    try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
+
+    LibraryRepository(session).bump_revision(asset.library_id)
+
+    return {"asset_id": asset_id, "ocr_text": body.ocr_text}
 
 
 class TranscriptSubmitRequest(BaseModel):

@@ -113,11 +113,8 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         prompt = (
             "Describe this image in 2-3 sentences, being specific about "
             "the subject, setting, and mood. Then provide 5-10 descriptive "
-            "tags. If there is any visible text in the image (signs, labels, "
-            "documents, screens, watermarks, etc.), include it in the "
-            "ocr_text field. If no text is visible, set ocr_text to an "
-            "empty string. Respond only with valid JSON in this exact format:\n"
-            '{"description": "...", "tags": ["tag1", "tag2", ...], "ocr_text": "..."}'
+            "tags. Respond only with valid JSON in this exact format:\n"
+            '{"description": "...", "tags": ["tag1", "tag2", ...]}'
         )
 
         last_error: Exception | None = None
@@ -140,11 +137,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                 parsed = json.loads(json_str)
                 description = parsed.get("description", "").strip()
                 tags = [t.strip() for t in parsed.get("tags", []) if t.strip()]
-                ocr_text = (parsed.get("ocr_text") or "").strip()
-                result = {"description": description, "tags": tags}
-                if ocr_text:
-                    result["ocr_text"] = ocr_text
-                return result
+                return {"description": description, "tags": tags}
             except Exception as e:  # noqa: BLE001
                 last_error = e
                 if attempt < self.MAX_ATTEMPTS:
@@ -161,6 +154,62 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                 return {}
 
         return {}
+
+    def extract_text(self, proxy_path: Path) -> str:
+        """Extract visible text from an image via OCR prompt.
+
+        Returns the extracted text as a string, or empty string if none found.
+        Uses the same retry logic as describe().
+        """
+        if not proxy_path.exists():
+            return ""
+
+        try:
+            img = Image.open(proxy_path)
+            try:
+                max_edge = 1024
+                if max(img.width, img.height) > max_edge:
+                    img.thumbnail((max_edge, max_edge), Image.LANCZOS)
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=75)
+                image_b64 = base64.b64encode(buf.getvalue()).decode()
+                data_url = f"data:image/jpeg;base64,{image_b64}"
+            finally:
+                img.close()
+        except Exception as e:
+            logger.warning("OCR image prep failed for %s: %s", proxy_path, e)
+            return ""
+
+        prompt = (
+            "Read all visible text in this image exactly as written. "
+            "Include text from signs, labels, documents, screens, "
+            "watermarks, captions, or any other readable text. "
+            "Return only the text, nothing else. "
+            "If there is no readable text, respond with exactly: NONE"
+        )
+
+        for attempt in range(1, self.MAX_ATTEMPTS + 1):
+            try:
+                raw = self._chat(data_url, prompt)
+                text = raw.strip()
+                if not text or text.upper() == "NONE":
+                    return ""
+                return text
+            except Exception as e:
+                if attempt < self.MAX_ATTEMPTS:
+                    delay = self.BACKOFF_BASE * (self.BACKOFF_MULTIPLIER ** (attempt - 1))
+                    jitter = delay * self.BACKOFF_JITTER * (2 * random.random() - 1)
+                    sleep_time = max(0.1, delay + jitter)
+                    logger.info(
+                        "OCR retry %d/%d for %s (sleeping %.1fs): %s",
+                        attempt, self.MAX_ATTEMPTS, proxy_path.name, sleep_time, e,
+                    )
+                    time.sleep(sleep_time)
+                    continue
+                logger.warning("OCR failed for %s after %d attempts: %s", proxy_path, self.MAX_ATTEMPTS, e)
+                return ""
+
+        return ""
 
     def _chat(self, data_url: str, prompt: str) -> str:
         payload = {

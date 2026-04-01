@@ -127,19 +127,12 @@ def _call_vision_ai(
     description = (result.get("description") or "").strip()
     tags = [t.strip() for t in (result.get("tags") or []) if isinstance(t, str) and t.strip()]
 
-    vision_result = {
+    return {
         "model_id": vision_model_id,
         "model_version": "1",
         "description": description,
         "tags": tags,
     }
-    ocr_text = (result.get("ocr_text") or "").strip()
-    if ocr_text:
-        vision_result["ocr_text"] = ocr_text
-        logger.info("OCR found: %s", ocr_text[:200])
-    else:
-        logger.info("OCR: no text detected (raw ocr_text=%r)", result.get("ocr_text"))
-    return vision_result
 
 
 def _resolve_vision_config(
@@ -1150,15 +1143,12 @@ def _backfill_one(
                 progress.update(task_id, fail=task.fields["fail"] + 1)
             return
 
-        body = {
+        client.post(f"/v1/assets/{asset_id}/vision", json={
             "model_id": vision_result["model_id"],
             "model_version": vision_result["model_version"],
             "description": vision_result["description"],
             "tags": vision_result["tags"],
-        }
-        if vision_result.get("ocr_text"):
-            body["ocr_text"] = vision_result["ocr_text"]
-        client.post(f"/v1/assets/{asset_id}/vision", json=body)
+        })
 
         with stats.lock:
             stats.processed += 1
