@@ -60,6 +60,27 @@ class QuickwitClient:
         """Ensure the per-tenant scene index exists."""
         self._ensure_index(self.tenant_scene_index_id(tenant_id), self._scene_schema_path())
 
+    def recreate_tenant_indexes(self, tenant_id: str) -> None:
+        """Delete and recreate both tenant indexes (asset + scene) with current schema.
+
+        Use when the schema has changed (new fields added). All documents
+        must be re-indexed after this call.
+        """
+        for index_id, schema_path in [
+            (self.tenant_index_id(tenant_id), self._schema_path()),
+            (self.tenant_scene_index_id(tenant_id), self._scene_schema_path()),
+        ]:
+            self._delete_index(index_id)
+            self._ensure_index(index_id, schema_path)
+
+    def _delete_index(self, index_id: str) -> None:
+        if not self._enabled:
+            return
+        resp = requests.delete(f"{self._base_url}/api/v1/indexes/{index_id}", timeout=10)
+        if resp.status_code in (200, 404):
+            return
+        logger.warning("Quickwit index delete failed for %s: %s %s", index_id, resp.status_code, resp.text)
+
     def _ensure_index(self, index_id: str, schema_path: Path) -> None:
         if not self._enabled:
             return
