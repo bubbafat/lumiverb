@@ -64,7 +64,7 @@ class ResetPasswordRequest(BaseModel):
     password: str
 
 
-def _issue_jwt(user_id: str, tenant_id: str, role: str, jwt_secret: str) -> str:
+def _issue_jwt(user_id: str, tenant_id: str, role: str, jwt_secret: str, email: str = "") -> str:
     """Create a signed JWT with a unique jti for revocation support."""
     now = utcnow()
     jti = str(ULID())
@@ -72,6 +72,7 @@ def _issue_jwt(user_id: str, tenant_id: str, role: str, jwt_secret: str) -> str:
         "sub": user_id,
         "tenant_id": tenant_id,
         "role": role,
+        "email": email,
         "jti": jti,
         "iat": int(now.timestamp()),
         "exp": int(now.timestamp()) + JWT_EXPIRY_SECONDS,
@@ -104,7 +105,7 @@ def login(
     if not bcrypt.checkpw(body.password.encode(), user.password_hash.encode()):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    token = _issue_jwt(user.user_id, user.tenant_id, user.role, settings.jwt_secret)
+    token = _issue_jwt(user.user_id, user.tenant_id, user.role, settings.jwt_secret, email=user.email)
     user_repo.update_last_login(user.user_id)
 
     return LoginResponse(access_token=token)
@@ -154,7 +155,7 @@ def refresh_token(request: Request, session: Annotated[Session, Depends(_get_db)
         # Revoke the old token so it can't be refreshed again
         revoked_repo.revoke(old_jti)
 
-    new_token = _issue_jwt(claims["sub"], claims["tenant_id"], claims["role"], settings.jwt_secret)
+    new_token = _issue_jwt(claims["sub"], claims["tenant_id"], claims["role"], settings.jwt_secret, email=claims.get("email", ""))
     return RefreshResponse(access_token=new_token)
 
 

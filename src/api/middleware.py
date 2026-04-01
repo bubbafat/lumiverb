@@ -97,6 +97,7 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
                     request.state.tenant_id = tenant_id
                     request.state.connection_string = routing.connection_string
                     request.state.user_id = user_id
+                    request.state.email = claims.get("email", "")
                     request.state.key_id = None
                     request.state.role = role
                     request.state.is_public_request = False

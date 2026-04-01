@@ -32,9 +32,9 @@ def _path_to_tokens(rel_path: str) -> str:
     return re.sub(r" +", " ", s).strip()
 
 
-def build_asset_document(asset: Asset, meta: AssetMetadata) -> dict:
+def build_asset_document(asset: Asset, meta: AssetMetadata | None) -> dict:
     """Build a Quickwit document for an asset + its latest AI metadata."""
-    data = meta.data or {}
+    data = meta.data if meta else {} or {}
     description = data.get("description", "")
     tags = data.get("tags") or []
 
@@ -60,8 +60,8 @@ def build_asset_document(asset: Asset, meta: AssetMetadata) -> dict:
         "note": asset.note or "",
         "transcript_text": asset.transcript_text or "",
         "searchable": True,
-        "model_id": meta.model_id,
-        "model_version": meta.model_version,
+        "model_id": meta.model_id if meta else "",
+        "model_version": meta.model_version if meta else "",
         "indexed_at": int(utcnow().timestamp()),
     }
 
@@ -105,7 +105,7 @@ def _get_quickwit() -> QuickwitClient | None:
 def try_sync_asset(
     session: Session,
     asset: Asset,
-    meta: AssetMetadata,
+    meta: AssetMetadata | None = None,
     tenant_id: str | None = None,
     quickwit: QuickwitClient | None = None,
 ) -> bool:

@@ -866,11 +866,10 @@ def submit_transcript(
     session.add(asset)
     session.commit()
 
-    # Inline search sync (best-effort)
+    # Sync to search (works with or without vision metadata)
+    from src.search.sync import try_sync_asset
     meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
-    if meta:
-        from src.search.sync import try_sync_asset
-        try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
+    try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
 
     LibraryRepository(session).bump_revision(asset.library_id)
 
@@ -897,11 +896,10 @@ def delete_transcript(
     session.add(asset)
     session.commit()
 
-    # Re-sync search (remove transcript from index)
+    # Sync to search
+    from src.search.sync import try_sync_asset
     meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
-    if meta:
-        from src.search.sync import try_sync_asset
-        try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
+    try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
 
     LibraryRepository(session).bump_revision(asset.library_id)
 
@@ -931,10 +929,12 @@ def update_note(
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
 
-    text = body.text.strip()
+    text = body.text.strip() if body.text else ""
     if text:
+        # Resolve email for display
+        email = getattr(request.state, "email", None) or user_id
         asset.note = text
-        asset.note_author = user_id
+        asset.note_author = email
         asset.note_updated_at = utcnow()
     else:
         asset.note = None
@@ -945,11 +945,10 @@ def update_note(
     session.add(asset)
     session.commit()
 
-    # Re-sync search
+    # Sync to search (works with or without vision metadata)
+    from src.search.sync import try_sync_asset
     meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
-    if meta:
-        from src.search.sync import try_sync_asset
-        try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
+    try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
 
     LibraryRepository(session).bump_revision(asset.library_id)
 
@@ -959,6 +958,32 @@ def update_note(
         note_author=asset.note_author,
         note_updated_at=asset.note_updated_at.isoformat() if asset.note_updated_at else None,
     )
+
+
+@router.delete("/{asset_id}/note", status_code=204)
+def delete_note(
+    asset_id: str,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> None:
+    """Delete a note from an asset."""
+    asset_repo = AssetRepository(session)
+    asset = asset_repo.get_by_id(asset_id)
+    if asset is None or asset.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    asset.note = None
+    asset.note_author = None
+    asset.note_updated_at = None
+    asset.updated_at = utcnow()
+    session.add(asset)
+    session.commit()
+
+    from src.search.sync import try_sync_asset
+    meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
+    try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
+
+    LibraryRepository(session).bump_revision(asset.library_id)
 
 
 class EmbeddingSubmitRequest(BaseModel):

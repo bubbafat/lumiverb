@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getAsset, findSimilar, listFaces, listPeople, assignFace, unassignFace, uploadTranscript, deleteTranscript, updateNote } from "../api/client";
+import { getAsset, findSimilar, listFaces, listPeople, assignFace, unassignFace, uploadTranscript, deleteTranscript, updateNote, deleteNote } from "../api/client";
 import TranscriptViewer from "./TranscriptViewer";
 import { useLocalStorage } from "../lib/useLocalStorage";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
@@ -114,13 +114,25 @@ function NoteSection({
             )}
           </span>
           {!editing && note && (
-            <button
-              type="button"
-              className="text-xs text-indigo-400 hover:text-indigo-300"
-              onClick={startEdit}
-            >
-              Edit
-            </button>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="text-xs text-indigo-400 hover:text-indigo-300"
+                onClick={startEdit}
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                className="text-xs text-red-400 hover:text-red-300"
+                onClick={async () => {
+                  await deleteNote(asset.asset_id);
+                  queryClient.invalidateQueries({ queryKey: ["asset", asset.asset_id] });
+                }}
+              >
+                Delete
+              </button>
+            </div>
           )}
         </div>
         {loading ? (
