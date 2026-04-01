@@ -15,4 +15,6 @@ def configure_logging() -> None:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
         datefmt="%H:%M:%S",
     )
+    # Suppress noisy third-party loggers
+    logging.getLogger("pyvips").setLevel(logging.WARNING)
 
