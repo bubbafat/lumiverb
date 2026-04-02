@@ -198,45 +198,15 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                 raw = self._chat(data_url, prompt)
                 text = raw.strip()
                 logger.info("OCR raw response (%d chars): %s", len(text), text[:200] if text else "(empty)")
-                if not text or text.upper() == "NONE":
+                if not text or text.upper() == "NONE" or text == "<none>":
                     return ""
 
-                # Short direct response — use as-is
-                if len(text) < 200 and "**" not in text:
-                    return text
-
-                # Reasoning model: extract quoted strings, deduplicate, filter noise
-                quoted = re.findall(r'"([^"]{2,})"', text)  # min 2 chars
-                if not quoted:
+                # Strip reasoning preamble (model analysis before actual OCR)
+                cleaned = self._strip_ocr_reasoning(text)
+                if not cleaned:
                     return ""
-                seen: set[str] = set()
-                clean: list[str] = []
-                for q in quoted:
-                    q_stripped = q.strip()
-                    lower = q_stripped.lower()
-                    if lower in seen:
-                        continue
-                    if any(noise in lower for noise in _prompt_noise):
-                        continue
-                    # Skip analysis fragments from reasoning
-                    if any(w in lower for w in (
-                        "i see", "i can", "i will", "let me", "let's",
-                        "looking", "there is", "there are", "the user",
-                        "scan", "the prompt", "transcribe", "it says",
-                        "it looks", "it's ", "maybe", "assume", "appears",
-                        "check", "write it", "clearly reads",
-                    )):
-                        continue
-                    # Skip long fragments (>60 chars) — likely analysis sentences
-                    if len(q_stripped) > 60:
-                        continue
-                    seen.add(lower)
-                    clean.append(q_stripped)
-                if clean:
-                    extracted = " | ".join(clean)
-                    logger.info("OCR found: %s", extracted[:200])
-                    return extracted
-                return ""
+                logger.info("OCR found: %s", cleaned[:200])
+                return cleaned
             except Exception as e:
                 if attempt < self.MAX_ATTEMPTS:
                     delay = self.BACKOFF_BASE * (self.BACKOFF_MULTIPLIER ** (attempt - 1))
@@ -252,6 +222,92 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                 return ""
 
         return ""
+
+    # Phrases that indicate reasoning preamble (not OCR text)
+    _REASONING_STARTS = (
+        "based on", "the user want", "i need to", "i will scan",
+        "i'll scan", "i'll look", "let me", "looking at",
+        "analyzing", "scanning", "the image show", "the image contain",
+        "the image display",
+    )
+
+    def _strip_ocr_reasoning(self, text: str) -> str:
+        """Clean model output: strip reasoning preamble, markdown, and noise.
+
+        Handles both direct responses and reasoning-wrapped responses.
+        """
+        lines = text.splitlines()
+        result_lines: list[str] = []
+        in_reasoning = False
+
+        # Check if the response starts with reasoning
+        first_line_lower = lines[0].strip().lower() if lines else ""
+        if any(first_line_lower.startswith(p) for p in self._REASONING_STARTS):
+            in_reasoning = True
+
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            lower = stripped.lower()
+
+            # Skip reasoning lines
+            if in_reasoning:
+                # Numbered analysis steps (1. **Scan the image:**)
+                if re.match(r"^\d+\.\s+\*\*", stripped):
+                    continue
+                # Bullet analysis (* **Left side:** ...)
+                if stripped.startswith("*") and "**" in stripped and ":" in stripped:
+                    continue
+                # Lines that start with reasoning phrases
+                if any(lower.startswith(p) for p in self._REASONING_STARTS):
+                    continue
+                # "The user wants..." type lines
+                if "the user" in lower and ("want" in lower or "need" in lower):
+                    continue
+
+            # Strip markdown formatting
+            stripped = re.sub(r"\*\*([^*]+)\*\*", r"\1", stripped)  # **bold** → bold
+            stripped = re.sub(r"^#+\s*", "", stripped)  # # Header → Header
+            stripped = re.sub(r"^[-*]\s+", "", stripped)  # - bullet → text
+            stripped = re.sub(r"<img>.*?</img>\s*", "", stripped)  # <img>...</img>
+            stripped = stripped.strip()
+
+            if not stripped:
+                continue
+
+            # Skip analysis/reasoning sentences
+            sl = stripped.lower()
+            if any(p in sl for p in (
+                "scan the image", "analyze the image", "visible text",
+                "i need to", "i will", "the prompt", "transcribe",
+                "there's a sign", "there is a sign", "there are some",
+                "looking closer", "looking at", "looking further",
+                "looking again", "looking really", "let's re-eval",
+                "let's look", "let me look", "let me re-",
+                "wait,", "wait.", "on the left side", "on the right side",
+                "on the far left", "on the far right", "in the center",
+                "it's blue", "it's red", "it's white", "it's a ",
+                "the background has", "the image is a", "the image show",
+                "it looks like", "but they are", "but it's",
+                "re-examine", "final check", "so the text is",
+                "so the full text", "text found:", "partially visible",
+                "too small", "too far", "too blurry", "not legible",
+                "no clear text", "no obvious", "no text",
+                "in red letters", "in large", "in white",
+                "with white letters", "with blue letters",
+            )):
+                continue
+
+            result_lines.append(stripped)
+
+        result = "\n".join(result_lines).strip()
+
+        # Final check: if result is just "NONE" variants
+        if result.upper() in ("NONE", "NONE.", "<NONE>", "N/A"):
+            return ""
+
+        return result
 
     def _chat(self, data_url: str, prompt: str) -> str:
         payload = {
