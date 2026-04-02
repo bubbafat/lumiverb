@@ -192,6 +192,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             try:
                 raw = self._chat(data_url, prompt)
                 text = raw.strip()
+                logger.info("OCR raw response: %s", text[:200] if text else "(empty)")
                 if not text or text.upper() == "NONE":
                     return ""
                 return text
