@@ -181,11 +181,10 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             return ""
 
         prompt = (
-            "Read all visible text in this image exactly as written. "
-            "Include text from signs, labels, documents, screens, "
-            "watermarks, captions, or any other readable text. "
-            "Return only the text, nothing else. "
-            "If there is no readable text, respond with exactly: NONE"
+            "What text is visible in this image? "
+            "List all readable text you can see — labels, signs, screens, documents, watermarks, anything. "
+            "Just the text, no descriptions. "
+            "If none, say NONE."
         )
 
         for attempt in range(1, self.MAX_ATTEMPTS + 1):
