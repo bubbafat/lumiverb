@@ -64,30 +64,19 @@ def _make_progress(console: Console) -> Progress:
 
 def _ocr_one(
     *,
-    client: LumiverbClient,
     asset_id: str,
     rel_path: str,
     ocr_provider: object,
     proxy_cache: "ProxyCache | None" = None,
-    submit_pool: "ThreadPoolExecutor | None" = None,
-    stats: _RepairStats,
-    progress: Progress,
-    task_id: object,
-) -> None:
-    """Get proxy, run OCR extraction, POST result back (async if submit_pool provided)."""
+) -> dict | None:
+    """Run OCR on one asset. Returns {"asset_id", "ocr_text"} or None on failure."""
     import time as _time
     try:
         t0 = _time.perf_counter()
         image_bytes = proxy_cache.get(asset_id, rel_path) if proxy_cache else None
         t_proxy = _time.perf_counter() - t0
         if image_bytes is None:
-            with stats.lock:
-                stats.skipped += 1
-                ok, fail = stats.processed, stats.failed
-            if progress is not None:
-                progress.advance(task_id, 1)
-                progress.update(task_id, ok=ok, fail=fail)
-            return
+            return None
 
         import tempfile
         from pathlib import Path
@@ -106,36 +95,13 @@ def _ocr_one(
 
         if ocr_text:
             logger.info("OCR found: %s", ocr_text[:200])
-
-        # POST async (overlaps with next image's OCR) or sync
-        def _do_post():
-            t2 = _time.perf_counter()
-            client.post(f"/v1/assets/{asset_id}/ocr", json={"ocr_text": ocr_text or ""})
-            t_post = _time.perf_counter() - t2
-            logger.info("ocr timings: %s — proxy=%.1fms ocr=%.1fms post=%.1fms",
-                         rel_path, t_proxy * 1000, t_ocr * 1000, t_post * 1000)
-
-        if submit_pool is not None:
-            submit_pool.submit(_do_post)
-        else:
-            _do_post()
-
-        with stats.lock:
-            stats.processed += 1
-            ok, fail = stats.processed, stats.failed
-        if progress is not None:
-            progress.advance(task_id, 1)
-            progress.update(task_id, ok=ok, fail=fail)
+        logger.info("ocr timings: %s — proxy=%.1fms ocr=%.1fms",
+                     rel_path, t_proxy * 1000, t_ocr * 1000)
+        return {"asset_id": asset_id, "ocr_text": ocr_text or ""}
 
     except Exception as e:
         logger.exception("Failed OCR for %s: %s", rel_path, e)
-        with stats.lock:
-            stats.failed += 1
-            ok, fail = stats.processed, stats.failed
-        if progress is not None:
-            progress.console.print(f"[red]ocr \u2717[/red] {rel_path}: {e}")
-            progress.advance(task_id, 1)
-            progress.update(task_id, ok=ok, fail=fail)
+        return None
 
 
 
@@ -535,32 +501,55 @@ def run_repair(
                 console.print("No assets found (already repaired?).")
                 continue
 
+            import time as _time
+            ocr_batch_size = _cfg.ocr_batch_size
+            batch_buf: list[dict] = []
+
+            def _flush_ocr_batch():
+                if not batch_buf:
+                    return
+                t0 = _time.perf_counter()
+                try:
+                    client.post("/v1/assets/batch-ocr", json={"items": list(batch_buf)})
+                    t_post = _time.perf_counter() - t0
+                    logger.info("ocr batch POST: %d items in %.1fms", len(batch_buf), t_post * 1000)
+                except Exception as e:
+                    logger.warning("ocr batch POST failed (%d items): %s", len(batch_buf), e)
+                    # Fallback: post individually
+                    for item in batch_buf:
+                        try:
+                            client.post(f"/v1/assets/{item['asset_id']}/ocr", json={"ocr_text": item["ocr_text"]})
+                        except Exception:
+                            pass
+                batch_buf.clear()
+
             progress = _make_progress(console)
-            ocr_submit_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ocr-post")
             with progress:
                 tid = progress.add_task("OCR", total=len(assets), ok=0, fail=0)
-                pool = ThreadPoolExecutor(max_workers=ocr_conc, thread_name_prefix="ocr")
-                inflight: set[Future] = set()
                 for a in assets:
-                    fut = pool.submit(
-                        _ocr_one,
-                        client=client,
+                    result = _ocr_one(
                         asset_id=a["asset_id"],
                         rel_path=a["rel_path"],
                         ocr_provider=ocr_provider,
                         proxy_cache=proxy_cache,
-                        submit_pool=ocr_submit_pool,
-                        stats=stats,
-                        progress=progress,
-                        task_id=tid,
                     )
-                    inflight.add(fut)
-                    if len(inflight) >= ocr_conc * 2:
-                        inflight = _drain(inflight)
-                while inflight:
-                    inflight = _drain(inflight)
-                pool.shutdown(wait=True)
-            ocr_submit_pool.shutdown(wait=True)
+                    if result is not None:
+                        batch_buf.append(result)
+                        with stats.lock:
+                            stats.processed += 1
+                    else:
+                        with stats.lock:
+                            stats.skipped += 1
+
+                    if len(batch_buf) >= ocr_batch_size:
+                        _flush_ocr_batch()
+
+                    with stats.lock:
+                        ok, fail = stats.processed, stats.failed
+                    progress.advance(tid, 1)
+                    progress.update(tid, ok=ok, fail=fail)
+
+                _flush_ocr_batch()  # flush remaining
 
         elif repair_type == "faces":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")

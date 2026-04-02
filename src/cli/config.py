@@ -20,6 +20,7 @@ class CLIConfig(BaseModel):
     vision_concurrency: int = 2
     ocr_concurrency: int = 1
     proxy_max_edge: int = 1280
+    ocr_batch_size: int = 25
 
 
 def _config_path() -> Path:
