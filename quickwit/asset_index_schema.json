@@ -179,7 +179,7 @@
     "timestamp_field": "indexed_at"
   },
   "search_settings": {
-    "default_search_fields": ["description", "tags", "path_tokens", "camera_make", "camera_model", "ocr_text", "note", "transcript_text"]
+    "default_search_fields": ["asset_id", "description", "tags", "path_tokens", "camera_make", "camera_model", "ocr_text", "note", "transcript_text"]
   },
   "indexing_settings": {
     "commit_timeout_secs": 10

@@ -50,7 +50,8 @@ def search_assets(
         WHERE {lib_condition}
               a.availability = 'online'
           AND (
-              a.rel_path       ILIKE :like
+              a.asset_id       ILIKE :like
+           OR a.rel_path       ILIKE :like
            OR a.camera_make    ILIKE :like
            OR a.camera_model   ILIKE :like
            OR m.data->>'description' ILIKE :like
