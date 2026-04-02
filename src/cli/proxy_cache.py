@@ -19,7 +19,6 @@ import atexit
 import logging
 import os
 import shutil
-import signal
 import tempfile
 from pathlib import Path
 
@@ -55,9 +54,7 @@ class ProxyCache:
         self._max_edge = max_edge
         self._root_path = root_path
         self._client = client
-        self._prev_sigint = None
-        self._prev_sigterm = None
-        self._install_cleanup()
+        atexit.register(self.cleanup)
 
     @property
     def path(self) -> Path:
@@ -138,22 +135,6 @@ class ProxyCache:
         except Exception:
             return image_bytes  # return original if downscale fails
 
-    def _install_cleanup(self) -> None:
-        atexit.register(self.cleanup)
-
-        def _signal_handler(signum, frame):
-            self.cleanup()
-            prev = self._prev_sigint if signum == signal.SIGINT else self._prev_sigterm
-            if callable(prev):
-                prev(signum, frame)
-            elif prev == signal.SIG_DFL:
-                signal.signal(signum, signal.SIG_DFL)
-                os.kill(os.getpid(), signum)
-
-        self._prev_sigint = signal.getsignal(signal.SIGINT)
-        self._prev_sigterm = signal.getsignal(signal.SIGTERM)
-        signal.signal(signal.SIGINT, _signal_handler)
-        signal.signal(signal.SIGTERM, _signal_handler)
 
 
 def _prune_stale_caches() -> None:
