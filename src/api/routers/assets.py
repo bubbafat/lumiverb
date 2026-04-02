@@ -906,18 +906,18 @@ def submit_batch_ocr(
         )
         updated += 1
 
-    # Batch search sync
+    # Clear search_synced_at so the sweep picks these up for re-indexing.
+    # Avoids 25 individual Quickwit calls inside the request.
     if updated > 0:
-        from src.search.sync import try_sync_asset
-        tenant_id = getattr(request.state, "tenant_id", None)
-        for item in body.items:
-            asset = asset_repo.get_by_id(item.asset_id)
-            if asset is None:
-                continue
-            meta = meta_repo.get_latest(asset_id=item.asset_id)
-            try_sync_asset(session, asset, meta, tenant_id=tenant_id)
+        from sqlalchemy import text
+        asset_ids = [item.asset_id for item in body.items]
+        session.execute(
+            text("UPDATE assets SET search_synced_at = NULL WHERE asset_id = ANY(:ids)"),
+            {"ids": asset_ids},
+        )
+        session.commit()
 
-        # Bump revision once for all
+        # Bump revision once per library
         lib_ids = {a.library_id for item in body.items if (a := asset_repo.get_by_id(item.asset_id))}
         lib_repo = LibraryRepository(session)
         for lid in lib_ids:
