@@ -866,6 +866,66 @@ def submit_ocr(
     return {"asset_id": asset_id, "ocr_text": body.ocr_text}
 
 
+class BatchOcrItem(BaseModel):
+    asset_id: str
+    ocr_text: str
+
+
+class BatchOcrRequest(BaseModel):
+    items: list[BatchOcrItem]
+
+
+@router.post("/batch-ocr", status_code=200)
+def submit_batch_ocr(
+    body: BatchOcrRequest,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> dict:
+    """Submit OCR text for multiple assets in one request."""
+    meta_repo = AssetMetadataRepository(session)
+    asset_repo = AssetRepository(session)
+    updated = 0
+    skipped = 0
+
+    for item in body.items:
+        asset = asset_repo.get_by_id(item.asset_id)
+        if asset is None or asset.deleted_at is not None:
+            skipped += 1
+            continue
+        meta = meta_repo.get_latest(asset_id=item.asset_id)
+        if meta is None:
+            skipped += 1
+            continue
+        data = dict(meta.data) if meta.data else {}
+        data["ocr_text"] = item.ocr_text
+        meta_repo.upsert(
+            asset_id=item.asset_id,
+            model_id=meta.model_id,
+            model_version=meta.model_version,
+            data=data,
+        )
+        updated += 1
+
+    # Batch search sync
+    if updated > 0:
+        from src.search.sync import try_sync_asset
+        tenant_id = getattr(request.state, "tenant_id", None)
+        for item in body.items:
+            asset = asset_repo.get_by_id(item.asset_id)
+            if asset is None:
+                continue
+            meta = meta_repo.get_latest(asset_id=item.asset_id)
+            try_sync_asset(session, asset, meta, tenant_id=tenant_id)
+
+        # Bump revision once for all
+        lib_ids = {a.library_id for item in body.items if (a := asset_repo.get_by_id(item.asset_id))}
+        lib_repo = LibraryRepository(session)
+        for lid in lib_ids:
+            lib_repo.bump_revision(lid)
+
+    return {"updated": updated, "skipped": skipped}
+
+
 class TranscriptSubmitRequest(BaseModel):
     srt: str
     language: str | None = None
