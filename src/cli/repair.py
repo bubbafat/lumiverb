@@ -442,9 +442,9 @@ def run_repair(
     if root_path and not root_path.is_dir():
         root_path = None
 
-    # Shared proxy cache: generates from local source → server download → cached at 1280px
+    # Shared proxy cache: generates from local source → server download → cached at configured size
     from src.cli.proxy_cache import ProxyCache
-    proxy_cache = ProxyCache(root_path=root_path, client=client)
+    proxy_cache = ProxyCache(max_edge=_cfg.proxy_max_edge, root_path=root_path, client=client)
 
     for repair_type, count, desc in plan:
         if repair_type == "embed":

@@ -953,7 +953,7 @@ def run_ingest(
         proxy_cache = None
         if faces_available and images_to_ingest:
             from src.cli.proxy_cache import ProxyCache
-            proxy_cache = ProxyCache(root_path=root_path, client=client)
+            proxy_cache = ProxyCache(max_edge=_cfg.proxy_max_edge, root_path=root_path, client=client)
         if images_to_ingest:
             pool = ThreadPoolExecutor(max_workers=vision_conc if vision_provider else concurrency, thread_name_prefix="ingest")
             inflight: set[Future] = set()

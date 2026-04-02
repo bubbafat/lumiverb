@@ -19,6 +19,7 @@ class CLIConfig(BaseModel):
     max_concurrency: int = 4
     vision_concurrency: int = 2
     ocr_concurrency: int = 1
+    proxy_max_edge: int = 1280
 
 
 def _config_path() -> Path:
