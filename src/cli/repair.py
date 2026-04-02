@@ -69,14 +69,13 @@ def _ocr_one(
     rel_path: str,
     ocr_provider: object,
     proxy_cache: "ProxyCache | None" = None,
-    root_path: "Path | None" = None,
     stats: _RepairStats,
     progress: Progress,
     task_id: object,
 ) -> None:
-    """Get proxy (local source → cache → server), run OCR extraction, POST result back."""
+    """Get proxy, run OCR extraction, POST result back."""
     try:
-        image_bytes = _get_proxy_bytes(client, asset_id, rel_path=rel_path, root_path=root_path, cache=proxy_cache)
+        image_bytes = proxy_cache.get(asset_id, rel_path) if proxy_cache else None
         if image_bytes is None:
             with stats.lock:
                 stats.skipped += 1
@@ -121,49 +120,6 @@ def _ocr_one(
             progress.update(task_id, ok=ok, fail=fail)
 
 
-def _get_proxy_bytes(
-    client: LumiverbClient,
-    asset_id: str,
-    rel_path: str | None = None,
-    root_path: "Path | None" = None,
-    cache: "ProxyCache | None" = None,
-) -> bytes | None:
-    """Get proxy bytes: cache → local source → server download.
-
-    Generates from local source when root_path is available, falls back
-    to server download only when local source isn't accessible.
-    """
-    if cache is not None:
-        cached = cache.get(asset_id)
-        if cached is not None:
-            return cached
-
-    # Try generating from local source file
-    if root_path is not None and rel_path is not None:
-        from pathlib import Path
-        source = (root_path / rel_path).resolve()
-        if source.is_file():
-            try:
-                from src.cli.proxy_gen import generate_proxy_bytes
-                image_bytes, _, _ = generate_proxy_bytes(source)
-                if cache is not None:
-                    cache.put(asset_id, image_bytes)
-                return image_bytes
-            except Exception:
-                pass  # fall through to server download
-
-    # Fall back to server download
-    resp = client._client.get(client._url(f"/v1/assets/{asset_id}/proxy"))
-    if resp.status_code != 200:
-        resp.close()
-        return None
-    image_bytes = resp.content
-    resp.close()
-
-    if cache is not None:
-        cache.put(asset_id, image_bytes)
-
-    return image_bytes
 
 
 def _page_missing(
@@ -220,14 +176,13 @@ def _repair_embed_one(
     rel_path: str,
     clip_provider: object,
     proxy_cache: "ProxyCache | None" = None,
-    root_path: "Path | None" = None,
     stats: _RepairStats,
     progress: Progress,
     task_id: object,
 ) -> None:
-    """Get proxy (local source → cache → server) and generate CLIP embedding for one asset."""
+    """Get proxy and generate CLIP embedding for one asset."""
     try:
-        image_bytes = _get_proxy_bytes(client, asset_id, rel_path=rel_path, root_path=root_path, cache=proxy_cache)
+        image_bytes = proxy_cache.get(asset_id, rel_path) if proxy_cache else None
         if image_bytes is None:
             logger.warning("No proxy for %s", rel_path)
             with stats.lock:
@@ -487,10 +442,9 @@ def run_repair(
     if root_path and not root_path.is_dir():
         root_path = None
 
-    # Shared proxy cache across all repair types for this library.
-    # First access generates from local source; falls back to server download.
+    # Shared proxy cache: generates from local source → server download → cached at 1280px
     from src.cli.proxy_cache import ProxyCache
-    proxy_cache = ProxyCache()
+    proxy_cache = ProxyCache(root_path=root_path, client=client)
 
     for repair_type, count, desc in plan:
         if repair_type == "embed":
@@ -521,7 +475,6 @@ def run_repair(
                         rel_path=a["rel_path"],
                         clip_provider=clip_provider,
                         proxy_cache=proxy_cache,
-                        root_path=root_path,
                         stats=stats,
                         progress=progress,
                         task_id=tid,
@@ -567,7 +520,6 @@ def run_repair(
                         rel_path=a["rel_path"],
                         ocr_provider=ocr_provider,
                         proxy_cache=proxy_cache,
-                        root_path=root_path,
                         stats=stats,
                         progress=progress,
                         task_id=tid,

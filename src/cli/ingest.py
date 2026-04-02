@@ -577,7 +577,7 @@ def _process_and_ingest_one(
 
         # 5. Convert to WebP for upload (server stores as-is, skips re-encoding)
         webp_bytes = _jpeg_to_webp(jpeg_bytes)
-        # Cache JPEG proxy on disk for face detection post-pass
+        # Cache for downstream tasks — put() handles downscaling to 1280px
         _proxy_for_cache = jpeg_bytes
         del jpeg_bytes
 
@@ -953,7 +953,7 @@ def run_ingest(
         proxy_cache = None
         if faces_available and images_to_ingest:
             from src.cli.proxy_cache import ProxyCache
-            proxy_cache = ProxyCache()
+            proxy_cache = ProxyCache(root_path=root_path, client=client)
         if images_to_ingest:
             pool = ThreadPoolExecutor(max_workers=vision_conc if vision_provider else concurrency, thread_name_prefix="ingest")
             inflight: set[Future] = set()
