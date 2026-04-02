@@ -218,8 +218,17 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                         continue
                     if lower in _prompt_noise:
                         continue
-                    # Skip if it's a sentence-like analysis fragment (has verb-like patterns)
-                    if any(w in lower for w in ("i see", "i can", "looking", "there is", "the user", "scan")):
+                    # Skip analysis fragments from reasoning
+                    if any(w in lower for w in (
+                        "i see", "i can", "i will", "let me", "let's",
+                        "looking", "there is", "there are", "the user",
+                        "scan", "the prompt", "transcribe", "it says",
+                        "it looks", "it's ", "maybe", "assume", "appears",
+                        "check", "write it", "clearly reads",
+                    )):
+                        continue
+                    # Skip long fragments (>60 chars) — likely analysis sentences
+                    if len(q_stripped) > 60:
                         continue
                     seen.add(lower)
                     clean.append(q_stripped)
