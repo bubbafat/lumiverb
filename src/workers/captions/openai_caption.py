@@ -182,10 +182,16 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
 
         prompt = (
             "What text is visible in this image? "
-            "List all readable text you can see — labels, signs, screens, documents, watermarks, anything. "
-            "Just the text, no descriptions. "
+            "Include text from signs, labels, products, screens, documents, or watermarks. "
             "If none, say NONE."
         )
+
+        # Words from the prompt that should not appear in OCR results
+        _prompt_noise = {
+            "text", "visible", "readable", "labels", "signs", "screens",
+            "documents", "watermarks", "descriptions", "none", "image",
+            "products", "say", "include",
+        }
 
         for attempt in range(1, self.MAX_ATTEMPTS + 1):
             try:
@@ -194,17 +200,34 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                 logger.info("OCR raw response (%d chars): %s", len(text), text[:200] if text else "(empty)")
                 if not text or text.upper() == "NONE":
                     return ""
-                # Reasoning models may return analysis with quoted text.
-                # If response looks like reasoning (long, has analysis markers),
-                # extract quoted strings as the OCR text.
-                if len(text) > 200 or "**" in text or "1." in text:
-                    quoted = re.findall(r'"([^"]+)"', text)
-                    if quoted:
-                        extracted = " ".join(quoted)
-                        logger.info("OCR extracted from reasoning: %s", extracted[:200])
-                        return extracted
+
+                # Short direct response — use as-is
+                if len(text) < 200 and "**" not in text:
+                    return text
+
+                # Reasoning model: extract quoted strings, deduplicate, filter noise
+                quoted = re.findall(r'"([^"]{2,})"', text)  # min 2 chars
+                if not quoted:
                     return ""
-                return text
+                seen: set[str] = set()
+                clean: list[str] = []
+                for q in quoted:
+                    q_stripped = q.strip()
+                    lower = q_stripped.lower()
+                    if lower in seen:
+                        continue
+                    if lower in _prompt_noise:
+                        continue
+                    # Skip if it's a sentence-like analysis fragment (has verb-like patterns)
+                    if any(w in lower for w in ("i see", "i can", "looking", "there is", "the user", "scan")):
+                        continue
+                    seen.add(lower)
+                    clean.append(q_stripped)
+                if clean:
+                    extracted = " | ".join(clean)
+                    logger.info("OCR found: %s", extracted[:200])
+                    return extracted
+                return ""
             except Exception as e:
                 if attempt < self.MAX_ATTEMPTS:
                     delay = self.BACKOFF_BASE * (self.BACKOFF_MULTIPLIER ** (attempt - 1))
