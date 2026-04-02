@@ -1130,13 +1130,18 @@ def _backfill_one(
     task_id: object = None,
 ) -> None:
     """Download proxy, call vision AI, POST results back."""
+    import time as _time
     try:
+        t0 = _time.perf_counter()
         resp = client.get(f"/v1/assets/{asset_id}/artifacts/proxy")
         proxy_bytes = resp.content
+        t_proxy = _time.perf_counter() - t0
 
+        t1 = _time.perf_counter()
         vision_result = _call_vision_ai(
             proxy_bytes, vision_model_id, vision_provider,
         )
+        t_vision = _time.perf_counter() - t1
         if not vision_result:
             logger.warning("Vision returned no result for %s", rel_path)
             with stats.lock:
@@ -1148,12 +1153,17 @@ def _backfill_one(
                 progress.update(task_id, fail=task.fields["fail"] + 1)
             return
 
+        t2 = _time.perf_counter()
         client.post(f"/v1/assets/{asset_id}/vision", json={
             "model_id": vision_result["model_id"],
             "model_version": vision_result["model_version"],
             "description": vision_result["description"],
             "tags": vision_result["tags"],
         })
+        t_post = _time.perf_counter() - t2
+
+        logger.info("vision timings: %s — proxy=%.1fms vision=%.1fms post=%.1fms",
+                     rel_path, t_proxy * 1000, t_vision * 1000, t_post * 1000)
 
         with stats.lock:
             stats.processed += 1

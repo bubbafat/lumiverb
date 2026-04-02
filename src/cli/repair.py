@@ -74,8 +74,11 @@ def _ocr_one(
     task_id: object,
 ) -> None:
     """Get proxy, run OCR extraction, POST result back."""
+    import time as _time
     try:
+        t0 = _time.perf_counter()
         image_bytes = proxy_cache.get(asset_id, rel_path) if proxy_cache else None
+        t_proxy = _time.perf_counter() - t0
         if image_bytes is None:
             with stats.lock:
                 stats.skipped += 1
@@ -93,14 +96,21 @@ def _ocr_one(
             tmp_path = Path(tmp.name)
         del image_bytes
 
+        t1 = _time.perf_counter()
         try:
             ocr_text = ocr_provider.extract_text(tmp_path)
         finally:
             tmp_path.unlink(missing_ok=True)
+        t_ocr = _time.perf_counter() - t1
 
+        t2 = _time.perf_counter()
         if ocr_text:
             logger.info("OCR found: %s", ocr_text[:200])
         client.post(f"/v1/assets/{asset_id}/ocr", json={"ocr_text": ocr_text or ""})
+        t_post = _time.perf_counter() - t2
+
+        logger.info("ocr timings: %s — proxy=%.1fms ocr=%.1fms post=%.1fms",
+                     rel_path, t_proxy * 1000, t_ocr * 1000, t_post * 1000)
 
         with stats.lock:
             stats.processed += 1
@@ -181,8 +191,11 @@ def _repair_embed_one(
     task_id: object,
 ) -> None:
     """Get proxy and generate CLIP embedding for one asset."""
+    import time as _time
     try:
+        t0 = _time.perf_counter()
         image_bytes = proxy_cache.get(asset_id, rel_path) if proxy_cache else None
+        t_proxy = _time.perf_counter() - t0
         if image_bytes is None:
             logger.warning("No proxy for %s", rel_path)
             with stats.lock:
@@ -194,17 +207,24 @@ def _repair_embed_one(
             return
 
         from PIL import Image as PILImage
+        t1 = _time.perf_counter()
         img = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
         del image_bytes
         vector = clip_provider.embed_image(img)
         img.close()
         del img
+        t_embed = _time.perf_counter() - t1
 
+        t2 = _time.perf_counter()
         client.post(f"/v1/assets/{asset_id}/embeddings", json={
             "model_id": clip_provider.model_id,
             "model_version": clip_provider.model_version,
             "vector": vector,
         })
+        t_post = _time.perf_counter() - t2
+
+        logger.info("embed timings: %s — proxy=%.1fms embed=%.1fms post=%.1fms",
+                     rel_path, t_proxy * 1000, t_embed * 1000, t_post * 1000)
 
         with stats.lock:
             stats.processed += 1
