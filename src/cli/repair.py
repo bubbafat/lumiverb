@@ -69,11 +69,12 @@ def _ocr_one(
     rel_path: str,
     ocr_provider: object,
     proxy_cache: "ProxyCache | None" = None,
+    submit_pool: "ThreadPoolExecutor | None" = None,
     stats: _RepairStats,
     progress: Progress,
     task_id: object,
 ) -> None:
-    """Get proxy, run OCR extraction, POST result back."""
+    """Get proxy, run OCR extraction, POST result back (async if submit_pool provided)."""
     import time as _time
     try:
         t0 = _time.perf_counter()
@@ -103,14 +104,21 @@ def _ocr_one(
             tmp_path.unlink(missing_ok=True)
         t_ocr = _time.perf_counter() - t1
 
-        t2 = _time.perf_counter()
         if ocr_text:
             logger.info("OCR found: %s", ocr_text[:200])
-        client.post(f"/v1/assets/{asset_id}/ocr", json={"ocr_text": ocr_text or ""})
-        t_post = _time.perf_counter() - t2
 
-        logger.info("ocr timings: %s — proxy=%.1fms ocr=%.1fms post=%.1fms",
-                     rel_path, t_proxy * 1000, t_ocr * 1000, t_post * 1000)
+        # POST async (overlaps with next image's OCR) or sync
+        def _do_post():
+            t2 = _time.perf_counter()
+            client.post(f"/v1/assets/{asset_id}/ocr", json={"ocr_text": ocr_text or ""})
+            t_post = _time.perf_counter() - t2
+            logger.info("ocr timings: %s — proxy=%.1fms ocr=%.1fms post=%.1fms",
+                         rel_path, t_proxy * 1000, t_ocr * 1000, t_post * 1000)
+
+        if submit_pool is not None:
+            submit_pool.submit(_do_post)
+        else:
+            _do_post()
 
         with stats.lock:
             stats.processed += 1
@@ -528,6 +536,7 @@ def run_repair(
                 continue
 
             progress = _make_progress(console)
+            ocr_submit_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ocr-post")
             with progress:
                 tid = progress.add_task("OCR", total=len(assets), ok=0, fail=0)
                 pool = ThreadPoolExecutor(max_workers=ocr_conc, thread_name_prefix="ocr")
@@ -540,6 +549,7 @@ def run_repair(
                         rel_path=a["rel_path"],
                         ocr_provider=ocr_provider,
                         proxy_cache=proxy_cache,
+                        submit_pool=ocr_submit_pool,
                         stats=stats,
                         progress=progress,
                         task_id=tid,
@@ -550,6 +560,7 @@ def run_repair(
                 while inflight:
                     inflight = _drain(inflight)
                 pool.shutdown(wait=True)
+            ocr_submit_pool.shutdown(wait=True)
 
         elif repair_type == "faces":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
