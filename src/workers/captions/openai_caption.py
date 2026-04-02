@@ -97,7 +97,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         try:
             img = Image.open(proxy_path)
             try:
-                max_edge = 1024
+                max_edge = 1280
                 if max(img.width, img.height) > max_edge:
                     img.thumbnail((max_edge, max_edge), Image.LANCZOS)
                 buf = io.BytesIO()
@@ -167,7 +167,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         try:
             img = Image.open(proxy_path)
             try:
-                max_edge = 1024
+                max_edge = 1280
                 if max(img.width, img.height) > max_edge:
                     img.thumbnail((max_edge, max_edge), Image.LANCZOS)
                 buf = io.BytesIO()
