@@ -191,8 +191,18 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             try:
                 raw = self._chat(data_url, prompt)
                 text = raw.strip()
-                logger.info("OCR raw response: %s", text[:200] if text else "(empty)")
+                logger.info("OCR raw response (%d chars): %s", len(text), text[:200] if text else "(empty)")
                 if not text or text.upper() == "NONE":
+                    return ""
+                # Reasoning models may return analysis with quoted text.
+                # If response looks like reasoning (long, has analysis markers),
+                # extract quoted strings as the OCR text.
+                if len(text) > 200 or "**" in text or "1." in text:
+                    quoted = re.findall(r'"([^"]+)"', text)
+                    if quoted:
+                        extracted = " ".join(quoted)
+                        logger.info("OCR extracted from reasoning: %s", extracted[:200])
+                        return extracted
                     return ""
                 return text
             except Exception as e:
@@ -239,5 +249,10 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             logger.warning("Error from AI Provider: %s: %s", resp.status_code, resp.text)
         resp.raise_for_status()
 
-        content = resp.json()["choices"][0]["message"]["content"]
+        msg = resp.json()["choices"][0]["message"]
+        content = msg.get("content") or ""
+        # Reasoning models (e.g. Qwen 3.5) may put the answer in reasoning_content
+        # when content is empty — fall back to it
+        if not content.strip():
+            content = msg.get("reasoning_content") or ""
         return self._strip_thinking(content)
