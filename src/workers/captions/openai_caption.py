@@ -216,7 +216,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                     lower = q_stripped.lower()
                     if lower in seen:
                         continue
-                    if lower in _prompt_noise:
+                    if any(noise in lower for noise in _prompt_noise):
                         continue
                     # Skip analysis fragments from reasoning
                     if any(w in lower for w in (
