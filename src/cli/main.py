@@ -568,9 +568,9 @@ def admin_vision_test(
     """
     from datetime import datetime, timezone
 
+    from src.cli.ingest import _resolve_vision_config
     from src.core.file_extensions import IMAGE_EXTENSIONS
     from src.workers.captions.factory import get_caption_provider
-    from src.workers.captions.model_discovery import discover_model_id
 
     path = path.expanduser().resolve()
     if not path.is_dir():
@@ -586,20 +586,20 @@ def admin_vision_test(
         console.print(f"[yellow]No images found in {path}[/yellow]")
         raise typer.Exit(0)
 
-    # Resolve vision API URL
-    if url:
-        vision_url = url.rstrip("/")
-    else:
-        cfg = load_config()
-        vision_url = cfg.vision_api_url
-        if not vision_url:
-            console.print("[red]No --url provided and no vision_api_url configured. Run 'lumiverb config set --vision-api-url ...'[/red]")
-            raise typer.Exit(1)
+    # Resolve vision config (CLI config > tenant config > auto-discover)
+    client = LumiverbClient()
+    vision_url, vision_key, model_id, source = _resolve_vision_config(client)
 
-    # Resolve model
-    cfg = load_config()
-    vision_key = cfg.vision_api_key or None
-    model_id = cfg.vision_model_id or discover_model_id(vision_url, vision_key)
+    # --url override takes precedence
+    if url:
+        from src.workers.captions.model_discovery import discover_model_id
+        vision_url = url.rstrip("/")
+        model_id = load_config().vision_model_id or discover_model_id(vision_url, vision_key)
+
+    if not vision_url:
+        console.print("[red]No --url provided and no vision API configured (client or tenant).[/red]")
+        raise typer.Exit(1)
+
     provider = get_caption_provider(model_id, vision_url, vision_key)
 
     # Default output path
