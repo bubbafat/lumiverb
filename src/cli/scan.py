@@ -97,26 +97,17 @@ def _fetch_existing_assets_with_sha(
     return existing
 
 
-def _classify_files(
+def _split_files(
     local_files: list[dict],
     existing: dict[str, _ServerAsset],
-    root_path: Path,
-    path_prefix: str | None,
-    force: bool,
-    console: Console,
-) -> tuple[list[dict], list[dict], list[dict], list[str]]:
-    """Classify local files against server state.
+) -> tuple[list[dict], list[dict]]:
+    """Split files into new (not on server) and needs-hash (on server).
 
-    Returns (new_files, changed_files, unchanged_files, deleted_asset_ids).
-    Each file dict in new/changed/unchanged has the original walk fields
-    plus 'source_sha256' (computed here) and optionally 'asset_id'.
+    New files can start scanning immediately. Needs-hash files require
+    SHA comparison before we know if they're changed or unchanged.
+    Returns (new_files, needs_hash_files).
     """
     new_files: list[dict] = []
-    changed_files: list[dict] = []
-    unchanged_files: list[dict] = []
-
-    # Split into new (not on server) vs needs-comparison (on server).
-    # Only files that exist on the server need SHA computation.
     needs_hash: list[dict] = []
     for f in local_files:
         server = existing.get(f["rel_path"])
@@ -125,44 +116,24 @@ def _classify_files(
         else:
             f["_server"] = server
             needs_hash.append(f)
+    return new_files, needs_hash
 
-    if needs_hash:
-        progress = Progress(
-            SpinnerColumn(),
-            TextColumn("[bold]Hashing"),
-            BarColumn(bar_width=30),
-            MofNCompleteColumn(),
-            console=console,
-            refresh_per_second=4,
-        )
-        with progress:
-            tid = progress.add_task("Hashing", total=len(needs_hash))
-            for f in needs_hash:
-                server = f.pop("_server")
-                source_path = root_path / f["rel_path"]
-                source_sha = compute_sha256(source_path)
-                f["source_sha256"] = source_sha
 
-                if force or (source_sha and server.sha256 != source_sha):
-                    f["asset_id"] = server.asset_id
-                    changed_files.append(f)
-                else:
-                    f["asset_id"] = server.asset_id
-                    unchanged_files.append(f)
-                progress.advance(tid)
-
-    # Detect deletions — server assets not found on disk
+def _detect_deletions(
+    local_files: list[dict],
+    existing: dict[str, _ServerAsset],
+    root_path: Path,
+    path_prefix: str | None,
+) -> list[str]:
+    """Find server assets with no corresponding local file. Returns asset IDs."""
     local_rel_paths = {f["rel_path"] for f in local_files}
     scope = existing
     if path_prefix:
         prefix = path_prefix.rstrip("/") + "/"
         scope = {rp: sa for rp, sa in existing.items() if rp.startswith(prefix)}
-
-    deleted_ids = [
-        sa.asset_id for rp, sa in scope.items() if rp not in local_rel_paths
-    ] if root_path.is_dir() else []
-
-    return new_files, changed_files, unchanged_files, deleted_ids
+    if not root_path.is_dir():
+        return []
+    return [sa.asset_id for rp, sa in scope.items() if rp not in local_rel_paths]
 
 
 def _scan_one(
@@ -425,32 +396,45 @@ def run_scan(
     existing = _fetch_existing_assets_with_sha(client, library_id)
     console.print(f"Server has {len(existing):,} existing assets")
 
-    # Classify files
-    new_files, changed_files, unchanged_files, deleted_ids = _classify_files(
-        local_files, existing, root_path, path_prefix, force, console,
-    )
+    # Split files: new (not on server) can scan immediately;
+    # existing files need SHA comparison first.
+    new_files, needs_hash = _split_files(local_files, existing)
+    deleted_ids = _detect_deletions(local_files, existing, root_path, path_prefix)
 
     console.print(
-        f"\n[bold]Scan summary:[/bold] "
         f"{len(new_files):,} new, "
-        f"{len(changed_files):,} changed, "
-        f"{len(unchanged_files):,} unchanged, "
-        f"{len(deleted_ids):,} deleted"
+        f"{len(needs_hash):,} existing ({len(deleted_ids):,} deleted)"
     )
 
     if dry_run:
-        console.print()
-        console.print(f"[bold]Root path:[/bold]  {root_path}")
-        if new_files and len(new_files) <= 20:
-            console.print("\n[bold]New files:[/bold]")
-            for f in sorted(new_files, key=lambda f: f["rel_path"])[:20]:
-                console.print(f"  {f['rel_path']}")
-        if changed_files and len(changed_files) <= 20:
-            console.print("\n[bold]Changed files:[/bold]")
-            for f in sorted(changed_files, key=lambda f: f["rel_path"])[:20]:
-                console.print(f"  {f['rel_path']}")
-        if deleted_ids and len(deleted_ids) <= 20:
-            console.print(f"\n[bold]Deleted assets:[/bold] {len(deleted_ids):,}")
+        # For dry-run, hash synchronously to show full breakdown
+        changed_files: list[dict] = []
+        unchanged_files: list[dict] = []
+        if needs_hash:
+            hash_progress = Progress(
+                SpinnerColumn(), TextColumn("[bold]Hashing"),
+                BarColumn(bar_width=30), MofNCompleteColumn(),
+                console=console, refresh_per_second=4,
+            )
+            with hash_progress:
+                tid = hash_progress.add_task("Hashing", total=len(needs_hash))
+                for f in needs_hash:
+                    server = f.pop("_server")
+                    source_sha = compute_sha256(root_path / f["rel_path"])
+                    if force or (source_sha and server.sha256 != source_sha):
+                        changed_files.append(f)
+                    else:
+                        unchanged_files.append(f)
+                    hash_progress.advance(tid)
+
+        console.print(
+            f"\n[bold]Scan summary:[/bold] "
+            f"{len(new_files):,} new, "
+            f"{len(changed_files):,} changed, "
+            f"{len(unchanged_files):,} unchanged, "
+            f"{len(deleted_ids):,} deleted"
+        )
+        console.print(f"\n[bold]Root path:[/bold]  {root_path}")
         return stats
 
     # Soft-delete missing assets
@@ -461,48 +445,76 @@ def run_scan(
             client.delete("/v1/assets", json={"asset_ids": batch})
         stats.deleted = len(deleted_ids)
 
-    # Process new + changed files
-    to_scan = [(f, "new") for f in new_files] + [(f, "changed") for f in changed_files]
-    if to_scan:
+    # Pipeline: scan new files immediately while hashing existing files
+    # in the background. Changed files feed into the same scan pool as
+    # hashing completes.
+    total_to_scan = len(new_files) + len(needs_hash)  # upper bound (unchanged will be skipped)
+    if not total_to_scan:
         proxy_cache = ProxyCache(root_path=root_path, client=client)
-        scan_progress = Progress(
-            SpinnerColumn(),
-            TextColumn("[bold]Scanning"),
-            BarColumn(bar_width=30),
-            MofNCompleteColumn(),
-            TimeRemainingColumn(),
-            console=console,
-            refresh_per_second=4,
+        _populate_cache_for_unchanged(client, [], proxy_cache, stats, console)
+        return stats
+
+    proxy_cache = ProxyCache(root_path=root_path, client=client)
+    scan_progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[bold]Scanning"),
+        BarColumn(bar_width=30),
+        MofNCompleteColumn(),
+        TimeRemainingColumn(),
+        console=console,
+        refresh_per_second=4,
+    )
+    unchanged_files = []
+
+    def _submit(f: dict, kind: str, pool: ThreadPoolExecutor, inflight: set, tid: object) -> set:
+        handler = _scan_one_video if f["media_type"] == "video" else _scan_one
+        fut = pool.submit(
+            handler,
+            client=client,
+            library_id=library_id,
+            root_path=root_path,
+            f=f,
+            proxy_cache=proxy_cache,
+            stats=stats,
+            progress=scan_progress,
+            task_id=tid,
+            counter_field=kind,
         )
-        with scan_progress:
-            tid = scan_progress.add_task("Scanning", total=len(to_scan))
-            pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="scan")
-            inflight: set[Future] = set()
-            for f, kind in to_scan:
-                handler = _scan_one_video if f["media_type"] == "video" else _scan_one
-                fut = pool.submit(
-                    handler,
-                    client=client,
-                    library_id=library_id,
-                    root_path=root_path,
-                    f=f,
-                    proxy_cache=proxy_cache,
-                    stats=stats,
-                    progress=scan_progress,
-                    task_id=tid,
-                    counter_field=kind,
-                )
-                inflight.add(fut)
-                if len(inflight) >= concurrency * 2:
-                    done, inflight = _drain(inflight)
-            while inflight:
-                done, inflight = _drain(inflight)
-            pool.shutdown(wait=True)
-    else:
-        proxy_cache = ProxyCache(root_path=root_path, client=client)
+        inflight.add(fut)
+        if len(inflight) >= concurrency * 2:
+            done, inflight = _drain(inflight)
+        return inflight
+
+    with scan_progress:
+        tid = scan_progress.add_task("Scanning", total=total_to_scan)
+        pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="scan")
+        inflight: set[Future] = set()
+
+        # Dispatch new files immediately — no hashing needed
+        for f in new_files:
+            inflight = _submit(f, "new", pool, inflight, tid)
+
+        # Hash existing files and dispatch changed ones as they're identified.
+        # Unchanged files skip scanning (advance progress bar only).
+        for f in needs_hash:
+            server = f.pop("_server")
+            source_sha = compute_sha256(root_path / f["rel_path"])
+            f["source_sha256"] = source_sha
+
+            if force or (source_sha and server.sha256 != source_sha):
+                f["asset_id"] = server.asset_id
+                inflight = _submit(f, "changed", pool, inflight, tid)
+            else:
+                f["asset_id"] = server.asset_id
+                unchanged_files.append(f)
+                stats.unchanged += 1
+                scan_progress.advance(tid)
+
+        while inflight:
+            done, inflight = _drain(inflight)
+        pool.shutdown(wait=True)
 
     # Populate cache for unchanged files
-    stats.unchanged = len(unchanged_files)
     _populate_cache_for_unchanged(client, unchanged_files, proxy_cache, stats, console)
 
     return stats

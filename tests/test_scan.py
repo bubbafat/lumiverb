@@ -15,9 +15,10 @@ from rich.console import Console
 from src.cli.scan import (
     ScanStats,
     _ServerAsset,
-    _classify_files,
+    _detect_deletions,
     _fetch_existing_assets_with_sha,
     _populate_cache_for_unchanged,
+    _split_files,
 )
 
 
@@ -35,127 +36,73 @@ def _make_file(tmp_path: Path, rel: str, content: bytes = b"test") -> dict:
     }
 
 
-class TestClassifyFiles:
-    """Test _classify_files change detection logic."""
+class TestSplitFiles:
+    """Test _split_files separates new from existing."""
 
-    def test_new_file(self, tmp_path):
-        """File on disk not on server → new. SHA is NOT computed (deferred to scan_one)."""
-        f = _make_file(tmp_path, "a.jpg")
+    def test_new_file(self):
+        """File not on server → new."""
+        f = {"rel_path": "a.jpg", "media_type": "image"}
         existing: dict[str, _ServerAsset] = {}
-        console = Console(quiet=True)
 
-        new, changed, unchanged, deleted = _classify_files(
-            [f], existing, tmp_path, None, False, console,
-        )
+        new, needs_hash = _split_files([f], existing)
         assert len(new) == 1
-        assert new[0]["rel_path"] == "a.jpg"
-        assert "source_sha256" not in new[0]  # deferred — no server asset to compare
-        assert len(changed) == 0
-        assert len(unchanged) == 0
-        assert len(deleted) == 0
+        assert len(needs_hash) == 0
 
-    def test_unchanged_file(self, tmp_path):
-        """File on disk with matching SHA → unchanged."""
-        content = b"stable-content"
-        f = _make_file(tmp_path, "a.jpg", content)
+    def test_existing_file_needs_hash(self):
+        """File on server → needs hash comparison."""
+        f = {"rel_path": "a.jpg", "media_type": "image"}
+        existing = {"a.jpg": _ServerAsset(asset_id="id-1", sha256="abc")}
 
-        # Compute the real SHA
-        from src.workers.exif_extract import compute_sha256
-        real_sha = compute_sha256(tmp_path / "a.jpg")
-
-        existing = {"a.jpg": _ServerAsset(asset_id="id-1", sha256=real_sha)}
-        console = Console(quiet=True)
-
-        new, changed, unchanged, deleted = _classify_files(
-            [f], existing, tmp_path, None, False, console,
-        )
+        new, needs_hash = _split_files([f], existing)
         assert len(new) == 0
-        assert len(changed) == 0
-        assert len(unchanged) == 1
-        assert unchanged[0]["asset_id"] == "id-1"
+        assert len(needs_hash) == 1
+        assert needs_hash[0]["_server"].asset_id == "id-1"
 
-    def test_changed_file(self, tmp_path):
-        """File on disk with different SHA → changed."""
-        f = _make_file(tmp_path, "a.jpg", b"new-content")
-        existing = {"a.jpg": _ServerAsset(asset_id="id-1", sha256="old-sha-that-wont-match")}
-        console = Console(quiet=True)
+    def test_mixed(self):
+        """Mix of new and existing."""
+        files = [
+            {"rel_path": "new.jpg", "media_type": "image"},
+            {"rel_path": "old.jpg", "media_type": "image"},
+        ]
+        existing = {"old.jpg": _ServerAsset(asset_id="id-1", sha256="abc")}
 
-        new, changed, unchanged, deleted = _classify_files(
-            [f], existing, tmp_path, None, False, console,
-        )
-        assert len(new) == 0
-        assert len(changed) == 1
-        assert changed[0]["asset_id"] == "id-1"
+        new, needs_hash = _split_files(files, existing)
+        assert len(new) == 1
+        assert new[0]["rel_path"] == "new.jpg"
+        assert len(needs_hash) == 1
+        assert needs_hash[0]["rel_path"] == "old.jpg"
+
+
+class TestDetectDeletions:
+    """Test _detect_deletions finds server assets missing from disk."""
 
     def test_deleted_file(self, tmp_path):
-        """Asset on server but file missing from disk → deleted."""
         existing = {"gone.jpg": _ServerAsset(asset_id="id-gone", sha256="abc")}
-        console = Console(quiet=True)
+        deleted = _detect_deletions([], existing, tmp_path, None)
+        assert deleted == ["id-gone"]
 
-        new, changed, unchanged, deleted = _classify_files(
-            [], existing, tmp_path, None, False, console,
-        )
-        assert len(deleted) == 1
-        assert deleted[0] == "id-gone"
-
-    def test_force_treats_unchanged_as_changed(self, tmp_path):
-        """--force flag causes unchanged files to be classified as changed."""
-        content = b"stable-content"
-        f = _make_file(tmp_path, "a.jpg", content)
-
-        from src.workers.exif_extract import compute_sha256
-        real_sha = compute_sha256(tmp_path / "a.jpg")
-
-        existing = {"a.jpg": _ServerAsset(asset_id="id-1", sha256=real_sha)}
-        console = Console(quiet=True)
-
-        new, changed, unchanged, deleted = _classify_files(
-            [f], existing, tmp_path, None, True, console,
-        )
-        assert len(unchanged) == 0
-        assert len(changed) == 1
-        assert changed[0]["asset_id"] == "id-1"
+    def test_no_deletions(self, tmp_path):
+        local = [{"rel_path": "a.jpg"}]
+        existing = {"a.jpg": _ServerAsset(asset_id="id-1", sha256="abc")}
+        deleted = _detect_deletions(local, existing, tmp_path, None)
+        assert deleted == []
 
     def test_path_prefix_scopes_deletion(self, tmp_path):
-        """Deletion detection only affects assets under the path prefix."""
-        f = _make_file(tmp_path, "sub/a.jpg")
+        """Only assets under the prefix are considered deleted."""
+        local = [{"rel_path": "sub/a.jpg"}]
         existing = {
             "sub/a.jpg": _ServerAsset(asset_id="id-1", sha256="x"),
             "other/b.jpg": _ServerAsset(asset_id="id-2", sha256="y"),
             "sub/gone.jpg": _ServerAsset(asset_id="id-3", sha256="z"),
         }
-        console = Console(quiet=True)
-
-        _, _, _, deleted = _classify_files(
-            [f], existing, tmp_path, "sub", False, console,
-        )
-        # Only sub/gone.jpg should be deleted, not other/b.jpg
+        deleted = _detect_deletions(local, existing, tmp_path, "sub")
         assert set(deleted) == {"id-3"}
 
-    def test_mixed_state(self, tmp_path):
-        """Multiple files in different states."""
-        new_f = _make_file(tmp_path, "new.jpg", b"new")
-        changed_f = _make_file(tmp_path, "changed.jpg", b"changed")
-        unchanged_content = b"unchanged"
-        unchanged_f = _make_file(tmp_path, "unchanged.jpg", unchanged_content)
-
-        from src.workers.exif_extract import compute_sha256
-        unchanged_sha = compute_sha256(tmp_path / "unchanged.jpg")
-
-        existing = {
-            "changed.jpg": _ServerAsset(asset_id="id-c", sha256="old"),
-            "unchanged.jpg": _ServerAsset(asset_id="id-u", sha256=unchanged_sha),
-            "deleted.jpg": _ServerAsset(asset_id="id-d", sha256="x"),
-        }
-        console = Console(quiet=True)
-
-        new, changed, unchanged, deleted = _classify_files(
-            [new_f, changed_f, unchanged_f], existing, tmp_path, None, False, console,
-        )
-        assert len(new) == 1
-        assert len(changed) == 1
-        assert len(unchanged) == 1
-        assert len(deleted) == 1
+    def test_unmounted_root_returns_empty(self):
+        """If root doesn't exist, no deletions (safety)."""
+        existing = {"a.jpg": _ServerAsset(asset_id="id-1", sha256="x")}
+        deleted = _detect_deletions([], existing, Path("/nonexistent"), None)
+        assert deleted == []
 
 
 class TestFetchExistingAssetsWithSha:
@@ -213,7 +160,6 @@ class TestPopulateCacheForUnchanged:
             [{"asset_id": "id-1", "source_sha256": "sha"}],
             cache, stats, console,
         )
-        # Should not have attempted any download
         mock_client._client.get.assert_not_called()
         assert stats.cache_populated == 0
 
