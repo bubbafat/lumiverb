@@ -90,30 +90,48 @@ def test_insightface_provider_properties() -> None:
     assert provider.model_version == "buffalo_l"
 
 
-@pytest.mark.fast
-def test_insightface_provider_detect_faces_mocked() -> None:
-    """InsightFaceProvider.detect_faces returns FaceDetection objects from mocked InsightFace."""
+def _make_sharp_image(width: int = 640, height: int = 480):
+    """Create a test image with high-frequency detail (passes sharpness gate)."""
     import numpy as np
     from PIL import Image as PILImage
 
+    # Checkerboard pattern — high Laplacian variance
+    arr = np.zeros((height, width, 3), dtype=np.uint8)
+    arr[::2, ::2] = 255
+    arr[1::2, 1::2] = 255
+    return PILImage.fromarray(arr)
+
+
+def _make_mock_face(bbox, det_score=0.95, embedding=True):
+    """Create a mock InsightFace detection result."""
+    import numpy as np
+
+    face = MagicMock()
+    face.bbox = bbox
+    face.det_score = det_score
+    if embedding:
+        emb = np.random.randn(512).astype(np.float32)
+        face.normed_embedding = emb / np.linalg.norm(emb)
+    else:
+        face.normed_embedding = None
+    return face
+
+
+@pytest.mark.fast
+def test_insightface_provider_detect_faces_mocked() -> None:
+    """InsightFaceProvider.detect_faces returns FaceDetection objects from mocked InsightFace."""
     from src.workers.faces.insightface_provider import InsightFaceProvider
 
-    # Create a small test image
-    img = PILImage.new("RGB", (640, 480), color=(128, 128, 128))
+    img = _make_sharp_image(640, 480)
 
-    # Mock the InsightFace FaceAnalysis app
-    mock_face = MagicMock()
-    mock_face.bbox = [64, 48, 192, 192]  # pixels: x1, y1, x2, y2
-    mock_face.det_score = 0.95
-    mock_face.normed_embedding = np.random.randn(512).astype(np.float32)
-    # Normalize
-    mock_face.normed_embedding = mock_face.normed_embedding / np.linalg.norm(mock_face.normed_embedding)
+    # Large face covering ~30% of image — passes all gates
+    mock_face = _make_mock_face([64, 48, 320, 336])
 
     mock_app = MagicMock()
     mock_app.get.return_value = [mock_face]
 
     provider = InsightFaceProvider()
-    provider._app = mock_app  # Inject mock
+    provider._app = mock_app
 
     results = provider.detect_faces(img)
 
@@ -125,6 +143,7 @@ def test_insightface_provider_detect_faces_mocked() -> None:
     assert 0.0 <= r.bounding_box["h"] <= 1.0
     assert r.detection_confidence == pytest.approx(0.95)
     assert len(r.embedding) == 512
+    assert r.sharpness > 0
 
 
 @pytest.mark.fast
@@ -149,16 +168,11 @@ def test_insightface_provider_no_faces() -> None:
 @pytest.mark.fast
 def test_insightface_provider_skips_face_without_embedding() -> None:
     """Faces with normed_embedding=None are skipped."""
-    from PIL import Image as PILImage
-
     from src.workers.faces.insightface_provider import InsightFaceProvider
 
-    img = PILImage.new("RGB", (640, 480))
+    img = _make_sharp_image(640, 480)
 
-    mock_face = MagicMock()
-    mock_face.bbox = [10, 10, 100, 100]
-    mock_face.det_score = 0.9
-    mock_face.normed_embedding = None  # No embedding
+    mock_face = _make_mock_face([64, 48, 320, 336], embedding=False)
 
     mock_app = MagicMock()
     mock_app.get.return_value = [mock_face]
@@ -183,6 +197,140 @@ def test_face_detection_dataclass() -> None:
     assert fd.bounding_box["x"] == 0.1
     assert fd.detection_confidence == 0.99
     assert len(fd.embedding) == 512
+    assert fd.sharpness == 0.0  # default
+
+
+# ---------------------------------------------------------------------------
+# Quality gate tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_gate_low_confidence_dropped() -> None:
+    """Faces below MIN_DETECTION_CONFIDENCE are dropped."""
+    from src.workers.faces.insightface_provider import InsightFaceProvider
+
+    img = _make_sharp_image(640, 480)
+    mock_app = MagicMock()
+    mock_app.get.return_value = [
+        _make_mock_face([64, 48, 320, 336], det_score=0.3),  # below 0.5
+    ]
+
+    provider = InsightFaceProvider()
+    provider._app = mock_app
+    assert provider.detect_faces(img) == []
+
+
+@pytest.mark.fast
+def test_gate_tiny_pixel_width_dropped() -> None:
+    """Faces narrower than MIN_FACE_PIXELS are dropped."""
+    from src.workers.faces.insightface_provider import InsightFaceProvider
+
+    img = _make_sharp_image(640, 480)
+    mock_app = MagicMock()
+    # 30px wide face — below 40px threshold
+    mock_app.get.return_value = [
+        _make_mock_face([100, 100, 130, 160], det_score=0.9),
+    ]
+
+    provider = InsightFaceProvider()
+    provider._app = mock_app
+    assert provider.detect_faces(img) == []
+
+
+@pytest.mark.fast
+def test_gate_tiny_area_fraction_dropped() -> None:
+    """Faces below MIN_BBOX_AREA_FRACTION of image are dropped."""
+    from src.workers.faces.insightface_provider import InsightFaceProvider
+
+    # 2000x2000 image, face is 42x42 px → area = 0.00044 (< 0.003)
+    img = _make_sharp_image(2000, 2000)
+    mock_app = MagicMock()
+    mock_app.get.return_value = [
+        _make_mock_face([100, 100, 142, 142], det_score=0.9),
+    ]
+
+    provider = InsightFaceProvider()
+    provider._app = mock_app
+    assert provider.detect_faces(img) == []
+
+
+@pytest.mark.fast
+def test_gate_blurry_face_dropped() -> None:
+    """Faces with low Laplacian sharpness are dropped."""
+    import numpy as np
+    from PIL import Image as PILImage
+    from src.workers.faces.insightface_provider import InsightFaceProvider
+
+    # Solid-color image — Laplacian variance ≈ 0
+    img = PILImage.new("RGB", (640, 480), color=(128, 128, 128))
+    mock_app = MagicMock()
+    mock_app.get.return_value = [
+        _make_mock_face([64, 48, 320, 336], det_score=0.9),
+    ]
+
+    provider = InsightFaceProvider()
+    provider._app = mock_app
+    assert provider.detect_faces(img) == []
+
+
+@pytest.mark.fast
+def test_gate_relative_size_drops_tiny_face() -> None:
+    """A face < 15% area of the largest face in the same image is dropped."""
+    from src.workers.faces.insightface_provider import InsightFaceProvider
+
+    img = _make_sharp_image(1000, 1000)
+    mock_app = MagicMock()
+    mock_app.get.return_value = [
+        # Big face: 400x400 px = 16% of image
+        _make_mock_face([100, 100, 500, 500], det_score=0.95),
+        # Small face: 50x50 px = 0.25% of image, ratio to big = 1.6%
+        _make_mock_face([800, 800, 850, 850], det_score=0.9),
+    ]
+
+    provider = InsightFaceProvider()
+    provider._app = mock_app
+    results = provider.detect_faces(img)
+    assert len(results) == 1
+    assert results[0].detection_confidence == pytest.approx(0.95)
+
+
+@pytest.mark.fast
+def test_gate_similar_size_faces_kept() -> None:
+    """Two similarly-sized faces both pass the relative size gate."""
+    from src.workers.faces.insightface_provider import InsightFaceProvider
+
+    img = _make_sharp_image(1000, 1000)
+    mock_app = MagicMock()
+    mock_app.get.return_value = [
+        # Face 1: 200x200 px
+        _make_mock_face([50, 50, 250, 250], det_score=0.95),
+        # Face 2: 180x180 px — ratio ≈ 81% of face 1
+        _make_mock_face([500, 500, 680, 680], det_score=0.92),
+    ]
+
+    provider = InsightFaceProvider()
+    provider._app = mock_app
+    results = provider.detect_faces(img)
+    assert len(results) == 2
+
+
+@pytest.mark.fast
+def test_gate_all_pass() -> None:
+    """A high-confidence, large, sharp face passes all gates."""
+    from src.workers.faces.insightface_provider import InsightFaceProvider
+
+    img = _make_sharp_image(640, 480)
+    mock_app = MagicMock()
+    mock_app.get.return_value = [
+        _make_mock_face([64, 48, 320, 336], det_score=0.98),
+    ]
+
+    provider = InsightFaceProvider()
+    provider._app = mock_app
+    results = provider.detect_faces(img)
+    assert len(results) == 1
+    assert results[0].sharpness > 0
 
 
 @pytest.mark.fast

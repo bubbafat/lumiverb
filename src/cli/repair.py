@@ -36,8 +36,8 @@ def _drain(inflight: set[Future]) -> set[Future]:
     return inflight
 
 
-REPAIR_TYPES = ("embed", "vision", "faces", "ocr", "video-scenes", "scene-vision", "search-sync", "all")
-RepairType = Literal["embed", "vision", "faces", "ocr", "video-scenes", "scene-vision", "search-sync", "all"]
+REPAIR_TYPES = ("embed", "vision", "faces", "redetect-faces", "ocr", "video-scenes", "scene-vision", "search-sync", "all")
+RepairType = Literal["embed", "vision", "faces", "redetect-faces", "ocr", "video-scenes", "scene-vision", "search-sync", "all"]
 
 
 class _RepairStats:
@@ -139,6 +139,35 @@ def _page_missing(
             params["missing_ocr"] = "true"
         if missing_scene_vision:
             params["missing_scene_vision"] = "true"
+        if cursor:
+            params["after"] = cursor
+        resp = client.get("/v1/assets/page", params=params)
+        data = resp.json()
+        items = data.get("items", [])
+        if not items:
+            break
+        results.extend(items)
+        cursor = data.get("next_cursor")
+        if not cursor:
+            break
+    return results
+
+
+def _page_all_images(
+    client: LumiverbClient,
+    library_id: str,
+) -> list[dict]:
+    """Page through ALL image assets in a library (for redetect-faces)."""
+    results: list[dict] = []
+    cursor: str | None = None
+    while True:
+        params: dict[str, str] = {
+            "library_id": library_id,
+            "limit": "500",
+            "sort": "asset_id",
+            "dir": "asc",
+            "media_type": "image",
+        }
         if cursor:
             params["after"] = cursor
         resp = client.get("/v1/assets/page", params=params)
@@ -366,6 +395,11 @@ def run_repair(
         plan.append(("vision", summary["missing_vision"], "missing AI descriptions"))
     if job_type in ("faces", "all") and summary.get("missing_faces", 0) > 0:
         plan.append(("faces", summary["missing_faces"], "missing face detection"))
+    if job_type == "redetect-faces":
+        # Count ALL images, not just missing — this re-runs detection on everything
+        all_images = _page_all_images(client, library_id)
+        if all_images:
+            plan.append(("redetect-faces", len(all_images), "re-detect faces (all images)"))
     if job_type in ("ocr", "all") and summary.get("missing_ocr", 0) > 0:
         plan.append(("ocr", summary["missing_ocr"], "missing OCR text"))
     if job_type in ("video-scenes", "all") and summary.get("missing_video_scenes", 0) > 0:
@@ -638,6 +672,104 @@ def run_repair(
                         _el = result.get("elapsed", 0)
                         _n = result["processed"] + result["failed"] + result["skipped"]
                         logger.info("faces worker: %d ok, %d fail, %d skip, %d faces, "
+                                    "%d cache/%d download, %.1fs (%.0fms/img)",
+                                    result["processed"], result["failed"], result["skipped"],
+                                    result.get("faces_found", 0), result.get("cache_hits", 0),
+                                    result.get("downloads", 0), _el, (_el / max(_n, 1)) * 1000)
+
+                        for err in result.get("errors", []):
+                            progress.console.print(
+                                f"[red]faces \u2717[/red] {err['rel_path']}: {err['error']}"
+                            )
+
+                        with stats.lock:
+                            stats.processed += result["processed"]
+                            stats.failed += result["failed"]
+                            stats.skipped += result["skipped"]
+                            ok, fail = stats.processed, stats.failed
+                        batch_total = result["processed"] + result["failed"] + result["skipped"]
+                        progress.advance(tid, batch_total)
+                        progress.update(tid, ok=ok, fail=fail)
+                finally:
+                    pool.close()
+                    pool.join()
+
+        elif repair_type == "redetect-faces":
+            console.print(f"\n[bold]Re-detecting faces on all images ({count})[/bold]")
+            console.print("[dim]Person centroids preserved — faces will auto-reassign.[/dim]")
+
+            # all_images was already fetched during plan phase
+            assets = all_images  # noqa: F821 — bound in plan phase above
+
+            from pathlib import Path
+            from src.cli.proxy_cache import generate_face_proxy
+            root_path_str = library.get("root_path")
+            root_path = Path(root_path_str).resolve() if root_path_str else None
+            use_local = root_path is not None and root_path.is_dir()
+            if use_local:
+                from src.workers.exif_extract import compute_sha256
+
+            from src.cli.config import load_config
+            cfg = load_config()
+            FACE_BATCH_SIZE = cfg.face_batch_size
+            FACE_BATCH_LIMIT = cfg.face_batch_limit
+            progress = _make_progress(console)
+            ctx = mp.get_context("spawn")
+            with progress:
+                tid = progress.add_task("Re-detect faces", total=len(assets), ok=0, fail=0)
+                pool = ctx.Pool(1, initializer=_silence_subprocess_stdout, maxtasksperchild=FACE_BATCH_LIMIT)
+                try:
+                    batch_num = 0
+                    for batch_start in range(0, len(assets), FACE_BATCH_SIZE):
+                        batch_num += 1
+                        batch = assets[batch_start:batch_start + FACE_BATCH_SIZE]
+
+                        cached_count = 0
+                        skipped_count = 0
+                        if use_local:
+                            for item in batch:
+                                asset_id = item["asset_id"]
+                                rel_path = item["rel_path"]
+                                source = root_path / rel_path
+                                if not source.is_file():
+                                    continue
+                                expected_hash = item.get("sha256")
+                                if expected_hash:
+                                    local_hash = compute_sha256(source)
+                                    if local_hash != expected_hash:
+                                        item["_skip"] = True
+                                        skipped_count += 1
+                                        progress.console.print(
+                                            f"[yellow]faces \u26a0[/yellow] {rel_path}: SHA mismatch (file changed since ingest, re-ingest needed)"
+                                        )
+                                        continue
+                                try:
+                                    jpeg_bytes = generate_face_proxy(source)
+                                    proxy_cache.put(asset_id, jpeg_bytes)
+                                    cached_count += 1
+                                    del jpeg_bytes
+                                except Exception:
+                                    pass
+
+                        batch = [item for item in batch if not item.get("_skip")]
+                        if not batch:
+                            continue
+
+                        logger.info("redetect-faces batch %d: %d assets (%d cached locally, %d SHA-skipped)",
+                                    batch_num, len(batch), cached_count, skipped_count)
+
+                        try:
+                            result = pool.apply(
+                                _face_batch_worker,
+                                (client.base_url, client.token, batch, str(proxy_cache.path)),
+                            )
+                        except Exception as e:
+                            console.print(f"[red]Batch failed: {e}[/red]")
+                            result = {"processed": 0, "failed": len(batch), "skipped": 0, "errors": []}
+
+                        _el = result.get("elapsed", 0)
+                        _n = result["processed"] + result["failed"] + result["skipped"]
+                        logger.info("redetect-faces worker: %d ok, %d fail, %d skip, %d faces, "
                                     "%d cache/%d download, %.1fs (%.0fms/img)",
                                     result["processed"], result["failed"], result["skipped"],
                                     result.get("faces_found", 0), result.get("cache_hits", 0),

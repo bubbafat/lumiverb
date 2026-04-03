@@ -898,7 +898,7 @@ def ingest(
 @app.command("repair")
 def repair(
     library: Annotated[str | None, typer.Option("--library", "-l", help="Library name (omit to repair all libraries).")] = None,
-    job_type: Annotated[str, typer.Option("--job-type", "-j", help="Repair type: embed, vision, faces, ocr, video-scenes, scene-vision, search-sync, or all.")] = "all",
+    job_type: Annotated[str, typer.Option("--job-type", "-j", help="Repair type: embed, vision, faces, redetect-faces, ocr, video-scenes, scene-vision, search-sync, or all.")] = "all",
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be repaired without making changes.")] = False,
     concurrency: Annotated[int, typer.Option("--concurrency", help="Number of parallel workers.")] = 4,
     force: Annotated[bool, typer.Option("--force", help="Force full re-index (search-sync: clear timestamps and re-index all).")] = False,
@@ -910,19 +910,20 @@ def repair(
 
     \b
     Job types:
-      embed        — Generate missing CLIP embeddings (similarity search)
-      vision       — Generate missing AI descriptions and tags
-      faces        — Detect faces using InsightFace (face recognition)
-      ocr          — Re-run vision to extract text from images (backfill)
-      video-scenes — Run scene detection on unindexed videos
-      scene-vision — Extract rep frames + run vision AI on scenes
-      search-sync  — Push stale assets to Quickwit search index
-      all          — Run all repairs in logical order (default)
+      embed           — Generate missing CLIP embeddings (similarity search)
+      vision          — Generate missing AI descriptions and tags
+      faces           — Detect faces using InsightFace (face recognition)
+      redetect-faces  — Re-run face detection on ALL images with quality gates
+      ocr             — Re-run vision to extract text from images (backfill)
+      video-scenes    — Run scene detection on unindexed videos
+      scene-vision    — Extract rep frames + run vision AI on scenes
+      search-sync     — Push stale assets to Quickwit search index
+      all             — Run all repairs in logical order (default)
     """
-    from src.cli.repair import run_repair
+    from src.cli.repair import run_repair, REPAIR_TYPES
 
-    if job_type not in ("embed", "vision", "faces", "ocr", "video-scenes", "scene-vision", "search-sync", "all"):
-        console.print(f"[red]Invalid --job-type: {job_type}. Must be embed, vision, faces, ocr, video-scenes, scene-vision, search-sync, or all.[/red]")
+    if job_type not in REPAIR_TYPES:
+        console.print(f"[red]Invalid --job-type: {job_type}. Must be one of: {', '.join(REPAIR_TYPES)}[/red]")
         raise typer.Exit(1)
 
     client = LumiverbClient()
