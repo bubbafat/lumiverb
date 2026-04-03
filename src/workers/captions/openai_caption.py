@@ -73,6 +73,60 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                     return text[start : i + 1]
         return None
 
+    @staticmethod
+    def _repair_json(text: str) -> str:
+        """Best-effort repair of JSON with unescaped quotes in string values.
+
+        Models sometimes produce strings like:
+            "a sign for "Blaster" and "Buzz Lightyear""
+        which breaks JSON parsing.  We re-scan the text and escape inner
+        quotes that don't serve a structural role.
+        """
+        out: list[str] = []
+        i = 0
+        n = len(text)
+        while i < n:
+            ch = text[i]
+            if ch != '"':
+                out.append(ch)
+                i += 1
+                continue
+
+            # Opening quote of a string — find the matching close
+            out.append('"')
+            i += 1
+            # Collect string content, escaping stray inner quotes
+            while i < n:
+                ch = text[i]
+                if ch == '\\':
+                    # Already-escaped character — pass through
+                    out.append(ch)
+                    i += 1
+                    if i < n:
+                        out.append(text[i])
+                        i += 1
+                    continue
+                if ch == '"':
+                    # Is this the real closing quote?
+                    # Look ahead past whitespace for a structural char
+                    j = i + 1
+                    while j < n and text[j] in ' \t\n\r':
+                        j += 1
+                    if j >= n or text[j] in ':,}]':
+                        # Structural — this is the real close
+                        out.append('"')
+                        i += 1
+                        break
+                    else:
+                        # Stray inner quote — escape it
+                        out.append('\\"')
+                        i += 1
+                        continue
+                out.append(ch)
+                i += 1
+
+        return "".join(out)
+
     def _strip_thinking(self, text: str) -> str:
         """Strip <think>...</think> blocks; some reasoning models prefix responses with them."""
         return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
@@ -150,7 +204,10 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                 json_str = self._extract_first_json_object(clean)
                 if not json_str:
                     raise ValueError(f"No JSON object found in response: {clean[:100]!r}")
-                parsed = json.loads(json_str)
+                try:
+                    parsed = json.loads(json_str)
+                except json.JSONDecodeError:
+                    parsed = json.loads(self._repair_json(json_str))
                 description = parsed.get("description", "").strip()
                 tags = [t.strip() for t in parsed.get("tags", []) if t.strip()]
                 return {"description": description, "tags": tags}

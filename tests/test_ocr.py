@@ -192,6 +192,55 @@ def test_strip_reasoning_bullet_analysis(provider):
 
 
 # ---------------------------------------------------------------------------
+# _repair_json tests
+# ---------------------------------------------------------------------------
+
+
+def test_repair_json_valid_passthrough(provider):
+    """Valid JSON is unchanged."""
+    import json
+    raw = '{"description": "A nice photo.", "tags": ["sun", "beach"]}'
+    assert json.loads(provider._repair_json(raw)) == json.loads(raw)
+
+
+def test_repair_json_unescaped_inner_quotes(provider):
+    """Unescaped quotes inside string values are escaped."""
+    import json
+    raw = (
+        '{"description": "A sign for "Blaster" and "Buzz Lightyear Astro Blasters"'
+        ' with targets.", "tags": ["game", "neon"]}'
+    )
+    parsed = json.loads(provider._repair_json(raw))
+    assert "Blaster" in parsed["description"]
+    assert "Buzz Lightyear Astro Blasters" in parsed["description"]
+    assert parsed["tags"] == ["game", "neon"]
+
+
+def test_repair_json_exact_gemini_failure(provider):
+    """Exact failing response from Gemini 2.5 Flash Lite."""
+    import json
+    raw = (
+        '{"description": "A black and white, inverted image shows a sign for '
+        '"Blaster" and "Buzz Lightyear Astro Blasters" with a row of circular '
+        'targets hanging below. The mood is stark and somewhat surreal due to '
+        'the inverted colors and the dark background.", "tags": ["inverted image", '
+        '"black and white", "Buzz Lightyear", "Astro Blasters", "targets", '
+        '"amusement park", "game", "neon", "surreal", "dark"]}'
+    )
+    parsed = json.loads(provider._repair_json(raw))
+    assert "Blaster" in parsed["description"]
+    assert len(parsed["tags"]) == 10
+
+
+def test_repair_json_already_escaped(provider):
+    """Already-escaped quotes are not double-escaped."""
+    import json
+    raw = r'{"description": "She said \"hello\" loudly.", "tags": ["test"]}'
+    parsed = json.loads(provider._repair_json(raw))
+    assert 'said "hello" loudly' in parsed["description"]
+
+
+# ---------------------------------------------------------------------------
 # extract_text tests
 # ---------------------------------------------------------------------------
 
