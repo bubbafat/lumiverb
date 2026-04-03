@@ -132,9 +132,11 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         )
 
         last_error: Exception | None = None
+        last_raw: str = ""
         for attempt in range(1, self.MAX_ATTEMPTS + 1):
             try:
                 raw = self._chat(data_url, prompt)
+                last_raw = raw
 
                 # Strip markdown code fences if present
                 clean = raw.strip()
@@ -168,7 +170,10 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                     )
                     self._sleep_with_countdown(sleep_time)
                     continue
-                logger.warning("OpenAI-compatible caption failed for %s after %d attempts: %s", proxy_path, self.MAX_ATTEMPTS, e)
+                logger.warning(
+                    "OpenAI-compatible caption failed for %s after %d attempts: %s\n  Last raw response: %s",
+                    proxy_path, self.MAX_ATTEMPTS, e, last_raw[:500] if last_raw else "(empty)",
+                )
                 return {}
 
         return {}
