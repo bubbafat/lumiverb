@@ -502,6 +502,13 @@ def _run_face_pipeline(
     console.print(f"[dim]{label}: {face_conc} detect workers, {proxy_threads} proxy threads[/dim]")
 
     pool = ctx.Pool(face_conc, initializer=_silence_subprocess_stdout, maxtasksperchild=batch_limit)
+
+    # Warm up detection workers — CoreML model compilation takes ~50s on first load
+    console.print("[dim]Warming up face detection model (first load may take a minute)...[/dim]")
+    _warmup = pool.apply_async(_face_batch_worker, (client.base_url, client.token, [], None))
+    _warmup.get()  # blocks until model is loaded
+    console.print("[dim]Model ready.[/dim]")
+
     proxy_pool = ThreadPoolExecutor(max_workers=proxy_threads, thread_name_prefix="proxy-gen")
     ready_q: queue.Queue = queue.Queue()
     _SENTINEL = None
