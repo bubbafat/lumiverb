@@ -266,14 +266,25 @@ def _face_batch_worker(
 
     Returns {"processed": N, "failed": N, "skipped": N}.
     """
+    import os
+    import sys
+    import time as _startup_time
     import warnings
     warnings.filterwarnings("ignore", category=FutureWarning, module="insightface")
 
     from pathlib import Path
 
+    _t0 = _startup_time.perf_counter()
+    sys.stderr.write(f"[face-worker pid={os.getpid()}] starting, {len(batch)} assets\n")
+    sys.stderr.flush()
+
     client = LumiverbClient(base_url=base_url, token=token)
     provider = InsightFaceProvider()
     provider.ensure_loaded()
+
+    _t_load = _startup_time.perf_counter() - _t0
+    sys.stderr.write(f"[face-worker pid={os.getpid()}] model loaded in {_t_load:.1f}s\n")
+    sys.stderr.flush()
 
     from PIL import Image as PILImage
 
@@ -685,7 +696,10 @@ def run_repair(
     embed_conc = min(max_conc, concurrency)  # embed is CPU-bound (CLIP), full concurrency
     vision_conc = min(max_conc, _cfg.vision_concurrency)
     ocr_conc = min(max_conc, _cfg.ocr_concurrency)
-    face_conc = min(max_conc, concurrency)  # face detection is GPU/CPU-bound
+    # Face detection uses subprocess isolation (ONNX memory leak). On macOS,
+    # multiple workers loading CoreML models simultaneously can hang. Default
+    # to 1 worker; concurrency applies to proxy generation threads instead.
+    face_conc = 1
 
     # Resolve library root path for local proxy generation
     from pathlib import Path as _Path
