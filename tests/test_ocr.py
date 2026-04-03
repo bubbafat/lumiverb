@@ -397,54 +397,49 @@ def test_ocr_one_provider_exception():
 from src.cli.proxy_cache import ProxyCache
 
 
-def test_proxy_cache_ensure_size_small_image():
+def _isolated_cache(tmp_path, **kwargs):
+    """Create a ProxyCache using a temp dir for test isolation."""
+    cache = ProxyCache(**kwargs)
+    cache._dir = tmp_path
+    return cache
+
+
+def test_proxy_cache_ensure_size_small_image(tmp_path):
     """Images smaller than max_edge pass through unchanged."""
-    cache = ProxyCache(max_edge=1280)
-    try:
-        # Non-JPEG bytes — _ensure_size returns original on decode failure
-        original = b"small-image-bytes"
-        result = cache._ensure_size(original)
-        assert result == original
-    finally:
-        cache.cleanup()
+    cache = _isolated_cache(tmp_path, max_edge=1280)
+    original = b"small-image-bytes"
+    result = cache._ensure_size(original)
+    assert result == original
 
 
-def test_proxy_cache_get_returns_none_without_sources():
+def test_proxy_cache_get_returns_none_without_sources(tmp_path):
     """get() returns None when no cache, no root_path, no client."""
-    cache = ProxyCache(max_edge=1280)
-    try:
-        result = cache.get("nonexistent_asset", "nonexistent.jpg")
-        assert result is None
-    finally:
-        cache.cleanup()
+    cache = _isolated_cache(tmp_path, max_edge=1280)
+    result = cache.get("nonexistent_asset", "nonexistent.jpg")
+    assert result is None
 
 
-def test_proxy_cache_put_and_get():
+def test_proxy_cache_put_and_get(tmp_path):
     """put() stores bytes, get() retrieves them."""
-    cache = ProxyCache(max_edge=1280)
-    try:
-        cache.put("ast_1", b"jpeg-data")
-        assert cache.get("ast_1") == b"jpeg-data"
-    finally:
-        cache.cleanup()
+    cache = _isolated_cache(tmp_path, max_edge=1280)
+    cache.put("ast_1", b"jpeg-data")
+    assert cache.get("ast_1") == b"jpeg-data"
 
 
 def test_proxy_cache_put_from_path(tmp_path):
     """put_from_path generates proxy and caches it."""
-    cache = ProxyCache(max_edge=1280)
-    try:
-        # Create a tiny valid JPEG
-        from PIL import Image
-        img = Image.new("RGB", (100, 100), "red")
-        img_path = tmp_path / "test.jpg"
-        img.save(img_path, format="JPEG")
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    cache = _isolated_cache(cache_dir, max_edge=1280)
 
-        result = cache.put_from_path("ast_1", img_path)
-        assert isinstance(result, bytes)
-        assert len(result) > 0
+    from PIL import Image
+    img = Image.new("RGB", (100, 100), "red")
+    img_path = tmp_path / "test.jpg"
+    img.save(img_path, format="JPEG")
 
-        # Should be cached now
-        cached = cache.get("ast_1")
-        assert cached == result
-    finally:
-        cache.cleanup()
+    result = cache.put_from_path("ast_1", img_path)
+    assert isinstance(result, bytes)
+    assert len(result) > 0
+
+    cached = cache.get("ast_1")
+    assert cached == result

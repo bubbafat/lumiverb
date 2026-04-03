@@ -6,81 +6,69 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from src.cli.proxy_cache import ProxyCache, _prune_stale_caches, _CACHE_PREFIX
+from src.cli.proxy_cache import ProxyCache
 
 
-def test_put_get_remove():
+def _test_cache(tmp_path: Path) -> ProxyCache:
+    """Create a ProxyCache using a temporary directory for test isolation."""
     cache = ProxyCache()
-    try:
-        assert cache.get("asset_1") is None
-
-        cache.put("asset_1", b"jpeg-bytes-1")
-        assert cache.get("asset_1") == b"jpeg-bytes-1"
-
-        cache.put("asset_2", b"jpeg-bytes-2")
-        assert cache.get("asset_2") == b"jpeg-bytes-2"
-
-        cache.remove("asset_1")
-        assert cache.get("asset_1") is None
-        assert cache.get("asset_2") == b"jpeg-bytes-2"
-    finally:
-        cache.cleanup()
+    cache._dir = tmp_path
+    return cache
 
 
-def test_cleanup_removes_directory():
-    cache = ProxyCache()
-    cache_dir = cache.path
+def test_put_get_remove(tmp_path):
+    cache = _test_cache(tmp_path)
+    assert cache.get("asset_1") is None
+
+    cache.put("asset_1", b"jpeg-bytes-1")
+    assert cache.get("asset_1") == b"jpeg-bytes-1"
+
+    cache.put("asset_2", b"jpeg-bytes-2")
+    assert cache.get("asset_2") == b"jpeg-bytes-2"
+
+    cache.remove("asset_1")
+    assert cache.get("asset_1") is None
+    assert cache.get("asset_2") == b"jpeg-bytes-2"
+
+
+def test_cleanup_removes_directory(tmp_path):
+    cache = _test_cache(tmp_path)
     cache.put("asset_1", b"data")
-    assert cache_dir.exists()
+    assert tmp_path.exists()
 
     cache.cleanup()
-    assert not cache_dir.exists()
+    assert not tmp_path.exists()
 
 
-def test_cleanup_idempotent():
-    cache = ProxyCache()
+def test_cleanup_idempotent(tmp_path):
+    cache = _test_cache(tmp_path)
     cache.cleanup()
     cache.cleanup()  # should not raise
 
 
-def test_remove_missing_key():
+def test_remove_missing_key(tmp_path):
+    cache = _test_cache(tmp_path)
+    cache.remove("nonexistent")  # should not raise
+
+
+def test_has(tmp_path):
+    cache = _test_cache(tmp_path)
+    assert not cache.has("asset_1")
+    cache.put("asset_1", b"data")
+    assert cache.has("asset_1")
+
+
+def test_persistent_dir_created():
+    """ProxyCache creates the persistent directory if it doesn't exist."""
     cache = ProxyCache()
-    try:
-        cache.remove("nonexistent")  # should not raise
-    finally:
-        cache.cleanup()
+    assert cache.path.exists()
+    assert cache.path.is_dir()
 
 
-def test_prune_stale_caches():
-    """Stale cache dirs (dead PID) are pruned on startup."""
-    tmp = Path(tempfile.gettempdir())
-    # Create a fake stale cache with a PID that doesn't exist
-    stale_dir = tmp / f"{_CACHE_PREFIX}999999999-fakesuffix"
-    stale_dir.mkdir(exist_ok=True)
-    (stale_dir / "asset_1").write_bytes(b"stale")
+def test_put_and_get_across_instances(tmp_path):
+    """Data persists across ProxyCache instances sharing the same dir."""
+    cache1 = _test_cache(tmp_path)
+    cache1.put("asset_1", b"persisted-data")
 
-    try:
-        _prune_stale_caches()
-        assert not stale_dir.exists()
-    finally:
-        if stale_dir.exists():
-            shutil.rmtree(stale_dir)
-
-
-def test_prune_preserves_live_cache():
-    """Cache dir for current (live) PID is not pruned."""
-    cache = ProxyCache()
-    try:
-        cache.put("asset_1", b"data")
-        _prune_stale_caches()
-        assert cache.get("asset_1") == b"data"
-    finally:
-        cache.cleanup()
-
-
-def test_cache_dir_contains_pid():
-    cache = ProxyCache()
-    try:
-        assert str(os.getpid()) in cache.path.name
-    finally:
-        cache.cleanup()
+    cache2 = _test_cache(tmp_path)
+    assert cache2.get("asset_1") == b"persisted-data"

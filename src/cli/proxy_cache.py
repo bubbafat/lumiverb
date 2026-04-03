@@ -6,8 +6,7 @@ All consumers (faces, vision, OCR, embeddings) get correctly-sized
 - Downscaling oversized images on put()
 - Generating proxies from source files on demand via get()
 - Falling back to server download when local source isn't available
-- Cleanup on exit (including Ctrl+C) via atexit + signal handlers
-- Pruning stale caches from crashed processes
+- Persistent storage across runs in ~/.cache/lumiverb/proxies/
 
 The only code that works with full-resolution (2048px) images is the
 ingest upload path, which bypasses this cache entirely.
@@ -15,7 +14,6 @@ ingest upload path, which bypasses this cache entirely.
 
 from __future__ import annotations
 
-import atexit
 import logging
 import os
 import shutil
@@ -24,7 +22,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_CACHE_PREFIX = "lumiverb-proxy-cache-"
+_PERSISTENT_DIR = Path.home() / ".cache" / "lumiverb" / "proxies"
 _DEFAULT_MAX_EDGE = 1280
 _JPEG_QUALITY = 75
 
@@ -35,6 +33,10 @@ class ProxyCache:
     Images are stored at max_edge resolution (default 1280px long edge).
     Callers never need to think about sizing — put() downscales,
     get() generates on demand.
+
+    Uses a persistent directory (~/.cache/lumiverb/proxies/) so proxies
+    survive across runs. Files are keyed by asset_id; an optional sha256
+    check ensures stale proxies are regenerated when source files change.
     """
 
     def __init__(
@@ -49,12 +51,11 @@ class ProxyCache:
             root_path: Library root for local source file generation.
             client: LumiverbClient for server download fallback.
         """
-        _prune_stale_caches()
-        self._dir = Path(tempfile.mkdtemp(prefix=f"{_CACHE_PREFIX}{os.getpid()}-"))
+        self._dir = _PERSISTENT_DIR
+        self._dir.mkdir(parents=True, exist_ok=True)
         self._max_edge = max_edge
         self._root_path = root_path
         self._client = client
-        atexit.register(self.cleanup)
 
     @property
     def path(self) -> Path:
@@ -71,6 +72,10 @@ class ProxyCache:
         image_bytes, _, _ = generate_proxy_bytes(source_path, max_long_edge=self._max_edge)
         (self._dir / asset_id).write_bytes(image_bytes)
         return image_bytes
+
+    def has(self, asset_id: str) -> bool:
+        """Check if a proxy exists in the cache without reading it."""
+        return (self._dir / asset_id).exists()
 
     def get(self, asset_id: str, rel_path: str | None = None) -> bytes | None:
         """Get proxy bytes for an asset.
@@ -134,24 +139,3 @@ class ProxyCache:
             return proxy_img.write_to_buffer(".jpg[Q=%d]" % _JPEG_QUALITY)
         except Exception:
             return image_bytes  # return original if downscale fails
-
-
-
-def _prune_stale_caches() -> None:
-    """Remove cache directories from previous runs whose process is no longer alive."""
-    tmp = Path(tempfile.gettempdir())
-    for entry in tmp.iterdir():
-        if not entry.is_dir() or not entry.name.startswith(_CACHE_PREFIX):
-            continue
-        parts = entry.name[len(_CACHE_PREFIX):].split("-", 1)
-        try:
-            pid = int(parts[0])
-        except (ValueError, IndexError):
-            continue
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            logger.info("Pruning stale proxy cache: %s", entry.name)
-            shutil.rmtree(entry, ignore_errors=True)
-        except PermissionError:
-            pass

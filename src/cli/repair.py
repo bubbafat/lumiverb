@@ -446,12 +446,17 @@ def _generate_proxy_for_item(
     """Generate a proxy for a single asset item. Returns the item or None if skipped.
 
     Runs in a thread pool to pipeline proxy generation with face detection.
+    Skips generation if the proxy is already in the persistent cache.
     """
     from pathlib import Path
     from src.cli.proxy_gen import generate_face_proxy
 
     asset_id = item["asset_id"]
     rel_path = item.get("rel_path", asset_id)
+
+    # Already cached from a previous run — skip generation
+    if proxy_cache.has(asset_id):
+        return item
 
     if root_path is not None:
         source = root_path / rel_path
