@@ -362,73 +362,69 @@ def _face_batch_worker(
     }
 
 
+def _process_face_result(
+    batch_num: int,
+    batch_size: int,
+    ar: "mp.pool.AsyncResult",
+    stats: _RepairStats,
+    progress,
+    tid,
+    console,
+) -> None:
+    """Process a single completed face batch result."""
+    try:
+        result = ar.get()
+    except Exception as e:
+        console.print(f"[red]Batch {batch_num} failed: {e}[/red]")
+        result = {"processed": 0, "failed": batch_size, "skipped": 0, "errors": []}
+
+    _el = result.get("elapsed", 0)
+    _n = result["processed"] + result["failed"] + result["skipped"]
+    logger.info("faces worker: %d ok, %d fail, %d skip, %d faces, "
+                "%d cache/%d download, %.1fs (%.0fms/img)",
+                result["processed"], result["failed"], result["skipped"],
+                result.get("faces_found", 0), result.get("cache_hits", 0),
+                result.get("downloads", 0), _el, (_el / max(_n, 1)) * 1000)
+
+    for err in result.get("errors", []):
+        console.print(f"[red]faces \u2717[/red] {err['rel_path']}: {err['error']}")
+
+    with stats.lock:
+        stats.processed += result["processed"]
+        stats.failed += result["failed"]
+        stats.skipped += result["skipped"]
+        ok, fail = stats.processed, stats.failed
+    batch_total = result["processed"] + result["failed"] + result["skipped"]
+    progress.advance(tid, batch_total)
+    progress.update(tid, ok=ok, fail=fail)
+
+
 def _collect_face_results(
     inflight: list,
     stats: _RepairStats,
     progress,
     tid,
     console,
+    *,
+    block: bool = False,
 ) -> None:
-    """Wait for the first completed face batch and process its result."""
-    # Poll for any completed result
-    for i, (batch_num, batch_size, ar) in enumerate(inflight):
+    """Collect all ready face batch results. If block=True, wait for at least one."""
+    # Sweep all ready results
+    collected = 0
+    i = 0
+    while i < len(inflight):
+        batch_num, batch_size, ar = inflight[i]
         if ar.ready():
             inflight.pop(i)
-            try:
-                result = ar.get()
-            except Exception as e:
-                console.print(f"[red]Batch {batch_num} failed: {e}[/red]")
-                result = {"processed": 0, "failed": batch_size, "skipped": 0, "errors": []}
+            _process_face_result(batch_num, batch_size, ar, stats, progress, tid, console)
+            collected += 1
+        else:
+            i += 1
 
-            _el = result.get("elapsed", 0)
-            _n = result["processed"] + result["failed"] + result["skipped"]
-            logger.info("faces worker: %d ok, %d fail, %d skip, %d faces, "
-                        "%d cache/%d download, %.1fs (%.0fms/img)",
-                        result["processed"], result["failed"], result["skipped"],
-                        result.get("faces_found", 0), result.get("cache_hits", 0),
-                        result.get("downloads", 0), _el, (_el / max(_n, 1)) * 1000)
-
-            for err in result.get("errors", []):
-                console.print(f"[red]faces \u2717[/red] {err['rel_path']}: {err['error']}")
-
-            with stats.lock:
-                stats.processed += result["processed"]
-                stats.failed += result["failed"]
-                stats.skipped += result["skipped"]
-                ok, fail = stats.processed, stats.failed
-            batch_total = result["processed"] + result["failed"] + result["skipped"]
-            progress.advance(tid, batch_total)
-            progress.update(tid, ok=ok, fail=fail)
-            return
-
-    # Nothing ready yet — block on the first one
-    if inflight:
+    # If nothing was ready and we must block, wait on the oldest
+    if collected == 0 and block and inflight:
         batch_num, batch_size, ar = inflight.pop(0)
-        try:
-            result = ar.get()
-        except Exception as e:
-            console.print(f"[red]Batch {batch_num} failed: {e}[/red]")
-            result = {"processed": 0, "failed": batch_size, "skipped": 0, "errors": []}
-
-        _el = result.get("elapsed", 0)
-        _n = result["processed"] + result["failed"] + result["skipped"]
-        logger.info("faces worker: %d ok, %d fail, %d skip, %d faces, "
-                    "%d cache/%d download, %.1fs (%.0fms/img)",
-                    result["processed"], result["failed"], result["skipped"],
-                    result.get("faces_found", 0), result.get("cache_hits", 0),
-                    result.get("downloads", 0), _el, (_el / max(_n, 1)) * 1000)
-
-        for err in result.get("errors", []):
-            console.print(f"[red]faces \u2717[/red] {err['rel_path']}: {err['error']}")
-
-        with stats.lock:
-            stats.processed += result["processed"]
-            stats.failed += result["failed"]
-            stats.skipped += result["skipped"]
-            ok, fail = stats.processed, stats.failed
-        batch_total = result["processed"] + result["failed"] + result["skipped"]
-        progress.advance(tid, batch_total)
-        progress.update(tid, ok=ok, fail=fail)
+        _process_face_result(batch_num, batch_size, ar, stats, progress, tid, console)
 
 
 def get_repair_summary(client: LumiverbClient, library_id: str) -> dict:
@@ -738,13 +734,13 @@ def run_repair(
                         )
                         inflight.append((batch_num, len(batch), ar))
 
-                        # Drain completed results when at capacity
-                        while len(inflight) >= face_conc * 2:
-                            _collect_face_results(inflight, stats, progress, tid, console)
+                        # Sweep ready results; block if at capacity
+                        _collect_face_results(inflight, stats, progress, tid, console,
+                                              block=len(inflight) >= face_conc * 2)
 
                     # Drain remaining
                     while inflight:
-                        _collect_face_results(inflight, stats, progress, tid, console)
+                        _collect_face_results(inflight, stats, progress, tid, console, block=True)
                 finally:
                     pool.close()
                     pool.join()
@@ -821,11 +817,11 @@ def run_repair(
                         )
                         inflight.append((batch_num, len(batch), ar))
 
-                        while len(inflight) >= face_conc * 2:
-                            _collect_face_results(inflight, stats, progress, tid, console)
+                        _collect_face_results(inflight, stats, progress, tid, console,
+                                              block=len(inflight) >= face_conc * 2)
 
                     while inflight:
-                        _collect_face_results(inflight, stats, progress, tid, console)
+                        _collect_face_results(inflight, stats, progress, tid, console, block=True)
                 finally:
                     pool.close()
                     pool.join()
