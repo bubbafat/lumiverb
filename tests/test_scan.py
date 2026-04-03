@@ -39,7 +39,7 @@ class TestClassifyFiles:
     """Test _classify_files change detection logic."""
 
     def test_new_file(self, tmp_path):
-        """File on disk not on server → new."""
+        """File on disk not on server → new. SHA is NOT computed (deferred to scan_one)."""
         f = _make_file(tmp_path, "a.jpg")
         existing: dict[str, _ServerAsset] = {}
         console = Console(quiet=True)
@@ -49,7 +49,7 @@ class TestClassifyFiles:
         )
         assert len(new) == 1
         assert new[0]["rel_path"] == "a.jpg"
-        assert new[0]["source_sha256"] is not None
+        assert "source_sha256" not in new[0]  # deferred — no server asset to compare
         assert len(changed) == 0
         assert len(unchanged) == 0
         assert len(deleted) == 0

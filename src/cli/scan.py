@@ -112,37 +112,41 @@ def _classify_files(
     changed_files: list[dict] = []
     unchanged_files: list[dict] = []
 
-    progress = Progress(
-        SpinnerColumn(),
-        TextColumn("[bold]Hashing"),
-        BarColumn(bar_width=30),
-        MofNCompleteColumn(),
-        console=console,
-        refresh_per_second=4,
-    )
-    with progress:
-        tid = progress.add_task("Hashing", total=len(local_files))
-        for f in local_files:
-            rel_path = f["rel_path"]
-            source_path = root_path / rel_path
+    # Split into new (not on server) vs needs-comparison (on server).
+    # Only files that exist on the server need SHA computation.
+    needs_hash: list[dict] = []
+    for f in local_files:
+        server = existing.get(f["rel_path"])
+        if server is None:
+            new_files.append(f)
+        else:
+            f["_server"] = server
+            needs_hash.append(f)
 
-            # Compute SHA-256 of source file
-            source_sha = compute_sha256(source_path)
-            f["source_sha256"] = source_sha
+    if needs_hash:
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[bold]Hashing"),
+            BarColumn(bar_width=30),
+            MofNCompleteColumn(),
+            console=console,
+            refresh_per_second=4,
+        )
+        with progress:
+            tid = progress.add_task("Hashing", total=len(needs_hash))
+            for f in needs_hash:
+                server = f.pop("_server")
+                source_path = root_path / f["rel_path"]
+                source_sha = compute_sha256(source_path)
+                f["source_sha256"] = source_sha
 
-            server = existing.get(rel_path)
-            if server is None:
-                # New file — not on server
-                new_files.append(f)
-            elif force or (source_sha and server.sha256 != source_sha):
-                # Changed (or --force) — SHA mismatch
-                f["asset_id"] = server.asset_id
-                changed_files.append(f)
-            else:
-                # Unchanged — SHA matches
-                f["asset_id"] = server.asset_id
-                unchanged_files.append(f)
-            progress.advance(tid)
+                if force or (source_sha and server.sha256 != source_sha):
+                    f["asset_id"] = server.asset_id
+                    changed_files.append(f)
+                else:
+                    f["asset_id"] = server.asset_id
+                    unchanged_files.append(f)
+                progress.advance(tid)
 
     # Detect deletions — server assets not found on disk
     local_rel_paths = {f["rel_path"] for f in local_files}
