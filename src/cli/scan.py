@@ -36,7 +36,9 @@ from src.cli.ingest import (
     SUPPORTED_EXTENSIONS,
     _build_exif_payload,
     _detect_media_type,
+    _extract_video_poster,
     _generate_proxy_bytes,
+    _generate_video_preview,
     _jpeg_to_webp,
     _load_library_filters,
     _load_tenant_filters,
@@ -237,6 +239,87 @@ def _scan_one(
         progress.advance(task_id)
 
 
+def _scan_one_video(
+    *,
+    client: LumiverbClient,
+    library_id: str,
+    root_path: Path,
+    f: dict,
+    proxy_cache: ProxyCache,
+    stats: ScanStats,
+    progress: Progress,
+    task_id: object,
+    counter_field: str,
+) -> None:
+    """Scan a single video: poster frame + EXIF + 10-sec preview → upload → cache."""
+    rel_path = f["rel_path"]
+    source_path = (root_path / rel_path).resolve()
+    if not source_path.is_relative_to(root_path):
+        logger.warning("Skipping %s: escapes library root", rel_path)
+        with stats.lock:
+            stats.failed += 1
+        return
+
+    try:
+        # 1. Extract poster frame as JPEG proxy
+        jpeg_bytes, width_orig, height_orig = _extract_video_poster(source_path)
+
+        # 2. Extract EXIF
+        exif_payload = _build_exif_payload(source_path, "video")
+        if f.get("source_sha256"):
+            exif_payload["sha256"] = f["source_sha256"]
+
+        # 3. Generate 10-second preview
+        preview_bytes = _generate_video_preview(source_path)
+
+        # 4. Convert poster to WebP for upload
+        webp_bytes = _jpeg_to_webp(jpeg_bytes)
+
+        # 5. POST /v1/ingest — create asset with poster frame as proxy
+        files = {"proxy": ("proxy.webp", io.BytesIO(webp_bytes), "image/webp")}
+        del webp_bytes
+        data: dict[str, str] = {
+            "library_id": library_id,
+            "rel_path": rel_path,
+            "file_size": str(f["file_size"]),
+            "media_type": "video",
+            "width": str(width_orig),
+            "height": str(height_orig),
+            "exif": json.dumps(exif_payload),
+        }
+        if f.get("file_mtime") is not None:
+            data["file_mtime"] = f["file_mtime"].isoformat()
+
+        resp = client.post("/v1/ingest", files=files, data=data)
+        asset_id = resp.json().get("asset_id")
+
+        # 6. Upload video preview
+        if asset_id and preview_bytes:
+            client.post(
+                f"/v1/assets/{asset_id}/artifacts/video_preview",
+                files={"file": ("preview.mp4", io.BytesIO(preview_bytes), "video/mp4")},
+            )
+        del preview_bytes
+
+        # 7. Cache the poster proxy + SHA sidecar
+        if asset_id and f.get("source_sha256"):
+            proxy_cache.put_scan(asset_id, jpeg_bytes, f["source_sha256"])
+        elif asset_id:
+            proxy_cache.put_scan(asset_id, jpeg_bytes, "")
+        del jpeg_bytes
+
+        with stats.lock:
+            setattr(stats, counter_field, getattr(stats, counter_field) + 1)
+        progress.advance(task_id)
+
+    except Exception as e:
+        logger.exception("Failed to scan video %s: %s", rel_path, e)
+        with stats.lock:
+            stats.failed += 1
+        progress.console.print(f"[red]scan \u2717[/red] {rel_path}: {e}")
+        progress.advance(task_id)
+
+
 def _populate_cache_for_unchanged(
     client: LumiverbClient,
     unchanged_files: list[dict],
@@ -327,14 +410,7 @@ def run_scan(
     if media_type_filter != "all":
         local_files = [f for f in local_files if f["media_type"] == media_type_filter]
 
-    # Separate images and videos. Videos need poster frame extraction (ffmpeg),
-    # not the image proxy pipeline. Video scan support is deferred to Phase 2.
-    images = [f for f in local_files if f["media_type"] == "image"]
-    videos = [f for f in local_files if f["media_type"] == "video"]
-    console.print(f"Found {len(local_files):,} media files ({len(images):,} images, {len(videos):,} videos)")
-    if videos:
-        console.print("[dim]Videos are skipped by scan — use `lumiverb ingest` for video processing[/dim]")
-    local_files = images
+    console.print(f"Found {len(local_files):,} media files")
 
     if not local_files and not force:
         return stats
@@ -398,8 +474,9 @@ def run_scan(
             pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="scan")
             inflight: set[Future] = set()
             for f, kind in to_scan:
+                handler = _scan_one_video if f["media_type"] == "video" else _scan_one
                 fut = pool.submit(
-                    _scan_one,
+                    handler,
                     client=client,
                     library_id=library_id,
                     root_path=root_path,
