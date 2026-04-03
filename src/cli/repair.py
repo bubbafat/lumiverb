@@ -298,18 +298,10 @@ def _face_batch_worker(
     _downloads = 0
     _total_faces = 0
 
-    submit_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="face-submit")
-    pending: list[tuple[str, str, Future]] = []
-
-    def _submit(asset_id: str, detection_model: str, detection_model_version: str, payload: list[dict]):
-        client.post(f"/v1/assets/{asset_id}/faces", json={
-            "detection_model": detection_model,
-            "detection_model_version": detection_model_version,
-            "faces": payload,
-        })
-
     processed = failed = skipped = 0
     errors: list[dict] = []
+    batch_items: list[dict] = []  # items for batch-faces POST
+
     for item in batch:
         asset_id = item["asset_id"]
         rel_path = item.get("rel_path", asset_id)
@@ -340,30 +332,45 @@ def _face_batch_worker(
             img.close()
             del img
 
-            payload = [
-                {
-                    "bounding_box": d.bounding_box,
-                    "detection_confidence": d.detection_confidence,
-                    "embedding": d.embedding,
-                }
-                for d in detections
-            ]
+            batch_items.append({
+                "asset_id": asset_id,
+                "detection_model": provider.model_id,
+                "detection_model_version": provider.model_version,
+                "faces": [
+                    {
+                        "bounding_box": d.bounding_box,
+                        "detection_confidence": d.detection_confidence,
+                        "embedding": d.embedding,
+                    }
+                    for d in detections
+                ],
+            })
             del detections
-
-            fut = submit_pool.submit(_submit, asset_id, provider.model_id, provider.model_version, payload)
-            pending.append((asset_id, rel_path, fut))
         except Exception as e:
             failed += 1
             errors.append({"rel_path": rel_path, "error": str(e)})
 
-    for asset_id, rel_path, fut in pending:
+    # Single batch POST instead of N individual requests
+    if batch_items:
         try:
-            fut.result()
-            processed += 1
+            resp = client.post("/v1/assets/batch-faces", json={"items": batch_items})
+            result_data = resp.json()
+            processed = result_data.get("processed", 0)
+            skipped += result_data.get("skipped", 0)
         except Exception as e:
-            failed += 1
-            errors.append({"rel_path": rel_path, "error": str(e)})
-    submit_pool.shutdown(wait=True)
+            # Fallback: submit individually
+            sys.stderr.write(f"[face-worker] batch-faces failed ({e}), falling back to individual\n")
+            for bi in batch_items:
+                try:
+                    client.post(f"/v1/assets/{bi['asset_id']}/faces", json={
+                        "detection_model": bi["detection_model"],
+                        "detection_model_version": bi["detection_model_version"],
+                        "faces": bi["faces"],
+                    })
+                    processed += 1
+                except Exception as e2:
+                    failed += 1
+                    errors.append({"rel_path": bi["asset_id"], "error": str(e2)})
 
     _elapsed = _time.perf_counter() - _batch_start
     return {

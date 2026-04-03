@@ -1324,6 +1324,68 @@ def _generate_face_crops(
         img.close()
 
 
+class BatchFaceItem(BaseModel):
+    asset_id: str
+    detection_model: str = "insightface"
+    detection_model_version: str = "buffalo_l"
+    faces: list[FaceDetectionItem]
+
+
+class BatchFaceRequest(BaseModel):
+    items: list[BatchFaceItem]
+
+
+@router.post("/batch-faces", status_code=200)
+def submit_batch_faces(
+    body: BatchFaceRequest,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> dict:
+    """Submit face detections for multiple assets in one request."""
+    from src.repository.tenant import FaceRepository
+
+    asset_repo = AssetRepository(session)
+    face_repo = FaceRepository(session)
+    tenant_id = getattr(request.state, "tenant_id", None)
+    processed = 0
+    skipped = 0
+
+    lib_ids: set[str] = set()
+    for item in body.items:
+        asset = asset_repo.get_by_id(item.asset_id)
+        if asset is None or asset.deleted_at is not None:
+            skipped += 1
+            continue
+
+        faces_data = [
+            {
+                "bounding_box": f.bounding_box,
+                "detection_confidence": f.detection_confidence,
+                "embedding": [float(x) for x in f.embedding] if f.embedding else None,
+            }
+            for f in item.faces
+        ]
+        face_ids = face_repo.submit_faces(
+            asset_id=item.asset_id,
+            detection_model=item.detection_model,
+            detection_model_version=item.detection_model_version,
+            faces=faces_data,
+        )
+
+        if tenant_id and asset.proxy_key:
+            _generate_face_crops(tenant_id, asset, face_ids, faces_data, session)
+
+        lib_ids.add(asset.library_id)
+        processed += 1
+
+    # Bump revision once per library
+    lib_repo = LibraryRepository(session)
+    for lid in lib_ids:
+        lib_repo.bump_revision(lid)
+
+    return {"processed": processed, "skipped": skipped}
+
+
 @router.post("/{asset_id}/faces", response_model=FaceSubmitResponse, status_code=201)
 def submit_faces(
     asset_id: str,
