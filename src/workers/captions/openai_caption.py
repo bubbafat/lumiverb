@@ -141,9 +141,13 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             except Exception as e:  # noqa: BLE001
                 last_error = e
                 if attempt < self.MAX_ATTEMPTS:
-                    delay = self.BACKOFF_BASE * (self.BACKOFF_MULTIPLIER ** (attempt - 1))
-                    jitter = delay * self.BACKOFF_JITTER * (2 * random.random() - 1)
-                    sleep_time = max(0.1, delay + jitter)
+                    retry_after = getattr(e, "retry_after", None)
+                    if retry_after:
+                        sleep_time = retry_after
+                    else:
+                        delay = self.BACKOFF_BASE * (self.BACKOFF_MULTIPLIER ** (attempt - 1))
+                        jitter = delay * self.BACKOFF_JITTER * (2 * random.random() - 1)
+                        sleep_time = max(0.1, delay + jitter)
                     logger.info(
                         "Vision retry %d/%d for %s (sleeping %.1fs): %s",
                         attempt, self.MAX_ATTEMPTS, proxy_path.name, sleep_time, e,
@@ -209,9 +213,13 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                 return cleaned
             except Exception as e:
                 if attempt < self.MAX_ATTEMPTS:
-                    delay = self.BACKOFF_BASE * (self.BACKOFF_MULTIPLIER ** (attempt - 1))
-                    jitter = delay * self.BACKOFF_JITTER * (2 * random.random() - 1)
-                    sleep_time = max(0.1, delay + jitter)
+                    retry_after = getattr(e, "retry_after", None)
+                    if retry_after:
+                        sleep_time = retry_after
+                    else:
+                        delay = self.BACKOFF_BASE * (self.BACKOFF_MULTIPLIER ** (attempt - 1))
+                        jitter = delay * self.BACKOFF_JITTER * (2 * random.random() - 1)
+                        sleep_time = max(0.1, delay + jitter)
                     logger.info(
                         "OCR retry %d/%d for %s (sleeping %.1fs): %s",
                         attempt, self.MAX_ATTEMPTS, proxy_path.name, sleep_time, e,
@@ -365,6 +373,12 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         )
         if not resp.ok:
             logger.warning("Error from AI Provider: %s: %s", resp.status_code, resp.text)
+            if resp.status_code == 429:
+                from src.workers.captions.retry_after import parse_retry_after
+                retry_after = parse_retry_after(resp)
+                err = requests.HTTPError(response=resp)
+                err.retry_after = retry_after  # type: ignore[attr-defined]
+                raise err
         resp.raise_for_status()
 
         msg = resp.json()["choices"][0]["message"]
