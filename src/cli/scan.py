@@ -59,6 +59,7 @@ class ScanStats:
     deleted: int = 0
     cache_populated: int = 0
     failed: int = 0
+    scanned_asset_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -229,6 +230,8 @@ def _scan_one(
 
         with stats.lock:
             setattr(stats, counter_field, getattr(stats, counter_field) + 1)
+            if asset_id:
+                stats.scanned_asset_ids.append(asset_id)
         progress.advance(task_id)
 
     except Exception as e:
@@ -310,6 +313,8 @@ def _scan_one_video(
 
         with stats.lock:
             setattr(stats, counter_field, getattr(stats, counter_field) + 1)
+            if asset_id:
+                stats.scanned_asset_ids.append(asset_id)
         progress.advance(task_id)
 
     except Exception as e:

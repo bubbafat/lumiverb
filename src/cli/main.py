@@ -961,22 +961,27 @@ def enrich(
 def ingest(
     library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
     path: Annotated[str | None, typer.Option("--path", "-p", help="Optional subpath.")] = None,
-    force: Annotated[bool, typer.Option("--force", "-f", help="Re-ingest already-processed assets.")] = False,
+    force: Annotated[bool, typer.Option("--force", "-f", help="Re-scan and re-enrich already-processed assets.")] = False,
     concurrency: Annotated[int, typer.Option("--concurrency", help="Number of parallel workers.")] = 4,
     skip_vision: Annotated[bool, typer.Option("--skip-vision", help="Skip AI vision processing.")] = False,
     skip_embeddings: Annotated[bool, typer.Option("--skip-embeddings", help="Skip CLIP embedding generation.")] = False,
     media_type: Annotated[str, typer.Option("--media-type", help="Filter: image, video, or all.")] = "all",
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would happen without making changes.")] = False,
 ) -> None:
-    """Scan and ingest a library in one pass.
+    """Scan and enrich a library in one pass.
 
-    Images: generate proxy, extract EXIF, call vision AI, upload atomically.
-    Videos: extract poster frame, EXIF, 10-sec preview, upload atomically.
+    Phase 1 (scan): discover files, compute SHA, extract EXIF, generate
+    proxies, upload to server, cache locally. Unchanged files are skipped
+    via SHA comparison.
 
-    Processing order: all images first, then videos. Use --media-type to
-    filter to just images or videos. Use --dry-run to preview changes.
+    Phase 2 (enrich): run CLIP embeddings, vision AI, face detection,
+    OCR, and search sync on assets with missing pipeline outputs.
+
+    Use --skip-vision or --skip-embeddings to skip specific enrichment.
+    Use --dry-run to preview changes without making them.
     """
-    from src.cli.ingest import run_ingest
+    from src.cli.scan import run_scan
+    from src.cli.repair import run_repair
 
     if media_type not in ("image", "video", "all"):
         console.print(f"[red]Invalid --media-type: {media_type}. Must be image, video, or all.[/red]")
@@ -989,51 +994,52 @@ def ingest(
         console.print(f"[red]Library not found: {library}[/red]")
         raise typer.Exit(1)
 
-    stats = run_ingest(
+    # Phase 1: Scan
+    scan_stats = run_scan(
         client,
         match,
         concurrency=concurrency,
-        skip_vision=skip_vision,
-        skip_embeddings=skip_embeddings,
-        path_override=path,
+        path_prefix=path,
         force=force,
         media_type_filter=media_type,
         dry_run=dry_run,
         console=console,
     )
 
-    if not dry_run:
-        console.print(
-            f"\nDone: {stats.processed:,} ingested, "
-            f"{stats.failed:,} failed, "
-            f"{stats.skipped:,} skipped"
-            + (f", {stats.removed:,} removed" if stats.removed else "")
-        )
+    if dry_run:
+        return
 
-        # Show repair summary so user can see if anything needs fixing
-        from src.cli.repair import get_repair_summary
-        summary = get_repair_summary(client, match["library_id"])
-        needs_repair = [
-            (label, summary.get(key, 0))
-            for label, key in [
-                ("Vision AI", "missing_vision"),
-                ("Embeddings", "missing_embeddings"),
-                ("Faces", "missing_faces"),
-                ("OCR", "missing_ocr"),
-                ("Video scenes", "missing_video_scenes"),
-                ("Scene vision", "missing_scene_vision"),
-                ("Search sync", "stale_search_sync"),
-            ]
-            if summary.get(key, 0) > 0
-        ]
-        if needs_repair:
-            console.print("\n[yellow]Pending repairs:[/yellow]")
-            for label, count in needs_repair:
-                console.print(f"  {label}: {count:,}")
-            console.print(f"[dim]Run: lumiverb repair --library {escape(library)}[/dim]")
+    console.print(
+        f"\n[bold]Scan complete:[/bold] {scan_stats.new:,} new, "
+        f"{scan_stats.changed:,} changed, "
+        f"{scan_stats.unchanged:,} unchanged, "
+        f"{scan_stats.deleted:,} deleted"
+        + (f", {scan_stats.failed:,} failed" if scan_stats.failed else "")
+    )
 
-        if stats.failed > 0:
-            raise typer.Exit(1)
+    # Phase 2: Enrich (scoped to scanned assets if any were scanned)
+    skip = set()
+    if skip_vision:
+        skip.add("vision")
+    if skip_embeddings:
+        skip.add("embed")
+
+    asset_ids = scan_stats.scanned_asset_ids or None
+
+    console.print()
+    run_repair(
+        client,
+        match,
+        job_type="all",
+        concurrency=concurrency,
+        force=force,
+        console=console,
+        asset_ids=asset_ids,
+        skip_types=skip or None,
+    )
+
+    if scan_stats.failed > 0:
+        raise typer.Exit(1)
 
 
 @app.command("repair")
@@ -1044,10 +1050,11 @@ def repair(
     concurrency: Annotated[int, typer.Option("--concurrency", help="Number of parallel workers.")] = 4,
     force: Annotated[bool, typer.Option("--force", help="Force full re-index (search-sync: clear timestamps and re-index all).")] = False,
 ) -> None:
-    """Detect and repair missing pipeline outputs.
+    """Enrich assets with missing pipeline outputs (alias for enrich).
 
-    Checks each pipeline stage and repairs what's missing. Omit --library
-    to repair all libraries. Use --dry-run to preview without making changes.
+    Same as `lumiverb enrich` but also supports `redetect-faces` for
+    destructive re-detection. Omit --library to repair all libraries.
+    Use --dry-run to preview without making changes.
 
     \b
     Job types:
@@ -1055,11 +1062,11 @@ def repair(
       vision          — Generate missing AI descriptions and tags
       faces           — Detect faces using InsightFace (face recognition)
       redetect-faces  — Re-run face detection on ALL images with quality gates
-      ocr             — Re-run vision to extract text from images (backfill)
+      ocr             — Extract text from images via vision AI
       video-scenes    — Run scene detection on unindexed videos
       scene-vision    — Extract rep frames + run vision AI on scenes
       search-sync     — Push stale assets to Quickwit search index
-      all             — Run all repairs in logical order (default)
+      all             — Run all enrichment in logical order (default)
     """
     from src.cli.repair import run_repair, REPAIR_TYPES
 

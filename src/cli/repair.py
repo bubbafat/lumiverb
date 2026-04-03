@@ -640,12 +640,17 @@ def run_repair(
     force: bool = False,
     console: Console,
     asset_ids: list[str] | None = None,
+    skip_types: set[str] | None = None,
 ) -> None:
     """Detect and fix missing pipeline outputs.
 
     If asset_ids is provided, only those assets are considered for enrichment.
     This is used by Phase 3 (ingest convergence) to pass scanned asset IDs
     directly, avoiding redundant re-paging of the entire library.
+
+    If skip_types is provided, those enrichment types are excluded from the
+    plan even when job_type="all". Used by ingest to honor --skip-vision
+    and --skip-embeddings.
     """
     library_id = library["library_id"]
     library_name = library["name"]
@@ -680,6 +685,10 @@ def run_repair(
             plan.append(("search-sync", summary.get("total_assets", 0), "full re-index (--force)"))
         elif stale > 0:
             plan.append(("search-sync", stale, "stale search index"))
+
+    # Apply skip_types filter (used by ingest --skip-vision / --skip-embeddings)
+    if skip_types:
+        plan = [(t, c, d) for t, c, d in plan if t not in skip_types]
 
     # Display summary table
     table = Table(title=f"Repair Summary — {library_name}", show_lines=False)
@@ -1029,7 +1038,7 @@ def run_repair(
             sync_failed = result.get("failed", 0)
             console.print(f"  Search sync: {synced} synced, {sync_failed} failed")
 
-    proxy_cache.cleanup()
+    # Proxy cache is persistent (shared between scan and enrich) — do not clean up.
 
     console.print(f"\n[green bold]Repair complete.[/green bold] "
                   f"{stats.processed} fixed, {stats.failed} failed, {stats.skipped} skipped")

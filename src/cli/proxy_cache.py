@@ -147,6 +147,7 @@ class ProxyCache:
     @staticmethod
     def _atomic_write(dest: Path, data: bytes) -> None:
         """Write data to dest atomically via temp + rename."""
+        dest.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_path = tempfile.mkstemp(dir=dest.parent, suffix=".tmp")
         try:
             os.write(fd, data)
