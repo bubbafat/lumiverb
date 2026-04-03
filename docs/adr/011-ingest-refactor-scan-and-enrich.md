@@ -62,11 +62,20 @@ Before processing files, scan compares local filesystem against server state:
 | State | Local file | Server asset | SHA match | Action |
 |-------|-----------|-------------|-----------|--------|
 | New | Exists | No match by rel_path | — | Full scan (SHA, EXIF, proxy, upload, cache) |
-| Changed | Exists | Match by rel_path | No | Re-scan (new SHA, new proxy, re-upload) |
+| Changed | Exists | Match by rel_path | No | Re-scan: update existing asset row (new SHA, new proxy, re-upload). `asset_id` is stable — the same asset record is updated in place via the existing upsert behavior of `POST /v1/ingest`. Enrichment flags (`missing_vision`, `missing_faces`, etc.) are reset server-side so enrich re-processes the asset with the new proxy. The proxy cache entry is overwritten with the new proxy bytes + updated `.sha` sidecar. |
 | Unchanged | Exists | Match by rel_path | Yes | Skip (verify proxy cache, populate if missing) |
 | Deleted | Missing | Match by rel_path | — | Mark deleted on server |
 
 For "unchanged" files where the proxy cache is missing (e.g., new machine, cleared cache), scan downloads the existing proxy from the server and caches it locally. This avoids re-reading the source file.
+
+**Deletion detection and safety:**
+
+Deletion detection requires a full-library scan — scan must walk the entire library (or `--path-prefix` subtree) to know which server-side assets no longer have local files. This means:
+
+- **Full scan is required for deletion.** Incremental scan (process only new/changed) cannot detect deletions because it doesn't know what's missing. Scan always walks the full tree but skips unchanged files quickly (stat + SHA compare, no I/O for the file body).
+- **Soft delete, not hard delete.** Detected deletions call the existing `DELETE /v1/assets` endpoint which sets `deleted_at` (soft delete / trash). The user can recover from the trash. This matches current ingest behavior.
+- **Volume unmount protection.** If the library root is not accessible (e.g., external drive unmounted), scan refuses to run and prints an error. It does not treat an empty/missing root as "all files deleted." This check exists today in `run_ingest()` and carries forward.
+- **`--path-prefix` scoping.** When `--path-prefix` is used, deletion detection is scoped to that subtree only. Assets outside the prefix are untouched. This prevents a partial scan from trashing the whole library.
 
 **What scan does NOT do:**
 - CLIP embeddings
@@ -125,9 +134,13 @@ Becomes an alias for `enrich`. Kept for backward compatibility.
 
 **No new endpoints required.** Scan uses the existing `POST /v1/ingest` endpoint. Enrich uses existing submission endpoints (`batch-faces`, `batch-ocr`, embeddings, etc.).
 
-**One change to `POST /v1/ingest`:** Accept an optional `sha256` field in the form data (currently computed server-side from the uploaded proxy). Scan computes SHA from the source file and passes it through. The server stores it on the asset record. This is the SHA of the source file, not the proxy — it's used for change detection.
+**One change to `POST /v1/ingest`:** Accept an optional `sha256` field in the form data. Scan computes SHA-256 of the **source file** and passes it through. The server stores it on the asset record. This hash represents source file identity, not proxy bytes — it's used for change detection across scan runs.
 
-**Note:** The server already stores `sha256` on the asset record. Currently this is set during EXIF extraction in the ingest endpoint. The change is making it an explicit input from the client rather than computed from uploaded bytes.
+**SHA semantics and migration:**
+- **Current behavior:** `sha256` is computed client-side from the source file during EXIF extraction and sent as part of the EXIF payload. The server stores it on the asset record but does not independently verify it against the uploaded proxy bytes (the proxy is a lossy derivative, so the hashes would never match).
+- **New behavior:** `sha256` moves from the EXIF payload to a top-level form field, making the semantic explicit: this is the source file hash. No server-side validation change — the server still trusts the client-provided value.
+- **Existing assets:** Assets ingested under the current pipeline already have correct source-file SHA-256 values. No migration needed — the stored values are already what change detection expects.
+- **Change detection for old assets:** Works correctly. The stored `sha256` was always the source file hash. Scan compares local `compute_sha256(source)` against the server's stored value — same computation, same semantics.
 
 ### Proxy Cache
 
@@ -139,9 +152,9 @@ The persistent proxy cache (`~/.cache/lumiverb/proxies/`) becomes the central ha
   {asset_id}.sha      # SHA-256 of source file (for staleness detection)
 ```
 
-**Thread safety:** Multiple proxy gen threads write to different files simultaneously. Safe on POSIX (file writes to different paths are independent).
+**Thread safety:** Multiple proxy gen threads write to different files simultaneously. Safe on POSIX (file writes to different paths are independent). For same-asset-id writes (e.g., user runs scan while enrich is reading), proxy writes should use atomic write-to-temp + rename to prevent enrich from reading a partial file. The `.sha` sidecar is written after the proxy, so a reader that sees a `.sha` file can trust the proxy is complete.
 
-**Disk budget:** 17K images * ~100KB average = ~1.7GB. Acceptable for a local cache. A future `lumiverb maintenance cache-cleanup` command can prune entries for deleted assets.
+**Disk budget:** 17K images at ~100KB average = ~1.7GB. RAW-heavy libraries with large embedded JPEGs may skew higher. Acceptable for a local cache. A future `lumiverb maintenance cache-cleanup` command can prune entries for deleted assets.
 
 **Cross-process sharing:** The subprocess face detection workers read from this cache via the path. No IPC needed — just filesystem.
 
@@ -176,6 +189,10 @@ Clean separation. Scan is I/O-bound (disk read + network upload). Enrich is comp
 | Video files | Scan handles video poster frame extraction (existing behavior). Video scene detection and enrichment remain in enrich phase. No change to video pipeline structure. |
 | `--force` flag on scan | Re-generates proxy and re-uploads even for unchanged files. Useful after changing proxy generation logic. |
 | Unchanged file, missing proxy cache | Scan downloads existing proxy from server and caches it. Does not re-read source file. |
+| Library root unmounted or missing | Scan refuses to run with a clear error message. Does not treat missing root as "all files deleted." |
+| `--path-prefix` used with deletion detection | Deletion is scoped to the prefix subtree only. Assets outside the prefix are untouched. |
+| Scan and enrich run concurrently on same library | Safe. Scan writes proxies atomically (temp + rename). Enrich reads completed proxies. Enrich may skip an asset whose proxy is mid-write — it will pick it up on the next run. |
+| Changed file resets enrichment | Re-uploading via `POST /v1/ingest` updates the proxy and resets enrichment flags server-side. Enrich automatically re-processes the asset. asset_id is stable. |
 
 ## Code References
 
@@ -205,8 +222,8 @@ Clean separation. Scan is I/O-bound (disk read + network upload). Enrich is comp
 Every phase must satisfy all of the following before it is marked complete:
 
 1. **Tests**: New backend tests for every endpoint and repository method. Edge cases from the table above must be covered as they become relevant. **All tests must pass** — not just new or affected tests, the entire suite (`uv run pytest tests/`). No phase is done until the full suite is clean.
-2. **Types**: Frontend TypeScript must compile cleanly (`npx tsc --noEmit`).
-3. **Build**: Vite must build without errors (`npx vite build`).
+2. **Types**: Frontend TypeScript must compile cleanly (`npx tsc --noEmit`) — required only when the phase changes API contracts, shared types, or frontend code. Phases that are purely Python/CLI (Phases 1, 2, 4) may skip this gate.
+3. **Build**: Vite must build without errors (`npx vite build`) — same gate as types: required when frontend is affected.
 4. **Documentation**: Relevant docs updated to reflect changes in the phase.
 5. **Progress**: The phase status table above is updated when a phase completes.
 6. **Forward compatibility**: Implementation must read ahead to future phases and ensure data model, API shapes, and component interfaces are set up correctly. If current work reveals changes needed in a future phase, update that phase's description.
@@ -237,8 +254,7 @@ Every phase must satisfy all of the following before it is marked complete:
 
 **Deliverables:**
 - `lumiverb enrich` CLI command: read proxy from cache, run CLIP/vision/OCR/faces, submit results
-- Proxy cache as sole image source — no source file access, no server proxy download (cache populated by scan)
-- Falls back to server proxy download on cache miss (graceful degradation)
+- Enrich never reads source files. The proxy cache is the primary image source (populated by scan). On cache miss, enrich downloads the server proxy to populate the cache — slower but correct. This covers cases where the cache was cleared or enrich runs on a different machine than scan.
 - Same `--job-type` flags as current repair: `embed`, `vision`, `faces`, `ocr`, `search-sync`, `all`
 - Pipelined proxy resize + inference (existing `_run_face_pipeline` pattern, generalized)
 - `--concurrency` flag
@@ -257,19 +273,21 @@ Every phase must satisfy all of the following before it is marked complete:
 ### Phase 3 — Ingest Convergence
 
 **Deliverables:**
-- `lumiverb ingest` becomes: scan the library, then enrich anything missing
-- `lumiverb repair` becomes an alias for `lumiverb enrich` (backward compatible)
+- `lumiverb ingest` becomes: call `scan` then call `enrich`. All code paths route through the Phase 1/2 implementations — `ingest` is a thin orchestrator, not a third implementation.
+- `lumiverb repair` becomes an alias for `lumiverb enrich` with full option parity: `--job-type`, `--concurrency`, `--dry-run`, `--force`, `--library`. No flags are dropped.
 - Scan passes list of newly scanned asset IDs to enrich to avoid redundant paging
 - Single progress experience: scan phase shows file discovery, enrich phase shows enrichment progress
-- Remove duplicate code paths between ingest and repair
-- Tests: `ingest` end-to-end does scan + enrich, `repair` still works as before
+- The old `_process_and_ingest_one()` monolithic path is no longer called by any command. It remains in the codebase (dead code) for Phase 4 removal but is unreachable.
+- Tests: `ingest` end-to-end does scan + enrich, `repair` still works with all existing flags, no test calls the old path
 
-**Does NOT include:** Removing the old ingest code path (Phase 4).
+**Does NOT include:** Deleting dead code (Phase 4). Phase 3 makes the old path unreachable; Phase 4 removes it.
 
-**Read-ahead:** Phase 4 removes dead code. Phase 3 must ensure the old path is fully unreachable before Phase 4 cleans it up.
+**Read-ahead:** Phase 4 is purely mechanical deletion. Phase 3 must verify that no tests, imports, or CLI commands reference the old path before Phase 4 runs `git rm`.
 
 **Done when:**
 - [ ] All deliverables implemented
+- [ ] `ingest` and `repair` both route through scan/enrich
+- [ ] Old monolithic path is unreachable (no callers)
 - [ ] Tests written and passing (`uv run pytest tests/`)
 - [ ] Docs updated (cursor-cli.md: updated ingest docs, repair alias note)
 - [ ] Phase status updated above
@@ -277,19 +295,19 @@ Every phase must satisfy all of the following before it is marked complete:
 ### Phase 4 — Remove Legacy Ingest Path
 
 **Deliverables:**
-- Remove `_process_and_ingest_one()` and all per-image monolithic processing code
-- Remove inline vision/CLIP/face calls from the old ingest path
-- Remove `_face_batch_worker` duplication between ingest.py and repair.py (single implementation in repair.py or shared module)
-- Clean up imports and dead code
-- Verify no external callers depend on removed functions
+- Delete `_process_and_ingest_one()` and all per-image monolithic processing functions that are now dead code (verified unreachable in Phase 3)
+- Delete `_face_batch_worker` from ingest.py (single implementation lives in shared module or repair.py)
+- Delete inline vision/CLIP calls from the old ingest path
+- Clean up orphaned imports
+- Verify no external callers depend on removed functions (grep for function names across codebase)
 - Tests: full suite passes, no regressions
 
-**Does NOT include:** New features. This is purely cleanup.
+**Does NOT include:** New features. This is purely deletion of code that Phase 3 made unreachable.
 
 **Done when:**
-- [ ] All deliverables implemented
+- [ ] All dead code removed
 - [ ] Tests written and passing (`uv run pytest tests/`)
-- [ ] No dead code remaining
+- [ ] No references to deleted functions remain
 - [ ] Phase status updated above
 
 ## Alternatives Considered
