@@ -121,6 +121,40 @@ def test_strip_reasoning_numbered_steps(provider):
     assert "Right side" not in result
 
 
+def test_strip_reasoning_dedup_consecutive_lines(provider):
+    """Consecutive duplicate lines beyond 2 are truncated."""
+    text = "Guimet\n" * 20
+    result = provider._strip_ocr_reasoning(text)
+    assert result == "Guimet\nGuimet"
+
+
+def test_strip_reasoning_dedup_preserves_non_runs(provider):
+    """Non-consecutive duplicates and mixed runs are preserved correctly."""
+    text = (
+        "Bronzes\n"
+        "royaux\n"
+        "d'Angkor\n"
+        "Guimet\n"
+        "Guimet\n"
+        "Halkus\n"
+        "d'argent\n"
+    ) + "Guimet\n" * 150
+    result = provider._strip_ocr_reasoning(text)
+    lines = result.splitlines()
+    assert lines == [
+        "Bronzes", "royaux", "d'Angkor",
+        "Guimet", "Guimet",
+        "Halkus", "d'argent",
+        "Guimet", "Guimet",
+    ]
+
+
+def test_strip_reasoning_dedup_single_occurrence(provider):
+    """Lines that appear only once are not affected."""
+    text = "STOP\nONE WAY\nYIELD"
+    assert provider._strip_ocr_reasoning(text) == text
+
+
 def test_strip_reasoning_empty_input(provider):
     """Empty input returns empty string."""
     assert provider._strip_ocr_reasoning("") == ""

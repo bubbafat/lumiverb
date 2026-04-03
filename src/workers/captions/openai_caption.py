@@ -301,6 +301,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
 
             result_lines.append(stripped)
 
+        result_lines = self._dedup_lines(result_lines)
         result = "\n".join(result_lines).strip()
 
         # Final check: if result is just "NONE" variants
@@ -308,6 +309,24 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             return ""
 
         return result
+
+    @staticmethod
+    def _dedup_lines(lines: list[str]) -> list[str]:
+        """Collapse consecutive runs of identical lines to at most 2."""
+        if not lines:
+            return lines
+        out: list[str] = []
+        run_count = 0
+        prev: str | None = None
+        for line in lines:
+            if line == prev:
+                run_count += 1
+            else:
+                run_count = 1
+                prev = line
+            if run_count <= 2:
+                out.append(line)
+        return out
 
     def _chat(self, data_url: str, prompt: str) -> str:
         payload = {
