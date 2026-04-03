@@ -327,7 +327,14 @@ def run_scan(
     if media_type_filter != "all":
         local_files = [f for f in local_files if f["media_type"] == media_type_filter]
 
-    console.print(f"Found {len(local_files):,} media files")
+    # Separate images and videos. Videos need poster frame extraction (ffmpeg),
+    # not the image proxy pipeline. Video scan support is deferred to Phase 2.
+    images = [f for f in local_files if f["media_type"] == "image"]
+    videos = [f for f in local_files if f["media_type"] == "video"]
+    console.print(f"Found {len(local_files):,} media files ({len(images):,} images, {len(videos):,} videos)")
+    if videos:
+        console.print("[dim]Videos are skipped by scan — use `lumiverb ingest` for video processing[/dim]")
+    local_files = images
 
     if not local_files and not force:
         return stats
