@@ -362,6 +362,75 @@ def _face_batch_worker(
     }
 
 
+def _collect_face_results(
+    inflight: list,
+    stats: _RepairStats,
+    progress,
+    tid,
+    console,
+) -> None:
+    """Wait for the first completed face batch and process its result."""
+    # Poll for any completed result
+    for i, (batch_num, batch_size, ar) in enumerate(inflight):
+        if ar.ready():
+            inflight.pop(i)
+            try:
+                result = ar.get()
+            except Exception as e:
+                console.print(f"[red]Batch {batch_num} failed: {e}[/red]")
+                result = {"processed": 0, "failed": batch_size, "skipped": 0, "errors": []}
+
+            _el = result.get("elapsed", 0)
+            _n = result["processed"] + result["failed"] + result["skipped"]
+            logger.info("faces worker: %d ok, %d fail, %d skip, %d faces, "
+                        "%d cache/%d download, %.1fs (%.0fms/img)",
+                        result["processed"], result["failed"], result["skipped"],
+                        result.get("faces_found", 0), result.get("cache_hits", 0),
+                        result.get("downloads", 0), _el, (_el / max(_n, 1)) * 1000)
+
+            for err in result.get("errors", []):
+                console.print(f"[red]faces \u2717[/red] {err['rel_path']}: {err['error']}")
+
+            with stats.lock:
+                stats.processed += result["processed"]
+                stats.failed += result["failed"]
+                stats.skipped += result["skipped"]
+                ok, fail = stats.processed, stats.failed
+            batch_total = result["processed"] + result["failed"] + result["skipped"]
+            progress.advance(tid, batch_total)
+            progress.update(tid, ok=ok, fail=fail)
+            return
+
+    # Nothing ready yet — block on the first one
+    if inflight:
+        batch_num, batch_size, ar = inflight.pop(0)
+        try:
+            result = ar.get()
+        except Exception as e:
+            console.print(f"[red]Batch {batch_num} failed: {e}[/red]")
+            result = {"processed": 0, "failed": batch_size, "skipped": 0, "errors": []}
+
+        _el = result.get("elapsed", 0)
+        _n = result["processed"] + result["failed"] + result["skipped"]
+        logger.info("faces worker: %d ok, %d fail, %d skip, %d faces, "
+                    "%d cache/%d download, %.1fs (%.0fms/img)",
+                    result["processed"], result["failed"], result["skipped"],
+                    result.get("faces_found", 0), result.get("cache_hits", 0),
+                    result.get("downloads", 0), _el, (_el / max(_n, 1)) * 1000)
+
+        for err in result.get("errors", []):
+            console.print(f"[red]faces \u2717[/red] {err['rel_path']}: {err['error']}")
+
+        with stats.lock:
+            stats.processed += result["processed"]
+            stats.failed += result["failed"]
+            stats.skipped += result["skipped"]
+            ok, fail = stats.processed, stats.failed
+        batch_total = result["processed"] + result["failed"] + result["skipped"]
+        progress.advance(tid, batch_total)
+        progress.update(tid, ok=ok, fail=fail)
+
+
 def get_repair_summary(client: LumiverbClient, library_id: str) -> dict:
     """Fetch repair summary counts from the API."""
     resp = client.get("/v1/assets/repair-summary", params={"library_id": library_id})
@@ -462,6 +531,7 @@ def run_repair(
     embed_conc = min(max_conc, concurrency)  # embed is CPU-bound (CLIP), full concurrency
     vision_conc = min(max_conc, _cfg.vision_concurrency)
     ocr_conc = min(max_conc, _cfg.ocr_concurrency)
+    face_conc = min(max_conc, concurrency)  # face detection is GPU/CPU-bound
 
     # Resolve library root path for local proxy generation
     from pathlib import Path as _Path
@@ -615,10 +685,12 @@ def run_repair(
             FACE_BATCH_LIMIT = cfg.face_batch_limit
             progress = _make_progress(console)
             ctx = mp.get_context("spawn")
+            console.print(f"[dim]Face workers: {face_conc}[/dim]")
             with progress:
                 tid = progress.add_task("Faces", total=len(assets), ok=0, fail=0)
-                pool = ctx.Pool(1, initializer=_silence_subprocess_stdout, maxtasksperchild=FACE_BATCH_LIMIT)
+                pool = ctx.Pool(face_conc, initializer=_silence_subprocess_stdout, maxtasksperchild=FACE_BATCH_LIMIT)
                 try:
+                    inflight: list[tuple[int, int, mp.pool.AsyncResult]] = []  # (batch_num, batch_size, async_result)
                     batch_num = 0
                     for batch_start in range(0, len(assets), FACE_BATCH_SIZE):
                         batch_num += 1
@@ -660,36 +732,19 @@ def run_repair(
                         logger.info("faces batch %d: %d assets (%d cached locally, %d SHA-skipped)",
                                     batch_num, len(batch), cached_count, skipped_count)
 
-                        try:
-                            result = pool.apply(
-                                _face_batch_worker,
-                                (client.base_url, client.token, batch, str(proxy_cache.path)),
-                            )
-                        except Exception as e:
-                            console.print(f"[red]Batch failed: {e}[/red]")
-                            result = {"processed": 0, "failed": len(batch), "skipped": 0, "errors": []}
+                        ar = pool.apply_async(
+                            _face_batch_worker,
+                            (client.base_url, client.token, batch, str(proxy_cache.path)),
+                        )
+                        inflight.append((batch_num, len(batch), ar))
 
-                        _el = result.get("elapsed", 0)
-                        _n = result["processed"] + result["failed"] + result["skipped"]
-                        logger.info("faces worker: %d ok, %d fail, %d skip, %d faces, "
-                                    "%d cache/%d download, %.1fs (%.0fms/img)",
-                                    result["processed"], result["failed"], result["skipped"],
-                                    result.get("faces_found", 0), result.get("cache_hits", 0),
-                                    result.get("downloads", 0), _el, (_el / max(_n, 1)) * 1000)
+                        # Drain completed results when at capacity
+                        while len(inflight) >= face_conc * 2:
+                            _collect_face_results(inflight, stats, progress, tid, console)
 
-                        for err in result.get("errors", []):
-                            progress.console.print(
-                                f"[red]faces \u2717[/red] {err['rel_path']}: {err['error']}"
-                            )
-
-                        with stats.lock:
-                            stats.processed += result["processed"]
-                            stats.failed += result["failed"]
-                            stats.skipped += result["skipped"]
-                            ok, fail = stats.processed, stats.failed
-                        batch_total = result["processed"] + result["failed"] + result["skipped"]
-                        progress.advance(tid, batch_total)
-                        progress.update(tid, ok=ok, fail=fail)
+                    # Drain remaining
+                    while inflight:
+                        _collect_face_results(inflight, stats, progress, tid, console)
                 finally:
                     pool.close()
                     pool.join()
@@ -715,10 +770,12 @@ def run_repair(
             FACE_BATCH_LIMIT = cfg.face_batch_limit
             progress = _make_progress(console)
             ctx = mp.get_context("spawn")
+            console.print(f"[dim]Face workers: {face_conc}[/dim]")
             with progress:
                 tid = progress.add_task("Re-detect faces", total=len(assets), ok=0, fail=0)
-                pool = ctx.Pool(1, initializer=_silence_subprocess_stdout, maxtasksperchild=FACE_BATCH_LIMIT)
+                pool = ctx.Pool(face_conc, initializer=_silence_subprocess_stdout, maxtasksperchild=FACE_BATCH_LIMIT)
                 try:
+                    inflight: list[tuple[int, int, mp.pool.AsyncResult]] = []
                     batch_num = 0
                     for batch_start in range(0, len(assets), FACE_BATCH_SIZE):
                         batch_num += 1
@@ -758,36 +815,17 @@ def run_repair(
                         logger.info("redetect-faces batch %d: %d assets (%d cached locally, %d SHA-skipped)",
                                     batch_num, len(batch), cached_count, skipped_count)
 
-                        try:
-                            result = pool.apply(
-                                _face_batch_worker,
-                                (client.base_url, client.token, batch, str(proxy_cache.path)),
-                            )
-                        except Exception as e:
-                            console.print(f"[red]Batch failed: {e}[/red]")
-                            result = {"processed": 0, "failed": len(batch), "skipped": 0, "errors": []}
+                        ar = pool.apply_async(
+                            _face_batch_worker,
+                            (client.base_url, client.token, batch, str(proxy_cache.path)),
+                        )
+                        inflight.append((batch_num, len(batch), ar))
 
-                        _el = result.get("elapsed", 0)
-                        _n = result["processed"] + result["failed"] + result["skipped"]
-                        logger.info("redetect-faces worker: %d ok, %d fail, %d skip, %d faces, "
-                                    "%d cache/%d download, %.1fs (%.0fms/img)",
-                                    result["processed"], result["failed"], result["skipped"],
-                                    result.get("faces_found", 0), result.get("cache_hits", 0),
-                                    result.get("downloads", 0), _el, (_el / max(_n, 1)) * 1000)
+                        while len(inflight) >= face_conc * 2:
+                            _collect_face_results(inflight, stats, progress, tid, console)
 
-                        for err in result.get("errors", []):
-                            progress.console.print(
-                                f"[red]faces \u2717[/red] {err['rel_path']}: {err['error']}"
-                            )
-
-                        with stats.lock:
-                            stats.processed += result["processed"]
-                            stats.failed += result["failed"]
-                            stats.skipped += result["skipped"]
-                            ok, fail = stats.processed, stats.failed
-                        batch_total = result["processed"] + result["failed"] + result["skipped"]
-                        progress.advance(tid, batch_total)
-                        progress.update(tid, ok=ok, fail=fail)
+                    while inflight:
+                        _collect_face_results(inflight, stats, progress, tid, console)
                 finally:
                     pool.close()
                     pool.join()
