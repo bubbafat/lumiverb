@@ -639,8 +639,14 @@ def run_repair(
     concurrency: int = 4,
     force: bool = False,
     console: Console,
+    asset_ids: list[str] | None = None,
 ) -> None:
-    """Detect and fix missing pipeline outputs."""
+    """Detect and fix missing pipeline outputs.
+
+    If asset_ids is provided, only those assets are considered for enrichment.
+    This is used by Phase 3 (ingest convergence) to pass scanned asset IDs
+    directly, avoiding redundant re-paging of the entire library.
+    """
     library_id = library["library_id"]
     library_name = library["name"]
 
@@ -659,7 +665,7 @@ def run_repair(
         plan.append(("faces", summary["missing_faces"], "missing face detection"))
     if job_type == "redetect-faces":
         # Count ALL images, not just missing — this re-runs detection on everything
-        all_images = _page_all_images(client, library_id)
+        all_images = _filter(_page_all_images(client, library_id))
         if all_images:
             plan.append(("redetect-faces", len(all_images), "re-detect faces (all images)"))
     if job_type in ("ocr", "all") and summary.get("missing_ocr", 0) > 0:
@@ -714,6 +720,12 @@ def run_repair(
         console.print("\n[dim]--dry-run: no changes made.[/dim]")
         return
 
+    # Filter helper: when asset_ids is set, restrict to those IDs only.
+    _id_set = set(asset_ids) if asset_ids else None
+
+    def _filter(assets: list[dict]) -> list[dict]:
+        return [a for a in assets if a["asset_id"] in _id_set] if _id_set else assets
+
     # Step 2: Execute repairs in logical order
     stats = _RepairStats()
 
@@ -751,7 +763,7 @@ def run_repair(
                 console.print(f"[red]Cannot load CLIP model: {e}[/red]")
                 continue
 
-            assets = _page_missing(client, library_id, missing_embeddings=True)
+            assets = _filter(_page_missing(client, library_id, missing_embeddings=True))
             if not assets:
                 console.print("No assets found (already repaired?).")
                 continue
@@ -796,7 +808,7 @@ def run_repair(
             ocr_provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key)
             console.print(f"  Vision AI: {vision_model_id} via {vision_api_url} ({vision_source})")
 
-            assets = _page_missing(client, library_id, missing_ocr=True)
+            assets = _filter(_page_missing(client, library_id, missing_ocr=True))
             if not assets:
                 console.print("No assets found (already repaired?).")
                 continue
@@ -854,7 +866,7 @@ def run_repair(
         elif repair_type == "faces":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
 
-            assets = _page_missing(client, library_id, missing_faces=True)
+            assets = _filter(_page_missing(client, library_id, missing_faces=True))
             if not assets:
                 console.print("No assets found (already repaired?).")
                 continue
@@ -938,7 +950,7 @@ def run_repair(
                 console.print("[red]Library root not accessible — cannot run scene detection[/red]")
                 continue
 
-            assets = _page_missing(client, library_id, missing_video_scenes=True)
+            assets = _filter(_page_missing(client, library_id, missing_video_scenes=True))
             if not assets:
                 console.print("No assets found (already repaired?).")
                 continue
@@ -986,7 +998,7 @@ def run_repair(
             else:
                 console.print("  Vision AI: not configured — extracting rep frames only")
 
-            assets = _page_missing(client, library_id, missing_scene_vision=True)
+            assets = _filter(_page_missing(client, library_id, missing_scene_vision=True))
             if not assets:
                 console.print("No assets found (already repaired?).")
                 continue

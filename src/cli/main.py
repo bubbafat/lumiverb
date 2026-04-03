@@ -887,10 +887,74 @@ def scan(
             console.print("\n[yellow]Pending enrichment:[/yellow]")
             for label, count in needs_enrich:
                 console.print(f"  {label}: {count:,}")
-            console.print(f"[dim]Run: lumiverb repair --library {library}[/dim]")
+            console.print(f"[dim]Run: lumiverb enrich --library {library}[/dim]")
 
         if stats.failed > 0:
             raise typer.Exit(1)
+
+
+# Enrich job types — same as repair minus redetect-faces (which is a destructive re-run, not enrichment).
+ENRICH_TYPES = ("embed", "vision", "faces", "ocr", "video-scenes", "scene-vision", "search-sync", "all")
+
+
+@app.command("enrich")
+def enrich(
+    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name (omit to enrich all libraries).")] = None,
+    job_type: Annotated[str, typer.Option("--job-type", "-j", help="Enrichment type: embed, vision, faces, ocr, video-scenes, scene-vision, search-sync, or all.")] = "all",
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be enriched without making changes.")] = False,
+    concurrency: Annotated[int, typer.Option("--concurrency", help="Number of parallel workers.")] = 4,
+    force: Annotated[bool, typer.Option("--force", help="Force full re-processing (search-sync: clear timestamps and re-index all).")] = False,
+) -> None:
+    """Run enrichment on assets with missing pipeline outputs.
+
+    Enrich is the second phase of the scan/enrich pipeline. It reads
+    proxies from the local cache (populated by scan) and runs inference:
+    CLIP embeddings, vision AI, OCR, face detection, search sync.
+
+    Enrich never touches source files — it operates on cached proxies
+    only. On cache miss, it downloads the proxy from the server.
+
+    \b
+    Job types:
+      embed           — Generate missing CLIP embeddings (similarity search)
+      vision          — Generate missing AI descriptions and tags
+      faces           — Detect faces using InsightFace (face recognition)
+      ocr             — Extract text from images via vision AI
+      video-scenes    — Run scene detection on unindexed videos
+      scene-vision    — Extract rep frames + run vision AI on scenes
+      search-sync     — Push stale assets to Quickwit search index
+      all             — Run all enrichment in logical order (default)
+    """
+    from src.cli.repair import run_repair, REPAIR_TYPES
+
+    if job_type not in ENRICH_TYPES:
+        console.print(f"[red]Invalid --job-type: {job_type}. Must be one of: {', '.join(ENRICH_TYPES)}[/red]")
+        raise typer.Exit(1)
+
+    client = LumiverbClient()
+    libraries = client.get("/v1/libraries").json()
+
+    if library is not None:
+        targets = [lib for lib in libraries if lib["name"] == library]
+        if not targets:
+            console.print(f"[red]Library not found: {library}[/red]")
+            raise typer.Exit(1)
+    else:
+        targets = libraries
+        if not targets:
+            console.print("No libraries found.")
+            return
+
+    for lib in targets:
+        run_repair(
+            client,
+            lib,
+            job_type=job_type,
+            dry_run=dry_run,
+            concurrency=concurrency,
+            force=force,
+            console=console,
+        )
 
 
 @app.command("ingest")

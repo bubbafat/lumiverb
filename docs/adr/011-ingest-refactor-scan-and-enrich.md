@@ -9,7 +9,7 @@ Proposed
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 1 | Scan command: discover, hash, EXIF, proxy, upload, cache | Complete |
-| 2 | Enrich command: CLIP, vision, OCR, faces from cached proxies | Not started |
+| 2 | Enrich command: CLIP, vision, OCR, faces from cached proxies | Complete |
 | 3 | Ingest convergence: `ingest` = scan + enrich, repair = enrich missing | Not started |
 | 4 | Remove legacy ingest path | Not started |
 
