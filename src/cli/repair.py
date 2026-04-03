@@ -427,6 +427,132 @@ def _collect_face_results(
         _process_face_result(batch_num, batch_size, ar, stats, progress, tid, console)
 
 
+def _generate_proxy_for_item(
+    item: dict,
+    root_path: "Path | None",
+    proxy_cache: object,
+) -> dict | None:
+    """Generate a proxy for a single asset item. Returns the item or None if skipped.
+
+    Runs in a thread pool to pipeline proxy generation with face detection.
+    """
+    from pathlib import Path
+    from src.cli.proxy_gen import generate_face_proxy
+
+    asset_id = item["asset_id"]
+    rel_path = item.get("rel_path", asset_id)
+
+    if root_path is not None:
+        source = root_path / rel_path
+        if source.is_file():
+            expected_hash = item.get("sha256")
+            if expected_hash:
+                from src.workers.exif_extract import compute_sha256
+                local_hash = compute_sha256(source)
+                if local_hash != expected_hash:
+                    return None  # SHA mismatch — skip
+            try:
+                jpeg_bytes = generate_face_proxy(source)
+                proxy_cache.put(asset_id, jpeg_bytes)
+                del jpeg_bytes
+            except Exception:
+                pass  # fall back to server download in worker
+
+    return item
+
+
+def _run_face_pipeline(
+    *,
+    assets: list[dict],
+    client: "LumiverbClient",
+    proxy_cache: object,
+    root_path: "Path | None",
+    face_conc: int,
+    batch_size: int,
+    batch_limit: int,
+    stats: _RepairStats,
+    progress,
+    tid,
+    console,
+    label: str = "faces",
+) -> None:
+    """Pipeline proxy generation → face detection → result collection.
+
+    Proxy generation runs in a thread pool; face detection in a subprocess pool.
+    Items flow through as fast as proxies are generated.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    ctx = mp.get_context("spawn")
+    proxy_threads = max(face_conc * 2, 4)  # I/O bound, can oversubscribe
+    console.print(f"[dim]{label}: {face_conc} detect workers, {proxy_threads} proxy threads[/dim]")
+
+    pool = ctx.Pool(face_conc, initializer=_silence_subprocess_stdout, maxtasksperchild=batch_limit)
+    proxy_pool = ThreadPoolExecutor(max_workers=proxy_threads, thread_name_prefix="proxy-gen")
+
+    try:
+        # Submit all proxy generation futures
+        proxy_futures = {
+            proxy_pool.submit(_generate_proxy_for_item, item, root_path, proxy_cache): item
+            for item in assets
+        }
+
+        # Collect ready items into batches, dispatch to face detection
+        inflight: list[tuple[int, int, mp.pool.AsyncResult]] = []
+        batch_buf: list[dict] = []
+        batch_num = 0
+        skipped = 0
+
+        for future in as_completed(proxy_futures):
+            result_item = future.result()
+            if result_item is None:
+                skipped += 1
+                with stats.lock:
+                    stats.skipped += 1
+                progress.advance(tid, 1)
+                continue
+
+            batch_buf.append(result_item)
+
+            if len(batch_buf) >= batch_size:
+                batch_num += 1
+                logger.info("%s batch %d: %d assets", label, batch_num, len(batch_buf))
+                ar = pool.apply_async(
+                    _face_batch_worker,
+                    (client.base_url, client.token, batch_buf, str(proxy_cache.path)),
+                )
+                inflight.append((batch_num, len(batch_buf), ar))
+                batch_buf = []
+
+                _collect_face_results(inflight, stats, progress, tid, console,
+                                      block=len(inflight) >= face_conc * 2)
+
+            # Non-blocking sweep between items
+            if inflight:
+                _collect_face_results(inflight, stats, progress, tid, console)
+
+        # Flush remaining partial batch
+        if batch_buf:
+            batch_num += 1
+            logger.info("%s batch %d: %d assets (final)", label, batch_num, len(batch_buf))
+            ar = pool.apply_async(
+                _face_batch_worker,
+                (client.base_url, client.token, batch_buf, str(proxy_cache.path)),
+            )
+            inflight.append((batch_num, len(batch_buf), ar))
+
+        # Drain all remaining
+        while inflight:
+            _collect_face_results(inflight, stats, progress, tid, console, block=True)
+
+        if skipped:
+            console.print(f"[dim]{skipped} assets skipped (SHA mismatch)[/dim]")
+    finally:
+        pool.close()
+        pool.join()
+        proxy_pool.shutdown(wait=False)
+
+
 def get_repair_summary(client: LumiverbClient, library_id: str) -> dict:
     """Fetch repair summary counts from the API."""
     resp = client.get("/v1/assets/repair-summary", params={"library_id": library_id})
@@ -659,172 +785,65 @@ def run_repair(
                 console.print("No assets found (already repaired?).")
                 continue
 
-            # Generate proxies from local source files where possible.
-            # SHA-256 mismatch means the file changed since ingest — skip
-            # those assets entirely (bounding boxes would be wrong).
             from pathlib import Path
-            from src.cli.proxy_gen import generate_face_proxy
             root_path_str = library.get("root_path")
-            root_path = Path(root_path_str).resolve() if root_path_str else None
-            use_local = root_path is not None and root_path.is_dir()
-            if use_local:
-                from src.workers.exif_extract import compute_sha256
+            _face_root = Path(root_path_str).resolve() if root_path_str else None
+            if _face_root and not _face_root.is_dir():
+                _face_root = None
 
-            # ONNX Runtime leaks ~35MB per session.run() call in its C++
-            # layer — no Python-level fix (arena disable, gc, del) works.
-            # Workaround: run each batch in a subprocess. When the child
-            # exits, the OS reclaims all native memory. Model reload cost
-            # (~2s per batch) is acceptable vs unbounded memory growth.
             from src.cli.config import load_config
             cfg = load_config()
-            FACE_BATCH_SIZE = cfg.face_batch_size
-            FACE_BATCH_LIMIT = cfg.face_batch_limit
+
             progress = _make_progress(console)
-            ctx = mp.get_context("spawn")
-            console.print(f"[dim]Face workers: {face_conc}[/dim]")
             with progress:
                 tid = progress.add_task("Faces", total=len(assets), ok=0, fail=0)
-                pool = ctx.Pool(face_conc, initializer=_silence_subprocess_stdout, maxtasksperchild=FACE_BATCH_LIMIT)
-                try:
-                    inflight: list[tuple[int, int, mp.pool.AsyncResult]] = []  # (batch_num, batch_size, async_result)
-                    batch_num = 0
-                    for batch_start in range(0, len(assets), FACE_BATCH_SIZE):
-                        batch_num += 1
-                        batch = assets[batch_start:batch_start + FACE_BATCH_SIZE]
-
-                        # Pre-generate proxy bytes from local source where possible
-                        cached_count = 0
-                        skipped_count = 0
-                        if use_local:
-                            for item in batch:
-                                asset_id = item["asset_id"]
-                                rel_path = item["rel_path"]
-                                source = root_path / rel_path
-                                if not source.is_file():
-                                    continue
-                                expected_hash = item.get("sha256")
-                                if expected_hash:
-                                    local_hash = compute_sha256(source)
-                                    if local_hash != expected_hash:
-                                        item["_skip"] = True
-                                        skipped_count += 1
-                                        progress.console.print(
-                                            f"[yellow]faces \u26a0[/yellow] {rel_path}: SHA mismatch (file changed since ingest, re-ingest needed)"
-                                        )
-                                        continue
-                                try:
-                                    jpeg_bytes = generate_face_proxy(source)
-                                    proxy_cache.put(asset_id, jpeg_bytes)
-                                    cached_count += 1
-                                    del jpeg_bytes
-                                except Exception:
-                                    pass  # fall back to server download in worker
-
-                        # Filter out SHA-mismatched assets
-                        batch = [item for item in batch if not item.get("_skip")]
-                        if not batch:
-                            continue
-
-                        logger.info("faces batch %d: %d assets (%d cached locally, %d SHA-skipped)",
-                                    batch_num, len(batch), cached_count, skipped_count)
-
-                        ar = pool.apply_async(
-                            _face_batch_worker,
-                            (client.base_url, client.token, batch, str(proxy_cache.path)),
-                        )
-                        inflight.append((batch_num, len(batch), ar))
-
-                        # Sweep ready results; block if at capacity
-                        _collect_face_results(inflight, stats, progress, tid, console,
-                                              block=len(inflight) >= face_conc * 2)
-
-                    # Drain remaining
-                    while inflight:
-                        _collect_face_results(inflight, stats, progress, tid, console, block=True)
-                finally:
-                    pool.close()
-                    pool.join()
+                _run_face_pipeline(
+                    assets=assets,
+                    client=client,
+                    proxy_cache=proxy_cache,
+                    root_path=_face_root,
+                    face_conc=face_conc,
+                    batch_size=cfg.face_batch_size,
+                    batch_limit=cfg.face_batch_limit,
+                    stats=stats,
+                    progress=progress,
+                    tid=tid,
+                    console=console,
+                    label="faces",
+                )
 
         elif repair_type == "redetect-faces":
             console.print(f"\n[bold]Re-detecting faces on all images ({count})[/bold]")
             console.print("[dim]Person centroids preserved — faces will auto-reassign.[/dim]")
 
-            # all_images was already fetched during plan phase
             assets = all_images  # noqa: F821 — bound in plan phase above
 
             from pathlib import Path
-            from src.cli.proxy_gen import generate_face_proxy
             root_path_str = library.get("root_path")
-            root_path = Path(root_path_str).resolve() if root_path_str else None
-            use_local = root_path is not None and root_path.is_dir()
-            if use_local:
-                from src.workers.exif_extract import compute_sha256
+            _face_root = Path(root_path_str).resolve() if root_path_str else None
+            if _face_root and not _face_root.is_dir():
+                _face_root = None
 
             from src.cli.config import load_config
             cfg = load_config()
-            FACE_BATCH_SIZE = cfg.face_batch_size
-            FACE_BATCH_LIMIT = cfg.face_batch_limit
+
             progress = _make_progress(console)
-            ctx = mp.get_context("spawn")
-            console.print(f"[dim]Face workers: {face_conc}[/dim]")
             with progress:
                 tid = progress.add_task("Re-detect faces", total=len(assets), ok=0, fail=0)
-                pool = ctx.Pool(face_conc, initializer=_silence_subprocess_stdout, maxtasksperchild=FACE_BATCH_LIMIT)
-                try:
-                    inflight: list[tuple[int, int, mp.pool.AsyncResult]] = []
-                    batch_num = 0
-                    for batch_start in range(0, len(assets), FACE_BATCH_SIZE):
-                        batch_num += 1
-                        batch = assets[batch_start:batch_start + FACE_BATCH_SIZE]
-
-                        cached_count = 0
-                        skipped_count = 0
-                        if use_local:
-                            for item in batch:
-                                asset_id = item["asset_id"]
-                                rel_path = item["rel_path"]
-                                source = root_path / rel_path
-                                if not source.is_file():
-                                    continue
-                                expected_hash = item.get("sha256")
-                                if expected_hash:
-                                    local_hash = compute_sha256(source)
-                                    if local_hash != expected_hash:
-                                        item["_skip"] = True
-                                        skipped_count += 1
-                                        progress.console.print(
-                                            f"[yellow]faces \u26a0[/yellow] {rel_path}: SHA mismatch (file changed since ingest, re-ingest needed)"
-                                        )
-                                        continue
-                                try:
-                                    jpeg_bytes = generate_face_proxy(source)
-                                    proxy_cache.put(asset_id, jpeg_bytes)
-                                    cached_count += 1
-                                    del jpeg_bytes
-                                except Exception:
-                                    pass
-
-                        batch = [item for item in batch if not item.get("_skip")]
-                        if not batch:
-                            continue
-
-                        logger.info("redetect-faces batch %d: %d assets (%d cached locally, %d SHA-skipped)",
-                                    batch_num, len(batch), cached_count, skipped_count)
-
-                        ar = pool.apply_async(
-                            _face_batch_worker,
-                            (client.base_url, client.token, batch, str(proxy_cache.path)),
-                        )
-                        inflight.append((batch_num, len(batch), ar))
-
-                        _collect_face_results(inflight, stats, progress, tid, console,
-                                              block=len(inflight) >= face_conc * 2)
-
-                    while inflight:
-                        _collect_face_results(inflight, stats, progress, tid, console, block=True)
-                finally:
-                    pool.close()
-                    pool.join()
+                _run_face_pipeline(
+                    assets=assets,
+                    client=client,
+                    proxy_cache=proxy_cache,
+                    root_path=_face_root,
+                    face_conc=face_conc,
+                    batch_size=cfg.face_batch_size,
+                    batch_limit=cfg.face_batch_limit,
+                    stats=stats,
+                    progress=progress,
+                    tid=tid,
+                    console=console,
+                    label="redetect-faces",
+                )
 
             # Clean up dismissed people left with zero face matches
             try:
