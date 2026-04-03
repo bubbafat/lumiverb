@@ -1,4 +1,4 @@
-"""CLI maintenance commands: cleanup, search-sync."""
+"""CLI maintenance commands: cleanup, search-sync, cleanup-dismissed."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from rich.table import Table
 from src.cli.client import LumiverbClient
 
 console = Console()
-maintenance_app = typer.Typer(help="Maintenance tasks: cleanup orphaned files, sync search index.")
+maintenance_app = typer.Typer(help="Maintenance tasks: cleanup orphaned files, sync search index, prune empty dismissed people.")
 
 
 @maintenance_app.command("cleanup")
@@ -139,3 +139,20 @@ def search_sync(
     console.print()
     console.print(table)
     console.print()
+
+
+@maintenance_app.command("cleanup-dismissed")
+def cleanup_dismissed() -> None:
+    """Delete dismissed people that have zero face matches.
+
+    Runs across all tenants. Useful after redetect-faces or bulk face
+    re-processing where old face records were replaced.
+    """
+    client = LumiverbClient()
+    resp = client.post("/v1/upkeep/cleanup-dismissed")
+    result = resp.json()
+    deleted = result.get("deleted", 0)
+    if deleted:
+        console.print(f"  Deleted {deleted} empty dismissed people.")
+    else:
+        console.print("  No empty dismissed people found.")

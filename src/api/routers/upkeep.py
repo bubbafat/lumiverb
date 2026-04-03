@@ -2,9 +2,10 @@
 
 Uses admin auth (ADMIN_KEY), iterates all tenants automatically.
 
-POST /v1/upkeep              — run all frequent tasks across all tenants
-POST /v1/upkeep/search-sync  — run search sync sweep only
-POST /v1/upkeep/cleanup      — run filesystem cleanup (dry_run=true by default)
+POST /v1/upkeep                  — run all frequent tasks across all tenants
+POST /v1/upkeep/search-sync      — run search sync sweep only
+POST /v1/upkeep/cleanup          — run filesystem cleanup (dry_run=true by default)
+POST /v1/upkeep/cleanup-dismissed — delete dismissed people with zero face matches
 """
 
 from __future__ import annotations
@@ -27,6 +28,10 @@ router = APIRouter(prefix="/v1/upkeep", tags=["upkeep"])
 class ReclusterResult(BaseModel):
     clusters: int = 0
     total_faces: int = 0
+
+
+class CleanupDismissedResult(BaseModel):
+    deleted: int = 0
 
 
 
@@ -314,3 +319,33 @@ def run_recluster(
             logger.warning("Recluster failed for tenant %s: %s", tenant.tenant_id, exc)
 
     return ReclusterResult(**totals)
+
+
+@router.post("/cleanup-dismissed", response_model=CleanupDismissedResult)
+def run_cleanup_dismissed(
+    request: Request,
+    _admin: Annotated[None, Depends(require_admin)],
+    authorization: Annotated[str | None, Header()] = None,
+) -> CleanupDismissedResult:
+    """Delete dismissed people that have zero face matches."""
+    from src.core.database import get_control_session, get_tenant_session
+    from src.repository.control_plane import TenantRepository
+    from src.repository.tenant import PersonRepository
+
+    total_deleted = 0
+
+    with get_control_session() as ctrl:
+        tenants = TenantRepository(ctrl).list_all()
+
+    for tenant in tenants:
+        try:
+            with get_tenant_session(tenant.tenant_id) as tsession:
+                deleted = PersonRepository(tsession).cleanup_empty_dismissed()
+                if deleted:
+                    logger.info("Cleaned up %d empty dismissed people for tenant %s",
+                                deleted, tenant.tenant_id)
+                total_deleted += deleted
+        except Exception as exc:
+            logger.warning("Cleanup dismissed failed for tenant %s: %s", tenant.tenant_id, exc)
+
+    return CleanupDismissedResult(deleted=total_deleted)

@@ -462,8 +462,14 @@ def test_resubmit_faces_with_person_assignment(face_client: Tuple[_AuthClient, s
     people.representative_face_id before deleting old faces, otherwise
     FK constraints block the delete.
     """
-    auth_client, library_id, _ = face_client
+    import numpy as np
+
+    auth_client, library_id, tenant_url = face_client
     asset_id = _create_asset(auth_client, library_id, "face_resubmit_person")
+
+    # Use a random embedding to avoid auto-assignment from other tests' centroids
+    rng = np.random.default_rng(42)
+    emb1 = (rng.standard_normal(512)).tolist()
 
     # Submit initial faces with embeddings
     r = auth_client.post(
@@ -473,7 +479,7 @@ def test_resubmit_faces_with_person_assignment(face_client: Tuple[_AuthClient, s
                 {
                     "bounding_box": {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.3},
                     "detection_confidence": 0.95,
-                    "embedding": [0.1] * 512,
+                    "embedding": emb1,
                 },
             ],
         },
@@ -489,6 +495,7 @@ def test_resubmit_faces_with_person_assignment(face_client: Tuple[_AuthClient, s
     assert r.status_code == 200, (r.status_code, r.text)
 
     # Resubmit faces — this must not fail with FK violation
+    emb2 = (rng.standard_normal(512)).tolist()
     r = auth_client.post(
         f"/v1/assets/{asset_id}/faces",
         json={
@@ -496,10 +503,85 @@ def test_resubmit_faces_with_person_assignment(face_client: Tuple[_AuthClient, s
                 {
                     "bounding_box": {"x": 0.2, "y": 0.2, "w": 0.3, "h": 0.3},
                     "detection_confidence": 0.98,
-                    "embedding": [0.2] * 512,
+                    "embedding": emb2,
                 },
             ],
         },
     )
     assert r.status_code == 201, (r.status_code, r.text)
     assert r.json()["face_count"] == 1
+
+
+@pytest.mark.slow
+def test_cleanup_empty_dismissed(face_client: Tuple[_AuthClient, str, str]) -> None:
+    """Dismissed people with zero face matches are deleted by cleanup.
+
+    Simulates what happens after redetect-faces: a dismissed person's faces
+    are replaced, leaving the person record with no matches.
+    """
+    import numpy as np
+    from src.repository.tenant import PersonRepository
+
+    auth_client, library_id, tenant_url = face_client
+    asset_id = _create_asset(auth_client, library_id, "face_cleanup_dismissed")
+
+    # Use random embedding to avoid auto-assignment collisions
+    rng = np.random.default_rng(99)
+    emb1 = (rng.standard_normal(512)).tolist()
+
+    # Submit a face and assign it to a person
+    r = auth_client.post(
+        f"/v1/assets/{asset_id}/faces",
+        json={
+            "faces": [
+                {
+                    "bounding_box": {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.3},
+                    "detection_confidence": 0.95,
+                    "embedding": emb1,
+                },
+            ],
+        },
+    )
+    assert r.status_code == 201
+    face_id = r.json()["face_ids"][0]
+
+    r = auth_client.post(
+        f"/v1/faces/{face_id}/assign",
+        json={"new_person_name": "Dismissed Cleanup Test"},
+    )
+    assert r.status_code == 200
+    person_id = r.json()["person_id"]
+
+    # Mark person as dismissed directly in DB
+    engine = create_engine(tenant_url)
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE people SET dismissed = true WHERE person_id = :pid"), {"pid": person_id})
+    engine.dispose()
+
+    # Resubmit faces — old face_person_match is deleted, person is now empty
+    emb2 = (rng.standard_normal(512)).tolist()
+    r = auth_client.post(
+        f"/v1/assets/{asset_id}/faces",
+        json={
+            "faces": [
+                {
+                    "bounding_box": {"x": 0.2, "y": 0.2, "w": 0.3, "h": 0.3},
+                    "detection_confidence": 0.98,
+                    "embedding": emb2,
+                },
+            ],
+        },
+    )
+    assert r.status_code == 201
+
+    # Run cleanup directly via repository (avoids multi-tenant routing issues in test)
+    from sqlmodel import Session as SmSession
+    test_engine = create_engine(tenant_url)
+    with SmSession(test_engine) as session:
+        deleted = PersonRepository(session).cleanup_empty_dismissed()
+        assert deleted >= 1
+    test_engine.dispose()
+
+    # Person should be gone
+    r = auth_client.get(f"/v1/people/{person_id}")
+    assert r.status_code == 404

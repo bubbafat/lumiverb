@@ -792,6 +792,15 @@ def run_repair(
                     pool.close()
                     pool.join()
 
+            # Clean up dismissed people left with zero face matches
+            try:
+                resp = client.post("/v1/upkeep/cleanup-dismissed")
+                deleted = resp.json().get("deleted", 0)
+                if deleted:
+                    console.print(f"[dim]Cleaned up {deleted} empty dismissed people.[/dim]")
+            except Exception as e:
+                logger.warning("cleanup-dismissed failed: %s", e)
+
         elif repair_type == "video-scenes":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
 

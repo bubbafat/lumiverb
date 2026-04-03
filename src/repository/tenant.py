@@ -2870,6 +2870,38 @@ class PersonRepository:
                 result.append((person, row.cnt))
         return result
 
+    def cleanup_empty_dismissed(self) -> int:
+        """Delete dismissed people that have zero face matches.
+
+        Returns the number of dismissed people deleted.
+        """
+        empty_ids = [
+            row[0]
+            for row in self._session.execute(
+                text("""
+                    SELECT p.person_id
+                    FROM people p
+                    LEFT JOIN face_person_matches m ON m.person_id = p.person_id
+                    WHERE p.dismissed = true
+                    GROUP BY p.person_id
+                    HAVING COUNT(m.match_id) = 0
+                """)
+            ).fetchall()
+        ]
+        if not empty_ids:
+            return 0
+
+        self._session.execute(
+            text("UPDATE faces SET person_id = NULL WHERE person_id = ANY(:pids)"),
+            {"pids": empty_ids},
+        )
+        self._session.execute(
+            text("DELETE FROM people WHERE person_id = ANY(:pids)"),
+            {"pids": empty_ids},
+        )
+        self._session.commit()
+        return len(empty_ids)
+
     def get_face_count(self, person_id: str) -> int:
         """Return the number of faces matched to a person."""
         result = self._session.execute(
