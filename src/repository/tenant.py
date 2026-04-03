@@ -2325,6 +2325,22 @@ class FaceRepository:
         """
         from sqlalchemy import delete as sa_delete
 
+        # Delete face_person_matches for faces being replaced
+        old_face_ids = [
+            row[0]
+            for row in self._session.execute(
+                text(
+                    "SELECT face_id FROM faces"
+                    " WHERE asset_id = :aid AND detection_model = :dm AND detection_model_version = :dmv"
+                ),
+                {"aid": asset_id, "dm": detection_model, "dmv": detection_model_version},
+            ).fetchall()
+        ]
+        if old_face_ids:
+            self._session.execute(
+                sa_delete(FacePersonMatch).where(FacePersonMatch.face_id.in_(old_face_ids))
+            )
+
         # Delete existing faces for this asset + model combo
         self._session.execute(
             sa_delete(Face).where(
