@@ -453,15 +453,22 @@ def _generate_proxy_for_item(
 
     asset_id = item["asset_id"]
     rel_path = item.get("rel_path", asset_id)
+    expected_hash = item.get("sha256")
 
-    # Already cached from a previous run — skip generation
+    # Check persistent cache: proxy exists AND source hash matches
     if proxy_cache.has(asset_id):
-        return item
+        sha_file = proxy_cache.path / f"{asset_id}.sha"
+        if expected_hash and sha_file.exists():
+            cached_hash = sha_file.read_text().strip()
+            if cached_hash == expected_hash:
+                return item  # cache hit — source unchanged
+            # Stale — source changed, regenerate below
+        elif not expected_hash:
+            return item  # no hash to check, trust the cache
 
     if root_path is not None:
         source = root_path / rel_path
         if source.is_file():
-            expected_hash = item.get("sha256")
             if expected_hash:
                 from src.workers.exif_extract import compute_sha256
                 local_hash = compute_sha256(source)
@@ -470,6 +477,8 @@ def _generate_proxy_for_item(
             try:
                 jpeg_bytes = generate_face_proxy(source)
                 proxy_cache.put(asset_id, jpeg_bytes)
+                if expected_hash:
+                    (proxy_cache.path / f"{asset_id}.sha").write_text(expected_hash)
                 del jpeg_bytes
             except Exception:
                 pass  # fall back to server download in worker
