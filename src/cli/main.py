@@ -556,6 +556,10 @@ def admin_vision_test(
         str | None,
         typer.Option("--url", help="Vision API base URL (default: configured URL)."),
     ] = None,
+    api_key: Annotated[
+        str | None,
+        typer.Option("--api-key", help="Vision API key (default: configured key)."),
+    ] = None,
     output: Annotated[
         Path | None,
         typer.Option("--output", "-o", help="Output JSON path (default: <path>/vision-test-<timestamp>.json)."),
@@ -589,6 +593,10 @@ def admin_vision_test(
     # Resolve vision config (CLI config > tenant config > auto-discover)
     client = LumiverbClient()
     vision_url, vision_key, model_id, source = _resolve_vision_config(client)
+
+    # --api-key override
+    if api_key:
+        vision_key = api_key
 
     # --url override takes precedence
     if url:
