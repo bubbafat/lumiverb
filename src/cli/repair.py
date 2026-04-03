@@ -479,9 +479,12 @@ def _run_face_pipeline(
     """Pipeline proxy generation → face detection → result collection.
 
     Proxy generation runs in a thread pool; face detection in a subprocess pool.
-    Items flow through as fast as proxies are generated.
+    A queue connects them: proxy threads put ready items, main thread consumes
+    them into batches and dispatches to detection workers.
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import queue
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
 
     ctx = mp.get_context("spawn")
     proxy_threads = max(face_conc * 2, 4)  # I/O bound, can oversubscribe
@@ -489,30 +492,60 @@ def _run_face_pipeline(
 
     pool = ctx.Pool(face_conc, initializer=_silence_subprocess_stdout, maxtasksperchild=batch_limit)
     proxy_pool = ThreadPoolExecutor(max_workers=proxy_threads, thread_name_prefix="proxy-gen")
+    ready_q: queue.Queue = queue.Queue()
+    _SENTINEL = None
+
+    skipped = 0
+    skip_lock = threading.Lock()
+
+    def _proxy_worker(item: dict) -> None:
+        nonlocal skipped
+        result = _generate_proxy_for_item(item, root_path, proxy_cache)
+        if result is None:
+            with skip_lock:
+                skipped += 1
+            with stats.lock:
+                stats.skipped += 1
+            # Advance progress for skipped items from main thread via queue
+            ready_q.put(("skip", None))
+        else:
+            ready_q.put(("item", result))
+
+    def _submit_all() -> None:
+        """Submit all proxy jobs, then signal done."""
+        futures = [proxy_pool.submit(_proxy_worker, item) for item in assets]
+        # Wait for all proxy gen to finish
+        for f in futures:
+            f.result()  # propagate exceptions
+        ready_q.put(("done", None))
+
+    # Start proxy generation in background thread
+    feeder = threading.Thread(target=_submit_all, daemon=True)
+    feeder.start()
 
     try:
-        # Submit all proxy generation futures
-        proxy_futures = {
-            proxy_pool.submit(_generate_proxy_for_item, item, root_path, proxy_cache): item
-            for item in assets
-        }
-
-        # Collect ready items into batches, dispatch to face detection
         inflight: list[tuple[int, int, mp.pool.AsyncResult]] = []
         batch_buf: list[dict] = []
         batch_num = 0
-        skipped = 0
 
-        for future in as_completed(proxy_futures):
-            result_item = future.result()
-            if result_item is None:
-                skipped += 1
-                with stats.lock:
-                    stats.skipped += 1
+        while True:
+            # Sweep any ready detection results (non-blocking)
+            if inflight:
+                _collect_face_results(inflight, stats, progress, tid, console)
+
+            # Get next item from proxy queue (short timeout so we keep sweeping)
+            try:
+                msg_type, item = ready_q.get(timeout=0.1)
+            except queue.Empty:
+                continue
+
+            if msg_type == "done":
+                break
+            elif msg_type == "skip":
                 progress.advance(tid, 1)
                 continue
 
-            batch_buf.append(result_item)
+            batch_buf.append(item)
 
             if len(batch_buf) >= batch_size:
                 batch_num += 1
@@ -524,12 +557,9 @@ def _run_face_pipeline(
                 inflight.append((batch_num, len(batch_buf), ar))
                 batch_buf = []
 
-                _collect_face_results(inflight, stats, progress, tid, console,
-                                      block=len(inflight) >= face_conc * 2)
-
-            # Non-blocking sweep between items
-            if inflight:
-                _collect_face_results(inflight, stats, progress, tid, console)
+                # If too many inflight, block until one finishes
+                while len(inflight) >= face_conc * 2:
+                    _collect_face_results(inflight, stats, progress, tid, console, block=True)
 
         # Flush remaining partial batch
         if batch_buf:
@@ -541,9 +571,11 @@ def _run_face_pipeline(
             )
             inflight.append((batch_num, len(batch_buf), ar))
 
-        # Drain all remaining
+        # Drain all remaining detection results
         while inflight:
             _collect_face_results(inflight, stats, progress, tid, console, block=True)
+
+        feeder.join(timeout=5)
 
         if skipped:
             console.print(f"[dim]{skipped} assets skipped (SHA mismatch)[/dim]")
