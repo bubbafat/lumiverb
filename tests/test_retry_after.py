@@ -88,6 +88,54 @@ def test_google_retry_info_fractional():
     assert parse_google_retry_info(resp) == 32.5
 
 
+def test_google_retry_info_exact_response():
+    """Exact Google Gemini 429 response (array-wrapped)."""
+    body = [{
+        "error": {
+            "code": 429,
+            "message": (
+                "You exceeded your current quota, please check your plan and billing details. "
+                "For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. "
+                "To monitor your current usage, head to: https://ai.dev/rate-limit. \n"
+                "* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, "
+                "limit: 10, model: gemini-2.5-flash-lite\n"
+                "Please retry in 4.185577026s."
+            ),
+            "status": "RESOURCE_EXHAUSTED",
+            "details": [
+                {
+                    "@type": "type.googleapis.com/google.rpc.Help",
+                    "links": [
+                        {
+                            "description": "Learn more about Gemini API quotas",
+                            "url": "https://ai.google.dev/gemini-api/docs/rate-limits",
+                        }
+                    ],
+                },
+                {
+                    "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                    "violations": [
+                        {
+                            "quotaMetric": "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+                            "quotaId": "GenerateRequestsPerMinutePerProjectPerModel-FreeTier",
+                            "quotaDimensions": {"location": "global", "model": "gemini-2.5-flash-lite"},
+                            "quotaValue": "10",
+                        }
+                    ],
+                },
+                {
+                    "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                    "retryDelay": "4s",
+                },
+            ],
+        }
+    }]
+    resp = _mock_response(json_body=body)
+    # Should find RetryInfo, not fall through to 60s default
+    assert parse_retry_after(resp) == 5.0  # 4s + 1s buffer
+    assert parse_google_retry_info(resp) == 4.0  # raw parser has no buffer
+
+
 def test_google_retry_info_missing_type():
     body = {"error": {"details": [{"retryDelay": "4s"}]}}
     resp = _mock_response(json_body=body)
@@ -144,7 +192,7 @@ def test_chain_prefers_header():
         }
     }
     resp = _mock_response(headers={"Retry-After": "5"}, json_body=body)
-    assert parse_retry_after(resp) == 5.0
+    assert parse_retry_after(resp) == 6.0  # 5 + 1s buffer
 
 
 def test_chain_falls_through_to_google():
@@ -159,16 +207,16 @@ def test_chain_falls_through_to_google():
         }
     }
     resp = _mock_response(json_body=body)
-    assert parse_retry_after(resp) == 4.0
+    assert parse_retry_after(resp) == 5.0  # 4 + 1s buffer
 
 
 def test_chain_falls_through_to_message():
     body = {"error": {"message": "Please retry in 2.5s."}}
     resp = _mock_response(json_body=body)
-    assert parse_retry_after(resp) == 2.5
+    assert parse_retry_after(resp) == 3.5  # 2.5 + 1s buffer
 
 
 def test_chain_falls_through_to_default():
-    """When no provider-specific hint is found, default to 60s."""
+    """When no provider-specific hint is found, default to 60s + 1s buffer."""
     resp = _mock_response(json_body={"error": {"message": "unknown"}})
-    assert parse_retry_after(resp) == 60.0
+    assert parse_retry_after(resp) == 61.0

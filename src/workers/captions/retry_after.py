@@ -17,6 +17,17 @@ import requests
 RetryAfterParser = Callable[[requests.Response], float | None]
 
 
+def _unwrap_error_body(resp: requests.Response) -> dict:
+    """Parse JSON body, unwrapping array wrapper if present.
+
+    Google sometimes returns ``[{"error": ...}]`` instead of ``{"error": ...}``.
+    """
+    body = resp.json()
+    if isinstance(body, list) and body:
+        body = body[0]
+    return body if isinstance(body, dict) else {}
+
+
 # ---------------------------------------------------------------------------
 # Standard HTTP
 # ---------------------------------------------------------------------------
@@ -50,7 +61,7 @@ def parse_google_retry_info(resp: requests.Response) -> float | None:
         ]}}
     """
     try:
-        body = resp.json()
+        body = _unwrap_error_body(resp)
         for detail in body.get("error", {}).get("details", []):
             if detail.get("@type", "").endswith("RetryInfo"):
                 raw = detail.get("retryDelay", "")
@@ -69,7 +80,7 @@ def parse_google_message_fallback(resp: requests.Response) -> float | None:
         Please retry in 4.185577026s.
     """
     try:
-        body = resp.json()
+        body = _unwrap_error_body(resp)
         msg = body.get("error", {}).get("message", "")
         m = re.search(r"retry in ([\d.]+)s", msg, re.IGNORECASE)
         if m:
@@ -97,9 +108,13 @@ PARSERS: list[RetryAfterParser] = [
 
 
 def parse_retry_after(resp: requests.Response) -> float:
-    """Try each parser in order; return the first non-None result."""
+    """Try each parser in order; return the first non-None result.
+
+    Adds a 1s buffer to account for providers that truncate fractional
+    seconds (e.g. Google retryDelay "55s" when the actual reset is 55.3s).
+    """
     for parser in PARSERS:
         result = parser(resp)
         if result is not None:
-            return result
-    return 60.0  # unreachable given default parser, but satisfies type checker
+            return result + 1.0
+    return 61.0  # unreachable given default parser, but satisfies type checker
