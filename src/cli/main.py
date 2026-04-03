@@ -542,6 +542,109 @@ def admin_tenants_list(
 
 
 # ---------------------------------------------------------------------------
+# admin vision-test
+# ---------------------------------------------------------------------------
+
+
+@admin_app.command("vision-test")
+def admin_vision_test(
+    path: Annotated[
+        Path,
+        typer.Option("--path", help="Directory containing test images."),
+    ],
+    url: Annotated[
+        str | None,
+        typer.Option("--url", help="Vision API base URL (default: configured URL)."),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Output JSON path (default: <path>/vision-test-<timestamp>.json)."),
+    ] = None,
+) -> None:
+    """Run describe + OCR against every image in a directory and save results as JSON.
+
+    Useful for benchmarking vision models: save one run as baseline.json,
+    then compare future runs to see how model changes affect output.
+    """
+    from datetime import datetime, timezone
+
+    from src.core.file_extensions import IMAGE_EXTENSIONS
+    from src.workers.captions.factory import get_caption_provider
+    from src.workers.captions.model_discovery import discover_model_id
+
+    path = path.expanduser().resolve()
+    if not path.is_dir():
+        console.print(f"[red]Not a directory: {path}[/red]")
+        raise typer.Exit(1)
+
+    # Collect image files (sorted alphabetically)
+    images = sorted(
+        [f for f in path.iterdir() if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS],
+        key=lambda f: f.name.lower(),
+    )
+    if not images:
+        console.print(f"[yellow]No images found in {path}[/yellow]")
+        raise typer.Exit(0)
+
+    # Resolve vision API URL
+    if url:
+        vision_url = url.rstrip("/")
+    else:
+        cfg = load_config()
+        vision_url = cfg.vision_api_url
+        if not vision_url:
+            console.print("[red]No --url provided and no vision_api_url configured. Run 'lumiverb config set --vision-api-url ...'[/red]")
+            raise typer.Exit(1)
+
+    # Resolve model
+    cfg = load_config()
+    vision_key = cfg.vision_api_key or None
+    model_id = cfg.vision_model_id or discover_model_id(vision_url, vision_key)
+    provider = get_caption_provider(model_id, vision_url, vision_key)
+
+    # Default output path
+    if output is None:
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        output = path / f"vision-test-{ts}.json"
+
+    console.print(f"Model: [cyan]{model_id}[/cyan]  URL: [cyan]{vision_url}[/cyan]")
+    console.print(f"Images: [cyan]{len(images)}[/cyan]  Output: [cyan]{output}[/cyan]")
+    console.print()
+
+    results: list[dict] = []
+    for i, img_path in enumerate(images, 1):
+        console.print(f"[dim][{i}/{len(images)}][/dim] {img_path.name} ... ", end="")
+
+        # Describe (description + tags)
+        desc_result = provider.describe(img_path)
+        description = desc_result.get("description", "")
+        tags = desc_result.get("tags", [])
+
+        # OCR
+        ocr_text = provider.extract_text(img_path)
+
+        results.append({
+            "filename": img_path.name,
+            "description": description,
+            "tags": tags,
+            "ocr": ocr_text,
+        })
+        console.print("[green]done[/green]")
+
+    output_data = {
+        "model_id": model_id,
+        "vision_api_url": vision_url,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "image_count": len(results),
+        "results": results,
+    }
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(_json.dumps(output_data, indent=2, ensure_ascii=False) + "\n")
+    console.print(f"\n[green]Wrote {output}[/green]")
+
+
+# ---------------------------------------------------------------------------
 # worker (continued)
 # ---------------------------------------------------------------------------
 
