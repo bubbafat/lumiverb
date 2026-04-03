@@ -2340,6 +2340,14 @@ class FaceRepository:
             self._session.execute(
                 sa_delete(FacePersonMatch).where(FacePersonMatch.face_id.in_(old_face_ids))
             )
+            # Null out representative_face_id on people pointing to these faces
+            self._session.execute(
+                text(
+                    "UPDATE people SET representative_face_id = NULL"
+                    " WHERE representative_face_id = ANY(:fids)"
+                ),
+                {"fids": old_face_ids},
+            )
 
         # Delete existing faces for this asset + model combo
         self._session.execute(
