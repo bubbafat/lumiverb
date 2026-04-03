@@ -1,15 +1,17 @@
 """Proxy-aware disk cache for downstream image processing tasks.
 
 All consumers (faces, vision, OCR, embeddings) get correctly-sized
-1280px JPEG proxies without thinking about resolution. The cache handles:
+JPEG proxies without thinking about resolution. The cache handles:
 
-- Downscaling oversized images on put()
+- Storing full-resolution 2048px proxies from scan (put_scan)
+- Downscaling oversized images on put() for legacy callers
 - Generating proxies from source files on demand via get()
 - Falling back to server download when local source isn't available
 - Persistent storage across runs in ~/.cache/lumiverb/proxies/
+- SHA-256 sidecar files for source file change detection
 
-The only code that works with full-resolution (2048px) images is the
-ingest upload path, which bypasses this cache entirely.
+Scan writes 2048px proxies + SHA sidecars. Enrich reads and resizes
+as needed. The cache is the handoff point between the two phases.
 """
 
 from __future__ import annotations
@@ -28,15 +30,14 @@ _JPEG_QUALITY = 75
 
 
 class ProxyCache:
-    """Disk-backed cache of correctly-sized JPEG proxy images.
+    """Disk-backed cache of JPEG proxy images.
 
-    Images are stored at max_edge resolution (default 1280px long edge).
-    Callers never need to think about sizing — put() downscales,
-    get() generates on demand.
+    Scan stores full-resolution 2048px proxies via put_scan() with a
+    .sha sidecar for change detection. Legacy callers use put() which
+    downscales to max_edge (default 1280px).
 
     Uses a persistent directory (~/.cache/lumiverb/proxies/) so proxies
-    survive across runs. Files are keyed by asset_id; an optional sha256
-    check ensures stale proxies are regenerated when source files change.
+    survive across runs. Files are keyed by asset_id.
     """
 
     def __init__(
@@ -47,7 +48,7 @@ class ProxyCache:
     ) -> None:
         """
         Args:
-            max_edge: Maximum long edge for cached proxies.
+            max_edge: Maximum long edge for cached proxies (for put/get).
             root_path: Library root for local source file generation.
             client: LumiverbClient for server download fallback.
         """
@@ -64,13 +65,30 @@ class ProxyCache:
     def put(self, asset_id: str, image_bytes: bytes) -> None:
         """Store proxy bytes, downscaling if needed. Never scales up."""
         image_bytes = self._ensure_size(image_bytes)
-        (self._dir / asset_id).write_bytes(image_bytes)
+        self._atomic_write(self._dir / asset_id, image_bytes)
+
+    def put_scan(self, asset_id: str, jpeg_bytes: bytes, source_sha256: str) -> None:
+        """Store a full-resolution 2048px proxy from scan with SHA sidecar.
+
+        Writes are atomic (temp + rename) so concurrent readers never see
+        partial files. The .sha sidecar is written after the proxy — a
+        reader that sees a .sha file can trust the proxy is complete.
+        """
+        self._atomic_write(self._dir / asset_id, jpeg_bytes)
+        self._atomic_write(self._dir / f"{asset_id}.sha", source_sha256.encode())
+
+    def get_sha(self, asset_id: str) -> str | None:
+        """Read the SHA-256 sidecar for an asset. Returns None if missing."""
+        sha_path = self._dir / f"{asset_id}.sha"
+        if sha_path.exists():
+            return sha_path.read_text().strip()
+        return None
 
     def put_from_path(self, asset_id: str, source_path: Path) -> bytes:
         """Generate proxy from a source file and cache it. Returns the bytes."""
         from src.cli.proxy_gen import generate_proxy_bytes
         image_bytes, _, _ = generate_proxy_bytes(source_path, max_long_edge=self._max_edge)
-        (self._dir / asset_id).write_bytes(image_bytes)
+        self._atomic_write(self._dir / asset_id, image_bytes)
         return image_bytes
 
     def has(self, asset_id: str) -> bool:
@@ -117,13 +135,32 @@ class ProxyCache:
         return None
 
     def remove(self, asset_id: str) -> None:
-        """Remove a single entry from the cache."""
+        """Remove a single entry and its SHA sidecar from the cache."""
         (self._dir / asset_id).unlink(missing_ok=True)
+        (self._dir / f"{asset_id}.sha").unlink(missing_ok=True)
 
     def cleanup(self) -> None:
         """Delete the entire cache directory."""
         if self._dir.exists():
             shutil.rmtree(self._dir, ignore_errors=True)
+
+    @staticmethod
+    def _atomic_write(dest: Path, data: bytes) -> None:
+        """Write data to dest atomically via temp + rename."""
+        fd, tmp_path = tempfile.mkstemp(dir=dest.parent, suffix=".tmp")
+        try:
+            os.write(fd, data)
+            os.close(fd)
+            fd = -1
+            os.replace(tmp_path, dest)
+        except BaseException:
+            if fd >= 0:
+                os.close(fd)
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def _ensure_size(self, image_bytes: bytes) -> bytes:
         """Downscale JPEG if it exceeds max_edge. Never scales up."""

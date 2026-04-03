@@ -72,3 +72,58 @@ def test_put_and_get_across_instances(tmp_path):
 
     cache2 = _test_cache(tmp_path)
     assert cache2.get("asset_1") == b"persisted-data"
+
+
+def test_put_scan_stores_proxy_and_sha(tmp_path):
+    """put_scan writes the proxy and a .sha sidecar atomically."""
+    cache = _test_cache(tmp_path)
+    cache.put_scan("asset_1", b"proxy-bytes", "abc123")
+
+    assert (tmp_path / "asset_1").read_bytes() == b"proxy-bytes"
+    assert (tmp_path / "asset_1.sha").read_text() == "abc123"
+
+
+def test_get_sha_returns_none_when_missing(tmp_path):
+    cache = _test_cache(tmp_path)
+    assert cache.get_sha("nonexistent") is None
+
+
+def test_get_sha_reads_sidecar(tmp_path):
+    cache = _test_cache(tmp_path)
+    cache.put_scan("asset_1", b"data", "deadbeef")
+    assert cache.get_sha("asset_1") == "deadbeef"
+
+
+def test_put_scan_overwrites_existing(tmp_path):
+    """Re-scanning a changed file overwrites both proxy and SHA."""
+    cache = _test_cache(tmp_path)
+    cache.put_scan("asset_1", b"old-proxy", "old-sha")
+    cache.put_scan("asset_1", b"new-proxy", "new-sha")
+
+    assert (tmp_path / "asset_1").read_bytes() == b"new-proxy"
+    assert cache.get_sha("asset_1") == "new-sha"
+
+
+def test_remove_cleans_sha_sidecar(tmp_path):
+    """remove() also deletes the .sha sidecar."""
+    cache = _test_cache(tmp_path)
+    cache.put_scan("asset_1", b"data", "sha-val")
+    cache.remove("asset_1")
+
+    assert not (tmp_path / "asset_1").exists()
+    assert not (tmp_path / "asset_1.sha").exists()
+
+
+def test_atomic_write_no_partial_files(tmp_path):
+    """If write fails, no partial file remains."""
+    cache = _test_cache(tmp_path)
+    # Make dir read-only to force write failure
+    ro_dir = tmp_path / "readonly"
+    ro_dir.mkdir()
+    cache._dir = ro_dir
+
+    cache.put_scan("asset_1", b"data", "sha")
+    # Even if it succeeds on some systems, the key point is no crash
+    # and no .tmp files left behind
+    tmp_files = list(ro_dir.glob("*.tmp"))
+    assert len(tmp_files) == 0

@@ -13,6 +13,7 @@ See docs/architecture.md for the full design.
 - `src/cli/config.py` — Local config in `~/.lumiverb/config.json` (`api_url`, `api_key`, `admin_key`, `vision_api_url`, `vision_api_key`, `vision_model_id`): `load_config`, `save_config`, `get_api_url`, `get_api_key`, `get_admin_key`
 - `src/cli/client.py` — `LumiverbClient`: thin httpx wrapper with persistent connection pool, reads config for base URL and `Authorization: Bearer <api_key>`; accepts `api_key_override` for admin commands; on non-2xx prints error envelope and raises `LumiverbAPIError`
 - `src/cli/ingest.py` — Per-asset ingest pipeline: discover files, generate proxies, call vision AI, upload atomically
+- `src/cli/scan.py` — Scan phase (ADR-011): discover files, SHA comparison, EXIF extraction, proxy generation, upload, proxy cache with SHA sidecar
 
 Entry point: `lumiverb = "src.cli:main"` (setuptools); `main()` invokes the Typer app.
 
@@ -31,6 +32,9 @@ Entry point: `lumiverb = "src.cli:main"` (setuptools); `main()` invokes the Type
 ### Tenant (admin)
 - `lumiverb tenant list [--admin-key <key>]` — List all tenants (tenant_id, name, plan, status). Admin key falls back to saved config.
 - `lumiverb tenant set-vision --tenant-id <id> [--vision-api-url <url>] [--vision-api-key <key>] [--vision-model-id <id>] [--admin-key <key>]` — Set the OpenAI-compatible vision API URL, key, and/or model ID for a tenant. Stored on the tenant record. Admin key falls back to saved config.
+
+### Scan
+- `lumiverb scan --library <name> [--path-prefix <subdir>] [--force] [--concurrency N] [--media-type image|video|all] [--dry-run]` — Discover files, compute SHA-256, extract EXIF, generate 2048px proxy, upload to server, cache proxy locally. This is Phase 1 of the scan/enrich pipeline (ADR-011). Scan is the only operation that touches source files. Change detection compares source file SHA-256 against server-stored values: new files get full scan, changed files get re-scanned (same asset_id, enrichment flags reset), unchanged files are skipped (proxy cache populated from server if missing), deleted files are soft-deleted. `--force` re-scans unchanged files. `--path-prefix` scopes both scanning and deletion detection to a subdirectory. `--dry-run` shows the scan summary without making changes. After scan completes, prints pending enrichment work. Does NOT run enrichment (CLIP, vision, OCR, faces) — use `lumiverb repair` for that.
 
 ### Ingest
 - `lumiverb ingest --library <name> [--path <subpath>] [--force] [--concurrency N] [--skip-vision] [--skip-embeddings] [--media-type image|video|all]` — Scan and ingest a library in one pass. Images: proxy + EXIF + vision AI + CLIP embeddings → atomic upload. Videos: stage 1 (poster frame + EXIF + 10-sec preview → atomic upload), then stage 2 (scene detection via pHash drift + temporal ceiling → chunk API), then stage 3 (rep frame extraction + vision AI on each scene → Quickwit sync). Processing order: all images first, then video stage 1, then video stage 2 (scene detection), then video stage 3 (scene enrichment). `--skip-vision` skips AI captioning; `--skip-embeddings` skips CLIP vector generation. Without `--skip-vision`, vision must be configured or the command fails with setup instructions. `--media-type` (default `all`) filters to just images or videos. Client sends WebP proxy to minimize server CPU. After ingest completes, prints a repair summary showing any pending pipeline work.

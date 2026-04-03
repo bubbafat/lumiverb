@@ -1998,6 +1998,7 @@ class UnifiedBrowseRepository:
         missing_embeddings: bool = False,
         missing_faces: bool = False,
         missing_video_scenes: bool = False,
+        missing_ocr: bool = False,
         missing_scene_vision: bool = False,
         *,
         sort: str = "taken_at",

@@ -816,6 +816,83 @@ def download(
             sys.stdout.buffer.flush()
 
 
+@app.command("scan")
+def scan(
+    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
+    path_prefix: Annotated[str | None, typer.Option("--path-prefix", "-p", help="Only scan files under this subdirectory.")] = None,
+    force: Annotated[bool, typer.Option("--force", "-f", help="Re-scan unchanged files (re-generate proxy even if SHA matches).")] = False,
+    concurrency: Annotated[int, typer.Option("--concurrency", help="Number of parallel workers.")] = 4,
+    media_type: Annotated[str, typer.Option("--media-type", help="Filter: image, video, or all.")] = "all",
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would happen without making changes.")] = False,
+) -> None:
+    """Discover files, compute SHA, extract EXIF, generate proxies, upload.
+
+    Scan is the first phase of the scan/enrich pipeline. It touches source
+    files, generates 2048px proxies, and uploads them to the server. It does
+    NOT run enrichment (CLIP, vision, OCR, faces) — use `lumiverb enrich`
+    or `lumiverb repair` for that.
+
+    Change detection compares source file SHA-256 against the server to
+    skip unchanged files. Use --force to re-scan everything.
+    """
+    from src.cli.scan import run_scan
+
+    if media_type not in ("image", "video", "all"):
+        console.print(f"[red]Invalid --media-type: {media_type}. Must be image, video, or all.[/red]")
+        raise typer.Exit(1)
+
+    client = LumiverbClient()
+    libraries = client.get("/v1/libraries").json()
+    match = next((lib for lib in libraries if lib["name"] == library), None)
+    if match is None:
+        console.print(f"[red]Library not found: {library}[/red]")
+        raise typer.Exit(1)
+
+    stats = run_scan(
+        client,
+        match,
+        concurrency=concurrency,
+        path_prefix=path_prefix,
+        force=force,
+        media_type_filter=media_type,
+        dry_run=dry_run,
+        console=console,
+    )
+
+    if not dry_run:
+        console.print(
+            f"\nDone: {stats.new:,} new, "
+            f"{stats.changed:,} changed, "
+            f"{stats.unchanged:,} unchanged, "
+            f"{stats.deleted:,} deleted"
+            + (f", {stats.cache_populated:,} cache populated" if stats.cache_populated else "")
+            + (f", {stats.failed:,} failed" if stats.failed else "")
+        )
+
+        # Show what enrichment is pending
+        from src.cli.repair import get_repair_summary
+        summary = get_repair_summary(client, match["library_id"])
+        needs_enrich = [
+            (label, summary.get(key, 0))
+            for label, key in [
+                ("Vision AI", "missing_vision"),
+                ("Embeddings", "missing_embeddings"),
+                ("Faces", "missing_faces"),
+                ("OCR", "missing_ocr"),
+                ("Search sync", "stale_search_sync"),
+            ]
+            if summary.get(key, 0) > 0
+        ]
+        if needs_enrich:
+            console.print("\n[yellow]Pending enrichment:[/yellow]")
+            for label, count in needs_enrich:
+                console.print(f"  {label}: {count:,}")
+            console.print(f"[dim]Run: lumiverb repair --library {library}[/dim]")
+
+        if stats.failed > 0:
+            raise typer.Exit(1)
+
+
 @app.command("ingest")
 def ingest(
     library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
