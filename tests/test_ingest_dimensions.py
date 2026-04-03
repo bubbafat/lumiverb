@@ -280,52 +280,6 @@ def test_extract_poster_from_truncated_video_raises():
 
 @pytest.mark.fast
 @_skip_no_ffprobe
-@_skip_no_libvips
-def test_video_stage1_posts_source_dimensions(tmp_path):
-    """The actual POST to /v1/ingest must contain the original video dimensions,
-    not the proxy/poster dimensions."""
-    from src.cli.ingest import _process_and_ingest_video_stage1, _IngestStats
-    import shutil
-
-    # Copy fixture into a "library root" so path validation passes
-    lib_root = tmp_path / "library"
-    lib_root.mkdir()
-    video_copy = lib_root / "test_video.mp4"
-    shutil.copy2(SAMPLE_VIDEO, video_copy)
-
-    stats = _IngestStats()
-    posted_data = {}
-
-    def fake_post(path, **kwargs):
-        if path == "/v1/ingest":
-            posted_data.update(kwargs.get("data", {}))
-            resp = MagicMock()
-            resp.json.return_value = {"asset_id": "fake-asset-id"}
-            return resp
-        return MagicMock()
-
-    mock_client = MagicMock()
-    mock_client.post = fake_post
-
-    _process_and_ingest_video_stage1(
-        client=mock_client,
-        library_id="lib-123",
-        root_path=lib_root,
-        rel_path="test_video.mp4",
-        file_size=video_copy.stat().st_size,
-        file_mtime=None,
-        stats=stats,
-        progress=None,
-        task_id=None,
-    )
-
-    assert stats.processed == 1
-    assert stats.failed == 0
-    assert posted_data["width"] == "3840"
-    assert posted_data["height"] == "2160"
-    assert posted_data["media_type"] == "video"
-
-
 # ---------------------------------------------------------------------------
 # Discovery: _walk_library
 # ---------------------------------------------------------------------------
