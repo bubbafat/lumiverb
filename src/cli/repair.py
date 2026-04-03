@@ -597,7 +597,7 @@ def run_repair(
             # SHA-256 mismatch means the file changed since ingest — skip
             # those assets entirely (bounding boxes would be wrong).
             from pathlib import Path
-            from src.cli.proxy_cache import generate_face_proxy
+            from src.cli.proxy_gen import generate_face_proxy
             root_path_str = library.get("root_path")
             root_path = Path(root_path_str).resolve() if root_path_str else None
             use_local = root_path is not None and root_path.is_dir()
@@ -702,7 +702,7 @@ def run_repair(
             assets = all_images  # noqa: F821 — bound in plan phase above
 
             from pathlib import Path
-            from src.cli.proxy_cache import generate_face_proxy
+            from src.cli.proxy_gen import generate_face_proxy
             root_path_str = library.get("root_path")
             root_path = Path(root_path_str).resolve() if root_path_str else None
             use_local = root_path is not None and root_path.is_dir()
