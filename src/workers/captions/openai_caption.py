@@ -11,8 +11,10 @@ import base64
 import io
 import json
 import logging
+import math
 import random
 import re
+import sys
 import time
 from pathlib import Path
 
@@ -74,6 +76,18 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
     def _strip_thinking(self, text: str) -> str:
         """Strip <think>...</think> blocks; some reasoning models prefix responses with them."""
         return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+    @staticmethod
+    def _sleep_with_countdown(seconds: float) -> None:
+        """Sleep with a countdown timer on stderr."""
+        remaining = math.ceil(seconds)
+        while remaining > 0:
+            sys.stderr.write(f"\r  retrying in {remaining}s ...  ")
+            sys.stderr.flush()
+            time.sleep(min(1.0, remaining))
+            remaining -= 1
+        sys.stderr.write("\r" + " " * 30 + "\r")
+        sys.stderr.flush()
 
     # Retry config: 3 attempts with exponential backoff + jitter.
     # Base delays: ~1s, ~3s, ~9s (jittered ±50%).
@@ -152,7 +166,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                         "Vision retry %d/%d for %s (sleeping %.1fs): %s",
                         attempt, self.MAX_ATTEMPTS, proxy_path.name, sleep_time, e,
                     )
-                    time.sleep(sleep_time)
+                    self._sleep_with_countdown(sleep_time)
                     continue
                 logger.warning("OpenAI-compatible caption failed for %s after %d attempts: %s", proxy_path, self.MAX_ATTEMPTS, e)
                 return {}
@@ -224,7 +238,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                         "OCR retry %d/%d for %s (sleeping %.1fs): %s",
                         attempt, self.MAX_ATTEMPTS, proxy_path.name, sleep_time, e,
                     )
-                    time.sleep(sleep_time)
+                    self._sleep_with_countdown(sleep_time)
                     continue
                 logger.warning("OCR failed for %s after %d attempts: %s", proxy_path, self.MAX_ATTEMPTS, e)
                 return ""
