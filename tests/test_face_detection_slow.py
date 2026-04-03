@@ -452,3 +452,54 @@ def test_list_faces_response_shape(face_client: Tuple[_AuthClient, str, str]) ->
         assert isinstance(bbox[key], (int, float))
     assert "detection_confidence" in face
     assert "person" in face  # null until clustering ships
+
+
+@pytest.mark.slow
+def test_resubmit_faces_with_person_assignment(face_client: Tuple[_AuthClient, str, str]) -> None:
+    """Resubmitting faces succeeds even when faces are assigned to a person.
+
+    Regression: submit_faces must clear face_person_matches and null out
+    people.representative_face_id before deleting old faces, otherwise
+    FK constraints block the delete.
+    """
+    auth_client, library_id, _ = face_client
+    asset_id = _create_asset(auth_client, library_id, "face_resubmit_person")
+
+    # Submit initial faces with embeddings
+    r = auth_client.post(
+        f"/v1/assets/{asset_id}/faces",
+        json={
+            "faces": [
+                {
+                    "bounding_box": {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.3},
+                    "detection_confidence": 0.95,
+                    "embedding": [0.1] * 512,
+                },
+            ],
+        },
+    )
+    assert r.status_code == 201
+    face_id = r.json()["face_ids"][0]
+
+    # Assign face to a new person (creates face_person_match + sets representative_face_id)
+    r = auth_client.post(
+        f"/v1/faces/{face_id}/assign",
+        json={"new_person_name": "Test Person Resubmit"},
+    )
+    assert r.status_code == 200, (r.status_code, r.text)
+
+    # Resubmit faces — this must not fail with FK violation
+    r = auth_client.post(
+        f"/v1/assets/{asset_id}/faces",
+        json={
+            "faces": [
+                {
+                    "bounding_box": {"x": 0.2, "y": 0.2, "w": 0.3, "h": 0.3},
+                    "detection_confidence": 0.98,
+                    "embedding": [0.2] * 512,
+                },
+            ],
+        },
+    )
+    assert r.status_code == 201, (r.status_code, r.text)
+    assert r.json()["face_count"] == 1
