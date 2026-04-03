@@ -312,20 +312,31 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
 
     @staticmethod
     def _dedup_lines(lines: list[str]) -> list[str]:
-        """Collapse consecutive runs of identical lines to at most 2."""
+        """Collapse consecutive repeating patterns (1+ lines) to at most 2."""
         if not lines:
             return lines
         out: list[str] = []
-        run_count = 0
-        prev: str | None = None
-        for line in lines:
-            if line == prev:
-                run_count += 1
-            else:
-                run_count = 1
-                prev = line
-            if run_count <= 2:
-                out.append(line)
+        i = 0
+        n = len(lines)
+        while i < n:
+            matched = False
+            # Try pattern lengths k = 1, 2, ... up to what could repeat 3+ times
+            for k in range(1, (n - i) // 3 + 1):
+                pattern = lines[i : i + k]
+                count = 1
+                j = i + k
+                while j + k <= n and lines[j : j + k] == pattern:
+                    count += 1
+                    j += k
+                if count > 2:
+                    out.extend(pattern)
+                    out.extend(pattern)
+                    i = j  # skip past all repetitions
+                    matched = True
+                    break
+            if not matched:
+                out.append(lines[i])
+                i += 1
         return out
 
     def _chat(self, data_url: str, prompt: str) -> str:

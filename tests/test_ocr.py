@@ -149,6 +149,20 @@ def test_strip_reasoning_dedup_preserves_non_runs(provider):
     ]
 
 
+def test_strip_reasoning_dedup_alternating_pattern(provider):
+    """Alternating multi-line patterns beyond 2 repetitions are truncated."""
+    text = "A\nB\n" * 50
+    result = provider._strip_ocr_reasoning(text)
+    assert result == "A\nB\nA\nB"
+
+
+def test_strip_reasoning_dedup_three_line_pattern(provider):
+    """Three-line repeating pattern is truncated to 2 occurrences."""
+    text = "X\nY\nZ\n" * 10
+    result = provider._strip_ocr_reasoning(text)
+    assert result == "X\nY\nZ\nX\nY\nZ"
+
+
 def test_strip_reasoning_dedup_single_occurrence(provider):
     """Lines that appear only once are not affected."""
     text = "STOP\nONE WAY\nYIELD"
