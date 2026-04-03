@@ -1,4 +1,4 @@
-"""CLI maintenance commands: cleanup, search-sync, cleanup-dismissed."""
+"""CLI maintenance commands: cleanup, search-sync, cleanup-dismissed, upgrade."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from rich.table import Table
 from src.cli.client import LumiverbClient
 
 console = Console()
-maintenance_app = typer.Typer(help="Maintenance tasks: cleanup orphaned files, sync search index, prune empty dismissed people.")
+maintenance_app = typer.Typer(help="Maintenance tasks: cleanup, search sync, prune dismissed people, tenant upgrades.")
 
 
 @maintenance_app.command("cleanup")
@@ -156,3 +156,155 @@ def cleanup_dismissed() -> None:
         console.print(f"  Deleted {deleted} empty dismissed people.")
     else:
         console.print("  No empty dismissed people found.")
+
+
+@maintenance_app.command("upgrade")
+def upgrade(
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show pending steps without executing.")] = False,
+    step_id: Annotated[str | None, typer.Option("--step", help="Run only a specific upgrade step ID.")] = None,
+    force: Annotated[bool, typer.Option("--force", help="Run a step even if preceding steps are not complete.")] = False,
+    max_steps: Annotated[int, typer.Option("--max-steps", help="Cap on pending steps to execute (0 = all).")] = 0,
+) -> None:
+    """Run tenant-level upgrades (schema/backfill steps) idempotently."""
+    from src.cli.progress import UnifiedProgress, UnifiedProgressSpec
+
+    client = LumiverbClient()
+
+    if not dry_run:
+        maint_resp = client.get("/v1/tenant/maintenance/status")
+        maint = maint_resp.json()
+        if not maint.get("active"):
+            console.print("[red]Maintenance mode is not active.[/red]")
+            console.print("Enable it first:")
+            console.print("  lumiverb admin maintenance --start --message 'Upgrading'")
+            raise typer.Exit(1)
+
+    status_resp = client.get("/v1/tenant/upgrade/status")
+    status = status_resp.json()
+
+    steps_total = int(status.get("steps_total", 0))
+    if steps_total == 0:
+        console.print("[dim]No upgrade steps are registered in this build.[/dim]")
+        return
+
+    pending_step_ids: list[str] = status.get("remaining_pending_step_ids", []) or []
+    has_work: bool = bool(status.get("has_work", False))
+    steps_info: list[dict] = status.get("steps", []) or []
+
+    if dry_run:
+        if step_id is not None:
+            match = next((s for s in steps_info if s.get("step_id") == step_id), None)
+            if match is None:
+                console.print(f"[red]Unknown upgrade step: {step_id}[/red]")
+                raise typer.Exit(1)
+            console.print(f"Tenant upgrade dry-run for step: {step_id}")
+            console.print(f"  Step status: {match.get('status')}")
+            try:
+                target_index = next(i for i, s in enumerate(steps_info) if s.get("step_id") == step_id)
+            except StopIteration:
+                target_index = -1
+            pending_or_failed_preceding: list[str] = []
+            if target_index > 0:
+                for s in steps_info[:target_index]:
+                    if s.get("status") in ("pending", "failed"):
+                        pending_or_failed_preceding.append(s.get("step_id", ""))
+            if pending_or_failed_preceding:
+                console.print(f"  Preceding pending/failed steps: {len(pending_or_failed_preceding)}")
+                for sid in pending_or_failed_preceding:
+                    console.print(f"  - {sid}")
+            else:
+                console.print("  Preceding steps: ready")
+            return
+
+        if not has_work:
+            console.print("Tenant upgrade: [green]no pending steps[/green].")
+            return
+        console.print(f"Tenant upgrade (dry-run): {len(pending_step_ids)} of {steps_total} steps pending.")
+        for sid in pending_step_ids:
+            console.print(f"  - {sid}")
+        return
+
+    if step_id is not None:
+        match = next((s for s in steps_info if s.get("step_id") == step_id), None)
+        if match is None:
+            console.print(f"[red]Unknown upgrade step: {step_id}[/red]")
+            raise typer.Exit(1)
+
+        pending_or_failed_preceding = []
+        try:
+            target_index = next(i for i, s in enumerate(steps_info) if s.get("step_id") == step_id)
+        except StopIteration:
+            target_index = -1
+        if target_index > 0:
+            for s in steps_info[:target_index]:
+                if s.get("status") in ("pending", "failed"):
+                    pending_or_failed_preceding.append(s.get("step_id", ""))
+
+        if pending_or_failed_preceding and not force:
+            console.print(f"[red]Refusing to run {step_id}: preceding steps are not complete.[/red]")
+            for sid in pending_or_failed_preceding:
+                console.print(f"  - {sid}")
+            console.print("Run without --step, or re-run with --force to override.")
+            raise typer.Exit(1)
+
+        if pending_or_failed_preceding and force:
+            confirmed = typer.confirm(
+                f"Run --force and execute step '{step_id}' with {len(pending_or_failed_preceding)} preceding step(s) not complete?",
+                default=False,
+            )
+            if not confirmed:
+                console.print("Aborted.")
+                return
+
+    name_by_id = {s.get("step_id", ""): s.get("display_name", s.get("step_id", "")) for s in steps_info}
+    pending_count = len(pending_step_ids)
+    executed_steps = 0
+    failed = 0
+
+    spec = UnifiedProgressSpec(
+        label="Upgrading tenant",
+        unit="steps",
+        counters=["done", "failed"],
+        total=pending_count,
+    )
+    with UnifiedProgress(console, spec) as bar:
+        bar.update(completed=0, done=0, failed=0)
+        if step_id is not None:
+            label = name_by_id.get(step_id, step_id)
+            bar.update(completed=0, description=f"{label}…", done=0, failed=0)
+            resp = client.post(
+                "/v1/tenant/upgrade/execute",
+                json={"max_steps": 1, "step_id": step_id, "force": force},
+            )
+            data = resp.json()
+            ran_steps = data.get("ran_steps", []) or []
+            executed_steps += len(ran_steps)
+            failed = int(data.get("failed_steps", failed))
+            has_work = bool(data.get("has_work_after", False))
+            bar.update(completed=executed_steps, done=executed_steps, failed=failed)
+        else:
+            remaining = list(pending_step_ids)
+            while has_work and (max_steps <= 0 or executed_steps < max_steps):
+                current_id = remaining[0] if remaining else None
+                label = name_by_id.get(current_id, current_id) if current_id else "Upgrading tenant"
+                bar.update(completed=executed_steps, description=f"{label}…", done=executed_steps, failed=failed)
+                resp = client.post(
+                    "/v1/tenant/upgrade/execute",
+                    json={"max_steps": 1},
+                )
+                data = resp.json()
+                ran_steps = data.get("ran_steps", []) or []
+                executed_steps += len(ran_steps)
+                if ran_steps and remaining:
+                    remaining.pop(0)
+                failed = int(data.get("failed_steps", failed))
+                has_work = bool(data.get("has_work_after", False))
+                bar.update(completed=executed_steps, done=executed_steps, failed=failed)
+
+    if not has_work:
+        console.print("Tenant upgrade: [green]completed[/green].")
+    else:
+        if step_id is not None:
+            console.print(f"Tenant upgrade: step '{step_id}' executed (or skipped).")
+        else:
+            console.print(f"Tenant upgrade: stopped after {executed_steps} step(s).")

@@ -1,4 +1,4 @@
-"""Typer CLI entry point: config, library, ingest, repair, search, similar."""
+"""Typer CLI entry point: scan, enrich, search, similar, library, user, admin."""
 
 from pathlib import Path
 from typing import Annotated
@@ -16,7 +16,7 @@ from src.cli.config import get_admin_key, load_config, save_config
 from src.cli.commands.collections import collections_app
 from src.cli.commands.keys import keys_app
 from src.cli.commands.maintenance import maintenance_app
-from src.cli.commands import users as users_commands
+from src.cli.commands.users import user_app
 from src.core.io_utils import normalize_path_prefix
 from src.core.logging_config import configure_logging
 
@@ -29,9 +29,7 @@ library_app = typer.Typer(help="Create and list libraries.")
 app.add_typer(library_app, name="library")
 app.add_typer(collections_app, name="collection")
 app.add_typer(keys_app, name="keys")
-users_commands.register(app)
-tenant_app = typer.Typer(help="Manage tenants (admin only).")
-app.add_typer(tenant_app, name="tenant")
+app.add_typer(user_app, name="user")
 filter_app = typer.Typer(help="Manage path filters (include/exclude patterns).")
 app.add_typer(filter_app, name="filter")
 app.add_typer(maintenance_app, name="maintenance")
@@ -220,60 +218,6 @@ def library_empty_trash() -> None:
 # ---------------------------------------------------------------------------
 # tenant
 # ---------------------------------------------------------------------------
-
-
-@tenant_app.command("list")
-def tenant_list(
-    admin_key: Annotated[str | None, typer.Option("--admin-key", help="Admin key (falls back to saved config).")] = None,
-) -> None:
-    """List all tenants."""
-    key = admin_key or get_admin_key()
-    if not key:
-        console.print("[red]Admin key required. Use --admin-key or run: lumiverb config set --admin-key <key>[/red]")
-        raise typer.Exit(1)
-    client = LumiverbClient(api_key_override=key)
-    resp = client.get("/v1/admin/tenants")
-    tenants = resp.json()
-    table = Table(title="Tenants")
-    table.add_column("ID", style="dim")
-    table.add_column("Name")
-    table.add_column("Plan")
-    table.add_column("Status")
-    for t in tenants:
-        table.add_row(t.get("tenant_id", ""), t.get("name", ""), t.get("plan", ""), t.get("status", ""))
-    console.print(table)
-
-
-@tenant_app.command("set-vision")
-def tenant_set_vision(
-    tenant_id: Annotated[str, typer.Option("--tenant-id", "-t", help="Tenant ID.")],
-    vision_api_url: Annotated[str | None, typer.Option("--vision-api-url", help="OpenAI-compatible vision API base URL.")] = None,
-    vision_api_key: Annotated[str | None, typer.Option("--vision-api-key", help="API key for the vision endpoint.")] = None,
-    vision_model_id: Annotated[str | None, typer.Option("--vision-model-id", help="Vision model ID (default: auto-discover from API).")] = None,
-    admin_key: Annotated[str | None, typer.Option("--admin-key", help="Admin key (falls back to saved config).")] = None,
-) -> None:
-    """Set the vision API URL, key, and/or model ID for a tenant."""
-    if vision_api_url is None and vision_api_key is None and vision_model_id is None:
-        console.print("[red]Provide at least one of --vision-api-url, --vision-api-key, or --vision-model-id.[/red]")
-        raise typer.Exit(1)
-    key = admin_key or get_admin_key()
-    if not key:
-        console.print("[red]Admin key required. Use --admin-key or run: lumiverb config set --admin-key <key>[/red]")
-        raise typer.Exit(1)
-    client = LumiverbClient(api_key_override=key)
-    body: dict = {}
-    if vision_api_url is not None:
-        body["vision_api_url"] = vision_api_url
-    if vision_api_key is not None:
-        body["vision_api_key"] = vision_api_key
-    if vision_model_id is not None:
-        body["vision_model_id"] = vision_model_id
-    resp = client.patch(f"/v1/admin/tenants/{tenant_id}", json=body)
-    data = resp.json()
-    console.print(f"[green]Tenant {data['tenant_id']} updated.[/green]")
-    console.print(f"  vision_api_url: {data['vision_api_url']}")
-    if data.get("vision_model_id"):
-        console.print(f"  vision_model_id: {data['vision_model_id']}")
 
 
 # ---------------------------------------------------------------------------
@@ -539,6 +483,35 @@ def admin_tenants_list(
             t.get("status", ""),
         )
     console.print(table)
+
+
+@admin_tenants_app.command("set-vision")
+def admin_tenant_set_vision(
+    tenant_id: Annotated[str, typer.Option("--tenant-id", "-t", help="Tenant ID.")],
+    vision_api_url: Annotated[str | None, typer.Option("--vision-api-url", help="OpenAI-compatible vision API base URL.")] = None,
+    vision_api_key: Annotated[str | None, typer.Option("--vision-api-key", help="API key for the vision endpoint.")] = None,
+    vision_model_id: Annotated[str | None, typer.Option("--vision-model-id", help="Vision model ID (default: auto-discover from API).")] = None,
+    admin_key: Annotated[str | None, typer.Option("--admin-key", envvar="LUMIVERB_ADMIN_KEY", help="Admin key for API auth.")] = None,
+) -> None:
+    """Set the vision API URL, key, and/or model ID for a tenant."""
+    if vision_api_url is None and vision_api_key is None and vision_model_id is None:
+        console.print("[red]Provide at least one of --vision-api-url, --vision-api-key, or --vision-model-id.[/red]")
+        raise typer.Exit(1)
+    key = _require_admin_key(admin_key)
+    client = LumiverbClient(api_key_override=key)
+    body: dict = {}
+    if vision_api_url is not None:
+        body["vision_api_url"] = vision_api_url
+    if vision_api_key is not None:
+        body["vision_api_key"] = vision_api_key
+    if vision_model_id is not None:
+        body["vision_model_id"] = vision_model_id
+    resp = client.patch(f"/v1/admin/tenants/{tenant_id}", json=body)
+    data = resp.json()
+    console.print(f"[green]Tenant {data['tenant_id']} updated.[/green]")
+    console.print(f"  vision_api_url: {data['vision_api_url']}")
+    if data.get("vision_model_id"):
+        console.print(f"  vision_model_id: {data['vision_model_id']}")
 
 
 # ---------------------------------------------------------------------------
@@ -893,168 +866,21 @@ def scan(
             raise typer.Exit(1)
 
 
-# Enrich job types — same as repair minus redetect-faces (which is a destructive re-run, not enrichment).
-ENRICH_TYPES = ("embed", "vision", "faces", "ocr", "video-scenes", "scene-vision", "search-sync", "all")
+ENRICH_TYPES = ("embed", "vision", "faces", "redetect-faces", "ocr", "video-scenes", "scene-vision", "search-sync", "all")
 
 
 @app.command("enrich")
 def enrich(
     library: Annotated[str | None, typer.Option("--library", "-l", help="Library name (omit to enrich all libraries).")] = None,
-    job_type: Annotated[str, typer.Option("--job-type", "-j", help="Enrichment type: embed, vision, faces, ocr, video-scenes, scene-vision, search-sync, or all.")] = "all",
+    job_type: Annotated[str, typer.Option("--job-type", "-j", help="Enrichment type.")] = "all",
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be enriched without making changes.")] = False,
     concurrency: Annotated[int, typer.Option("--concurrency", help="Number of parallel workers.")] = 4,
     force: Annotated[bool, typer.Option("--force", help="Force full re-processing (search-sync: clear timestamps and re-index all).")] = False,
 ) -> None:
     """Run enrichment on assets with missing pipeline outputs.
 
-    Enrich is the second phase of the scan/enrich pipeline. It reads
-    proxies from the local cache (populated by scan) and runs inference:
-    CLIP embeddings, vision AI, OCR, face detection, search sync.
-
-    Enrich never touches source files — it operates on cached proxies
-    only. On cache miss, it downloads the proxy from the server.
-
-    \b
-    Job types:
-      embed           — Generate missing CLIP embeddings (similarity search)
-      vision          — Generate missing AI descriptions and tags
-      faces           — Detect faces using InsightFace (face recognition)
-      ocr             — Extract text from images via vision AI
-      video-scenes    — Run scene detection on unindexed videos
-      scene-vision    — Extract rep frames + run vision AI on scenes
-      search-sync     — Push stale assets to Quickwit search index
-      all             — Run all enrichment in logical order (default)
-    """
-    from src.cli.repair import run_repair, REPAIR_TYPES
-
-    if job_type not in ENRICH_TYPES:
-        console.print(f"[red]Invalid --job-type: {job_type}. Must be one of: {', '.join(ENRICH_TYPES)}[/red]")
-        raise typer.Exit(1)
-
-    client = LumiverbClient()
-    libraries = client.get("/v1/libraries").json()
-
-    if library is not None:
-        targets = [lib for lib in libraries if lib["name"] == library]
-        if not targets:
-            console.print(f"[red]Library not found: {library}[/red]")
-            raise typer.Exit(1)
-    else:
-        targets = libraries
-        if not targets:
-            console.print("No libraries found.")
-            return
-
-    for lib in targets:
-        run_repair(
-            client,
-            lib,
-            job_type=job_type,
-            dry_run=dry_run,
-            concurrency=concurrency,
-            force=force,
-            console=console,
-        )
-
-
-@app.command("ingest")
-def ingest(
-    library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
-    path: Annotated[str | None, typer.Option("--path", "-p", help="Optional subpath.")] = None,
-    force: Annotated[bool, typer.Option("--force", "-f", help="Re-scan and re-enrich already-processed assets.")] = False,
-    concurrency: Annotated[int, typer.Option("--concurrency", help="Number of parallel workers.")] = 4,
-    skip_vision: Annotated[bool, typer.Option("--skip-vision", help="Skip AI vision processing.")] = False,
-    skip_embeddings: Annotated[bool, typer.Option("--skip-embeddings", help="Skip CLIP embedding generation.")] = False,
-    media_type: Annotated[str, typer.Option("--media-type", help="Filter: image, video, or all.")] = "all",
-    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would happen without making changes.")] = False,
-) -> None:
-    """Scan and enrich a library in one pass.
-
-    Phase 1 (scan): discover files, compute SHA, extract EXIF, generate
-    proxies, upload to server, cache locally. Unchanged files are skipped
-    via SHA comparison.
-
-    Phase 2 (enrich): run CLIP embeddings, vision AI, face detection,
-    OCR, and search sync on assets with missing pipeline outputs.
-
-    Use --skip-vision or --skip-embeddings to skip specific enrichment.
-    Use --dry-run to preview changes without making them.
-    """
-    from src.cli.scan import run_scan
-    from src.cli.repair import run_repair
-
-    if media_type not in ("image", "video", "all"):
-        console.print(f"[red]Invalid --media-type: {media_type}. Must be image, video, or all.[/red]")
-        raise typer.Exit(1)
-
-    client = LumiverbClient()
-    libraries = client.get("/v1/libraries").json()
-    match = next((lib for lib in libraries if lib["name"] == library), None)
-    if match is None:
-        console.print(f"[red]Library not found: {library}[/red]")
-        raise typer.Exit(1)
-
-    # Phase 1: Scan
-    scan_stats = run_scan(
-        client,
-        match,
-        concurrency=concurrency,
-        path_prefix=path,
-        force=force,
-        media_type_filter=media_type,
-        dry_run=dry_run,
-        console=console,
-    )
-
-    if dry_run:
-        return
-
-    console.print(
-        f"\n[bold]Scan complete:[/bold] {scan_stats.new:,} new, "
-        f"{scan_stats.changed:,} changed, "
-        f"{scan_stats.unchanged:,} unchanged, "
-        f"{scan_stats.deleted:,} deleted"
-        + (f", {scan_stats.failed:,} failed" if scan_stats.failed else "")
-    )
-
-    # Phase 2: Enrich (scoped to scanned assets if any were scanned)
-    skip = set()
-    if skip_vision:
-        skip.add("vision")
-    if skip_embeddings:
-        skip.add("embed")
-
-    asset_ids = scan_stats.scanned_asset_ids or None
-
-    console.print()
-    run_repair(
-        client,
-        match,
-        job_type="all",
-        concurrency=concurrency,
-        force=force,
-        console=console,
-        asset_ids=asset_ids,
-        skip_types=skip or None,
-    )
-
-    if scan_stats.failed > 0:
-        raise typer.Exit(1)
-
-
-@app.command("repair")
-def repair(
-    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name (omit to repair all libraries).")] = None,
-    job_type: Annotated[str, typer.Option("--job-type", "-j", help="Repair type: embed, vision, faces, redetect-faces, ocr, video-scenes, scene-vision, search-sync, or all.")] = "all",
-    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be repaired without making changes.")] = False,
-    concurrency: Annotated[int, typer.Option("--concurrency", help="Number of parallel workers.")] = 4,
-    force: Annotated[bool, typer.Option("--force", help="Force full re-index (search-sync: clear timestamps and re-index all).")] = False,
-) -> None:
-    """Enrich assets with missing pipeline outputs (alias for enrich).
-
-    Same as `lumiverb enrich` but also supports `redetect-faces` for
-    destructive re-detection. Omit --library to repair all libraries.
-    Use --dry-run to preview without making changes.
+    Reads proxies from the local cache (populated by scan) and runs
+    inference. On cache miss, downloads the proxy from the server.
 
     \b
     Job types:
@@ -1068,10 +894,10 @@ def repair(
       search-sync     — Push stale assets to Quickwit search index
       all             — Run all enrichment in logical order (default)
     """
-    from src.cli.repair import run_repair, REPAIR_TYPES
+    from src.cli.repair import run_repair
 
-    if job_type not in REPAIR_TYPES:
-        console.print(f"[red]Invalid --job-type: {job_type}. Must be one of: {', '.join(REPAIR_TYPES)}[/red]")
+    if job_type not in ENRICH_TYPES:
+        console.print(f"[red]Invalid --job-type: {job_type}. Must be one of: {', '.join(ENRICH_TYPES)}[/red]")
         raise typer.Exit(1)
 
     client = LumiverbClient()
@@ -1220,119 +1046,95 @@ def search(
 @app.command()
 def similar(
     library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
-    asset_id: Annotated[
-        str | None,
-        typer.Option("--asset-id", help="Asset ID to find similar assets for."),
-    ] = None,
-    path: Annotated[
-        str | None,
-        typer.Option(
-            "--path",
-            "-p",
-            help="Relative path to asset file within the library.",
-        ),
-    ] = None,
-    limit: Annotated[int, typer.Option("--limit", help="Max similar assets to return.")] = 10,
+    asset_id: Annotated[str | None, typer.Option("--asset-id", help="Asset ID to find similar assets for.")] = None,
+    path: Annotated[str | None, typer.Option("--path", "-p", help="Relative path to asset within the library.")] = None,
+    image: Annotated[Path | None, typer.Option("--image", "-i", help="Path to a local image file to search by.")] = None,
+    limit: Annotated[int, typer.Option("--limit", help="Max similar assets to return.")] = 20,
     offset: Annotated[int, typer.Option("--offset", help="Start offset for pagination.")] = 0,
     output: Annotated[str, typer.Option("--output", "-o", help="Output format: table, json, text")] = "table",
+    from_ts: Annotated[float | None, typer.Option("--from-ts", help="Filter: minimum taken_at timestamp.")] = None,
+    to_ts: Annotated[float | None, typer.Option("--to-ts", help="Filter: maximum taken_at timestamp.")] = None,
+    asset_types: Annotated[str | None, typer.Option("--asset-types", help="Filter: image,video")] = None,
+    camera_make: Annotated[list[str] | None, typer.Option("--camera-make", help="Filter by camera make.")] = None,
+    camera_model: Annotated[list[str] | None, typer.Option("--camera-model", help="Filter by camera model.")] = None,
 ) -> None:
-    """Find visually similar assets by vector similarity (default: 10 results)."""
+    """Find visually similar assets by vector similarity.
+
+    Supply one of: --asset-id, --path (existing asset), or --image (local file).
+    """
     if output not in ("table", "json", "text"):
         console.print("[red]--output must be one of: table, json, text[/red]")
         raise typer.Exit(1)
 
+    sources = sum(1 for s in (asset_id, path, image) if s is not None)
+    if sources == 0:
+        console.print("[red]Provide one of: --asset-id, --path, or --image[/red]")
+        raise typer.Exit(1)
+    if sources > 1:
+        console.print("[red]Provide only one of: --asset-id, --path, or --image[/red]")
+        raise typer.Exit(1)
+
     client = LumiverbClient()
     library_id = _resolve_library_id(client, library)
-    resolved_asset_id = _resolve_asset_id(
-        client,
-        library_id=library_id,
-        asset_id=asset_id,
-        path=path,
-    )
 
+    if image is not None:
+        # Search by local image file
+        _similar_by_image(
+            client, library_id, image, limit, offset, output,
+            from_ts, to_ts, asset_types, camera_make, camera_model,
+        )
+    else:
+        # Search by existing asset
+        _similar_by_asset(client, library_id, asset_id, path, limit, offset, output)
+
+
+def _similar_by_asset(
+    client: LumiverbClient,
+    library_id: str,
+    asset_id: str | None,
+    path: str | None,
+    limit: int,
+    offset: int,
+    output: str,
+) -> None:
+    resolved_asset_id = _resolve_asset_id(client, library_id=library_id, asset_id=asset_id, path=path)
     resp = client.get(
         "/v1/similar",
-        params={
-            "asset_id": resolved_asset_id,
-            "library_id": library_id,
-            "limit": limit,
-            "offset": offset,
-        },
+        params={"asset_id": resolved_asset_id, "library_id": library_id, "limit": limit, "offset": offset},
     )
     data = resp.json()
     hits = data.get("hits", [])
-    embedding_available = data.get("embedding_available", False)
 
-    if not embedding_available and not hits:
+    if not data.get("embedding_available", False) and not hits:
         console.print("No similar assets (source asset has no embeddings).")
         return
-
     if not hits:
         console.print("No similar assets.")
         return
 
-    if output == "json":
-        import sys as _sys
-        _sys.stdout.write(_json.dumps(data, indent=2))
-        _sys.stdout.write("\n")
-
-    elif output == "text":
-        for hit in hits:
-            console.print(hit["rel_path"])
-
-    else:  # table (default)
-        table = Table(show_header=True, show_lines=False)
-        table.add_column("Path", style="cyan", no_wrap=False)
-        table.add_column("Distance", justify="right", style="dim")
-        table.add_column("Asset ID", style="dim")
-        for hit in hits:
-            table.add_row(
-                hit["rel_path"],
-                f"{hit.get('distance', 0.0):.4f}",
-                hit.get("asset_id", ""),
-            )
-        console.print(table)
-        n = len(hits)
-        console.print(f"[dim]{n} similar asset(s)[/dim]")
+    _print_similar_results(hits, data, output, len(hits))
 
 
-@app.command("similar-image")
-def similar_image(
-    image_path: Annotated[
-        Path,
-        typer.Option(
-            "--image-path",
-            "-i",
-            help="Path to query image",
-        ),
-    ],
-    library: Annotated[str, typer.Option("--library", "-l")] = "",
-    limit: Annotated[int, typer.Option("--limit")] = 20,
-    offset: Annotated[int, typer.Option("--offset")] = 0,
-    output: Annotated[str, typer.Option("--output")] = "table",
-    from_ts: Annotated[float | None, typer.Option("--from-ts")] = None,
-    to_ts: Annotated[float | None, typer.Option("--to-ts")] = None,
-    asset_types: Annotated[str | None, typer.Option("--asset-types")] = None,
-    camera_make: Annotated[list[str] | None, typer.Option("--camera-make")] = None,
-    camera_model: Annotated[list[str] | None, typer.Option("--camera-model")] = None,
+def _similar_by_image(
+    client: LumiverbClient,
+    library_id: str,
+    image_path: Path,
+    limit: int,
+    offset: int,
+    output: str,
+    from_ts: float | None,
+    to_ts: float | None,
+    asset_types: str | None,
+    camera_make: list[str] | None,
+    camera_model: list[str] | None,
 ) -> None:
-    """Find visually similar assets by uploading a query image."""
     import base64
     import io
     from PIL import Image as PILImage
 
-    PROXY_LONG_EDGE = 2048
-
-    client = LumiverbClient()
-    libraries = client.get("/v1/libraries").json()
-    match = next((l for l in libraries if l.get("name") == library), None)
-    if not match:
-        console.print(f"[red]Library not found: {library}[/red]")
-        raise typer.Exit(1)
-
     pil_img = PILImage.open(image_path).convert("RGB")
     w, h = pil_img.size
-    scale = PROXY_LONG_EDGE / max(w, h)
+    scale = 2048 / max(w, h)
     if scale < 1.0:
         pil_img = pil_img.resize((int(w * scale), int(h * scale)), PILImage.LANCZOS)
 
@@ -1346,30 +1148,17 @@ def similar_image(
         models = camera_model or []
         n = max(len(makes), len(models))
         cameras = [
-            {
-                "make": makes[i] if i < len(makes) else None,
-                "model": models[i] if i < len(models) else None,
-            }
+            {"make": makes[i] if i < len(makes) else None, "model": models[i] if i < len(models) else None}
             for i in range(n)
-            if (makes[i] if i < len(makes) else None)
-            or (models[i] if i < len(models) else None)
+            if (makes[i] if i < len(makes) else None) or (models[i] if i < len(models) else None)
         ]
 
     asset_types_list = None
     if asset_types:
         allowed = {"image", "video"}
-        asset_types_list = [
-            t.strip() for t in asset_types.split(",") if t.strip() in allowed
-        ]
-        if not asset_types_list:
-            asset_types_list = None
+        asset_types_list = [t.strip() for t in asset_types.split(",") if t.strip() in allowed] or None
 
-    payload: dict = {
-        "library_id": match["library_id"],
-        "image_b64": image_b64,
-        "limit": limit,
-        "offset": offset,
-    }
+    payload: dict = {"library_id": library_id, "image_b64": image_b64, "limit": limit, "offset": offset}
     if from_ts is not None:
         payload["from_ts"] = from_ts
     if to_ts is not None:
@@ -1385,27 +1174,29 @@ def similar_image(
     hits = data.get("hits", [])
     total = data.get("total", 0)
 
-    if output == "json":
-        import sys as _sys
+    _print_similar_results(hits, data, output, total)
 
-        _sys.stdout.write(_json.dumps(data, indent=2))
-        _sys.stdout.write("\n")
+
+def _print_similar_results(hits: list, data: dict, output: str, total: int) -> None:
+    if not hits:
+        console.print("No similar assets.")
         return
 
-    from rich.table import Table as _Table
-
-    table = _Table(show_header=True, header_style="bold")
-    table.add_column("Path", no_wrap=False)
-    table.add_column("Distance", justify="right", width=10)
-    table.add_column("Asset ID", width=28)
-    for hit in hits:
-        table.add_row(
-            hit.get("rel_path", ""),
-            f"{hit.get('distance', 0.0):.4f}",
-            hit.get("asset_id", ""),
-        )
-    console.print(table)
-    console.print(f"{total} result(s)")
+    if output == "json":
+        sys.stdout.write(_json.dumps(data, indent=2))
+        sys.stdout.write("\n")
+    elif output == "text":
+        for hit in hits:
+            console.print(hit["rel_path"])
+    else:
+        table = Table(show_header=True, show_lines=False)
+        table.add_column("Path", style="cyan", no_wrap=False)
+        table.add_column("Distance", justify="right", style="dim", width=10)
+        table.add_column("Asset ID", style="dim", width=28)
+        for hit in hits:
+            table.add_row(hit.get("rel_path", ""), f"{hit.get('distance', 0.0):.4f}", hit.get("asset_id", ""))
+        console.print(table)
+        console.print(f"[dim]{total} result(s)[/dim]")
 
 
 def main() -> None:
@@ -1417,180 +1208,3 @@ def main() -> None:
         sys.exit(1)
 
 
-@app.command("upgrade")
-def upgrade(
-    dry_run: Annotated[
-        bool,
-        typer.Option(
-            "--dry-run",
-            help="Show which tenant upgrade steps are pending without executing them.",
-        ),
-    ] = False,
-    step_id: Annotated[
-        str | None,
-        typer.Option(
-            "--step",
-            help="Run only a specific upgrade step ID.",
-        ),
-    ] = None,
-    force: Annotated[
-        bool,
-        typer.Option(
-            "--force",
-            help="Safety valve: run a step even if preceding steps are not complete. Requires confirmation prompt.",
-        ),
-    ] = False,
-    max_steps: Annotated[
-        int,
-        typer.Option(
-            "--max-steps",
-            help="Optional cap on how many pending upgrade steps to execute (default: 0 = all).",
-        ),
-    ] = 0,
-) -> None:
-    """Run tenant-level upgrades (schema/backfill steps) idempotently."""
-
-    from src.cli.progress import UnifiedProgress, UnifiedProgressSpec
-
-    client = LumiverbClient()
-
-    if not dry_run:
-        maint_resp = client.get("/v1/tenant/maintenance/status")
-        maint = maint_resp.json()
-        if not maint.get("active"):
-            console.print("[red]Maintenance mode is not active.[/red]")
-            console.print("Enable it first:")
-            console.print("  lumiverb admin maintenance --start --message 'Upgrading'")
-            raise typer.Exit(1)
-
-    status_resp = client.get("/v1/tenant/upgrade/status")
-    status = status_resp.json()
-
-    steps_total = int(status.get("steps_total", 0))
-    if steps_total == 0:
-        console.print("[dim]No upgrade steps are registered in this build.[/dim]")
-        return
-
-    pending_step_ids: list[str] = status.get("remaining_pending_step_ids", []) or []
-    has_work: bool = bool(status.get("has_work", False))
-    done_steps: int = int(status.get("done_steps", status.get("completed_steps", 0)) or 0)
-    steps_info: list[dict] = status.get("steps", []) or []
-
-    if dry_run:
-        if step_id is not None:
-            match = next((s for s in steps_info if s.get("step_id") == step_id), None)
-            if match is None:
-                console.print(f"[red]Unknown upgrade step: {step_id}[/red]")
-                raise typer.Exit(1)
-            console.print(f"Tenant upgrade dry-run for step: {step_id}")
-            console.print(f"  Step status: {match.get('status')}")
-            try:
-                target_index = next(i for i, s in enumerate(steps_info) if s.get("step_id") == step_id)
-            except StopIteration:
-                target_index = -1
-            pending_or_failed_preceding: list[str] = []
-            if target_index > 0:
-                for s in steps_info[:target_index]:
-                    if s.get("status") in ("pending", "failed"):
-                        pending_or_failed_preceding.append(s.get("step_id", ""))
-            if pending_or_failed_preceding:
-                console.print(f"  Preceding pending/failed steps: {len(pending_or_failed_preceding)}")
-                for sid in pending_or_failed_preceding:
-                    console.print(f"  - {sid}")
-            else:
-                console.print("  Preceding steps: ready")
-            return
-
-        if not has_work:
-            console.print("Tenant upgrade: [green]no pending steps[/green].")
-            return
-        console.print(f"Tenant upgrade (dry-run): {len(pending_step_ids)} of {steps_total} steps pending.")
-        for sid in pending_step_ids:
-            console.print(f"  - {sid}")
-        return
-
-    if step_id is not None:
-        match = next((s for s in steps_info if s.get("step_id") == step_id), None)
-        if match is None:
-            console.print(f"[red]Unknown upgrade step: {step_id}[/red]")
-            raise typer.Exit(1)
-
-        pending_or_failed_preceding: list[str] = []
-        try:
-            target_index = next(i for i, s in enumerate(steps_info) if s.get("step_id") == step_id)
-        except StopIteration:
-            target_index = -1
-        if target_index > 0:
-            for s in steps_info[:target_index]:
-                if s.get("status") in ("pending", "failed"):
-                    pending_or_failed_preceding.append(s.get("step_id", ""))
-
-        if pending_or_failed_preceding and not force:
-            console.print(f"[red]Refusing to run {step_id}: preceding steps are not complete.[/red]")
-            for sid in pending_or_failed_preceding:
-                console.print(f"  - {sid}")
-            console.print("Run without --step, or re-run with --force to override (untested territory).")
-            raise typer.Exit(1)
-
-        if pending_or_failed_preceding and force:
-            confirmed = typer.confirm(
-                f"Run --force and execute step '{step_id}' with {len(pending_or_failed_preceding)} preceding step(s) not complete?",
-                default=False,
-            )
-            if not confirmed:
-                console.print("Aborted.")
-                return
-
-    name_by_id = {s.get("step_id", ""): s.get("display_name", s.get("step_id", "")) for s in steps_info}
-    # pending_count is the denominator: skipped steps are not counted.
-    pending_count = len(pending_step_ids)
-    executed_steps = 0
-    failed = 0
-
-    spec = UnifiedProgressSpec(
-        label="Upgrading tenant",
-        unit="steps",
-        counters=["done", "failed"],
-        total=pending_count,
-    )
-    with UnifiedProgress(console, spec) as bar:
-        bar.update(completed=0, done=0, failed=0)
-        if step_id is not None:
-            label = name_by_id.get(step_id, step_id)
-            bar.update(completed=0, description=f"{label}…", done=0, failed=0)
-            resp = client.post(
-                "/v1/tenant/upgrade/execute",
-                json={"max_steps": 1, "step_id": step_id, "force": force},
-            )
-            data = resp.json()
-            ran_steps = data.get("ran_steps", []) or []
-            executed_steps += len(ran_steps)
-            failed = int(data.get("failed_steps", failed))
-            has_work = bool(data.get("has_work_after", False))
-            bar.update(completed=executed_steps, done=executed_steps, failed=failed)
-        else:
-            remaining = list(pending_step_ids)
-            while has_work and (max_steps <= 0 or executed_steps < max_steps):
-                current_id = remaining[0] if remaining else None
-                label = name_by_id.get(current_id, current_id) if current_id else "Upgrading tenant"
-                bar.update(completed=executed_steps, description=f"{label}…", done=executed_steps, failed=failed)
-                resp = client.post(
-                    "/v1/tenant/upgrade/execute",
-                    json={"max_steps": 1},
-                )
-                data = resp.json()
-                ran_steps = data.get("ran_steps", []) or []
-                executed_steps += len(ran_steps)
-                if ran_steps and remaining:
-                    remaining.pop(0)
-                failed = int(data.get("failed_steps", failed))
-                has_work = bool(data.get("has_work_after", False))
-                bar.update(completed=executed_steps, done=executed_steps, failed=failed)
-
-    if not has_work:
-        console.print(f"Tenant upgrade: [green]completed[/green].")
-    else:
-        if step_id is not None:
-            console.print(f"Tenant upgrade: step '{step_id}' executed (or skipped).")
-        else:
-            console.print(f"Tenant upgrade: stopped after {executed_steps} step(s).")

@@ -87,12 +87,12 @@ class TestEnrichCommand:
         from src.cli.main import app
 
         runner = CliRunner()
-        result = runner.invoke(app, ["enrich", "--job-type", "redetect-faces"])
+        result = runner.invoke(app, ["enrich", "--job-type", "bogus-type"])
         assert result.exit_code != 0
         assert "Invalid" in result.output
 
     def test_enrich_accepts_valid_job_types(self):
         """All ENRICH_TYPES are accepted by the command parser."""
         from src.cli.main import ENRICH_TYPES
-        expected = {"embed", "vision", "faces", "ocr", "video-scenes", "scene-vision", "search-sync", "all"}
+        expected = {"embed", "vision", "faces", "redetect-faces", "ocr", "video-scenes", "scene-vision", "search-sync", "all"}
         assert set(ENRICH_TYPES) == expected
