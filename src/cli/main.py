@@ -560,6 +560,10 @@ def admin_vision_test(
         str | None,
         typer.Option("--api-key", help="Vision API key (default: configured key)."),
     ] = None,
+    model: Annotated[
+        str | None,
+        typer.Option("--model", help="Model ID (default: configured/auto-discovered model)."),
+    ] = None,
     output: Annotated[
         Path | None,
         typer.Option("--output", "-o", help="Output JSON path (default: <path>/vision-test-<timestamp>.json)."),
@@ -598,11 +602,16 @@ def admin_vision_test(
     if api_key:
         vision_key = api_key
 
-    # --url override takes precedence
+    # --url override
     if url:
-        from src.workers.captions.model_discovery import discover_model_id
         vision_url = url.rstrip("/")
-        model_id = load_config().vision_model_id or discover_model_id(vision_url, vision_key)
+
+    # --model override; fall back to auto-discover if url changed
+    if model:
+        model_id = model
+    elif url:
+        from src.workers.captions.model_discovery import discover_model_id
+        model_id = discover_model_id(vision_url, vision_key)
 
     if not vision_url:
         console.print("[red]No --url provided and no vision API configured (client or tenant).[/red]")
