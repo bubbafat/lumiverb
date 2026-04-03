@@ -198,6 +198,40 @@ class LibraryRepository:
             ),
             params,
         )
+        # Face tables: matches → null out people refs → faces
+        self._session.execute(
+            text(
+                """
+                DELETE FROM face_person_matches
+                WHERE face_id IN (
+                    SELECT face_id FROM faces
+                    WHERE asset_id IN (SELECT asset_id FROM assets WHERE library_id = :library_id)
+                )
+                """
+            ),
+            params,
+        )
+        self._session.execute(
+            text(
+                """
+                UPDATE people SET representative_face_id = NULL
+                WHERE representative_face_id IN (
+                    SELECT face_id FROM faces
+                    WHERE asset_id IN (SELECT asset_id FROM assets WHERE library_id = :library_id)
+                )
+                """
+            ),
+            params,
+        )
+        self._session.execute(
+            text(
+                """
+                DELETE FROM faces
+                WHERE asset_id IN (SELECT asset_id FROM assets WHERE library_id = :library_id)
+                """
+            ),
+            params,
+        )
         self._session.execute(text("DELETE FROM assets WHERE library_id = :library_id"), params)
         self._session.execute(
             text("DELETE FROM library_path_filters WHERE library_id = :library_id"), params
