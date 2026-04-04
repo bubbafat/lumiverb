@@ -479,6 +479,7 @@ function ClusterCard({
 export default function PeoplePage() {
   const queryClient = useQueryClient();
   const [clustersExpanded, setClustersExpanded] = useState(true);
+  const [minClusterSize, setMinClusterSize] = useState(2);
   // Track removed cluster indices for optimistic updates — prevents
   // named/dismissed clusters from re-appearing until next manual refresh.
   const [removedIndices, setRemovedIndices] = useState<Set<number>>(new Set());
@@ -495,8 +496,8 @@ export default function PeoplePage() {
   });
 
   const clustersQuery = useQuery({
-    queryKey: ["face-clusters"],
-    queryFn: () => getClusters(20, 6),
+    queryKey: ["face-clusters", minClusterSize],
+    queryFn: () => getClusters(20, 6, minClusterSize),
     // No auto-refetch — only refetch on explicit user action.
     // This prevents clusters from shuffling while the user is naming/dismissing.
     refetchOnWindowFocus: false,
@@ -507,6 +508,7 @@ export default function PeoplePage() {
   const people = peopleQuery.data?.pages.flatMap((p) => p.items) ?? [];
   const allClusters = clustersQuery.data?.clusters ?? [];
   const truncated = clustersQuery.data?.truncated ?? false;
+  const maxClusterSize = clustersQuery.data?.max_cluster_size ?? 0;
 
   // Filter out fully removed clusters but keep fading ones visible
   const clusters = useMemo(
@@ -605,7 +607,7 @@ export default function PeoplePage() {
       />
 
       {/* Unnamed clusters */}
-      {(clusters.length > 0 || clustersQuery.isLoading) && (
+      {(clusters.length > 0 || clustersQuery.isLoading || clustersQuery.isFetching) && (
         <div className="mt-4">
           <div className="mb-4 flex items-center gap-3">
             <button
@@ -622,11 +624,16 @@ export default function PeoplePage() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
               </svg>
               Unnamed clusters
-              <span className="text-sm font-normal text-gray-500">
-                ({clusters.reduce((sum, c) => sum + c.size, 0)} faces in {clusters.length} clusters)
-              </span>
+              {!clustersQuery.isLoading && (
+                <span className="text-sm font-normal text-gray-500">
+                  ({clusters.reduce((sum, c) => sum + c.size, 0)} faces in {clusters.length} clusters)
+                </span>
+              )}
             </button>
-            {removedIndices.size > 0 && (
+            {clustersQuery.isFetching && (
+              <span className="text-xs text-gray-500">loading…</span>
+            )}
+            {removedIndices.size > 0 && !clustersQuery.isFetching && (
               <button
                 type="button"
                 onClick={handleRefreshClusters}
@@ -639,32 +646,51 @@ export default function PeoplePage() {
 
           {clustersExpanded && (
             <>
+              {maxClusterSize > 1 && (
+                <div className="mb-4 flex items-center gap-3">
+                  <label htmlFor="cluster-size-slider" className="text-xs text-gray-400 whitespace-nowrap">
+                    Min faces
+                  </label>
+                  <input
+                    id="cluster-size-slider"
+                    type="range"
+                    min={1}
+                    max={maxClusterSize}
+                    value={minClusterSize}
+                    onChange={(e) => setMinClusterSize(Number(e.target.value))}
+                    className="h-1.5 w-40 cursor-pointer appearance-none rounded-full bg-gray-700 accent-indigo-500"
+                  />
+                  <span className="text-xs tabular-nums text-gray-400">{minClusterSize}</span>
+                </div>
+              )}
               {truncated && (
                 <p className="mb-4 text-xs text-yellow-500">
                   Showing top clusters. Name the largest clusters first to see more.
                 </p>
               )}
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-                {clusters.map((cluster) => (
-                  <ClusterCard
-                    key={cluster.cluster_index}
-                    cluster={cluster}
-                    people={people}
-                    fading={fadingIndices.get(cluster.cluster_index) ?? false}
-                    onProcessed={handleClusterProcessed}
-                    onDismissStarted={handleDismissStarted}
-                    onDismissComplete={handleDismissComplete}
-                  />
-                ))}
-              </div>
+              {clustersQuery.isLoading ? (
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i} className="h-48 animate-pulse rounded-xl bg-gray-800/50" />
+                  ))}
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+                  {clusters.map((cluster) => (
+                    <ClusterCard
+                      key={cluster.cluster_index}
+                      cluster={cluster}
+                      people={people}
+                      fading={fadingIndices.get(cluster.cluster_index) ?? false}
+                      onProcessed={handleClusterProcessed}
+                      onDismissStarted={handleDismissStarted}
+                      onDismissComplete={handleDismissComplete}
+                    />
+                  ))}
+                </div>
+              )}
             </>
           )}
-        </div>
-      )}
-
-      {clustersQuery.isLoading && (
-        <div className="mt-4">
-          <div className="h-6 w-48 animate-pulse rounded bg-gray-700" />
         </div>
       )}
 

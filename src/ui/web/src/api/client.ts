@@ -430,6 +430,7 @@ export interface ClusterItem {
 export interface ClustersResponse {
   clusters: ClusterItem[];
   truncated: boolean;
+  max_cluster_size: number;
 }
 
 /** List people sorted by face count descending. */
@@ -500,8 +501,12 @@ export async function listPersonFaces(personId: string, cursor?: string, limit =
 }
 
 /** Get face clusters (unassigned faces grouped by similarity). */
-export async function getClusters(limit = 20, facesPerCluster = 6): Promise<ClustersResponse> {
-  const params = new URLSearchParams({ limit: String(limit), faces_per_cluster: String(facesPerCluster) });
+export async function getClusters(limit = 20, facesPerCluster = 6, minClusterSize = 2): Promise<ClustersResponse> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    faces_per_cluster: String(facesPerCluster),
+    min_cluster_size: String(minClusterSize),
+  });
   return apiFetch<ClustersResponse>(`/faces/clusters?${params}`);
 }
 

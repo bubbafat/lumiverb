@@ -74,6 +74,7 @@ class ClusterItem(BaseModel):
 class ClustersResponse(BaseModel):
     clusters: list[ClusterItem]
     truncated: bool = False
+    max_cluster_size: int = 0
 
 
 # ---------- Endpoints ----------
@@ -989,6 +990,7 @@ def get_clusters(
     session: Annotated[Session, Depends(get_tenant_session)],
     limit: int = 20,
     faces_per_cluster: int = 6,
+    min_cluster_size: int = 2,
 ) -> ClustersResponse:
     """Return clusters of unassigned faces. Uses cache; recomputes if dirty."""
     from src.repository.system_metadata import SystemMetadataRepository
@@ -998,26 +1000,31 @@ def get_clusters(
         limit = 50
     if faces_per_cluster > 20:
         faces_per_cluster = 20
+    if min_cluster_size < 1:
+        min_cluster_size = 1
 
     meta = SystemMetadataRepository(session)
     dirty = meta.get_value("face_clusters_dirty")
     cached = meta.get_value("face_clusters_cache")
 
+    def _build_response(all_clusters: list[dict], truncated: bool) -> ClustersResponse:
+        """Filter by min_cluster_size, apply limit, return response with max_cluster_size."""
+        max_size = max((c["size"] for c in all_clusters), default=0)
+        filtered = [c for c in all_clusters if c["size"] >= min_cluster_size][:limit]
+        return ClustersResponse(
+            clusters=[
+                ClusterItem(cluster_index=c["cluster_index"], size=c["size"], faces=c.get("faces", [])[:faces_per_cluster])
+                for c in filtered
+            ],
+            truncated=truncated,
+            max_cluster_size=max_size,
+        )
+
     # Return cache if clean and exists
     if not dirty and cached:
         try:
             data = json.loads(cached)
-            # Apply limit/faces_per_cluster to cached data
-            clusters = data.get("clusters", [])[:limit]
-            for c in clusters:
-                c["faces"] = c.get("faces", [])[:faces_per_cluster]
-            return ClustersResponse(
-                clusters=[
-                    ClusterItem(cluster_index=i, size=c["size"], faces=c["faces"])
-                    for i, c in enumerate(clusters)
-                ],
-                truncated=data.get("truncated", False),
-            )
+            return _build_response(data.get("clusters", []), data.get("truncated", False))
         except (json.JSONDecodeError, KeyError):
             pass  # corrupted cache, recompute
 
@@ -1042,13 +1049,4 @@ def get_clusters(
     meta.set_value("face_clusters_cache", cache_data)
     meta.set_value("face_clusters_dirty", "false")
 
-    # Apply requested limits
-    result_clusters = cache_clusters[:limit]
-
-    return ClustersResponse(
-        clusters=[
-            ClusterItem(cluster_index=i, size=c["size"], faces=c["faces"][:faces_per_cluster])
-            for i, c in enumerate(result_clusters)
-        ],
-        truncated=truncated,
-    )
+    return _build_response(cache_clusters, truncated)

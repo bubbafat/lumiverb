@@ -2597,6 +2597,7 @@ class FaceRepository:
         self,
         *,
         similarity_threshold: float = 0.40,
+        max_centroid_distance: float = 0.35,
         k: int = 10,
         max_faces: int = 5000,
         min_cluster_size: int = 2,
@@ -2674,9 +2675,31 @@ class FaceRepository:
 
         # Group into clusters
         from collections import defaultdict
-        clusters_map: dict[int, list[str]] = defaultdict(list)
+        clusters_idx: dict[int, list[int]] = defaultdict(list)
         for i in range(n):
-            clusters_map[find(i)].append(face_ids[i])
+            clusters_idx[find(i)].append(i)
+
+        # Diameter check: eject faces that are too far from their cluster centroid.
+        # This catches transitive chains where A→B→C→D are each within threshold
+        # but A and D are very dissimilar.
+        validated: dict[int, list[int]] = {}
+        for root, indices in clusters_idx.items():
+            if len(indices) < min_cluster_size:
+                continue
+            cluster_vecs = vectors[indices]
+            centroid = cluster_vecs.mean(axis=0)
+            centroid_norm = np.linalg.norm(centroid)
+            if centroid_norm > 0:
+                centroid = centroid / centroid_norm
+            dists_to_centroid = 1.0 - (cluster_vecs @ centroid)
+            kept = [idx for idx, d in zip(indices, dists_to_centroid) if d < max_centroid_distance]
+            if len(kept) >= min_cluster_size:
+                validated[root] = kept
+
+        clusters_map: dict[int, list[str]] = {
+            root: [face_ids[i] for i in indices]
+            for root, indices in validated.items()
+        }
 
         # Filter by min size, sort by size desc
         clusters = [c for c in clusters_map.values() if len(c) >= min_cluster_size]
