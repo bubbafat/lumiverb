@@ -66,7 +66,7 @@ def _get_video_size(source: Path) -> tuple[int, int]:
         )
     if result.returncode != 0 or not result.stdout.strip():
         raise ValueError(f"Could not get video size for {source}: {result.stderr or result.stdout}")
-    parts = result.stdout.strip().split(",")
+    parts = [p for p in result.stdout.strip().split(",") if p]
     if len(parts) != 2:
         raise ValueError(f"Unexpected ffprobe output: {result.stdout}")
     w, h = int(parts[0]), int(parts[1])
