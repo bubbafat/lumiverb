@@ -184,72 +184,38 @@ def _page_all_images(
 
 def _repair_embed_one(
     *,
-    client: LumiverbClient,
     asset_id: str,
     rel_path: str,
     clip_provider: object,
     proxy_cache: "ProxyCache | None" = None,
-    stats: _RepairStats,
-    progress: Progress,
-    task_id: object,
-) -> None:
-    """Get proxy and generate CLIP embedding for one asset."""
+) -> dict | None:
+    """Generate CLIP embedding for one asset. Returns result dict or None."""
     import time as _time
-    try:
-        t0 = _time.perf_counter()
-        image_bytes = proxy_cache.get(asset_id, rel_path) if proxy_cache else None
-        t_proxy = _time.perf_counter() - t0
-        if image_bytes is None:
-            logger.warning("No proxy for %s", rel_path)
-            with stats.lock:
-                stats.skipped += 1
-                ok, fail = stats.processed, stats.failed
-            if progress is not None:
-                progress.advance(task_id, 1)
-                progress.update(task_id, ok=ok, fail=fail)
-            return
+    t0 = _time.perf_counter()
+    image_bytes = proxy_cache.get(asset_id, rel_path) if proxy_cache else None
+    t_proxy = _time.perf_counter() - t0
+    if image_bytes is None:
+        logger.warning("No proxy for %s", rel_path)
+        return None
 
-        from PIL import Image as PILImage
-        t1 = _time.perf_counter()
-        img = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
-        del image_bytes
-        vector = clip_provider.embed_image(img)
-        img.close()
-        del img
-        t_embed = _time.perf_counter() - t1
+    from PIL import Image as PILImage
+    t1 = _time.perf_counter()
+    img = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
+    del image_bytes
+    vector = clip_provider.embed_image(img)
+    img.close()
+    del img
+    t_embed = _time.perf_counter() - t1
 
-        t2 = _time.perf_counter()
-        client.post(f"/v1/assets/{asset_id}/embeddings", json={
-            "model_id": clip_provider.model_id,
-            "model_version": clip_provider.model_version,
-            "vector": vector,
-        })
-        t_post = _time.perf_counter() - t2
+    logger.info("embed timings: %s — proxy=%.1fms embed=%.1fms",
+                 rel_path, t_proxy * 1000, t_embed * 1000)
 
-        logger.info("embed timings: %s — proxy=%.1fms embed=%.1fms post=%.1fms",
-                     rel_path, t_proxy * 1000, t_embed * 1000, t_post * 1000)
-
-        with stats.lock:
-            stats.processed += 1
-            ok, fail = stats.processed, stats.failed
-        if progress is not None:
-            progress.advance(task_id, 1)
-            progress.update(task_id, ok=ok, fail=fail)
-
-    except Exception as e:
-        logger.exception("Failed to embed %s: %s", rel_path, e)
-        with stats.lock:
-            stats.failed += 1
-            ok, fail = stats.processed, stats.failed
-        if progress is not None:
-            progress.console.print(f"[red]embed ✗[/red] {rel_path}: {e}")
-            progress.advance(task_id, 1)
-            progress.update(task_id, ok=ok, fail=fail)
-    finally:
-        with stats.lock:
-            total = stats.processed + stats.failed + stats.skipped
-        if total % 10 == 0:
-            gc.collect()
+    return {
+        "asset_id": asset_id,
+        "model_id": clip_provider.model_id,
+        "model_version": clip_provider.model_version,
+        "vector": vector,
+    }
 
 
 def _face_batch_worker(
@@ -777,6 +743,45 @@ def run_repair(
                 console.print("No assets found (already repaired?).")
                 continue
 
+            EMBED_BATCH_SIZE = 50
+            embed_batch: list[dict] = []
+
+            def _flush_embed_batch() -> None:
+                if not embed_batch:
+                    return
+                try:
+                    client.post("/v1/assets/batch-embeddings", json={"items": list(embed_batch)})
+                    logger.info("embed batch POST: %d items", len(embed_batch))
+                except Exception as e:
+                    logger.warning("embed batch POST failed (%d items): %s", len(embed_batch), e)
+                    for item in embed_batch:
+                        try:
+                            client.post(f"/v1/assets/{item['asset_id']}/embeddings", json=item)
+                        except Exception:
+                            pass
+                embed_batch.clear()
+
+            def _collect_embed(done: set[Future]) -> None:
+                for f in done:
+                    try:
+                        result = f.result()
+                    except Exception:
+                        result = None
+                    if result is not None:
+                        embed_batch.append(result)
+                        with stats.lock:
+                            stats.processed += 1
+                    else:
+                        with stats.lock:
+                            stats.failed += 1
+                    progress.advance(tid, 1)
+                    with stats.lock:
+                        progress.update(tid, ok=stats.processed, fail=stats.failed)
+                    if len(embed_batch) >= EMBED_BATCH_SIZE:
+                        _flush_embed_batch()
+                if (stats.processed + stats.failed) % 10 == 0:
+                    gc.collect()
+
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Embeddings", total=len(assets), ok=0, fail=0)
@@ -785,21 +790,20 @@ def run_repair(
                 for a in assets:
                     fut = pool.submit(
                         _repair_embed_one,
-                        client=client,
                         asset_id=a["asset_id"],
                         rel_path=a["rel_path"],
                         clip_provider=clip_provider,
                         proxy_cache=proxy_cache,
-                        stats=stats,
-                        progress=progress,
-                        task_id=tid,
                     )
                     inflight.add(fut)
                     if len(inflight) >= embed_conc * 2:
-                        inflight = _drain(inflight)
+                        done, inflight = wait(inflight, return_when=FIRST_COMPLETED)
+                        _collect_embed(done)
                 while inflight:
-                    inflight = _drain(inflight)
+                    done, inflight = wait(inflight, return_when=FIRST_COMPLETED)
+                    _collect_embed(done)
                 pool.shutdown(wait=True)
+                _flush_embed_batch()
 
         elif repair_type == "vision":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")

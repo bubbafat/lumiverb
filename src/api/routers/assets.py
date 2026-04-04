@@ -926,6 +926,61 @@ def submit_batch_ocr(
     return {"updated": updated, "skipped": skipped}
 
 
+class BatchVisionItem(BaseModel):
+    asset_id: str
+    model_id: str
+    model_version: str = "1"
+    description: str
+    tags: list[str] = []
+
+
+class BatchVisionRequest(BaseModel):
+    items: list[BatchVisionItem]
+
+
+@router.post("/batch-vision", status_code=200)
+def submit_batch_vision(
+    body: BatchVisionRequest,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> dict:
+    """Submit AI vision results for multiple assets in one request."""
+    meta_repo = AssetMetadataRepository(session)
+    asset_repo = AssetRepository(session)
+    updated = 0
+    skipped = 0
+
+    for item in body.items:
+        asset = asset_repo.get_by_id(item.asset_id)
+        if asset is None or asset.deleted_at is not None:
+            skipped += 1
+            continue
+        meta_repo.upsert(
+            asset_id=item.asset_id,
+            model_id=item.model_id,
+            model_version=item.model_version,
+            data={"description": item.description, "tags": item.tags},
+        )
+        asset_repo.set_status(item.asset_id, asset_status.DESCRIBED)
+        updated += 1
+
+    if updated > 0:
+        from sqlalchemy import text
+        asset_ids = [item.asset_id for item in body.items]
+        session.execute(
+            text("UPDATE assets SET search_synced_at = NULL WHERE asset_id = ANY(:ids)"),
+            {"ids": asset_ids},
+        )
+        session.commit()
+
+        lib_ids = {a.library_id for item in body.items if (a := asset_repo.get_by_id(item.asset_id))}
+        lib_repo = LibraryRepository(session)
+        for lid in lib_ids:
+            lib_repo.bump_revision(lid)
+
+    return {"updated": updated, "skipped": skipped}
+
+
 class TranscriptSubmitRequest(BaseModel):
     srt: str
     language: str | None = None
@@ -1111,6 +1166,53 @@ def submit_embedding(
         vector=[float(x) for x in body.vector],
     )
     return {"ok": True}
+
+
+class BatchEmbeddingItem(BaseModel):
+    asset_id: str
+    model_id: str
+    model_version: str
+    vector: list[float]
+
+
+class BatchEmbeddingRequest(BaseModel):
+    items: list[BatchEmbeddingItem]
+
+
+@router.post("/batch-embeddings", status_code=200)
+def submit_batch_embeddings(
+    body: BatchEmbeddingRequest,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> dict:
+    """Submit embedding vectors for multiple assets in one request."""
+    from src.repository.tenant import AssetEmbeddingRepository
+    asset_repo = AssetRepository(session)
+    emb_repo = AssetEmbeddingRepository(session)
+    updated = 0
+    skipped = 0
+
+    for item in body.items:
+        asset = asset_repo.get_by_id(item.asset_id)
+        if asset is None or asset.deleted_at is not None:
+            skipped += 1
+            continue
+        emb_repo.upsert(
+            asset_id=item.asset_id,
+            model_id=item.model_id,
+            model_version=item.model_version,
+            vector=[float(x) for x in item.vector],
+        )
+        updated += 1
+
+    if updated > 0:
+        session.commit()
+        lib_ids = {a.library_id for item in body.items if (a := asset_repo.get_by_id(item.asset_id))}
+        lib_repo = LibraryRepository(session)
+        for lid in lib_ids:
+            lib_repo.bump_revision(lid)
+
+    return {"updated": updated, "skipped": skipped}
 
 
 @router.get("/{asset_id}/preview")

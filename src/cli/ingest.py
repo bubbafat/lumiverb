@@ -508,67 +508,42 @@ def _load_library_filters(client: LumiverbClient, library_id: str) -> list[PathF
 
 def _backfill_one(
     *,
-    client: LumiverbClient,
     asset_id: str,
     rel_path: str,
     vision_model_id: str,
     vision_provider: object,
-    stats: _IngestStats,
-    progress: Progress | None = None,
-    task_id: object = None,
-) -> None:
-    """Download proxy, call vision AI, POST results back."""
+    proxy_cache: "ProxyCache | None" = None,
+    client: "LumiverbClient | None" = None,
+) -> dict | None:
+    """Read proxy from cache, call vision AI. Returns result dict or None."""
     import time as _time
-    try:
-        t0 = _time.perf_counter()
+    t0 = _time.perf_counter()
+    proxy_bytes = proxy_cache.get(asset_id, rel_path) if proxy_cache else None
+    if proxy_bytes is None and client is not None:
         resp = client.get(f"/v1/assets/{asset_id}/artifacts/proxy")
         proxy_bytes = resp.content
-        t_proxy = _time.perf_counter() - t0
+    t_proxy = _time.perf_counter() - t0
 
-        t1 = _time.perf_counter()
-        vision_result = _call_vision_ai(
-            proxy_bytes, vision_model_id, vision_provider,
-        )
-        t_vision = _time.perf_counter() - t1
-        if not vision_result:
-            logger.warning("Vision returned no result for %s", rel_path)
-            with stats.lock:
-                stats.failed += 1
-            if progress is not None:
-                progress.console.print(f"[red]vision \u2717[/red] {rel_path}: no result")
-                task = progress.tasks[task_id]
-                progress.advance(task_id, 1)
-                progress.update(task_id, fail=task.fields["fail"] + 1)
-            return
+    if proxy_bytes is None:
+        return None
 
-        t2 = _time.perf_counter()
-        client.post(f"/v1/assets/{asset_id}/vision", json={
-            "model_id": vision_result["model_id"],
-            "model_version": vision_result["model_version"],
-            "description": vision_result["description"],
-            "tags": vision_result["tags"],
-        })
-        t_post = _time.perf_counter() - t2
+    t1 = _time.perf_counter()
+    vision_result = _call_vision_ai(proxy_bytes, vision_model_id, vision_provider)
+    t_vision = _time.perf_counter() - t1
 
-        logger.info("vision timings: %s — proxy=%.1fms vision=%.1fms post=%.1fms",
-                     rel_path, t_proxy * 1000, t_vision * 1000, t_post * 1000)
+    logger.info("vision timings: %s — proxy=%.1fms vision=%.1fms",
+                 rel_path, t_proxy * 1000, t_vision * 1000)
 
-        with stats.lock:
-            stats.processed += 1
-        if progress is not None:
-            task = progress.tasks[task_id]
-            progress.advance(task_id, 1)
-            progress.update(task_id, ok=task.fields["ok"] + 1)
+    if not vision_result:
+        return None
 
-    except Exception as e:
-        logger.exception("Failed to backfill vision for %s: %s", rel_path, e)
-        with stats.lock:
-            stats.failed += 1
-        if progress is not None:
-            progress.console.print(f"[red]vision \u2717[/red] {rel_path}: {e}")
-            task = progress.tasks[task_id]
-            progress.advance(task_id, 1)
-            progress.update(task_id, fail=task.fields["fail"] + 1)
+    return {
+        "asset_id": asset_id,
+        "model_id": vision_result["model_id"],
+        "model_version": vision_result["model_version"],
+        "description": vision_result["description"],
+        "tags": vision_result["tags"],
+    }
 
 
 def run_backfill_vision(
@@ -624,6 +599,51 @@ def run_backfill_vision(
         console.print("All assets already have AI descriptions.")
         return stats
 
+    from src.cli.proxy_cache import ProxyCache
+    from pathlib import Path as _Path
+    root_path_str = library.get("root_path")
+    root_path = _Path(root_path_str).resolve() if root_path_str else None
+    if root_path and not root_path.is_dir():
+        root_path = None
+    proxy_cache = ProxyCache(root_path=root_path, client=client)
+
+    BATCH_SIZE = 25
+    batch_buf: list[dict] = []
+
+    def _flush_vision_batch() -> None:
+        if not batch_buf:
+            return
+        try:
+            client.post("/v1/assets/batch-vision", json={"items": list(batch_buf)})
+            logger.info("vision batch POST: %d items", len(batch_buf))
+        except Exception as e:
+            logger.warning("vision batch POST failed (%d items): %s", len(batch_buf), e)
+            for item in batch_buf:
+                try:
+                    client.post(f"/v1/assets/{item['asset_id']}/vision", json=item)
+                except Exception:
+                    pass
+        batch_buf.clear()
+
+    def _collect(done: set[Future]) -> None:
+        for f in done:
+            try:
+                result = f.result()
+            except Exception:
+                result = None
+            if result is not None:
+                batch_buf.append(result)
+                with stats.lock:
+                    stats.processed += 1
+            else:
+                with stats.lock:
+                    stats.failed += 1
+            progress.advance(tid, 1)
+            with stats.lock:
+                progress.update(tid, ok=stats.processed, fail=stats.failed)
+            if len(batch_buf) >= BATCH_SIZE:
+                _flush_vision_batch()
+
     progress = _make_progress(console)
     with progress:
         tid = progress.add_task("Vision", total=len(to_backfill), ok=0, fail=0)
@@ -632,19 +652,23 @@ def run_backfill_vision(
         for a in to_backfill:
             fut = pool.submit(
                 _backfill_one,
-                client=client,
                 asset_id=a["asset_id"],
                 rel_path=a["rel_path"],
                 vision_model_id=vision_model_id,
                 vision_provider=vision_provider,
-                stats=stats,
-                progress=progress,
-                task_id=tid,
+                proxy_cache=proxy_cache,
+                client=client,
             )
             inflight.add(fut)
             if len(inflight) >= concurrency * 2:
-                done, inflight = _drain(inflight)
-        _drain(inflight)
+                done, inflight = _wait_first(inflight)
+                _collect(done)
+
+        while inflight:
+            done, inflight = _wait_first(inflight)
+            _collect(done)
+
         pool.shutdown(wait=True)
+        _flush_vision_batch()
 
     return stats
