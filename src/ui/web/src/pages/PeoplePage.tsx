@@ -496,8 +496,8 @@ export default function PeoplePage() {
   });
 
   const clustersQuery = useQuery({
-    queryKey: ["face-clusters", minClusterSize],
-    queryFn: () => getClusters(20, 6, minClusterSize),
+    queryKey: ["face-clusters"],
+    queryFn: () => getClusters(50, 6, 1),
     // No auto-refetch — only refetch on explicit user action.
     // This prevents clusters from shuffling while the user is naming/dismissing.
     refetchOnWindowFocus: false,
@@ -510,10 +510,10 @@ export default function PeoplePage() {
   const truncated = clustersQuery.data?.truncated ?? false;
   const maxClusterSize = clustersQuery.data?.max_cluster_size ?? 0;
 
-  // Filter out fully removed clusters but keep fading ones visible
+  // Filter out removed clusters and apply min size filter (client-side, no re-fetch)
   const clusters = useMemo(
-    () => allClusters.filter((c) => !removedIndices.has(c.cluster_index)),
-    [allClusters, removedIndices],
+    () => allClusters.filter((c) => !removedIndices.has(c.cluster_index) && c.size >= minClusterSize),
+    [allClusters, removedIndices, minClusterSize],
   );
 
   // Auto-refresh when all clusters have been dismissed/named
