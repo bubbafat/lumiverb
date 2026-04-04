@@ -54,8 +54,7 @@ MISSING_CONDITIONS = {
     "missing_faces": "a.face_count IS NULL AND a.media_type = 'image'",
     "missing_video_scenes": "a.video_indexed = false AND a.media_type = 'video' AND a.duration_sec IS NOT NULL",
     "missing_ocr": (
-        "EXISTS (SELECT 1 FROM asset_metadata am WHERE am.asset_id = a.asset_id)"
-        " AND NOT EXISTS (SELECT 1 FROM asset_metadata am2 WHERE am2.asset_id = a.asset_id AND am2.data->>'ocr_text' IS NOT NULL AND am2.data->>'ocr_text' != '')"
+        "EXISTS (SELECT 1 FROM asset_metadata am WHERE am.asset_id = a.asset_id AND (am.data->>'has_text') IS NULL)"
         " AND a.media_type = 'image'"
     ),
     "missing_scene_vision": (

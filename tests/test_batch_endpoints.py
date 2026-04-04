@@ -184,3 +184,15 @@ class TestBatchEndpointModels:
         ])
         assert len(req.items) == 1
         assert len(req.items[0].vector) == 10
+
+
+@pytest.mark.fast
+class TestMissingOcrCondition:
+    """Verify the missing_ocr SQL condition uses has_text flag."""
+
+    def test_missing_ocr_checks_has_text(self):
+        """missing_ocr condition should check has_text IS NULL, not ocr_text."""
+        from src.repository.tenant import MISSING_CONDITIONS
+        cond = MISSING_CONDITIONS["missing_ocr"]
+        assert "has_text" in cond
+        assert "ocr_text" not in cond

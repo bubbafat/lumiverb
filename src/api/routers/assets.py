@@ -846,9 +846,10 @@ def submit_ocr(
     if meta is None:
         raise HTTPException(status_code=400, detail="Asset has no vision metadata — run vision first")
 
-    # Merge ocr_text into existing metadata data dict
+    # Merge ocr_text + has_text into existing metadata data dict
     data = dict(meta.data) if meta.data else {}
     data["ocr_text"] = body.ocr_text
+    data["has_text"] = bool(body.ocr_text)
     meta_repo.upsert(
         asset_id=asset_id,
         model_id=meta.model_id,
@@ -898,6 +899,7 @@ def submit_batch_ocr(
             continue
         data = dict(meta.data) if meta.data else {}
         data["ocr_text"] = item.ocr_text
+        data["has_text"] = bool(item.ocr_text)
         meta_repo.upsert(
             asset_id=item.asset_id,
             model_id=meta.model_id,
