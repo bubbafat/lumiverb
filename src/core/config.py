@@ -21,6 +21,7 @@ class Settings(BaseSettings):
 
     # API
     api_host: str = "0.0.0.0"
+    api_listen_host: str = "127.0.0.1"  # uvicorn bind address (set via env/systemd)
     api_port: int = 8000
     api_secret_key: str = ""
     admin_key: str = ""

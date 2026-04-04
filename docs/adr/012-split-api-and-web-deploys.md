@@ -2,15 +2,15 @@
 
 ## Status
 
-Proposed
+Accepted — all phases complete
 
 ## Progress
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | API-only deploy and update scripts | Not started |
-| 2 | Web-only deploy and update scripts | Not started |
-| 3 | Retire monolithic scripts | Not started |
+| 1 | API-only deploy and update scripts | Complete |
+| 2 | Web-only deploy and update scripts | Complete |
+| 3 | Retire monolithic scripts | Complete |
 
 ## Overview
 

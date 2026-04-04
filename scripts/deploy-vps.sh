@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Bootstrap Lumiverb on a fresh Ubuntu 22.04+ VPS (DigitalOcean, Hetzner, etc.)
+# Bootstrap Lumiverb on a fresh Ubuntu 22.04+ VPS (single-machine deploy).
+#
+# This is a convenience wrapper that runs deploy-api.sh then deploy-web.sh
+# on the same machine. For split deployments (API and web on separate machines),
+# run those scripts individually.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/bubbafat/lumiverb/main/scripts/deploy-vps.sh | bash -s -- --domain app.example.com
@@ -10,7 +14,7 @@
 # Idempotent: safe to run again to update an existing install.
 #
 # After completion, create the first admin user:
-#   sudo -u lumiverb /opt/lumiverb/.venv/bin/lumiverb create-user --email you@example.com --role admin
+#   sudo -u lumiverb /opt/lumiverb/.venv/bin/lumiverb user create --email you@example.com --role admin
 #
 set -euo pipefail
 
@@ -19,689 +23,124 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 GREEN='\033[0;32m'
 RED='\033[0;31m'
-YELLOW='\033[1;33m'
 BOLD='\033[1m'
 NC='\033[0m'
 
 step()  { echo -e "\n${BOLD}=== $1 ===${NC}"; }
-ok()    { echo -e "${GREEN}  ✓${NC} $1"; }
-warn()  { echo -e "${YELLOW}  ⚠${NC} $1"; }
 fail()  { echo -e "${RED}  ✗ $1${NC}" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------
-# Args
+# Resolve script directory (handles curl-pipe and local invocations)
+# ---------------------------------------------------------------------------
+# When run from a local checkout, use sibling scripts directly.
+# When run via curl-pipe, clone the repo first then call the scripts.
+SCRIPT_DIR=""
+if [[ -f "$(dirname "${BASH_SOURCE[0]:-$0}")/deploy-api.sh" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+fi
+
+# ---------------------------------------------------------------------------
+# Separate args for API and web scripts
 # ---------------------------------------------------------------------------
 DOMAIN=""
-REPO_URL="https://github.com/bubbafat/lumiverb.git"
-BRANCH="main"
 CERTBOT_EMAIL=""
 SKIP_CERTBOT=false
-TENANT_NAME="Lumiverb"
-DATA_DIR_OVERRIDE=""
 CERTIFICATE_ARCHIVE=""
-VISION_API_URL=""
-VISION_API_KEY=""
 
+# Collect all args to forward to deploy-api.sh
+ALL_ARGS=("$@")
+
+# Extract --domain and web-specific args for deploy-web.sh
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --domain)       DOMAIN="${2:?Missing value for --domain}"; shift 2 ;;
-    --repo)         REPO_URL="${2:?Missing value for --repo}"; shift 2 ;;
-    --branch)       BRANCH="${2:?Missing value for --branch}"; shift 2 ;;
-    --email)        CERTBOT_EMAIL="${2:?Missing value for --email}"; shift 2 ;;
-    --tenant)       TENANT_NAME="${2:?Missing value for --tenant}"; shift 2 ;;
-    --data-dir)     DATA_DIR_OVERRIDE="${2:?Missing value for --data-dir}"; shift 2 ;;
-    --certificate)    CERTIFICATE_ARCHIVE="${2:?Missing value for --certificate}"; shift 2 ;;
-    --vision-api-url) VISION_API_URL="${2:?Missing value for --vision-api-url}"; shift 2 ;;
-    --vision-api-key) VISION_API_KEY="${2:?Missing value for --vision-api-key}"; shift 2 ;;
+    --domain)         DOMAIN="${2:-}"; shift 2 ;;
+    --email)          CERTBOT_EMAIL="${2:-}"; shift 2 ;;
+    --certificate)    CERTIFICATE_ARCHIVE="${2:-}"; shift 2 ;;
     --skip-certbot)   SKIP_CERTBOT=true; shift ;;
-    -h|--help)
-      echo "Usage: $0 --domain <FQDN> [--email <certbot-email>] [--tenant <name>] [--data-dir <path>] [--certificate <letsencrypt.tar.gz>] [--vision-api-url <url>] [--vision-api-key <key>] [--repo <url>] [--branch <ref>] [--skip-certbot]"
-      exit 0
-      ;;
-    *) fail "Unknown option: $1" ;;
+    *)                shift ;;  # skip other args (forwarded to deploy-api.sh)
   esac
 done
 
-# ---------------------------------------------------------------------------
-# Validate inputs before doing anything
-# ---------------------------------------------------------------------------
 [[ -n "$DOMAIN" ]] || fail "Required: --domain <FQDN>  (e.g. --domain app.example.com)"
-
-# Catch copy-paste from docs
-if [[ "$DOMAIN" == *"example.com"* ]]; then
-  fail "Replace example.com with your actual domain (e.g. --domain app.yourdomain.com)"
-fi
-if [[ -n "$CERTBOT_EMAIL" ]] && [[ "$CERTBOT_EMAIL" == *"example.com"* ]]; then
-  fail "Replace example.com email with your actual email (e.g. --email you@yourdomain.com)"
-fi
-
-# Validate certificate archive exists before starting
-if [[ -n "$CERTIFICATE_ARCHIVE" ]] && [[ ! -f "$CERTIFICATE_ARCHIVE" ]]; then
-  fail "Certificate archive not found: $CERTIFICATE_ARCHIVE"
-fi
-
-# Must run as root
 [[ "$(id -u)" -eq 0 ]] || fail "This script must be run as root (try: sudo bash ...)"
 
-# Create data dir if it doesn't exist (must be after root check)
-if [[ -n "$DATA_DIR_OVERRIDE" ]]; then
-  mkdir -p "$DATA_DIR_OVERRIDE" || fail "Cannot create data directory: $DATA_DIR_OVERRIDE"
-fi
-
 # ---------------------------------------------------------------------------
-# Constants
+# If scripts not found locally, we need to bootstrap
 # ---------------------------------------------------------------------------
 APP_DIR="/opt/lumiverb"
-CONF_DIR="/etc/lumiverb"
-DATA_DIR="${DATA_DIR_OVERRIDE:-/var/lib/lumiverb}"
-BACKUP_DIR="/var/backups/lumiverb"
-ENV_FILE="${CONF_DIR}/env"
-SVC_USER="lumiverb"
-PG_USER="app"
-PG_DB="control_plane"
-NODE_MAJOR=20
-UV_VERSION="0.7.12"
-UV_BIN="/usr/local/bin/uv"
-QUICKWIT_VERSION="0.8.2"
-
-# Map host architecture to release artifact names
-ARCH="$(uname -m)"
-case "$ARCH" in
-  x86_64)  RUST_TARGET="x86_64-unknown-linux-gnu" ;;
-  aarch64) RUST_TARGET="aarch64-unknown-linux-gnu" ;;
-  *) fail "Unsupported architecture: $ARCH (only x86_64 and aarch64 are supported)" ;;
-esac
-
-# ---------------------------------------------------------------------------
-# 1. System packages
-# ---------------------------------------------------------------------------
-step "Installing system packages"
-
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-
-# Bootstrap minimal deps needed by the rest of the script.
-apt-get install -y -qq curl ca-certificates gnupg lsb-release openssl
-
-# PostgreSQL 16 repo (if not already present)
-if ! apt-cache show postgresql-16 >/dev/null 2>&1; then
-  curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql.gpg
-  echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
-    > /etc/apt/sources.list.d/pgdg.list
-  apt-get update -qq
-fi
-
-# Node.js repo — NodeSource's setup script is the standard method for adding their
-# apt repo. It registers an HTTPS source and GPG key; packages are then verified
-# by apt on install. There is no checksum-verifiable alternative.
-if ! command -v node >/dev/null 2>&1; then
-  curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash -
-fi
-
-apt-get install -y -qq \
-  postgresql-16 postgresql-16-pgvector \
-  nginx certbot python3-certbot-nginx \
-  git build-essential \
-  nodejs ufw
-
-ok "System packages installed"
-
-# ---------------------------------------------------------------------------
-# 2. uv (Python package manager)
-# ---------------------------------------------------------------------------
-step "Installing uv"
-
-if [[ ! -x "$UV_BIN" ]]; then
-  UV_ARCHIVE="uv-${RUST_TARGET}.tar.gz"
-  curl -LsSf "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${UV_ARCHIVE}" \
-    -o /tmp/uv.tar.gz
-  curl -LsSf "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${UV_ARCHIVE}.sha256" \
-    -o /tmp/uv.sha256
-  EXPECTED_HASH="$(awk '{print $1}' /tmp/uv.sha256)"
-  ACTUAL_HASH="$(sha256sum /tmp/uv.tar.gz | awk '{print $1}')"
-  [[ "$EXPECTED_HASH" == "$ACTUAL_HASH" ]] || fail "uv checksum verification failed"
-  tar -xzf /tmp/uv.tar.gz -C /tmp
-  install -m 0755 "/tmp/uv-${RUST_TARGET}/uv" "$UV_BIN"
-  install -m 0755 "/tmp/uv-${RUST_TARGET}/uvx" /usr/local/bin/uvx
-  rm -rf /tmp/uv.tar.gz /tmp/uv.sha256 "/tmp/uv-${RUST_TARGET}"
-fi
-ok "uv $($UV_BIN --version)"
-
-# ---------------------------------------------------------------------------
-# 3. Service user and directories
-# ---------------------------------------------------------------------------
-step "Creating service user and directories"
-
-SVC_HOME="/var/lib/lumiverb"
-id -u "$SVC_USER" >/dev/null 2>&1 || useradd --system --shell /usr/sbin/nologin --home "$SVC_HOME" "$SVC_USER"
-
-mkdir -p "$SVC_HOME" "$CONF_DIR" "$DATA_DIR"/quickwit "$BACKUP_DIR"
-chown "$SVC_USER":"$SVC_USER" "$SVC_HOME"
-# Service user needs to traverse the dir (for quickwit.yaml); secrets in env file stay 600.
-chown root:"$SVC_USER" "$CONF_DIR"
-chmod 750 "$CONF_DIR"
-chown -R "$SVC_USER":"$SVC_USER" "$DATA_DIR"
-
-ok "User $SVC_USER, dirs ready"
-
-# ---------------------------------------------------------------------------
-# 4. PostgreSQL bootstrap
-# ---------------------------------------------------------------------------
-step "Configuring PostgreSQL"
-
-# Generate a stable DB password (create once, reuse on re-runs)
-if [[ -f "${CONF_DIR}/.pg_password" ]]; then
-  PG_PASS="$(cat "${CONF_DIR}/.pg_password")"
-else
-  PG_PASS="$(openssl rand -hex 24)"
-  echo -n "$PG_PASS" > "${CONF_DIR}/.pg_password"
-  chmod 600 "${CONF_DIR}/.pg_password"
-fi
-
-# Enforce listen_addresses = localhost (handles commented, uncommented, or missing)
-PG_CONF="/etc/postgresql/16/main/postgresql.conf"
-PG_NEEDS_RESTART=false
-if grep -qE "^\s*listen_addresses\s*=" "$PG_CONF" 2>/dev/null; then
-  current=$(grep -oP "^\s*listen_addresses\s*=\s*'\K[^']+" "$PG_CONF" || true)
-  if [[ "$current" != "127.0.0.1" ]]; then
-    sed -i "s/^\s*listen_addresses\s*=.*/listen_addresses = '127.0.0.1'/" "$PG_CONF"
-    PG_NEEDS_RESTART=true
-  fi
-elif grep -qE "^#\s*listen_addresses" "$PG_CONF" 2>/dev/null; then
-  sed -i "s/^#\s*listen_addresses.*/listen_addresses = '127.0.0.1'/" "$PG_CONF"
-  PG_NEEDS_RESTART=true
-else
-  echo "listen_addresses = '127.0.0.1'" >> "$PG_CONF"
-  PG_NEEDS_RESTART=true
-fi
-if [[ "$PG_NEEDS_RESTART" == "true" ]]; then
-  systemctl restart postgresql
-fi
-
-# Create user + DB if they don't exist
-su - postgres -c "psql -tc \"SELECT 1 FROM pg_roles WHERE rolname='${PG_USER}'\"" | grep -q 1 \
-  || su - postgres -c "psql -c \"CREATE USER ${PG_USER} WITH PASSWORD '${PG_PASS}' CREATEDB\""
-
-# Update password and ensure CREATEDB on re-runs (idempotent)
-su - postgres -c "psql -c \"ALTER USER ${PG_USER} WITH PASSWORD '${PG_PASS}' CREATEDB\""
-
-su - postgres -c "psql -tc \"SELECT 1 FROM pg_database WHERE datname='${PG_DB}'\"" | grep -q 1 \
-  || su - postgres -c "psql -c \"CREATE DATABASE ${PG_DB} OWNER ${PG_USER}\""
-
-# Install pgvector in template1 so all new tenant databases inherit it,
-# and in control_plane for the control plane schema.
-su - postgres -c "psql -d template1 -c 'CREATE EXTENSION IF NOT EXISTS vector'"
-su - postgres -c "psql -d ${PG_DB} -c 'CREATE EXTENSION IF NOT EXISTS vector'"
-
-ok "PostgreSQL: user=${PG_USER}, db=${PG_DB}, pgvector enabled (template1 + ${PG_DB})"
-
-# ---------------------------------------------------------------------------
-# 5. Generate secrets and write env file
-# ---------------------------------------------------------------------------
-step "Writing ${ENV_FILE}"
-
-# Preserve existing secrets on re-run
-_existing_val() {
-  grep "^${1}=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true
-}
-
-ADMIN_KEY="$(_existing_val ADMIN_KEY)"
-API_SECRET_KEY="$(_existing_val API_SECRET_KEY)"
-JWT_SECRET="$(_existing_val JWT_SECRET)"
-
-[[ -n "$ADMIN_KEY" ]]     || ADMIN_KEY="$(openssl rand -hex 32)"
-[[ -n "$API_SECRET_KEY" ]] || API_SECRET_KEY="$(openssl rand -hex 32)"
-[[ -n "$JWT_SECRET" ]]     || JWT_SECRET="$(openssl rand -hex 32)"
-
-DB_URL="postgresql+psycopg2://${PG_USER}:${PG_PASS}@127.0.0.1:5432"
-
-cat > "$ENV_FILE" <<ENVEOF
-# Auto-generated by deploy-vps.sh — $(date -u +%Y-%m-%dT%H:%M:%SZ)
-
-# Database
-CONTROL_PLANE_DATABASE_URL=${DB_URL}/${PG_DB}
-TENANT_DATABASE_URL_TEMPLATE=${DB_URL}/{tenant_id}
-
-# Auth
-ADMIN_KEY=${ADMIN_KEY}
-API_SECRET_KEY=${API_SECRET_KEY}
-JWT_SECRET=${JWT_SECRET}
-
-# Storage
-STORAGE_PROVIDER=local
-DATA_DIR=${DATA_DIR}
-
-# Search
-QUICKWIT_URL=http://127.0.0.1:7280
-QUICKWIT_ENABLED=true
-
-# App
-APP_ENV=production
-APP_HOST=https://${DOMAIN}
-LOG_LEVEL=INFO
-
-# Password reset SMTP (uncomment and fill in to enable forgot-password)
-# SMTP_HOST=smtp.example.com
-# SMTP_PORT=587
-# SMTP_USER=apikey
-# SMTP_PASSWORD=
-# SMTP_FROM=noreply@${DOMAIN}
-ENVEOF
-
-chmod 600 "$ENV_FILE"
-ok "Secrets generated, env written"
-
-# ---------------------------------------------------------------------------
-# 6. Quickwit
-# ---------------------------------------------------------------------------
-step "Installing Quickwit"
-
-if ! command -v quickwit >/dev/null 2>&1; then
-  # Note: Quickwit does not publish checksum files. Pinned version + HTTPS provide
-  # baseline integrity. If you need stronger guarantees, download manually and verify
-  # the GitHub release digest before deploying.
-  QW_ARCHIVE="quickwit-v${QUICKWIT_VERSION}-${RUST_TARGET}.tar.gz"
-  QW_TMP="$(mktemp -d)"
-  curl -LsSf "https://github.com/quickwit-oss/quickwit/releases/download/v${QUICKWIT_VERSION}/${QW_ARCHIVE}" \
-    -o "${QW_TMP}/quickwit.tar.gz"
-  tar -xzf "${QW_TMP}/quickwit.tar.gz" -C "$QW_TMP"
-  QW_BIN="$(find "$QW_TMP" -name quickwit -type f -executable | head -1)"
-  [[ -n "$QW_BIN" ]] || fail "Could not find quickwit binary in downloaded archive"
-  install -m 0755 "$QW_BIN" /usr/local/bin/quickwit
-  rm -rf "$QW_TMP"
-fi
-ok "quickwit $(quickwit --version 2>&1 | head -1)"
-
-# Quickwit config file
-cat > "${CONF_DIR}/quickwit.yaml" <<QWCONF
-version: 0.8
-node_id: lumiverb
-listen_address: 127.0.0.1
-rest:
-  listen_port: 7280
-data_dir: ${DATA_DIR}/quickwit
-QWCONF
-# Root-owned, world-readable (no secrets in this file; parent dir is 700 for env file).
-chmod 644 "${CONF_DIR}/quickwit.yaml"
-
-cat > /etc/systemd/system/lumiverb-quickwit.service <<UNIT
-[Unit]
-Description=Lumiverb Quickwit
-After=network.target
-
-[Service]
-Type=simple
-User=${SVC_USER}
-Group=${SVC_USER}
-ExecStart=/usr/local/bin/quickwit run --config ${CONF_DIR}/quickwit.yaml
-Restart=on-failure
-RestartSec=5s
-NoNewPrivileges=true
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-
-# ---------------------------------------------------------------------------
-# 7. Clone / update application
-# ---------------------------------------------------------------------------
-step "Deploying application to ${APP_DIR}"
-
-if [[ -d "${APP_DIR}/.git" ]]; then
-  cd "$APP_DIR"
-  git fetch --all --prune
-  git checkout "$BRANCH"
-  git pull origin "$BRANCH"
-  ok "Updated existing checkout"
-else
-  git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
-  ok "Cloned ${REPO_URL} @ ${BRANCH}"
-fi
-
-cd "$APP_DIR"
-chown -R "$SVC_USER":"$SVC_USER" "$APP_DIR"
-
-# ---------------------------------------------------------------------------
-# 8. Python dependencies
-# ---------------------------------------------------------------------------
-step "Installing Python dependencies"
-
-# Server only needs base deps + cli (for create-user). Workers run on client machines.
-sudo -u "$SVC_USER" "$UV_BIN" sync --extra cli
-ok "Python venv ready (server + cli)"
-
-# ---------------------------------------------------------------------------
-# 9. Run migrations
-# ---------------------------------------------------------------------------
-step "Running database migrations"
-
-export ALEMBIC_CONTROL_URL="${DB_URL}/${PG_DB}"
-sudo -u "$SVC_USER" --preserve-env=ALEMBIC_CONTROL_URL \
-  "$APP_DIR/.venv/bin/python" -m alembic -c alembic-control.ini upgrade head
-ok "Control plane migrations applied"
-
-# ---------------------------------------------------------------------------
-# 10. Build web UI
-# ---------------------------------------------------------------------------
-step "Building web UI"
-
-cd "$APP_DIR/src/ui/web"
-sudo -u "$SVC_USER" npm ci --no-audit --no-fund
-sudo -u "$SVC_USER" npm run build
-ok "Web UI built"
-cd "$APP_DIR"
-
-# ---------------------------------------------------------------------------
-# 11. systemd units
-# ---------------------------------------------------------------------------
-step "Installing systemd units"
-
-cat > /etc/systemd/system/lumiverb-api.service <<UNIT
-[Unit]
-Description=Lumiverb API Server
-After=network.target postgresql.service lumiverb-quickwit.service
-Wants=lumiverb-quickwit.service
-
-[Service]
-Type=simple
-User=${SVC_USER}
-Group=${SVC_USER}
-WorkingDirectory=${APP_DIR}
-EnvironmentFile=${ENV_FILE}
-Environment=PYTHONUNBUFFERED=1
-ExecStart=${APP_DIR}/.venv/bin/uvicorn src.api.main:app --host 127.0.0.1 --port 8000 --workers 2
-Restart=on-failure
-RestartSec=5s
-LimitNOFILE=65535
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ReadWritePaths=${DATA_DIR}
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-
-cat > /etc/systemd/system/lumiverb-worker.service <<UNIT
-[Unit]
-Description=Lumiverb Background Worker
-After=network.target postgresql.service lumiverb-api.service
-Wants=lumiverb-api.service
-
-[Service]
-Type=simple
-User=${SVC_USER}
-Group=${SVC_USER}
-WorkingDirectory=${APP_DIR}
-EnvironmentFile=${ENV_FILE}
-Environment=PYTHONUNBUFFERED=1
-ExecStart=${APP_DIR}/.venv/bin/lumiverb pipeline
-Restart=on-failure
-RestartSec=10s
-LimitNOFILE=65535
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ReadWritePaths=${DATA_DIR}
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-
-cat > /etc/systemd/system/lumiverb-upkeep.service <<UNIT
-[Unit]
-Description=Lumiverb periodic upkeep (search sync, cleanup)
-
-[Service]
-Type=oneshot
-User=${SVC_USER}
-Group=${SVC_USER}
-EnvironmentFile=${ENV_FILE}
-ExecStart=/usr/bin/curl -sf -X POST http://127.0.0.1:8000/v1/upkeep -H "Authorization: Bearer \${ADMIN_KEY}" -H "Content-Type: application/json"
-TimeoutSec=120
-UNIT
-
-cat > /etc/systemd/system/lumiverb-upkeep.timer <<UNIT
-[Unit]
-Description=Run Lumiverb upkeep every 5 minutes
-
-[Timer]
-OnBootSec=2min
-OnUnitActiveSec=5min
-AccuracySec=30s
-
-[Install]
-WantedBy=timers.target
-UNIT
-
-cat > /etc/systemd/system/lumiverb-upkeep-daily.service <<UNIT
-[Unit]
-Description=Lumiverb daily maintenance (filesystem cleanup)
-
-[Service]
-Type=oneshot
-User=${SVC_USER}
-Group=${SVC_USER}
-EnvironmentFile=${ENV_FILE}
-ExecStart=/usr/bin/curl -sf -X POST "http://127.0.0.1:8000/v1/upkeep/cleanup?dry_run=false" -H "Authorization: Bearer \${ADMIN_KEY}" -H "Content-Type: application/json"
-TimeoutSec=300
-UNIT
-
-cat > /etc/systemd/system/lumiverb-upkeep-daily.timer <<UNIT
-[Unit]
-Description=Run Lumiverb daily maintenance at 3am
-
-[Timer]
-OnCalendar=*-*-* 03:00:00
-AccuracySec=5min
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-UNIT
-
-systemctl daemon-reload
-ok "systemd units installed"
-
-# ---------------------------------------------------------------------------
-# 12. nginx
-# ---------------------------------------------------------------------------
-step "Configuring nginx"
-
-cat > /etc/nginx/sites-available/lumiverb <<NGINX
-server {
-    listen 80;
-    server_name ${DOMAIN};
-
-    root ${APP_DIR}/src/ui/web/dist;
-    index index.html;
-
-    add_header X-Content-Type-Options nosniff always;
-    add_header X-Frame-Options DENY always;
-    add_header Referrer-Policy no-referrer-when-downgrade always;
-
-    location /v1/ {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        client_max_body_size 100m;
-        proxy_connect_timeout 60s;
-        proxy_send_timeout 300s;
-        proxy_read_timeout 300s;
-    }
-
-    location / {
-        try_files \$uri \$uri/ /index.html;
-    }
-}
-NGINX
-
-ln -sf /etc/nginx/sites-available/lumiverb /etc/nginx/sites-enabled/lumiverb
-rm -f /etc/nginx/sites-enabled/default
-nginx -t
-systemctl reload nginx
-ok "nginx configured for ${DOMAIN}"
-
-# ---------------------------------------------------------------------------
-# 13. TLS certificate
-# ---------------------------------------------------------------------------
-TLS_ACTIVE=false
-
-if [[ -n "$CERTIFICATE_ARCHIVE" ]]; then
-  step "Restoring TLS certificate from archive"
-  tar xzf "$CERTIFICATE_ARCHIVE" -C /
-  ok "Restored /etc/letsencrypt from $CERTIFICATE_ARCHIVE"
-
-  # Re-run certbot install to wire the restored cert into the nginx config
-  certbot install --nginx -d "$DOMAIN" --non-interactive --redirect
-  ok "TLS certificate installed into nginx"
-  TLS_ACTIVE=true
-
-elif [[ "$SKIP_CERTBOT" == "false" ]]; then
-  step "Obtaining TLS certificate"
-
-  certbot_args=(--nginx -d "$DOMAIN" --non-interactive --agree-tos --redirect)
-  if [[ -n "$CERTBOT_EMAIL" ]]; then
-    certbot_args+=(--email "$CERTBOT_EMAIL")
+if [[ -z "$SCRIPT_DIR" ]]; then
+  # Running via curl-pipe — extract --repo and --branch from args if present
+  REPO_URL="https://github.com/bubbafat/lumiverb.git"
+  BRANCH="main"
+  set -- "${ALL_ARGS[@]}"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --repo)   REPO_URL="${2:-}"; shift 2 ;;
+      --branch) BRANCH="${2:-}"; shift 2 ;;
+      *)        shift ;;
+    esac
+  done
+
+  step "Bootstrapping repo for script access"
+  if [[ -d "${APP_DIR}/.git" ]]; then
+    cd "$APP_DIR"
+    git fetch --all --prune
+    git checkout "$BRANCH"
+    git pull origin "$BRANCH"
   else
-    certbot_args+=(--register-unsafely-without-email)
+    apt-get update -qq && apt-get install -y -qq git
+    git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
   fi
-
-  if certbot "${certbot_args[@]}"; then
-    ok "TLS certificate obtained"
-    TLS_ACTIVE=true
-  else
-    warn "Certbot failed — site will serve HTTP only until DNS is pointed and certbot re-run"
-  fi
-else
-  warn "Skipping certbot (--skip-certbot)"
-fi
-
-# Fix APP_HOST in env file if TLS is not active
-if [[ "$TLS_ACTIVE" == "false" ]]; then
-  sed -i "s|^APP_HOST=https://|APP_HOST=http://|" "$ENV_FILE"
-  warn "APP_HOST set to http:// (no TLS). After obtaining a cert, update APP_HOST in ${ENV_FILE}"
+  SCRIPT_DIR="${APP_DIR}/scripts"
 fi
 
 # ---------------------------------------------------------------------------
-# 14. Firewall
+# Phase 1: Deploy API
 # ---------------------------------------------------------------------------
-step "Configuring firewall (ufw)"
+step "Deploying API (Phase 1 of 2)"
 
-ufw default deny incoming
-ufw default allow outgoing
-ufw allow 22/tcp   # SSH
-ufw allow 80/tcp   # HTTP (certbot + redirect)
-ufw allow 443/tcp  # HTTPS
-ufw --force enable
-ok "Firewall active — inbound limited to SSH, HTTP, HTTPS"
-
-# ---------------------------------------------------------------------------
-# 15. Start services
-# ---------------------------------------------------------------------------
-step "Starting services"
-
-# Note: lumiverb-worker is installed but not enabled by default. It requires
-# a configured CLI with a tenant API key. Enable it after tenant provisioning:
-#   sudo systemctl enable --now lumiverb-worker
-systemctl enable --now lumiverb-quickwit lumiverb-api lumiverb-upkeep.timer lumiverb-upkeep-daily.timer
-
-# Brief wait for API to come up
-for i in {1..10}; do
-  if curl -sf http://127.0.0.1:8000/health >/dev/null 2>&1; then
-    break
-  fi
-  sleep 1
+# Build API args: forward everything except web-specific flags
+API_ARGS=()
+set -- "${ALL_ARGS[@]}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --certificate)  shift 2 ;;  # web-only
+    --skip-certbot) shift ;;    # web-only
+    *)              API_ARGS+=("$1"); shift ;;
+  esac
 done
 
-if curl -sf http://127.0.0.1:8000/health >/dev/null 2>&1; then
-  ok "API server healthy"
-else
-  warn "API server not responding yet — check: journalctl -u lumiverb-api -n 50"
-fi
-
-systemctl status --no-pager lumiverb-quickwit lumiverb-api || true
+bash "${SCRIPT_DIR}/deploy-api.sh" "${API_ARGS[@]}"
 
 # ---------------------------------------------------------------------------
-# 16. Provision default tenant
+# Phase 2: Deploy Web
 # ---------------------------------------------------------------------------
-step "Provisioning tenant: ${TENANT_NAME}"
+step "Deploying Web UI (Phase 2 of 2)"
 
-ADMIN_KEY="$(grep '^ADMIN_KEY=' "${ENV_FILE}" | cut -d= -f2-)"
-TENANT_BODY="{\"name\": \"${TENANT_NAME}\", \"email\": \"${CERTBOT_EMAIL}\""
-if [[ -n "$VISION_API_URL" ]]; then
-  TENANT_BODY="${TENANT_BODY}, \"vision_api_url\": \"${VISION_API_URL}\""
-fi
-if [[ -n "$VISION_API_KEY" ]]; then
-  TENANT_BODY="${TENANT_BODY}, \"vision_api_key\": \"${VISION_API_KEY}\""
-fi
-TENANT_BODY="${TENANT_BODY}}"
+WEB_ARGS=(--domain "$DOMAIN" --api-upstream "http://127.0.0.1:8000")
+[[ -n "$CERTBOT_EMAIL" ]]     && WEB_ARGS+=(--email "$CERTBOT_EMAIL")
+[[ -n "$CERTIFICATE_ARCHIVE" ]] && WEB_ARGS+=(--certificate "$CERTIFICATE_ARCHIVE")
+[[ "$SKIP_CERTBOT" == "true" ]] && WEB_ARGS+=(--skip-certbot)
 
-TENANT_RESPONSE="$(curl -sf -X POST http://127.0.0.1:8000/v1/admin/tenants \
-  -H "Authorization: Bearer ${ADMIN_KEY}" \
-  -H "Content-Type: application/json" \
-  -d "${TENANT_BODY}")" \
-  || fail "Tenant provisioning failed — check: journalctl -u lumiverb-api -n 50"
+# Forward --repo and --branch if present
+set -- "${ALL_ARGS[@]}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --repo)   WEB_ARGS+=(--repo "${2:-}"); shift 2 ;;
+    --branch) WEB_ARGS+=(--branch "${2:-}"); shift 2 ;;
+    *)        shift ;;
+  esac
+done
 
-TENANT_ID="$(echo "$TENANT_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['tenant_id'])")"
-TENANT_API_KEY="$(echo "$TENANT_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['api_key'])")"
-ok "Tenant ${TENANT_ID} provisioned"
-
-# Configure CLI for the service user so create-user works
-sudo -u "${SVC_USER}" mkdir -p "${SVC_HOME}/.lumiverb"
-echo "{\"api_url\": \"http://127.0.0.1:8000\", \"api_key\": \"${TENANT_API_KEY}\"}" \
-  | sudo -u "${SVC_USER}" tee "${SVC_HOME}/.lumiverb/config.json" > /dev/null
-ok "CLI configured for tenant"
+bash "${SCRIPT_DIR}/deploy-web.sh" "${WEB_ARGS[@]}"
 
 # ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
 echo ""
-if [[ "$TLS_ACTIVE" == "true" ]]; then
-  SITE_URL="https://${DOMAIN}"
-else
-  SITE_URL="http://${DOMAIN}"
-fi
-
-echo -e "${GREEN}${BOLD}Lumiverb deployed to ${SITE_URL}${NC}"
+echo -e "${GREEN}${BOLD}Lumiverb fully deployed (API + Web on single machine).${NC}"
 echo ""
-echo "Next steps:"
-echo ""
-echo "  1. Create the first admin user:"
-echo ""
-EXAMPLE_EMAIL="${CERTBOT_EMAIL:-you@example.com}"
-echo "     sudo -u lumiverb /opt/lumiverb/.venv/bin/lumiverb create-user --email ${EXAMPLE_EMAIL} --role admin"
-echo ""
-echo "  2. Open ${SITE_URL} and log in."
-echo ""
-if [[ -n "$VISION_API_URL" ]]; then
-  echo "  3. Vision AI: configured (${VISION_API_URL})"
-else
-  echo "  3. (Optional) Configure vision AI for automatic image descriptions:"
-  echo ""
-  echo "     lumiverb tenant update-vision --vision-api-url <url> --vision-api-key <key>"
-  echo ""
-  echo "     Or pass --vision-api-url and --vision-api-key to this deploy script next time."
-fi
-echo ""
-echo "  4. (Optional) Enable password reset — edit ${ENV_FILE} and uncomment the SMTP_* lines."
-echo ""
-if [[ "$TLS_ACTIVE" == "true" ]] && [[ -z "$CERTIFICATE_ARCHIVE" ]]; then
-  echo "  5. Back up the TLS certificate for future redeploys:"
-  echo ""
-  echo "     tar czf /mnt/lumiverb/data/letsencrypt.tar.gz -C / etc/letsencrypt"
-  echo ""
-  echo "     Then pass --certificate /mnt/lumiverb/data/letsencrypt.tar.gz on future deploys."
-  echo ""
-fi
-
-echo "Useful commands:"
-echo "  journalctl -u lumiverb-api -f          # API logs"
-echo "  journalctl -u lumiverb-worker -f       # Worker logs"
-echo "  systemctl restart lumiverb-api          # Restart API"
-echo ""
-echo "Config: ${ENV_FILE} (contains secrets — use 'sudo cat' with care)"
+echo "To update:  bash /opt/lumiverb/scripts/update-vps.sh"
+echo "API only:   bash /opt/lumiverb/scripts/update-api.sh"
+echo "Web only:   bash /opt/lumiverb/scripts/update-web.sh"
 echo ""
