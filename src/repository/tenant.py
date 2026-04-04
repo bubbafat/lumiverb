@@ -2596,7 +2596,7 @@ class FaceRepository:
     def compute_clusters(
         self,
         *,
-        similarity_threshold: float = 0.55,
+        similarity_threshold: float = 0.40,
         k: int = 10,
         max_faces: int = 5000,
         min_cluster_size: int = 2,
