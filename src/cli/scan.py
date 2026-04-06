@@ -483,8 +483,8 @@ def _apply_moves(
 ) -> None:
     """Apply detected moves by updating rel_path on the server in batches."""
     console.print(f"Applying {len(moves):,} moves...")
-    for batch_start in range(0, len(moves), 50):
-        batch = moves[batch_start : batch_start + 50]
+    for batch_start in range(0, len(moves), 500):
+        batch = moves[batch_start : batch_start + 500]
         items = [{"asset_id": m.asset_id, "rel_path": m.new_rel_path} for m in batch]
         try:
             client.post("/v1/assets/batch-moves", json={"items": items})
