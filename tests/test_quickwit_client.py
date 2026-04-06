@@ -187,30 +187,31 @@ def test_ingest_tenant_documents_disabled():
 
 
 @pytest.mark.fast
-def test_delete_by_asset_id_calls_both_indexes():
-    """delete_tenant_documents_by_asset_id hits both asset and scene indexes."""
+def test_delete_by_asset_id_calls_all_indexes():
+    """delete_tenant_documents_by_asset_id hits asset, scene, and transcript indexes."""
     qw = _make_client()
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     with patch("src.search.quickwit_client.requests.post", return_value=mock_resp) as mock_post:
         qw.delete_tenant_documents_by_asset_id("tnt_1", "ast_123")
 
-    assert mock_post.call_count == 2
+    assert mock_post.call_count == 3
     urls = [call.args[0] for call in mock_post.call_args_list]
     assert any("lumiverb_tenant_tnt_1/delete-tasks" in u for u in urls)
     assert any("lumiverb_tenant_tnt_1_scenes/delete-tasks" in u for u in urls)
+    assert any("lumiverb_tenant_tnt_1_transcripts/delete-tasks" in u for u in urls)
 
 
 @pytest.mark.fast
-def test_delete_by_library_id_calls_both_indexes():
-    """delete_tenant_documents_by_library_id hits both indexes with library_id query."""
+def test_delete_by_library_id_calls_all_indexes():
+    """delete_tenant_documents_by_library_id hits all indexes with library_id query."""
     qw = _make_client()
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     with patch("src.search.quickwit_client.requests.post", return_value=mock_resp) as mock_post:
         qw.delete_tenant_documents_by_library_id("tnt_1", "lib_old")
 
-    assert mock_post.call_count == 2
+    assert mock_post.call_count == 3
     for call in mock_post.call_args_list:
         body = call[1]["json"]
         assert body["query"] == 'library_id:"lib_old"'

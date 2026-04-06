@@ -38,6 +38,9 @@ class QuickwitClient:
     def _scene_schema_path(self) -> Path:
         return self._schema_dir / "scene_index_schema.json"
 
+    def _transcript_schema_path(self) -> Path:
+        return self._schema_dir / "transcript_index_schema.json"
+
     # ------------------------------------------------------------------
     # Index naming
     # ------------------------------------------------------------------
@@ -47,6 +50,9 @@ class QuickwitClient:
 
     def tenant_scene_index_id(self, tenant_id: str) -> str:
         return f"lumiverb_tenant_{tenant_id}_scenes"
+
+    def tenant_transcript_index_id(self, tenant_id: str) -> str:
+        return f"lumiverb_tenant_{tenant_id}_transcripts"
 
     # ------------------------------------------------------------------
     # Index lifecycle
@@ -60,6 +66,10 @@ class QuickwitClient:
         """Ensure the per-tenant scene index exists. Returns True if recreated."""
         return self._ensure_index(self.tenant_scene_index_id(tenant_id), self._scene_schema_path())
 
+    def ensure_tenant_transcript_index(self, tenant_id: str) -> bool:
+        """Ensure the per-tenant transcript index exists. Returns True if recreated."""
+        return self._ensure_index(self.tenant_transcript_index_id(tenant_id), self._transcript_schema_path())
+
     def recreate_tenant_indexes(self, tenant_id: str) -> None:
         """Delete and recreate both tenant indexes (asset + scene) with current schema.
 
@@ -69,6 +79,7 @@ class QuickwitClient:
         for index_id, schema_path in [
             (self.tenant_index_id(tenant_id), self._schema_path()),
             (self.tenant_scene_index_id(tenant_id), self._scene_schema_path()),
+            (self.tenant_transcript_index_id(tenant_id), self._transcript_schema_path()),
         ]:
             self._delete_index(index_id)
             self._ensure_index(index_id, schema_path)
@@ -140,6 +151,10 @@ class QuickwitClient:
     def ingest_tenant_scene_documents(self, tenant_id: str, docs: Iterable[dict]) -> None:
         """Ingest scene documents into the per-tenant scene index."""
         self._ingest_to_index(self.tenant_scene_index_id(tenant_id), docs)
+
+    def ingest_tenant_transcript_documents(self, tenant_id: str, docs: Iterable[dict]) -> None:
+        """Ingest transcript segment documents into the per-tenant transcript index."""
+        self._ingest_to_index(self.tenant_transcript_index_id(tenant_id), docs)
 
     def _ingest_to_index(self, index_id: str, docs: Iterable[dict]) -> None:
         if not self._enabled:
@@ -234,6 +249,35 @@ class QuickwitClient:
             })
         return results
 
+    def search_tenant_transcripts(
+        self,
+        tenant_id: str,
+        query: str,
+        library_ids: list[str] | None = None,
+        max_hits: int = 60,
+        start_offset: int = 0,
+    ) -> list[dict]:
+        """BM25 search on the per-tenant transcript index. Returns per-segment hits."""
+        effective_query = self._apply_library_filter(query, library_ids)
+        index_id = self.tenant_transcript_index_id(tenant_id)
+        raw_hits = self._search_index(index_id, effective_query, max_hits, start_offset)
+        results: list[dict] = []
+        for hit in raw_hits:
+            doc = hit.get("_source", hit)
+            results.append({
+                "asset_id": doc.get("asset_id", ""),
+                "library_id": doc.get("library_id", ""),
+                "rel_path": doc.get("rel_path", ""),
+                "media_type": doc.get("media_type", "video"),
+                "start_ms": doc.get("start_ms"),
+                "end_ms": doc.get("end_ms"),
+                "text": doc.get("text", ""),
+                "language": doc.get("language", ""),
+                "score": 0.0,
+                "source": "quickwit_transcripts",
+            })
+        return results
+
     def _search_index(self, index_id: str, query: str, max_hits: int, start_offset: int) -> list[dict]:
         if not self._enabled:
             return []
@@ -249,12 +293,25 @@ class QuickwitClient:
     # Delete
     # ------------------------------------------------------------------
 
+    def delete_tenant_transcript_documents(self, tenant_id: str, asset_id: str) -> None:
+        """Delete all transcript segment documents for an asset from the transcript index."""
+        if not self._enabled:
+            return
+        query = f'asset_id:"{asset_id}"'
+        index_id = self.tenant_transcript_index_id(tenant_id)
+        try:
+            resp = requests.post(f"{self._base_url}/api/v1/{index_id}/delete-tasks", json={"query": query}, timeout=10)
+            if resp.status_code not in (200, 201, 202):
+                logger.warning("Quickwit transcript delete failed for %s asset_id=%s: %s %s", index_id, asset_id, resp.status_code, resp.text)
+        except requests.RequestException as exc:
+            logger.warning("Quickwit transcript delete request failed for %s asset_id=%s: %s", index_id, asset_id, exc)
+
     def delete_tenant_documents_by_asset_id(self, tenant_id: str, asset_id: str) -> None:
         """Best-effort delete documents for an asset from both tenant indexes."""
         if not self._enabled:
             return
         query = f'asset_id:"{asset_id}"'
-        for index_id in (self.tenant_index_id(tenant_id), self.tenant_scene_index_id(tenant_id)):
+        for index_id in (self.tenant_index_id(tenant_id), self.tenant_scene_index_id(tenant_id), self.tenant_transcript_index_id(tenant_id)):
             try:
                 resp = requests.post(f"{self._base_url}/api/v1/{index_id}/delete-tasks", json={"query": query}, timeout=10)
                 if resp.status_code not in (200, 201, 202):
@@ -267,7 +324,7 @@ class QuickwitClient:
         if not self._enabled:
             return
         query = f'library_id:"{library_id}"'
-        for index_id in (self.tenant_index_id(tenant_id), self.tenant_scene_index_id(tenant_id)):
+        for index_id in (self.tenant_index_id(tenant_id), self.tenant_scene_index_id(tenant_id), self.tenant_transcript_index_id(tenant_id)):
             try:
                 resp = requests.post(f"{self._base_url}/api/v1/{index_id}/delete-tasks", json={"query": query}, timeout=10)
                 if resp.status_code not in (200, 201, 202):

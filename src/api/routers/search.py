@@ -31,7 +31,7 @@ class SearchHit(BaseModel):
       tags, score, source.
     """
 
-    type: Literal["image", "scene"] = "image"
+    type: Literal["image", "scene", "transcript"] = "image"
 
     # Common fields
     asset_id: str
@@ -60,6 +60,10 @@ class SearchHit(BaseModel):
     end_ms: int | None = None
     rep_frame_ms: int | None = None
     duration_sec: float | None = None
+
+    # Transcript-only fields
+    snippet: str | None = None
+    language: str | None = None
 
 
 class SearchResponse(BaseModel):
@@ -158,11 +162,13 @@ def search(
     settings = get_settings()
     image_hits: list[dict] = []
     scene_hits: list[dict] = []
+    transcript_hits: list[dict] = []
     assets_by_id: dict = {}
     source_parts: list[str] = []
 
     search_images = media_type in ("image", "all")
     search_scenes = media_type in ("video", "all")
+    search_transcripts = media_type in ("video", "all")
 
     # Fetch enough results from each index so that after merging and global
     # sorting we can correctly slice [offset:offset+limit].
@@ -283,6 +289,90 @@ def search(
                 hit["type"] = "scene"
             scene_hits = [h for h in scene_hits if h["asset_id"] in assets_by_id]
 
+    # --- Transcript search ---
+    if search_transcripts and settings.quickwit_enabled and tenant_id:
+        try:
+            from src.search.quickwit_client import QuickwitClient
+
+            qw = QuickwitClient()
+            raw_transcript_hits = qw.search_tenant_transcripts(
+                tenant_id=tenant_id,
+                query=q,
+                library_ids=[library_id] if library_id else None,
+                max_hits=fetch_limit * 3,  # over-fetch for deduplication
+                start_offset=0,
+            )
+            source_parts.append("quickwit_transcripts")
+        except Exception as e:
+            logger.warning("Quickwit transcript search failed: %s", e)
+            raw_transcript_hits = []
+
+        # Deduplicate: best-scoring segment per asset, expand with adjacent context
+        if raw_transcript_hits:
+            # Group by asset_id, keep best hit per asset
+            best_by_asset: dict[str, dict] = {}
+            all_by_asset: dict[str, list[dict]] = {}
+            for hit in raw_transcript_hits:
+                aid = hit["asset_id"]
+                all_by_asset.setdefault(aid, []).append(hit)
+                if aid not in best_by_asset or hit.get("score", 0) > best_by_asset[aid].get("score", 0):
+                    best_by_asset[aid] = hit
+
+            # Build context snippets from adjacent segments
+            for aid, best in best_by_asset.items():
+                segments = sorted(all_by_asset[aid], key=lambda h: h.get("start_ms") or 0)
+                best_idx = next(
+                    (i for i, s in enumerate(segments) if s is best),
+                    0,
+                )
+                # Include 1 segment before and after for context
+                ctx_start = max(0, best_idx - 1)
+                ctx_end = min(len(segments), best_idx + 2)
+                context = segments[ctx_start:ctx_end]
+
+                snippet = " ".join(s.get("text", "") for s in context)
+                merged_start = min(s.get("start_ms") or 0 for s in context)
+                merged_end = max(s.get("end_ms") or 0 for s in context)
+
+                best["snippet"] = snippet
+                best["start_ms"] = merged_start
+                best["end_ms"] = merged_end
+                best["type"] = "transcript"
+
+            transcript_hits = list(best_by_asset.values())
+
+            # Enrich with asset data
+            asset_repo = AssetRepository(session)
+            transcript_assets = {
+                a.asset_id: a
+                for a in asset_repo.get_by_ids(list(best_by_asset.keys()))
+            }
+            assets_by_id.update(transcript_assets)
+
+            lib_repo = LibraryRepository(session)
+            lib_ids = list({a.library_id for a in transcript_assets.values()})
+            libs_by_id: dict[str, str] = {}
+            for lid in lib_ids:
+                lib = lib_repo.get_by_id(lid)
+                if lib:
+                    libs_by_id[lid] = lib.name
+
+            for hit in transcript_hits:
+                asset = transcript_assets.get(hit["asset_id"])
+                if asset:
+                    hit["library_id"] = asset.library_id
+                    hit["library_name"] = libs_by_id.get(asset.library_id, "")
+                    hit["rel_path"] = asset.rel_path
+                    hit["thumbnail_key"] = asset.thumbnail_key
+                    hit["proxy_key"] = asset.proxy_key
+                    hit["media_type"] = asset.media_type
+                    hit["duration_sec"] = asset.duration_sec
+                    hit["taken_at"] = asset.taken_at.isoformat() if asset.taken_at else None
+                    hit["_file_mtime"] = asset.file_mtime
+                hit["description"] = hit.get("snippet", "")
+                hit["tags"] = []
+            transcript_hits = [h for h in transcript_hits if h["asset_id"] in transcript_assets]
+
     # --- Apply optional path_prefix and tag filters after enrichment ---
     def _path_matches(rel_path: str | None) -> bool:
         if not rel_path or not path_prefix:
@@ -306,6 +396,13 @@ def search(
             scene_hits = [
                 h
                 for h in scene_hits
+                if (not path_prefix or _path_matches(h.get("rel_path")))
+                and _has_tag(h.get("tags"))
+            ]
+        if transcript_hits:
+            transcript_hits = [
+                h
+                for h in transcript_hits
                 if (not path_prefix or _path_matches(h.get("rel_path")))
                 and _has_tag(h.get("tags"))
             ]
@@ -341,10 +438,11 @@ def search(
 
         image_hits = [h for h in image_hits if _date_in_range(h)]
         scene_hits = [h for h in scene_hits if _date_in_range(h)]
+        transcript_hits = [h for h in transcript_hits if _date_in_range(h)]
 
     # --- Rating post-filter ---
     needs_rating_filter = favorite is not None or star_min is not None or star_max is not None or color is not None or has_rating is not None
-    if needs_rating_filter and (image_hits or scene_hits):
+    if needs_rating_filter and (image_hits or scene_hits or transcript_hits):
         from src.repository.tenant import RatingRepository
 
         uid = getattr(request.state, "user_id", None)
@@ -352,7 +450,7 @@ def search(
             key_id = getattr(request.state, "key_id", None)
             uid = f"key:{key_id}" if key_id else None
         if uid:
-            all_asset_ids = list({h["asset_id"] for h in image_hits + scene_hits})
+            all_asset_ids = list({h["asset_id"] for h in image_hits + scene_hits + transcript_hits})
             rating_repo = RatingRepository(session)
             ratings_by_id = rating_repo.get_for_assets(uid, all_asset_ids)
             color_list = [c.strip() for c in color.split(",") if c.strip()] if color else None
@@ -377,9 +475,10 @@ def search(
 
             image_hits = [h for h in image_hits if _rating_matches(h["asset_id"])]
             scene_hits = [h for h in scene_hits if _rating_matches(h["asset_id"])]
+            transcript_hits = [h for h in transcript_hits if _rating_matches(h["asset_id"])]
 
     # --- has_faces post-filter ---
-    if has_faces is not None and (image_hits or scene_hits):
+    if has_faces is not None and (image_hits or scene_hits or transcript_hits):
         def _face_matches(asset_id: str) -> bool:
             asset = assets_by_id.get(asset_id)
             if asset is None:
@@ -392,10 +491,11 @@ def search(
 
         image_hits = [h for h in image_hits if _face_matches(h["asset_id"])]
         scene_hits = [h for h in scene_hits if _face_matches(h["asset_id"])]
+        transcript_hits = [h for h in transcript_hits if _face_matches(h["asset_id"])]
 
     # --- person_id post-filter ---
-    if person_id is not None and (image_hits or scene_hits):
-        all_hit_aids = list({h["asset_id"] for h in image_hits + scene_hits})
+    if person_id is not None and (image_hits or scene_hits or transcript_hits):
+        all_hit_aids = list({h["asset_id"] for h in image_hits + scene_hits + transcript_hits})
         from sqlalchemy import text as _text
         person_aids = set(
             session.execute(
@@ -405,6 +505,7 @@ def search(
         )
         image_hits = [h for h in image_hits if h["asset_id"] in person_aids]
         scene_hits = [h for h in scene_hits if h["asset_id"] in person_aids]
+        transcript_hits = [h for h in transcript_hits if h["asset_id"] in person_aids]
 
     # --- Merge, deduplicate images by asset_id, sort by score ---
     seen_images: dict[str, dict] = {}
@@ -413,7 +514,7 @@ def search(
         if aid not in seen_images or hit["score"] > seen_images[aid]["score"]:
             seen_images[aid] = hit
 
-    all_hits: list[dict] = list(seen_images.values()) + scene_hits
+    all_hits: list[dict] = list(seen_images.values()) + scene_hits + transcript_hits
     all_hits.sort(key=lambda h: h["score"], reverse=True)
 
     # Apply global offset+limit after merge so cross-index ranking is correct.

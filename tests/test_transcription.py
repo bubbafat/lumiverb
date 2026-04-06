@@ -220,3 +220,102 @@ class TestTranscriptEndpointEmptySrt:
         req = TranscriptSubmitRequest(srt="", language="en", source="whisper")
         assert req.srt == ""
         assert req.source == "whisper"
+
+
+# -------------------------------------------------------------------------
+# Phase 2 tests: Transcript search infrastructure
+# -------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+class TestSearchHitTranscriptType:
+    """Verify the SearchHit model supports the transcript type."""
+
+    def test_transcript_type_literal(self):
+        from src.api.routers.search import SearchHit
+        hit = SearchHit(
+            type="transcript",
+            asset_id="ast_1",
+            rel_path="video.mp4",
+            description="",
+            tags=[],
+            score=1.0,
+            source="quickwit_transcripts",
+            start_ms=5000,
+            end_ms=10500,
+            snippet="Hello and welcome to the show.",
+            language="en",
+        )
+        assert hit.type == "transcript"
+        assert hit.snippet == "Hello and welcome to the show."
+        assert hit.language == "en"
+        assert hit.start_ms == 5000
+        assert hit.end_ms == 10500
+
+    def test_snippet_and_language_fields_exist(self):
+        from src.api.routers.search import SearchHit
+        hit = SearchHit(
+            type="image",
+            asset_id="a",
+            rel_path="p",
+            description="",
+            tags=[],
+            score=0,
+            source="x",
+        )
+        assert hit.snippet is None
+        assert hit.language is None
+
+
+@pytest.mark.fast
+class TestQuickwitTranscriptIndex:
+    """Verify QuickwitClient has transcript index methods."""
+
+    def test_transcript_index_id(self):
+        from unittest.mock import patch
+        with patch("src.search.quickwit_client.get_settings") as mock:
+            mock.return_value.quickwit_url = "http://localhost:7280"
+            mock.return_value.quickwit_enabled = True
+            from src.search.quickwit_client import QuickwitClient
+            qw = QuickwitClient()
+            assert qw.tenant_transcript_index_id("tnt_1") == "lumiverb_tenant_tnt_1_transcripts"
+
+    def test_schema_file_exists(self):
+        from pathlib import Path
+        schema = Path("quickwit/transcript_index_schema.json")
+        assert schema.exists()
+
+    def test_schema_has_text_field(self):
+        import json
+        from pathlib import Path
+        schema = json.loads(Path("quickwit/transcript_index_schema.json").read_text())
+        fields = {f["name"] for f in schema["doc_mapping"]["field_mappings"]}
+        assert "text" in fields
+        assert "start_ms" in fields
+        assert "end_ms" in fields
+        assert "asset_id" in fields
+        assert "language" in fields
+
+    def test_default_search_field_is_text(self):
+        import json
+        from pathlib import Path
+        schema = json.loads(Path("quickwit/transcript_index_schema.json").read_text())
+        assert "text" in schema["search_settings"]["default_search_fields"]
+
+
+@pytest.mark.fast
+class TestTranscriptDocumentId:
+    """Verify transcript document IDs use timestamp-based format."""
+
+    def test_document_id_format(self):
+        from src.core.srt import parse_srt_segments
+        segments = parse_srt_segments(SAMPLE_SRT)
+        seg = segments[0]
+        doc_id = f"ast_1_{seg.start_ms}_{seg.end_ms}"
+        assert doc_id == "ast_1_5000_10500"
+
+    def test_unique_ids_for_different_segments(self):
+        from src.core.srt import parse_srt_segments
+        segments = parse_srt_segments(SAMPLE_SRT)
+        ids = {f"ast_1_{s.start_ms}_{s.end_ms}" for s in segments}
+        assert len(ids) == len(segments)

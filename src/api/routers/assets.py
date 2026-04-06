@@ -1047,6 +1047,38 @@ def submit_transcript(
     meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
     try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
 
+    # Index transcript segments into Quickwit
+    _tid = getattr(request.state, "tenant_id", None)
+    if _tid:
+        try:
+            from src.core.srt import parse_srt_segments
+            from src.search.quickwit_client import QuickwitClient
+            from src.core.utils import utcnow as _utcnow
+
+            qw = QuickwitClient()
+            qw.ensure_tenant_transcript_index(_tid)
+            qw.delete_tenant_transcript_documents(_tid, asset_id)
+            segments = parse_srt_segments(body.srt)
+            if segments:
+                docs = [
+                    {
+                        "id": f"{asset_id}_{seg.start_ms}_{seg.end_ms}",
+                        "asset_id": asset_id,
+                        "library_id": asset.library_id,
+                        "rel_path": asset.rel_path,
+                        "media_type": asset.media_type,
+                        "start_ms": seg.start_ms,
+                        "end_ms": seg.end_ms,
+                        "text": seg.text,
+                        "language": asset.transcript_language or "",
+                        "indexed_at": int(_utcnow().timestamp()),
+                    }
+                    for seg in segments
+                ]
+                qw.ingest_tenant_transcript_documents(_tid, docs)
+        except Exception as exc:
+            logger.warning("Transcript segment indexing failed for %s: %s", asset_id, exc)
+
     LibraryRepository(session).bump_revision(asset.library_id)
 
     return TranscriptSubmitResponse(asset_id=asset_id, status="transcribed")
@@ -1077,6 +1109,15 @@ def delete_transcript(
     from src.search.sync import try_sync_asset
     meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
     try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
+
+    # Delete transcript segments from Quickwit
+    _tid = getattr(request.state, "tenant_id", None)
+    if _tid:
+        try:
+            from src.search.quickwit_client import QuickwitClient
+            QuickwitClient().delete_tenant_transcript_documents(_tid, asset_id)
+        except Exception as exc:
+            logger.warning("Transcript segment delete failed for %s: %s", asset_id, exc)
 
     LibraryRepository(session).bump_revision(asset.library_id)
 
