@@ -974,6 +974,22 @@ export function Lightbox({
                       </span>
                       {detail.transcript_srt && (
                         <div className="flex gap-2">
+                          <button
+                            type="button"
+                            className="text-xs text-indigo-400 hover:text-indigo-300"
+                            onClick={() => {
+                              const blob = new Blob([detail.transcript_srt!], { type: "text/srt" });
+                              const url = URL.createObjectURL(blob);
+                              const a = document.createElement("a");
+                              const stem = asset.rel_path.replace(/\.[^.]+$/, "").split("/").pop() || "transcript";
+                              a.href = url;
+                              a.download = `${stem}.srt`;
+                              a.click();
+                              URL.revokeObjectURL(url);
+                            }}
+                          >
+                            Download
+                          </button>
                           <label className="cursor-pointer text-xs text-indigo-400 hover:text-indigo-300">
                             Replace
                             <input

@@ -79,7 +79,7 @@ export interface FaceListResponse {
 }
 
 export interface SearchHit {
-  type: "image" | "scene";
+  type: "image" | "scene" | "transcript";
   asset_id: string;
   library_id: string | null;
   library_name: string | null;
@@ -101,6 +101,8 @@ export interface SearchHit {
   width: number | null;
   height: number | null;
   taken_at: string | null;
+  snippet: string | null;
+  language: string | null;
 }
 
 export interface SearchResponse {

@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted — all phases complete
 
 ## Progress
 
@@ -10,7 +10,7 @@ Proposed
 |-------|-------------|--------|
 | 1 | Whisper engine + `transcribe` enrich job type + `has_transcript` flag | Complete |
 | 2 | Transcript search (new hit type, SRT-aware snippet extraction, Quickwit index) | Complete |
-| 3 | UI: download SRT, upload-over-existing, search result rendering | Not started |
+| 3 | UI: download SRT, upload-over-existing, search result rendering | Complete |
 
 ## Overview
 
