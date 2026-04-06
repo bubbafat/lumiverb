@@ -799,6 +799,7 @@ def scan(
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would happen without making changes.")] = False,
     allow_moves: Annotated[bool, typer.Option("--allow-moves", help="Automatically apply detected file moves (update paths on server).")] = False,
     skip_moves: Annotated[bool, typer.Option("--skip-moves", help="Skip detected file moves (don't update paths, don't treat as new/deleted).")] = False,
+    thorough: Annotated[bool, typer.Option("--thorough", help="SHA-verify all existing files instead of fast mtime+size check.")] = False,
 ) -> None:
     """Discover files, compute SHA, extract EXIF, generate proxies, upload.
 
@@ -807,8 +808,9 @@ def scan(
     NOT run enrichment (CLIP, vision, OCR, faces) — use `lumiverb enrich`
     or `lumiverb repair` for that.
 
-    Change detection compares source file SHA-256 against the server to
-    skip unchanged files. Use --force to re-scan everything.
+    By default, files whose mtime and size match the server are skipped
+    without hashing (fast mode). Use --thorough to SHA-verify all files.
+    Use --force to re-scan everything regardless of SHA.
     """
     from src.cli.scan import run_scan
 
@@ -837,6 +839,7 @@ def scan(
         dry_run=dry_run,
         allow_moves=allow_moves,
         skip_moves=skip_moves,
+        thorough=thorough,
         console=console,
     )
 

@@ -6,6 +6,7 @@ hit a real database are in test_scan_slow.py (requires Docker).
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -44,19 +45,88 @@ class TestSplitFiles:
         f = {"rel_path": "a.jpg", "media_type": "image"}
         existing: dict[str, _ServerAsset] = {}
 
-        new, needs_hash = _split_files([f], existing)
+        new, needs_hash, fast_unchanged = _split_files([f], existing)
         assert len(new) == 1
         assert len(needs_hash) == 0
+        assert len(fast_unchanged) == 0
 
-    def test_existing_file_needs_hash(self):
-        """File on server → needs hash comparison."""
+    def test_existing_file_needs_hash_thorough(self):
+        """File on server with thorough=True → needs hash comparison."""
         f = {"rel_path": "a.jpg", "media_type": "image"}
         existing = {"a.jpg": _ServerAsset(asset_id="id-1", sha256="abc")}
 
-        new, needs_hash = _split_files([f], existing)
+        new, needs_hash, fast_unchanged = _split_files([f], existing, thorough=True)
         assert len(new) == 0
         assert len(needs_hash) == 1
         assert needs_hash[0]["_server"].asset_id == "id-1"
+        assert len(fast_unchanged) == 0
+
+    def test_existing_file_needs_hash_no_server_mtime(self):
+        """File on server without mtime → needs hash (can't fast-skip)."""
+        f = {"rel_path": "a.jpg", "media_type": "image", "file_size": 100,
+             "file_mtime": datetime(2024, 1, 1, tzinfo=timezone.utc)}
+        existing = {"a.jpg": _ServerAsset(asset_id="id-1", sha256="abc", file_size=100)}
+
+        new, needs_hash, fast_unchanged = _split_files([f], existing)
+        assert len(needs_hash) == 1
+        assert len(fast_unchanged) == 0
+
+    def test_fast_unchanged_mtime_size_match(self):
+        """File with matching mtime+size → fast unchanged (no hash needed)."""
+        mtime = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        f = {"rel_path": "a.jpg", "media_type": "image", "file_size": 5000,
+             "file_mtime": mtime}
+        existing = {"a.jpg": _ServerAsset(
+            asset_id="id-1", sha256="abc", file_size=5000,
+            file_mtime=mtime.isoformat(),
+        )}
+
+        new, needs_hash, fast_unchanged = _split_files([f], existing)
+        assert len(new) == 0
+        assert len(needs_hash) == 0
+        assert len(fast_unchanged) == 1
+        assert fast_unchanged[0]["asset_id"] == "id-1"
+
+    def test_fast_skip_disabled_by_thorough(self):
+        """thorough=True forces hash even when mtime+size match."""
+        mtime = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        f = {"rel_path": "a.jpg", "media_type": "image", "file_size": 5000,
+             "file_mtime": mtime}
+        existing = {"a.jpg": _ServerAsset(
+            asset_id="id-1", sha256="abc", file_size=5000,
+            file_mtime=mtime.isoformat(),
+        )}
+
+        new, needs_hash, fast_unchanged = _split_files([f], existing, thorough=True)
+        assert len(needs_hash) == 1
+        assert len(fast_unchanged) == 0
+
+    def test_size_mismatch_needs_hash(self):
+        """Different file size → needs hash (content may have changed)."""
+        mtime = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        f = {"rel_path": "a.jpg", "media_type": "image", "file_size": 6000,
+             "file_mtime": mtime}
+        existing = {"a.jpg": _ServerAsset(
+            asset_id="id-1", sha256="abc", file_size=5000,
+            file_mtime=mtime.isoformat(),
+        )}
+
+        new, needs_hash, fast_unchanged = _split_files([f], existing)
+        assert len(needs_hash) == 1
+        assert len(fast_unchanged) == 0
+
+    def test_mtime_mismatch_needs_hash(self):
+        """Different mtime → needs hash (file may have been modified)."""
+        f = {"rel_path": "a.jpg", "media_type": "image", "file_size": 5000,
+             "file_mtime": datetime(2024, 7, 1, tzinfo=timezone.utc)}
+        existing = {"a.jpg": _ServerAsset(
+            asset_id="id-1", sha256="abc", file_size=5000,
+            file_mtime=datetime(2024, 6, 15, tzinfo=timezone.utc).isoformat(),
+        )}
+
+        new, needs_hash, fast_unchanged = _split_files([f], existing)
+        assert len(needs_hash) == 1
+        assert len(fast_unchanged) == 0
 
     def test_mixed(self):
         """Mix of new and existing."""
@@ -66,11 +136,21 @@ class TestSplitFiles:
         ]
         existing = {"old.jpg": _ServerAsset(asset_id="id-1", sha256="abc")}
 
-        new, needs_hash = _split_files(files, existing)
+        new, needs_hash, fast_unchanged = _split_files(files, existing)
         assert len(new) == 1
         assert new[0]["rel_path"] == "new.jpg"
         assert len(needs_hash) == 1
         assert needs_hash[0]["rel_path"] == "old.jpg"
+
+
+class TestRunScanAcceptsThorough:
+    """Verify run_scan signature accepts thorough parameter."""
+
+    def test_thorough_param_exists(self):
+        import inspect
+        from src.cli.scan import run_scan
+        sig = inspect.signature(run_scan)
+        assert "thorough" in sig.parameters
 
 
 class TestDetectDeletions:

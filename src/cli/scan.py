@@ -68,6 +68,7 @@ class _ServerAsset:
     asset_id: str
     sha256: str | None
     file_size: int | None = None
+    file_mtime: str | None = None  # ISO8601 string from server
 
 
 def _fetch_existing_assets_with_sha(
@@ -93,6 +94,7 @@ def _fetch_existing_assets_with_sha(
                 asset_id=a["asset_id"],
                 sha256=a.get("sha256"),
                 file_size=a.get("file_size"),
+                file_mtime=a.get("file_mtime"),
             )
         cursor = data.get("next_cursor")
         if not cursor:
@@ -103,23 +105,47 @@ def _fetch_existing_assets_with_sha(
 def _split_files(
     local_files: list[dict],
     existing: dict[str, _ServerAsset],
-) -> tuple[list[dict], list[dict]]:
-    """Split files into new (not on server) and needs-hash (on server).
+    *,
+    thorough: bool = False,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Split files into new, needs-hash, and fast-unchanged.
 
     New files can start scanning immediately. Needs-hash files require
     SHA comparison before we know if they're changed or unchanged.
-    Returns (new_files, needs_hash_files).
+
+    When thorough=False (default), files whose mtime and size match the
+    server are classified as fast-unchanged without hashing. When
+    thorough=True, all existing files go through SHA comparison.
+
+    Returns (new_files, needs_hash_files, fast_unchanged_files).
     """
     new_files: list[dict] = []
     needs_hash: list[dict] = []
+    fast_unchanged: list[dict] = []
     for f in local_files:
         server = existing.get(f["rel_path"])
         if server is None:
             new_files.append(f)
+        elif not thorough and _mtime_size_match(f, server):
+            f["asset_id"] = server.asset_id
+            fast_unchanged.append(f)
         else:
             f["_server"] = server
             needs_hash.append(f)
-    return new_files, needs_hash
+    return new_files, needs_hash, fast_unchanged
+
+
+def _mtime_size_match(local_file: dict, server: _ServerAsset) -> bool:
+    """Check if local file's mtime and size match the server asset."""
+    if server.file_size is None or server.file_mtime is None:
+        return False
+    if local_file["file_size"] != server.file_size:
+        return False
+    # Compare mtime: local is a datetime, server is ISO8601 string
+    local_mtime = local_file.get("file_mtime")
+    if local_mtime is None:
+        return False
+    return local_mtime.isoformat() == server.file_mtime
 
 
 @dataclass
@@ -535,6 +561,7 @@ def run_scan(
     dry_run: bool = False,
     allow_moves: bool = False,
     skip_moves: bool = False,
+    thorough: bool = False,
     console: Console,
 ) -> ScanStats:
     """Discover files, compute SHA, extract EXIF, generate proxies, upload.
@@ -578,7 +605,10 @@ def run_scan(
     console.print(f"Server has {len(existing):,} existing assets")
 
     # Split files: new (not on server by path) vs existing (need SHA check)
-    new_files, needs_hash = _split_files(local_files, existing)
+    # Default (fast): mtime+size match skips hashing. --thorough forces SHA on all.
+    new_files, needs_hash, fast_unchanged = _split_files(
+        local_files, existing, thorough=thorough or force,
+    )
     local_rel_paths = {f["rel_path"] for f in local_files}
 
     # Detect deletions first (needed to scope move detection)
@@ -600,11 +630,13 @@ def run_scan(
         moved_asset_ids = {m.asset_id for m in moves}
         deleted_ids = [aid for aid in deleted_ids if aid not in moved_asset_ids]
 
+    fast_skip_msg = f", {len(fast_unchanged):,} unchanged (fast)" if fast_unchanged else ""
     console.print(
         f"{len(new_files):,} new, "
-        f"{len(needs_hash):,} existing, "
+        f"{len(needs_hash):,} to check, "
         f"{len(deleted_ids):,} deleted, "
         f"{len(moves):,} moved"
+        + fast_skip_msg
     )
 
     # --- Handle moves ---
@@ -662,11 +694,12 @@ def run_scan(
                         unchanged_files.append(f)
                     hash_progress.advance(tid)
 
+        total_unchanged = len(unchanged_files) + len(fast_unchanged)
         console.print(
             f"\n[bold]Scan summary:[/bold] "
             f"{len(new_files):,} new, "
             f"{len(changed_files):,} changed, "
-            f"{len(unchanged_files):,} unchanged, "
+            f"{total_unchanged:,} unchanged, "
             f"{len(deleted_ids):,} deleted, "
             f"{len(moves):,} moved"
         )
@@ -688,10 +721,13 @@ def run_scan(
     # Pipeline: scan new files immediately while hashing existing files
     # in the background. Changed files feed into the same scan pool as
     # hashing completes.
+    # Count fast-unchanged toward stats
+    stats.unchanged += len(fast_unchanged)
+
     total_to_scan = len(new_files) + len(needs_hash)  # upper bound (unchanged will be skipped)
     if not total_to_scan:
         proxy_cache = ProxyCache(root_path=root_path, client=client)
-        _populate_cache_for_unchanged(client, [], proxy_cache, stats, console)
+        _populate_cache_for_unchanged(client, fast_unchanged, proxy_cache, stats, console)
         return stats
 
     proxy_cache = ProxyCache(root_path=root_path, client=client)
@@ -754,7 +790,9 @@ def run_scan(
             done, inflight = _drain(inflight)
         pool.shutdown(wait=True)
 
-    # Populate cache for unchanged files
-    _populate_cache_for_unchanged(client, unchanged_files, proxy_cache, stats, console)
+    # Populate cache for unchanged files (both hash-verified and fast-skipped)
+    _populate_cache_for_unchanged(
+        client, unchanged_files + fast_unchanged, proxy_cache, stats, console,
+    )
 
     return stats
