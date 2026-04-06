@@ -67,6 +67,7 @@ class ScanStats:
 class _ServerAsset:
     asset_id: str
     sha256: str | None
+    file_size: int | None = None
 
 
 def _fetch_existing_assets_with_sha(
@@ -91,6 +92,7 @@ def _fetch_existing_assets_with_sha(
             existing[a["rel_path"]] = _ServerAsset(
                 asset_id=a["asset_id"],
                 sha256=a.get("sha256"),
+                file_size=a.get("file_size"),
             )
         cursor = data.get("next_cursor")
         if not cursor:
@@ -134,57 +136,116 @@ def _detect_moves(
     existing: dict[str, _ServerAsset],
     root_path: Path,
     local_rel_paths: set[str],
+    deleted_ids: list[str] | None = None,
+    console: Console | None = None,
 ) -> tuple[list[_MoveCandidate], list[dict]]:
     """Detect files that moved (same SHA, different path).
 
     A move is: new local file whose SHA matches a server asset whose
     old rel_path is no longer on the local filesystem.
 
+    Optimizations:
+    - Skip entirely if there are no deletions (no old path gone = no moves)
+    - Pre-filter by file_size before expensive SHA computation
+
     Returns (moves, remaining_new_files). Moves are removed from new_files.
     """
-    # Build reverse index: SHA → list of server assets
+    # No deletions = no moves possible (a move requires an old path to disappear)
+    if deleted_ids is not None and not deleted_ids:
+        return [], new_files
+
+    # Build set of deleted server assets for fast lookup
+    deleted_asset_id_set = set(deleted_ids) if deleted_ids else None
+
+    # Build reverse index from deleted server assets: SHA → list, file_size → set of SHAs
+    # Only index server assets whose paths are gone locally (deletion candidates)
     sha_to_server: dict[str, list[tuple[str, _ServerAsset]]] = {}
+    deleted_file_sizes: set[int] = set()
     for rel_path, sa in existing.items():
+        if rel_path in local_rel_paths:
+            continue  # still on disk — not a move source
+        if deleted_asset_id_set is not None and sa.asset_id not in deleted_asset_id_set:
+            continue  # not in deletion list
         if sa.sha256:
             sha_to_server.setdefault(sa.sha256, []).append((rel_path, sa))
+            if sa.file_size is not None:
+                deleted_file_sizes.add(sa.file_size)
 
+    if not sha_to_server:
+        return [], new_files
+
+    # Pre-filter new files by file_size match against deleted assets
+    candidates: list[dict] = []
+    no_match: list[dict] = []
+    for f in new_files:
+        if deleted_file_sizes and f.get("file_size") not in deleted_file_sizes:
+            no_match.append(f)
+        else:
+            candidates.append(f)
+
+    if not candidates:
+        return [], new_files
+
+    # Hash only the candidates (file_size matched a deleted asset)
     moves: list[_MoveCandidate] = []
     remaining: list[dict] = []
-    # Track which server assets have already been claimed as move sources
     claimed_asset_ids: set[str] = set()
 
-    for f in new_files:
-        source_path = root_path / f["rel_path"]
-        source_sha = compute_sha256(source_path)
-        f["source_sha256"] = source_sha
+    progress = None
+    tid = None
+    if console and len(candidates) > 1:
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[bold]Checking moves"),
+            BarColumn(bar_width=30),
+            MofNCompleteColumn(),
+            console=console,
+            refresh_per_second=4,
+        )
+        progress.start()
+        tid = progress.add_task("Moves", total=len(candidates))
 
-        if not source_sha or source_sha not in sha_to_server:
-            remaining.append(f)
-            continue
+    try:
+        for f in candidates:
+            source_path = root_path / f["rel_path"]
+            source_sha = compute_sha256(source_path)
+            f["source_sha256"] = source_sha
 
-        # Find a server asset with this SHA whose path is gone locally
-        candidates = sha_to_server[source_sha]
-        match = None
-        for old_path, sa in candidates:
-            if sa.asset_id in claimed_asset_ids:
+            if progress and tid is not None:
+                progress.advance(tid)
+
+            if not source_sha or source_sha not in sha_to_server:
+                remaining.append(f)
                 continue
-            if old_path not in local_rel_paths:
-                match = (old_path, sa)
-                break
 
-        if match is None:
-            remaining.append(f)
-            continue
+            # Find a server asset with this SHA whose path is gone locally
+            server_candidates = sha_to_server[source_sha]
+            match = None
+            for old_path, sa in server_candidates:
+                if sa.asset_id in claimed_asset_ids:
+                    continue
+                if old_path not in local_rel_paths:
+                    match = (old_path, sa)
+                    break
 
-        old_path, sa = match
-        moves.append(_MoveCandidate(
-            asset_id=sa.asset_id,
-            old_rel_path=old_path,
-            new_rel_path=f["rel_path"],
-            sha256=source_sha,
-        ))
-        claimed_asset_ids.add(sa.asset_id)
+            if match is None:
+                remaining.append(f)
+                continue
 
+            old_path, sa = match
+            moves.append(_MoveCandidate(
+                asset_id=sa.asset_id,
+                old_rel_path=old_path,
+                new_rel_path=f["rel_path"],
+                sha256=source_sha,
+            ))
+            claimed_asset_ids.add(sa.asset_id)
+    finally:
+        if progress:
+            progress.stop()
+
+    # Combine: files that didn't match by size + files that matched size but not SHA
+    remaining = no_match + remaining
     return moves, remaining
 
 
@@ -520,16 +581,19 @@ def run_scan(
     new_files, needs_hash = _split_files(local_files, existing)
     local_rel_paths = {f["rel_path"] for f in local_files}
 
-    # --- Move detection ---
-    # Detect moves from new_files: SHA matches a server asset whose path is gone.
-    # This hashes all new files to compare against server SHAs.
-    moves: list[_MoveCandidate] = []
-    if new_files and not force:
-        console.print("Checking for moved files...")
-        moves, new_files = _detect_moves(new_files, existing, root_path, local_rel_paths)
-
-    # Detect deletions (before move adjustment — we'll filter moved assets out below)
+    # Detect deletions first (needed to scope move detection)
     deleted_ids = _detect_deletions(local_files, existing, root_path, path_prefix)
+
+    # --- Move detection ---
+    # Only check for moves when: there are new files, there are deletions
+    # (a move requires an old path to disappear), and --force is not set.
+    # Pre-filters by file_size before expensive SHA computation.
+    moves: list[_MoveCandidate] = []
+    if new_files and deleted_ids and not force and not skip_moves:
+        moves, new_files = _detect_moves(
+            new_files, existing, root_path, local_rel_paths,
+            deleted_ids=deleted_ids, console=console,
+        )
 
     # Remove moved assets from deletion candidates (they're not deleted, just moved)
     if moves:
@@ -548,8 +612,6 @@ def run_scan(
     if moves:
         if allow_moves:
             move_decision = "apply"
-        elif skip_moves:
-            move_decision = "skip"
         elif dry_run:
             # dry-run: report and suggest flag
             console.print(f"\n[yellow]{len(moves):,} moved file(s) detected.[/yellow]")
@@ -567,18 +629,16 @@ def run_scan(
                 console.print("[red]Scan aborted.[/red]")
                 return stats
 
-    # For skipped moves: exclude moved files' old paths from deletion candidates,
-    # and exclude the new paths from new_files (already done by _detect_moves).
-    # The moved files simply don't participate in the scan at all.
+    # --skip-moves suppresses deletions too: without move detection we can't
+    # distinguish real deletes from the "old path" half of a move.
+    if skip_moves and deleted_ids:
+        console.print(f"[dim]Skipping {len(deleted_ids):,} deletions (--skip-moves)[/dim]")
+        deleted_ids = []
+
+    # For skipped moves (via prompt choice): moved files don't participate.
+    # New paths already removed from new_files by _detect_moves.
+    # Old paths already removed from deleted_ids above.
     if move_decision == "skip" and moves:
-        # The new paths are already removed from new_files.
-        # The old paths are already removed from deleted_ids.
-        # We also need to treat the server-side assets as unchanged.
-        for m in moves:
-            sa = existing.get(m.old_rel_path)
-            if sa:
-                # Add to unchanged tracking (for cache population later)
-                pass
         console.print(f"[dim]Skipping {len(moves):,} moves[/dim]")
 
     if dry_run:

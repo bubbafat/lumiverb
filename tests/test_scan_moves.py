@@ -153,18 +153,45 @@ class TestDetectMoves:
         assert moves[0].asset_id == "ast_moved"
         assert moves[0].old_rel_path == "gone/photo.jpg"
 
-    def test_move_sets_source_sha(self, tmp_path):
-        """Move detection should set source_sha256 on the file dict for remaining files."""
+    def test_skips_entirely_when_no_deletions(self, tmp_path):
+        """When deleted_ids is empty, move detection is skipped entirely."""
         content = b"some-file-content"
         new_file = _make_file(tmp_path, "truly_new.jpg", content)
 
-        existing = {}  # nothing on server
+        existing = {}
         local_paths = {"truly_new.jpg"}
 
-        moves, remaining = _detect_moves([new_file], existing, tmp_path, local_paths)
+        moves, remaining = _detect_moves(
+            [new_file], existing, tmp_path, local_paths, deleted_ids=[],
+        )
 
+        assert len(moves) == 0
         assert len(remaining) == 1
-        assert remaining[0].get("source_sha256") is not None
+        # SHA not computed (skipped due to no deletions)
+        assert remaining[0].get("source_sha256") is None
+
+    def test_sets_source_sha_when_hashed(self, tmp_path):
+        """Move detection sets source_sha256 on files it hashes."""
+        content = b"some-file-content"
+        new_file = _make_file(tmp_path, "new/photo.jpg", content)
+
+        from src.workers.exif_extract import compute_sha256
+        sha = compute_sha256(tmp_path / "new/photo.jpg")
+
+        existing = {
+            "old/photo.jpg": _ServerAsset(
+                asset_id="ast_1", sha256=sha, file_size=len(content),
+            ),
+        }
+        local_paths = {"new/photo.jpg"}
+
+        moves, remaining = _detect_moves(
+            [new_file], existing, tmp_path, local_paths,
+            deleted_ids=["ast_1"],
+        )
+
+        assert len(moves) == 1
+        assert moves[0].sha256 == sha
 
 
 @pytest.mark.fast
@@ -246,6 +273,67 @@ class TestMoveCandidateDataclass:
         assert m.old_rel_path == "old/photo.jpg"
         assert m.new_rel_path == "new/photo.jpg"
         assert m.sha256 == "abc123"
+
+
+@pytest.mark.fast
+class TestFileSizePreFilter:
+    """Test that file_size mismatch skips SHA computation."""
+
+    def test_size_mismatch_skips_hashing(self, tmp_path):
+        """New file with different size than any deleted asset → not a move."""
+        content = b"short"
+        new_file = _make_file(tmp_path, "new/photo.jpg", content)
+
+        existing = {
+            "old/big.jpg": _ServerAsset(
+                asset_id="ast_1", sha256="abc", file_size=999999,
+            ),
+        }
+        local_paths = {"new/photo.jpg"}
+
+        moves, remaining = _detect_moves(
+            [new_file], existing, tmp_path, local_paths,
+            deleted_ids=["ast_1"],
+        )
+
+        assert len(moves) == 0
+        assert len(remaining) == 1
+        # SHA was NOT computed (skipped by size filter)
+        assert remaining[0].get("source_sha256") is None
+
+    def test_size_match_proceeds_to_hash(self, tmp_path):
+        """New file with same size as a deleted asset → hash and check."""
+        content = b"exact-size-match-content"
+        new_file = _make_file(tmp_path, "new/photo.jpg", content)
+
+        from src.workers.exif_extract import compute_sha256
+        sha = compute_sha256(tmp_path / "new/photo.jpg")
+
+        existing = {
+            "old/photo.jpg": _ServerAsset(
+                asset_id="ast_1", sha256=sha, file_size=len(content),
+            ),
+        }
+        local_paths = {"new/photo.jpg"}
+
+        moves, remaining = _detect_moves(
+            [new_file], existing, tmp_path, local_paths,
+            deleted_ids=["ast_1"],
+        )
+
+        assert len(moves) == 1
+        assert moves[0].asset_id == "ast_1"
+
+
+@pytest.mark.fast
+class TestSkipMovesSkipsDeletes:
+    """--skip-moves should also suppress deletions."""
+
+    def test_skip_moves_param_exists(self):
+        import inspect
+        from src.cli.scan import run_scan
+        sig = inspect.signature(run_scan)
+        assert "skip_moves" in sig.parameters
 
 
 @pytest.mark.fast
