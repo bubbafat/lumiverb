@@ -866,7 +866,7 @@ def scan(
             raise typer.Exit(1)
 
 
-ENRICH_TYPES = ("embed", "vision", "faces", "redetect-faces", "ocr", "video-scenes", "scene-vision", "search-sync", "all")
+ENRICH_TYPES = ("embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all")
 
 
 @app.command("enrich")
@@ -889,6 +889,7 @@ def enrich(
       faces           — Detect faces using InsightFace (face recognition)
       redetect-faces  — Re-run face detection on ALL images with quality gates
       ocr             — Extract text from images via vision AI
+      transcribe      — Transcribe video audio via faster-whisper (needs source files)
       video-scenes    — Run scene detection on unindexed videos
       scene-vision    — Extract rep frames + run vision AI on scenes
       search-sync     — Push stale assets to Quickwit search index

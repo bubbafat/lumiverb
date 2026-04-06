@@ -21,6 +21,8 @@ class CLIConfig(BaseModel):
     ocr_concurrency: int = 1
     proxy_max_edge: int = 1280
     ocr_batch_size: int = 25
+    whisper_model: str = "small"
+    transcribe_concurrency: int = 1
 
 
 def _config_path() -> Path:

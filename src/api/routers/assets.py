@@ -184,6 +184,7 @@ def page_assets(
     missing_video_scenes: bool = False,
     missing_ocr: bool = False,
     missing_scene_vision: bool = False,
+    missing_transcription: bool = False,
     has_faces: bool | None = None,
     person_id: str | None = None,
     sort: str = "taken_at",
@@ -268,6 +269,7 @@ def page_assets(
         missing_video_scenes=missing_video_scenes,
         missing_ocr=missing_ocr,
         missing_scene_vision=missing_scene_vision,
+        missing_transcription=missing_transcription,
         has_faces=has_faces,
         person_id=person_id,
         sort=sort_col,
@@ -347,6 +349,7 @@ class RepairSummary(BaseModel):
     missing_ocr: int = 0
     missing_video_scenes: int = 0
     missing_scene_vision: int = 0
+    missing_transcription: int = 0
     stale_search_sync: int = 0
 
 
@@ -373,6 +376,7 @@ def repair_summary(
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_ocr"]}) AS missing_ocr,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_video_scenes"]}) AS missing_video_scenes,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_scene_vision"]}) AS missing_scene_vision,
+                COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_transcription"]}) AS missing_transcription,
                 COUNT(*) FILTER (
                     WHERE EXISTS (
                         SELECT 1 FROM asset_metadata am
@@ -401,6 +405,7 @@ def repair_summary(
         missing_ocr=row.missing_ocr,
         missing_video_scenes=row.missing_video_scenes,
         missing_scene_vision=row.missing_scene_vision,
+        missing_transcription=row.missing_transcription,
         stale_search_sync=row.stale_search_sync,
     )
 
@@ -1010,6 +1015,19 @@ def submit_transcript(
         raise HTTPException(status_code=404, detail="Asset not found")
     if asset.media_type != "video":
         raise HTTPException(status_code=400, detail="Transcripts are only supported for video assets")
+
+    # Empty SRT = "checked, no speech" (e.g., silent video processed by Whisper)
+    if not body.srt or not body.srt.strip():
+        asset.transcript_srt = None
+        asset.transcript_text = None
+        asset.transcript_language = body.language
+        asset.transcribed_at = utcnow()
+        asset.has_transcript = False
+        asset.updated_at = utcnow()
+        session.add(asset)
+        session.commit()
+        return TranscriptSubmitResponse(asset_id=asset_id, status="no_speech")
+
     if not validate_srt(body.srt):
         raise HTTPException(status_code=400, detail="Invalid SRT format")
 
@@ -1019,6 +1037,7 @@ def submit_transcript(
     asset.transcript_text = plain_text
     asset.transcript_language = body.language
     asset.transcribed_at = utcnow()
+    asset.has_transcript = bool(plain_text.strip())
     asset.updated_at = utcnow()
     session.add(asset)
     session.commit()
@@ -1049,6 +1068,7 @@ def delete_transcript(
     asset.transcript_text = None
     asset.transcript_language = None
     asset.transcribed_at = None
+    asset.has_transcript = False
     asset.updated_at = utcnow()
     session.add(asset)
     session.commit()

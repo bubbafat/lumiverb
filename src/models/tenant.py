@@ -142,6 +142,7 @@ class Asset(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
     face_count: int | None = Field(default=None, nullable=True)
+    has_transcript: bool | None = Field(default=None, nullable=True)
     transcript_srt: str | None = Field(default=None, nullable=True)
     transcript_text: str | None = Field(default=None, nullable=True)
     transcript_language: str | None = Field(default=None, nullable=True)

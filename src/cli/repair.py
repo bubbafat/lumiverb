@@ -36,8 +36,8 @@ def _drain(inflight: set[Future]) -> set[Future]:
     return inflight
 
 
-REPAIR_TYPES = ("embed", "vision", "faces", "redetect-faces", "ocr", "video-scenes", "scene-vision", "search-sync", "all")
-RepairType = Literal["embed", "vision", "faces", "redetect-faces", "ocr", "video-scenes", "scene-vision", "search-sync", "all"]
+REPAIR_TYPES = ("embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all")
+RepairType = Literal["embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all"]
 
 
 class _RepairStats:
@@ -104,6 +104,123 @@ def _ocr_one(
         return None
 
 
+def _transcribe_one(
+    source_path: "Path",
+    whisper_model: str = "small",
+) -> tuple[str, str] | None:
+    """Transcribe a video file using faster-whisper in a subprocess.
+
+    Returns (srt_text, language) on success. srt_text is empty string if no
+    speech was detected. Returns None on transient failure.
+    """
+    import json as _json
+    import subprocess
+    import sys
+    import tempfile
+
+    try:
+        # Extract audio to temp WAV (16kHz mono)
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            wav_path = tmp.name
+
+        cmd = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-i", str(source_path),
+            "-vn", "-ar", "16000", "-ac", "1", "-f", "wav",
+            "-y", wav_path,
+        ]
+        result = subprocess.run(cmd, capture_output=True, timeout=300)
+        if result.returncode != 0:
+            stderr = result.stderr.decode(errors="replace") if result.stderr else ""
+            if "does not contain any stream" in stderr or "Output file #0 does not contain" in stderr:
+                logger.info("No audio track in %s", source_path)
+                return ("", "")  # deterministic: no audio
+            logger.warning("ffmpeg audio extraction failed for %s: %s", source_path, stderr[:500])
+            return ("", "")  # treat as no audio (deterministic)
+
+        import os
+        wav_size = os.path.getsize(wav_path)
+        if wav_size < 1000:  # < 1KB = essentially empty
+            logger.info("Audio track too short/empty for %s", source_path)
+            os.unlink(wav_path)
+            return ("", "")
+
+        # Run Whisper in subprocess for memory isolation
+        worker_code = f'''
+import json, sys
+try:
+    from faster_whisper import WhisperModel
+    model = WhisperModel("{whisper_model}", device="auto", compute_type="auto")
+    segments, info = model.transcribe(
+        sys.argv[1],
+        vad_filter=True,
+        vad_parameters=dict(min_silence_duration_ms=500),
+    )
+    srt_parts = []
+    for i, seg in enumerate(segments, 1):
+        start_h = int(seg.start // 3600)
+        start_m = int((seg.start % 3600) // 60)
+        start_s = int(seg.start % 60)
+        start_ms = int((seg.start % 1) * 1000)
+        end_h = int(seg.end // 3600)
+        end_m = int((seg.end % 3600) // 60)
+        end_s = int(seg.end % 60)
+        end_ms = int((seg.end % 1) * 1000)
+        text = seg.text.strip()
+        if not text:
+            continue
+        srt_parts.append(
+            f"{{i}}\\n"
+            f"{{start_h:02d}}:{{start_m:02d}}:{{start_s:02d}},{{start_ms:03d}} --> "
+            f"{{end_h:02d}}:{{end_m:02d}}:{{end_s:02d}},{{end_ms:03d}}\\n"
+            f"{{text}}\\n"
+        )
+    result = {{"srt": "\\n".join(srt_parts), "language": info.language or ""}}
+    print(json.dumps(result))
+except Exception as e:
+    print(json.dumps({{"error": str(e)}}), file=sys.stderr)
+    sys.exit(1)
+'''
+        proc = subprocess.run(
+            [sys.executable, "-c", worker_code, wav_path],
+            capture_output=True,
+            text=True,
+            timeout=3600,  # 1 hour max for very long videos
+        )
+
+        # Clean up WAV
+        try:
+            os.unlink(wav_path)
+        except OSError:
+            pass
+
+        if proc.returncode != 0:
+            logger.warning(
+                "Whisper subprocess failed for %s: %s",
+                source_path, (proc.stderr or "")[:500],
+            )
+            return None  # transient failure — retry on next run
+
+        try:
+            output = _json.loads(proc.stdout.strip())
+        except _json.JSONDecodeError:
+            logger.warning("Whisper returned invalid JSON for %s: %s", source_path, proc.stdout[:200])
+            return None
+
+        srt_text = output.get("srt", "")
+        language = output.get("language", "")
+        if srt_text:
+            logger.info("Transcribed %s: %d chars, language=%s", source_path.name, len(srt_text), language)
+        else:
+            logger.info("No speech detected in %s", source_path.name)
+        return (srt_text, language)
+
+    except subprocess.TimeoutExpired:
+        logger.warning("Transcription timed out for %s", source_path)
+        return None
+    except Exception as e:
+        logger.exception("Transcription failed for %s: %s", source_path, e)
+        return None
 
 
 def _page_missing(
@@ -116,6 +233,7 @@ def _page_missing(
     missing_video_scenes: bool = False,
     missing_ocr: bool = False,
     missing_scene_vision: bool = False,
+    missing_transcription: bool = False,
 ) -> list[dict]:
     """Page through assets matching the given missing filter."""
     results: list[dict] = []
@@ -139,6 +257,8 @@ def _page_missing(
             params["missing_ocr"] = "true"
         if missing_scene_vision:
             params["missing_scene_vision"] = "true"
+        if missing_transcription:
+            params["missing_transcription"] = "true"
         if cursor:
             params["after"] = cursor
         resp = client.get("/v1/assets/page", params=params)
@@ -641,6 +761,8 @@ def run_repair(
             plan.append(("redetect-faces", len(all_images), "re-detect faces (all images)"))
     if job_type in ("ocr", "all") and summary.get("missing_ocr", 0) > 0:
         plan.append(("ocr", summary["missing_ocr"], "missing OCR text"))
+    if job_type in ("transcribe", "all") and summary.get("missing_transcription", 0) > 0:
+        plan.append(("transcribe", summary["missing_transcription"], "missing transcription"))
     if job_type in ("video-scenes", "all") and summary.get("missing_video_scenes", 0) > 0:
         plan.append(("video-scenes", summary["missing_video_scenes"], "missing video scene detection"))
     if job_type in ("scene-vision", "all") and summary.get("missing_scene_vision", 0) > 0:
@@ -672,6 +794,7 @@ def run_repair(
         ("Vision AI", "missing_vision", job_type in ("vision", "all")),
         ("Faces", "missing_faces", job_type in ("faces", "all")),
         ("OCR", "missing_ocr", job_type in ("ocr", "all")),
+        ("Transcription", "missing_transcription", job_type in ("transcribe", "all")),
         ("Video scenes", "missing_video_scenes", job_type in ("video-scenes", "all")),
         ("Scene vision", "missing_scene_vision", job_type in ("scene-vision", "all")),
         ("Search sync", "stale_search_sync", job_type in ("search-sync", "all")),
@@ -952,6 +1075,68 @@ def run_repair(
                     console.print(f"[dim]Cleaned up {deleted} empty dismissed people.[/dim]")
             except Exception as e:
                 logger.warning("cleanup-dismissed failed: %s", e)
+
+        elif repair_type == "transcribe":
+            console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
+
+            assets = _filter(_page_missing(client, library_id, missing_transcription=True))
+            if not assets:
+                console.print("No assets found (already transcribed?).")
+                continue
+
+            # Transcription needs source files (for audio extraction)
+            from pathlib import Path as _Path
+            root_path_str = library.get("root_path")
+            lib_root = _Path(root_path_str).resolve() if root_path_str else None
+            if lib_root and not lib_root.is_dir():
+                console.print(f"[yellow]Library root not accessible: {lib_root}[/yellow]")
+                console.print("[yellow]Transcription requires source video files. Skipping.[/yellow]")
+                continue
+
+            progress = _make_progress(console)
+            with progress:
+                tid = progress.add_task("Transcribe", total=len(assets), ok=0, fail=0)
+                for a in assets:
+                    rel_path = a["rel_path"]
+                    asset_id = a["asset_id"]
+
+                    # Resolve source file
+                    source_path = lib_root / rel_path if lib_root else None
+                    if source_path is None or not source_path.exists():
+                        logger.warning("Source file not found for %s: %s", asset_id, rel_path)
+                        with stats.lock:
+                            stats.skipped += 1
+                        progress.advance(tid, 1)
+                        continue
+
+                    result = _transcribe_one(source_path, _cfg.whisper_model)
+
+                    if result is None:
+                        # Transient failure — leave has_transcript=NULL for retry
+                        with stats.lock:
+                            stats.failed += 1
+                        progress.advance(tid, 1)
+                        progress.update(tid, ok=stats.processed, fail=stats.failed)
+                        continue
+
+                    srt_text, language = result
+                    # Submit transcript (empty string = no speech, sets has_transcript=false)
+                    try:
+                        client.post(
+                            f"/v1/assets/{asset_id}/transcript",
+                            json={"srt": srt_text, "language": language, "source": "whisper"},
+                        )
+                        with stats.lock:
+                            stats.processed += 1
+                    except Exception as e:
+                        logger.warning("Failed to submit transcript for %s: %s", asset_id, e)
+                        with stats.lock:
+                            stats.failed += 1
+
+                    with stats.lock:
+                        ok_count, fail_count = stats.processed, stats.failed
+                    progress.advance(tid, 1)
+                    progress.update(tid, ok=ok_count, fail=fail_count)
 
         elif repair_type == "video-scenes":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
