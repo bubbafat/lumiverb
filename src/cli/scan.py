@@ -57,6 +57,7 @@ class ScanStats:
     changed: int = 0
     unchanged: int = 0
     deleted: int = 0
+    moved: int = 0
     cache_populated: int = 0
     failed: int = 0
     scanned_asset_ids: list[str] = field(default_factory=list)
@@ -117,6 +118,74 @@ def _split_files(
             f["_server"] = server
             needs_hash.append(f)
     return new_files, needs_hash
+
+
+@dataclass
+class _MoveCandidate:
+    """A file that appears to have moved: same SHA, different path."""
+    asset_id: str
+    old_rel_path: str
+    new_rel_path: str
+    sha256: str
+
+
+def _detect_moves(
+    new_files: list[dict],
+    existing: dict[str, _ServerAsset],
+    root_path: Path,
+    local_rel_paths: set[str],
+) -> tuple[list[_MoveCandidate], list[dict]]:
+    """Detect files that moved (same SHA, different path).
+
+    A move is: new local file whose SHA matches a server asset whose
+    old rel_path is no longer on the local filesystem.
+
+    Returns (moves, remaining_new_files). Moves are removed from new_files.
+    """
+    # Build reverse index: SHA → list of server assets
+    sha_to_server: dict[str, list[tuple[str, _ServerAsset]]] = {}
+    for rel_path, sa in existing.items():
+        if sa.sha256:
+            sha_to_server.setdefault(sa.sha256, []).append((rel_path, sa))
+
+    moves: list[_MoveCandidate] = []
+    remaining: list[dict] = []
+    # Track which server assets have already been claimed as move sources
+    claimed_asset_ids: set[str] = set()
+
+    for f in new_files:
+        source_path = root_path / f["rel_path"]
+        source_sha = compute_sha256(source_path)
+        f["source_sha256"] = source_sha
+
+        if not source_sha or source_sha not in sha_to_server:
+            remaining.append(f)
+            continue
+
+        # Find a server asset with this SHA whose path is gone locally
+        candidates = sha_to_server[source_sha]
+        match = None
+        for old_path, sa in candidates:
+            if sa.asset_id in claimed_asset_ids:
+                continue
+            if old_path not in local_rel_paths:
+                match = (old_path, sa)
+                break
+
+        if match is None:
+            remaining.append(f)
+            continue
+
+        old_path, sa = match
+        moves.append(_MoveCandidate(
+            asset_id=sa.asset_id,
+            old_rel_path=old_path,
+            new_rel_path=f["rel_path"],
+            sha256=source_sha,
+        ))
+        claimed_asset_ids.add(sa.asset_id)
+
+    return moves, remaining
 
 
 def _detect_deletions(
@@ -345,6 +414,55 @@ def _drain(inflight: set[Future]) -> tuple[set[Future], set[Future]]:
     return done, pending
 
 
+def _apply_moves(
+    client: LumiverbClient,
+    moves: list[_MoveCandidate],
+    stats: ScanStats,
+    console: Console,
+) -> None:
+    """Apply detected moves by updating rel_path on the server in batches."""
+    console.print(f"Applying {len(moves):,} moves...")
+    for batch_start in range(0, len(moves), 50):
+        batch = moves[batch_start : batch_start + 50]
+        items = [{"asset_id": m.asset_id, "rel_path": m.new_rel_path} for m in batch]
+        try:
+            client.post("/v1/assets/batch-moves", json={"items": items})
+        except Exception as e:
+            logger.warning("Batch move failed: %s", e)
+            # Fallback: skip these moves rather than crash
+            stats.failed += len(batch)
+            continue
+        stats.moved += len(batch)
+
+
+def _prompt_move_decision(console: Console, moves: list[_MoveCandidate]) -> str:
+    """Show moved files and prompt user for action. Returns 'apply', 'skip', or 'abort'."""
+    console.print(f"\n[yellow]Detected {len(moves):,} moved file(s):[/yellow]")
+    show = moves[:10]
+    for m in show:
+        console.print(f"  {m.old_rel_path} [dim]→[/dim] {m.new_rel_path}")
+    if len(moves) > 10:
+        console.print(f"  [dim]... and {len(moves) - 10:,} more[/dim]")
+
+    console.print("\nOptions:")
+    console.print("  [bold]1[/bold] Perform moves (update paths on server)")
+    console.print("  [bold]2[/bold] Skip moves (ignore, don't treat as new/deleted)")
+    console.print("  [bold]3[/bold] Abort scan")
+
+    while True:
+        try:
+            choice = input("\nChoice [1/2/3]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return "abort"
+        if choice == "1":
+            return "apply"
+        if choice == "2":
+            return "skip"
+        if choice == "3":
+            return "abort"
+        console.print("[red]Invalid choice. Enter 1, 2, or 3.[/red]")
+
+
 def run_scan(
     client: LumiverbClient,
     library: dict,
@@ -354,6 +472,8 @@ def run_scan(
     force: bool = False,
     media_type_filter: str = "all",
     dry_run: bool = False,
+    allow_moves: bool = False,
+    skip_moves: bool = False,
     console: Console,
 ) -> ScanStats:
     """Discover files, compute SHA, extract EXIF, generate proxies, upload.
@@ -396,15 +516,70 @@ def run_scan(
     existing = _fetch_existing_assets_with_sha(client, library_id)
     console.print(f"Server has {len(existing):,} existing assets")
 
-    # Split files: new (not on server) can scan immediately;
-    # existing files need SHA comparison first.
+    # Split files: new (not on server by path) vs existing (need SHA check)
     new_files, needs_hash = _split_files(local_files, existing)
+    local_rel_paths = {f["rel_path"] for f in local_files}
+
+    # --- Move detection ---
+    # Detect moves from new_files: SHA matches a server asset whose path is gone.
+    # This hashes all new files to compare against server SHAs.
+    moves: list[_MoveCandidate] = []
+    if new_files and not force:
+        console.print("Checking for moved files...")
+        moves, new_files = _detect_moves(new_files, existing, root_path, local_rel_paths)
+
+    # Detect deletions (before move adjustment — we'll filter moved assets out below)
     deleted_ids = _detect_deletions(local_files, existing, root_path, path_prefix)
+
+    # Remove moved assets from deletion candidates (they're not deleted, just moved)
+    if moves:
+        moved_asset_ids = {m.asset_id for m in moves}
+        deleted_ids = [aid for aid in deleted_ids if aid not in moved_asset_ids]
 
     console.print(
         f"{len(new_files):,} new, "
-        f"{len(needs_hash):,} existing ({len(deleted_ids):,} deleted)"
+        f"{len(needs_hash):,} existing, "
+        f"{len(deleted_ids):,} deleted, "
+        f"{len(moves):,} moved"
     )
+
+    # --- Handle moves ---
+    move_decision = "skip"  # default: no moves or skip
+    if moves:
+        if allow_moves:
+            move_decision = "apply"
+        elif skip_moves:
+            move_decision = "skip"
+        elif dry_run:
+            # dry-run: report and suggest flag
+            console.print(f"\n[yellow]{len(moves):,} moved file(s) detected.[/yellow]")
+            show = moves[:10]
+            for m in show:
+                console.print(f"  {m.old_rel_path} [dim]→[/dim] {m.new_rel_path}")
+            if len(moves) > 10:
+                console.print(f"  [dim]... and {len(moves) - 10:,} more[/dim]")
+            console.print("[dim]Use --allow-moves to apply, or --skip-moves to ignore.[/dim]")
+            move_decision = "skip"
+        else:
+            # Interactive prompt
+            move_decision = _prompt_move_decision(console, moves)
+            if move_decision == "abort":
+                console.print("[red]Scan aborted.[/red]")
+                return stats
+
+    # For skipped moves: exclude moved files' old paths from deletion candidates,
+    # and exclude the new paths from new_files (already done by _detect_moves).
+    # The moved files simply don't participate in the scan at all.
+    if move_decision == "skip" and moves:
+        # The new paths are already removed from new_files.
+        # The old paths are already removed from deleted_ids.
+        # We also need to treat the server-side assets as unchanged.
+        for m in moves:
+            sa = existing.get(m.old_rel_path)
+            if sa:
+                # Add to unchanged tracking (for cache population later)
+                pass
+        console.print(f"[dim]Skipping {len(moves):,} moves[/dim]")
 
     if dry_run:
         # For dry-run, hash synchronously to show full breakdown
@@ -432,12 +607,17 @@ def run_scan(
             f"{len(new_files):,} new, "
             f"{len(changed_files):,} changed, "
             f"{len(unchanged_files):,} unchanged, "
-            f"{len(deleted_ids):,} deleted"
+            f"{len(deleted_ids):,} deleted, "
+            f"{len(moves):,} moved"
         )
         console.print(f"\n[bold]Root path:[/bold]  {root_path}")
         return stats
 
-    # Soft-delete missing assets
+    # --- Apply moves FIRST (before any destructive actions) ---
+    if move_decision == "apply" and moves:
+        _apply_moves(client, moves, stats, console)
+
+    # Soft-delete missing assets (after moves, so moved assets are not deleted)
     if deleted_ids:
         console.print(f"Removing {len(deleted_ids):,} assets no longer on disk...")
         for batch_start in range(0, len(deleted_ids), 500):

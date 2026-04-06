@@ -1278,6 +1278,47 @@ def submit_batch_embeddings(
     return {"updated": updated, "skipped": skipped}
 
 
+class BatchMoveItem(BaseModel):
+    asset_id: str
+    rel_path: str
+
+
+class BatchMoveRequest(BaseModel):
+    items: list[BatchMoveItem]
+
+
+@router.post("/batch-moves", status_code=200)
+def submit_batch_moves(
+    body: BatchMoveRequest,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> dict:
+    """Update rel_path for multiple assets (file moves detected by scan)."""
+    asset_repo = AssetRepository(session)
+    updated = 0
+    skipped = 0
+
+    for item in body.items:
+        asset = asset_repo.get_by_id(item.asset_id)
+        if asset is None or asset.deleted_at is not None:
+            skipped += 1
+            continue
+        asset.rel_path = item.rel_path
+        asset.search_synced_at = None
+        asset.updated_at = utcnow()
+        session.add(asset)
+        updated += 1
+
+    if updated > 0:
+        session.commit()
+        lib_ids = {a.library_id for item in body.items if (a := asset_repo.get_by_id(item.asset_id))}
+        lib_repo = LibraryRepository(session)
+        for lid in lib_ids:
+            lib_repo.bump_revision(lid)
+
+    return {"updated": updated, "skipped": skipped}
+
+
 @router.get("/{asset_id}/preview")
 def stream_or_enqueue_preview(
     asset_id: str,

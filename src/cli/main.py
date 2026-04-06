@@ -797,6 +797,8 @@ def scan(
     concurrency: Annotated[int, typer.Option("--concurrency", help="Number of parallel workers.")] = 4,
     media_type: Annotated[str, typer.Option("--media-type", help="Filter: image, video, or all.")] = "all",
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would happen without making changes.")] = False,
+    allow_moves: Annotated[bool, typer.Option("--allow-moves", help="Automatically apply detected file moves (update paths on server).")] = False,
+    skip_moves: Annotated[bool, typer.Option("--skip-moves", help="Skip detected file moves (don't update paths, don't treat as new/deleted).")] = False,
 ) -> None:
     """Discover files, compute SHA, extract EXIF, generate proxies, upload.
 
@@ -809,6 +811,10 @@ def scan(
     skip unchanged files. Use --force to re-scan everything.
     """
     from src.cli.scan import run_scan
+
+    if allow_moves and skip_moves:
+        console.print("[red]Cannot use both --allow-moves and --skip-moves[/red]")
+        raise typer.Exit(1)
 
     if media_type not in ("image", "video", "all"):
         console.print(f"[red]Invalid --media-type: {media_type}. Must be image, video, or all.[/red]")
@@ -829,6 +835,8 @@ def scan(
         force=force,
         media_type_filter=media_type,
         dry_run=dry_run,
+        allow_moves=allow_moves,
+        skip_moves=skip_moves,
         console=console,
     )
 
@@ -837,7 +845,8 @@ def scan(
             f"\nDone: {stats.new:,} new, "
             f"{stats.changed:,} changed, "
             f"{stats.unchanged:,} unchanged, "
-            f"{stats.deleted:,} deleted"
+            f"{stats.deleted:,} deleted, "
+            f"{stats.moved:,} moved"
             + (f", {stats.cache_populated:,} cache populated" if stats.cache_populated else "")
             + (f", {stats.failed:,} failed" if stats.failed else "")
         )
