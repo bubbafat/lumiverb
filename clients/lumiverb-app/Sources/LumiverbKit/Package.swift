@@ -18,7 +18,10 @@ let package = Package(
         .testTarget(
             name: "LumiverbKitTests",
             dependencies: ["LumiverbKit"],
-            path: "Tests/LumiverbKitTests"
+            path: "Tests/LumiverbKitTests",
+            resources: [
+                .copy("Fixtures"),
+            ]
         ),
     ]
 )

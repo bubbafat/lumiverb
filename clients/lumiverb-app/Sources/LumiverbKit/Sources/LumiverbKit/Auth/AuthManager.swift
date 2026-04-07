@@ -33,6 +33,11 @@ public actor AuthManager {
     private let client: APIClient
     private let keychain: any TokenStore
 
+    /// In-flight refresh task. Multiple 401s coalesce into a single refresh
+    /// call — the server revokes the old token on refresh, so concurrent
+    /// refreshes would each revoke the previous result, causing a cascade.
+    private var refreshTask: Task<Bool, Never>?
+
     public init(client: APIClient, keychain: any TokenStore = KeychainHelper()) {
         self.client = client
         self.keychain = keychain
@@ -61,7 +66,28 @@ public actor AuthManager {
 
     /// Refresh the access token by sending the current (possibly expired) JWT.
     /// Returns `true` if refresh succeeded, `false` if re-login is needed.
+    ///
+    /// Serialized: if a refresh is already in flight, subsequent calls wait
+    /// for it instead of starting a new one. This prevents the server from
+    /// revoking a just-issued token when multiple 401s trigger concurrent
+    /// refresh attempts.
     public func refresh() async -> Bool {
+        // If a refresh is already in flight, wait for it
+        if let existing = refreshTask {
+            return await existing.value
+        }
+
+        let task = Task { [weak self] () -> Bool in
+            guard let self else { return false }
+            return await self.performRefresh()
+        }
+        refreshTask = task
+        let result = await task.value
+        refreshTask = nil
+        return result
+    }
+
+    private func performRefresh() async -> Bool {
         guard let currentToken = try? keychain.read(key: "accessToken") else {
             return false
         }

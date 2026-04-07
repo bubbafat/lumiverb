@@ -319,7 +319,9 @@ final class APIClientNetworkTests: XCTestCase {
             let _: [Library] = try await client.get("/v1/libraries")
             XCTFail("Expected unauthorized")
         } catch let error as APIError {
-            XCTAssertEqual(error, .unauthorized)
+            guard case .unauthorized = error else {
+                    XCTFail("Expected .unauthorized, got \(error)"); return
+                }
         } catch {
             XCTFail("Unexpected error: \(error)")
         }
@@ -339,7 +341,9 @@ final class APIClientNetworkTests: XCTestCase {
             let _: [Library] = try await client.get("/v1/libraries")
             XCTFail("Expected unauthorized")
         } catch let error as APIError {
-            XCTAssertEqual(error, .unauthorized)
+            guard case .unauthorized = error else {
+                    XCTFail("Expected .unauthorized, got \(error)"); return
+                }
         } catch {
             XCTFail("Unexpected error: \(error)")
         }
@@ -365,7 +369,9 @@ final class APIClientNetworkTests: XCTestCase {
             let _: LoginResponse = try await client.postNoRetry("/v1/auth/refresh")
             XCTFail("Expected unauthorized")
         } catch let error as APIError {
-            XCTAssertEqual(error, .unauthorized)
+            guard case .unauthorized = error else {
+                    XCTFail("Expected .unauthorized, got \(error)"); return
+                }
         } catch {
             XCTFail("Unexpected error: \(error)")
         }

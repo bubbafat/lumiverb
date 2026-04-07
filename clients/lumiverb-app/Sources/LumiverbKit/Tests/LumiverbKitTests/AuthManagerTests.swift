@@ -38,6 +38,47 @@ final class InMemoryTokenStore: TokenStore, @unchecked Sendable {
     }
 }
 
+// MARK: - Request recorder
+
+/// Thread-safe recorder for verifying request sequence and auth headers.
+final class RequestRecorder: @unchecked Sendable {
+    struct Entry: Sendable {
+        let path: String
+        let auth: String?
+    }
+
+    private let lock = NSLock()
+    private var _requests: [Entry] = []
+
+    var requests: [Entry] {
+        lock.lock(); defer { lock.unlock() }
+        return _requests
+    }
+
+    func record(path: String, auth: String?) {
+        lock.lock(); defer { lock.unlock() }
+        _requests.append(Entry(path: path, auth: auth))
+    }
+}
+
+/// Thread-safe counter.
+final class SendableCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value = 0
+    var value: Int { lock.lock(); defer { lock.unlock() }; return _value }
+    func increment() { lock.lock(); defer { lock.unlock() }; _value += 1 }
+}
+
+// MARK: - Helpers
+
+private func jsonResponse(_ statusCode: Int, json: String, for request: URLRequest) -> (HTTPURLResponse, Data) {
+    let response = HTTPURLResponse(
+        url: request.url!, statusCode: statusCode,
+        httpVersion: nil, headerFields: ["Content-Type": "application/json"]
+    )!
+    return (response, json.data(using: .utf8)!)
+}
+
 // MARK: - Tests
 
 final class AuthManagerTests: XCTestCase {
@@ -120,7 +161,9 @@ final class AuthManagerTests: XCTestCase {
             // postUnauthenticated with 401 — should get unauthorized since it's unauthenticated
             // Actually, looking at the code: unauthenticated requests with 401 still hit the
             // 401 branch but with authenticated=false, so it goes to the else branch and throws .unauthorized
-            XCTAssertEqual(error, .unauthorized)
+            guard case .unauthorized = error else {
+                    XCTFail("Expected .unauthorized, got \(error)"); return
+                }
         } catch {
             XCTFail("Unexpected error type: \(error)")
         }
@@ -227,6 +270,151 @@ final class AuthManagerTests: XCTestCase {
 
         let after = await auth.hasStoredCredentials()
         XCTAssertTrue(after)
+    }
+
+    // MARK: - End-to-end refresh flow
+
+    /// Verifies the exact token used on the retry after a 401 → refresh cycle.
+    /// This is the test that catches stale-token-on-retry bugs.
+    func testRetryAfterRefreshUsesNewToken() async throws {
+        try tokenStore.save(key: "accessToken", value: "expired_jwt")
+        await client.setAccessToken("expired_jwt")
+
+        // Wait for refresh handler to be wired up
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        // Track every request in order
+        let recorder = RequestRecorder()
+
+        MockURLProtocol.requestHandler = { request in
+            let path = request.url?.path ?? ""
+            let authHeader = request.value(forHTTPHeaderField: "Authorization")
+            recorder.record(path: path, auth: authHeader)
+
+            if path == "/v1/libraries" && authHeader == "Bearer expired_jwt" {
+                // First attempt with expired token → 401
+                return jsonResponse(401, json: """
+                {"error": {"code": "unauthorized", "message": "Expired"}}
+                """, for: request)
+            } else if path == "/v1/auth/refresh" {
+                // Refresh endpoint — returns new token
+                return jsonResponse(200, json: """
+                {"access_token": "fresh_jwt", "token_type": "bearer", "expires_in": 3600}
+                """, for: request)
+            } else if path == "/v1/libraries" && authHeader == "Bearer fresh_jwt" {
+                // Retry with new token → success
+                return jsonResponse(200, json: """
+                [{"library_id": "lib_1", "name": "Photos", "root_path": "/p", "created_at": "2024-01-01T00:00:00+00:00"}]
+                """, for: request)
+            } else {
+                XCTFail("Unexpected request: \(path) auth=\(authHeader ?? "nil")")
+                return jsonResponse(500, json: "{}", for: request)
+            }
+        }
+
+        let libs: [Library] = try await client.get("/v1/libraries")
+        XCTAssertEqual(libs.count, 1)
+
+        // Verify exact request sequence
+        let requests = recorder.requests
+        XCTAssertEqual(requests.count, 3, "Expected 3 requests: original, refresh, retry")
+        XCTAssertEqual(requests[0].path, "/v1/libraries")
+        XCTAssertEqual(requests[0].auth, "Bearer expired_jwt", "First attempt should use expired token")
+        XCTAssertEqual(requests[1].path, "/v1/auth/refresh")
+        XCTAssertEqual(requests[1].auth, "Bearer expired_jwt", "Refresh should send expired token")
+        XCTAssertEqual(requests[2].path, "/v1/libraries")
+        XCTAssertEqual(requests[2].auth, "Bearer fresh_jwt", "Retry MUST use the fresh token")
+
+        // Token state should be updated everywhere
+        XCTAssertEqual(tokenStore.peek(key: "accessToken"), "fresh_jwt")
+        let clientToken = await client.currentToken()
+        XCTAssertEqual(clientToken, "fresh_jwt")
+    }
+
+    /// Verifies that getData (binary fetch) also retries with the fresh token.
+    func testGetDataRetryAfterRefreshUsesNewToken() async throws {
+        try tokenStore.save(key: "accessToken", value: "expired_jwt")
+        await client.setAccessToken("expired_jwt")
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        let recorder = RequestRecorder()
+        let imageData = Data([0xFF, 0xD8, 0xFF, 0xE0])
+
+        MockURLProtocol.requestHandler = { request in
+            let path = request.url?.path ?? ""
+            let authHeader = request.value(forHTTPHeaderField: "Authorization")
+            recorder.record(path: path, auth: authHeader)
+
+            if path.hasSuffix("/proxy") && authHeader == "Bearer expired_jwt" {
+                return jsonResponse(401, json: "Unauthorized", for: request)
+            } else if path == "/v1/auth/refresh" {
+                return jsonResponse(200, json: """
+                {"access_token": "fresh_jwt", "token_type": "bearer", "expires_in": 3600}
+                """, for: request)
+            } else if path.hasSuffix("/proxy") && authHeader == "Bearer fresh_jwt" {
+                let response = HTTPURLResponse(
+                    url: request.url!, statusCode: 200,
+                    httpVersion: nil, headerFields: ["Content-Type": "image/jpeg"]
+                )!
+                return (response, imageData)
+            } else {
+                XCTFail("Unexpected request: \(path) auth=\(authHeader ?? "nil")")
+                return jsonResponse(500, json: "{}", for: request)
+            }
+        }
+
+        let data = try await client.getData("/v1/assets/ast_1/proxy")
+        XCTAssertEqual(data, imageData)
+
+        let requests = recorder.requests
+        XCTAssertEqual(requests.count, 3)
+        XCTAssertEqual(requests[2].auth, "Bearer fresh_jwt", "getData retry MUST use fresh token")
+    }
+
+    /// Verifies that concurrent 401s coalesce into a single refresh call.
+    func testConcurrent401sCoalesceIntoSingleRefresh() async throws {
+        try tokenStore.save(key: "accessToken", value: "expired_jwt")
+        await client.setAccessToken("expired_jwt")
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        let refreshCount = SendableCounter()
+
+        MockURLProtocol.requestHandler = { request in
+            let path = request.url?.path ?? ""
+            let authHeader = request.value(forHTTPHeaderField: "Authorization")
+
+            if path == "/v1/auth/refresh" {
+                refreshCount.increment()
+                // Small delay to allow concurrent refresh attempts to coalesce
+                Thread.sleep(forTimeInterval: 0.05)
+                return jsonResponse(200, json: """
+                {"access_token": "fresh_jwt", "token_type": "bearer", "expires_in": 3600}
+                """, for: request)
+            } else if authHeader == "Bearer expired_jwt" {
+                return jsonResponse(401, json: """
+                {"error": {"code": "unauthorized", "message": "Expired"}}
+                """, for: request)
+            } else {
+                return jsonResponse(200, json: """
+                [{"library_id": "lib_1", "name": "Photos", "root_path": "/p", "created_at": "2024-01-01T00:00:00+00:00"}]
+                """, for: request)
+            }
+        }
+
+        // Fire two requests concurrently — both should get 401
+        let client = self.client!
+        try await withThrowingTaskGroup(of: [Library].self) { group in
+            group.addTask { try await client.get("/v1/libraries") }
+            group.addTask { try await client.get("/v1/libraries") }
+
+            for try await libs in group {
+                XCTAssertEqual(libs.count, 1)
+            }
+        }
+
+        // Should have at most 1 refresh call (coalesced), not 2
+        XCTAssertEqual(refreshCount.value, 1,
+            "Expected 1 refresh call (coalesced), got \(refreshCount.value)")
     }
 
     // MARK: - Auto-refresh wiring

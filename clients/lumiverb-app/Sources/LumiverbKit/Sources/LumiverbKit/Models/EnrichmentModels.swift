@@ -1,5 +1,14 @@
 import Foundation
 
+// MARK: - Enrichment operations
+
+/// Operations available for re-enrichment of assets.
+public enum EnrichmentOperation: String, CaseIterable, Sendable {
+    case faces = "Detect Faces"
+    case embeddings = "Generate Embeddings"
+    case ocr = "Extract Text"
+}
+
 // MARK: - OCR
 
 /// Request body for `POST /v1/assets/batch-ocr`.

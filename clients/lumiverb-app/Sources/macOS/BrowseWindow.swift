@@ -20,7 +20,12 @@ struct BrowseWindow: View {
             .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 300)
         } detail: {
             ZStack {
-                contentArea
+                VStack(spacing: 0) {
+                    if browseState.isReEnriching {
+                        reEnrichBanner
+                    }
+                    contentArea
+                }
                 if browseState.selectedAssetId != nil {
                     lightboxOverlay
                 }
@@ -177,6 +182,33 @@ struct BrowseWindow: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    // MARK: - Re-enrichment banner
+
+    private var reEnrichBanner: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+            Text("Re-enriching: \(browseState.reEnrichPhase)")
+                .font(.caption)
+            if browseState.reEnrichTotal > 0 {
+                Text("\(browseState.reEnrichProcessed) of \(browseState.reEnrichTotal)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            Button {
+                browseState.cancelReEnrich()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(.bar)
     }
 
     private func emptyState(_ message: String, icon: String) -> some View {

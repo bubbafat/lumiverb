@@ -81,6 +81,12 @@ class BrowseState: ObservableObject {
 
     var client: APIClient? { appState.client }
 
+    /// Root path of the currently selected library, if any.
+    var selectedLibraryRootPath: String? {
+        guard let id = selectedLibraryId else { return nil }
+        return appState.libraries.first { $0.libraryId == id }?.rootPath
+    }
+
     /// The list of asset IDs currently displayed (varies by mode).
     var displayedAssetIds: [String] {
         switch mode {
@@ -299,6 +305,139 @@ class BrowseState: ObservableObject {
 
     func selectPath(_ path: String?) {
         selectedPath = path
+    }
+
+    // MARK: - Re-enrichment
+
+    @Published var isReEnriching = false
+    @Published var reEnrichPhase = ""
+    @Published var reEnrichTotal = 0
+    @Published var reEnrichProcessed = 0
+
+    private var reEnrichRunner: ReEnrichmentRunner?
+    private var reEnrichPollTask: Task<Void, Never>?
+
+    /// Re-enrich assets in the current library, optionally scoped to a path prefix.
+    func reEnrich(operations: Set<EnrichmentOperation>, pathPrefix: String? = nil) {
+        guard let client, let libraryId = selectedLibraryId, !isReEnriching else { return }
+
+        Task {
+            isReEnriching = true
+            reEnrichPhase = "fetching assets"
+            reEnrichProcessed = 0
+            reEnrichTotal = 0
+
+            let assets = await fetchAllAssets(libraryId: libraryId, pathPrefix: pathPrefix)
+            guard !assets.isEmpty else {
+                isReEnriching = false
+                return
+            }
+
+            let runner = ReEnrichmentRunner(client: client, libraryId: libraryId)
+            reEnrichRunner = runner
+            startReEnrichPolling(runner: runner)
+
+            _ = await runner.run(assets: assets, operations: operations)
+
+            stopReEnrichPolling()
+            reEnrichRunner = nil
+            isReEnriching = false
+            reEnrichPhase = ""
+
+            // Refresh the grid and detail if open
+            reloadAssets()
+            if let assetId = selectedAssetId {
+                await loadAssetDetail(assetId: assetId)
+            }
+        }
+    }
+
+    /// Re-enrich a single asset (from lightbox actions).
+    func reEnrichAsset(assetId: String, operations: Set<EnrichmentOperation>) {
+        guard let client, let libraryId = selectedLibraryId, !isReEnriching else { return }
+
+        // Find the asset in current display or fetch it
+        let asset = assets.first { $0.assetId == assetId }
+        guard let asset else { return }
+
+        Task {
+            isReEnriching = true
+            reEnrichPhase = ""
+            reEnrichProcessed = 0
+            reEnrichTotal = 1
+
+            let runner = ReEnrichmentRunner(client: client, libraryId: libraryId)
+            reEnrichRunner = runner
+            startReEnrichPolling(runner: runner)
+
+            _ = await runner.run(assets: [asset], operations: operations)
+
+            stopReEnrichPolling()
+            reEnrichRunner = nil
+            isReEnriching = false
+            reEnrichPhase = ""
+
+            // Refresh the lightbox detail
+            await loadAssetDetail(assetId: assetId)
+        }
+    }
+
+    func cancelReEnrich() {
+        Task {
+            await reEnrichRunner?.cancel()
+        }
+    }
+
+    /// Fetch all assets for a library/path (paginated).
+    private func fetchAllAssets(libraryId: String, pathPrefix: String?) async -> [AssetPageItem] {
+        guard let client else { return [] }
+        var all: [AssetPageItem] = []
+        var cursor: String?
+
+        repeat {
+            var query: [String: String] = [
+                "library_id": libraryId,
+                "limit": "500",
+                "sort": "asset_id",
+                "dir": "asc",
+            ]
+            if let cursor { query["after"] = cursor }
+            if let pathPrefix { query["path_prefix"] = pathPrefix }
+
+            do {
+                let response: AssetPageResponse = try await client.get(
+                    "/v1/assets/page", query: query
+                )
+                all.append(contentsOf: response.items)
+                cursor = response.nextCursor
+                reEnrichTotal = all.count
+            } catch {
+                self.error = "Failed to fetch assets: \(error)"
+                break
+            }
+        } while cursor != nil
+
+        return all
+    }
+
+    private func startReEnrichPolling(runner: ReEnrichmentRunner) {
+        reEnrichPollTask?.cancel()
+        reEnrichPollTask = Task {
+            while !Task.isCancelled {
+                let total = await runner.totalItems
+                let processed = await runner.processedItems
+                let phase = await runner.phase
+                self.reEnrichTotal = total
+                self.reEnrichProcessed = processed
+                self.reEnrichPhase = phase
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
+    }
+
+    private func stopReEnrichPolling() {
+        reEnrichPollTask?.cancel()
+        reEnrichPollTask = nil
     }
 
     // MARK: - Keyboard navigation

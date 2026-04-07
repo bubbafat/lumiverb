@@ -114,6 +114,18 @@ struct DirectoryRowView: View {
                         : Color.clear
                 )
                 .cornerRadius(4)
+                .contextMenu {
+                    if let rootPath = browseState.selectedLibraryRootPath {
+                        Button("Open Source Location") {
+                            let fullPath = (rootPath as NSString).appendingPathComponent(node.path)
+                            NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: fullPath)
+                        }
+                        Divider()
+                    }
+                    ReEnrichMenu { ops in
+                        browseState.reEnrich(operations: ops, pathPrefix: node.path)
+                    }
+                }
             }
             .buttonStyle(.plain)
 

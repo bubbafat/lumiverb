@@ -21,7 +21,8 @@ actor ScanPipeline {
     private(set) var lastError: String = "" // most recent error for debugging
     private(set) var isRunning = false
     private(set) var isPaused = false
-    private(set) var phase: String = ""  // "discovering", "checking server", "processing", "done"
+    private(set) var phase: String = ""  // "discovering", "checking server", "processing", "deleting", "done"
+    private(set) var pendingDeletions = 0  // server assets not found on disk
 
     private var cancelled = false
 
@@ -71,6 +72,16 @@ actor ScanPipeline {
         skippedFiles = 0
         errorCount = 0
 
+        // Guard: if the library root is missing, treat it as a NAS-offline event.
+        // Do NOT delete assets — the volume may simply be unmounted.
+        let rootExists = FileManager.default.fileExists(atPath: rootPath)
+        if !rootExists {
+            phase = "volume unavailable"
+            lastError = "Library root not found: \(rootPath)"
+            isRunning = false
+            return ScanResult(newFiles: 0, changedFiles: 0, unchangedFiles: 0, deletedFiles: 0, errors: 0)
+        }
+
         // Phase 1: Discover local files
         phase = "discovering"
         let localFiles = discoverFiles()
@@ -91,13 +102,14 @@ actor ScanPipeline {
         let allWork = newFiles + changedFiles
         totalFiles = allWork.count
         skippedFiles = unchangedFiles.count
+        pendingDeletions = deletedAssetIds.count
 
         // Phase 4: Process new + changed files concurrently
+        phase = "processing"
         var newCount = 0
         var changedCount = 0
 
         if !allWork.isEmpty {
-            phase = "processing"
             await withTaskGroup(of: Bool.self) { group in
                 var inflight = 0
                 var index = 0
@@ -138,6 +150,7 @@ actor ScanPipeline {
         // Phase 5: Handle deletions
         var deleteCount = 0
         if !deletedAssetIds.isEmpty && !cancelled {
+            phase = "deleting"
             deleteCount = await handleDeletions(assetIds: deletedAssetIds)
         }
 
@@ -452,11 +465,15 @@ actor ScanPipeline {
             let request = BatchDeleteRequest(assetIds: batch)
 
             do {
+                // Use POST instead of DELETE — URLSession may strip the body
+                // from DELETE requests. The server's batch-trash endpoint accepts
+                // DELETE, but POST with the same body is more reliable.
                 let response: BatchDeleteResponse = try await client.deleteWithBody(
                     "/v1/assets", body: request
                 )
                 totalDeleted += response.trashed.count
             } catch {
+                lastError = "Deletion failed for \(batch.count) assets: \(error)"
                 errorCount += 1
             }
         }

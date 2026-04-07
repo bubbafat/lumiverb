@@ -4,7 +4,7 @@ import Foundation
 
 /// Errors from the Lumiverb API client.
 public enum APIError: Error, Equatable {
-    case unauthorized
+    case unauthorized(String)
     case serverError(statusCode: Int, message: String)
     case decodingError(String)
     case networkError(String)
@@ -56,6 +56,14 @@ public actor APIClient {
 
     public func currentToken() -> String? {
         accessToken
+    }
+
+    /// Extract error detail from a 401 response body for diagnostics.
+    private func unauthorizedMessage(from data: Data) -> String {
+        if let envelope = try? decoder.decode(ErrorEnvelope.self, from: data) {
+            return envelope.error.message
+        }
+        return String(data: data.prefix(200), encoding: .utf8) ?? "Unauthorized"
     }
 
     // MARK: - HTTP methods
@@ -157,35 +165,25 @@ public actor APIClient {
         }
 
         if http.statusCode == 401 {
-            if let refreshHandler, await refreshHandler(), let newToken = accessToken {
-                urlRequest.setValue("Bearer \(newToken)", forHTTPHeaderField: "Authorization")
-                do {
-                    (data, response) = try await session.data(for: urlRequest)
-                } catch {
-                    throw APIError.networkError(error.localizedDescription)
-                }
-                guard let retryHttp = response as? HTTPURLResponse else {
-                    throw APIError.networkError("Invalid response")
-                }
-                if retryHttp.statusCode == 401 { throw APIError.unauthorized }
-            } else {
-                throw APIError.unauthorized
+            if let refreshHandler, await refreshHandler() {
+                // Retry with fresh token — rebuild entire multipart request
+                return try await postMultipart(
+                    path, fields: fields, fileField: fileField,
+                    fileData: fileData, fileName: fileName, mimeType: mimeType
+                )
             }
+            throw APIError.unauthorized(unauthorizedMessage(from: data))
         }
 
-        guard let finalHttp = response as? HTTPURLResponse else {
-            throw APIError.networkError("Invalid response")
-        }
-
-        if finalHttp.statusCode >= 400 {
+        if http.statusCode >= 400 {
             if let envelope = try? decoder.decode(ErrorEnvelope.self, from: data) {
                 throw APIError.serverError(
-                    statusCode: finalHttp.statusCode,
+                    statusCode: http.statusCode,
                     message: envelope.error.message
                 )
             }
             let bodyStr = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw APIError.serverError(statusCode: finalHttp.statusCode, message: bodyStr)
+            throw APIError.serverError(statusCode: http.statusCode, message: bodyStr)
         }
 
         do {
@@ -226,24 +224,21 @@ public actor APIClient {
             throw APIError.networkError(error.localizedDescription)
         }
 
-        guard var http = response as? HTTPURLResponse else {
+        guard let http = response as? HTTPURLResponse else {
             throw APIError.networkError("Invalid response")
         }
 
         if http.statusCode == 401 {
-            if let refreshHandler, await refreshHandler(), let newToken = accessToken {
-                urlRequest.setValue("Bearer \(newToken)", forHTTPHeaderField: "Authorization")
-                do {
-                    (data, response) = try await session.data(for: urlRequest)
-                } catch {
-                    throw APIError.networkError(error.localizedDescription)
-                }
-                guard let retryHttp = response as? HTTPURLResponse else {
-                    throw APIError.networkError("Invalid response")
-                }
-                http = retryHttp
+            // Check if token was already refreshed by another request
+            let tokenUsed = urlRequest.value(forHTTPHeaderField: "Authorization")
+            let currentAuth = accessToken.map { "Bearer \($0)" }
+            if tokenUsed != currentAuth {
+                return try await getData(path)
             }
-            if http.statusCode == 401 { throw APIError.unauthorized }
+            if let refreshHandler, await refreshHandler() {
+                return try await getData(path)
+            }
+            throw APIError.unauthorized(unauthorizedMessage(from: data))
         }
         if http.statusCode == 404 { return nil }
         if http.statusCode >= 400 {
@@ -297,28 +292,34 @@ public actor APIClient {
             throw APIError.networkError(error.localizedDescription)
         }
 
-        guard var http = response as? HTTPURLResponse else {
+        guard let http = response as? HTTPURLResponse else {
             throw APIError.networkError("Invalid response")
         }
 
         if http.statusCode == 401 && authenticated && !skipRefresh {
-            if let refreshHandler, await refreshHandler(), let newToken = accessToken {
-                urlRequest.setValue("Bearer \(newToken)", forHTTPHeaderField: "Authorization")
-                do {
-                    (data, response) = try await session.data(for: urlRequest)
-                } catch {
-                    throw APIError.networkError(error.localizedDescription)
-                }
-                guard let retryHttp = response as? HTTPURLResponse else {
-                    throw APIError.networkError("Invalid response")
-                }
-                http = retryHttp
+            // If the token has already been refreshed (by another request) since
+            // we built our URLRequest, just retry with the current token — don't
+            // trigger another refresh which would revoke the just-issued token.
+            let tokenUsed = urlRequest.value(forHTTPHeaderField: "Authorization")
+            let currentAuth = accessToken.map { "Bearer \($0)" }
+
+            if tokenUsed != currentAuth {
+                // Token changed while we were in flight — retry with current token
+                return try await request(
+                    method, path: path, query: query, body: body,
+                    authenticated: true, skipRefresh: true
+                )
             }
-            if http.statusCode == 401 {
-                throw APIError.unauthorized
+
+            if let refreshHandler, await refreshHandler() {
+                return try await request(
+                    method, path: path, query: query, body: body,
+                    authenticated: true, skipRefresh: true
+                )
             }
+            throw APIError.unauthorized(unauthorizedMessage(from: data))
         } else if http.statusCode == 401 {
-            throw APIError.unauthorized
+            throw APIError.unauthorized(unauthorizedMessage(from: data))
         }
 
         if http.statusCode >= 400 {

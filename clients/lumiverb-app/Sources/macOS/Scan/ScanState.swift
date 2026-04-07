@@ -13,6 +13,7 @@ class ScanState: ObservableObject {
     @Published var totalFiles = 0        // files needing work (new + changed)
     @Published var processedFiles = 0    // files completed
     @Published var skippedFiles = 0      // unchanged files
+    @Published var pendingDeletions = 0  // server assets not on disk
     @Published var errorCount = 0         // failed files
     @Published var lastError = ""         // most recent error detail
     @Published var phase = ""            // current scan phase
@@ -51,12 +52,19 @@ class ScanState: ObservableObject {
             case "discovering":
                 return "Scanning files... (\(discoveredFiles) found)"
             case "checking server":
-                return "Checking server... (\(serverFiles) assets fetched)"
+                if serverFiles > 0 {
+                    return "Checking server... (\(serverFiles) assets)"
+                }
+                return "Checking server..."
             case "processing":
                 if totalFiles == 0 {
                     return "Up to date (\(skippedFiles) unchanged)"
                 }
                 return "Processing \(processedFiles) of \(totalFiles) new files (\(skippedFiles) unchanged)"
+            case "deleting":
+                return "Removing \(pendingDeletions) deleted files..."
+            case "volume unavailable":
+                return "Volume unavailable — skipping"
             default:
                 return "Scanning..."
             }
@@ -206,6 +214,7 @@ class ScanState: ObservableObject {
                 let total = await pipeline.totalFiles
                 let processed = await pipeline.processedFiles
                 let skipped = await pipeline.skippedFiles
+                let deletions = await pipeline.pendingDeletions
                 let errors = await pipeline.errorCount
                 let error = await pipeline.lastError
                 let currentPhase = await pipeline.phase
@@ -214,6 +223,7 @@ class ScanState: ObservableObject {
                 self.totalFiles = total
                 self.processedFiles = processed
                 self.skippedFiles = skipped
+                self.pendingDeletions = deletions
                 self.errorCount = errors
                 self.lastError = error
                 self.phase = currentPhase

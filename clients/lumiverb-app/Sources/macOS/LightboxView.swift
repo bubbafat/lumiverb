@@ -56,6 +56,17 @@ struct LightboxView: View {
                     detail: detail,
                     onFindSimilar: {
                         Task { await browseState.findSimilar(assetId: detail.assetId) }
+                    },
+                    onReEnrich: { ops in
+                        browseState.reEnrichAsset(assetId: detail.assetId, operations: ops)
+                    },
+                    onRevealInFinder: {
+                        if let rootPath = browseState.selectedLibraryRootPath {
+                            let fullPath = (rootPath as NSString).appendingPathComponent(detail.relPath)
+                            NSWorkspace.shared.activateFileViewerSelecting(
+                                [URL(fileURLWithPath: fullPath)]
+                            )
+                        }
                     }
                 )
                 .frame(width: 300)
@@ -85,6 +96,8 @@ struct LightboxView: View {
 struct MetadataSidebar: View {
     let detail: AssetDetail
     let onFindSimilar: () -> Void
+    let onReEnrich: (Set<EnrichmentOperation>) -> Void
+    let onRevealInFinder: () -> Void
 
     var body: some View {
         ScrollView {
@@ -104,6 +117,16 @@ struct MetadataSidebar: View {
                         Label("Find Similar", systemImage: "square.stack.3d.up")
                     }
                     .controlSize(.small)
+
+                    Button {
+                        onRevealInFinder()
+                    } label: {
+                        Label("Reveal in Finder", systemImage: "folder")
+                    }
+                    .controlSize(.small)
+
+                    ReEnrichMenu(onReEnrich: onReEnrich)
+                        .controlSize(.small)
                 }
 
                 // AI Description
