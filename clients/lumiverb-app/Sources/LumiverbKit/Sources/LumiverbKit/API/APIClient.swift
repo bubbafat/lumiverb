@@ -155,6 +155,22 @@ public actor APIClient {
 
         do {
             return try decoder.decode(T.self, from: data)
+        } catch let decodingError as DecodingError {
+            let context: String
+            switch decodingError {
+            case .keyNotFound(let key, let ctx):
+                context = "Missing key '\(key.stringValue)' at \(ctx.codingPath.map(\.stringValue).joined(separator: "."))"
+            case .typeMismatch(let type, let ctx):
+                context = "Type mismatch for \(type) at \(ctx.codingPath.map(\.stringValue).joined(separator: "."))"
+            case .valueNotFound(let type, let ctx):
+                context = "Null value for \(type) at \(ctx.codingPath.map(\.stringValue).joined(separator: "."))"
+            case .dataCorrupted(let ctx):
+                context = "Corrupted data at \(ctx.codingPath.map(\.stringValue).joined(separator: "."))"
+            @unknown default:
+                context = decodingError.localizedDescription
+            }
+            let preview = String(data: data.prefix(500), encoding: .utf8) ?? "(binary)"
+            throw APIError.decodingError("\(context) — response: \(preview)")
         } catch {
             throw APIError.decodingError(error.localizedDescription)
         }

@@ -97,6 +97,12 @@ struct MenuBarView: View {
                 Text(error)
                     .font(.caption)
                     .foregroundColor(.red)
+                    .textSelection(.enabled)
+                Button("Copy Error") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(error, forType: .string)
+                }
+                .controlSize(.small)
             }
         }
 

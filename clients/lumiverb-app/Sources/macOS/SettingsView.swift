@@ -39,6 +39,12 @@ struct SettingsView: View {
                     Text(error)
                         .foregroundColor(.red)
                         .font(.caption)
+                        .textSelection(.enabled)
+                    Button("Copy Error") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(error, forType: .string)
+                    }
+                    .controlSize(.small)
                 }
 
                 if appState.isAuthenticated {
