@@ -101,9 +101,9 @@ run-web: ## Start web UI dev server (port 5173)
 	cd $(WEB_DIR) && npx vite
 
 run-macos: build-macos ## Build and launch macOS app
-	@app=$$(find $(SWIFT_PROJECT)/build -name "Lumiverb.app" -path "*/Debug/*" 2>/dev/null | head -1); \
+	@app=$$(find ~/Library/Developer/Xcode/DerivedData -name "Lumiverb.app" -path "*/Debug/*" 2>/dev/null | head -1); \
 	if [ -z "$$app" ]; then \
-		echo "Build succeeded but .app not found in expected location."; \
+		echo "Build succeeded but .app not found in DerivedData."; \
 		echo "Open $(XCODE_PROJECT) in Xcode and run from there."; \
 	else \
 		open "$$app"; \
