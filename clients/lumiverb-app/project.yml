@@ -1,0 +1,56 @@
+name: Lumiverb
+options:
+  bundleIdPrefix: io.lumiverb
+  deploymentTarget:
+    macOS: "14.0"
+    iOS: "17.0"
+  xcodeVersion: "15.0"
+  createIntermediateGroups: true
+
+packages:
+  LumiverbKit:
+    path: Sources/LumiverbKit
+
+targets:
+  Lumiverb-macOS:
+    type: application
+    platform: macOS
+    sources:
+      - Sources/macOS
+    dependencies:
+      - package: LumiverbKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.lumiverb.app.macos
+        INFOPLIST_FILE: Sources/macOS/Info.plist
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        SWIFT_VERSION: "5.9"
+        CODE_SIGN_IDENTITY: "-"
+        PRODUCT_NAME: Lumiverb
+
+  Lumiverb-iOS:
+    type: application
+    platform: iOS
+    sources:
+      - Sources/iOS
+    dependencies:
+      - package: LumiverbKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.lumiverb.app.ios
+        INFOPLIST_FILE: Sources/iOS/Info.plist
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        SWIFT_VERSION: "5.9"
+        CODE_SIGN_IDENTITY: "-"
+        PRODUCT_NAME: Lumiverb
+
+  LumiverbKitTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/LumiverbKitTests
+    dependencies:
+      - package: LumiverbKit
+    settings:
+      base:
+        SWIFT_VERSION: "5.9"

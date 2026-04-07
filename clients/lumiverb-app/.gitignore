@@ -1,0 +1,15 @@
+# XcodeGen generates this — don't commit
+*.xcodeproj
+
+# Xcode build artifacts
+build/
+DerivedData/
+*.xcworkspace
+xcuserdata/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# macOS
+.DS_Store
