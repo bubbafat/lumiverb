@@ -31,9 +31,9 @@ struct RefreshResponse: Decodable {
 /// Authorization header to `POST /v1/auth/refresh`.
 public actor AuthManager {
     private let client: APIClient
-    private let keychain: KeychainHelper
+    private let keychain: any TokenStore
 
-    public init(client: APIClient, keychain: KeychainHelper = KeychainHelper()) {
+    public init(client: APIClient, keychain: any TokenStore = KeychainHelper()) {
         self.client = client
         self.keychain = keychain
 

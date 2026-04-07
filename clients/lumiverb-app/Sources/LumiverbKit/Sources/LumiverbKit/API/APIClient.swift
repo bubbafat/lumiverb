@@ -34,9 +34,9 @@ public actor APIClient {
     /// Callback for automatic token refresh on 401. Set by AuthManager.
     private var refreshHandler: (@Sendable () async -> Bool)?
 
-    public init(baseURL: URL, accessToken: String? = nil) {
+    public init(baseURL: URL, session: URLSession = .shared, accessToken: String? = nil) {
         self.baseURL = baseURL
-        self.session = URLSession.shared
+        self.session = session
         self.accessToken = accessToken
 
         let decoder = JSONDecoder()
@@ -366,7 +366,7 @@ public actor APIClient {
 // MARK: - Empty response
 
 /// Placeholder for endpoints that return no body.
-public struct EmptyResponse: Decodable {
+public struct EmptyResponse: Decodable, Sendable {
     public init() {}
 }
 

@@ -7,11 +7,18 @@ public enum KeychainError: Error {
     case encodingError
 }
 
+/// Abstraction over token persistence so tests can swap in an in-memory store.
+public protocol TokenStore: Sendable {
+    func save(key: String, value: String) throws
+    func read(key: String) throws -> String
+    func delete(key: String) throws
+}
+
 /// Simple keychain wrapper for storing string values (tokens, keys).
 ///
 /// Uses `kSecClassGenericPassword` with a service identifier to namespace
 /// entries. Thread-safe (Security framework is thread-safe).
-public struct KeychainHelper: Sendable {
+public struct KeychainHelper: TokenStore, Sendable {
     private let service: String
 
     public init(service: String = "io.lumiverb.app") {
