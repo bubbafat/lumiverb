@@ -3,6 +3,8 @@ import LumiverbKit
 
 struct MenuBarView: View {
     @ObservedObject var appState: AppState
+    @ObservedObject var scanState: ScanState
+    var openBrowseWindow: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -18,6 +20,13 @@ struct MenuBarView: View {
             if !appState.serverURL.isEmpty && !appState.isAuthenticated {
                 appState.configure(serverURL: appState.serverURL)
                 await appState.tryRestoreSession()
+            }
+        }
+        .onChange(of: appState.isAuthenticated) { _, isAuth in
+            if isAuth {
+                scanState.startWatching()
+            } else {
+                scanState.stopWatching()
             }
         }
     }
@@ -41,6 +50,11 @@ struct MenuBarView: View {
 
         Divider()
 
+        // Scan status
+        scanStatusSection
+
+        Divider()
+
         if appState.libraries.isEmpty {
             Text("No libraries")
                 .foregroundColor(.secondary)
@@ -53,7 +67,15 @@ struct MenuBarView: View {
 
         Divider()
 
+        Button("Open Lumiverb") {
+            openBrowseWindow?()
+        }
+        .keyboardShortcut("o")
+
+        Divider()
+
         Button("Log Out") {
+            scanState.stopWatching()
             Task { await appState.logout() }
         }
 
@@ -67,6 +89,81 @@ struct MenuBarView: View {
             NSApplication.shared.terminate(nil)
         }
         .keyboardShortcut("q")
+    }
+
+    // MARK: - Scan status
+
+    @ViewBuilder
+    private var scanStatusSection: some View {
+        HStack {
+            if scanState.isScanning {
+                ProgressView()
+                    .controlSize(.small)
+            } else if scanState.isWatching {
+                Image(systemName: "eye")
+                    .foregroundColor(.blue)
+            }
+            Text(scanState.statusText)
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+
+        if scanState.isScanning {
+            // Only show progress bar during actual processing
+            if scanState.totalFiles > 0 && scanState.phase == "processing" {
+                ProgressView(
+                    value: Double(scanState.processedFiles),
+                    total: Double(scanState.totalFiles)
+                )
+                .progressViewStyle(.linear)
+            }
+
+            HStack(spacing: 8) {
+                if scanState.isPaused {
+                    Button("Resume") { scanState.resumeScanning() }
+                        .controlSize(.small)
+                } else {
+                    Button("Pause") { scanState.pauseScanning() }
+                        .controlSize(.small)
+                        .keyboardShortcut("p")
+                }
+                Button("Cancel") { scanState.cancelScanning() }
+                    .controlSize(.small)
+            }
+        } else {
+            Button("Scan Now") { scanState.scanAllLibraries() }
+                .controlSize(.small)
+                .keyboardShortcut("s")
+                .disabled(appState.libraries.isEmpty)
+        }
+
+        if scanState.errorCount > 0 {
+            Text("\(scanState.errorCount) errors")
+                .font(.caption2)
+                .foregroundColor(.red)
+            Text(scanState.lastError)
+                .font(.caption2)
+                .foregroundColor(.red)
+                .lineLimit(3)
+                .textSelection(.enabled)
+            Button("Copy Error") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(scanState.lastError, forType: .string)
+            }
+            .controlSize(.small)
+        }
+
+        if let lastScan = scanState.lastScanDate {
+            Text("Last scan: \(lastScan, style: .relative) ago")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+
+        if let error = scanState.scanError {
+            Text(error)
+                .font(.caption2)
+                .foregroundColor(.red)
+        }
     }
 
     // MARK: - Unauthenticated

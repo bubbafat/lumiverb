@@ -36,6 +36,14 @@ public actor AuthManager {
     public init(client: APIClient, keychain: KeychainHelper = KeychainHelper()) {
         self.client = client
         self.keychain = keychain
+
+        // Wire up auto-refresh: when APIClient gets a 401, it calls this
+        let authManager = self
+        Task {
+            await client.setRefreshHandler {
+                await authManager.refresh()
+            }
+        }
     }
 
     /// Attempt login with email and password. On success, stores the token
@@ -62,7 +70,7 @@ public actor AuthManager {
         await client.setAccessToken(currentToken)
 
         do {
-            let response: RefreshResponse = try await client.post(
+            let response: RefreshResponse = try await client.postNoRetry(
                 "/v1/auth/refresh"
             )
             await client.setAccessToken(response.accessToken)

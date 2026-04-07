@@ -31,6 +31,8 @@ public actor APIClient {
     private let session: URLSession
     private var accessToken: String?
     private let decoder: JSONDecoder
+    /// Callback for automatic token refresh on 401. Set by AuthManager.
+    private var refreshHandler: (@Sendable () async -> Bool)?
 
     public init(baseURL: URL, accessToken: String? = nil) {
         self.baseURL = baseURL
@@ -44,6 +46,12 @@ public actor APIClient {
 
     public func setAccessToken(_ token: String?) {
         self.accessToken = token
+    }
+
+    /// Set a handler that will be called to refresh the token on 401.
+    /// The handler should return true if refresh succeeded.
+    public func setRefreshHandler(_ handler: @escaping @Sendable () async -> Bool) {
+        self.refreshHandler = handler
     }
 
     public func currentToken() -> String? {
@@ -77,12 +85,173 @@ public actor APIClient {
         let _: EmptyResponse = try await request("DELETE", path: path)
     }
 
+    /// POST that skips auto-refresh on 401 (used for token refresh itself).
+    public func postNoRetry<T: Decodable>(
+        _ path: String,
+        body: (any Encodable)? = nil
+    ) async throws -> T {
+        try await request("POST", path: path, body: body, skipRefresh: true)
+    }
+
     /// POST without requiring an access token (used for login).
     public func postUnauthenticated<T: Decodable>(
         _ path: String,
         body: (any Encodable)? = nil
     ) async throws -> T {
         try await request("POST", path: path, body: body, authenticated: false)
+    }
+
+    // MARK: - Multipart upload
+
+    /// POST multipart/form-data with file data and text fields.
+    /// Used for `/v1/ingest` which requires a proxy image plus metadata fields.
+    public func postMultipart<T: Decodable>(
+        _ path: String,
+        fields: [String: String],
+        fileField: String,
+        fileData: Data,
+        fileName: String,
+        mimeType: String
+    ) async throws -> T {
+        guard let token = accessToken else {
+            throw APIError.noToken
+        }
+
+        let boundary = "Boundary-\(UUID().uuidString)"
+        let url = baseURL.appendingPathComponent(path)
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        var body = Data()
+
+        // Text fields
+        for (key, value) in fields {
+            body.append("--\(boundary)\r\n")
+            body.append("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n")
+            body.append("\(value)\r\n")
+        }
+
+        // File field
+        body.append("--\(boundary)\r\n")
+        body.append("Content-Disposition: form-data; name=\"\(fileField)\"; filename=\"\(fileName)\"\r\n")
+        body.append("Content-Type: \(mimeType)\r\n\r\n")
+        body.append(fileData)
+        body.append("\r\n")
+
+        body.append("--\(boundary)--\r\n")
+
+        urlRequest.httpBody = body
+
+        var data: Data
+        var response: URLResponse
+        do {
+            (data, response) = try await session.data(for: urlRequest)
+        } catch {
+            throw APIError.networkError(error.localizedDescription)
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.networkError("Invalid response")
+        }
+
+        if http.statusCode == 401 {
+            if let refreshHandler, await refreshHandler(), let newToken = accessToken {
+                urlRequest.setValue("Bearer \(newToken)", forHTTPHeaderField: "Authorization")
+                do {
+                    (data, response) = try await session.data(for: urlRequest)
+                } catch {
+                    throw APIError.networkError(error.localizedDescription)
+                }
+                guard let retryHttp = response as? HTTPURLResponse else {
+                    throw APIError.networkError("Invalid response")
+                }
+                if retryHttp.statusCode == 401 { throw APIError.unauthorized }
+            } else {
+                throw APIError.unauthorized
+            }
+        }
+
+        guard let finalHttp = response as? HTTPURLResponse else {
+            throw APIError.networkError("Invalid response")
+        }
+
+        if finalHttp.statusCode >= 400 {
+            if let envelope = try? decoder.decode(ErrorEnvelope.self, from: data) {
+                throw APIError.serverError(
+                    statusCode: finalHttp.statusCode,
+                    message: envelope.error.message
+                )
+            }
+            let bodyStr = String(data: data, encoding: .utf8) ?? "Unknown error"
+            throw APIError.serverError(statusCode: finalHttp.statusCode, message: bodyStr)
+        }
+
+        do {
+            return try decoder.decode(T.self, from: data)
+        } catch {
+            let preview = String(data: data.prefix(500), encoding: .utf8) ?? "(binary)"
+            throw APIError.decodingError("Multipart response decode failed: \(error) — response: \(preview)")
+        }
+    }
+
+    /// POST multipart/form-data for DELETE body (JSON body with asset IDs).
+    public func deleteWithBody<T: Decodable>(
+        _ path: String,
+        body: (any Encodable)? = nil
+    ) async throws -> T {
+        try await request("DELETE", path: path, body: body)
+    }
+
+    // MARK: - Binary data (images)
+
+    /// Fetch raw bytes (thumbnails, proxies) with authentication.
+    /// Returns `nil` for 404 (no proxy/thumbnail generated yet).
+    public func getData(_ path: String) async throws -> Data? {
+        guard let token = accessToken else {
+            throw APIError.noToken
+        }
+
+        let url = baseURL.appendingPathComponent(path)
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "GET"
+        urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        var data: Data
+        var response: URLResponse
+        do {
+            (data, response) = try await session.data(for: urlRequest)
+        } catch {
+            throw APIError.networkError(error.localizedDescription)
+        }
+
+        guard var http = response as? HTTPURLResponse else {
+            throw APIError.networkError("Invalid response")
+        }
+
+        if http.statusCode == 401 {
+            if let refreshHandler, await refreshHandler(), let newToken = accessToken {
+                urlRequest.setValue("Bearer \(newToken)", forHTTPHeaderField: "Authorization")
+                do {
+                    (data, response) = try await session.data(for: urlRequest)
+                } catch {
+                    throw APIError.networkError(error.localizedDescription)
+                }
+                guard let retryHttp = response as? HTTPURLResponse else {
+                    throw APIError.networkError("Invalid response")
+                }
+                http = retryHttp
+            }
+            if http.statusCode == 401 { throw APIError.unauthorized }
+        }
+        if http.statusCode == 404 { return nil }
+        if http.statusCode >= 400 {
+            let body = String(data: data, encoding: .utf8) ?? "Unknown error"
+            throw APIError.serverError(statusCode: http.statusCode, message: body)
+        }
+
+        return data
     }
 
     // MARK: - Core request
@@ -92,7 +261,8 @@ public actor APIClient {
         path: String,
         query: [String: String]? = nil,
         body: (any Encodable)? = nil,
-        authenticated: Bool = true
+        authenticated: Bool = true,
+        skipRefresh: Bool = false
     ) async throws -> T {
         if authenticated && accessToken == nil {
             throw APIError.noToken
@@ -119,19 +289,35 @@ public actor APIClient {
             urlRequest.httpBody = try encoder.encode(body)
         }
 
-        let data: Data
-        let response: URLResponse
+        var data: Data
+        var response: URLResponse
         do {
             (data, response) = try await session.data(for: urlRequest)
         } catch {
             throw APIError.networkError(error.localizedDescription)
         }
 
-        guard let http = response as? HTTPURLResponse else {
+        guard var http = response as? HTTPURLResponse else {
             throw APIError.networkError("Invalid response")
         }
 
-        if http.statusCode == 401 {
+        if http.statusCode == 401 && authenticated && !skipRefresh {
+            if let refreshHandler, await refreshHandler(), let newToken = accessToken {
+                urlRequest.setValue("Bearer \(newToken)", forHTTPHeaderField: "Authorization")
+                do {
+                    (data, response) = try await session.data(for: urlRequest)
+                } catch {
+                    throw APIError.networkError(error.localizedDescription)
+                }
+                guard let retryHttp = response as? HTTPURLResponse else {
+                    throw APIError.networkError("Invalid response")
+                }
+                http = retryHttp
+            }
+            if http.statusCode == 401 {
+                throw APIError.unauthorized
+            }
+        } else if http.statusCode == 401 {
             throw APIError.unauthorized
         }
 
@@ -182,4 +368,15 @@ public actor APIClient {
 /// Placeholder for endpoints that return no body.
 public struct EmptyResponse: Decodable {
     public init() {}
+}
+
+// MARK: - Data helpers
+
+extension Data {
+    /// Append a UTF-8 encoded string to the data buffer.
+    mutating func append(_ string: String) {
+        if let data = string.data(using: .utf8) {
+            append(data)
+        }
+    }
 }

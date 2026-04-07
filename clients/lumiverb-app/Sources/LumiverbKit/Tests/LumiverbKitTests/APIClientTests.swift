@@ -27,7 +27,10 @@ final class APIClientTests: XCTestCase {
     }
 }
 
-final class ModelDecodingTests: XCTestCase {
+// Phase 1 model decoding tests moved to ModelDecodingTests.swift
+// Additional model tests (AssetPageItem, AssetDetail, Search, Similarity) are there too.
+
+final class Phase1ModelDecodingTests: XCTestCase {
 
     private var decoder: JSONDecoder {
         let d = JSONDecoder()

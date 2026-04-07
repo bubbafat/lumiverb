@@ -48,7 +48,7 @@ targets:
     type: bundle.unit-test
     platform: macOS
     sources:
-      - Tests/LumiverbKitTests
+      - Sources/LumiverbKit/Tests/LumiverbKitTests
     dependencies:
       - package: LumiverbKit
     settings:

@@ -77,6 +77,17 @@ class AppState: ObservableObject {
         libraries = []
     }
 
+    /// Refresh the library list from the server.
+    func refreshLibraries() async {
+        guard let client else { return }
+        do {
+            let libs: LibraryListResponse = try await client.get("/v1/libraries")
+            libraries = libs
+        } catch {
+            // Non-fatal — keep stale list
+        }
+    }
+
     private func fetchUserAndLibraries() async {
         guard let client else { return }
 
