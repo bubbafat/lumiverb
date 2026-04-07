@@ -355,7 +355,7 @@ public actor APIClient {
             let bodyPreview = String(data: data.prefix(200), encoding: .utf8) ?? "(empty)"
             let tokenSuffix = tokenUsed.map { String($0.suffix(12)) } ?? "nil"
             let currentSuffix = currentAuth.map { String($0.suffix(12)) } ?? "nil"
-            logger.warning("\(method) \(path) — 401: \(bodyPreview) | token sent: …\(tokenSuffix) | current: …\(currentSuffix) | skipRefresh: \(skipRefresh)")
+            logger.warning("\(method, privacy: .public) \(path, privacy: .public) — 401: \(bodyPreview, privacy: .public) | token sent: …\(tokenSuffix, privacy: .public) | current: …\(currentSuffix, privacy: .public) | skipRefresh: \(skipRefresh, privacy: .public)")
 
             if tokenUsed != currentAuth {
                 // Token changed while we were in flight — retry with current token
