@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let logger = Logger(subsystem: "io.lumiverb.app", category: "APIClient")
 
 // MARK: - Errors
 
@@ -331,11 +334,12 @@ public actor APIClient {
             urlRequest.httpBody = try encoder.encode(body)
         }
 
-        var data: Data
-        var response: URLResponse
+        let data: Data
+        let response: URLResponse
         do {
             (data, response) = try await session.data(for: urlRequest)
         } catch {
+            logger.error("\(method) \(path) — network error: \(error.localizedDescription)")
             throw APIError.networkError(error.localizedDescription)
         }
 
@@ -343,12 +347,15 @@ public actor APIClient {
             throw APIError.networkError("Invalid response")
         }
 
+        logger.debug("\(method) \(path) → \(http.statusCode)")
+
         if http.statusCode == 401 && authenticated && !skipRefresh {
-            // If the token has already been refreshed (by another request) since
-            // we built our URLRequest, just retry with the current token — don't
-            // trigger another refresh which would revoke the just-issued token.
             let tokenUsed = urlRequest.value(forHTTPHeaderField: "Authorization")
             let currentAuth = accessToken.map { "Bearer \($0)" }
+            let bodyPreview = String(data: data.prefix(200), encoding: .utf8) ?? "(empty)"
+            let tokenSuffix = tokenUsed.map { String($0.suffix(12)) } ?? "nil"
+            let currentSuffix = currentAuth.map { String($0.suffix(12)) } ?? "nil"
+            logger.warning("\(method) \(path) — 401: \(bodyPreview) | token sent: …\(tokenSuffix) | current: …\(currentSuffix) | skipRefresh: \(skipRefresh)")
 
             if tokenUsed != currentAuth {
                 // Token changed while we were in flight — retry with current token
