@@ -7,27 +7,28 @@ struct LoginRequest: Encodable {
     let password: String
 }
 
+/// Server returns: `{access_token, token_type, expires_in}`.
+/// The access token doubles as the refresh token (within its refresh window).
 struct LoginResponse: Decodable {
     let accessToken: String
-    let refreshToken: String
-}
-
-struct RefreshRequest: Encodable {
-    let refreshToken: String
+    let tokenType: String
+    let expiresIn: Int
 }
 
 struct RefreshResponse: Decodable {
     let accessToken: String
+    let tokenType: String
+    let expiresIn: Int
 }
 
 // MARK: - Auth manager
 
 /// Manages authentication state: login, token refresh, and keychain persistence.
 ///
-/// The auth manager owns the lifecycle of JWT tokens. On successful login it
-/// stores both tokens in the keychain. On API calls, the `APIClient` uses the
-/// access token. When a 401 is received, the caller should invoke `refresh()`
-/// to get a new access token using the stored refresh token.
+/// The Lumiverb API uses a single JWT that serves as both access and refresh
+/// token. The JWT has an `exp` (access expiry, ~1 hour) and a `refresh_exp`
+/// (refresh window, ~7 days). To refresh, send the expired JWT in the
+/// Authorization header to `POST /v1/auth/refresh`.
 public actor AuthManager {
     private let client: APIClient
     private let keychain: KeychainHelper
@@ -37,38 +38,32 @@ public actor AuthManager {
         self.keychain = keychain
     }
 
-    /// Attempt login with email and password. On success, stores tokens and
-    /// configures the API client.
+    /// Attempt login with email and password. On success, stores the token
+    /// and configures the API client.
     public func login(email: String, password: String) async throws {
         let body = LoginRequest(email: email, password: password)
-        // Login endpoint doesn't require a token, so we set a temporary one
-        await client.setAccessToken("login-placeholder")
 
-        let response: LoginResponse
-        do {
-            response = try await client.post("/v1/auth/login", body: body)
-        } catch {
-            await client.setAccessToken(nil)
-            throw error
-        }
+        let response: LoginResponse = try await client.postUnauthenticated(
+            "/v1/auth/login", body: body
+        )
 
         await client.setAccessToken(response.accessToken)
         try keychain.save(key: "accessToken", value: response.accessToken)
-        try keychain.save(key: "refreshToken", value: response.refreshToken)
     }
 
-    /// Refresh the access token using the stored refresh token.
+    /// Refresh the access token by sending the current (possibly expired) JWT.
     /// Returns `true` if refresh succeeded, `false` if re-login is needed.
     public func refresh() async -> Bool {
-        guard let refreshToken = try? keychain.read(key: "refreshToken") else {
+        guard let currentToken = try? keychain.read(key: "accessToken") else {
             return false
         }
 
-        let body = RefreshRequest(refreshToken: refreshToken)
-        // Use the expired access token (server checks refresh token, not access)
+        // Set the expired token so the refresh request includes it
+        await client.setAccessToken(currentToken)
+
         do {
             let response: RefreshResponse = try await client.post(
-                "/v1/auth/refresh", body: body
+                "/v1/auth/refresh"
             )
             await client.setAccessToken(response.accessToken)
             try keychain.save(key: "accessToken", value: response.accessToken)
@@ -92,7 +87,6 @@ public actor AuthManager {
     public func logout() async {
         await client.setAccessToken(nil)
         try? keychain.delete(key: "accessToken")
-        try? keychain.delete(key: "refreshToken")
     }
 
     /// Whether we have a stored token (may be expired).

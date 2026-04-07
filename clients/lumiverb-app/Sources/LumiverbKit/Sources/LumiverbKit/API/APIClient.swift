@@ -77,15 +77,24 @@ public actor APIClient {
         let _: EmptyResponse = try await request("DELETE", path: path)
     }
 
+    /// POST without requiring an access token (used for login).
+    public func postUnauthenticated<T: Decodable>(
+        _ path: String,
+        body: (any Encodable)? = nil
+    ) async throws -> T {
+        try await request("POST", path: path, body: body, authenticated: false)
+    }
+
     // MARK: - Core request
 
     private func request<T: Decodable>(
         _ method: String,
         path: String,
         query: [String: String]? = nil,
-        body: (any Encodable)? = nil
+        body: (any Encodable)? = nil,
+        authenticated: Bool = true
     ) async throws -> T {
-        guard let token = accessToken else {
+        if authenticated && accessToken == nil {
             throw APIError.noToken
         }
 
@@ -100,7 +109,9 @@ public actor APIClient {
         var urlRequest = URLRequest(url: components.url!)
         urlRequest.httpMethod = method
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if authenticated, let token = accessToken {
+            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
 
         if let body {
             let encoder = JSONEncoder()
