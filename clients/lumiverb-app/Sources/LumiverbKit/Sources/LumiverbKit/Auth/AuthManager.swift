@@ -92,12 +92,13 @@ public actor AuthManager {
             return false
         }
 
-        // Set the expired token so the refresh request includes it
-        await client.setAccessToken(currentToken)
-
         do {
-            let response: RefreshResponse = try await client.postNoRetry(
-                "/v1/auth/refresh"
+            // Send the expired token directly to the refresh endpoint without
+            // overwriting the client's accessToken — other requests may be
+            // using a valid token that we'd clobber.
+            let response: RefreshResponse = try await client.postWithToken(
+                "/v1/auth/refresh",
+                token: currentToken
             )
             await client.setAccessToken(response.accessToken)
             try keychain.save(key: "accessToken", value: response.accessToken)

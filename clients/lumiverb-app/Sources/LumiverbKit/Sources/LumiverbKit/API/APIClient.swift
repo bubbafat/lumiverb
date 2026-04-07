@@ -101,6 +101,53 @@ public actor APIClient {
         try await request("POST", path: path, body: body, skipRefresh: true)
     }
 
+    /// POST with an explicit token, without changing the client's current token.
+    /// Used by AuthManager to send the expired token to the refresh endpoint
+    /// without clobbering a valid token that other requests are using.
+    public func postWithToken<T: Decodable>(
+        _ path: String,
+        token: String,
+        body: (any Encodable)? = nil
+    ) async throws -> T {
+        let url = baseURL.appendingPathComponent(path)
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        if let body {
+            let encoder = JSONEncoder()
+            encoder.keyEncodingStrategy = .convertToSnakeCase
+            urlRequest.httpBody = try encoder.encode(body)
+        }
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: urlRequest)
+        } catch {
+            throw APIError.networkError(error.localizedDescription)
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.networkError("Invalid response")
+        }
+
+        if http.statusCode == 401 {
+            throw APIError.unauthorized(unauthorizedMessage(from: data))
+        }
+
+        if http.statusCode >= 400 {
+            if let envelope = try? decoder.decode(ErrorEnvelope.self, from: data) {
+                throw APIError.serverError(statusCode: http.statusCode, message: envelope.error.message)
+            }
+            let body = String(data: data, encoding: .utf8) ?? "Unknown error"
+            throw APIError.serverError(statusCode: http.statusCode, message: body)
+        }
+
+        return try decoder.decode(T.self, from: data)
+    }
+
     /// POST without requiring an access token (used for login).
     public func postUnauthenticated<T: Decodable>(
         _ path: String,
