@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from src.cli.main import app
+from src.client.cli.main import app
 
 runner = CliRunner()
 
@@ -16,7 +16,7 @@ def test_search_invalid_output_exits_1() -> None:
     mock_client = MagicMock()
     mock_client.get.return_value.json.return_value = [{"library_id": "lib_1", "name": "Lib", "root_path": "/path"}]
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
             ["search", "-l", "Lib", "--query", "query", "--output", "xml"],
@@ -55,7 +55,7 @@ def test_search_calls_api_with_library_id_and_query() -> None:
         ),
     ]
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
             ["search", "--library", "MyLib", "--query", "sunset", "--limit", "10"],
@@ -83,7 +83,7 @@ def test_search_no_results_exit_0() -> None:
         MagicMock(status_code=200, json=lambda: {"query": "xyz", "hits": [], "total": 0, "source": "postgres"}),
     ]
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
             ["search", "-l", "EmptyLib", "--query", "xyz"],
@@ -112,7 +112,7 @@ def test_search_json_output() -> None:
         MagicMock(status_code=200, json=lambda: {"query": "q", "hits": [hit], "total": 1, "source": "postgres"}),
     ]
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
             ["search", "-l", "J", "--query", "q", "-o", "json"],

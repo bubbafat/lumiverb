@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.search.cleanup import (
+from src.server.search.cleanup import (
     CleanupResult,
     _MAX_DELETE_FRACTION,
     _MIN_AGE_SECONDS,

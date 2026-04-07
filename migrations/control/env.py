@@ -7,7 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy import pool
 from alembic import context
 
-from src.models.control_plane import SQLModel
+from src.server.models.control_plane import SQLModel
 
 config = context.config
 

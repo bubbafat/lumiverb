@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.search.postgres_search import search_assets
+from src.server.search.postgres_search import search_assets
 
 
 @pytest.mark.fast

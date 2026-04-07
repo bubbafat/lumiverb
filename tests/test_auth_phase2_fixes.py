@@ -5,9 +5,9 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from src.api.main import app
-from src.api.routers import auth
-from src.core.config import get_settings
+from src.server.api.main import app
+from src.server.api.routers import auth
+from src.server.config import get_settings
 
 
 def _fake_db():

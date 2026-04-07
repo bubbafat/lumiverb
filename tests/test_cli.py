@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from src.cli.main import app
+from src.client.cli.main import app
 
 runner = CliRunner()
 
@@ -15,7 +15,7 @@ runner = CliRunner()
 def test_config_set_and_show(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Set config, show config, assert values match."""
     config_file = tmp_path / "config.json"
-    monkeypatch.setattr("src.cli.config._config_path", lambda: config_file)
+    monkeypatch.setattr("src.client.cli.config._config_path", lambda: config_file)
 
     result_set = runner.invoke(
         app,
@@ -41,7 +41,7 @@ def test_library_create_prints_id() -> None:
     mock_client = MagicMock()
     mock_client.post.return_value = mock_response
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
             [
@@ -83,7 +83,7 @@ def test_library_list_shows_table() -> None:
     mock_client = MagicMock()
     mock_client.get.return_value = mock_response
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(app, ["library", "list"])
 
     assert result.exit_code == 0
@@ -102,7 +102,7 @@ def test_library_delete_requires_confirmation() -> None:
     mock_client = MagicMock()
     mock_client.get.return_value = mock_response
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
             ["library", "delete", "--name", "ToDelete"],
@@ -125,7 +125,7 @@ def test_library_delete_confirms_and_calls_api() -> None:
     mock_client.get.return_value = mock_response
     mock_client.delete.return_value = MagicMock(status_code=204)
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
             ["library", "delete", "--name", "ToDelete"],
@@ -148,7 +148,7 @@ def test_library_empty_trash_aborts_if_none() -> None:
     mock_client = MagicMock()
     mock_client.get.return_value = mock_response
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(app, ["library", "empty-trash"])
 
     assert result.exit_code == 0
@@ -168,7 +168,7 @@ def test_library_empty_trash_requires_confirmation() -> None:
     mock_client = MagicMock()
     mock_client.get.return_value = mock_response
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(app, ["library", "empty-trash"], input="n")
 
     assert result.exit_code == 0
@@ -183,7 +183,7 @@ def test_download_refuses_tty_without_output(monkeypatch: pytest.MonkeyPatch) ->
     import sys
     import typer
 
-    from src.cli.main import download, console
+    from src.client.cli.main import download, console
 
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True, raising=False)
 
@@ -199,7 +199,7 @@ def test_download_refuses_tty_without_output(monkeypatch: pytest.MonkeyPatch) ->
     # Patch client, though it should not be used before the TTY guard triggers.
     mock_client = MagicMock()
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         with pytest.raises(typer.Exit) as exc:
             download(
                 library="TestLib",
@@ -263,7 +263,7 @@ def test_download_saves_to_file(tmp_path: Path) -> None:
 
     out_file = tmp_path / "out.jpg"
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
             [
@@ -329,7 +329,7 @@ def test_download_saves_to_directory(tmp_path: Path) -> None:
 
     out_dir = tmp_path / "out"
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
             [

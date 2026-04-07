@@ -32,15 +32,15 @@ def test_ingest_batching() -> None:
     """Mock HTTP in QuickwitClient; ingest 1100 docs; assert 3 calls (500 + 500 + 100)."""
     from unittest.mock import MagicMock
 
-    from src.search.quickwit_client import INGEST_BATCH_SIZE, QuickwitClient
+    from src.server.search.quickwit_client import INGEST_BATCH_SIZE, QuickwitClient
 
     mock_settings = MagicMock()
     mock_settings.quickwit_enabled = True
     mock_settings.quickwit_url = "http://localhost:7280"
 
     with (
-        patch("src.search.quickwit_client.get_settings", return_value=mock_settings),
-        patch("src.search.quickwit_client.requests.post") as mock_post,
+        patch("src.server.search.quickwit_client.get_settings", return_value=mock_settings),
+        patch("src.server.search.quickwit_client.requests.post") as mock_post,
     ):
         mock_post.return_value.status_code = 200
 

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from src.cli.main import app
+from src.client.cli.main import app
 
 runner = CliRunner()
 
@@ -22,7 +22,7 @@ def test_admin_keys_create_happy_path() -> None:
     mock_client = MagicMock()
     mock_client.post.return_value = mock_response
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
             [
@@ -56,7 +56,7 @@ def test_admin_keys_create_uses_env_var(monkeypatch: pytest.MonkeyPatch) -> None
     mock_client = MagicMock()
     mock_client.post.return_value = mock_response
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
             ["admin", "keys", "create", "--tenant-id", "ten_1", "--name", "web-ui"],
@@ -66,7 +66,7 @@ def test_admin_keys_create_uses_env_var(monkeypatch: pytest.MonkeyPatch) -> None
     assert "lv_new" in result.output
     call_kw = mock_client.post.call_args[1]
     # Client was constructed with api_key_override from env (via Typer's envvar)
-    mock_client_ctor = patch("src.cli.main.LumiverbClient", return_value=mock_client)
+    mock_client_ctor = patch("src.client.cli.main.LumiverbClient", return_value=mock_client)
     # The LumiverbClient(api_key_override=...) was called with the env value
     # We can't easily assert that without capturing the constructor call.
     # The important thing is the POST was made and succeeded.
@@ -98,7 +98,7 @@ def test_admin_keys_list_happy_path() -> None:
     mock_client = MagicMock()
     mock_client.get.return_value = mock_response
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
             [
@@ -130,7 +130,7 @@ def test_admin_tenants_list_happy_path() -> None:
     mock_client = MagicMock()
     mock_client.get.return_value = mock_response
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
             ["admin", "tenants", "list", "--admin-key", "secret"],

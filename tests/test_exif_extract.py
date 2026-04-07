@@ -8,14 +8,14 @@ import pytest
 
 @pytest.mark.fast
 def test_extract_exif_missing_file() -> None:
-    from src.workers.exif_extract import extract_exif
+    from src.client.workers.exif_extract import extract_exif
 
     assert extract_exif(Path("/nonexistent/file.jpg")) == {}
 
 
 @pytest.mark.fast
 def test_compute_sha256(tmp_path: Path) -> None:
-    from src.workers.exif_extract import compute_sha256
+    from src.client.workers.exif_extract import compute_sha256
 
     f = tmp_path / "test.bin"
     f.write_bytes(b"hello world")
@@ -24,14 +24,14 @@ def test_compute_sha256(tmp_path: Path) -> None:
 
 @pytest.mark.fast
 def test_compute_sha256_missing_file() -> None:
-    from src.workers.exif_extract import compute_sha256
+    from src.client.workers.exif_extract import compute_sha256
 
     assert compute_sha256(Path("/nonexistent")) is None
 
 
 @pytest.mark.fast
 def test_parse_gps_north_east() -> None:
-    from src.workers.exif_extract import parse_gps
+    from src.client.workers.exif_extract import parse_gps
 
     exif = {
         "GPSLatitude": 37.7749,
@@ -46,14 +46,14 @@ def test_parse_gps_north_east() -> None:
 
 @pytest.mark.fast
 def test_parse_gps_missing() -> None:
-    from src.workers.exif_extract import parse_gps
+    from src.client.workers.exif_extract import parse_gps
 
     assert parse_gps({}) == (None, None)
 
 
 @pytest.mark.fast
 def test_parse_taken_at_valid() -> None:
-    from src.workers.exif_extract import parse_taken_at
+    from src.client.workers.exif_extract import parse_taken_at
 
     exif = {"DateTimeOriginal": "2024:06:15 14:30:00"}
     dt = parse_taken_at(exif)
@@ -65,6 +65,6 @@ def test_parse_taken_at_valid() -> None:
 
 @pytest.mark.fast
 def test_parse_taken_at_missing() -> None:
-    from src.workers.exif_extract import parse_taken_at
+    from src.client.workers.exif_extract import parse_taken_at
 
     assert parse_taken_at({}) is None

@@ -10,7 +10,7 @@ import pytest
 @pytest.mark.fast
 def test_repair_types_includes_faces() -> None:
     """REPAIR_TYPES includes 'faces'."""
-    from src.cli.repair import REPAIR_TYPES
+    from src.client.cli.repair import REPAIR_TYPES
 
     assert "faces" in REPAIR_TYPES
 
@@ -25,7 +25,7 @@ def test_page_missing_accepts_missing_faces() -> None:
     mock_resp.json.return_value = {"items": [], "next_cursor": None}
     mock_client.get.return_value = mock_resp
 
-    from src.cli.repair import _page_missing
+    from src.client.cli.repair import _page_missing
 
     _page_missing(mock_client, "lib_123", missing_faces=True)
 
@@ -54,7 +54,7 @@ def test_face_batch_worker_processes_assets() -> None:
     post_resp.status_code = 201
     mock_client_instance.post.return_value = post_resp
 
-    from src.workers.faces.insightface_provider import FaceDetection
+    from src.client.workers.faces.insightface_provider import FaceDetection
 
     mock_provider = MagicMock()
     mock_provider.model_id = "insightface"
@@ -74,9 +74,9 @@ def test_face_batch_worker_processes_assets() -> None:
         {"asset_id": "ast_003"},
     ]
 
-    with patch("src.cli.repair.LumiverbClient", return_value=mock_client_instance), \
-         patch("src.cli.repair.InsightFaceProvider", return_value=mock_provider):
-        from src.cli.repair import _face_batch_worker
+    with patch("src.client.cli.repair.LumiverbClient", return_value=mock_client_instance), \
+         patch("src.client.cli.repair.InsightFaceProvider", return_value=mock_provider):
+        from src.client.cli.repair import _face_batch_worker
         result = _face_batch_worker("http://localhost", "test-token", batch)
 
     assert result["processed"] == 3
@@ -105,9 +105,9 @@ def test_face_batch_worker_skips_missing_proxy() -> None:
 
     batch = [{"asset_id": "ast_missing"}]
 
-    with patch("src.cli.repair.LumiverbClient", return_value=mock_client_instance), \
-         patch("src.cli.repair.InsightFaceProvider", return_value=mock_provider):
-        from src.cli.repair import _face_batch_worker
+    with patch("src.client.cli.repair.LumiverbClient", return_value=mock_client_instance), \
+         patch("src.client.cli.repair.InsightFaceProvider", return_value=mock_provider):
+        from src.client.cli.repair import _face_batch_worker
         result = _face_batch_worker("http://localhost", "test-token", batch)
 
     assert result["skipped"] == 1
@@ -136,9 +136,9 @@ def test_face_batch_worker_counts_failures() -> None:
 
     batch = [{"asset_id": "ast_crash"}]
 
-    with patch("src.cli.repair.LumiverbClient", return_value=mock_client_instance), \
-         patch("src.cli.repair.InsightFaceProvider", return_value=mock_provider):
-        from src.cli.repair import _face_batch_worker
+    with patch("src.client.cli.repair.LumiverbClient", return_value=mock_client_instance), \
+         patch("src.client.cli.repair.InsightFaceProvider", return_value=mock_provider):
+        from src.client.cli.repair import _face_batch_worker
         result = _face_batch_worker("http://localhost", "test-token", batch)
 
     assert result["failed"] == 1

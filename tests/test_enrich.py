@@ -57,7 +57,7 @@ class TestAssetIdsFilter:
     def test_run_repair_accepts_asset_ids(self):
         """run_repair signature accepts asset_ids parameter."""
         import inspect
-        from src.cli.repair import run_repair
+        from src.client.cli.repair import run_repair
 
         sig = inspect.signature(run_repair)
         assert "asset_ids" in sig.parameters
@@ -71,7 +71,7 @@ class TestEnrichCommand:
     def test_enrich_help(self):
         """enrich command shows up in --help."""
         from typer.testing import CliRunner
-        from src.cli.main import app
+        from src.client.cli.main import app
 
         runner = CliRunner()
         result = runner.invoke(app, ["enrich", "--help"])
@@ -84,7 +84,7 @@ class TestEnrichCommand:
     def test_enrich_rejects_invalid_job_type(self):
         """enrich rejects job types not in ENRICH_TYPES."""
         from typer.testing import CliRunner
-        from src.cli.main import app
+        from src.client.cli.main import app
 
         runner = CliRunner()
         result = runner.invoke(app, ["enrich", "--job-type", "bogus-type"])
@@ -93,6 +93,6 @@ class TestEnrichCommand:
 
     def test_enrich_accepts_valid_job_types(self):
         """All ENRICH_TYPES are accepted by the command parser."""
-        from src.cli.main import ENRICH_TYPES
+        from src.client.cli.main import ENRICH_TYPES
         expected = {"embed", "vision", "faces", "redetect-faces", "ocr", "video-scenes", "scene-vision", "search-sync", "all"}
         assert set(ENRICH_TYPES) == expected

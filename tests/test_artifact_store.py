@@ -9,13 +9,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.storage.artifact_store import (
+from src.server.storage.artifact_store import (
     ArtifactRef,
     LocalArtifactStore,
     RemoteArtifactStore,
     get_artifact_store,
 )
-from src.storage.local import LocalStorage
+from src.server.storage.local import LocalStorage
 
 
 # ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from ulid import ULID
 
-from src.storage.local import LocalStorage
+from src.server.storage.local import LocalStorage
 
 
 @pytest.mark.fast

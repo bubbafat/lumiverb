@@ -12,12 +12,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy.engine import make_url
 from testcontainers.postgres import PostgresContainer
 
-from src.api.main import app
-from src.core.config import get_settings
+from src.server.api.main import app
+from src.server.config import get_settings
 from sqlalchemy import create_engine, text
-from src.core.database import _engines, get_control_session
-from src.repository.control_plane import TenantDbRoutingRepository
-from src.repository.tenant import AssetRepository, LibraryRepository
+from src.server.database import _engines, get_control_session
+from src.server.repository.control_plane import TenantDbRoutingRepository
+from src.server.repository.tenant import AssetRepository, LibraryRepository
 from tests.conftest import _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 
@@ -38,7 +38,7 @@ def face_client() -> Tuple[_AuthClient, str, str]:
         get_settings.cache_clear()
         _engines.clear()
 
-        with patch("src.api.routers.admin.provision_tenant_database"):
+        with patch("src.server.api.routers.admin.provision_tenant_database"):
             with TestClient(app) as client:
                 r = client.post(
                     "/v1/admin/tenants",
@@ -520,7 +520,7 @@ def test_cleanup_empty_dismissed(face_client: Tuple[_AuthClient, str, str]) -> N
     are replaced, leaving the person record with no matches.
     """
     import numpy as np
-    from src.repository.tenant import PersonRepository
+    from src.server.repository.tenant import PersonRepository
 
     auth_client, library_id, tenant_url = face_client
     asset_id = _create_asset(auth_client, library_id, "face_cleanup_dismissed")

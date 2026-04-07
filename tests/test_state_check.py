@@ -14,9 +14,9 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from testcontainers.postgres import PostgresContainer
 
-from src.api.main import app
-from src.core.config import get_settings
-from src.core.database import _engines
+from src.server.api.main import app
+from src.server.config import get_settings
+from src.server.database import _engines
 from tests.conftest import _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 
@@ -57,7 +57,7 @@ def state_check_env(tmp_path_factory):
 
         from unittest.mock import patch
 
-        with patch("src.api.routers.admin.provision_tenant_database"):
+        with patch("src.server.api.routers.admin.provision_tenant_database"):
             with TestClient(app) as bootstrap_client:
                 r = bootstrap_client.post(
                     "/v1/admin/tenants",
@@ -72,8 +72,8 @@ def state_check_env(tmp_path_factory):
             tenant_url = _ensure_psycopg2(tenant_pg.get_connection_url())
             _provision_tenant_db(tenant_url, project_root)
 
-            from src.core.database import get_control_session
-            from src.repository.control_plane import TenantDbRoutingRepository
+            from src.server.database import get_control_session
+            from src.server.repository.control_plane import TenantDbRoutingRepository
 
             with get_control_session() as session:
                 routing_repo = TenantDbRoutingRepository(session)
@@ -120,9 +120,9 @@ def state_check_env(tmp_path_factory):
                 deleted_id = _upsert("deleted.jpg")
 
                 # Set proxy_sha256 directly on the active asset via the DB
-                from src.core.database import get_engine_for_url
+                from src.server.database import get_engine_for_url
                 from sqlmodel import Session as SMSession
-                from src.models.tenant import Asset
+                from src.server.models.tenant import Asset
 
                 tenant_engine = get_engine_for_url(tenant_url)
                 with SMSession(tenant_engine) as db:
@@ -291,7 +291,7 @@ def test_tenant_isolation(state_check_env, tmp_path_factory) -> None:
 
             from unittest.mock import patch
 
-            with patch("src.api.routers.admin.provision_tenant_database"):
+            with patch("src.server.api.routers.admin.provision_tenant_database"):
                 with TestClient(app) as bc2:
                     r2 = bc2.post(
                         "/v1/admin/tenants",
@@ -306,8 +306,8 @@ def test_tenant_isolation(state_check_env, tmp_path_factory) -> None:
                 tenant_url2 = _ensure_psycopg2(tp2.get_connection_url())
                 _provision_tenant_db(tenant_url2, project_root)
 
-                from src.core.database import get_control_session
-                from src.repository.control_plane import TenantDbRoutingRepository
+                from src.server.database import get_control_session
+                from src.server.repository.control_plane import TenantDbRoutingRepository
 
                 with get_control_session() as sess:
                     repo = TenantDbRoutingRepository(sess)

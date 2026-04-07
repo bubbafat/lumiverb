@@ -1,6 +1,6 @@
 """Unit tests for SRT parsing utilities."""
 
-from src.core.srt import parse_srt_to_text, validate_srt
+from src.server.srt import parse_srt_to_text, validate_srt
 
 SAMPLE_SRT = """\
 1

@@ -10,7 +10,7 @@ import pytest
 @pytest.mark.fast
 def test_face_submit_request_model() -> None:
     """FaceSubmitRequest validates with default model fields."""
-    from src.api.routers.assets import FaceSubmitRequest, FaceDetectionItem
+    from src.server.api.routers.assets import FaceSubmitRequest, FaceDetectionItem
 
     req = FaceSubmitRequest(
         faces=[
@@ -29,7 +29,7 @@ def test_face_submit_request_model() -> None:
 @pytest.mark.fast
 def test_face_submit_request_no_embedding() -> None:
     """FaceDetectionItem allows None embedding."""
-    from src.api.routers.assets import FaceDetectionItem
+    from src.server.api.routers.assets import FaceDetectionItem
 
     item = FaceDetectionItem(
         bounding_box={"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5},
@@ -41,7 +41,7 @@ def test_face_submit_request_no_embedding() -> None:
 @pytest.mark.fast
 def test_face_submit_response_model() -> None:
     """FaceSubmitResponse serializes correctly."""
-    from src.api.routers.assets import FaceSubmitResponse
+    from src.server.api.routers.assets import FaceSubmitResponse
 
     resp = FaceSubmitResponse(face_count=2, face_ids=["face_a", "face_b"])
     assert resp.face_count == 2
@@ -51,7 +51,7 @@ def test_face_submit_response_model() -> None:
 @pytest.mark.fast
 def test_face_list_response_model() -> None:
     """FaceListResponse with person=None."""
-    from src.api.routers.assets import FaceListResponse, FaceListItem
+    from src.server.api.routers.assets import FaceListResponse, FaceListItem
 
     resp = FaceListResponse(
         faces=[
@@ -70,7 +70,7 @@ def test_face_list_response_model() -> None:
 @pytest.mark.fast
 def test_repair_summary_includes_missing_faces() -> None:
     """RepairSummary model has missing_faces field."""
-    from src.api.routers.assets import RepairSummary
+    from src.server.api.routers.assets import RepairSummary
 
     summary = RepairSummary(
         total_assets=100,
@@ -83,7 +83,7 @@ def test_repair_summary_includes_missing_faces() -> None:
 @pytest.mark.fast
 def test_insightface_provider_properties() -> None:
     """InsightFaceProvider has correct model_id and model_version."""
-    from src.workers.faces.insightface_provider import InsightFaceProvider
+    from src.client.workers.faces.insightface_provider import InsightFaceProvider
 
     provider = InsightFaceProvider()
     assert provider.model_id == "insightface"
@@ -120,7 +120,7 @@ def _make_mock_face(bbox, det_score=0.95, embedding=True):
 @pytest.mark.fast
 def test_insightface_provider_detect_faces_mocked() -> None:
     """InsightFaceProvider.detect_faces returns FaceDetection objects from mocked InsightFace."""
-    from src.workers.faces.insightface_provider import InsightFaceProvider
+    from src.client.workers.faces.insightface_provider import InsightFaceProvider
 
     img = _make_sharp_image(640, 480)
 
@@ -151,7 +151,7 @@ def test_insightface_provider_no_faces() -> None:
     """InsightFaceProvider returns empty list when no faces detected."""
     from PIL import Image as PILImage
 
-    from src.workers.faces.insightface_provider import InsightFaceProvider
+    from src.client.workers.faces.insightface_provider import InsightFaceProvider
 
     img = PILImage.new("RGB", (100, 100), color=(255, 255, 255))
 
@@ -168,7 +168,7 @@ def test_insightface_provider_no_faces() -> None:
 @pytest.mark.fast
 def test_insightface_provider_skips_face_without_embedding() -> None:
     """Faces with normed_embedding=None are skipped."""
-    from src.workers.faces.insightface_provider import InsightFaceProvider
+    from src.client.workers.faces.insightface_provider import InsightFaceProvider
 
     img = _make_sharp_image(640, 480)
 
@@ -187,7 +187,7 @@ def test_insightface_provider_skips_face_without_embedding() -> None:
 @pytest.mark.fast
 def test_face_detection_dataclass() -> None:
     """FaceDetection dataclass holds expected fields."""
-    from src.workers.faces.insightface_provider import FaceDetection
+    from src.client.workers.faces.insightface_provider import FaceDetection
 
     fd = FaceDetection(
         bounding_box={"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.4},
@@ -208,7 +208,7 @@ def test_face_detection_dataclass() -> None:
 @pytest.mark.fast
 def test_gate_low_confidence_dropped() -> None:
     """Faces below MIN_DETECTION_CONFIDENCE are dropped."""
-    from src.workers.faces.insightface_provider import InsightFaceProvider
+    from src.client.workers.faces.insightface_provider import InsightFaceProvider
 
     img = _make_sharp_image(640, 480)
     mock_app = MagicMock()
@@ -224,7 +224,7 @@ def test_gate_low_confidence_dropped() -> None:
 @pytest.mark.fast
 def test_gate_tiny_pixel_width_dropped() -> None:
     """Faces narrower than MIN_FACE_PIXELS are dropped."""
-    from src.workers.faces.insightface_provider import InsightFaceProvider
+    from src.client.workers.faces.insightface_provider import InsightFaceProvider
 
     img = _make_sharp_image(640, 480)
     mock_app = MagicMock()
@@ -241,7 +241,7 @@ def test_gate_tiny_pixel_width_dropped() -> None:
 @pytest.mark.fast
 def test_gate_tiny_area_fraction_dropped() -> None:
     """Faces below MIN_BBOX_AREA_FRACTION of image are dropped."""
-    from src.workers.faces.insightface_provider import InsightFaceProvider
+    from src.client.workers.faces.insightface_provider import InsightFaceProvider
 
     # 2000x2000 image, face is 42x42 px → area = 0.00044 (< 0.003)
     img = _make_sharp_image(2000, 2000)
@@ -260,7 +260,7 @@ def test_gate_blurry_face_dropped() -> None:
     """Faces with low Laplacian sharpness are dropped."""
     import numpy as np
     from PIL import Image as PILImage
-    from src.workers.faces.insightface_provider import InsightFaceProvider
+    from src.client.workers.faces.insightface_provider import InsightFaceProvider
 
     # Solid-color image — Laplacian variance ≈ 0
     img = PILImage.new("RGB", (640, 480), color=(128, 128, 128))
@@ -277,7 +277,7 @@ def test_gate_blurry_face_dropped() -> None:
 @pytest.mark.fast
 def test_gate_relative_size_drops_tiny_face() -> None:
     """A face < 15% area of the largest face in the same image is dropped."""
-    from src.workers.faces.insightface_provider import InsightFaceProvider
+    from src.client.workers.faces.insightface_provider import InsightFaceProvider
 
     img = _make_sharp_image(1000, 1000)
     mock_app = MagicMock()
@@ -298,7 +298,7 @@ def test_gate_relative_size_drops_tiny_face() -> None:
 @pytest.mark.fast
 def test_gate_similar_size_faces_kept() -> None:
     """Two similarly-sized faces both pass the relative size gate."""
-    from src.workers.faces.insightface_provider import InsightFaceProvider
+    from src.client.workers.faces.insightface_provider import InsightFaceProvider
 
     img = _make_sharp_image(1000, 1000)
     mock_app = MagicMock()
@@ -318,7 +318,7 @@ def test_gate_similar_size_faces_kept() -> None:
 @pytest.mark.fast
 def test_gate_all_pass() -> None:
     """A high-confidence, large, sharp face passes all gates."""
-    from src.workers.faces.insightface_provider import InsightFaceProvider
+    from src.client.workers.faces.insightface_provider import InsightFaceProvider
 
     img = _make_sharp_image(640, 480)
     mock_app = MagicMock()
@@ -336,7 +336,7 @@ def test_gate_all_pass() -> None:
 @pytest.mark.fast
 def test_face_model_has_detection_model_fields() -> None:
     """Face SQLModel has detection_model and detection_model_version fields."""
-    from src.models.tenant import Face
+    from src.server.models.tenant import Face
 
     f = Face(
         face_id="face_test",
@@ -351,7 +351,7 @@ def test_face_model_has_detection_model_fields() -> None:
 @pytest.mark.fast
 def test_person_model_has_clustering_fields() -> None:
     """Person SQLModel has centroid_vector, confirmation_count, representative_face_id."""
-    from src.models.tenant import Person
+    from src.server.models.tenant import Person
 
     p = Person(
         person_id="person_test",
@@ -366,7 +366,7 @@ def test_person_model_has_clustering_fields() -> None:
 @pytest.mark.fast
 def test_asset_model_has_face_count() -> None:
     """Asset model includes face_count field."""
-    from src.models.tenant import Asset
+    from src.server.models.tenant import Asset
 
     a = Asset(
         asset_id="test",

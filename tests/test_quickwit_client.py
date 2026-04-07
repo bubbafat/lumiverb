@@ -4,14 +4,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.search.quickwit_client import QuickwitClient
+from src.server.search.quickwit_client import QuickwitClient
 
 
 def _make_client(enabled: bool = True) -> QuickwitClient:
     mock_settings = MagicMock()
     mock_settings.quickwit_enabled = enabled
     mock_settings.quickwit_url = "http://localhost:7280"
-    with patch("src.search.quickwit_client.get_settings", return_value=mock_settings):
+    with patch("src.server.search.quickwit_client.get_settings", return_value=mock_settings):
         return QuickwitClient()
 
 
@@ -77,7 +77,7 @@ def test_search_tenant_no_library_filter():
                          "description": "sunset", "tags": ["nature"]}}
         ]
     }
-    with patch("src.search.quickwit_client.requests.post", return_value=mock_resp) as mock_post:
+    with patch("src.server.search.quickwit_client.requests.post", return_value=mock_resp) as mock_post:
         results = qw.search_tenant("tnt_1", "sunset", max_hits=10)
 
     assert len(results) == 1
@@ -95,7 +95,7 @@ def test_search_tenant_with_single_library():
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.json.return_value = {"hits": []}
-    with patch("src.search.quickwit_client.requests.post", return_value=mock_resp) as mock_post:
+    with patch("src.server.search.quickwit_client.requests.post", return_value=mock_resp) as mock_post:
         qw.search_tenant("tnt_1", "sunset", library_ids=["lib_A"])
 
     call_body = mock_post.call_args[1]["json"]
@@ -109,7 +109,7 @@ def test_search_tenant_with_multiple_libraries():
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.json.return_value = {"hits": []}
-    with patch("src.search.quickwit_client.requests.post", return_value=mock_resp) as mock_post:
+    with patch("src.server.search.quickwit_client.requests.post", return_value=mock_resp) as mock_post:
         qw.search_tenant("tnt_1", "sunset", library_ids=["lib_A", "lib_B"])
 
     call_body = mock_post.call_args[1]["json"]
@@ -128,7 +128,7 @@ def test_search_tenant_scenes_with_library_filter():
                          "rel_path": "vid.mp4", "description": "beach", "tags": []}}
         ]
     }
-    with patch("src.search.quickwit_client.requests.post", return_value=mock_resp) as mock_post:
+    with patch("src.server.search.quickwit_client.requests.post", return_value=mock_resp) as mock_post:
         results = qw.search_tenant_scenes("tnt_1", "beach", library_ids=["lib_A"])
 
     assert len(results) == 1
@@ -155,7 +155,7 @@ def test_ingest_tenant_documents_batching():
     qw = _make_client()
     mock_resp = MagicMock()
     mock_resp.status_code = 200
-    with patch("src.search.quickwit_client.requests.post", return_value=mock_resp) as mock_post:
+    with patch("src.server.search.quickwit_client.requests.post", return_value=mock_resp) as mock_post:
         docs = [{"id": f"doc_{i}"} for i in range(1100)]
         qw.ingest_tenant_documents("tnt_1", docs)
 
@@ -166,7 +166,7 @@ def test_ingest_tenant_documents_batching():
 def test_ingest_tenant_documents_empty():
     """Empty doc list makes no HTTP calls."""
     qw = _make_client()
-    with patch("src.search.quickwit_client.requests.post") as mock_post:
+    with patch("src.server.search.quickwit_client.requests.post") as mock_post:
         qw.ingest_tenant_documents("tnt_1", [])
 
     mock_post.assert_not_called()
@@ -175,7 +175,7 @@ def test_ingest_tenant_documents_empty():
 @pytest.mark.fast
 def test_ingest_tenant_documents_disabled():
     qw = _make_client(enabled=False)
-    with patch("src.search.quickwit_client.requests.post") as mock_post:
+    with patch("src.server.search.quickwit_client.requests.post") as mock_post:
         qw.ingest_tenant_documents("tnt_1", [{"id": "doc_1"}])
 
     mock_post.assert_not_called()
@@ -192,7 +192,7 @@ def test_delete_by_asset_id_calls_all_indexes():
     qw = _make_client()
     mock_resp = MagicMock()
     mock_resp.status_code = 200
-    with patch("src.search.quickwit_client.requests.post", return_value=mock_resp) as mock_post:
+    with patch("src.server.search.quickwit_client.requests.post", return_value=mock_resp) as mock_post:
         qw.delete_tenant_documents_by_asset_id("tnt_1", "ast_123")
 
     assert mock_post.call_count == 3
@@ -208,7 +208,7 @@ def test_delete_by_library_id_calls_all_indexes():
     qw = _make_client()
     mock_resp = MagicMock()
     mock_resp.status_code = 200
-    with patch("src.search.quickwit_client.requests.post", return_value=mock_resp) as mock_post:
+    with patch("src.server.search.quickwit_client.requests.post", return_value=mock_resp) as mock_post:
         qw.delete_tenant_documents_by_library_id("tnt_1", "lib_old")
 
     assert mock_post.call_count == 3
@@ -220,7 +220,7 @@ def test_delete_by_library_id_calls_all_indexes():
 @pytest.mark.fast
 def test_delete_disabled_no_calls():
     qw = _make_client(enabled=False)
-    with patch("src.search.quickwit_client.requests.post") as mock_post:
+    with patch("src.server.search.quickwit_client.requests.post") as mock_post:
         qw.delete_tenant_documents_by_asset_id("tnt_1", "ast_1")
         qw.delete_tenant_documents_by_library_id("tnt_1", "lib_1")
 
@@ -241,13 +241,13 @@ def test_ensure_tenant_index_creates_when_missing(tmp_path):
     mock_settings = MagicMock()
     mock_settings.quickwit_enabled = True
     mock_settings.quickwit_url = "http://localhost:7280"
-    with patch("src.search.quickwit_client.get_settings", return_value=mock_settings):
+    with patch("src.server.search.quickwit_client.get_settings", return_value=mock_settings):
         qw = QuickwitClient(schema_dir=tmp_path)
 
     get_resp = MagicMock(status_code=404)
     post_resp = MagicMock(status_code=200)
-    with patch("src.search.quickwit_client.requests.get", return_value=get_resp), \
-         patch("src.search.quickwit_client.requests.post", return_value=post_resp) as mock_post:
+    with patch("src.server.search.quickwit_client.requests.get", return_value=get_resp), \
+         patch("src.server.search.quickwit_client.requests.post", return_value=post_resp) as mock_post:
         qw.ensure_tenant_index("tnt_1")
 
     assert mock_post.call_count == 1
@@ -262,12 +262,12 @@ def test_ensure_tenant_index_skips_when_exists(tmp_path):
     mock_settings = MagicMock()
     mock_settings.quickwit_enabled = True
     mock_settings.quickwit_url = "http://localhost:7280"
-    with patch("src.search.quickwit_client.get_settings", return_value=mock_settings):
+    with patch("src.server.search.quickwit_client.get_settings", return_value=mock_settings):
         qw = QuickwitClient(schema_dir=tmp_path)
 
     get_resp = MagicMock(status_code=200)
-    with patch("src.search.quickwit_client.requests.get", return_value=get_resp), \
-         patch("src.search.quickwit_client.requests.post") as mock_post:
+    with patch("src.server.search.quickwit_client.requests.get", return_value=get_resp), \
+         patch("src.server.search.quickwit_client.requests.post") as mock_post:
         qw.ensure_tenant_index("tnt_1")
 
     mock_post.assert_not_called()

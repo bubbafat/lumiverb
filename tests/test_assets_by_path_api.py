@@ -11,9 +11,9 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from testcontainers.postgres import PostgresContainer
 
-from src.api.main import app
-from src.core.config import get_settings
-from src.core.database import _engines
+from src.server.api.main import app
+from src.server.config import get_settings
+from src.server.database import _engines
 
 
 def _ensure_psycopg2(url: str) -> str:
@@ -74,7 +74,7 @@ def assets_client() -> tuple[TestClient, str]:
         get_settings.cache_clear()
         _engines.clear()
 
-        with patch("src.api.routers.admin.provision_tenant_database"):
+        with patch("src.server.api.routers.admin.provision_tenant_database"):
             with TestClient(app) as client:
                 r = client.post(
                     "/v1/admin/tenants",
@@ -88,8 +88,8 @@ def assets_client() -> tuple[TestClient, str]:
         with PostgresContainer("pgvector/pgvector:pg16") as tenant_postgres:
             tenant_url = _ensure_psycopg2(tenant_postgres.get_connection_url())
             _provision_tenant_db(tenant_url, project_root)
-            from src.core.database import get_control_session
-            from src.repository.control_plane import TenantDbRoutingRepository
+            from src.server.database import get_control_session
+            from src.server.repository.control_plane import TenantDbRoutingRepository
 
             with get_control_session() as session:
                 routing_repo = TenantDbRoutingRepository(session)
@@ -150,10 +150,10 @@ def test_get_asset_by_path_happy_path(assets_client: tuple[TestClient, str]) -> 
 @pytest.mark.slow
 def test_stream_proxy_happy_path(assets_client: tuple[TestClient, str], tmp_path: Path) -> None:
     """Create library + asset + proxy file; GET /v1/assets/{asset_id}/proxy streams JPEG bytes."""
-    from src.core.config import get_settings
-    from src.core.database import get_tenant_session
-    from src.repository.tenant import AssetRepository
-    from src.storage.local import get_storage
+    from src.server.config import get_settings
+    from src.server.database import get_tenant_session
+    from src.server.repository.tenant import AssetRepository
+    from src.server.storage.local import get_storage
 
     client, api_key = assets_client
     auth = {"Authorization": f"Bearer {api_key}"}
@@ -203,8 +203,8 @@ def test_stream_proxy_happy_path(assets_client: tuple[TestClient, str], tmp_path
     # Write a JPEG-like payload to the expected storage path.
     from sqlalchemy import text as _text
 
-    from src.core.database import _engines, get_control_session
-    from src.repository.control_plane import TenantDbRoutingRepository
+    from src.server.database import _engines, get_control_session
+    from src.server.repository.control_plane import TenantDbRoutingRepository
 
     # Resolve tenant connection string to open tenant session.
     with get_control_session() as control_session:

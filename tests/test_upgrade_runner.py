@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from src.upgrade.context import UpgradeContext
-from src.upgrade.runner import TenantUpgradeRunner, UpgradeStepNotReadyError
-from src.upgrade.step import UpgradeStepInfo
+from src.server.upgrade.context import UpgradeContext
+from src.server.upgrade.runner import TenantUpgradeRunner, UpgradeStepNotReadyError
+from src.server.upgrade.step import UpgradeStepInfo
 
 
 class _FakeMetadataRepo:

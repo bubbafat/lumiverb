@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from rich.console import Console
 
-from src.cli.scan import (
+from src.client.cli.scan import (
     ScanStats,
     _ServerAsset,
     _detect_deletions,
@@ -148,7 +148,7 @@ class TestRunScanAcceptsThorough:
 
     def test_thorough_param_exists(self):
         import inspect
-        from src.cli.scan import run_scan
+        from src.client.cli.scan import run_scan
         sig = inspect.signature(run_scan)
         assert "thorough" in sig.parameters
 
@@ -226,7 +226,7 @@ class TestPopulateCacheForUnchanged:
 
     def test_skips_cached(self, tmp_path):
         """Files already in cache are skipped."""
-        from src.cli.proxy_cache import ProxyCache
+        from src.client.proxy.proxy_cache import ProxyCache
         cache = ProxyCache()
         cache._dir = tmp_path
         cache.put_scan("id-1", b"proxy", "sha")
@@ -245,7 +245,7 @@ class TestPopulateCacheForUnchanged:
 
     def test_downloads_missing(self, tmp_path):
         """Files not in cache are downloaded from server."""
-        from src.cli.proxy_cache import ProxyCache
+        from src.client.proxy.proxy_cache import ProxyCache
         cache = ProxyCache()
         cache._dir = tmp_path
 

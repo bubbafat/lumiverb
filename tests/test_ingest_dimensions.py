@@ -44,7 +44,7 @@ _skip_no_ffprobe = pytest.mark.skipif(not _has_ffprobe, reason="ffprobe not inst
 @pytest.mark.fast
 @_skip_no_ffprobe
 def test_probe_video_dimensions_returns_source_resolution():
-    from src.cli.ingest import _probe_video_dimensions
+    from src.client.cli.ingest import _probe_video_dimensions
 
     w, h = _probe_video_dimensions(SAMPLE_VIDEO)
     assert w == 3840
@@ -56,7 +56,7 @@ def test_probe_video_dimensions_returns_source_resolution():
 @_skip_no_libvips
 def test_extract_video_poster_returns_source_dimensions():
     """The poster frame is resized, but reported dimensions must be the original."""
-    from src.cli.ingest import _extract_video_poster
+    from src.client.cli.ingest import _extract_video_poster
 
     jpeg_bytes, w, h = _extract_video_poster(SAMPLE_VIDEO)
 
@@ -72,7 +72,7 @@ def test_extract_video_poster_returns_source_dimensions():
 @_skip_no_ffprobe
 @_skip_no_libvips
 def test_video_poster_preserves_aspect_ratio():
-    from src.cli.ingest import _extract_video_poster
+    from src.client.cli.ingest import _extract_video_poster
 
     jpeg_bytes, w, h = _extract_video_poster(SAMPLE_VIDEO)
     source_ratio = w / h  # 16:9
@@ -90,7 +90,7 @@ def test_video_poster_preserves_aspect_ratio():
 @pytest.mark.fast
 @_skip_no_ffprobe
 def test_video_preview_is_valid_mp4():
-    from src.cli.ingest import _generate_video_preview
+    from src.client.cli.ingest import _generate_video_preview
 
     preview_bytes = _generate_video_preview(SAMPLE_VIDEO)
     # MP4 files start with a box: 4 bytes size + "ftyp"
@@ -101,7 +101,7 @@ def test_video_preview_is_valid_mp4():
 @pytest.mark.fast
 @_skip_no_ffprobe
 def test_video_preview_capped_at_720p():
-    from src.cli.ingest import _generate_video_preview, _probe_video_dimensions
+    from src.client.cli.ingest import _generate_video_preview, _probe_video_dimensions
     import subprocess
     import tempfile
 
@@ -126,7 +126,7 @@ def test_video_preview_capped_at_720p():
 @pytest.mark.fast
 @_skip_no_libvips
 def test_generate_proxy_returns_source_dimensions_for_jpeg():
-    from src.cli.ingest import _generate_proxy_bytes
+    from src.client.cli.ingest import _generate_proxy_bytes
 
     jpeg_bytes, w, h = _generate_proxy_bytes(SAMPLE_IMAGE)
 
@@ -140,7 +140,7 @@ def test_generate_proxy_returns_source_dimensions_for_jpeg():
 @pytest.mark.fast
 @_skip_no_libvips
 def test_image_proxy_preserves_aspect_ratio():
-    from src.cli.ingest import _generate_proxy_bytes
+    from src.client.cli.ingest import _generate_proxy_bytes
 
     jpeg_bytes, w, h = _generate_proxy_bytes(SAMPLE_IMAGE)
     source_ratio = w / h
@@ -158,7 +158,7 @@ def test_image_proxy_preserves_aspect_ratio():
 @pytest.mark.fast
 @_skip_no_libvips
 def test_jpeg_to_webp_produces_valid_output():
-    from src.cli.ingest import _generate_proxy_bytes, _jpeg_to_webp
+    from src.client.cli.ingest import _generate_proxy_bytes, _jpeg_to_webp
 
     jpeg_bytes, _, _ = _generate_proxy_bytes(SAMPLE_IMAGE)
     webp_bytes = _jpeg_to_webp(jpeg_bytes)
@@ -182,7 +182,7 @@ def test_jpeg_to_webp_produces_valid_output():
 @pytest.mark.fast
 @_skip_no_ffprobe
 def test_build_exif_payload_image():
-    from src.cli.ingest import _build_exif_payload
+    from src.client.cli.ingest import _build_exif_payload
 
     payload = _build_exif_payload(SAMPLE_IMAGE, "image")
 
@@ -199,7 +199,7 @@ def test_build_exif_payload_image():
 @pytest.mark.fast
 @_skip_no_ffprobe
 def test_exif_gps_coordinates_parsed_correctly():
-    from src.cli.ingest import _build_exif_payload
+    from src.client.cli.ingest import _build_exif_payload
 
     payload = _build_exif_payload(SAMPLE_IMAGE, "image")
 
@@ -211,7 +211,7 @@ def test_exif_gps_coordinates_parsed_correctly():
 @pytest.mark.fast
 @_skip_no_ffprobe
 def test_exif_exposure_time_in_microseconds():
-    from src.cli.ingest import _build_exif_payload
+    from src.client.cli.ingest import _build_exif_payload
 
     payload = _build_exif_payload(SAMPLE_IMAGE, "image")
 
@@ -222,7 +222,7 @@ def test_exif_exposure_time_in_microseconds():
 @pytest.mark.fast
 @_skip_no_ffprobe
 def test_build_exif_payload_video():
-    from src.cli.ingest import _build_exif_payload
+    from src.client.cli.ingest import _build_exif_payload
 
     payload = _build_exif_payload(SAMPLE_VIDEO, "video")
 
@@ -239,7 +239,7 @@ def test_build_exif_payload_video():
 @pytest.mark.fast
 @_skip_no_ffprobe
 def test_probe_dimensions_truncated_video_raises():
-    from src.cli.ingest import _probe_video_dimensions
+    from src.client.cli.ingest import _probe_video_dimensions
 
     with pytest.raises(Exception):
         _probe_video_dimensions(TRUNCATED_VIDEO)
@@ -248,7 +248,7 @@ def test_probe_dimensions_truncated_video_raises():
 @pytest.mark.fast
 @_skip_no_ffprobe
 def test_probe_dimensions_empty_file_raises():
-    from src.cli.ingest import _probe_video_dimensions
+    from src.client.cli.ingest import _probe_video_dimensions
 
     with pytest.raises(Exception):
         _probe_video_dimensions(EMPTY_VIDEO)
@@ -257,7 +257,7 @@ def test_probe_dimensions_empty_file_raises():
 @pytest.mark.fast
 @_skip_no_ffprobe
 def test_probe_dimensions_garbage_file_raises():
-    from src.cli.ingest import _probe_video_dimensions
+    from src.client.cli.ingest import _probe_video_dimensions
 
     with pytest.raises(Exception):
         _probe_video_dimensions(GARBAGE_VIDEO)
@@ -267,7 +267,7 @@ def test_probe_dimensions_garbage_file_raises():
 @_skip_no_ffprobe
 @_skip_no_libvips
 def test_extract_poster_from_truncated_video_raises():
-    from src.cli.ingest import _extract_video_poster
+    from src.client.cli.ingest import _extract_video_poster
 
     with pytest.raises(Exception):
         _extract_video_poster(TRUNCATED_VIDEO)
@@ -288,7 +288,7 @@ def test_extract_poster_from_truncated_video_raises():
 @pytest.mark.fast
 def test_walk_library_skips_zero_byte_files(tmp_path):
     """Zero-byte files should be excluded during discovery."""
-    from src.cli.ingest import _walk_library
+    from src.client.cli.ingest import _walk_library
 
     lib_root = tmp_path / "library"
     lib_root.mkdir()
@@ -315,7 +315,7 @@ def test_walk_library_skips_zero_byte_files(tmp_path):
 @pytest.mark.fast
 def test_missing_file_detection_computes_correct_diff(tmp_path):
     """Assets on server but not on disk should be identified for removal."""
-    from src.cli.ingest import _walk_library
+    from src.client.cli.ingest import _walk_library
 
     lib_root = tmp_path / "library"
     lib_root.mkdir()
@@ -355,7 +355,7 @@ def test_missing_file_detection_skips_when_root_missing(tmp_path):
 @pytest.mark.fast
 def test_missing_file_detection_respects_path_prefix(tmp_path):
     """With --path prefix, only assets under that prefix should be considered."""
-    from src.cli.ingest import _walk_library
+    from src.client.cli.ingest import _walk_library
 
     lib_root = tmp_path / "library"
     (lib_root / "a").mkdir(parents=True)
@@ -384,7 +384,7 @@ def test_missing_file_detection_respects_path_prefix(tmp_path):
 @pytest.mark.fast
 def test_missing_single_deleted_file(tmp_path):
     """A single file removed from disk should be detected."""
-    from src.cli.ingest import _walk_library
+    from src.client.cli.ingest import _walk_library
 
     lib_root = tmp_path / "library"
     lib_root.mkdir()
@@ -400,7 +400,7 @@ def test_missing_single_deleted_file(tmp_path):
 @pytest.mark.fast
 def test_missing_multiple_deleted_files(tmp_path):
     """Multiple deleted files should all be detected."""
-    from src.cli.ingest import _walk_library
+    from src.client.cli.ingest import _walk_library
 
     lib_root = tmp_path / "library"
     lib_root.mkdir()
@@ -421,7 +421,7 @@ def test_missing_multiple_deleted_files(tmp_path):
 @pytest.mark.fast
 def test_missing_entire_directory(tmp_path):
     """All assets under a removed directory should be detected."""
-    from src.cli.ingest import _walk_library
+    from src.client.cli.ingest import _walk_library
 
     lib_root = tmp_path / "library"
     (lib_root / "kept").mkdir(parents=True)
@@ -457,7 +457,7 @@ def test_protect_missing_library_root(tmp_path):
 @pytest.mark.fast
 def test_missing_recursive_nested_files(tmp_path):
     """Deeply nested missing files should be detected."""
-    from src.cli.ingest import _walk_library
+    from src.client.cli.ingest import _walk_library
 
     lib_root = tmp_path / "library"
     (lib_root / "a" / "b").mkdir(parents=True)

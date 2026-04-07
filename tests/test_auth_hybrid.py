@@ -16,10 +16,10 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from testcontainers.postgres import PostgresContainer
 
-from src.api.main import app
-from src.api.routers import auth as auth_module
-from src.core.config import get_settings
-from src.core.database import _engines
+from src.server.api.main import app
+from src.server.api.routers import auth as auth_module
+from src.server.config import get_settings
+from src.server.database import _engines
 
 from tests.conftest import _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 

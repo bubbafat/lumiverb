@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.core.path_filter import PathFilter, _glob_match, is_path_included, is_path_included_merged, validate_pattern
+from src.shared.path_filter import PathFilter, _glob_match, is_path_included, is_path_included_merged, validate_pattern
 
 
 @pytest.mark.fast

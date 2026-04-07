@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
 
 # ---------------------------------------------------------------------------
@@ -315,7 +315,7 @@ def test_extract_text_missing_file(mock_chat, provider):
 # _ocr_one tests
 # ---------------------------------------------------------------------------
 
-from src.cli.repair import _ocr_one
+from src.client.cli.repair import _ocr_one
 
 
 def test_ocr_one_success():
@@ -394,7 +394,7 @@ def test_ocr_one_provider_exception():
 # ProxyCache._ensure_size tests
 # ---------------------------------------------------------------------------
 
-from src.cli.proxy_cache import ProxyCache
+from src.client.proxy.proxy_cache import ProxyCache
 
 
 def _isolated_cache(tmp_path, **kwargs):

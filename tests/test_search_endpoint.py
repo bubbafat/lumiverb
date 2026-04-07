@@ -4,7 +4,7 @@ import pytest
 @pytest.mark.fast
 def test_search_response_model() -> None:
     """SearchResponse and SearchHit validate correctly."""
-    from src.api.routers.search import SearchHit, SearchResponse
+    from src.server.api.routers.search import SearchHit, SearchResponse
 
     hit = SearchHit(
         asset_id="ast_001",
@@ -26,7 +26,7 @@ def test_postgres_search_empty_query_returns_no_results() -> None:
     """search_assets with no matching query returns empty list."""
     from unittest.mock import MagicMock
 
-    from src.search.postgres_search import search_assets
+    from src.server.search.postgres_search import search_assets
 
     mock_session = MagicMock()
     mock_session.execute.return_value.fetchall.return_value = []

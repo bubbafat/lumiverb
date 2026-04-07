@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from src.cli.proxy_cache import ProxyCache
+from src.client.proxy.proxy_cache import ProxyCache
 
 
 def _test_cache(tmp_path: Path) -> ProxyCache:

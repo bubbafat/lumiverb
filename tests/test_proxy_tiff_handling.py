@@ -15,7 +15,7 @@ _skip_no_libvips = pytest.mark.skipif(not _has_pyvips, reason="libvips not insta
 @_skip_no_libvips
 @pytest.mark.fast
 def test_tiff_pyvips_primary_success_no_pillow_fallback() -> None:
-    from src.workers import proxy as proxy_mod
+    from src.client.proxy import proxy_gen as proxy_mod
 
     source_path = Path("some.tif")
     sentinel_proxy = MagicMock(name="proxy_img")
@@ -48,7 +48,7 @@ def test_tiff_pyvips_primary_success_no_pillow_fallback() -> None:
 @_skip_no_libvips
 @pytest.mark.fast
 def test_tiff_pyvips_failure_falls_back_to_pillow() -> None:
-    from src.workers import proxy as proxy_mod
+    from src.client.proxy import proxy_gen as proxy_mod
 
     source_path = Path("some.tif")
     sentinel_proxy = MagicMock(name="proxy_img")
@@ -82,7 +82,7 @@ def test_tiff_pyvips_failure_falls_back_to_pillow() -> None:
 @_skip_no_libvips
 @pytest.mark.fast
 def test_tiff_oversize_guard_raises_without_pillow_decode() -> None:
-    from src.workers import proxy as proxy_mod
+    from src.client.proxy import proxy_gen as proxy_mod
 
     source_path = Path("some.tif")
 

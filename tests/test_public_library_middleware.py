@@ -9,9 +9,9 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from testcontainers.postgres import PostgresContainer
 
-from src.api.main import app
-from src.core.config import get_settings
-from src.core.database import _engines
+from src.server.api.main import app
+from src.server.config import get_settings
+from src.server.database import _engines
 from tests.conftest import _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 
@@ -40,7 +40,7 @@ def public_lib_client():
         get_settings.cache_clear()
         _engines.clear()
 
-        with patch("src.api.routers.admin.provision_tenant_database"):
+        with patch("src.server.api.routers.admin.provision_tenant_database"):
             with TestClient(app) as client:
                 r = client.post(
                     "/v1/admin/tenants",
@@ -55,8 +55,8 @@ def public_lib_client():
             tenant_url = _ensure_psycopg2(tenant_pg.get_connection_url())
             _provision_tenant_db(tenant_url, project_root)
 
-            from src.core.database import get_control_session
-            from src.repository.control_plane import TenantDbRoutingRepository
+            from src.server.database import get_control_session
+            from src.server.repository.control_plane import TenantDbRoutingRepository
 
             with get_control_session() as session:
                 row = TenantDbRoutingRepository(session).get_by_tenant_id(tenant_id)
@@ -222,8 +222,8 @@ def test_handler_rejects_stale_public_libraries_row(public_lib_client) -> None:
     assert r.status_code == 200
 
     # Re-insert a stale CP row manually (bypassing the route handler)
-    from src.core.database import get_control_session
-    from src.repository.control_plane import ApiKeyRepository, PublicLibraryRepository, TenantDbRoutingRepository
+    from src.server.database import get_control_session
+    from src.server.repository.control_plane import ApiKeyRepository, PublicLibraryRepository, TenantDbRoutingRepository
     with get_control_session() as ctrl_session:
         actual_api_key_obj = ApiKeyRepository(ctrl_session).get_by_plaintext(api_key)
         tenant_id = actual_api_key_obj.tenant_id

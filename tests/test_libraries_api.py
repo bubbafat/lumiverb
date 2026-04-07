@@ -9,9 +9,9 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from testcontainers.postgres import PostgresContainer
 
-from src.api.main import app
-from src.core.config import get_settings
-from src.core.database import _engines
+from src.server.api.main import app
+from src.server.config import get_settings
+from src.server.database import _engines
 from tests.conftest import _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 
@@ -43,7 +43,7 @@ def libraries_client() -> tuple[TestClient, str]:
         get_settings.cache_clear()
         _engines.clear()
 
-        with patch("src.api.routers.admin.provision_tenant_database"):
+        with patch("src.server.api.routers.admin.provision_tenant_database"):
             with TestClient(app) as client:
                 r = client.post(
                     "/v1/admin/tenants",
@@ -61,8 +61,8 @@ def libraries_client() -> tuple[TestClient, str]:
             tenant_url = _ensure_psycopg2(tenant_url)
             _provision_tenant_db(tenant_url, project_root)
 
-            from src.core.database import get_control_session
-            from src.repository.control_plane import TenantDbRoutingRepository
+            from src.server.database import get_control_session
+            from src.server.repository.control_plane import TenantDbRoutingRepository
 
             with get_control_session() as session:
                 routing_repo = TenantDbRoutingRepository(session)
@@ -225,8 +225,8 @@ def test_delete_already_trashed_returns_409(libraries_client: tuple[TestClient, 
 
 def _get_public_libraries_row(library_id: str):
     """Return the public_libraries control plane row for library_id, or None."""
-    from src.core.database import get_control_session
-    from src.models.control_plane import PublicLibrary
+    from src.server.database import get_control_session
+    from src.server.models.control_plane import PublicLibrary
     with get_control_session() as session:
         return session.get(PublicLibrary, library_id)
 
@@ -327,12 +327,12 @@ def test_hard_delete_public_library_removes_control_plane_row(libraries_client: 
 
     # Trash the library WITHOUT using the DELETE endpoint so the CP row is not
     # removed by the trash handler — exercise the empty-trash cleanup path directly.
-    from src.core.database import get_control_session
-    from src.repository.tenant import LibraryRepository as TenantLibraryRepo
-    from src.core.database import get_engine_for_url
+    from src.server.database import get_control_session
+    from src.server.repository.tenant import LibraryRepository as TenantLibraryRepo
+    from src.server.database import get_engine_for_url
     from sqlmodel import Session as SqlSession
     with get_control_session() as ctrl_session:
-        from src.repository.control_plane import TenantDbRoutingRepository
+        from src.server.repository.control_plane import TenantDbRoutingRepository
         routing = TenantDbRoutingRepository(ctrl_session).get_by_tenant_id(
             _get_public_libraries_row(library_id).tenant_id
         )

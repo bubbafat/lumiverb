@@ -11,8 +11,8 @@ from unittest.mock import patch
 
 import pytest
 
-from src.video.scene_segmenter import SceneSegmenter
-from src.video.video_scanner import RawFrame
+from src.client.video.scene_segmenter import SceneSegmenter
+from src.client.video.video_scanner import RawFrame
 
 _DUMMY_BYTES = b"\x00" * 12  # placeholder; sharpness/phash are patched
 
@@ -35,15 +35,15 @@ def test_short_scene_chooses_sharpest_candidate():
 
     with (
         patch(
-            "src.video.scene_segmenter._frame_to_phash",
+            "src.client.video.scene_segmenter._frame_to_phash",
             side_effect=lambda _: "aabbccdd" * 8,
         ),
         patch(
-            "src.video.scene_segmenter._frame_sharpness",
+            "src.client.video.scene_segmenter._frame_sharpness",
             side_effect=lambda _: next(sharpness_iter),
         ),
         patch(
-            "src.video.scene_segmenter._hamming_hex",
+            "src.client.video.scene_segmenter._hamming_hex",
             return_value=60,  # always above PHASH_THRESHOLD=51
         ),
     ):
@@ -68,15 +68,15 @@ def test_long_scene_skips_first_two_frames():
 
     with (
         patch(
-            "src.video.scene_segmenter._frame_to_phash",
+            "src.client.video.scene_segmenter._frame_to_phash",
             side_effect=lambda _: "aabbccdd" * 8,
         ),
         patch(
-            "src.video.scene_segmenter._frame_sharpness",
+            "src.client.video.scene_segmenter._frame_sharpness",
             side_effect=lambda _: next(sharpness_iter),
         ),
         patch(
-            "src.video.scene_segmenter._hamming_hex",
+            "src.client.video.scene_segmenter._hamming_hex",
             return_value=0,  # always below PHASH_THRESHOLD; no phash trigger
         ),
     ):

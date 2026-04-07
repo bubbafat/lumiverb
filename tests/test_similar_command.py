@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from src.cli.main import app
+from src.client.cli.main import app
 
 runner = CliRunner()
 
@@ -16,7 +16,7 @@ def test_similar_invalid_output_exits_1() -> None:
     mock_client = MagicMock()
     mock_client.get.return_value.json.return_value = [{"library_id": "lib_1", "name": "Lib", "root_path": "/path"}]
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
             [
@@ -60,7 +60,7 @@ def test_similar_calls_api_with_asset_id_library_id_limit_offset() -> None:
         ),
     ]
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
             [
@@ -102,7 +102,7 @@ def test_similar_no_embeddings_exit_0() -> None:
         ),
     ]
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
             [
@@ -136,7 +136,7 @@ def test_similar_no_hits_exit_0() -> None:
         ),
     ]
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
             [
@@ -176,7 +176,7 @@ def test_similar_table_output() -> None:
         ),
     ]
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
             [
@@ -219,7 +219,7 @@ def test_similar_json_output() -> None:
         ),
     ]
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
             [
@@ -260,7 +260,7 @@ def test_similar_text_output() -> None:
         ),
     ]
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
             [
@@ -291,7 +291,7 @@ def test_similar_limit_and_offset_passed_to_api() -> None:
         ),
     ]
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         runner.invoke(
             app,
             [
@@ -338,7 +338,7 @@ def test_similar_image_calls_api_and_prints_table(tmp_path) -> None:
     }
     mock_client.post.return_value.raise_for_status = MagicMock()
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
             [
@@ -392,7 +392,7 @@ def test_similar_image_json_output(tmp_path) -> None:
     }
     mock_client.post.return_value.raise_for_status = MagicMock()
 
-    with patch("src.cli.main.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             app,
             [

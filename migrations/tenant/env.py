@@ -13,7 +13,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 try:
-    from src.models.tenant import SQLModel  # type: ignore[attr-defined]
+    from src.server.models.tenant import SQLModel  # type: ignore[attr-defined]
     target_metadata = SQLModel.metadata
 except ImportError:
     from sqlmodel import SQLModel

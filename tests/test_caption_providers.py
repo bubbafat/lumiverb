@@ -5,7 +5,7 @@ import pytest
 
 @pytest.mark.fast
 def test_openai_provider_id():
-    from src.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
     assert (
         OpenAICompatibleCaptionProvider("http://localhost:1234/v1", "qwen").provider_id
@@ -15,8 +15,8 @@ def test_openai_provider_id():
 
 @pytest.mark.fast
 def test_factory_returns_openai_compatible():
-    from src.workers.captions.factory import get_caption_provider
-    from src.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from src.client.workers.captions.factory import get_caption_provider
+    from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
     p = get_caption_provider(
         vision_model_id="qwen3-visioncaption-2b",
@@ -29,8 +29,8 @@ def test_factory_returns_openai_compatible():
 
 @pytest.mark.fast
 def test_factory_arbitrary_model_id():
-    from src.workers.captions.factory import get_caption_provider
-    from src.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from src.client.workers.captions.factory import get_caption_provider
+    from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
     p = get_caption_provider(
         vision_model_id="llava:13b",
@@ -43,7 +43,7 @@ def test_factory_arbitrary_model_id():
 
 @pytest.mark.fast
 def test_openai_strips_thinking_blocks():
-    from src.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
     p = OpenAICompatibleCaptionProvider("http://localhost:1234/v1", "qwen")
     raw = "<think>some reasoning here</think>A sunset over mountains."
@@ -55,7 +55,7 @@ def test_openai_provider_sends_auth_header_when_api_key_set() -> None:
     """When api_key is provided, _chat sends Authorization: Bearer <key>."""
     from unittest.mock import MagicMock, patch
 
-    from src.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
     p = OpenAICompatibleCaptionProvider("http://localhost:1234/v1", "gpt-4o", api_key="sk-test")
     assert p._api_key == "sk-test"
@@ -78,7 +78,7 @@ def test_openai_provider_omits_auth_header_when_no_api_key() -> None:
     """When api_key is None, no Authorization header is included."""
     from unittest.mock import MagicMock, patch
 
-    from src.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
     p = OpenAICompatibleCaptionProvider("http://localhost:1234/v1", "gpt-4o", api_key=None)
 
@@ -101,7 +101,7 @@ def test_openai_provider_retries_once_on_empty_completion(tmp_path) -> None:
 
     from PIL import Image
 
-    from src.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
     img_path = tmp_path / "img.jpg"
     Image.new("RGB", (16, 16), color=(255, 0, 0)).save(img_path)

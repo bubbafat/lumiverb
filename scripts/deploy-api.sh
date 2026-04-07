@@ -368,7 +368,7 @@ Group=${SVC_USER}
 WorkingDirectory=${APP_DIR}
 EnvironmentFile=${ENV_FILE}
 Environment=PYTHONUNBUFFERED=1
-ExecStart=${APP_DIR}/.venv/bin/uvicorn src.api.main:app --host \${API_LISTEN_HOST} --port 8000 --workers 2
+ExecStart=${APP_DIR}/.venv/bin/uvicorn src.server.api.main:app --host \${API_LISTEN_HOST} --port 8000 --workers 2
 Restart=on-failure
 RestartSec=5s
 LimitNOFILE=65535

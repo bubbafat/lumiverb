@@ -10,10 +10,10 @@ from sqlalchemy.engine import make_url
 from testcontainers.postgres import PostgresContainer
 from typer.testing import CliRunner
 
-from src.api.main import app
-from src.cli.main import app as cli_app
-from src.core.config import get_settings
-from src.core.database import _engines
+from src.server.api.main import app
+from src.client.cli.main import app as cli_app
+from src.server.config import get_settings
+from src.server.database import _engines
 
 from tests.conftest import _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
@@ -46,7 +46,7 @@ def keys_client() -> tuple[TestClient, str]:
         _engines.clear()
 
         # Create tenant + default key via admin API (mock provision_tenant_database).
-        with patch("src.api.routers.admin.provision_tenant_database"):
+        with patch("src.server.api.routers.admin.provision_tenant_database"):
             with TestClient(app) as client:
                 r = client.post(
                     "/v1/admin/tenants",
@@ -62,8 +62,8 @@ def keys_client() -> tuple[TestClient, str]:
             tenant_url = _ensure_psycopg2(tenant_postgres.get_connection_url())
             _provision_tenant_db(tenant_url, project_root)
 
-            from src.core.database import get_control_session
-            from src.repository.control_plane import TenantDbRoutingRepository
+            from src.server.database import get_control_session
+            from src.server.repository.control_plane import TenantDbRoutingRepository
 
             with get_control_session() as session:
                 routing_repo = TenantDbRoutingRepository(session)
@@ -96,7 +96,7 @@ def test_viewer_cannot_create_list_or_revoke_keys(keys_client: tuple[TestClient,
     viewer_plaintext = r_admin.json()["plaintext"]
 
     import hashlib
-    from src.core.database import get_control_session
+    from src.server.database import get_control_session
     from sqlmodel import text as sql_text
 
     key_hash = hashlib.sha256(viewer_plaintext.encode()).hexdigest()
@@ -146,7 +146,7 @@ def test_self_revoke_returns_409(keys_client: tuple[TestClient, str]) -> None:
 def test_last_admin_key_cannot_be_revoked(keys_client: tuple[TestClient, str]) -> None:
     """Attempting to revoke the only admin key (as an editor key) returns 409 with code last_admin_key."""
     import hashlib
-    from src.core.database import get_control_session
+    from src.server.database import get_control_session
     from sqlmodel import text as sql_text
 
     client, admin_plaintext = keys_client
@@ -194,7 +194,7 @@ def test_last_admin_key_cannot_be_revoked(keys_client: tuple[TestClient, str]) -
 def test_non_admin_key_can_be_revoked_when_single_admin_exists(keys_client: tuple[TestClient, str]) -> None:
     """Revoking an editor key succeeds even when there is only one admin key."""
     import hashlib
-    from src.core.database import get_control_session
+    from src.server.database import get_control_session
     from sqlmodel import text as sql_text
 
     client, api_key = keys_client
@@ -265,7 +265,7 @@ def test_admin_can_create_admin_key(keys_client: tuple[TestClient, str]) -> None
 def test_editor_can_create_viewer_key(keys_client: tuple[TestClient, str]) -> None:
     """Editor creating a viewer key should succeed."""
     import hashlib
-    from src.core.database import get_control_session
+    from src.server.database import get_control_session
     from sqlmodel import text as sql_text
 
     client, api_key = keys_client
@@ -294,7 +294,7 @@ def test_editor_can_create_viewer_key(keys_client: tuple[TestClient, str]) -> No
 def test_editor_cannot_create_admin_key(keys_client: tuple[TestClient, str]) -> None:
     """Editor trying to create an admin key should be rejected with 403."""
     import hashlib
-    from src.core.database import get_control_session
+    from src.server.database import get_control_session
     from sqlmodel import text as sql_text
 
     client, api_key = keys_client
@@ -333,7 +333,7 @@ def test_create_key_invalid_role_returns_400(keys_client: tuple[TestClient, str]
 def test_create_key_no_role_inherits_caller(keys_client: tuple[TestClient, str]) -> None:
     """Omitting role should inherit the caller's role."""
     import hashlib
-    from src.core.database import get_control_session
+    from src.server.database import get_control_session
     from sqlmodel import text as sql_text
 
     client, api_key = keys_client
@@ -376,7 +376,7 @@ def test_cli_keys_list_uses_api() -> None:
     mock_client = MagicMock()
     mock_client.get.return_value = mock_response
 
-    with patch("src.cli.commands.keys.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.commands.keys.LumiverbClient", return_value=mock_client):
         result = runner.invoke(cli_app, ["keys", "list"])
 
     assert result.exit_code == 0
@@ -399,7 +399,7 @@ def test_cli_keys_create_prints_plaintext() -> None:
     mock_client = MagicMock()
     mock_client.post.return_value = mock_response
 
-    with patch("src.cli.commands.keys.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.commands.keys.LumiverbClient", return_value=mock_client):
         result = runner.invoke(cli_app, ["keys", "create", "--label", "ci-read-only"])
 
     assert result.exit_code == 0
@@ -419,7 +419,7 @@ def test_cli_keys_revoke_confirms_and_handles_204() -> None:
     resp = Response(204, request=req)
     mock_client.raw.return_value = resp
 
-    with patch("src.cli.commands.keys.LumiverbClient", return_value=mock_client):
+    with patch("src.client.cli.commands.keys.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
             cli_app,
             ["keys", "revoke", "--key-id", "key_01A"],

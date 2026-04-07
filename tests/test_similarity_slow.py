@@ -13,11 +13,11 @@ from sqlalchemy.engine import make_url
 from sqlmodel import Session
 from testcontainers.postgres import PostgresContainer
 
-from src.api.main import app
-from src.core.config import get_settings
-from src.core.database import _engines, get_control_session
-from src.repository.control_plane import TenantDbRoutingRepository
-from src.repository.tenant import AssetEmbeddingRepository, AssetRepository, LibraryRepository
+from src.server.api.main import app
+from src.server.config import get_settings
+from src.server.database import _engines, get_control_session
+from src.server.repository.control_plane import TenantDbRoutingRepository
+from src.server.repository.tenant import AssetEmbeddingRepository, AssetRepository, LibraryRepository
 from tests.conftest import _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 
@@ -49,7 +49,7 @@ def similarity_client() -> Tuple[_AuthClient, str, str]:
         _engines.clear()
 
         # Create tenant and API key via admin router
-        with patch("src.api.routers.admin.provision_tenant_database"):
+        with patch("src.server.api.routers.admin.provision_tenant_database"):
             with TestClient(app) as client:
                 r = client.post(
                     "/v1/admin/tenants",
@@ -153,7 +153,7 @@ def test_similar_with_embeddings(similarity_client: Tuple[_AuthClient, str, str]
         )
 
         emb_repo = AssetEmbeddingRepository(session)
-        from src.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
+        from src.client.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
 
         emb_repo.upsert(base_asset.asset_id, "clip", CLIP_VERSION, base_vec)
         emb_repo.upsert(close_asset.asset_id, "clip", CLIP_VERSION, close_vec)
@@ -233,7 +233,7 @@ def test_similar_date_range_filter(similarity_client: Tuple[_AuthClient, str, st
         session.commit()
 
         emb_repo = AssetEmbeddingRepository(session)
-        from src.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
+        from src.client.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
 
         emb_repo.upsert(base_asset.asset_id, "clip", CLIP_VERSION, base_vec)
         emb_repo.upsert(close_asset.asset_id, "clip", CLIP_VERSION, close_vec)
@@ -285,7 +285,7 @@ def test_search_by_image_basic(similarity_client: Tuple[_AuthClient, str, str]) 
 
     from PIL import Image as PILImage
 
-    from src.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
+    from src.client.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
 
     auth_client, library_id, tenant_url = similarity_client
 
@@ -336,7 +336,7 @@ def test_search_by_image_basic(similarity_client: Tuple[_AuthClient, str, str]) 
             # Use the base vector so similarity is defined vs stored embeddings
             return base_vec
 
-    with patch("src.workers.embeddings.clip_provider.CLIPEmbeddingProvider", return_value=_DummyProvider()):
+    with patch("src.client.workers.embeddings.clip_provider.CLIPEmbeddingProvider", return_value=_DummyProvider()):
         resp = auth_client.post(
             "/v1/similar/search-by-image",
             json={
@@ -390,7 +390,7 @@ def test_similar_asset_types_filter(similarity_client: Tuple[_AuthClient, str, s
         )
 
         emb_repo = AssetEmbeddingRepository(session)
-        from src.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
+        from src.client.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
 
         emb_repo.upsert(base_asset.asset_id, "clip", CLIP_VERSION, base_vec)
         emb_repo.upsert(close_asset.asset_id, "clip", CLIP_VERSION, close_vec)
@@ -476,7 +476,7 @@ def test_similar_camera_filter(similarity_client: Tuple[_AuthClient, str, str]) 
         session.commit()
 
         emb_repo = AssetEmbeddingRepository(session)
-        from src.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
+        from src.client.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
 
         emb_repo.upsert(base_asset.asset_id, "clip", CLIP_VERSION, base_vec)
         emb_repo.upsert(close_asset.asset_id, "clip", CLIP_VERSION, close_vec)

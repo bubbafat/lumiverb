@@ -17,11 +17,11 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from testcontainers.postgres import PostgresContainer
 
-from src.upgrade.context import UpgradeContext
-from src.upgrade.registry import registered_upgrade_steps
-from src.upgrade.runner import TenantUpgradeRunner
-from src.upgrade.step import UpgradeStepInfo
-from src.upgrade.steps.backfill_artifact_sha256 import (
+from src.server.upgrade.context import UpgradeContext
+from src.server.upgrade.registry import registered_upgrade_steps
+from src.server.upgrade.runner import TenantUpgradeRunner
+from src.server.upgrade.step import UpgradeStepInfo
+from src.server.upgrade.steps.backfill_artifact_sha256 import (
     BackfillProxySha256Step,
     BackfillSceneRepSha256Step,
     BackfillThumbnailSha256Step,
@@ -130,7 +130,7 @@ def test_proxy_run_skips_missing_file(tmp_path: Path) -> None:
     storage_mock.abs_path.return_value = tmp_path / "nonexistent.jpg"
 
     step = BackfillProxySha256Step()
-    with patch("src.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage_mock):
+    with patch("src.server.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage_mock):
         result = step.run(ctx)
 
     assert result["missing"] == 1
@@ -161,7 +161,7 @@ def test_proxy_run_writes_hash_for_existing_file(tmp_path: Path) -> None:
     storage_mock.abs_path.return_value = proxy_file
 
     step = BackfillProxySha256Step()
-    with patch("src.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage_mock):
+    with patch("src.server.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage_mock):
         result = step.run(ctx)
 
     assert result["updated"] == 1
@@ -241,7 +241,7 @@ def _make_ctx(engine, metadata_repo=None) -> UpgradeContext:
 
     session = Session(engine)
     if metadata_repo is None:
-        from src.repository.system_metadata import SystemMetadataRepository
+        from src.server.repository.system_metadata import SystemMetadataRepository
         metadata_repo = SystemMetadataRepository(session)
     return UpgradeContext(session=session, metadata=metadata_repo, tenant_id="test_tenant")
 
@@ -272,7 +272,7 @@ def test_proxy_backfill_writes_correct_sha256(backfill_db, tmp_path: Path) -> No
 
     assert step.needs_work(ctx) is True
 
-    with patch("src.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage):
+    with patch("src.server.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage):
         result = step.run(ctx)
 
     assert result["updated"] == 1
@@ -314,7 +314,7 @@ def test_thumbnail_backfill_writes_correct_sha256(backfill_db, tmp_path: Path) -
     ctx = _make_ctx(backfill_db)
     step = BackfillThumbnailSha256Step()
 
-    with patch("src.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage):
+    with patch("src.server.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage):
         result = step.run(ctx)
 
     assert result["updated"] == 1
@@ -347,7 +347,7 @@ def test_proxy_backfill_skips_missing_file_leaves_null(backfill_db, tmp_path: Pa
     ctx = _make_ctx(backfill_db)
     step = BackfillProxySha256Step()
 
-    with patch("src.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage):
+    with patch("src.server.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage):
         result = step.run(ctx)
 
     assert result["missing"] == 1
@@ -407,7 +407,7 @@ def test_scene_rep_backfill_writes_correct_sha256(backfill_db, tmp_path: Path) -
 
     assert step.needs_work(ctx) is True
 
-    with patch("src.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage):
+    with patch("src.server.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage):
         result = step.run(ctx)
 
     assert result["updated"] == 1
@@ -429,7 +429,7 @@ def test_runner_marks_all_three_steps_completed(backfill_db, tmp_path: Path) -> 
     """Full runner completes all three steps when no work is needed (empty library)."""
     # backfill_db may already have rows from prior tests, but needs_work() only cares
     # about NULL sha columns — prior tests wrote real hashes. Add no new rows here.
-    from src.repository.system_metadata import SystemMetadataRepository
+    from src.server.repository.system_metadata import SystemMetadataRepository
     from sqlmodel import Session
 
     session = Session(backfill_db)
@@ -441,7 +441,7 @@ def test_runner_marks_all_three_steps_completed(backfill_db, tmp_path: Path) -> 
     storage = MagicMock()
     storage.abs_path.side_effect = lambda key: tmp_path / key
 
-    with patch("src.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage):
+    with patch("src.server.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage):
         result = runner.execute(ctx, max_steps=10)
 
     status = runner.get_status(ctx)

@@ -8,7 +8,7 @@ import pytest
 @pytest.mark.fast
 def test_unified_progress_indeterminate_counters_update() -> None:
     """UnifiedProgressBar with total=None updates counters and unit display."""
-    from src.cli.progress import UnifiedProgressBar, UnifiedProgressSpec
+    from src.client.cli.progress import UnifiedProgressBar, UnifiedProgressSpec
 
     mock_progress = MagicMock()
     spec = UnifiedProgressSpec(
@@ -34,7 +34,7 @@ def test_unified_progress_indeterminate_counters_update() -> None:
 @pytest.mark.fast
 def test_unified_progress_determinate_n_m_display() -> None:
     """UnifiedProgressBar with total set shows N / M format."""
-    from src.cli.progress import UnifiedProgressBar, UnifiedProgressSpec
+    from src.client.cli.progress import UnifiedProgressBar, UnifiedProgressSpec
 
     spec = UnifiedProgressSpec(
         label="Syncing",
@@ -63,7 +63,7 @@ def test_unified_progress_non_terminal_disabled() -> None:
 
     from rich.console import Console
 
-    from src.cli.progress import UnifiedProgress, UnifiedProgressSpec
+    from src.client.cli.progress import UnifiedProgress, UnifiedProgressSpec
 
     # Console with file output is typically non-interactive (is_terminal=False)
     console = Console(file=StringIO(), force_terminal=False)
@@ -83,7 +83,7 @@ def test_unified_progress_non_terminal_disabled() -> None:
 @pytest.mark.fast
 def test_unified_progress_finish_snaps_total() -> None:
     """finish() makes indeterminate bar determinate by setting total."""
-    from src.cli.progress import UnifiedProgressBar, UnifiedProgressSpec
+    from src.client.cli.progress import UnifiedProgressBar, UnifiedProgressSpec
 
     mock_progress = MagicMock()
     spec = UnifiedProgressSpec(
@@ -108,7 +108,7 @@ def test_unified_progress_finish_snaps_total() -> None:
 @pytest.mark.fast
 def test_unified_progress_empty_counters() -> None:
     """Counters can be empty; display is blank."""
-    from src.cli.progress import UnifiedProgressBar, UnifiedProgressSpec
+    from src.client.cli.progress import UnifiedProgressBar, UnifiedProgressSpec
 
     spec = UnifiedProgressSpec(
         label="Enqueuing",

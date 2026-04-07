@@ -258,7 +258,7 @@ Group=lumiverb
 WorkingDirectory=/opt/lumiverb
 EnvironmentFile=/etc/lumiverb/env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/lumiverb/.venv/bin/uvicorn src.api.main:app --host 127.0.0.1 --port 8000 --workers 2
+ExecStart=/opt/lumiverb/.venv/bin/uvicorn src.server.api.main:app --host 127.0.0.1 --port 8000 --workers 2
 Restart=on-failure
 RestartSec=5s
 LimitNOFILE=65535
@@ -287,7 +287,7 @@ Group=lumiverb
 WorkingDirectory=/opt/lumiverb
 EnvironmentFile=/etc/lumiverb/env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/lumiverb/.venv/bin/python -m src.workers.main
+ExecStart=/opt/lumiverb/.venv/bin/python -m src.client.workers.main
 Restart=on-failure
 RestartSec=10s
 LimitNOFILE=65535

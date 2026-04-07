@@ -9,9 +9,9 @@ from sqlalchemy import create_engine, text
 from sqlmodel import Session
 from testcontainers.postgres import PostgresContainer
 
-from src.core.config import get_settings
-from src.core.database import _engines, get_control_session
-from src.repository.control_plane import (
+from src.server.config import get_settings
+from src.server.database import _engines, get_control_session
+from src.server.repository.control_plane import (
     ApiKeyRepository,
     TenantDbRoutingRepository,
     TenantRepository,

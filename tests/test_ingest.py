@@ -18,10 +18,10 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from testcontainers.postgres import PostgresContainer
 
-from src.api.main import app
-from src.core.config import get_settings
-from src.core.database import _engines
-from src.storage.local import LocalStorage
+from src.server.api.main import app
+from src.server.config import get_settings
+from src.server.database import _engines
+from src.server.storage.local import LocalStorage
 from tests.conftest import _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 
@@ -64,7 +64,7 @@ def ingest_env(tmp_path_factory):
 
         from unittest.mock import patch
 
-        with patch("src.api.routers.admin.provision_tenant_database"):
+        with patch("src.server.api.routers.admin.provision_tenant_database"):
             with TestClient(app) as bootstrap_client:
                 r = bootstrap_client.post(
                     "/v1/admin/tenants",
@@ -79,8 +79,8 @@ def ingest_env(tmp_path_factory):
             tenant_url = _ensure_psycopg2(tenant_pg.get_connection_url())
             _provision_tenant_db(tenant_url, project_root)
 
-            from src.core.database import get_control_session
-            from src.repository.control_plane import TenantDbRoutingRepository
+            from src.server.database import get_control_session
+            from src.server.repository.control_plane import TenantDbRoutingRepository
 
             with get_control_session() as session:
                 routing_repo = TenantDbRoutingRepository(session)
@@ -91,8 +91,8 @@ def ingest_env(tmp_path_factory):
                 session.commit()
 
             with (
-                patch("src.api.routers.artifacts.get_storage", return_value=storage),
-                patch("src.api.routers.ingest.get_storage", return_value=storage),
+                patch("src.server.api.routers.artifacts.get_storage", return_value=storage),
+                patch("src.server.api.routers.ingest.get_storage", return_value=storage),
             ):
                 with TestClient(app) as raw_client:
                     auth_headers = {"Authorization": f"Bearer {api_key}"}
@@ -524,7 +524,7 @@ def test_create_on_ingest_blocked_by_library_exclude_filter(ingest_env) -> None:
 @pytest.mark.fast
 def test_normalize_proxy_webp_fast_path() -> None:
     """_normalize_proxy returns input bytes unchanged for valid WebP within size limits."""
-    from src.api.routers.ingest import _normalize_proxy
+    from src.server.api.routers.ingest import _normalize_proxy
 
     webp_bytes = _make_test_image(800, 600, fmt="WEBP")
     result_bytes, w, h = _normalize_proxy(webp_bytes)
@@ -536,7 +536,7 @@ def test_normalize_proxy_webp_fast_path() -> None:
 @pytest.mark.fast
 def test_normalize_proxy_jpeg_reencoded_to_webp() -> None:
     """_normalize_proxy re-encodes JPEG input to WebP."""
-    from src.api.routers.ingest import _normalize_proxy
+    from src.server.api.routers.ingest import _normalize_proxy
 
     jpeg_bytes = _make_test_image(400, 300, fmt="JPEG")
     result_bytes, w, h = _normalize_proxy(jpeg_bytes)

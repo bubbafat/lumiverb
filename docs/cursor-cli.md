@@ -15,7 +15,7 @@ See docs/architecture.md for the full design.
 - `src/cli/ingest.py` — Per-asset ingest pipeline: discover files, generate proxies, call vision AI, upload atomically
 - `src/cli/scan.py` — Scan phase (ADR-011): discover files, SHA comparison, EXIF extraction, proxy generation, upload, proxy cache with SHA sidecar
 
-Entry point: `lumiverb = "src.cli:main"` (setuptools); `main()` invokes the Typer app.
+Entry point: `lumiverb = "src.client.cli:main"` (setuptools); `main()` invokes the Typer app.
 
 ## Commands
 

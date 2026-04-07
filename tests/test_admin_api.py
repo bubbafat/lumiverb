@@ -10,9 +10,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from testcontainers.postgres import PostgresContainer
 
-from src.api.main import app
-from src.core.config import get_settings
-from src.core.database import _engines
+from src.server.api.main import app
+from src.server.config import get_settings
+from src.server.database import _engines
 
 
 def _ensure_psycopg2(url: str) -> str:
@@ -58,7 +58,7 @@ def admin_client() -> TestClient:
         get_settings.cache_clear()
         _engines.clear()
 
-        with patch("src.api.routers.admin.provision_tenant_database"):
+        with patch("src.server.api.routers.admin.provision_tenant_database"):
             with TestClient(app) as client:
                 yield client
 

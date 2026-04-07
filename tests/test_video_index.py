@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
 
-from src.cli.video_index import index_video_scenes, run_video_index, enrich_video_scenes, run_video_enrich
+from src.client.cli.video_index import index_video_scenes, run_video_index, enrich_video_scenes, run_video_enrich
 
 
 class _FakeResponse:
@@ -46,8 +46,8 @@ class _FakeSegmenter:
         return self._scenes
 
 
-@patch("src.cli.video_index.VideoScanner")
-@patch("src.cli.video_index.SceneSegmenter")
+@patch("src.client.cli.video_index.VideoScanner")
+@patch("src.client.cli.video_index.SceneSegmenter")
 def test_index_video_scenes_single_chunk(mock_segmenter_cls, mock_scanner_cls):
     """Single chunk with two scenes completes successfully."""
     client = MagicMock()
@@ -106,8 +106,8 @@ def test_index_video_scenes_single_chunk(mock_segmenter_cls, mock_scanner_cls):
     assert body["next_anchor_phash"] == "deadbeef"
 
 
-@patch("src.cli.video_index.VideoScanner")
-@patch("src.cli.video_index.SceneSegmenter")
+@patch("src.client.cli.video_index.VideoScanner")
+@patch("src.client.cli.video_index.SceneSegmenter")
 def test_index_video_scenes_all_complete(mock_segmenter_cls, mock_scanner_cls):
     """When all chunks are already complete, returns 0 scenes."""
     client = MagicMock()
@@ -128,11 +128,11 @@ def test_index_video_scenes_all_complete(mock_segmenter_cls, mock_scanner_cls):
     assert result["chunks"] == 0
 
 
-@patch("src.cli.video_index.VideoScanner")
-@patch("src.cli.video_index.SceneSegmenter")
+@patch("src.client.cli.video_index.VideoScanner")
+@patch("src.client.cli.video_index.SceneSegmenter")
 def test_index_video_scenes_chunk_failure(mock_segmenter_cls, mock_scanner_cls):
     """Failed chunks are reported to server and processing continues."""
-    from src.video.video_scanner import SyncError
+    from src.client.video.video_scanner import SyncError
 
     client = MagicMock()
     client.post.return_value = _FakeResponse(data={"chunk_count": 1, "already_initialized": False})
@@ -170,8 +170,8 @@ def test_index_video_scenes_chunk_failure(mock_segmenter_cls, mock_scanner_cls):
     assert "FFmpeg hung" in fail_body["error_message"]
 
 
-@patch("src.cli.video_index.VideoScanner")
-@patch("src.cli.video_index.SceneSegmenter")
+@patch("src.client.cli.video_index.VideoScanner")
+@patch("src.client.cli.video_index.SceneSegmenter")
 def test_index_video_scenes_multi_chunk(mock_segmenter_cls, mock_scanner_cls):
     """Two chunks: scene_index is cumulative across chunks."""
     client = MagicMock()
@@ -221,8 +221,8 @@ def test_index_video_scenes_multi_chunk(mock_segmenter_cls, mock_scanner_cls):
     assert complete_calls[1].kwargs["json"]["scenes"][0]["scene_index"] == 1
 
 
-@patch("src.cli.video_index.VideoScanner")
-@patch("src.cli.video_index.SceneSegmenter")
+@patch("src.client.cli.video_index.VideoScanner")
+@patch("src.client.cli.video_index.SceneSegmenter")
 def test_index_video_scenes_overlap_calculation(mock_segmenter_cls, mock_scanner_cls):
     """Scanner is called with start_ts - overlap for anchor continuity."""
     client = MagicMock()
@@ -254,8 +254,8 @@ def test_index_video_scenes_overlap_calculation(mock_segmenter_cls, mock_scanner
     assert kwargs.get("anchor_phash") == "abc"
 
 
-@patch("src.cli.video_index.VideoScanner")
-@patch("src.cli.video_index.SceneSegmenter")
+@patch("src.client.cli.video_index.VideoScanner")
+@patch("src.client.cli.video_index.SceneSegmenter")
 def test_index_video_scenes_scene_fields_complete(mock_segmenter_cls, mock_scanner_cls):
     """All scene fields are passed through to the server."""
     client = MagicMock()
@@ -293,7 +293,7 @@ def test_index_video_scenes_scene_fields_complete(mock_segmenter_cls, mock_scann
     assert result_scene["scene_index"] == 0
 
 
-@patch("src.cli.video_index.index_video_scenes")
+@patch("src.client.cli.video_index.index_video_scenes")
 def test_run_video_index_missing_source(mock_index):
     """Videos with missing source files are skipped with fail count."""
     progress = MagicMock()
@@ -319,7 +319,7 @@ def test_run_video_index_missing_source(mock_index):
     progress.update.assert_called_once_with(0, ok=0, fail=1)
 
 
-@patch("src.cli.video_index.index_video_scenes")
+@patch("src.client.cli.video_index.index_video_scenes")
 def test_run_video_index_happy_path(mock_index):
     """Processes two videos, updates progress correctly."""
     mock_index.return_value = {"scenes": 3, "chunks": 1, "elapsed": 1.5}
@@ -370,7 +370,7 @@ def _mock_extract_ok(source, dest, timestamp=0.0):
     return _FakeFFmpegAttempt(ok=True)
 
 
-@patch("src.cli.video_index.extract_video_frame_detailed")
+@patch("src.client.cli.video_index.extract_video_frame_detailed")
 def test_enrich_video_scenes_with_vision(mock_extract):
     """Enriches scenes: extracts rep frame, calls vision, patches + syncs."""
     mock_extract.side_effect = _mock_extract_ok
@@ -422,7 +422,7 @@ def test_enrich_video_scenes_with_vision(mock_extract):
     assert len(sync_calls) == 1
 
 
-@patch("src.cli.video_index.extract_video_frame_detailed")
+@patch("src.client.cli.video_index.extract_video_frame_detailed")
 def test_enrich_video_scenes_without_vision(mock_extract):
     """Without vision provider, extracts rep frames but skips vision/sync."""
     mock_extract.side_effect = _mock_extract_ok
@@ -459,7 +459,7 @@ def test_enrich_video_scenes_without_vision(mock_extract):
     assert len(sync_calls) == 0
 
 
-@patch("src.cli.video_index.extract_video_frame_detailed")
+@patch("src.client.cli.video_index.extract_video_frame_detailed")
 def test_enrich_video_scenes_extraction_failure(mock_extract):
     """Failed rep frame extraction counts as failure, continues to next scene."""
     mock_extract.return_value = _FakeFFmpegAttempt(ok=False)
@@ -489,7 +489,7 @@ def test_enrich_video_scenes_extraction_failure(mock_extract):
     assert result["failed"] == 2
 
 
-@patch("src.cli.video_index.enrich_video_scenes")
+@patch("src.client.cli.video_index.enrich_video_scenes")
 def test_run_video_enrich_happy_path(mock_enrich):
     """Processes videos and updates progress."""
     mock_enrich.return_value = {"enriched": 2, "skipped": 0, "failed": 0, "elapsed": 1.0}
@@ -518,7 +518,7 @@ def test_run_video_enrich_happy_path(mock_enrich):
     assert last_update.kwargs["fail"] == 0
 
 
-@patch("src.cli.video_index.enrich_video_scenes")
+@patch("src.client.cli.video_index.enrich_video_scenes")
 def test_run_video_enrich_missing_source(mock_enrich):
     """Missing source files are skipped."""
     progress = MagicMock()

@@ -11,8 +11,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import src.video.video_scanner as vs_module
-from src.video.video_scanner import SyncError, VideoScanner
+import src.client.video.video_scanner as vs_module
+from src.client.video.video_scanner import SyncError, VideoScanner
 
 # Tiny frame: 4×4 RGB24
 _W, _H = 4, 4
@@ -28,7 +28,7 @@ def scanner(tmp_path, monkeypatch):
     fake_video = tmp_path / "fake.mp4"
     fake_video.touch()
 
-    with patch("src.video.video_scanner._get_video_size", return_value=(_W, _H)):
+    with patch("src.client.video.video_scanner._get_video_size", return_value=(_W, _H)):
         yield VideoScanner(fake_video)
 
 

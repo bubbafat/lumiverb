@@ -4,7 +4,7 @@ import pytest
 @pytest.mark.fast
 def test_similar_hit_model() -> None:
     """SimilarHit validates correctly."""
-    from src.api.routers.similarity import SimilarHit
+    from src.server.api.routers.similarity import SimilarHit
 
     hit = SimilarHit(
         asset_id="ast_001",
@@ -19,7 +19,7 @@ def test_similar_hit_model() -> None:
 @pytest.mark.fast
 def test_similarity_response_no_embedding() -> None:
     """SimilarityResponse with embedding_available=False has empty hits."""
-    from src.api.routers.similarity import SimilarityResponse
+    from src.server.api.routers.similarity import SimilarityResponse
 
     resp = SimilarityResponse(
         source_asset_id="ast_001",
@@ -34,7 +34,7 @@ def test_similarity_response_no_embedding() -> None:
 @pytest.mark.fast
 def test_image_similarity_models() -> None:
     """ImageSimilarityRequest and ImageSimilarityResponse validate correctly."""
-    from src.api.routers.similarity import (
+    from src.server.api.routers.similarity import (
         CameraSpec,
         ImageSimilarityRequest,
         ImageSimilarityResponse,

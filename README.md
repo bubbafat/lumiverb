@@ -120,7 +120,7 @@ uv run alembic -c alembic-control.ini upgrade head
 ### 5. Start the API server
 
 ```bash
-uv run uvicorn src.api.main:app --reload --port 8000
+uv run uvicorn src.server.api.main:app --reload --port 8000
 ```
 
 ### 6. Provision a tenant and get an API key

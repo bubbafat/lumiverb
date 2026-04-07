@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 from unittest.mock import MagicMock, patch
 
-from src.cli.scan import ScanStats
+from src.client.cli.scan import ScanStats
 
 
 class TestScanReturnsAssetIds:
@@ -28,7 +28,7 @@ class TestRemovedCommands:
 
     def test_no_ingest_command(self):
         from typer.testing import CliRunner
-        from src.cli.main import app
+        from src.client.cli.main import app
 
         runner = CliRunner()
         result = runner.invoke(app, ["ingest", "--help"])
@@ -36,7 +36,7 @@ class TestRemovedCommands:
 
     def test_no_repair_command(self):
         from typer.testing import CliRunner
-        from src.cli.main import app
+        from src.client.cli.main import app
 
         runner = CliRunner()
         result = runner.invoke(app, ["repair", "--help"])
@@ -44,7 +44,7 @@ class TestRemovedCommands:
 
     def test_no_similar_image_command(self):
         from typer.testing import CliRunner
-        from src.cli.main import app
+        from src.client.cli.main import app
 
         runner = CliRunner()
         result = runner.invoke(app, ["similar-image", "--help"])
@@ -52,7 +52,7 @@ class TestRemovedCommands:
 
     def test_old_path_has_no_callers(self):
         """run_ingest is not referenced from main.py."""
-        from src.cli import main
+        from src.client.cli import main
         source = inspect.getsource(main)
         assert "run_ingest" not in source
 
@@ -61,17 +61,17 @@ class TestSkipTypes:
     """Verify skip_types parameter in run_repair."""
 
     def test_run_repair_accepts_skip_types(self):
-        from src.cli.repair import run_repair
+        from src.client.cli.repair import run_repair
         sig = inspect.signature(run_repair)
         assert "skip_types" in sig.parameters
         assert sig.parameters["skip_types"].default is None
 
-    @patch("src.cli.repair._page_missing")
-    @patch("src.cli.repair.get_repair_summary")
+    @patch("src.client.cli.repair._page_missing")
+    @patch("src.client.cli.repair.get_repair_summary")
     def test_skip_types_excludes_from_plan(self, mock_summary, mock_page):
         """When skip_types includes 'vision', vision repair is skipped."""
         from rich.console import Console
-        from src.cli.repair import run_repair
+        from src.client.cli.repair import run_repair
 
         mock_summary.return_value = {
             "total_assets": 10,
@@ -107,7 +107,7 @@ class TestUserSubcommand:
 
     def test_user_help(self):
         from typer.testing import CliRunner
-        from src.cli.main import app
+        from src.client.cli.main import app
 
         runner = CliRunner()
         result = runner.invoke(app, ["user", "--help"])
@@ -119,7 +119,7 @@ class TestUserSubcommand:
 
     def test_no_top_level_create_user(self):
         from typer.testing import CliRunner
-        from src.cli.main import app
+        from src.client.cli.main import app
 
         runner = CliRunner()
         result = runner.invoke(app, ["create-user", "--help"])
@@ -131,7 +131,7 @@ class TestSimilarMerged:
 
     def test_similar_help_shows_image(self):
         from typer.testing import CliRunner
-        from src.cli.main import app
+        from src.client.cli.main import app
 
         runner = CliRunner()
         result = runner.invoke(app, ["similar", "--help"])

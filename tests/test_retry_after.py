@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.workers.captions.retry_after import (
+from src.client.workers.captions.retry_after import (
     parse_google_message_fallback,
     parse_google_retry_info,
     parse_retry_after,

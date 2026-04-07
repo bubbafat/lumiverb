@@ -17,14 +17,14 @@ class TestVisionProxyCache:
 
     def test_backfill_one_uses_proxy_cache(self):
         """_backfill_one reads from proxy cache, not server."""
-        from src.cli.ingest import _backfill_one
+        from src.client.cli.ingest import _backfill_one
 
         mock_cache = MagicMock()
         mock_cache.get.return_value = b"fake-jpeg-bytes"
 
         mock_provider = MagicMock()
 
-        with patch("src.cli.ingest._call_vision_ai") as mock_vision:
+        with patch("src.client.cli.ingest._call_vision_ai") as mock_vision:
             mock_vision.return_value = {
                 "model_id": "test",
                 "model_version": "1",
@@ -47,7 +47,7 @@ class TestVisionProxyCache:
 
     def test_backfill_one_falls_back_to_server(self):
         """Falls back to server download when proxy cache misses."""
-        from src.cli.ingest import _backfill_one
+        from src.client.cli.ingest import _backfill_one
 
         mock_cache = MagicMock()
         mock_cache.get.return_value = None
@@ -55,7 +55,7 @@ class TestVisionProxyCache:
         mock_client = MagicMock()
         mock_client.get.return_value.content = b"server-proxy"
 
-        with patch("src.cli.ingest._call_vision_ai") as mock_vision:
+        with patch("src.client.cli.ingest._call_vision_ai") as mock_vision:
             mock_vision.return_value = {
                 "model_id": "test",
                 "model_version": "1",
@@ -77,7 +77,7 @@ class TestVisionProxyCache:
 
     def test_backfill_one_returns_none_on_no_proxy(self):
         """Returns None when proxy cache misses and no client fallback."""
-        from src.cli.ingest import _backfill_one
+        from src.client.cli.ingest import _backfill_one
 
         mock_cache = MagicMock()
         mock_cache.get.return_value = None
@@ -94,12 +94,12 @@ class TestVisionProxyCache:
 
     def test_backfill_one_returns_none_on_vision_failure(self):
         """Returns None when vision AI returns no result."""
-        from src.cli.ingest import _backfill_one
+        from src.client.cli.ingest import _backfill_one
 
         mock_cache = MagicMock()
         mock_cache.get.return_value = b"fake-jpeg"
 
-        with patch("src.cli.ingest._call_vision_ai") as mock_vision:
+        with patch("src.client.cli.ingest._call_vision_ai") as mock_vision:
             mock_vision.return_value = None
 
             result = _backfill_one(
@@ -119,7 +119,7 @@ class TestEmbedReturnResult:
 
     def test_returns_embedding_dict(self):
         """_repair_embed_one returns dict with vector on success."""
-        from src.cli.repair import _repair_embed_one
+        from src.client.cli.repair import _repair_embed_one
         from PIL import Image as PILImage
         import io as _io
 
@@ -150,7 +150,7 @@ class TestEmbedReturnResult:
 
     def test_returns_none_on_no_proxy(self):
         """Returns None when no proxy available."""
-        from src.cli.repair import _repair_embed_one
+        from src.client.cli.repair import _repair_embed_one
 
         mock_cache = MagicMock()
         mock_cache.get.return_value = None
@@ -170,7 +170,7 @@ class TestBatchEndpointModels:
     """Verify batch request/response models are importable and correct."""
 
     def test_batch_vision_model(self):
-        from src.api.routers.assets import BatchVisionRequest, BatchVisionItem
+        from src.server.api.routers.assets import BatchVisionRequest, BatchVisionItem
         req = BatchVisionRequest(items=[
             BatchVisionItem(asset_id="a1", model_id="m", description="d", tags=["t"]),
         ])
@@ -178,7 +178,7 @@ class TestBatchEndpointModels:
         assert req.items[0].model_version == "1"  # default
 
     def test_batch_embedding_model(self):
-        from src.api.routers.assets import BatchEmbeddingRequest, BatchEmbeddingItem
+        from src.server.api.routers.assets import BatchEmbeddingRequest, BatchEmbeddingItem
         req = BatchEmbeddingRequest(items=[
             BatchEmbeddingItem(asset_id="a1", model_id="clip", model_version="v1", vector=[0.1] * 10),
         ])
@@ -192,7 +192,7 @@ class TestMissingOcrCondition:
 
     def test_missing_ocr_checks_has_text(self):
         """missing_ocr condition should check has_text IS NULL, not ocr_text."""
-        from src.repository.tenant import MISSING_CONDITIONS
+        from src.server.repository.tenant import MISSING_CONDITIONS
         cond = MISSING_CONDITIONS["missing_ocr"]
         assert "has_text" in cond
         assert "ocr_text" not in cond

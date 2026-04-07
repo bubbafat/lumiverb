@@ -1,6 +1,6 @@
 """Tests for EXIF parsing helpers in src/workers/exif_extract.py."""
 
-from src.workers.exif_extract import (
+from src.client.workers.exif_extract import (
     parse_aperture,
     parse_exposure_time_us,
     parse_flash_fired,
