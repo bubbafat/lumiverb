@@ -11,7 +11,7 @@ struct ConnectedView: View {
                     Label("Connected", systemImage: "checkmark.circle.fill")
                         .foregroundColor(.green)
                     if let user = appState.currentUser {
-                        Text(user.email)
+                        Text(user.displayName)
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }

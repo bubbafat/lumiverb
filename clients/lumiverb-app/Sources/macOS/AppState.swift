@@ -88,6 +88,7 @@ class AppState: ObservableObject {
             isAuthenticated = true
             connectionError = nil
         } catch {
+            let firstError = error
             // Token may be expired — try refresh
             if let authManager, await authManager.refresh() {
                 do {
@@ -98,10 +99,10 @@ class AppState: ObservableObject {
                     isAuthenticated = true
                     connectionError = nil
                 } catch {
-                    connectionError = "Session expired. Please log in again."
+                    connectionError = "After refresh: \(error)"
                 }
             } else {
-                connectionError = "Session expired. Please log in again."
+                connectionError = "First attempt: \(firstError)"
             }
         }
     }

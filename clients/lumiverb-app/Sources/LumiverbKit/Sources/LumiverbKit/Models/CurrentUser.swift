@@ -2,7 +2,12 @@ import Foundation
 
 /// Current user info as returned by `GET /v1/me`.
 public struct CurrentUser: Decodable, Sendable {
-    public let userId: String
-    public let email: String
+    public let userId: String?
+    public let email: String?
     public let role: String
+
+    /// Display name: email if available, otherwise role.
+    public var displayName: String {
+        email ?? role
+    }
 }

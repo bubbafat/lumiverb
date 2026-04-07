@@ -81,6 +81,7 @@ class iOSAppState: ObservableObject {
             isAuthenticated = true
             connectionError = nil
         } catch {
+            let firstError = error
             if let authManager, await authManager.refresh() {
                 do {
                     let user: CurrentUser = try await client.get("/v1/me")
@@ -89,10 +90,10 @@ class iOSAppState: ObservableObject {
                     libraries = libs
                     isAuthenticated = true
                 } catch {
-                    connectionError = "Session expired. Please log in again."
+                    connectionError = "After refresh: \(error)"
                 }
             } else {
-                connectionError = "Session expired. Please log in again."
+                connectionError = "First attempt: \(firstError)"
             }
         }
     }

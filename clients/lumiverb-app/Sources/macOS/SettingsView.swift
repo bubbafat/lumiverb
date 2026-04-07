@@ -46,7 +46,7 @@ struct SettingsView: View {
                         Label("Connected", systemImage: "checkmark.circle.fill")
                             .foregroundColor(.green)
                         if let user = appState.currentUser {
-                            Text("Logged in as \(user.email) (\(user.role))")
+                            Text("Logged in as \(user.displayName) (\(user.role))")
                                 .font(.caption)
                         }
                         Text("\(appState.libraries.count) library(ies)")
