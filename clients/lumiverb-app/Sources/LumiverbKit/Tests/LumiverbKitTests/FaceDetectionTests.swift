@@ -1,15 +1,23 @@
 import XCTest
 import Foundation
 import Vision
-import AppKit
+@testable import LumiverbKit
 
-/// Tests Apple Vision face detection on real photos.
+/// Tests Apple Vision face detection on real photos via the production
+/// image-loading path.
 ///
-/// Uses the same code path as FaceDetectionProvider.detectFaces(from: Data):
-///   Data → NSImage → CGImage → VNDetectFaceRectanglesRequest
+/// Uses the same code path as `FaceDetectionProvider.detectFaces(from: Data)`:
 ///
-/// This validates that Vision actually detects faces in our test fixtures
-/// and that the Data → CGImage conversion doesn't silently fail.
+///     Data → ImageLoading.loadOriented (applies EXIF rotation)
+///          → CGImage → VNDetectFaceRectanglesRequest
+///
+/// Skipping the orientation step — the `NSImage(data:).cgImage(...)` path
+/// the production code took before the 2026-04 face-clustering fix — hands
+/// Vision the raw sensor pixels, which are sideways or upside-down for any
+/// photo not stored in the camera's native landscape orientation. Detection
+/// then silently misses faces or returns them in the wrong coordinate
+/// system, and that was a major contributor to the production cluster
+/// collapse this test file now exists to guard against.
 final class FaceDetectionTests: XCTestCase {
 
     // MARK: - Helpers
@@ -22,10 +30,10 @@ final class FaceDetectionTests: XCTestCase {
         return try Data(contentsOf: url)
     }
 
-    /// Convert image data to CGImage using the same path as FaceDetectionProvider.
+    /// Convert image data to a `CGImage` via the same EXIF-aware production
+    /// path `FaceDetectionProvider.cgImage(from:)` uses.
     private func cgImage(from data: Data) throws -> CGImage {
-        guard let nsImage = NSImage(data: data),
-              let cg = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+        guard let cg = ImageLoading.loadOriented(from: data) else {
             throw FixtureError.unreadable
         }
         return cg
@@ -76,12 +84,6 @@ final class FaceDetectionTests: XCTestCase {
         let data = try loadFixture("face_crowd.jpg")
         let image = try cgImage(from: data)
         let faces = try detectFaces(in: image)
-
-        print("face_crowd.jpg — \(faces.count) faces detected at \(image.width)x\(image.height)")
-        for (i, face) in faces.enumerated() {
-            let box = face.boundingBox
-            print("  face \(i): confidence=\(face.confidence) box=(\(box.origin.x), \(box.origin.y), \(box.width)x\(box.height))")
-        }
 
         // Apple Vision detects only large/clear faces in crowd scenes.
         // At proxy resolution (2048px max), distant faces are too small.
@@ -142,8 +144,6 @@ final class FaceDetectionTests: XCTestCase {
             return area >= minAreaFraction
         }
 
-        print("face_crowd.jpg: \(faces.count) raw detections, \(passingFaces.count) pass area gate")
-
         // Some faces in the crowd are too small — quality gate should reduce the count
         XCTAssertLessThanOrEqual(passingFaces.count, faces.count)
     }
@@ -167,46 +167,29 @@ final class FaceDetectionTests: XCTestCase {
 
     // MARK: - EXIF orientation handling
 
+    /// `face_group.jpg` is stored with EXIF orientation 3 (rotated 180°).
+    /// `ImageLoading.loadOriented` must apply that rotation before Vision
+    /// runs detection — otherwise Vision sees upside-down pixels and may
+    /// silently miss faces or return them with wrong-orientation landmarks.
+    /// This test pins the EXIF-orientation contract on the production load
+    /// path.
+    ///
+    /// History: an earlier version of this test ran two parallel loaders
+    /// (`NSImage(data:).cgImage(...)` vs `CGImageSourceCreateThumbnailAtIndex`
+    /// with `kCGImageSourceCreateThumbnailWithTransform`) and `print`-ed a
+    /// `WARNING:` if the two disagreed, but the assertion was `max(...)`
+    /// across both — so the test passed even when the production path was
+    /// broken. The warning was a sticky note nobody read; the bug it
+    /// flagged stayed in production for months and contributed to the
+    /// 2026-04 face-clustering catastrophe. The test now asserts the
+    /// production path produces the right result, full stop.
     func testDetectionWorksWithExifRotation() throws {
-        // face_group.jpg appears upside-down — tests whether Vision handles EXIF orientation.
-        // If Vision ignores orientation, it may fail to detect faces.
         let data = try loadFixture("face_group.jpg")
-
-        // Method 1: NSImage → CGImage (what FaceDetectionProvider uses)
         let image = try cgImage(from: data)
-        let facesFromNSImage = try detectFaces(in: image)
+        let faces = try detectFaces(in: image)
 
-        // Method 2: CGImageSource (applies EXIF orientation transform)
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
-            XCTFail("Cannot create image source")
-            return
-        }
-        let options: [String: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways as String: true,
-            kCGImageSourceThumbnailMaxPixelSize as String: 2048,
-            kCGImageSourceCreateThumbnailWithTransform as String: true,
-        ]
-        guard let orientedImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
-            XCTFail("Cannot create oriented thumbnail")
-            return
-        }
-        let facesFromOriented = try detectFaces(in: orientedImage)
-
-        // Log both results for diagnosis
-        print("face_group.jpg — NSImage path: \(facesFromNSImage.count) faces, CGImageSource path: \(facesFromOriented.count) faces")
-        print("  NSImage CGImage size: \(image.width)x\(image.height)")
-        print("  CGImageSource size: \(orientedImage.width)x\(orientedImage.height)")
-
-        // At least one path should detect 2+ faces
-        let bestCount = max(facesFromNSImage.count, facesFromOriented.count)
-        XCTAssertGreaterThanOrEqual(bestCount, 2,
-            "Neither conversion path detected 2 faces in face_group.jpg")
-
-        // If the NSImage path detects fewer, that's the bug in FaceDetectionProvider
-        if facesFromNSImage.count < facesFromOriented.count {
-            print("  WARNING: NSImage path detected fewer faces (\(facesFromNSImage.count)) than CGImageSource path (\(facesFromOriented.count))")
-            print("  This suggests FaceDetectionProvider should use CGImageSource with kCGImageSourceCreateThumbnailWithTransform")
-        }
+        XCTAssertGreaterThanOrEqual(faces.count, 2,
+            "ImageLoading.loadOriented must apply EXIF rotation so Vision detects both faces in face_group.jpg; got \(faces.count)")
     }
 }
 
