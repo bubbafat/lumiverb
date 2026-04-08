@@ -18,6 +18,7 @@ class BrowseState: ObservableObject {
     @Published var selectedLibraryId: String? {
         didSet {
             if selectedLibraryId != oldValue {
+                UserDefaults.standard.set(selectedLibraryId, forKey: "lastLibraryId")
                 resetAndLoad()
             }
         }
@@ -343,6 +344,7 @@ class BrowseState: ObservableObject {
             let runner = ReEnrichmentRunner(
                 client: client,
                 libraryId: libraryId,
+                libraryRootPath: selectedLibraryRootPath,
                 visionApiUrl: appState.resolvedVisionApiUrl,
                 visionApiKey: appState.resolvedVisionApiKey,
                 visionModelId: appState.resolvedVisionModelId
@@ -383,6 +385,7 @@ class BrowseState: ObservableObject {
             let runner = ReEnrichmentRunner(
                 client: client,
                 libraryId: libraryId,
+                libraryRootPath: selectedLibraryRootPath,
                 visionApiUrl: appState.resolvedVisionApiUrl,
                 visionApiKey: appState.resolvedVisionApiKey,
                 visionModelId: appState.resolvedVisionModelId

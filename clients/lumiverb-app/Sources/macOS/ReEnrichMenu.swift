@@ -24,6 +24,9 @@ struct ReEnrichMenu: View {
             Button("Generate Descriptions") {
                 onReEnrich([.vision])
             }
+            Button("Generate Preview") {
+                onReEnrich([.videoPreview])
+            }
             Divider()
             Button("All") {
                 onReEnrich(Set(EnrichmentOperation.allCases))

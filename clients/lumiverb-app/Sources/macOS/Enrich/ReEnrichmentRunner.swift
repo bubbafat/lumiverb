@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 import LumiverbKit
 
 /// Runs enrichment on a specific set of assets, regardless of their current
@@ -11,6 +12,7 @@ import LumiverbKit
 actor ReEnrichmentRunner {
     private let client: APIClient
     private let libraryId: String
+    private let libraryRootPath: String?
     private let visionApiUrl: String
     private let visionApiKey: String
     private let visionModelId: String
@@ -33,12 +35,14 @@ actor ReEnrichmentRunner {
     init(
         client: APIClient,
         libraryId: String,
+        libraryRootPath: String? = nil,
         visionApiUrl: String = "",
         visionApiKey: String = "",
         visionModelId: String = ""
     ) {
         self.client = client
         self.libraryId = libraryId
+        self.libraryRootPath = libraryRootPath
         self.visionApiUrl = visionApiUrl
         self.visionApiKey = visionApiKey
         self.visionModelId = visionModelId
@@ -55,8 +59,10 @@ actor ReEnrichmentRunner {
         processedItems = 0
         skippedOperations = []
 
-        // Filter to images only (faces/embeddings/OCR don't apply to video)
         let imageAssets = assets.filter { $0.mediaType == "image" }
+        let videoAssets = assets.filter { $0.mediaType == "video" }
+
+        // Image-only operations
         totalItems = imageAssets.count
 
         if operations.contains(.faces) {
@@ -83,6 +89,18 @@ actor ReEnrichmentRunner {
                 await runVision(on: imageAssets)
             } else {
                 skippedOperations.append("vision (not configured — set API URL in Settings)")
+            }
+        }
+
+        // Video operations
+        if !cancelled && operations.contains(.videoPreview) {
+            if let rootPath = libraryRootPath {
+                phase = "video previews"
+                processedItems = 0
+                totalItems = videoAssets.count
+                await runVideoPreview(on: videoAssets, rootPath: rootPath)
+            } else {
+                skippedOperations.append("video preview (library root path not available)")
             }
         }
 
@@ -297,6 +315,45 @@ actor ReEnrichmentRunner {
         } catch {
             lastError = "Vision batch submit: \(error)"
             errorCount += 1
+        }
+    }
+
+    // MARK: - Video preview generation
+
+    private struct ArtifactUploadResponse: Decodable {
+        let key: String
+        let sha256: String
+    }
+
+    private func runVideoPreview(on assets: [AssetPageItem], rootPath: String) async {
+        for asset in assets {
+            if cancelled { break }
+
+            let fullPath = (rootPath as NSString).appendingPathComponent(asset.relPath)
+            let sourceURL = URL(fileURLWithPath: fullPath)
+
+            guard FileManager.default.fileExists(atPath: fullPath) else {
+                processedItems += 1
+                continue
+            }
+
+            do {
+                let previewData = try await VideoPreviewGenerator.generatePreview(sourceURL: sourceURL)
+
+                let _: ArtifactUploadResponse = try await client.postMultipart(
+                    "/v1/assets/\(asset.assetId)/artifacts/video_preview",
+                    fields: [:],
+                    fileField: "file",
+                    fileData: previewData,
+                    fileName: "\(asset.assetId).mp4",
+                    mimeType: "video/mp4"
+                )
+            } catch {
+                lastError = "\(asset.relPath): \(error)"
+                errorCount += 1
+            }
+
+            processedItems += 1
         }
     }
 

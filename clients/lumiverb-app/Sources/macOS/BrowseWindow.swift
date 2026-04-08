@@ -89,6 +89,14 @@ struct BrowseWindow: View {
             browseState.moveFocus(direction: 1, columns: 4)
             return .handled
         }
+        .onChange(of: appState.libraries.count) { _, _ in
+            // Restore last opened library once libraries are loaded
+            if browseState.selectedLibraryId == nil,
+               let lastId = UserDefaults.standard.string(forKey: "lastLibraryId"),
+               appState.libraries.contains(where: { $0.libraryId == lastId }) {
+                browseState.selectedLibraryId = lastId
+            }
+        }
     }
 
     // MARK: - Content area

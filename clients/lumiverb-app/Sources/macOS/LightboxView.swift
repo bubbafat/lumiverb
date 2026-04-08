@@ -1,4 +1,5 @@
 import SwiftUI
+import AVKit
 import LumiverbKit
 
 /// Full-screen lightbox overlay showing proxy image + metadata sidebar.
@@ -15,13 +16,22 @@ struct LightboxView: View {
                 if browseState.isLoadingDetail {
                     ProgressView()
                         .tint(.white)
-                } else if let assetId = browseState.selectedAssetId {
-                    AuthenticatedImageView(
-                        assetId: assetId,
-                        client: client,
-                        type: .proxy
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let detail = browseState.assetDetail {
+                    if detail.isVideo {
+                        LightboxVideoPlayerView(
+                            detail: detail,
+                            libraryRootPath: browseState.selectedLibraryRootPath,
+                            client: client
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        AuthenticatedImageView(
+                            assetId: detail.assetId,
+                            client: client,
+                            type: .proxy
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
 
                 // Navigation arrows
@@ -67,7 +77,14 @@ struct LightboxView: View {
                                 [URL(fileURLWithPath: fullPath)]
                             )
                         }
-                    }
+                    },
+                    onOpenInPlayer: detail.isVideo ? {
+                        if let rootPath = browseState.selectedLibraryRootPath {
+                            let fullPath = (rootPath as NSString).appendingPathComponent(detail.relPath)
+                            let url = URL(fileURLWithPath: fullPath)
+                            NSWorkspace.shared.open(url)
+                        }
+                    } : nil
                 )
                 .frame(width: 300)
             }
@@ -98,6 +115,7 @@ struct MetadataSidebar: View {
     let onFindSimilar: () -> Void
     let onReEnrich: (Set<EnrichmentOperation>) -> Void
     let onRevealInFinder: () -> Void
+    let onOpenInPlayer: (() -> Void)?
 
     var body: some View {
         ScrollView {
@@ -127,6 +145,15 @@ struct MetadataSidebar: View {
 
                     ReEnrichMenu(onReEnrich: onReEnrich)
                         .controlSize(.small)
+
+                    if let onOpenInPlayer {
+                        Button {
+                            onOpenInPlayer()
+                        } label: {
+                            Label("Open in Player", systemImage: "play.rectangle")
+                        }
+                        .controlSize(.small)
+                    }
                 }
 
                 // AI Description

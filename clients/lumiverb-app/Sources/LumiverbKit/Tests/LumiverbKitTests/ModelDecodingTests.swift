@@ -1141,6 +1141,11 @@ final class EnrichmentModelTests: XCTestCase {
         XCTAssertEqual(EnrichmentOperation.vision.rawValue, "Generate Descriptions")
     }
 
+    func testEnrichmentOperationIncludesVideoPreview() {
+        XCTAssertTrue(EnrichmentOperation.allCases.contains(.videoPreview))
+        XCTAssertEqual(EnrichmentOperation.videoPreview.rawValue, "Generate Preview")
+    }
+
     func testEncodesEmbeddingRequest() throws {
         let request = BatchEmbeddingsRequest(items: [
             BatchEmbeddingsRequest.Item(

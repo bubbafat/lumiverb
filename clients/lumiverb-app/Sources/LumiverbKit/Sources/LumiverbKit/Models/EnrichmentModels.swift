@@ -8,6 +8,7 @@ public enum EnrichmentOperation: String, CaseIterable, Sendable {
     case embeddings = "Generate Embeddings"
     case ocr = "Extract Text"
     case vision = "Generate Descriptions"
+    case videoPreview = "Generate Preview"
 }
 
 // MARK: - OCR

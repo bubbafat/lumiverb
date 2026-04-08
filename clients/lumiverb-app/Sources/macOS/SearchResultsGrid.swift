@@ -46,6 +46,15 @@ struct SearchHitCellView: View {
             .clipped()
             .background(Color.gray.opacity(0.1))
 
+            // Video play icon
+            if hit.mediaType == "video" {
+                Image(systemName: "play.fill")
+                    .font(.title2)
+                    .foregroundColor(.white.opacity(0.9))
+                    .shadow(color: .black.opacity(0.5), radius: 4)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+
             // Hit type badge for scenes/transcripts
             if hit.type != "image" {
                 Text(hit.type)
