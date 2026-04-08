@@ -24,6 +24,7 @@ down_revision: Union[str, Sequence[str], None] = [
     "k1l2m3n4o5p6",  # search_sync_processing_lease
     "d3e4f5a6b7c8",  # drop_library_vision_model_id
     "a0b9c8d7e6f5",  # repair_cancelled_vision_and_orphaned_search_sync
+    "j9k0l1m2n3o4",  # drop_worker_jobs_scans_pipeline_locks
 ]
 branch_labels = None
 depends_on = None

@@ -1,13 +1,89 @@
-"""Control plane migration tests: upgrade/downgrade against a fresh Postgres."""
+"""Migration tests: structure validation and upgrade/downgrade against Postgres."""
 
 import os
+import re
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, text
 from testcontainers.postgres import PostgresContainer
 from uuid import uuid4
+
+
+# ---------------------------------------------------------------------------
+# Fast structural tests (no Docker / DB required)
+# ---------------------------------------------------------------------------
+
+TENANT_VERSIONS_DIR = Path(__file__).parent.parent / "migrations" / "tenant" / "versions"
+
+
+def _parse_revisions(versions_dir: Path) -> dict[str, tuple[list[str], str]]:
+    """Parse all migration files and return {revision: ([down_revisions], filename)}."""
+    revisions: dict[str, tuple[list[str], str]] = {}
+    for f in versions_dir.glob("*.py"):
+        if f.name.startswith("__"):
+            continue
+        content = f.read_text()
+        rev_match = re.search(r"""^revision(?::\s*str)?\s*=\s*['"]([^'"]+)['"]""", content, re.MULTILINE)
+        if not rev_match:
+            continue
+        rev = rev_match.group(1)
+        # Handle both single string and list of strings for down_revision
+        down_list_match = re.search(r"down_revision.*?=\s*\[([^\]]*)\]", content)
+        down_str_match = re.search(r"""down_revision.*?=\s*['"]([^'"]+)['"]""", content)
+        if down_list_match:
+            downs = re.findall(r'"([^"]+)"', down_list_match.group(1))
+        elif down_str_match:
+            downs = [down_str_match.group(1)]
+        else:
+            downs = []
+        revisions[rev] = (downs, f.name)
+    return revisions
+
+
+def test_tenant_migration_revision_ids_are_unique() -> None:
+    """Every migration file must have a unique revision ID."""
+    seen: dict[str, str] = {}
+    for f in TENANT_VERSIONS_DIR.glob("*.py"):
+        if f.name.startswith("__"):
+            continue
+        content = f.read_text()
+        rev_match = re.search(r"""^revision(?::\s*str)?\s*=\s*['"]([^'"]+)['"]""", content, re.MULTILINE)
+        if not rev_match:
+            continue
+        rev = rev_match.group(1)
+        assert rev not in seen, (
+            f"Duplicate revision ID '{rev}' in {f.name} and {seen[rev]}"
+        )
+        seen[rev] = f.name
+
+
+def test_tenant_migrations_have_single_head() -> None:
+    """The migration chain must converge to exactly one head revision."""
+    revisions = _parse_revisions(TENANT_VERSIONS_DIR)
+    # A head is a revision that no other revision lists as a down_revision
+    referenced_as_down: set[str] = set()
+    for _rev, (downs, _fname) in revisions.items():
+        for d in downs:
+            referenced_as_down.add(d)
+    heads = [r for r in revisions if r not in referenced_as_down]
+    assert len(heads) == 1, (
+        f"Expected 1 head revision, found {len(heads)}: "
+        + ", ".join(f"{h} ({revisions[h][1]})" for h in heads)
+    )
+
+
+def test_tenant_migration_down_revisions_exist() -> None:
+    """Every down_revision must reference an existing revision (or be None/root)."""
+    revisions = _parse_revisions(TENANT_VERSIONS_DIR)
+    for rev, (downs, fname) in revisions.items():
+        for d in downs:
+            assert d in revisions, (
+                f"Migration {fname} (rev {rev}) references non-existent "
+                f"down_revision '{d}'"
+            )
 
 
 @pytest.mark.migration
