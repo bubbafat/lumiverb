@@ -30,6 +30,19 @@ responsibility mappings change less often; that's what lives here.
 
 ---
 
+## Runtime topology
+
+The FastAPI server is the only persistent service. The Python CLI, the
+web UI, and the native macOS/iOS apps are all clients that talk to it
+over `/v1/`. Two of those clients additionally do **local enrichment**
+and POST results back: the Python CLI runs InsightFace / faster-whisper
+in subprocesses (`src/client/`), and the macOS app runs CLIP / ArcFace /
+OCR via CoreML + Vision (`clients/lumiverb-app/Sources/macOS/Enrich/`).
+The iOS app is browse-only. Search is offloaded to a Quickwit sidecar
+(BM25), with a Postgres fallback path.
+
+---
+
 ## Top-level layout
 
 ```
@@ -101,19 +114,19 @@ pyproject.toml             Python project, deps, pytest config, entry point
 | Person cluster admin ops | `POST /v1/upkeep/cleanup-dismissed` (admin), `POST /v1/upkeep/recluster`. Bulk-reset: `scripts/reset-face-clusters.py` |
 | Ratings (favorite, stars, color) | `src/server/api/routers/ratings.py`, `UserRatingRepository` in `repository/tenant.py` |
 | Path include/exclude filters | `src/shared/path_filter.py` (Python). Swift equivalent: `LumiverbKit/Sources/LumiverbKit/Models/PathFilter.swift` |
+| Server config / env vars | `src/server/config.py` — `Settings(BaseSettings)` from `pydantic-settings`. All env vars are declared as fields with defaults. CLI-side config: `src/client/cli/config.py`. Prod env file lives at `/etc/lumiverb/env` (loaded by systemd) |
 
 ---
 
 ## Running things
 
-**API server (dev)**  `uvicorn src.server.api.main:app --reload`
-**CLI**               `lumiverb <command>` (after `uv sync`)
-**Web UI dev**        `cd src/ui/web && npm run dev` (proxies `/v1/*` to API)
-**Web UI build**      `cd src/ui/web && npm run build`
-**Swift package**     `cd clients/lumiverb-app/Sources/LumiverbKit && swift build`
-**Swift tests**       `cd clients/lumiverb-app/Sources/LumiverbKit && swift test`
-**macOS app build**   `cd clients/lumiverb-app && xcodegen generate && xcodebuild -project Lumiverb.xcodeproj -scheme Lumiverb-macOS -configuration Debug build CODE_SIGNING_ALLOWED=NO`
-**Convert ArcFace**   `cd scripts/convert-models && .venv/bin/python convert_arcface.py` (requires its own venv, see script docstring)
+Standard incantations (`uvicorn src.server.api.main:app --reload`,
+`lumiverb <cmd>`, `npm run dev` / `build` in `src/ui/web`, `swift build` /
+`swift test` in `LumiverbKit`) work as you'd expect. Only the
+non-obvious ones are listed here:
+
+**macOS app build**  `cd clients/lumiverb-app && xcodegen generate && xcodebuild -project Lumiverb.xcodeproj -scheme Lumiverb-macOS -configuration Debug build CODE_SIGNING_ALLOWED=NO`
+**Convert ArcFace**  `cd scripts/convert-models && .venv/bin/python convert_arcface.py` (requires its own venv — see script docstring)
 
 **uv only** — `pip` is not available. Use `uv add <pkg>`, `uv run <cmd>`,
 `uv sync` (feedback memory).
@@ -175,22 +188,18 @@ face_group.jpg, face_crowd.jpg). There is **no macOS-target test bundle**
 
 ---
 
-## Key docs (in `docs/`)
+## Key docs
 
-- `architecture.md` — full system design
-- `cursor-api.md` — **authoritative** API reference; do not relitigate decisions
-- `cursor-cli.md` — CLI context
-- `product-overview.md` — what Lumiverb is
-- `proxy-cache-protocol.md` — proxy/thumbnail cache on-disk protocol
-- `adr/` — architecture decision records. Relevant recent ones:
-  - `014-native-clients.md` — native macOS/iOS client design
-  - `013-video-transcription.md` — faster-whisper engine, per-segment Quickwit index, transcript hit type (all phases shipped)
-  - `012-split-api-and-web-deploys.md` — separate API + web deploy/update scripts
-  - `011-ingest-refactor-scan-and-enrich.md` — scan / enrich pipeline split
-  - `010-person-recognition-ui.md` — person UI
-  - `009-face-detection-and-person-recognition.md` — face pipeline
-  - `008-unified-browse-and-saved-views.md` — unified browse
-  - `006-filtering-sorting-geo.md` — browse filter surface
+Long-form docs and ADRs live in `docs/` and `docs/adr/`. Two are
+load-bearing enough to call out:
+
+- `docs/cursor-api.md` — **authoritative** API reference. Do not
+  relitigate decisions documented here.
+- `docs/architecture.md` — full system design.
+
+For everything else, `ls docs/` and `ls docs/adr/` is the right move —
+ADR filenames are self-describing and the set changes too often to
+mirror here.
 
 ---
 
