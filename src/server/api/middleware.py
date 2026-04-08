@@ -102,8 +102,8 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
                     request.state.role = role
                     request.state.is_public_request = False
                     return await call_next(request)
-                except (jwt.PyJWTError, KeyError):
-                    logger.debug("JWT decode failed for request to %s — falling through to API key", request.url.path)
+                except (jwt.PyJWTError, KeyError) as exc:
+                    logger.warning("JWT decode failed for %s %s — %s: %s — falling through to API key", request.method, request.url.path, type(exc).__name__, exc)
 
             with get_control_session() as session:
                 key_repo = ApiKeyRepository(session)
