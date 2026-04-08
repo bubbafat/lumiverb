@@ -14,7 +14,7 @@ enum ProxyGenerator {
 
     /// Result of proxy generation.
     struct ProxyResult: @unchecked Sendable {
-        let proxyData: Data          // WebP bytes
+        let proxyData: Data          // JPEG bytes (server normalizes to WebP on ingest)
         let originalWidth: Int
         let originalHeight: Int
         let sha256: String           // SHA-256 of the source file

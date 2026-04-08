@@ -118,7 +118,7 @@ class ScanState: ObservableObject {
             }
 
             for library in appState.libraries {
-                guard !isPaused || !isScanning else { break }
+                guard isScanning else { break }
 
                 // Fetch library-specific filters
                 let libraryFilters: LibraryFiltersResponse

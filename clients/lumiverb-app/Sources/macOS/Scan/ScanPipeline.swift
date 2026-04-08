@@ -258,6 +258,22 @@ actor ScanPipeline {
 
     // MARK: - Classification
 
+    /// Parse ISO8601 dates from the server, which may or may not include fractional seconds.
+    private static let iso8601WithFrac: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    private static let iso8601NoFrac: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    private static func parseISO8601(_ string: String) -> Date? {
+        iso8601WithFrac.date(from: string) ?? iso8601NoFrac.date(from: string)
+    }
+
     private func classifyFiles(
         local: [DiscoveredFile],
         server: [String: ServerAsset]
@@ -278,10 +294,7 @@ actor ScanPipeline {
                           let serverMtime = serverAsset.fileMtime else {
                         return true // No mtime to compare — trust size
                     }
-                    // Parse server ISO8601 mtime and compare within 2 seconds
-                    let formatter = ISO8601DateFormatter()
-                    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                    guard let serverDate = formatter.date(from: serverMtime) else {
+                    guard let serverDate = Self.parseISO8601(serverMtime) else {
                         return true
                     }
                     return abs(localMtime.timeIntervalSince(serverDate)) < 2.0

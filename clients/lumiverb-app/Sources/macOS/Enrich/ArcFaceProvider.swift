@@ -31,6 +31,8 @@ enum ArcFaceProvider {
     /// Whether the ArcFace model is available.
     static var isAvailable: Bool { modelURL != nil }
 
+    // Not thread-safe. Safe today because enrichment pipelines are actors
+    // that call providers sequentially. Guard with a lock if parallelizing.
     private static var cachedModel: MLModel?
 
     private static func loadModel() throws -> MLModel {
