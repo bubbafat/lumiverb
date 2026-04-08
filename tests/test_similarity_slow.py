@@ -189,6 +189,71 @@ def test_similar_asset_not_found(similarity_client: Tuple[_AuthClient, str, str]
 
 
 @pytest.mark.slow
+def test_similar_auto_detects_model(similarity_client: Tuple[_AuthClient, str, str]) -> None:
+    """GET /v1/similar without model_id auto-detects from source asset's embedding.
+
+    This catches the bug where the server defaulted to 'clip' model when no
+    model_id was passed, causing Apple Vision (or any non-CLIP) embeddings
+    to appear as 'no embedding available'.
+    """
+    auth_client, library_id, tenant_url = similarity_client
+
+    engine = create_engine(tenant_url)
+    with Session(engine) as session:
+        asset_repo = AssetRepository(session)
+        # Use 768-dim vectors (Apple Vision dimension)
+        base_vec, close_vec, far_vec = _asset_vectors(dim=768)
+
+        base_asset = asset_repo.create_asset(
+            library_id=library_id,
+            rel_path="auto_detect/base.jpg",
+            file_size=100,
+            file_mtime=None,
+            media_type="image",
+        )
+        close_asset = asset_repo.create_asset(
+            library_id=library_id,
+            rel_path="auto_detect/close.jpg",
+            file_size=100,
+            file_mtime=None,
+            media_type="image",
+        )
+        far_asset = asset_repo.create_asset(
+            library_id=library_id,
+            rel_path="auto_detect/far.jpg",
+            file_size=100,
+            file_mtime=None,
+            media_type="image",
+        )
+
+        emb_repo = AssetEmbeddingRepository(session)
+        # Use apple_vision model (NOT clip)
+        emb_repo.upsert(base_asset.asset_id, "apple_vision", "feature_print_v1", base_vec)
+        emb_repo.upsert(close_asset.asset_id, "apple_vision", "feature_print_v1", close_vec)
+        emb_repo.upsert(far_asset.asset_id, "apple_vision", "feature_print_v1", far_vec)
+
+        base_id = base_asset.asset_id
+        close_id = close_asset.asset_id
+        far_id = far_asset.asset_id
+
+    # No model_id param — server should auto-detect apple_vision
+    resp = auth_client.get(
+        f"/v1/similar?asset_id={base_id}&library_id={library_id}",
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+
+    # Must find the embedding (not return embedding_available=False)
+    assert data["embedding_available"] is True, (
+        "Server did not auto-detect apple_vision embedding; returned embedding_available=False"
+    )
+    assert data["total"] >= 2
+    ids = [hit["asset_id"] for hit in data["hits"]]
+    assert close_id in ids and far_id in ids
+    assert ids.index(close_id) < ids.index(far_id)
+
+
+@pytest.mark.slow
 def test_similar_date_range_filter(similarity_client: Tuple[_AuthClient, str, str]) -> None:
     """GET /v1/similar with from_ts/to_ts returns only assets with taken_at in range."""
     auth_client, library_id, tenant_url = similarity_client

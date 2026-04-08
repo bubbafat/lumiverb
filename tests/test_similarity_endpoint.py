@@ -32,6 +32,23 @@ def test_similarity_response_no_embedding() -> None:
 
 
 @pytest.mark.fast
+def test_similarity_response_defaults_model_auto_detect() -> None:
+    """When model_id is not provided, the endpoint should not hardcode 'clip'.
+
+    This is a structural check — the actual auto-detection is verified in
+    test_similar_auto_detects_model (slow/integration).
+    """
+    import inspect
+    from src.server.api.routers.similarity import find_similar
+
+    source = inspect.getsource(find_similar)
+    # The endpoint should use get_any (auto-detect) not just default to "clip"
+    assert "get_any" in source, (
+        "find_similar should call get_any() for model auto-detection"
+    )
+
+
+@pytest.mark.fast
 def test_image_similarity_models() -> None:
     """ImageSimilarityRequest and ImageSimilarityResponse validate correctly."""
     from src.server.api.routers.similarity import (

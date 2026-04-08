@@ -135,12 +135,6 @@ def find_similar(
             cameras=cameras_list,
         )
 
-    from src.server.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
-
-    # Resolve model — defaults to server CLIP for backward compat
-    resolved_model_id = model_id or "clip"
-    resolved_model_version = model_version or CLIP_VERSION
-
     asset_repo = AssetRepository(session)
     lib_repo = LibraryRepository(session)
     emb_repo = AssetEmbeddingRepository(session)
@@ -159,7 +153,26 @@ def find_similar(
     # Fetch top-(limit*3) candidates for re-ranking pool
     K = min(limit * 3, 100)
 
-    clip_emb = emb_repo.get(asset_id, resolved_model_id, resolved_model_version)
+    # Auto-detect embedding model from source asset when not specified
+    if model_id and model_version:
+        source_emb = emb_repo.get(asset_id, model_id, model_version)
+    elif model_id:
+        # model_id given but no version — find any embedding with that model
+        source_emb = emb_repo.get_any(asset_id)
+        if source_emb and source_emb.model_id != model_id:
+            source_emb = None
+    else:
+        # No model specified — use whatever embedding the asset has
+        source_emb = emb_repo.get_any(asset_id)
+
+    if source_emb is not None:
+        resolved_model_id = source_emb.model_id
+        resolved_model_version = source_emb.model_version
+    else:
+        resolved_model_id = model_id or "clip"
+        resolved_model_version = model_version or "unknown"
+
+    clip_emb = source_emb
 
     if clip_emb is None:
         return SimilarityResponse(

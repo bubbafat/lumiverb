@@ -1149,6 +1149,19 @@ class AssetEmbeddingRepository:
         )
         return self._session.exec(stmt).first()
 
+    def get_any(self, asset_id: str) -> AssetEmbedding | None:
+        """Return any embedding for the asset (most recent first).
+
+        Used when the caller doesn't know which model was used — e.g. the
+        web UI similarity search which should auto-detect the model.
+        """
+        stmt = (
+            select(AssetEmbedding)
+            .where(AssetEmbedding.asset_id == asset_id)
+            .order_by(AssetEmbedding.created_at.desc())  # type: ignore[union-attr]
+        )
+        return self._session.exec(stmt).first()
+
     def find_similar(
         self,
         library_id: str,
