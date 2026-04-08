@@ -131,3 +131,11 @@ public struct FaceAssignRequest: Encodable, Sendable {
         self.newPersonName = newPersonName
     }
 }
+
+/// Response from `POST /v1/faces/{face_id}/assign`. The server returns
+/// the resolved person — either the existing one whose id was passed in,
+/// or the newly-created one when `new_person_name` was used.
+public struct FaceAssignResponse: Decodable, Sendable {
+    public let personId: String
+    public let displayName: String
+}

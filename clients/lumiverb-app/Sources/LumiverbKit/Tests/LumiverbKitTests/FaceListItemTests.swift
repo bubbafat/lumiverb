@@ -184,4 +184,13 @@ final class FaceListItemTests: XCTestCase {
         let json = String(data: data, encoding: .utf8)!
         XCTAssertEqual(json, #"{"new_person_name":"Bob"}"#)
     }
+
+    // MARK: - FaceAssignResponse decoding
+
+    func testDecodesFaceAssignResponse() throws {
+        let json = #"{"person_id": "per_alice", "display_name": "Alice"}"#.data(using: .utf8)!
+        let response = try decoder.decode(FaceAssignResponse.self, from: json)
+        XCTAssertEqual(response.personId, "per_alice")
+        XCTAssertEqual(response.displayName, "Alice")
+    }
 }

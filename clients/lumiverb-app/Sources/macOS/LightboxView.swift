@@ -61,7 +61,8 @@ struct LightboxView: View {
                     FaceOverlayView(
                         faces: facesVM.faces,
                         imageWidth: w,
-                        imageHeight: h
+                        imageHeight: h,
+                        vm: facesVM
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }

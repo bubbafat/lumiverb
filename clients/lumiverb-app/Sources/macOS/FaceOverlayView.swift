@@ -20,7 +20,28 @@ final class LightboxFacesViewModel: ObservableObject {
     @Published var faces: [FaceListItem] = []
     @Published var isLoading: Bool = false
 
-    private let client: APIClient?
+    // MARK: - M4 selection / mutation state
+
+    /// The face that the user has tapped to open the assignment popover.
+    /// Drives `.popover(isPresented:)` on each `FaceBoxView`.
+    @Published var selectedFaceId: String?
+
+    /// Set while an assign / unassign request is in flight, so the popover
+    /// can show a spinner and disable its action buttons.
+    @Published var pendingMutation: Bool = false
+
+    /// Last mutation error, displayed in the popover footer. Cleared when
+    /// the user starts a new mutation or selects a different face.
+    @Published var mutationError: String?
+
+    // MARK: - M4 person search state (for the popover's typeahead)
+
+    @Published var personSearchQuery: String = ""
+    @Published var personSearchResults: [PersonItem] = []
+    @Published var isSearchingPeople: Bool = false
+    private var personSearchTask: Task<Void, Never>?
+
+    let client: APIClient?
     private var loadedAssetId: String?
 
     init(client: APIClient?) {
@@ -35,6 +56,9 @@ final class LightboxFacesViewModel: ObservableObject {
         guard let client else { return }
         if loadedAssetId == assetId, !faces.isEmpty { return }
         loadedAssetId = assetId
+        // Switching assets always closes the popover so it doesn't end
+        // up anchored to a face that's no longer on screen.
+        deselectFace()
         isLoading = true
         defer { isLoading = false }
 
@@ -53,6 +77,132 @@ final class LightboxFacesViewModel: ObservableObject {
     func reset() {
         self.faces = []
         self.loadedAssetId = nil
+        deselectFace()
+    }
+
+    // MARK: - Selection
+
+    func selectFace(_ faceId: String) {
+        selectedFaceId = faceId
+        personSearchQuery = ""
+        personSearchResults = []
+        mutationError = nil
+    }
+
+    func deselectFace() {
+        selectedFaceId = nil
+        personSearchTask?.cancel()
+        personSearchTask = nil
+        personSearchQuery = ""
+        personSearchResults = []
+    }
+
+    // MARK: - Person search (debounced typeahead)
+
+    /// Called from the popover's TextField on every keystroke. Debounces
+    /// at 300ms — short enough to feel live, long enough that fast typists
+    /// don't fire a request per character.
+    func debouncedPersonSearch(query: String) {
+        personSearchQuery = query
+        personSearchTask?.cancel()
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            personSearchResults = []
+            return
+        }
+        personSearchTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            await self?.searchPeople(trimmed)
+        }
+    }
+
+    private func searchPeople(_ query: String) async {
+        guard let client else { return }
+        isSearchingPeople = true
+        defer { isSearchingPeople = false }
+        do {
+            let response: PersonListResponse = try await client.get(
+                "/v1/people", query: ["q": query, "limit": "10"]
+            )
+            // Drop stale results if the query changed while we were waiting.
+            if personSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines) == query {
+                personSearchResults = response.items
+            }
+        } catch {
+            // Non-fatal: empty list is fine. Cancellation falls through here too.
+        }
+    }
+
+    // MARK: - Mutations
+
+    /// Assign `faceId` to `personId`. Always issues a `DELETE` first to
+    /// clear any existing assignment, since the server returns 409 on
+    /// reassign by design — making this method idempotent across both
+    /// the new-assignment and reassign cases.
+    func assignFace(_ faceId: String, toPersonId personId: String) async {
+        await mutate(faceId: faceId) { client in
+            try? await client.delete("/v1/faces/\(faceId)/assign")
+            let _: FaceAssignResponse = try await client.post(
+                "/v1/faces/\(faceId)/assign",
+                body: FaceAssignRequest(personId: personId)
+            )
+        }
+    }
+
+    /// Create a new person with `name` and assign `faceId` to it. The
+    /// server-side endpoint does both in one transaction. Same delete-
+    /// first dance as `assignFace(toPersonId:)`.
+    func assignFace(_ faceId: String, newPersonName name: String) async {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        await mutate(faceId: faceId) { client in
+            try? await client.delete("/v1/faces/\(faceId)/assign")
+            let _: FaceAssignResponse = try await client.post(
+                "/v1/faces/\(faceId)/assign",
+                body: FaceAssignRequest(newPersonName: trimmed)
+            )
+        }
+    }
+
+    /// Remove `faceId`'s person assignment entirely.
+    func unassignFace(_ faceId: String) async {
+        await mutate(faceId: faceId) { client in
+            try await client.delete("/v1/faces/\(faceId)/assign")
+        }
+    }
+
+    /// Run a mutation against the server, then refetch the asset's face
+    /// list so the overlay reflects the new assignment. The popover is
+    /// closed on success; on failure the error is shown inside it.
+    private func mutate(
+        faceId: String,
+        op: (APIClient) async throws -> Void
+    ) async {
+        guard let client else { return }
+        pendingMutation = true
+        mutationError = nil
+        defer { pendingMutation = false }
+        do {
+            try await op(client)
+            // Force a re-fetch of this asset's faces.
+            if let assetId = loadedAssetId {
+                let prev = assetId
+                self.faces = []
+                self.loadedAssetId = nil
+                await loadFaces(forAsset: prev)
+            }
+            deselectFace()
+        } catch {
+            mutationError = describe(error)
+        }
+    }
+
+    private func describe(_ error: Error) -> String {
+        if case APIError.serverError(_, let message) = error {
+            return message
+        }
+        return "\(error)"
     }
 }
 
@@ -66,8 +216,10 @@ final class LightboxFacesViewModel: ObservableObject {
 /// dimensions, so the overlay's coordinate space matches the rendered
 /// image rect by construction.
 ///
-/// `allowsHitTesting(false)` for M2 — the overlay is read-only. Click
-/// handling on individual boxes lands in M4.
+/// In M4 the overlay becomes interactive — face boxes are tappable
+/// hit targets that open an assignment popover. The wrapping `Color.clear`
+/// stays non-hit-testable so clicks in the empty letterbox area still
+/// reach the navigation arrows underneath.
 struct FaceOverlayView: View {
     let faces: [FaceListItem]
     /// Original asset width / height in pixels, from `AssetDetail`. The
@@ -77,6 +229,7 @@ struct FaceOverlayView: View {
     /// `kCGImageSourceThumbnailMaxPixelSize` which is uniform-scale).
     let imageWidth: Int
     let imageHeight: Int
+    @ObservedObject var vm: LightboxFacesViewModel
 
     var body: some View {
         GeometryReader { proxy in
@@ -85,7 +238,11 @@ struct FaceOverlayView: View {
                 in: proxy.size
             )
             ZStack(alignment: .topLeading) {
+                // Empty background — non-hit-testable so clicks in the
+                // letterboxed area pass through to the lightbox controls.
                 Color.clear
+                    .allowsHitTesting(false)
+
                 ForEach(faces) { face in
                     if let bb = face.boundingBox {
                         let boxW = CGFloat(bb.width) * imgRect.width
@@ -94,12 +251,37 @@ struct FaceOverlayView: View {
                         let boxY = imgRect.minY + CGFloat(bb.y) * imgRect.height
                         FaceBoxView(person: face.person, label: labelText(face.person))
                             .frame(width: boxW, height: boxH)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                vm.selectFace(face.faceId)
+                            }
+                            .popover(
+                                isPresented: popoverBinding(for: face.faceId),
+                                attachmentAnchor: .rect(.bounds),
+                                arrowEdge: .top
+                            ) {
+                                FaceAssignmentPopover(vm: vm, face: face)
+                            }
                             .position(x: boxX + boxW / 2, y: boxY + boxH / 2)
                     }
                 }
             }
         }
-        .allowsHitTesting(false)
+    }
+
+    /// Translate `vm.selectedFaceId == faceId` into a `Bool` binding
+    /// suitable for `.popover(isPresented:)`. SwiftUI flips the binding
+    /// to false when the user clicks outside the popover; we forward
+    /// that to `vm.deselectFace()` so the model state stays in sync.
+    private func popoverBinding(for faceId: String) -> Binding<Bool> {
+        Binding(
+            get: { vm.selectedFaceId == faceId },
+            set: { isShown in
+                if !isShown && vm.selectedFaceId == faceId {
+                    vm.deselectFace()
+                }
+            }
+        )
     }
 
     /// `nil` for unidentified or dismissed faces — those render with a
@@ -190,5 +372,186 @@ func aspectFitRect(contentSize: CGSize, in frameSize: CGSize) -> CGRect {
             width: w,
             height: frameSize.height
         )
+    }
+}
+
+// MARK: - Face assignment popover (M4)
+
+/// Anchored to a tapped face box. Shows the current assignment (with an
+/// unassign button), a debounced typeahead person search, and an option
+/// to create a new person from whatever the user has typed. Server-side
+/// the assign endpoint is `POST /v1/faces/{face_id}/assign`; this view's
+/// view model handles the delete-then-post dance for reassignment so the
+/// server's "no silent reassign" 409 stays out of the UI.
+struct FaceAssignmentPopover: View {
+    @ObservedObject var vm: LightboxFacesViewModel
+    let face: FaceListItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            currentAssignmentRow
+            searchField
+            resultsList
+            createNewRow
+            footer
+        }
+        .padding(12)
+        .frame(width: 280)
+    }
+
+    // MARK: - Sections
+
+    @ViewBuilder
+    private var currentAssignmentRow: some View {
+        if let person = face.person {
+            HStack(spacing: 6) {
+                Image(systemName: person.dismissed ? "person.crop.circle.badge.xmark" : "person.crop.circle.fill")
+                    .foregroundColor(person.dismissed ? .secondary : .green)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(person.dismissed ? "Dismissed" : person.displayName)
+                        .font(.callout)
+                        .lineLimit(1)
+                    Text("Currently assigned")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Button {
+                    Task { await vm.unassignFace(face.faceId) }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Remove this face from \(person.displayName)")
+                .disabled(vm.pendingMutation)
+            }
+            Divider()
+        }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .foregroundColor(.secondary)
+                .font(.caption)
+            TextField("Person name…", text: Binding(
+                get: { vm.personSearchQuery },
+                set: { vm.debouncedPersonSearch(query: $0) }
+            ))
+            .textFieldStyle(.plain)
+            .font(.callout)
+            .onSubmit {
+                submitFirstMatch()
+            }
+            if vm.isSearchingPeople {
+                ProgressView()
+                    .controlSize(.mini)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Color.gray.opacity(0.12))
+        .cornerRadius(6)
+        .disabled(vm.pendingMutation)
+    }
+
+    @ViewBuilder
+    private var resultsList: some View {
+        if !vm.personSearchResults.isEmpty {
+            VStack(spacing: 0) {
+                ForEach(vm.personSearchResults) { person in
+                    Button {
+                        Task { await vm.assignFace(face.faceId, toPersonId: person.personId) }
+                    } label: {
+                        HStack(spacing: 8) {
+                            FaceThumbnailView(
+                                faceId: person.representativeFaceId,
+                                client: vm.client
+                            )
+                            .frame(width: 24, height: 24)
+                            .clipShape(Circle())
+                            Text(person.displayName)
+                                .font(.callout)
+                                .lineLimit(1)
+                            Spacer()
+                            Text("\(person.faceCount)")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 3)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(vm.pendingMutation)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var createNewRow: some View {
+        let trimmed = vm.personSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty,
+           !vm.personSearchResults.contains(where: {
+               $0.displayName.caseInsensitiveCompare(trimmed) == .orderedSame
+           }) {
+            if !vm.personSearchResults.isEmpty {
+                Divider()
+            }
+            Button {
+                Task { await vm.assignFace(face.faceId, newPersonName: trimmed) }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "person.crop.circle.badge.plus")
+                        .foregroundColor(.accentColor)
+                    Text("Create \"\(trimmed)\"")
+                        .font(.callout)
+                    Spacer()
+                }
+                .padding(.horizontal, 4)
+                .padding(.vertical, 3)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(vm.pendingMutation)
+        }
+    }
+
+    @ViewBuilder
+    private var footer: some View {
+        if vm.pendingMutation {
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Saving…")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        if let error = vm.mutationError {
+            Text(error)
+                .font(.caption)
+                .foregroundColor(.red)
+                .lineLimit(3)
+        }
+    }
+
+    // MARK: - Helpers
+
+    /// Pressing return in the search field assigns to the first
+    /// case-insensitive exact match if one exists, otherwise creates
+    /// a new person from the search text.
+    private func submitFirstMatch() {
+        let trimmed = vm.personSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if let exact = vm.personSearchResults.first(where: {
+            $0.displayName.caseInsensitiveCompare(trimmed) == .orderedSame
+        }) {
+            Task { await vm.assignFace(face.faceId, toPersonId: exact.personId) }
+        } else {
+            Task { await vm.assignFace(face.faceId, newPersonName: trimmed) }
+        }
     }
 }
