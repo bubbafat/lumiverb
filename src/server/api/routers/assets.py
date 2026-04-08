@@ -1492,7 +1492,12 @@ def _generate_face_crops(
 
             # Expand bounding box by 40% padding, clamp to image bounds
             pad = 0.4
-            fx, fy, fw, fh = bb["x"], bb["y"], bb["w"], bb["h"]
+            # Support both {x,y,w,h} (Python CLI) and {x1,y1,x2,y2} (Swift client) formats
+            if "x" in bb:
+                fx, fy, fw, fh = bb["x"], bb["y"], bb["w"], bb["h"]
+            else:
+                fx, fy = bb["x1"], bb["y1"]
+                fw, fh = bb["x2"] - fx, bb["y2"] - fy
             cx, cy = fx + fw / 2, fy + fh / 2
             side = max(fw, fh) * (1 + pad)
             x1 = max(0.0, cx - side / 2)
