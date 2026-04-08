@@ -35,8 +35,9 @@ def test_page_missing_accepts_missing_faces() -> None:
 
 @pytest.mark.fast
 def test_face_batch_worker_processes_assets() -> None:
-    """_face_batch_worker downloads proxies, runs detection, and posts results."""
-    from unittest.mock import MagicMock, patch, call
+    """_face_batch_worker downloads proxies, runs detection, and posts a single
+    batch result via POST /v1/assets/batch-faces."""
+    from unittest.mock import MagicMock, patch
 
     mock_http_client = MagicMock()
     # Simulate proxy download returning JPEG bytes
@@ -49,9 +50,10 @@ def test_face_batch_worker_processes_assets() -> None:
     mock_client_instance = MagicMock()
     mock_client_instance._client = mock_http_client
     mock_client_instance._url = lambda path: f"http://localhost{path}"
-    # POST for face submission goes through the wrapper
+    # Single batch-faces POST returns aggregated counts
     post_resp = MagicMock()
-    post_resp.status_code = 201
+    post_resp.status_code = 200
+    post_resp.json.return_value = {"processed": 3, "skipped": 0}
     mock_client_instance.post.return_value = post_resp
 
     from src.client.workers.faces.insightface_provider import FaceDetection
@@ -82,7 +84,13 @@ def test_face_batch_worker_processes_assets() -> None:
     assert result["processed"] == 3
     assert result["failed"] == 0
     assert result["skipped"] == 0
-    assert mock_client_instance.post.call_count == 3
+    # Single batch POST, not one-per-asset
+    assert mock_client_instance.post.call_count == 1
+    call_args = mock_client_instance.post.call_args
+    assert call_args.args[0] == "/v1/assets/batch-faces"
+    items = call_args.kwargs["json"]["items"]
+    assert len(items) == 3
+    assert [item["asset_id"] for item in items] == ["ast_001", "ast_002", "ast_003"]
 
 
 @pytest.mark.fast
