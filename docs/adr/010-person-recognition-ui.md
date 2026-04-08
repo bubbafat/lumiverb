@@ -183,6 +183,22 @@ Once `FaceItem.person` is populated:
 > `FaceRepository.compute_clusters` in `src/server/repository/tenant.py`,
 > tests in `tests/test_face_clustering.py`. The original design follows
 > for historical context.
+>
+> **Cost / scalability under HDBSCAN.** The "Scalability constraints"
+> bullets below describe the *old* per-face HNSW round-trip model, which no
+> longer applies. Current behavior:
+> - The 5,000-face cap is unchanged. Faces beyond it are still indicated by
+>   the `truncated: true` flag on the response.
+> - There are no per-face HNSW queries. `compute_clusters` runs **one**
+>   `SELECT face_id, embedding_vector FROM faces ...` and computes the full
+>   N×N cosine distance matrix in numpy. At the 5,000-face cap that matrix
+>   is 5000×5000 float32 ≈ 100 MB held in RAM for the duration of the call;
+>   HDBSCAN adds its own working overhead on top.
+> - The endpoint **is** cached now. The cluster result is materialized into
+>   `system_metadata.face_clusters_cache` and marked dirty by any face
+>   mutation via `_mark_clusters_dirty`. `GET /v1/faces/clusters` returns
+>   the cached snapshot if clean and recomputes lazily otherwise. The
+>   "no cached snapshot" line below is historical.
 
 Server-side, using pgvector:
 

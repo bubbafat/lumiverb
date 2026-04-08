@@ -2371,7 +2371,7 @@ def _mark_clusters_dirty(session: Session) -> None:
 
 
 def _cluster_face_embeddings(
-    vectors,  # type: ignore[no-untyped-def]
+    vectors: "np.ndarray",
     *,
     min_cluster_size: int = 3,
 ) -> list[list[int]]:
@@ -2404,8 +2404,14 @@ def _cluster_face_embeddings(
     # Cosine distance matrix; with unit vectors this is 1 - dot(a, b).
     # Clamp to [0, 2] to defend against tiny FP overshoot (e.g. -1e-7),
     # which HDBSCAN's precomputed-metric path rejects.
+    #
+    # Float32 is sufficient for ArcFace cosine distances (the input embeddings
+    # themselves are float32) and halves the matrix's memory footprint vs
+    # float64 — at the max_faces=5000 cap that's ~50MB instead of ~200MB,
+    # which matters because this function holds the full N×N matrix in RAM
+    # while HDBSCAN runs.
     sim = vectors @ vectors.T
-    dist = np.clip(1.0 - sim, 0.0, 2.0).astype(np.float64)
+    dist = np.clip(1.0 - sim, 0.0, 2.0).astype(np.float32)
     np.fill_diagonal(dist, 0.0)  # precomputed metric requires exact zero diagonal
 
     labels = HDBSCAN(
