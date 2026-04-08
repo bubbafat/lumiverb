@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getAsset, findSimilar, listFaces, listPeople, assignFace, unassignFace, uploadTranscript, deleteTranscript, updateNote, deleteNote } from "../api/client";
+import { getAsset, findSimilar, listFaces, listPeople, getNearestPeopleForFace, assignFace, unassignFace, uploadTranscript, deleteTranscript, updateNote, deleteNote } from "../api/client";
 import TranscriptViewer from "./TranscriptViewer";
 import { useLocalStorage } from "../lib/useLocalStorage";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
@@ -407,11 +407,50 @@ export function Lightbox({
     setAssignMode("pick");
   }, [asset.asset_id, highlightFaceId, facesData]);
 
+  // Per-face nearest-people: ranks named people by cosine distance
+  // from the clicked face's embedding to each person's centroid.
+  // This is the *signal* the user actually wants in the popover —
+  // "who looks like this face?" — and is computed server-side via
+  // GET /v1/faces/{face_id}/nearest-people. Limit 8 keeps the
+  // popover compact while still surfacing the relevant candidates.
+  const { data: nearestForFaceData } = useQuery({
+    queryKey: ["nearest-people-for-face", assignFaceId],
+    queryFn: () => getNearestPeopleForFace(assignFaceId!, 8),
+    enabled: assignFaceId != null,
+    staleTime: 60_000,
+  });
+
+  // Fallback alphabetical-by-face-count list, used when:
+  // - The face has no embedding (nearest endpoint returns empty)
+  // - The user is in "Change to:" mode on an already-named face
+  // - As a safety net while the nearest query is in flight
   const { data: peopleData } = useQuery({
     queryKey: ["people-for-assign"],
     queryFn: () => listPeople(undefined, 100),
     enabled: assignFaceId != null,
   });
+
+  /// Composite candidate list for the popover. Prefer the nearest-by-
+  /// embedding ranking; fall back to the full list if that's empty.
+  /// Returns the same shape (PersonItem[]) as listPeople so the JSX
+  /// rendering doesn't need to know which source it came from.
+  const candidatePeople = (() => {
+    const nearest = nearestForFaceData ?? [];
+    if (nearest.length > 0) {
+      // NearestPersonItem doesn't have representativeFaceId — synthesize
+      // a minimal PersonItem-shaped object with the fields the popover
+      // actually reads.
+      return nearest.map((np) => ({
+        person_id: np.person_id,
+        display_name: np.display_name,
+        face_count: np.face_count,
+        representative_face_id: null,
+        representative_asset_id: null,
+        confirmation_count: 0,
+      }));
+    }
+    return peopleData?.items ?? [];
+  })();
 
   const assignMutation = useMutation({
     mutationFn: (opts: { faceId: string } & ({ personId: string } | { newPersonName: string })) => {
@@ -425,6 +464,10 @@ export function Lightbox({
       queryClient.invalidateQueries({ queryKey: ["faces", asset.asset_id] });
       queryClient.invalidateQueries({ queryKey: ["people"] });
       queryClient.invalidateQueries({ queryKey: ["people-for-assign"] });
+      // The nearest-people ranking is centroid-based, so an assign
+      // shifts the named person's centroid and invalidates every
+      // existing per-face ranking. Wipe the whole prefix.
+      queryClient.invalidateQueries({ queryKey: ["nearest-people-for-face"] });
       queryClient.invalidateQueries({ queryKey: ["face-clusters"] });
     },
   });
@@ -650,6 +693,23 @@ export function Lightbox({
                   const isNamed = face.person != null && !isDismissed;
                   const borderColor = isHighlighted ? "border-red-500" : isNamed ? "border-emerald-400" : isDismissed ? "border-gray-500" : "border-white";
                   const isPopoverTarget = assignFaceId === face.face_id;
+                  // Auto-flip the popover anchor when the face is near
+                  // an edge of the image, so it doesn't clip off-screen.
+                  // The thresholds are intentionally generous: a face
+                  // whose bottom edge sits below 55% of the image
+                  // height anchors the popover *above* the face
+                  // instead of below; same for right-edge faces. This
+                  // matters most for super-close-up portraits where
+                  // the chin is near the bottom of the frame and the
+                  // popover's ~220px height would otherwise drop
+                  // entirely below the viewport.
+                  const faceBottom = face.bounding_box.y + face.bounding_box.h;
+                  const anchorAbove = faceBottom > 0.55;
+                  const anchorRight = face.bounding_box.x > 0.6;
+                  const popoverAnchorClass = [
+                    anchorRight ? "right-0" : "left-0",
+                    anchorAbove ? "bottom-full mb-1" : "top-full mt-1",
+                  ].join(" ");
                   return (
                     <div
                       key={face.face_id}
@@ -675,7 +735,7 @@ export function Lightbox({
                       {/* Face popover — assign (unidentified) or manage (identified) */}
                       {isPopoverTarget && (
                         <div
-                          className="absolute left-0 top-full z-50 mt-1 w-56 rounded-lg border border-gray-600 bg-gray-800 p-3 shadow-xl"
+                          className={`absolute z-50 w-56 rounded-lg border border-gray-600 bg-gray-800 p-3 shadow-xl ${popoverAnchorClass}`}
                           onClick={(e) => e.stopPropagation()}
                         >
                           {isNamed && assignMode === "pick" ? (
@@ -698,9 +758,9 @@ export function Lightbox({
                               </button>
                               <hr className="border-gray-700" />
                               <p className="text-xs text-gray-500">Change to:</p>
-                              {(peopleData?.items ?? []).filter((p) => p.person_id !== face.person!.person_id).length > 0 && (
+                              {candidatePeople.filter((p) => p.person_id !== face.person!.person_id).length > 0 && (
                                 <div className="max-h-24 space-y-1 overflow-y-auto">
-                                  {peopleData!.items
+                                  {candidatePeople
                                     .filter((p) => p.person_id !== face.person!.person_id)
                                     .map((p) => (
                                       <button
@@ -725,9 +785,9 @@ export function Lightbox({
                           ) : assignMode === "pick" ? (
                             <div className="space-y-2">
                               <p className="text-xs font-medium text-gray-300">Who is this?</p>
-                              {(peopleData?.items ?? []).length > 0 && (
+                              {candidatePeople.length > 0 && (
                                 <div className="max-h-32 space-y-1 overflow-y-auto">
-                                  {peopleData!.items.map((p) => (
+                                  {candidatePeople.map((p) => (
                                     <button
                                       key={p.person_id}
                                       type="button"

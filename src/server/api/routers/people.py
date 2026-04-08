@@ -781,6 +781,86 @@ def nearest_people_for_cluster(
     return results[:limit]
 
 
+@faces_router.get("/{face_id}/nearest-people", response_model=list[NearestPersonItem])
+def nearest_people_for_face(
+    face_id: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    limit: int = 5,
+) -> list[NearestPersonItem]:
+    """Return named people sorted by cosine distance to a single face's embedding.
+
+    Used by the lightbox face-assignment popover so the dropdown of
+    candidate people is ordered by who actually looks most like the
+    clicked face — instead of by overall face count, which has no
+    bearing on whether they're the right person. The clicked face's
+    own embedding is the source vector; people are ranked the same
+    way ``nearest_people_for_cluster`` ranks against a cluster
+    centroid (1 − cosine similarity, ascending).
+
+    Returns an empty list — not 404 — when the face exists but has no
+    embedding, so the popover can still show the alphabetical
+    fallback list without an error path.
+    """
+    import numpy as np
+    from sqlalchemy import text as sa_text
+    from src.server.models.tenant import Face
+
+    if limit > 20:
+        limit = 20
+
+    face = session.get(Face, face_id)
+    if face is None:
+        raise HTTPException(status_code=404, detail="Face not found")
+    if face.embedding_vector is None:
+        return []
+
+    # The pgvector adapter returns the column as a numpy array via the
+    # ORM, so feed it directly into np.asarray. (The cluster endpoint
+    # uses ::text + .strip("[]").split(",") because it pulls a raw row
+    # rather than going through the ORM.)
+    src = np.asarray(face.embedding_vector, dtype=np.float32)
+    src_norm = float(np.linalg.norm(src))
+    if src_norm > 0:
+        src = src / src_norm
+
+    people_rows = session.execute(
+        sa_text("""
+            SELECT p.person_id, p.display_name, p.centroid_vector::text,
+                   COUNT(m.match_id)::int AS face_count
+            FROM people p
+            LEFT JOIN face_person_matches m ON m.person_id = p.person_id
+            LEFT JOIN faces f ON f.face_id = m.face_id
+            LEFT JOIN assets a
+                ON a.asset_id = f.asset_id AND a.deleted_at IS NULL
+            WHERE p.dismissed = false AND p.centroid_vector IS NOT NULL
+            GROUP BY p.person_id
+        """),
+    ).all()
+
+    if not people_rows:
+        return []
+
+    results = []
+    for row in people_rows:
+        pvec = np.array(
+            [float(x) for x in row[2].strip("[]").split(",")],
+            dtype=np.float32,
+        )
+        pnorm = float(np.linalg.norm(pvec))
+        if pnorm > 0:
+            pvec = pvec / pnorm
+        dist = float(1.0 - np.dot(src, pvec))
+        results.append(NearestPersonItem(
+            person_id=row[0],
+            display_name=row[1],
+            face_count=row[3],
+            distance=round(dist, 4),
+        ))
+
+    results.sort(key=lambda x: x.distance)
+    return results[:limit]
+
+
 class ClusterFacesResponse(BaseModel):
     items: list[PersonFaceItem]
     total: int

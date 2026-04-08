@@ -535,6 +535,14 @@ export async function getNearestPeople(clusterIndex: number, limit = 5): Promise
   return apiFetch<NearestPersonItem[]>(`/faces/clusters/${clusterIndex}/nearest-people?limit=${limit}`);
 }
 
+/** Get people sorted by similarity to a single face's embedding. Used by
+ * the lightbox face-assignment popover so the candidate dropdown is
+ * ordered by who actually looks like the clicked face, instead of by
+ * total face count (which has nothing to do with whether they match). */
+export async function getNearestPeopleForFace(faceId: string, limit = 5): Promise<NearestPersonItem[]> {
+  return apiFetch<NearestPersonItem[]>(`/faces/${faceId}/nearest-people?limit=${limit}`);
+}
+
 /** Dismiss a cluster: creates a dismissed person that absorbs future similar faces. Returns person_id for undo. */
 export async function dismissCluster(clusterIndex: number): Promise<{ person_id: string }> {
   const res = await fetch(`/v1/faces/clusters/${clusterIndex}/dismiss`, {
