@@ -66,10 +66,10 @@ public struct BrowseFilter: Equatable, Sendable {
         if let apertureMax { params["aperture_max"] = String(apertureMax) }
         if let focalLengthMin { params["focal_length_min"] = String(focalLengthMin) }
         if let focalLengthMax { params["focal_length_max"] = String(focalLengthMax) }
-        if let hasGps, hasGps { params["has_gps"] = "true" }
-        if let hasFaces, hasFaces { params["has_faces"] = "true" }
+        if let hasGps { params["has_gps"] = String(hasGps) }
+        if let hasFaces { params["has_faces"] = String(hasFaces) }
         if let personId { params["person_id"] = personId }
-        if let favorite, favorite { params["favorite"] = "true" }
+        if let favorite { params["favorite"] = String(favorite) }
         if let starMin { params["star_min"] = String(starMin) }
         if let starMax { params["star_max"] = String(starMax) }
         if let color { params["color"] = color }
