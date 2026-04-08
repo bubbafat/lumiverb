@@ -7,6 +7,20 @@ struct LightboxView: View {
     @ObservedObject var browseState: BrowseState
     let client: APIClient?
 
+    /// Persisted across sessions and across asset navigation. Matches the
+    /// web UI's `lv_show_faces` localStorage key so users get the same
+    /// preference on both clients (the keys are independent storage but
+    /// the naming convention is shared, which makes future sync easier).
+    @AppStorage("lv_show_faces") private var showFaces: Bool = false
+
+    @StateObject private var facesVM: LightboxFacesViewModel
+
+    init(browseState: BrowseState, client: APIClient?) {
+        self.browseState = browseState
+        self.client = client
+        _facesVM = StateObject(wrappedValue: LightboxFacesViewModel(client: client))
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             // Main image area
@@ -32,6 +46,24 @@ struct LightboxView: View {
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
+                }
+
+                // Face overlay layer — sibling of the image so both inherit
+                // the same parent frame from the ZStack and the aspect-fit
+                // math here matches the image's actual rendered rect.
+                // Stills only — videos can have face data but the player
+                // doesn't have a single frame to overlay against.
+                if showFaces,
+                   let detail = browseState.assetDetail,
+                   !detail.isVideo,
+                   let w = detail.width, let h = detail.height,
+                   !facesVM.faces.isEmpty {
+                    FaceOverlayView(
+                        faces: facesVM.faces,
+                        imageWidth: w,
+                        imageHeight: h
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
 
                 // Navigation arrows
@@ -64,6 +96,7 @@ struct LightboxView: View {
             if let detail = browseState.assetDetail {
                 MetadataSidebar(
                     detail: detail,
+                    showFaces: $showFaces,
                     onFindSimilar: {
                         Task { await browseState.findSimilar(assetId: detail.assetId) }
                     },
@@ -90,6 +123,23 @@ struct LightboxView: View {
             }
         }
         .background(.black)
+        // Re-fetch faces whenever the visible asset changes — but only when
+        // the toggle is on, so toggling off mid-browse doesn't keep paying
+        // for face requests. The vm short-circuits if it already has the
+        // current asset's faces cached.
+        .task(id: showFacesTaskKey) {
+            if showFaces, let assetId = browseState.assetDetail?.assetId {
+                await facesVM.loadFaces(forAsset: assetId)
+            } else if !showFaces {
+                facesVM.reset()
+            }
+        }
+    }
+
+    /// Composite key so `.task(id:)` re-runs both when the user toggles the
+    /// face overlay on/off AND when navigation moves to a new asset.
+    private var showFacesTaskKey: String {
+        "\(showFaces)|\(browseState.assetDetail?.assetId ?? "")"
     }
 
     @ViewBuilder
@@ -112,6 +162,7 @@ struct LightboxView: View {
 
 struct MetadataSidebar: View {
     let detail: AssetDetail
+    @Binding var showFaces: Bool
     let onFindSimilar: () -> Void
     let onReEnrich: (Set<EnrichmentOperation>) -> Void
     let onRevealInFinder: () -> Void
@@ -142,6 +193,21 @@ struct MetadataSidebar: View {
                         Label("Reveal in Finder", systemImage: "folder")
                     }
                     .controlSize(.small)
+
+                    // Show / hide face bounding box overlay. The keyboard
+                    // shortcut `d` mirrors the web UI's lightbox shortcut
+                    // (the `f` key is taken by Favorite via Lightroom
+                    // convention). Stills only — videos can't currently
+                    // host an overlay.
+                    if !detail.isVideo {
+                        Toggle(isOn: $showFaces) {
+                            Label("Show Faces", systemImage: "face.dashed")
+                        }
+                        .toggleStyle(.button)
+                        .controlSize(.small)
+                        .keyboardShortcut("d", modifiers: [])
+                        .help("Show face bounding boxes (D)")
+                    }
 
                     ReEnrichMenu(onReEnrich: onReEnrich)
                         .controlSize(.small)
