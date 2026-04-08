@@ -1,6 +1,14 @@
 import SwiftUI
 import LumiverbKit
 
+/// Top-level sidebar section. Switches the detail panel between the
+/// existing library/search/similar browse experience and the People view
+/// added in Phase 6 M3 of ADR-014.
+enum SidebarSection: Equatable {
+    case library
+    case people
+}
+
 /// Sort options for the asset grid.
 enum SortOption: String, CaseIterable, Identifiable {
     case takenAt = "taken_at"
@@ -30,28 +38,46 @@ enum SortOption: String, CaseIterable, Identifiable {
 struct BrowseWindow: View {
     @ObservedObject var appState: AppState
     @StateObject private var browseState: BrowseState
+    @StateObject private var peopleState: PeopleState
+
+    /// Which top-level sidebar section is active. Drives whether the
+    /// detail panel shows the existing library browse UI or the new
+    /// People view (Phase 6 M3).
+    @State private var section: SidebarSection = .library
 
     init(appState: AppState) {
         self.appState = appState
         self._browseState = StateObject(wrappedValue: BrowseState(appState: appState))
+        self._peopleState = StateObject(wrappedValue: PeopleState(appState: appState))
     }
 
     var body: some View {
         NavigationSplitView {
             LibrarySidebar(
                 libraries: appState.libraries,
-                browseState: browseState
+                browseState: browseState,
+                section: $section
             )
             .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 300)
         } detail: {
             ZStack {
-                VStack(spacing: 0) {
-                    if browseState.isReEnriching || !browseState.reEnrichSkipped.isEmpty {
-                        reEnrichBanner
+                switch section {
+                case .library:
+                    VStack(spacing: 0) {
+                        if browseState.isReEnriching || !browseState.reEnrichSkipped.isEmpty {
+                            reEnrichBanner
+                        }
+                        activeFiltersBar
+                        contentArea
                     }
-                    activeFiltersBar
-                    contentArea
+                case .people:
+                    PeopleView(
+                        peopleState: peopleState,
+                        browseState: browseState,
+                        client: appState.client
+                    )
                 }
+
                 if browseState.selectedAssetId != nil {
                     lightboxOverlay
                 }

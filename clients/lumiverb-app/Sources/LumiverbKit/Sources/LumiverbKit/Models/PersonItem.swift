@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Person
 
 /// A person from `GET /v1/people`.
-public struct PersonItem: Decodable, Identifiable, Sendable {
+public struct PersonItem: Decodable, Identifiable, Hashable, Sendable {
     public let personId: String
     public let displayName: String
     public let faceCount: Int

@@ -80,6 +80,14 @@ class BrowseState: ObservableObject {
     @Published var assetDetail: AssetDetail?
     @Published var isLoadingDetail = false
 
+    /// When set, the lightbox prev/next chevrons (and arrow-key navigation)
+    /// iterate this list instead of `displayedAssetIds`'s normal mode-based
+    /// list. Used by the People view's `PersonDetailView` so opening a
+    /// face lets the user step through that person's other photos rather
+    /// than the (likely empty) library grid behind them. Cleared by
+    /// `closeLightbox()`.
+    @Published var displayedAssetIdsOverride: [String]?
+
     // MARK: - Mode
 
     @Published var mode: BrowseMode = .library
@@ -104,8 +112,13 @@ class BrowseState: ObservableObject {
         return appState.libraries.first { $0.libraryId == id }?.rootPath
     }
 
-    /// The list of asset IDs currently displayed (varies by mode).
+    /// The list of asset IDs currently displayed (varies by mode). When
+    /// `displayedAssetIdsOverride` is set, that list wins — the People
+    /// view installs it before opening the lightbox so prev/next walks
+    /// the person's faces rather than the underlying library mode's
+    /// (potentially empty) list.
     var displayedAssetIds: [String] {
+        if let displayedAssetIdsOverride { return displayedAssetIdsOverride }
         switch mode {
         case .library:
             return assets.map(\.assetId)
@@ -207,6 +220,9 @@ class BrowseState: ObservableObject {
     func closeLightbox() {
         selectedAssetId = nil
         assetDetail = nil
+        // Clear any People-view installed prev/next override so the next
+        // lightbox open from the library grid uses the normal mode list.
+        displayedAssetIdsOverride = nil
     }
 
     // MARK: - Search
