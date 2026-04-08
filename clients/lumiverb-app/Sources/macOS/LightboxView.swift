@@ -131,8 +131,29 @@ struct LightboxView: View {
         .task(id: showFacesTaskKey) {
             if showFaces, let assetId = browseState.assetDetail?.assetId {
                 await facesVM.loadFaces(forAsset: assetId)
+                // Cluster review hands us a `pendingHighlightFaceId`
+                // when the user clicks a face crop. After the faces
+                // load, auto-open the assign popover on that exact
+                // face so the per-face tagging path is one click
+                // instead of "open lightbox → press d → click face
+                // → assign". Cleared on consume so navigating to the
+                // next asset doesn't keep popping the same popover.
+                if let pending = browseState.pendingHighlightFaceId,
+                   facesVM.faces.contains(where: { $0.faceId == pending }) {
+                    facesVM.selectFace(pending)
+                    browseState.pendingHighlightFaceId = nil
+                }
             } else if !showFaces {
                 facesVM.reset()
+            }
+        }
+        // Force the face overlay on whenever the cluster review hands
+        // us a highlighted face — without this the user opens the
+        // lightbox to a photo with no clickable hit target and falls
+        // back to the bulk "name everything" path.
+        .onChange(of: browseState.pendingHighlightFaceId) { _, newValue in
+            if newValue != nil && !showFaces {
+                showFaces = true
             }
         }
     }

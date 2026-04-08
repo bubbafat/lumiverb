@@ -370,6 +370,43 @@ export function Lightbox({
     setAssignFaceId(null);
   }, [asset.asset_id]);
 
+  // When the lightbox is opened from cluster review (or anywhere else
+  // that passes a highlightFaceId), force the face overlay on. The
+  // whole point of arriving with a highlighted face is to interact
+  // with that one face — without overlays you're staring at a photo
+  // with no clickable hit target, and the only escape is the cluster
+  // card's "name everything" button. Only kicks once per session
+  // since lv_show_faces is in localStorage.
+  useEffect(() => {
+    if (highlightFaceId && !showFaces && hasFaces) {
+      setShowFaces(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightFaceId, hasFaces]);
+
+  // Once faces have loaded for the current asset, auto-open the
+  // assign popover on the highlighted face. This collapses the
+  // cluster-review-to-tagged flow from "click face crop → wait →
+  // click red border → wait" down to "click face crop → wait → pick
+  // a name". Skips when the highlighted face is already named (no
+  // need to nag the user about a face that's already done).
+  const autoOpenedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!highlightFaceId || !facesData?.faces) return;
+    const target = facesData.faces.find((f) => f.face_id === highlightFaceId);
+    if (!target) return;
+    const isNamed = target.person != null && target.person.dismissed === false;
+    if (isNamed) return;
+    // Only auto-open once per (asset, highlightFaceId) pair so the
+    // popover doesn't reopen on every render or after the user
+    // explicitly closes it.
+    const key = `${asset.asset_id}|${highlightFaceId}`;
+    if (autoOpenedRef.current === key) return;
+    autoOpenedRef.current = key;
+    setAssignFaceId(highlightFaceId);
+    setAssignMode("pick");
+  }, [asset.asset_id, highlightFaceId, facesData]);
+
   const { data: peopleData } = useQuery({
     queryKey: ["people-for-assign"],
     queryFn: () => listPeople(undefined, 100),

@@ -10,6 +10,7 @@ import LumiverbKit
 /// a cluster pops a 5-second undo toast at the bottom.
 struct ClusterReviewView: View {
     @ObservedObject var state: ClusterReviewState
+    @ObservedObject var browseState: BrowseState
     let client: APIClient?
 
     var body: some View {
@@ -33,6 +34,7 @@ struct ClusterReviewView: View {
                             ClusterCardView(
                                 cluster: cluster,
                                 state: state,
+                                browseState: browseState,
                                 client: client
                             )
                             .transition(.opacity.combined(with: .move(edge: .leading)))
@@ -165,6 +167,7 @@ struct ClusterReviewView: View {
 struct ClusterCardView: View {
     let cluster: ClusterItem
     @ObservedObject var state: ClusterReviewState
+    @ObservedObject var browseState: BrowseState
     let client: APIClient?
 
     @State private var nameInput: String = ""
@@ -203,16 +206,27 @@ struct ClusterCardView: View {
 
     private var facesStrip: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("\(cluster.size) face\(cluster.size == 1 ? "" : "s")")
-                .font(.caption)
-                .foregroundColor(.secondary)
+            HStack(spacing: 6) {
+                Text("\(cluster.size) face\(cluster.size == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Text("· click a face to tag individually")
+                    .font(.caption2)
+                    .foregroundColor(.secondary.opacity(0.7))
+            }
 
             HStack(spacing: 6) {
                 ForEach(cluster.faces.prefix(8)) { face in
-                    FaceThumbnailView(faceId: face.faceId, client: client)
-                        .frame(width: 64, height: 64)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                        .background(Color.gray.opacity(0.1))
+                    Button {
+                        openLightbox(for: face)
+                    } label: {
+                        FaceThumbnailView(faceId: face.faceId, client: client)
+                            .frame(width: 64, height: 64)
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                            .background(Color.gray.opacity(0.1))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open this photo to tag just this face")
                 }
                 if cluster.size > cluster.faces.count {
                     Text("+\(cluster.size - cluster.faces.count)")
@@ -226,6 +240,19 @@ struct ClusterCardView: View {
         }
     }
 
+    /// Open the existing lightbox on the face's owning asset, with the
+    /// face overlay forced on and the assign popover auto-targeted at
+    /// this exact face. Gives the user a per-face escape hatch out of
+    /// "name the whole cluster" — useful when HDBSCAN merged multiple
+    /// real identities into one cluster.
+    private func openLightbox(for face: PersonFaceItem) {
+        // Install the cluster's full asset list as the lightbox prev/next
+        // override so left/right arrows iterate the cluster's faces.
+        browseState.displayedAssetIdsOverride = cluster.faces.map(\.assetId)
+        browseState.pendingHighlightFaceId = face.faceId
+        Task { await browseState.loadAssetDetail(assetId: face.assetId) }
+    }
+
     // MARK: - Actions column (name input + dismiss)
 
     private var actionsColumn: some View {
@@ -233,12 +260,13 @@ struct ClusterCardView: View {
             HStack(spacing: 6) {
                 Image(systemName: "person.crop.circle.badge.plus")
                     .foregroundColor(.secondary)
-                TextField("Name this person…", text: $nameInput)
+                TextField("Name all \(cluster.size) faces…", text: $nameInput)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit(submitName)
-                Button("Save", action: submitName)
+                Button("Tag all \(cluster.size)", action: submitName)
                     .keyboardShortcut(.return, modifiers: [])
                     .disabled(nameInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .help("Tag every face in this cluster as one person — for heterogeneous clusters use the per-face thumbnails on the left")
             }
             HStack {
                 Spacer()

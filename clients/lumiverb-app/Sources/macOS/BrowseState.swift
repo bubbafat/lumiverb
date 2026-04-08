@@ -88,6 +88,21 @@ class BrowseState: ObservableObject {
     /// `closeLightbox()`.
     @Published var displayedAssetIdsOverride: [String]?
 
+    /// When set, the lightbox should:
+    /// 1. Force the face overlay on (as if the user pressed `d`)
+    /// 2. Auto-open the assign popover on this specific face
+    ///
+    /// Used by the cluster review (`ClusterCardView`) to give the user
+    /// a per-face escape hatch out of "name the whole cluster" — they
+    /// can drill into a single face, assign it, and the cluster cache
+    /// recomputes on the next refresh leaving the rest of the cluster
+    /// behind. Without this, the only path to per-face assignment was
+    /// to dismiss the cluster and tag faces from normal browse, which
+    /// is much slower.
+    ///
+    /// Cleared by `closeLightbox()`.
+    @Published var pendingHighlightFaceId: String?
+
     // MARK: - Mode
 
     @Published var mode: BrowseMode = .library
@@ -223,6 +238,9 @@ class BrowseState: ObservableObject {
         // Clear any People-view installed prev/next override so the next
         // lightbox open from the library grid uses the normal mode list.
         displayedAssetIdsOverride = nil
+        // Clear any cluster-review face highlight so the next lightbox
+        // open doesn't pop a stale popover.
+        pendingHighlightFaceId = nil
     }
 
     // MARK: - Search

@@ -84,6 +84,7 @@ struct BrowseWindow: View {
                 case .review:
                     ClusterReviewView(
                         state: clusterReviewState,
+                        browseState: browseState,
                         client: appState.client
                     )
                 }

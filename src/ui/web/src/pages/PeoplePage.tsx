@@ -304,6 +304,16 @@ function ClusterCard({
         </button>
       </div>
 
+      {/* Per-face hint — the bulk Name / This is... buttons below tag
+          every face in the cluster, but for a heterogeneous cluster
+          (e.g. HDBSCAN merged multiple identities) the user wants to
+          tag faces individually. Clicking a face crop opens the
+          lightbox with the face overlay forced on and the assign
+          popover auto-targeted at that exact face. */}
+      <p className="mb-1 text-xs text-gray-500">
+        Click a face to tag it individually.
+      </p>
+
       {/* Face thumbnails */}
       <div className={`mb-3 grid gap-1.5 ${expanded ? "grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10" : "grid-cols-3"}`}>
         {displayFaces.map((face, i) => (
@@ -324,23 +334,27 @@ function ClusterCard({
         />
       )}
 
-      {/* Actions */}
+      {/* Actions — these all operate on the *entire* cluster. The
+          per-face path is the face-crop click handler above; these
+          buttons are for clusters that really are one person. */}
       {mode === "idle" && (
         <div className="flex gap-2">
           <button
             type="button"
             onClick={() => setMode("name")}
             className="flex-1 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500"
+            title={`Name all ${cluster.size} faces in this cluster as one person`}
           >
-            Name this person
+            Name all {cluster.size}
           </button>
           {people.length > 0 && (
             <button
               type="button"
               onClick={() => setMode("assign")}
               className="flex-1 rounded-lg border border-gray-600 px-3 py-1.5 text-xs font-medium text-gray-300 hover:bg-gray-700"
+              title={`Merge all ${cluster.size} faces into an existing person`}
             >
-              This is...
+              All {cluster.size} are...
             </button>
           )}
           <button
