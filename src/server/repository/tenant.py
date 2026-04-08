@@ -2370,6 +2370,68 @@ def _mark_clusters_dirty(session: Session) -> None:
     )
 
 
+def _cluster_face_embeddings(
+    vectors,  # type: ignore[no-untyped-def]
+    *,
+    min_cluster_size: int = 3,
+) -> list[list[int]]:
+    """Cluster L2-normalized face embeddings using HDBSCAN.
+
+    Pure-math helper extracted from FaceRepository.compute_clusters so the
+    clustering algorithm can be unit-tested without a database.
+
+    Runs HDBSCAN with metric='precomputed' over a cosine distance matrix.
+    HDBSCAN is density-based, so a face must have at least ``min_cluster_size``
+    close neighbors to anchor a cluster — this is what prevents the
+    single-linkage chaining that an earlier union-find implementation
+    suffered from (one bridging face would collapse two distinct identities).
+
+    Args:
+        vectors: (N, D) numpy array of L2-normalized face embeddings.
+        min_cluster_size: HDBSCAN's core parameter. A cluster must contain
+            at least this many faces or its members are labeled noise.
+
+    Returns:
+        Clusters as lists of row indices into ``vectors``, sorted by size
+        descending. HDBSCAN noise points (label -1) are excluded.
+    """
+    import numpy as np
+    from sklearn.cluster import HDBSCAN
+
+    if len(vectors) < min_cluster_size:
+        return []
+
+    # Cosine distance matrix; with unit vectors this is 1 - dot(a, b).
+    # Clamp to [0, 2] to defend against tiny FP overshoot (e.g. -1e-7),
+    # which HDBSCAN's precomputed-metric path rejects.
+    sim = vectors @ vectors.T
+    dist = np.clip(1.0 - sim, 0.0, 2.0).astype(np.float64)
+    np.fill_diagonal(dist, 0.0)  # precomputed metric requires exact zero diagonal
+
+    labels = HDBSCAN(
+        metric="precomputed",
+        min_cluster_size=min_cluster_size,
+        copy=True,  # don't let HDBSCAN mutate our distance matrix in place
+        # When the input has only one density mode, HDBSCAN's default 'eom'
+        # selection labels everything as noise (no excess of mass relative to
+        # the root). For face libraries that's wrong: a user with photos of
+        # only immediate family genuinely has one cluster, and we want to
+        # surface it.
+        allow_single_cluster=True,
+    ).fit_predict(dist)
+
+    from collections import defaultdict
+    by_label: dict[int, list[int]] = defaultdict(list)
+    for idx, lbl in enumerate(labels):
+        if lbl < 0:  # noise
+            continue
+        by_label[int(lbl)].append(idx)
+
+    clusters = list(by_label.values())
+    clusters.sort(key=len, reverse=True)
+    return clusters
+
+
 class FaceRepository:
     """CRUD for detected faces. Operates within a tenant session."""
 
@@ -2624,27 +2686,31 @@ class FaceRepository:
     def compute_clusters(
         self,
         *,
-        similarity_threshold: float = 0.40,
-        max_centroid_distance: float = 0.35,
-        k: int = 10,
         max_faces: int = 5000,
-        min_cluster_size: int = 2,
+        min_cluster_size: int = 3,
         max_clusters: int = 20,
         faces_per_cluster: int = 6,
-    ) -> tuple[list[list[dict]], bool]:
-        """Compute clusters of unassigned faces.
+    ) -> tuple[list[list[dict]], list[list[str]], bool]:
+        """Cluster unassigned face embeddings via HDBSCAN.
 
-        Fetches all unassigned face embeddings in one query, computes the
-        cosine distance matrix in numpy, then builds connected components
-        via union-find. This avoids N per-face SQL round-trips which caused
-        the endpoint to hang (the cross-join query couldn't use HNSW).
+        Fetches all unassigned face embeddings, then runs density-based
+        clustering on a cosine distance matrix. The earlier implementation
+        was single-linkage union-find on a kNN graph, which catastrophically
+        chained across identities (one observed cluster of 2887 / 2893 faces
+        spanning all ages, genders, and ethnicities). HDBSCAN requires a
+        density core to anchor a cluster, so a single bridging face can no
+        longer collapse two distinct identities.
 
-        Returns (clusters, truncated) where each cluster is a list of face dicts
-        sorted by detection_confidence desc, and clusters are sorted by size desc.
+        Returns ``(clusters, all_face_ids, truncated)``:
+            * ``clusters`` — list of cluster samples, each a list of face
+              dicts truncated to ``faces_per_cluster``, sorted by
+              detection_confidence desc.
+            * ``all_face_ids`` — full per-cluster face ID list (used by the
+              people router for naming a whole cluster at once).
+            * ``truncated`` — True when the SQL hit the ``max_faces`` cap.
         """
         import numpy as np
 
-        # Get unassigned face IDs + embeddings in one query
         sql = """
             SELECT f.face_id, f.embedding_vector::text
             FROM faces f
@@ -2654,11 +2720,10 @@ class FaceRepository:
             LIMIT :max_faces
         """
         rows = self._session.execute(text(sql).bindparams(max_faces=max_faces)).all()
-
         truncated = len(rows) == max_faces
 
         if len(rows) < min_cluster_size:
-            return [], truncated
+            return [], [], truncated
 
         face_ids = [r[0] for r in rows]
         # Parse pgvector text format "[0.1,0.2,...]" → numpy array
@@ -2667,98 +2732,38 @@ class FaceRepository:
             dtype=np.float32,
         )
 
-        # L2-normalize (ArcFace embeddings should already be normalized, belt-and-suspenders)
+        # L2-normalize defensively (ArcFace embeddings ship unit-length)
         norms = np.linalg.norm(vectors, axis=1, keepdims=True)
         norms[norms == 0] = 1.0
         vectors = vectors / norms
 
-        # Cosine distance matrix: 1 - dot(a, b). Shape: (N, N)
-        cosine_sim = vectors @ vectors.T
-        dist_matrix = 1.0 - cosine_sim
+        clusters_idx = _cluster_face_embeddings(
+            vectors, min_cluster_size=min_cluster_size
+        )[:max_clusters]
 
-        # Build adjacency from K nearest neighbors within threshold
-        n = len(face_ids)
-        parent: dict[int, int] = {i: i for i in range(n)}
+        if not clusters_idx:
+            return [], [], truncated
 
-        def find(x: int) -> int:
-            while parent[x] != x:
-                parent[x] = parent[parent[x]]
-                x = parent[x]
-            return x
+        clusters_face_ids = [[face_ids[i] for i in indices] for indices in clusters_idx]
 
-        def union(a: int, b: int) -> None:
-            ra, rb = find(a), find(b)
-            if ra != rb:
-                parent[ra] = rb
-
-        for i in range(n):
-            # Get K nearest neighbors (excluding self)
-            dists = dist_matrix[i]
-            # Set self-distance to infinity so it's excluded
-            dists[i] = float("inf")
-            nearest_k = np.argpartition(dists, min(k, n - 1))[:k]
-            for j in nearest_k:
-                if dists[j] < similarity_threshold:
-                    union(i, j)
-
-        # Group into clusters
-        from collections import defaultdict
-        clusters_idx: dict[int, list[int]] = defaultdict(list)
-        for i in range(n):
-            clusters_idx[find(i)].append(i)
-
-        # Diameter check: eject faces that are too far from their cluster centroid.
-        # This catches transitive chains where A→B→C→D are each within threshold
-        # but A and D are very dissimilar.
-        validated: dict[int, list[int]] = {}
-        for root, indices in clusters_idx.items():
-            if len(indices) < min_cluster_size:
-                continue
-            cluster_vecs = vectors[indices]
-            centroid = cluster_vecs.mean(axis=0)
-            centroid_norm = np.linalg.norm(centroid)
-            if centroid_norm > 0:
-                centroid = centroid / centroid_norm
-            dists_to_centroid = 1.0 - (cluster_vecs @ centroid)
-            kept = [idx for idx, d in zip(indices, dists_to_centroid) if d < max_centroid_distance]
-            if len(kept) >= min_cluster_size:
-                validated[root] = kept
-
-        clusters_map: dict[int, list[str]] = {
-            root: [face_ids[i] for i in indices]
-            for root, indices in validated.items()
-        }
-
-        # Filter by min size, sort by size desc
-        clusters = [c for c in clusters_map.values() if len(c) >= min_cluster_size]
-        clusters.sort(key=len, reverse=True)
-        clusters = clusters[:max_clusters]
-
-        # Load face data for each cluster
-        all_face_ids = [fid for c in clusters for fid in c]
-        if not all_face_ids:
-            return [], truncated
-
-        stmt = select(Face).where(Face.face_id.in_(all_face_ids))  # type: ignore[union-attr]
+        # Hydrate face + asset rows for sample display
+        flat_ids = [fid for c in clusters_face_ids for fid in c]
+        stmt = select(Face).where(Face.face_id.in_(flat_ids))  # type: ignore[union-attr]
         faces_by_id = {f.face_id: f for f in self._session.exec(stmt).all()}
 
-        # Also get asset data for thumbnails
-        asset_ids = list({faces_by_id[fid].asset_id for fid in all_face_ids if fid in faces_by_id})
+        asset_ids = list({faces_by_id[fid].asset_id for fid in flat_ids if fid in faces_by_id})
         asset_map: dict[str, object] = {}
         if asset_ids:
             asset_stmt = select(Asset).where(Asset.asset_id.in_(asset_ids))  # type: ignore[union-attr]
             asset_map = {a.asset_id: a for a in self._session.exec(asset_stmt).all()}
 
-        result = []
-        all_ids_per_cluster = []
-        for cluster_face_ids in clusters:
-            # Sort by confidence desc within cluster
+        result: list[list[dict]] = []
+        all_ids_per_cluster: list[list[str]] = []
+        for cluster_face_ids in clusters_face_ids:
             cluster_faces = [faces_by_id[fid] for fid in cluster_face_ids if fid in faces_by_id]
             cluster_faces.sort(key=lambda f: f.detection_confidence or 0, reverse=True)
-
             all_ids_per_cluster.append([f.face_id for f in cluster_faces])
 
-            # Limit to faces_per_cluster samples
             sample = cluster_faces[:faces_per_cluster]
             cluster_data = []
             for f in sample:

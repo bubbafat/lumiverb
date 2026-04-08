@@ -314,7 +314,7 @@ def run_recluster(
                 meta.set_value("face_clusters_dirty", "false")
 
                 totals["clusters"] += len(clusters)
-                totals["total_faces"] += sum(len(c) for c in clusters)
+                totals["total_faces"] += sum(len(ids) for ids in all_face_ids)
         except Exception as exc:
             logger.warning("Recluster failed for tenant %s: %s", tenant.tenant_id, exc)
 

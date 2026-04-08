@@ -165,6 +165,25 @@ Once `FaceItem.person` is populated:
 
 ### Clustering Algorithm (Phase 2)
 
+> **2026-04 update — algorithm replaced.** The original union-find approach
+> below was implemented and shipped, then catastrophically failed in
+> practice: a real-world library produced one cluster of 2887 / 2893 faces
+> spanning every age, gender, and ethnicity, plus three size-2 clusters.
+> Root cause was exactly the "false merges" risk flagged in the original
+> ADR — single-linkage chained across identities through ambiguous bridge
+> faces, and the diameter check was useless once a cluster grew large
+> (centroid of 2887 mixed faces ≈ population mean, so almost no points were
+> ejected). It has been replaced with **HDBSCAN** (`sklearn.cluster.HDBSCAN`,
+> `metric='precomputed'`) over the same cosine distance matrix. HDBSCAN
+> requires a density core to anchor a cluster, so a single bridge face can
+> no longer collapse two identities. The 0.55 / 0.40 threshold and the K=10
+> nearest-neighbor parameters are gone; HDBSCAN's `min_cluster_size=3` is
+> the only knob. The endpoint contract (`GET /v1/faces/clusters`) is
+> unchanged. Implementation in `_cluster_face_embeddings` and
+> `FaceRepository.compute_clusters` in `src/server/repository/tenant.py`,
+> tests in `tests/test_face_clustering.py`. The original design follows
+> for historical context.
+
 Server-side, using pgvector:
 
 1. **Find clusters**: For each unassigned face, find its K=10 nearest neighbors within cosine distance < 0.55 (ArcFace empirical threshold). HNSW query uses `SET LOCAL hnsw.ef_search = 40` (default is 40; sufficient for K=10). Build connected components via union-find. Filter out clusters smaller than `min_cluster_size` (default 2).
