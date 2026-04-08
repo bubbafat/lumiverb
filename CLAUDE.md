@@ -27,19 +27,11 @@ responsibility mappings change less often; that's what lives here.
   targets live in an XcodeGen-managed Xcode project.
 - **Auth**: Hybrid JWT (web login) + API keys (CLI/automation). Both use
   `Authorization: Bearer <token>`. Roles: `admin`, `editor`, `viewer`.
-
----
-
-## Runtime topology
-
-The FastAPI server is the only persistent service. The Python CLI, the
-web UI, and the native macOS/iOS apps are all clients that talk to it
-over `/v1/`. Two of those clients additionally do **local enrichment**
-and POST results back: the Python CLI runs InsightFace / faster-whisper
-in subprocesses (`src/client/`), and the macOS app runs CLIP / ArcFace /
-OCR via CoreML + Vision (`clients/lumiverb-app/Sources/macOS/Enrich/`).
-The iOS app is browse-only. Search is offloaded to a Quickwit sidecar
-(BM25), with a Postgres fallback path.
+- **Topology**: FastAPI is the only persistent service; CLI / web / macOS /
+  iOS are all `/v1/` clients. The Python CLI and macOS app additionally
+  run local enrichment (InsightFace/faster-whisper subprocesses; CLIP /
+  ArcFace / OCR via CoreML + Vision) and POST results back. iOS is
+  browse-only. Quickwit runs as a sidecar with a Postgres fallback path.
 
 ---
 
@@ -120,16 +112,13 @@ pyproject.toml             Python project, deps, pytest config, entry point
 
 ## Running things
 
-Standard incantations (`uvicorn src.server.api.main:app --reload`,
-`lumiverb <cmd>`, `npm run dev` / `build` in `src/ui/web`, `swift build` /
-`swift test` in `LumiverbKit`) work as you'd expect. Only the
-non-obvious ones are listed here:
+Standard incantations work as expected (`uvicorn src.server.api.main:app
+--reload`, `lumiverb <cmd>`, `npm run dev` in `src/ui/web`, `swift test`
+in `LumiverbKit`). Non-obvious ones:
 
-**macOS app build**  `cd clients/lumiverb-app && xcodegen generate && xcodebuild -project Lumiverb.xcodeproj -scheme Lumiverb-macOS -configuration Debug build CODE_SIGNING_ALLOWED=NO`
-**Convert ArcFace**  `cd scripts/convert-models && .venv/bin/python convert_arcface.py` (requires its own venv — see script docstring)
-
-**uv only** — `pip` is not available. Use `uv add <pkg>`, `uv run <cmd>`,
-`uv sync` (feedback memory).
+- **uv only** — `pip` is not available. Use `uv add` / `uv run` / `uv sync`.
+- **macOS app build** — `cd clients/lumiverb-app && xcodegen generate && xcodebuild -project Lumiverb.xcodeproj -scheme Lumiverb-macOS -configuration Debug build CODE_SIGNING_ALLOWED=NO`
+- **Convert ArcFace** — `cd scripts/convert-models && .venv/bin/python convert_arcface.py` (its own venv; see script docstring)
 
 ---
 
@@ -200,11 +189,3 @@ load-bearing enough to call out:
 For everything else, `ls docs/` and `ls docs/adr/` is the right move —
 ADR filenames are self-describing and the set changes too often to
 mirror here.
-
----
-
-## When this file drifts
-
-This is a **map**, not code. If a file moves, a directory is renamed, or
-a new major subsystem is added, update this guide in the same commit.
-Do not add per-function details — those belong in the code itself.
