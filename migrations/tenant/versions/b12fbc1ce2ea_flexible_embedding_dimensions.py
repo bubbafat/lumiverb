@@ -5,7 +5,7 @@ without a fixed dimension constraint. This allows both 512-dim CLIP
 and 768-dim Apple Vision feature prints (and any future model) to
 coexist in the same table.
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: b12fbc1ce2ea
 Revises: z3a4b5c6d7e8
 Create Date: 2026-04-07
 """
@@ -17,7 +17,7 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "a1b2c3d4e5f6"
+revision: str = "b12fbc1ce2ea"
 down_revision: Union[str, Sequence[str], None] = "z3a4b5c6d7e8"
 branch_labels = None
 depends_on = None
