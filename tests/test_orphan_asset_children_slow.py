@@ -64,9 +64,11 @@ def _new_asset(session: Session, library_id: str, name: str, *, soft_deleted: bo
         text(
             "INSERT INTO assets ("
             "  asset_id, library_id, rel_path, file_size, file_mtime,"
-            "  media_type, status, deleted_at, created_at, updated_at"
+            "  media_type, availability, status, deleted_at,"
+            "  created_at, updated_at"
             ") VALUES ("
-            "  :id, :lib, :rel, 1000, NOW(), 'image', 'discovered', :del, NOW(), NOW()"
+            "  :id, :lib, :rel, 1000, NOW(), 'image', 'online', 'discovered',"
+            "  :del, NOW(), NOW()"
             ")"
         ),
         {"id": asset_id, "lib": library_id, "rel": f"x/{name}.jpg", "del": deleted_at},
@@ -106,8 +108,8 @@ def _insert_person_with_rep_face(session: Session, face_id: str) -> str:
         text(
             "INSERT INTO people ("
             "  person_id, display_name, created_by_user, dismissed,"
-            "  representative_face_id, confirmation_count, created_at, updated_at"
-            ") VALUES (:pid, 'Test', true, false, :fid, 0, NOW(), NOW())"
+            "  representative_face_id, confirmation_count, created_at"
+            ") VALUES (:pid, 'Test', true, false, :fid, 0, NOW())"
         ),
         {"pid": person_id, "fid": face_id},
     )
