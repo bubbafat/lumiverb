@@ -2,11 +2,12 @@ import SwiftUI
 import LumiverbKit
 
 /// Top-level sidebar section. Switches the detail panel between the
-/// existing library/search/similar browse experience and the People view
-/// added in Phase 6 M3 of ADR-014.
+/// existing library/search/similar browse experience, the People view
+/// (Phase 6 M3 of ADR-014), and the cluster review view (Phase 6 M5).
 enum SidebarSection: Equatable {
     case library
     case people
+    case review
 }
 
 /// Sort options for the asset grid.
@@ -39,16 +40,20 @@ struct BrowseWindow: View {
     @ObservedObject var appState: AppState
     @StateObject private var browseState: BrowseState
     @StateObject private var peopleState: PeopleState
+    @StateObject private var clusterReviewState: ClusterReviewState
 
     /// Which top-level sidebar section is active. Drives whether the
-    /// detail panel shows the existing library browse UI or the new
-    /// People view (Phase 6 M3).
+    /// detail panel shows the existing library browse UI, the People
+    /// view (M3), or the cluster review view (M5).
     @State private var section: SidebarSection = .library
 
     init(appState: AppState) {
         self.appState = appState
         self._browseState = StateObject(wrappedValue: BrowseState(appState: appState))
         self._peopleState = StateObject(wrappedValue: PeopleState(appState: appState))
+        self._clusterReviewState = StateObject(
+            wrappedValue: ClusterReviewState(appState: appState)
+        )
     }
 
     var body: some View {
@@ -74,6 +79,11 @@ struct BrowseWindow: View {
                     PeopleView(
                         peopleState: peopleState,
                         browseState: browseState,
+                        client: appState.client
+                    )
+                case .review:
+                    ClusterReviewView(
+                        state: clusterReviewState,
                         client: appState.client
                     )
                 }

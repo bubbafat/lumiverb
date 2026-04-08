@@ -11,30 +11,24 @@ struct LibrarySidebar: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Top-level "People" entry. Sits outside the libraries List
-            // because that List uses `selectedLibraryId` as its selection
-            // model and adding a non-library row would force the two
-            // selections through a compound enum. A plain Button styled
-            // like a sidebar row is the smaller change.
-            Button {
-                section = .people
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "person.2.fill")
-                        .frame(width: 16)
-                    Text("People")
-                    Spacer()
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(
-                    section == .people
-                        ? Color.accentColor.opacity(0.2)
-                        : Color.clear
-                )
-                .contentShape(Rectangle())
+            // Top-level entries. Sit outside the libraries List because
+            // that List uses `selectedLibraryId` as its selection model
+            // and adding non-library rows would force the two selections
+            // through a compound enum. Plain Buttons styled like sidebar
+            // rows are the smaller change.
+            VStack(spacing: 0) {
+                sidebarRow(
+                    label: "People",
+                    icon: "person.2.fill",
+                    isActive: section == .people
+                ) { section = .people }
+
+                sidebarRow(
+                    label: "Review Clusters",
+                    icon: "person.crop.rectangle.stack",
+                    isActive: section == .review
+                ) { section = .review }
             }
-            .buttonStyle(.plain)
             .padding(.top, 8)
 
             Divider()
@@ -87,5 +81,32 @@ struct LibrarySidebar: View {
             }
         }
         .navigationTitle("Lumiverb")
+    }
+
+    /// One non-library sidebar row (People, Review Clusters, …). Styled
+    /// to roughly match the macOS `.listStyle(.sidebar)` row metrics so
+    /// the top entries don't visually clash with the library list below.
+    @ViewBuilder
+    private func sidebarRow(
+        label: String,
+        icon: String,
+        isActive: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .frame(width: 16)
+                Text(label)
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                isActive ? Color.accentColor.opacity(0.2) : Color.clear
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
