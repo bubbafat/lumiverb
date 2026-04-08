@@ -65,13 +65,9 @@ actor ReEnrichmentRunner {
         }
 
         if !cancelled && operations.contains(.embeddings) {
-            if CLIPProvider.isAvailable {
-                phase = "embeddings"
-                processedItems = 0
-                await runEmbeddings(on: imageAssets)
-            } else {
-                skippedOperations.append("embeddings (CLIP model not installed)")
-            }
+            phase = "embeddings"
+            processedItems = 0
+            await runEmbeddings(on: imageAssets)
         }
 
         if !cancelled && operations.contains(.ocr) {
@@ -135,7 +131,22 @@ actor ReEnrichmentRunner {
         }
     }
 
-    // MARK: - CLIP embeddings
+    // MARK: - Embeddings (CLIP or Apple Vision)
+
+    private var embeddingModelId: String {
+        CLIPProvider.isAvailable ? CLIPProvider.modelId : FeaturePrintProvider.modelId
+    }
+
+    private var embeddingModelVersion: String {
+        CLIPProvider.isAvailable ? CLIPProvider.modelVersion : FeaturePrintProvider.modelVersion
+    }
+
+    private func embedImage(_ data: Data) throws -> [Float] {
+        if CLIPProvider.isAvailable {
+            return try CLIPProvider.embed(imageData: data)
+        }
+        return try FeaturePrintProvider.embed(imageData: data)
+    }
 
     private func runEmbeddings(on assets: [AssetPageItem]) async {
         var batch: [BatchEmbeddingsRequest.Item] = []
@@ -148,11 +159,11 @@ actor ReEnrichmentRunner {
             }
 
             do {
-                let vector = try CLIPProvider.embed(imageData: proxyData)
+                let vector = try embedImage(proxyData)
                 batch.append(BatchEmbeddingsRequest.Item(
                     assetId: asset.assetId,
-                    modelId: CLIPProvider.modelId,
-                    modelVersion: CLIPProvider.modelVersion,
+                    modelId: embeddingModelId,
+                    modelVersion: embeddingModelVersion,
                     vector: vector
                 ))
             } catch {

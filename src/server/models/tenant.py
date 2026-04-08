@@ -259,7 +259,7 @@ class AssetEmbedding(SQLModel, table=True):
     model_id: str = Field(nullable=False)
     model_version: str = Field(nullable=False)
     embedding_vector: Any = Field(
-        sa_column=Column(Vector(512), nullable=False),
+        sa_column=Column(Vector(), nullable=False),
     )
     created_at: datetime = Field(
         default_factory=utcnow,

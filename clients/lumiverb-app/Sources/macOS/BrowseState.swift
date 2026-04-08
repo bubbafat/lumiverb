@@ -247,10 +247,16 @@ class BrowseState: ObservableObject {
         closeLightbox()
 
         do {
+            // Pass the embedding model so the server looks up the right vectors
+            let embeddingModelId = CLIPProvider.isAvailable ? CLIPProvider.modelId : FeaturePrintProvider.modelId
+            let embeddingModelVersion = CLIPProvider.isAvailable ? CLIPProvider.modelVersion : FeaturePrintProvider.modelVersion
+
             let params: [String: String] = [
                 "asset_id": assetId,
                 "library_id": libraryId,
                 "limit": "50",
+                "model_id": embeddingModelId,
+                "model_version": embeddingModelVersion,
             ]
 
             let response: SimilarityResponse = try await client.get(

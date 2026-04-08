@@ -65,11 +65,9 @@ actor EnrichmentPipeline {
         var ocrCount = 0
         var visionCount = 0
 
-        // Step 1: CLIP embeddings (if model available)
-        if CLIPProvider.isAvailable {
-            phase = "embeddings"
-            embedCount = await runEmbeddings()
-        }
+        // Step 1: Image embeddings (CLIP if available, otherwise Apple Vision feature prints)
+        phase = "embeddings"
+        embedCount = await runEmbeddings()
 
         // Step 2: Face detection
         if !cancelled {
@@ -101,7 +99,24 @@ actor EnrichmentPipeline {
         )
     }
 
-    // MARK: - CLIP Embeddings
+    // MARK: - Embeddings (CLIP or Apple Vision)
+
+    /// Resolve which embedding provider to use: CLIP if the CoreML model is
+    /// installed, otherwise Apple Vision feature prints (always available).
+    private var embeddingModelId: String {
+        CLIPProvider.isAvailable ? CLIPProvider.modelId : FeaturePrintProvider.modelId
+    }
+
+    private var embeddingModelVersion: String {
+        CLIPProvider.isAvailable ? CLIPProvider.modelVersion : FeaturePrintProvider.modelVersion
+    }
+
+    private func embedImage(_ data: Data) throws -> [Float] {
+        if CLIPProvider.isAvailable {
+            return try CLIPProvider.embed(imageData: data)
+        }
+        return try FeaturePrintProvider.embed(imageData: data)
+    }
 
     private func runEmbeddings() async -> Int {
         let assets = await fetchAssets(missing: "missing_embeddings")
@@ -117,11 +132,11 @@ actor EnrichmentPipeline {
             guard let proxyData = await loadProxy(assetId: asset.assetId) else { continue }
 
             do {
-                let vector = try CLIPProvider.embed(imageData: proxyData)
+                let vector = try embedImage(proxyData)
                 batch.append(BatchEmbeddingsRequest.Item(
                     assetId: asset.assetId,
-                    modelId: CLIPProvider.modelId,
-                    modelVersion: CLIPProvider.modelVersion,
+                    modelId: embeddingModelId,
+                    modelVersion: embeddingModelVersion,
                     vector: vector
                 ))
             } catch {

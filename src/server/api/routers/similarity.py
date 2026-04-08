@@ -40,9 +40,25 @@ class SimilarityResponse(BaseModel):
 class ImageSimilarityRequest(BaseModel):
     library_id: str
     image_b64: str  # base64-encoded JPEG/PNG, already resized by client
+    model_id: str | None = None  # defaults to "clip"
+    model_version: str | None = None  # defaults to server CLIP version
     limit: int = 20
     offset: int = 0
     # Scope filters — mirrors the GET endpoint's query params as a structured body
+    from_ts: float | None = None
+    to_ts: float | None = None
+    asset_types: list[Literal["image", "video"]] | None = None
+    cameras: list[CameraSpec] | None = None
+
+
+class VectorSimilarityRequest(BaseModel):
+    """Search by pre-computed embedding vector (for clients that embed locally)."""
+    library_id: str
+    vector: list[float]
+    model_id: str
+    model_version: str
+    limit: int = 20
+    offset: int = 0
     from_ts: float | None = None
     to_ts: float | None = None
     asset_types: list[Literal["image", "video"]] | None = None
@@ -62,6 +78,8 @@ def find_similar(
     session: Annotated[Session, Depends(get_tenant_session)],
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0, le=10_000),
+    model_id: str | None = Query(default=None, description="Embedding model ID. Defaults to 'clip'."),
+    model_version: str | None = Query(default=None, description="Embedding model version. Defaults to server CLIP version."),
     from_ts: float | None = Query(default=None, description="Unix timestamp (seconds), inclusive start of capture-time range."),
     to_ts: float | None = Query(default=None, description="Unix timestamp (seconds), inclusive end of capture-time range."),
     asset_types: str | None = Query(
@@ -119,6 +137,10 @@ def find_similar(
 
     from src.server.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
 
+    # Resolve model — defaults to server CLIP for backward compat
+    resolved_model_id = model_id or "clip"
+    resolved_model_version = model_version or CLIP_VERSION
+
     asset_repo = AssetRepository(session)
     lib_repo = LibraryRepository(session)
     emb_repo = AssetEmbeddingRepository(session)
@@ -137,7 +159,7 @@ def find_similar(
     # Fetch top-(limit*3) candidates for re-ranking pool
     K = min(limit * 3, 100)
 
-    clip_emb = emb_repo.get(asset_id, "clip", CLIP_VERSION)
+    clip_emb = emb_repo.get(asset_id, resolved_model_id, resolved_model_version)
 
     if clip_emb is None:
         return SimilarityResponse(
@@ -149,8 +171,8 @@ def find_similar(
 
     clip_candidates = emb_repo.find_similar(
         library_id=library_id,
-        model_id="clip",
-        model_version=CLIP_VERSION,
+        model_id=resolved_model_id,
+        model_version=resolved_model_version,
         vector=[float(x) for x in clip_emb.embedding_vector],
         limit=K,
         exclude_asset_id=asset_id,
@@ -227,47 +249,88 @@ def search_by_image(
     from PIL import Image as PILImage
     from src.server.embeddings.clip_provider import CLIPEmbeddingProvider, MODEL_VERSION as CLIP_VERSION
 
+    resolved_model_id = body.model_id or "clip"
+    resolved_model_version = body.model_version or CLIP_VERSION
+
     # Validate timestamps
     if body.from_ts is not None and body.to_ts is not None and body.from_ts > body.to_ts:
         raise HTTPException(status_code=422, detail="from_ts must be <= to_ts")
 
-    # Decode image
+    # Decode image and embed server-side (only works for models the server has)
+    if resolved_model_id != "clip":
+        raise HTTPException(
+            status_code=422,
+            detail=f"Server can only embed with model 'clip'. Use /search-by-vector for '{resolved_model_id}'.",
+        )
+
     image_bytes = base64.b64decode(body.image_b64)
     pil_image = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
     try:
-        # Generate CLIP embedding in memory
         provider = CLIPEmbeddingProvider()
         vector = provider.embed_image(pil_image)
     finally:
         pil_image.close()
 
-    # Build scope (same logic as GET endpoint)
+    return _search_by_vector(
+        session, body.library_id, vector, resolved_model_id, resolved_model_version,
+        body.limit, body.offset, body.from_ts, body.to_ts, body.asset_types, body.cameras,
+    )
+
+
+@router.post("/search-by-vector", response_model=ImageSimilarityResponse)
+def search_by_vector(
+    body: VectorSimilarityRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> ImageSimilarityResponse:
+    """Search by pre-computed embedding vector. For clients that embed locally
+    (e.g. Apple Vision feature prints, on-device CLIP)."""
+    if body.from_ts is not None and body.to_ts is not None and body.from_ts > body.to_ts:
+        raise HTTPException(status_code=422, detail="from_ts must be <= to_ts")
+
+    return _search_by_vector(
+        session, body.library_id, body.vector, body.model_id, body.model_version,
+        body.limit, body.offset, body.from_ts, body.to_ts, body.asset_types, body.cameras,
+    )
+
+
+def _search_by_vector(
+    session: Session,
+    library_id: str,
+    vector: list[float],
+    model_id: str,
+    model_version: str,
+    limit: int,
+    offset: int,
+    from_ts: float | None,
+    to_ts: float | None,
+    asset_types: list[str] | None,
+    cameras: list[CameraSpec] | None,
+) -> ImageSimilarityResponse:
     scope: SimilarityScope | None = None
     date_range = (
-        DateRange(from_ts=body.from_ts, to_ts=body.to_ts)
-        if (body.from_ts is not None or body.to_ts is not None)
+        DateRange(from_ts=from_ts, to_ts=to_ts)
+        if (from_ts is not None or to_ts is not None)
         else None
     )
-    asset_types = body.asset_types if body.asset_types else "all"
-    if date_range is not None or body.cameras is not None or body.asset_types is not None:
+    at = asset_types if asset_types else "all"
+    if date_range is not None or cameras is not None or asset_types is not None:
         scope = SimilarityScope(
             date_range=date_range,
-            asset_types=asset_types,
-            cameras=body.cameras,
+            asset_types=at,
+            cameras=cameras,
         )
 
-    # Query
     emb_repo = AssetEmbeddingRepository(session)
     asset_repo = AssetRepository(session)
 
     candidates = emb_repo.find_similar(
-        library_id=body.library_id,
-        model_id="clip",
-        model_version=CLIP_VERSION,
+        library_id=library_id,
+        model_id=model_id,
+        model_version=model_version,
         vector=vector,
-        limit=body.limit,
-        offset=body.offset,
-        exclude_asset_id=None,  # no source asset to exclude
+        limit=limit,
+        offset=offset,
+        exclude_asset_id=None,
         scope=scope,
     )
 
