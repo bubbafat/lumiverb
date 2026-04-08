@@ -6,7 +6,7 @@ and 768-dim Apple Vision feature prints (and any future model) to
 coexist in the same table.
 
 Revision ID: b12fbc1ce2ea
-Revises: z3a4b5c6d7e8
+Revises: (merge of all heads)
 Create Date: 2026-04-07
 """
 
@@ -18,7 +18,13 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "b12fbc1ce2ea"
-down_revision: Union[str, Sequence[str], None] = "z3a4b5c6d7e8"
+down_revision: Union[str, Sequence[str], None] = [
+    "o5p6q7r8s9t0",  # add_has_transcript
+    "f4a5b6c7d8e9",  # worker_job_performance_indexes
+    "k1l2m3n4o5p6",  # search_sync_processing_lease
+    "d3e4f5a6b7c8",  # drop_library_vision_model_id
+    "a0b9c8d7e6f5",  # repair_cancelled_vision_and_orphaned_search_sync
+]
 branch_labels = None
 depends_on = None
 
