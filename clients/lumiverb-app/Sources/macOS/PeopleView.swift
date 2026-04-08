@@ -22,6 +22,10 @@ struct PeopleView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
+                modePicker
+                    .padding(.horizontal, 20)
+                    .padding(.top, 12)
+
                 if peopleState.people.isEmpty && !peopleState.isLoadingPeople {
                     emptyState
                 } else {
@@ -56,7 +60,7 @@ struct PeopleView: View {
                         .padding()
                 }
             }
-            .navigationTitle("People")
+            .navigationTitle(peopleState.mode == .active ? "People" : "Dismissed People")
             .navigationDestination(for: PersonItem.self) { person in
                 PersonDetailView(
                     person: person,
@@ -88,15 +92,36 @@ struct PeopleView: View {
         }
     }
 
+    /// Segmented control switching between active and dismissed lists.
+    /// Wraps `peopleState.setMode(_:)` so changing the segment also
+    /// resets pagination + kicks a fresh fetch in one place.
+    private var modePicker: some View {
+        Picker("List", selection: Binding(
+            get: { peopleState.mode },
+            set: { peopleState.setMode($0) }
+        )) {
+            Text("Active").tag(PeopleListMode.active)
+            Text("Dismissed").tag(PeopleListMode.dismissed)
+        }
+        .pickerStyle(.segmented)
+        .frame(maxWidth: 320)
+    }
+
     private var emptyState: some View {
         VStack(spacing: 12) {
-            Image(systemName: "person.2.slash")
+            Image(systemName: peopleState.mode == .active
+                  ? "person.2.slash"
+                  : "person.crop.circle.badge.checkmark")
                 .font(.system(size: 40))
                 .foregroundColor(.secondary)
-            Text("No named people yet")
+            Text(peopleState.mode == .active
+                 ? "No named people yet"
+                 : "No dismissed people")
                 .font(.title3)
                 .foregroundColor(.secondary)
-            Text("Use the lightbox face overlay to assign people to faces.")
+            Text(peopleState.mode == .active
+                 ? "Use the lightbox face overlay to assign people to faces."
+                 : "Dismissed clusters will appear here so you can restore them.")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
