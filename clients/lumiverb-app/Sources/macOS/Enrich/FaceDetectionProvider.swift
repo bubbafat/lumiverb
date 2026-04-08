@@ -5,14 +5,22 @@ import LumiverbKit
 
 /// Detects faces in images using Apple Vision framework.
 ///
-/// Uses `VNDetectFaceRectanglesRequest` for bounding boxes and confidence.
-/// Fully local, no model downloads needed — built into macOS 14+.
+/// Uses `VNDetectFaceLandmarksRequest` for bounding boxes, confidence, and
+/// the facial landmarks needed for ArcFace alignment. Fully local, no model
+/// downloads needed — built into macOS 14+.
 ///
 /// Quality gates match the Python InsightFace provider to ensure consistent
-/// results across clients. See `src/client/workers/faces/insightface_provider.py`.
+/// results across clients — confidence ≥ 0.5, ≥ 40 px face width, ≥ 0.3%
+/// image-area fraction, ≥ 15% of the largest-face area, and a Laplacian-
+/// variance sharpness floor of 15.0. See
+/// `src/client/workers/faces/insightface_provider.py` for the reference.
 ///
-/// Note: Apple Vision provides detection only (bounding boxes), not embeddings.
-/// Face embeddings require a CoreML ArcFace model (Phase 4 TODO).
+/// Vision supplies bounding boxes and landmarks; embeddings come from
+/// `ArcFaceProvider` (CoreML). The 5-point landmarks Vision produces are
+/// converted to ArcFace's canonical template via
+/// `LumiverbKit.FaceLandmarks.extractAlignmentLandmarks`, and the sharpness
+/// gate is computed by `LumiverbKit.ImageQuality.laplacianVariance` — both
+/// live in the shared package so they can be unit-tested.
 enum FaceDetectionProvider {
 
     // MARK: - Quality gate thresholds (match Python insightface_provider.py)
@@ -28,6 +36,12 @@ enum FaceDetectionProvider {
 
     /// Must be >= 15% area of the largest detected face (Python: MIN_RELATIVE_SIZE = 0.15).
     static let minRelativeSize: Float = 0.15
+
+    /// Minimum Laplacian variance — drops blurry / out-of-focus faces that would
+    /// embed unreliably and pollute clusters. Matches Python's
+    /// `MIN_LAPLACIAN_VARIANCE = 15.0` computed via `cv2.Laplacian(gray, CV_64F)`
+    /// with the default 3x3 4-neighbor kernel `[0,1,0; 1,-4,1; 0,1,0]`.
+    static let minLaplacianVariance: Double = 15.0
 
     /// Detected face with normalized bounding box and optional landmarks.
     struct DetectedFace: Sendable {
@@ -111,8 +125,17 @@ enum FaceDetectionProvider {
                 continue
             }
 
+            // Sharpness gate: drop blurry faces that would embed unreliably.
+            // Computed on the face crop (not the whole image) matching Python.
+            let sharpness = ImageQuality.laplacianVariance(
+                of: cgImage, bboxTopLeft: (x1, y1, x2, y2)
+            )
+            if sharpness < minLaplacianVariance {
+                continue
+            }
+
             // Extract 5 landmarks for ArcFace alignment (pixel coords, top-left origin)
-            let landmarks = extractAlignmentLandmarks(
+            let landmarks = FaceLandmarks.extractAlignmentLandmarks(
                 from: observation, imageWidth: imageWidth, imageHeight: imageHeight
             )
 
@@ -135,65 +158,11 @@ enum FaceDetectionProvider {
             .map(\.detection)
     }
 
-    // MARK: - Landmark extraction
-
-    /// Extract the 5 ArcFace alignment landmarks from a Vision face observation.
-    /// Returns pixel coordinates in top-left origin, matching InsightFace's order:
-    /// [left eye, right eye, nose, left mouth corner, right mouth corner].
-    private static func extractAlignmentLandmarks(
-        from observation: VNFaceObservation,
-        imageWidth: Float,
-        imageHeight: Float
-    ) -> [CGPoint]? {
-        guard let landmarks = observation.landmarks else { return nil }
-        let bbox = observation.boundingBox
-
-        // Helper: convert a Vision landmark point (normalized to face bbox, bottom-left origin)
-        // to pixel coords (top-left origin)
-        func toPixel(_ point: CGPoint) -> CGPoint {
-            let px = (bbox.origin.x + point.x * bbox.width) * CGFloat(imageWidth)
-            let py = (1.0 - (bbox.origin.y + point.y * bbox.height)) * CGFloat(imageHeight)
-            return CGPoint(x: px, y: py)
-        }
-
-        func centroid(_ region: VNFaceLandmarkRegion2D?) -> CGPoint? {
-            guard let region, region.pointCount > 0 else { return nil }
-            let points = region.normalizedPoints
-            let cx = points.map(\.x).reduce(0, +) / CGFloat(points.count)
-            let cy = points.map(\.y).reduce(0, +) / CGFloat(points.count)
-            return toPixel(CGPoint(x: cx, y: cy))
-        }
-
-        // InsightFace order: left eye, right eye, nose tip, left mouth, right mouth
-        guard let leftEye = centroid(landmarks.leftEye),
-              let rightEye = centroid(landmarks.rightEye),
-              let nose = centroid(landmarks.nose) else {
-            return nil
-        }
-
-        // Mouth corners: use outer lips if available, approximate from inner otherwise
-        let mouthPoints: [CGPoint]?
-        if let outerLips = landmarks.outerLips, outerLips.pointCount >= 2 {
-            let pts = outerLips.normalizedPoints
-            // First point is left corner, midpoint of array is right corner (roughly)
-            let leftMouth = toPixel(CGPoint(x: pts[0].x, y: pts[0].y))
-            let rightIdx = outerLips.pointCount / 2
-            let rightMouth = toPixel(CGPoint(x: pts[rightIdx].x, y: pts[rightIdx].y))
-            mouthPoints = [leftMouth, rightMouth]
-        } else if let innerLips = landmarks.innerLips, innerLips.pointCount >= 2 {
-            let pts = innerLips.normalizedPoints
-            let leftMouth = toPixel(CGPoint(x: pts[0].x, y: pts[0].y))
-            let rightIdx = innerLips.pointCount / 2
-            let rightMouth = toPixel(CGPoint(x: pts[rightIdx].x, y: pts[rightIdx].y))
-            mouthPoints = [leftMouth, rightMouth]
-        } else {
-            mouthPoints = nil
-        }
-
-        guard let mouth = mouthPoints else { return nil }
-
-        return [leftEye, rightEye, nose, mouth[0], mouth[1]]
-    }
+    // MARK: - Helpers live in LumiverbKit
+    //
+    // Pure math helpers — `FaceLandmarks.extractAlignmentLandmarks` and
+    // `ImageQuality.laplacianVariance` — live in LumiverbKit so they can be
+    // unit-tested directly from the Swift package test target.
 
     /// Extract an aligned 112x112 face crop for ArcFace embedding.
     ///

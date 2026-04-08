@@ -113,55 +113,142 @@ def convert(output_dir: Path = OUTPUT_DIR) -> Path:
     return mlpackage_path
 
 
-def validate(mlpackage_path: Path, n_images: int = 20) -> None:
-    """Validate CoreML output matches ONNX (cosine similarity > 0.999)."""
-    import onnxruntime as ort
+FIXTURE_DIR = (
+    Path(__file__).resolve().parent.parent.parent
+    / "clients"
+    / "lumiverb-app"
+    / "Sources"
+    / "LumiverbKit"
+    / "Tests"
+    / "LumiverbKitTests"
+    / "Fixtures"
+)
 
-    print(f"\nValidating with {n_images} random face images...")
+MIN_COS_SIM_REAL_FACES = 0.999
 
+
+def _collect_aligned_face_crops(max_crops: int = 20) -> list[np.ndarray]:
+    """Run InsightFace's detection + alignment on the LumiverbKit face fixtures
+    and return a list of aligned 112×112 RGB face crops as uint8 arrays.
+
+    Using real faces through the full InsightFace alignment pipeline gives us
+    realistic inputs for validation — inputs that look like what the model
+    actually sees in production, not uniform noise.
+    """
+    from insightface.app import FaceAnalysis
+    from PIL import Image
+    from insightface.utils import face_align
+
+    fixtures = [
+        FIXTURE_DIR / "face_single.jpg",
+        FIXTURE_DIR / "face_group.jpg",
+        FIXTURE_DIR / "face_crowd.jpg",
+    ]
+
+    app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
+    app.prepare(ctx_id=0, det_size=(640, 640))
+
+    crops: list[np.ndarray] = []
+    for path in fixtures:
+        if not path.exists():
+            print(f"  (missing fixture: {path})", file=sys.stderr)
+            continue
+        pil_img = Image.open(path).convert("RGB")
+        img_bgr = np.array(pil_img)[:, :, ::-1].copy()
+        faces = app.get(img_bgr)
+        if not faces:
+            print(f"  (no faces detected in {path.name})", file=sys.stderr)
+            continue
+        for face in faces:
+            if face.kps is None:
+                continue
+            aligned_bgr = face_align.norm_crop(img_bgr, landmark=face.kps)
+            aligned_rgb = aligned_bgr[:, :, ::-1].copy()  # BGR → RGB
+            crops.append(aligned_rgb)
+            if len(crops) >= max_crops:
+                return crops
+
+    return crops
+
+
+def validate(mlpackage_path: Path) -> None:
+    """Validate CoreML output matches ONNX on real face images.
+
+    Runs real photos through InsightFace's detection + alignment pipeline to
+    produce realistic 112×112 aligned face crops, then compares the embedding
+    InsightFace's own `ArcFaceONNX.get_feat()` produces to the embedding the
+    converted CoreML model produces for the *same* aligned crop.
+
+    InsightFace internally uses `cv2.dnn.blobFromImages(..., swapRB=True)`
+    with mean 127.5 / std 127.5, so its pipeline consumes a BGR `numpy` array
+    and feeds RGB to the model. The CoreML `ImageType` is configured with
+    `color_layout=RGB` and the same scale/bias, so passing an RGB `PIL.Image`
+    produces the equivalent model input — both pipelines should yield
+    numerically near-identical 512-d vectors.
+
+    Requires min cosine similarity ≥ 0.999 across all crops. Any drift
+    indicates the ONNX → PyTorch → CoreML conversion has introduced
+    numerical error that will degrade face-clustering quality.
+    """
+    from insightface.model_zoo.arcface_onnx import ArcFaceONNX
+    from PIL import Image
+
+    print("\nValidating with real aligned face crops from LumiverbKit fixtures...")
+
+    crops_rgb = _collect_aligned_face_crops()
+    if not crops_rgb:
+        print(
+            "  FAIL: No aligned face crops available for validation. "
+            "Check that fixture images exist and InsightFace can detect them.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    print(f"  Collected {len(crops_rgb)} aligned face crops.")
+
+    # Use InsightFace's own ArcFaceONNX wrapper for the ONNX side so the
+    # preprocessing (mean/std, channel swap) exactly matches what the server
+    # uses today. This eliminates any chance of a spurious validation failure
+    # caused by preprocessing divergence in the test script itself.
     onnx_path = find_recognition_model()
-    sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
-    input_name = sess.get_inputs()[0].name
+    rec = ArcFaceONNX(str(onnx_path))
+    rec.prepare(ctx_id=0)
 
     mlmodel = ct.models.MLModel(str(mlpackage_path))
 
-    onnx_input_name = sess.get_inputs()[0].name
-
     similarities = []
-    for i in range(n_images):
-        # Random 112x112 "face" image
-        img_np = np.random.randint(0, 255, (INPUT_SIZE, INPUT_SIZE, 3), dtype=np.uint8)
-
-        # ONNX: expects NCHW float32 normalized to [-1, 1]
-        onnx_input = img_np.astype(np.float32).transpose(2, 0, 1)[np.newaxis]
-        onnx_input = (onnx_input - 127.5) / 127.5
-        onnx_emb = sess.run(None, {onnx_input_name: onnx_input})[0].flatten()
+    for i, crop_rgb in enumerate(crops_rgb):
+        # ONNX path: InsightFace's get_feat consumes BGR numpy arrays.
+        crop_bgr = crop_rgb[:, :, ::-1].copy()
+        onnx_emb = rec.get_feat(crop_bgr).flatten()
         onnx_emb = onnx_emb / np.linalg.norm(onnx_emb)
 
-        # CoreML: pass PIL Image, preprocessing done by ImageType config
-        from PIL import Image
-
-        pil_img = Image.fromarray(img_np)
+        # CoreML path: the model declares color_layout=RGB, so we pass the
+        # RGB PIL image directly. CoreML applies scale/bias from the ImageType
+        # config, matching InsightFace's (x − 127.5) / 127.5 internally.
+        pil_img = Image.fromarray(crop_rgb)
         coreml_out = mlmodel.predict({"input": pil_img})
         ct_emb = np.array(coreml_out["output"]).flatten()
         ct_emb = ct_emb / np.linalg.norm(ct_emb)
 
         cos_sim = float(np.dot(onnx_emb, ct_emb))
         similarities.append(cos_sim)
-        print(f"  Image {i + 1}: cosine similarity = {cos_sim:.6f}")
+        print(f"  Crop {i + 1}: cosine similarity = {cos_sim:.6f}")
 
-    avg = np.mean(similarities)
-    min_sim = np.min(similarities)
+    avg = float(np.mean(similarities))
+    min_sim = float(np.min(similarities))
     print(f"\n  Average: {avg:.6f}, Min: {min_sim:.6f}")
 
-    if min_sim < 0.990:
-        print("  FAIL: Minimum similarity below 0.990 threshold!", file=sys.stderr)
+    if min_sim < MIN_COS_SIM_REAL_FACES:
+        print(
+            f"  FAIL: Minimum similarity {min_sim:.6f} below "
+            f"{MIN_COS_SIM_REAL_FACES} threshold — CoreML conversion "
+            "has drifted and will degrade face-clustering quality.",
+            file=sys.stderr,
+        )
         sys.exit(1)
-    elif min_sim < 0.999:
-        print("  PASS: Minor float divergence (expected with random images).")
-        print("  Real face images typically achieve > 0.999.")
     else:
-        print("  PASS: All embeddings match within threshold.")
+        print("  PASS: All aligned-face embeddings match within threshold.")
 
 
 def main():
