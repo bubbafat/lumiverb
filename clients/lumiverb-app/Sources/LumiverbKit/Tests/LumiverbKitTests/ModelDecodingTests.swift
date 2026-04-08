@@ -1011,6 +1011,7 @@ final class EnrichmentModelTests: XCTestCase {
             "missing_vision": 1200,
             "missing_embeddings": 1500,
             "missing_faces": 14000,
+            "missing_face_embeddings": 8000,
             "missing_ocr": 13000,
             "missing_video_scenes": 50,
             "missing_scene_vision": 10,

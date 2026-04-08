@@ -1,6 +1,31 @@
 import SwiftUI
 import LumiverbKit
 
+/// Sort options for the asset grid.
+enum SortOption: String, CaseIterable, Identifiable {
+    case takenAt = "taken_at"
+    case createdAt = "created_at"
+    case fileSize = "file_size"
+    case iso = "iso"
+    case aperture = "aperture"
+    case focalLength = "focal_length"
+    case relPath = "rel_path"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .takenAt: return "Date Taken"
+        case .createdAt: return "Date Added"
+        case .fileSize: return "File Size"
+        case .iso: return "ISO"
+        case .aperture: return "Aperture"
+        case .focalLength: return "Focal Length"
+        case .relPath: return "Filename"
+        }
+    }
+}
+
 /// Main browse window with library sidebar, media grid, and lightbox.
 struct BrowseWindow: View {
     @ObservedObject var appState: AppState
@@ -24,6 +49,7 @@ struct BrowseWindow: View {
                     if browseState.isReEnriching || !browseState.reEnrichSkipped.isEmpty {
                         reEnrichBanner
                     }
+                    activeFiltersBar
                     contentArea
                 }
                 if browseState.selectedAssetId != nil {
@@ -34,17 +60,53 @@ struct BrowseWindow: View {
         .searchable(
             text: $browseState.searchQuery,
             placement: .toolbar,
-            prompt: "Search assets..."
+            prompt: "Search assets or people..."
         )
+        .searchSuggestions {
+            if !browseState.personSuggestions.isEmpty {
+                Section("People") {
+                    ForEach(browseState.personSuggestions) { person in
+                        Button {
+                            browseState.filterByPerson(person)
+                        } label: {
+                            HStack(spacing: 8) {
+                                FaceThumbnailView(
+                                    faceId: person.representativeFaceId,
+                                    client: appState.client
+                                )
+                                .frame(width: 28, height: 28)
+                                .clipShape(Circle())
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(person.displayName)
+                                    Text("\(person.faceCount) photos")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         .onSubmit(of: .search) {
+            browseState.personSuggestions = []
             Task { await browseState.performSearch() }
         }
         .onChange(of: browseState.searchQuery) { _, newValue in
             if newValue.isEmpty {
                 browseState.clearSearch()
+                browseState.personSuggestions = []
+            } else {
+                browseState.debouncedPersonSearch(query: newValue)
             }
         }
         .toolbar {
+            ToolbarItem(placement: .automatic) {
+                mediaTypePicker
+            }
+            ToolbarItem(placement: .automatic) {
+                sortMenu
+            }
             ToolbarItem(placement: .automatic) {
                 modeIndicator
             }
@@ -239,6 +301,108 @@ struct BrowseWindow: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(.bar)
+    }
+
+    // MARK: - Sort menu
+
+    @ViewBuilder
+    private var sortMenu: some View {
+        Menu {
+            ForEach(SortOption.allCases) { option in
+                Button {
+                    browseState.filters.sortField = option.rawValue
+                } label: {
+                    HStack {
+                        Text(option.label)
+                        if browseState.filters.sortField == option.rawValue {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+            Divider()
+            Button {
+                browseState.filters.sortDirection = browseState.filters.sortDirection == "asc" ? "desc" : "asc"
+            } label: {
+                Label(
+                    browseState.filters.sortDirection == "asc" ? "Ascending" : "Descending",
+                    systemImage: browseState.filters.sortDirection == "asc" ? "arrow.up" : "arrow.down"
+                )
+            }
+        } label: {
+            Label("Sort", systemImage: "arrow.up.arrow.down")
+        }
+    }
+
+    // MARK: - Media type picker
+
+    @ViewBuilder
+    private var mediaTypePicker: some View {
+        Picker("Media", selection: Binding(
+            get: { browseState.filters.mediaType ?? "all" },
+            set: { browseState.filters.mediaType = $0 == "all" ? nil : $0 }
+        )) {
+            Text("All").tag("all")
+            Label("Photos", systemImage: "photo").tag("image")
+            Label("Videos", systemImage: "video").tag("video")
+        }
+        .pickerStyle(.segmented)
+        .frame(width: 180)
+    }
+
+    // MARK: - Active filters bar
+
+    @ViewBuilder
+    private var activeFiltersBar: some View {
+        if browseState.filters.hasActiveFilters {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    if browseState.filters.mediaType != nil {
+                        filterChiclet(
+                            label: browseState.filters.mediaType == "image" ? "Photos" : "Videos"
+                        ) {
+                            browseState.filters.mediaType = nil
+                        }
+                    }
+                    if let name = browseState.filters.personDisplayName {
+                        filterChiclet(label: name) {
+                            browseState.clearPersonFilter()
+                        }
+                    }
+                    if browseState.filters.sortField != "taken_at" || browseState.filters.sortDirection != "desc" {
+                        let option = SortOption(rawValue: browseState.filters.sortField)
+                        let dir = browseState.filters.sortDirection == "asc" ? "Asc" : "Desc"
+                        filterChiclet(label: "\(option?.label ?? browseState.filters.sortField) \(dir)") {
+                            browseState.filters.sortField = "taken_at"
+                            browseState.filters.sortDirection = "desc"
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+            }
+            .background(.bar)
+        }
+    }
+
+    private func filterChiclet(label: String, onRemove: @escaping () -> Void) -> some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .font(.caption)
+                .lineLimit(1)
+            Button {
+                onRemove()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(.quaternary)
+        .cornerRadius(12)
     }
 
     private func emptyState(_ message: String, icon: String) -> some View {

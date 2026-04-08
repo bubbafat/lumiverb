@@ -5,6 +5,7 @@ import Foundation
 /// Operations available for re-enrichment of assets.
 public enum EnrichmentOperation: String, CaseIterable, Sendable {
     case faces = "Detect Faces"
+    case faceEmbeddings = "Face Embeddings"
     case embeddings = "Generate Embeddings"
     case ocr = "Extract Text"
     case vision = "Generate Descriptions"
@@ -176,6 +177,7 @@ public struct RepairSummary: Decodable, Sendable {
     public let missingVision: Int
     public let missingEmbeddings: Int
     public let missingFaces: Int
+    public let missingFaceEmbeddings: Int
     public let missingOcr: Int
     public let missingVideoScenes: Int
     public let missingSceneVision: Int

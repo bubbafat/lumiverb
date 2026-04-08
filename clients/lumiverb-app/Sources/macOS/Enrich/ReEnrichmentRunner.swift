@@ -70,6 +70,17 @@ actor ReEnrichmentRunner {
             await runFaceDetection(on: imageAssets)
         }
 
+        if !cancelled && operations.contains(.faceEmbeddings) {
+            if ArcFaceProvider.isAvailable {
+                phase = "face embeddings"
+                processedItems = 0
+                // Re-run face detection which now includes embeddings
+                await runFaceDetection(on: imageAssets)
+            } else {
+                skippedOperations.append("face embeddings (ArcFace model not installed)")
+            }
+        }
+
         if !cancelled && operations.contains(.embeddings) {
             phase = "embeddings"
             processedItems = 0
@@ -111,7 +122,19 @@ actor ReEnrichmentRunner {
 
     // MARK: - Face detection
 
+    /// Ensure ArcFace is available before running face detection with embeddings.
+    private func ensureArcFace() async {
+        if !ArcFaceProvider.isAvailable {
+            do {
+                try await ArcFaceProvider.ensureAvailable()
+            } catch {
+                lastError = "ArcFace download: \(error)"
+            }
+        }
+    }
+
     private func runFaceDetection(on assets: [AssetPageItem]) async {
+        await ensureArcFace()
         for asset in assets {
             if cancelled { break }
             guard let proxyData = await loadProxy(assetId: asset.assetId) else {
@@ -120,13 +143,23 @@ actor ReEnrichmentRunner {
             }
 
             do {
-                let faces = try FaceDetectionProvider.detectFaces(from: proxyData)
+                guard let cgImage = FaceDetectionProvider.cgImage(from: proxyData) else {
+                    processedItems += 1
+                    continue
+                }
+
+                let faces = try FaceDetectionProvider.detectFaces(from: cgImage)
 
                 let faceItems = faces.map { face in
-                    FacesSubmitRequest.FaceItem(
+                    var embedding: [Float]? = nil
+                    if ArcFaceProvider.isAvailable,
+                       let crop = FaceDetectionProvider.extractAlignedFaceCrop(from: cgImage, face: face) {
+                        embedding = try? ArcFaceProvider.embed(faceImage: crop)
+                    }
+                    return FacesSubmitRequest.FaceItem(
                         boundingBox: face.boundingBox,
                         detectionConfidence: face.confidence,
-                        embedding: nil
+                        embedding: embedding
                     )
                 }
 

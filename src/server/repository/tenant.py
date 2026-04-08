@@ -52,6 +52,10 @@ MISSING_CONDITIONS = {
         " AND a.media_type = 'image'"
     ),
     "missing_faces": "a.face_count IS NULL AND a.media_type = 'image'",
+    "missing_face_embeddings": (
+        "a.face_count > 0 AND a.media_type = 'image'"
+        " AND EXISTS (SELECT 1 FROM faces f WHERE f.asset_id = a.asset_id AND f.embedding_vector IS NULL)"
+    ),
     "missing_video_scenes": "a.video_indexed = false AND a.media_type = 'video' AND a.duration_sec IS NOT NULL",
     "missing_ocr": (
         "EXISTS (SELECT 1 FROM asset_metadata am WHERE am.asset_id = a.asset_id AND (am.data->>'has_text') IS NULL)"
@@ -439,6 +443,7 @@ class AssetRepository:
         missing_vision: bool = False,
         missing_embeddings: bool = False,
         missing_faces: bool = False,
+        missing_face_embeddings: bool = False,
         missing_video_scenes: bool = False,
         missing_ocr: bool = False,
         missing_scene_vision: bool = False,
@@ -547,6 +552,8 @@ class AssetRepository:
             conditions.append(MISSING_CONDITIONS["missing_embeddings"])
         if missing_faces:
             conditions.append(MISSING_CONDITIONS["missing_faces"])
+        if missing_face_embeddings:
+            conditions.append(MISSING_CONDITIONS["missing_face_embeddings"])
         if missing_video_scenes:
             conditions.append(MISSING_CONDITIONS["missing_video_scenes"])
         if missing_ocr:
@@ -2017,6 +2024,7 @@ class UnifiedBrowseRepository:
         missing_vision: bool = False,
         missing_embeddings: bool = False,
         missing_faces: bool = False,
+        missing_face_embeddings: bool = False,
         missing_video_scenes: bool = False,
         missing_ocr: bool = False,
         missing_scene_vision: bool = False,
@@ -2115,6 +2123,8 @@ class UnifiedBrowseRepository:
             conditions.append(MISSING_CONDITIONS["missing_embeddings"])
         if missing_faces:
             conditions.append(MISSING_CONDITIONS["missing_faces"])
+        if missing_face_embeddings:
+            conditions.append(MISSING_CONDITIONS["missing_face_embeddings"])
         if missing_video_scenes:
             conditions.append(MISSING_CONDITIONS["missing_video_scenes"])
         if missing_ocr:

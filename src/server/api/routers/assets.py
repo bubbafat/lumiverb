@@ -181,6 +181,7 @@ def page_assets(
     missing_vision: bool = False,
     missing_embeddings: bool = False,
     missing_faces: bool = False,
+    missing_face_embeddings: bool = False,
     missing_video_scenes: bool = False,
     missing_ocr: bool = False,
     missing_scene_vision: bool = False,
@@ -266,6 +267,7 @@ def page_assets(
         missing_vision=missing_vision,
         missing_embeddings=missing_embeddings,
         missing_faces=missing_faces,
+        missing_face_embeddings=missing_face_embeddings,
         missing_video_scenes=missing_video_scenes,
         missing_ocr=missing_ocr,
         missing_scene_vision=missing_scene_vision,
@@ -346,6 +348,7 @@ class RepairSummary(BaseModel):
     missing_vision: int = 0
     missing_embeddings: int = 0
     missing_faces: int = 0
+    missing_face_embeddings: int = 0
     missing_ocr: int = 0
     missing_video_scenes: int = 0
     missing_scene_vision: int = 0
@@ -373,6 +376,7 @@ def repair_summary(
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_vision"]}) AS missing_vision,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_embeddings"]}) AS missing_embeddings,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_faces"]}) AS missing_faces,
+                COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_face_embeddings"]}) AS missing_face_embeddings,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_ocr"]}) AS missing_ocr,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_video_scenes"]}) AS missing_video_scenes,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_scene_vision"]}) AS missing_scene_vision,
@@ -402,6 +406,7 @@ def repair_summary(
         missing_vision=row.missing_vision,
         missing_embeddings=row.missing_embeddings,
         missing_faces=row.missing_faces,
+        missing_face_embeddings=row.missing_face_embeddings,
         missing_ocr=row.missing_ocr,
         missing_video_scenes=row.missing_video_scenes,
         missing_scene_vision=row.missing_scene_vision,

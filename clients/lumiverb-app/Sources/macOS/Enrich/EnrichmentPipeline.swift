@@ -182,6 +182,16 @@ actor EnrichmentPipeline {
         processedItems = 0
         guard !assets.isEmpty else { return 0 }
 
+        // Download ArcFace model if not available (one-time ~80MB download)
+        if !ArcFaceProvider.isAvailable {
+            do {
+                try await ArcFaceProvider.ensureAvailable()
+            } catch {
+                lastError = "ArcFace download: \(error)"
+                // Continue without embeddings — face detection still works
+            }
+        }
+
         var count = 0
 
         for asset in assets {
@@ -192,13 +202,23 @@ actor EnrichmentPipeline {
             }
 
             do {
-                let faces = try FaceDetectionProvider.detectFaces(from: proxyData)
+                guard let cgImage = FaceDetectionProvider.cgImage(from: proxyData) else {
+                    processedItems += 1
+                    continue
+                }
+
+                let faces = try FaceDetectionProvider.detectFaces(from: cgImage)
 
                 let faceItems = faces.map { face in
-                    FacesSubmitRequest.FaceItem(
+                    var embedding: [Float]? = nil
+                    if ArcFaceProvider.isAvailable,
+                       let crop = FaceDetectionProvider.extractAlignedFaceCrop(from: cgImage, face: face) {
+                        embedding = try? ArcFaceProvider.embed(faceImage: crop)
+                    }
+                    return FacesSubmitRequest.FaceItem(
                         boundingBox: face.boundingBox,
                         detectionConfidence: face.confidence,
-                        embedding: nil // ArcFace embeddings require model — submitted separately when available
+                        embedding: embedding
                     )
                 }
 

@@ -37,6 +37,22 @@ class BrowseState: ObservableObject {
         }
     }
 
+    // MARK: - Filters
+
+    @Published var filters = BrowseFilter() {
+        didSet {
+            if filters != oldValue {
+                // Sort-only changes don't need to reset person state
+                reloadAssets()
+            }
+        }
+    }
+
+    // MARK: - Person search suggestions
+
+    @Published var personSuggestions: [PersonItem] = []
+    private var personSearchTask: Task<Void, Never>?
+
     // MARK: - Asset grid
 
     @Published var assets: [AssetPageItem] = []
@@ -121,6 +137,8 @@ class BrowseState: ObservableObject {
         directories = []
         expandedPaths = []
         childDirectories = [:]
+        filters = BrowseFilter()
+        personSuggestions = []
         Task {
             await loadRootDirectories()
             await loadNextPage()
@@ -144,12 +162,9 @@ class BrowseState: ObservableObject {
         error = nil
 
         do {
-            var query: [String: String] = [
-                "library_id": libraryId,
-                "limit": "100",
-                "sort": "taken_at",
-                "dir": "desc",
-            ]
+            var query = filters.queryParams
+            query["library_id"] = libraryId
+            query["limit"] = "100"
             if let cursor = nextCursor {
                 query["after"] = cursor
             }
@@ -462,6 +477,51 @@ class BrowseState: ObservableObject {
     private func stopReEnrichPolling() {
         reEnrichPollTask?.cancel()
         reEnrichPollTask = nil
+    }
+
+    // MARK: - Person search
+
+    /// Search for people matching the query (debounced by caller).
+    func searchPeople(query: String) async {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let client else {
+            personSuggestions = []
+            return
+        }
+
+        do {
+            let response: PersonListResponse = try await client.get(
+                "/v1/people", query: ["q": trimmed, "limit": "10"]
+            )
+            personSuggestions = response.items
+        } catch {
+            personSuggestions = []
+        }
+    }
+
+    /// Filter the grid to show only a specific person's assets.
+    func filterByPerson(_ person: PersonItem) {
+        filters.personId = person.personId
+        filters.personDisplayName = person.displayName
+        personSuggestions = []
+        searchQuery = ""
+        mode = .library
+    }
+
+    /// Clear the person filter.
+    func clearPersonFilter() {
+        filters.personId = nil
+        filters.personDisplayName = nil
+    }
+
+    /// Debounced person search triggered by search text changes.
+    func debouncedPersonSearch(query: String) {
+        personSearchTask?.cancel()
+        personSearchTask = Task {
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            await searchPeople(query: query)
+        }
     }
 
     // MARK: - Keyboard navigation

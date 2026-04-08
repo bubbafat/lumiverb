@@ -4,6 +4,7 @@ import type { FacetsResponse } from "../api/types";
 import { RATING_COLORS, COLOR_HEX } from "../api/types";
 import { formatExposure } from "../lib/format";
 import { searchPeople, getPerson } from "../api/client";
+import { FaceCropImage } from "./FaceCropImage";
 
 interface DatePreset {
   label: string;
@@ -172,9 +173,14 @@ function PersonFilterDropdown({
                   setOpen(false);
                   setQ("");
                 }}
-                className="w-full rounded px-2 py-1 text-left text-xs text-gray-200 hover:bg-gray-700"
+                className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs text-gray-200 hover:bg-gray-700"
               >
-                {p.display_name} <span className="text-gray-500">({p.face_count})</span>
+                {p.representative_face_id && (
+                  <FaceCropImage faceId={p.representative_face_id} size={24} />
+                )}
+                <span className="flex-1">
+                  {p.display_name} <span className="text-gray-500">({p.face_count})</span>
+                </span>
               </button>
             ))}
             {data && data.items.length === 0 && q && (
@@ -236,6 +242,8 @@ export function FilterBar({
     }
   };
   const [inputValue, setInputValue] = useState(q ?? "");
+  const [searchFocused, setSearchFocused] = useState(false);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
   const [showDateRow, setShowDateRow] = useState(Boolean(dateFrom));
   const [customFrom, setCustomFrom] = useState(dateFrom ?? "");
   const [customTo, setCustomTo] = useState(dateTo ?? "");
@@ -260,6 +268,26 @@ export function FilterBar({
     setCustomTo(dateTo ?? "");
     if (dateFrom) setShowDateRow(true);
   }, [dateFrom, dateTo]);
+
+  // Person suggestions in main search bar
+  const showPersonSuggestions = searchFocused && inputValue.trim().length >= 2 && !personId;
+  const { data: searchPeopleData } = useQuery({
+    queryKey: ["people-search-bar", inputValue.trim()],
+    queryFn: () => searchPeople(inputValue.trim(), 5),
+    enabled: showPersonSuggestions,
+  });
+  const personSuggestions = showPersonSuggestions ? (searchPeopleData?.items ?? []) : [];
+
+  // Close search suggestions on click outside
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node)) {
+        setSearchFocused(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
 
   const applySearch = useCallback(
     (value: string) => {
@@ -343,7 +371,7 @@ export function FilterBar({
     <div className="flex flex-col gap-2">
       {/* Row 1: search input + controls + chiclets */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative flex-1 min-w-[200px] max-w-xl">
+        <div className="relative flex-1 min-w-[200px] max-w-xl" ref={searchContainerRef}>
           <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-gray-500">
             <svg
               className="h-4 w-4"
@@ -366,6 +394,7 @@ export function FilterBar({
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
+            onFocus={() => setSearchFocused(true)}
           />
           {inputValue && (
             <button
@@ -376,6 +405,36 @@ export function FilterBar({
             >
               x
             </button>
+          )}
+          {personSuggestions.length > 0 && (
+            <div className="absolute left-0 top-full z-50 mt-1 w-full rounded-lg border border-gray-600 bg-gray-800 p-1 shadow-xl">
+              <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-gray-500">
+                People
+              </div>
+              {personSuggestions.map((p) => (
+                <button
+                  key={p.person_id}
+                  type="button"
+                  onClick={() => {
+                    onChangeFilter("person_id", p.person_id);
+                    setInputValue("");
+                    onChangeQ(null);
+                    setSearchFocused(false);
+                  }}
+                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-gray-200 hover:bg-gray-700"
+                >
+                  {p.representative_face_id && (
+                    <FaceCropImage faceId={p.representative_face_id} size={28} />
+                  )}
+                  <span className="flex-1">
+                    {p.display_name}
+                    <span className="ml-1.5 text-xs text-gray-500">
+                      {p.face_count} {p.face_count === 1 ? "photo" : "photos"}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
           )}
         </div>
 

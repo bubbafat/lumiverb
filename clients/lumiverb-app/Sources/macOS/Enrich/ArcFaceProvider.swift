@@ -28,8 +28,11 @@ enum ArcFaceProvider {
         return nil
     }
 
-    /// Whether the ArcFace model is available.
+    /// Whether the ArcFace model is available locally (bundle or ~/.lumiverb/models/).
     static var isAvailable: Bool { modelURL != nil }
+
+    /// Whether the model can be downloaded on demand.
+    static var isDownloadable: Bool { true }
 
     // Not thread-safe. Safe today because enrichment pipelines are actors
     // that call providers sequentially. Guard with a lock if parallelizing.
@@ -41,6 +44,15 @@ enum ArcFaceProvider {
         let model = try MLModel(contentsOf: url)
         cachedModel = model
         return model
+    }
+
+    /// Download the model if not already installed, then load it.
+    static func ensureAvailable() async throws {
+        if isAvailable { return }
+        let url = try await ModelDownloader.ensureAvailable(ModelDownloader.arcFace)
+        // Pre-load into cache
+        let model = try MLModel(contentsOf: url)
+        cachedModel = model
     }
 
     /// Compute a 512-dimensional face embedding from a cropped face image.
