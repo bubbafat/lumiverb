@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getAsset, findSimilar, listFaces, listPeople, getNearestPeopleForFace, assignFace, unassignFace, uploadTranscript, deleteTranscript, updateNote, deleteNote } from "../api/client";
+import { getAsset, findSimilar, listFaces, listPeople, getNearestPeopleForFace, searchPeople, assignFace, unassignFace, uploadTranscript, deleteTranscript, updateNote, deleteNote } from "../api/client";
 import TranscriptViewer from "./TranscriptViewer";
 import { useLocalStorage } from "../lib/useLocalStorage";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
@@ -364,11 +364,46 @@ export function Lightbox({
   const [assignFaceId, setAssignFaceId] = useState<string | null>(null);
   const [assignMode, setAssignMode] = useState<"pick" | "name">("pick");
   const [newPersonName, setNewPersonName] = useState("");
+  // Typeahead search over the full people list for when the right
+  // person isn't in the nearest-by-embedding suggestions (happens on
+  // partial profiles, heavy occlusion, or when a person has too few
+  // confirmed faces for their centroid to be meaningful).
+  const [assignSearch, setAssignSearch] = useState("");
+  const [searchResults, setSearchResults] = useState<
+    { person_id: string; display_name: string; face_count: number }[]
+  >([]);
+  const [searching, setSearching] = useState(false);
 
   // Reset popover when asset changes
   useEffect(() => {
     setAssignFaceId(null);
+    setAssignSearch("");
+    setSearchResults([]);
   }, [asset.asset_id]);
+
+  // Clear search state when popover closes or switches face
+  useEffect(() => {
+    setAssignSearch("");
+    setSearchResults([]);
+  }, [assignFaceId]);
+
+  // Debounced typeahead — mirrors PeoplePage cluster-card pattern.
+  useEffect(() => {
+    if (assignFaceId == null || !assignSearch.trim()) {
+      setSearchResults([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await searchPeople(assignSearch.trim());
+        setSearchResults(res.items);
+      } catch { /* ignore */ }
+      setSearching(false);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [assignSearch, assignFaceId]);
 
   // When the lightbox is opened from cluster review (or anywhere else
   // that passes a highlightFaceId), force the face overlay on. The
@@ -457,10 +492,13 @@ export function Lightbox({
       const { faceId, ...rest } = opts;
       return assignFace(faceId, "personId" in rest ? { personId: rest.personId } : { newPersonName: rest.newPersonName });
     },
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
+      const taggedHighlight = variables.faceId === highlightFaceId;
       setAssignFaceId(null);
       setNewPersonName("");
       setAssignMode("pick");
+      setAssignSearch("");
+      setSearchResults([]);
       queryClient.invalidateQueries({ queryKey: ["faces", asset.asset_id] });
       queryClient.invalidateQueries({ queryKey: ["people"] });
       queryClient.invalidateQueries({ queryKey: ["people-for-assign"] });
@@ -469,6 +507,24 @@ export function Lightbox({
       // existing per-face ranking. Wipe the whole prefix.
       queryClient.invalidateQueries({ queryKey: ["nearest-people-for-face"] });
       queryClient.invalidateQueries({ queryKey: ["face-clusters"] });
+      // Cluster-review face pages are keyed by cluster_index; invalidate
+      // the whole prefix so the caller's paginated list reshapes.
+      queryClient.invalidateQueries({ queryKey: ["cluster-faces"] });
+
+      // If the user just tagged the *highlighted* face (the one they
+      // arrived at from cluster review), advance to the next asset in
+      // the lightbox so the cluster visibly "moves along". Brief delay
+      // lets them see the red→green transition first. If there's no
+      // next asset, close the lightbox entirely.
+      if (taggedHighlight) {
+        window.setTimeout(() => {
+          if (hasNext) {
+            onNavigate(currentIndex + 1);
+          } else {
+            onClose();
+          }
+        }, 350);
+      }
     },
   });
 
@@ -691,7 +747,11 @@ export function Lightbox({
                   const isHighlighted = highlightFaceId === face.face_id;
                   const isDismissed = face.person?.dismissed === true;
                   const isNamed = face.person != null && !isDismissed;
-                  const borderColor = isHighlighted ? "border-red-500" : isNamed ? "border-emerald-400" : isDismissed ? "border-gray-500" : "border-white";
+                  // Named beats highlighted: once the cluster-review
+                  // face has been tagged, it should flash green even
+                  // before the lightbox auto-advances — otherwise the
+                  // success state is invisible.
+                  const borderColor = isNamed ? "border-emerald-400" : isHighlighted ? "border-red-500" : isDismissed ? "border-gray-500" : "border-white";
                   const isPopoverTarget = assignFaceId === face.face_id;
                   // Auto-flip the popover anchor when the face is near
                   // an edge of the image, so it doesn't clip off-screen.
@@ -735,7 +795,7 @@ export function Lightbox({
                       {/* Face popover — assign (unidentified) or manage (identified) */}
                       {isPopoverTarget && (
                         <div
-                          className={`absolute z-50 w-56 rounded-lg border border-gray-600 bg-gray-800 p-3 shadow-xl ${popoverAnchorClass}`}
+                          className={`absolute z-50 w-64 rounded-lg border border-gray-600 bg-gray-800 p-3 shadow-xl ${popoverAnchorClass}`}
                           onClick={(e) => e.stopPropagation()}
                         >
                           {isNamed && assignMode === "pick" ? (
@@ -778,6 +838,43 @@ export function Lightbox({
                                     ))}
                                 </div>
                               )}
+                              {/* Search the full people list — nearest-by-
+                                  embedding only surfaces the top 8, so we
+                                  need a way to reach everyone else. */}
+                              <div className="relative">
+                                <input
+                                  type="text"
+                                  value={assignSearch}
+                                  onChange={(e) => setAssignSearch(e.target.value)}
+                                  placeholder="Search by name..."
+                                  className="w-full rounded border border-gray-600 bg-gray-900 px-2 py-1 text-xs text-white focus:border-indigo-500 focus:outline-none"
+                                />
+                                {assignSearch.trim() && searchResults.length > 0 && (
+                                  <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-40 overflow-y-auto rounded border border-gray-600 bg-gray-900 shadow-lg">
+                                    {searchResults
+                                      .filter((p) => p.person_id !== face.person!.person_id)
+                                      .map((p) => (
+                                        <button
+                                          key={p.person_id}
+                                          type="button"
+                                          onClick={async () => {
+                                            await unassignFace(face.face_id);
+                                            assignMutation.mutate({ faceId: face.face_id, personId: p.person_id });
+                                          }}
+                                          disabled={assignMutation.isPending}
+                                          className="block w-full px-2 py-1 text-left text-xs text-gray-200 hover:bg-indigo-600 hover:text-white disabled:opacity-50"
+                                        >
+                                          {p.display_name} <span className="text-gray-500">({p.face_count})</span>
+                                        </button>
+                                      ))}
+                                  </div>
+                                )}
+                                {assignSearch.trim() && searching && (
+                                  <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                                    <div className="h-3 w-3 animate-spin rounded-full border border-gray-600 border-t-white" />
+                                  </div>
+                                )}
+                              </div>
                               {unassignMutation.isError && (
                                 <p className="mt-1 text-xs text-red-400">{unassignMutation.error?.message ?? "Failed"}</p>
                               )}
@@ -800,6 +897,39 @@ export function Lightbox({
                                   ))}
                                 </div>
                               )}
+                              {/* Search the full people list — the
+                                  nearest ranking only surfaces the top 8,
+                                  so partial profiles / occluded faces
+                                  need a name escape hatch. */}
+                              <div className="relative">
+                                <input
+                                  type="text"
+                                  value={assignSearch}
+                                  onChange={(e) => setAssignSearch(e.target.value)}
+                                  placeholder="Search by name..."
+                                  className="w-full rounded border border-gray-600 bg-gray-900 px-2 py-1 text-xs text-white focus:border-indigo-500 focus:outline-none"
+                                />
+                                {assignSearch.trim() && searchResults.length > 0 && (
+                                  <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-40 overflow-y-auto rounded border border-gray-600 bg-gray-900 shadow-lg">
+                                    {searchResults.map((p) => (
+                                      <button
+                                        key={p.person_id}
+                                        type="button"
+                                        onClick={() => assignMutation.mutate({ faceId: face.face_id, personId: p.person_id })}
+                                        disabled={assignMutation.isPending}
+                                        className="block w-full px-2 py-1 text-left text-xs text-gray-200 hover:bg-indigo-600 hover:text-white disabled:opacity-50"
+                                      >
+                                        {p.display_name} <span className="text-gray-500">({p.face_count})</span>
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                                {assignSearch.trim() && searching && (
+                                  <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                                    <div className="h-3 w-3 animate-spin rounded-full border border-gray-600 border-t-white" />
+                                  </div>
+                                )}
+                              </div>
                               <button
                                 type="button"
                                 onClick={() => setAssignMode("name")}
