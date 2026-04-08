@@ -77,8 +77,14 @@ struct PeopleView: View {
                 }
             }
         }
-        .task {
-            await peopleState.loadIfNeeded()
+        // Use an unstructured Task in onAppear (rather than `.task`) so
+        // the initial fetch survives a transient view teardown — for
+        // example, a library autoload race that briefly flips the
+        // sidebar section back to .library mid-request. SwiftUI's
+        // `.task` modifier cancels its work when the view disappears,
+        // which would surface as a `cancelled` URL error.
+        .onAppear {
+            Task { await peopleState.loadIfNeeded() }
         }
     }
 

@@ -68,9 +68,27 @@ final class PeopleState: ObservableObject {
             nextPeopleCursor = response.nextCursor
             hasMorePeople = response.nextCursor != nil
         } catch {
+            // Cancellation is not a real failure — happens when the view
+            // is briefly torn down (e.g., section toggle racing with the
+            // initial fetch). Leave hasMorePeople true so the next visit
+            // can retry. Anything else is a real error worth surfacing.
+            if Self.isCancellation(error) { return }
             self.peopleError = "Failed to load people: \(error)"
             hasMorePeople = false
         }
+    }
+
+    /// True if `error` is a Swift task cancellation or a URLSession
+    /// cancelled error (which the APIClient flattens into
+    /// `APIError.networkError("cancelled")`).
+    private static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let urlErr = error as? URLError, urlErr.code == .cancelled { return true }
+        if case APIError.networkError(let msg) = error,
+           msg.lowercased().contains("cancel") {
+            return true
+        }
+        return false
     }
 
     // MARK: - Person detail loading
@@ -114,6 +132,7 @@ final class PeopleState: ObservableObject {
             nextFacesCursor = response.nextCursor
             hasMoreFaces = response.nextCursor != nil
         } catch {
+            if Self.isCancellation(error) { return }
             self.personFacesError = "Failed to load faces: \(error)"
             hasMoreFaces = false
         }
