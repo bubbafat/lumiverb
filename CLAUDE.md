@@ -95,7 +95,7 @@ pyproject.toml             Python project, deps, pytest config, entry point
 |---|---|
 | An API endpoint | `src/server/api/routers/<area>.py` — one file per domain (people, assets, libraries, search, similarity, ingest, upkeep, admin, …) |
 | DB tables / schemas | `src/server/models/tenant.py` (tenant-scoped, the big one) + `src/server/models/control_plane.py` (tenants, users) |
-| A DB query / repository method | `src/server/repository/tenant.py` (3k+ lines — the largest file; search for the class you want, then the method) |
+| A DB query / repository method | `src/server/repository/tenant.py` (3k+ lines — the largest file). Classes: `LibraryRepository`, `PathFilterRepository`, `AssetRepository`, `AssetMetadataRepository`, `AssetEmbeddingRepository`, `VideoSceneRepository`, `VideoIndexChunkRepository`, `CollectionRepository`, `RatingRepository`, `UnifiedBrowseRepository`, `SavedViewRepository`, `FaceRepository`, `PersonRepository`. Grep for the class, then the method |
 | The FastAPI entry point | `src/server/api/main.py` (`app = FastAPI(...)` at top), `src/server/api/dependencies.py` for `get_tenant_session`, `require_admin`, `require_tenant_admin`, `require_editor` |
 | Request auth / tenant resolution | `src/server/api/middleware.py` |
 | DB schema upgrades (DDL) | Alembic. Control plane: `migrations/control/versions/`. Tenant: `migrations/tenant/versions/`. Configs: `alembic-control.ini`, `alembic-tenant.ini`. Tenant env reads `ALEMBIC_TENANT_URL`. Run via `scripts/migrate.sh` (iterates `tenant_db_routing` and applies head to each) |
@@ -113,7 +113,7 @@ pyproject.toml             Python project, deps, pytest config, entry point
 | Face clustering / people | Repos in `src/server/repository/tenant.py` (`PersonRepository`, `FaceRepository`). Router: `src/server/api/routers/people.py`. Cluster cache lives in the `system_metadata` table and is invalidated on face/person writes |
 | Person cluster admin ops | `POST /v1/upkeep/cleanup-dismissed` (admin), `POST /v1/upkeep/recluster`. Bulk-reset: `scripts/reset-face-clusters.py` |
 | Ratings (favorite, stars, color) | `src/server/api/routers/ratings.py`, `UserRatingRepository` in `repository/tenant.py` |
-| Path include/exclude filters | `src/shared/path_filter.py` (Python). Swift equivalent: `LumiverbKit/Sources/LumiverbKit/Models/PathFilter.swift` |
+| Code shared between Python and Swift clients | `src/shared/` (Python). Two files have hand-maintained Swift twins in `LumiverbKit/Sources/LumiverbKit/Models/`: `path_filter.py` ↔ `PathFilter.swift`, `file_extensions.py` ↔ `FileExtensions.swift`. `asset_status.py`, `io_utils.py`, `logging_config.py`, `utils.py` are Python-only — port deliberately if Swift needs them |
 | Server config / env vars | `src/server/config.py` — `Settings(BaseSettings)` from `pydantic-settings`. All env vars are declared as fields with defaults. CLI-side config: `src/client/cli/config.py`. Prod env file lives at `/etc/lumiverb/env` (loaded by systemd) |
 
 ---
