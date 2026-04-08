@@ -9,18 +9,36 @@ import LumiverbKit
 /// the facial landmarks needed for ArcFace alignment. Fully local, no model
 /// downloads needed — built into macOS 14+.
 ///
-/// Quality gates match the Python InsightFace provider to ensure consistent
-/// results across clients — confidence ≥ 0.5, ≥ 40 px face width, ≥ 0.3%
-/// image-area fraction, ≥ 15% of the largest-face area, and a Laplacian-
-/// variance sharpness floor of 15.0. See
-/// `src/client/workers/faces/insightface_provider.py` for the reference.
+/// **Two sharpness gates run in series.** A face must pass both to be
+/// emitted:
+///
+/// 1. ``LumiverbKit.ImageQuality.laplacianVariance`` ≥ 15.0 — the
+///    classic Python-compatible gate. Cheap, runs on the proxy crop,
+///    easily tested in the shared package. Catches obvious motion blur
+///    and totally out-of-focus crops, but is noisy: a flat bald face
+///    can score lower than a bearded face of the same sharpness, and
+///    background subjects with high-frequency texture (foliage, fabric)
+///    sneak through with deceptively high variance.
+/// 2. ``VNDetectFaceCaptureQualityRequest`` ≥ ``minFaceCaptureQuality``
+///    — Apple's purpose-built "is this face usable for recognition"
+///    score. It evaluates blur, lighting, occlusion, *and* pose
+///    together, which is exactly what we want. Catches the case where
+///    Laplacian was fooled by background texture (the canonical example:
+///    a defocused subject behind a sharp foreground person scores
+///    deceptively high on Laplacian but low on Vision's quality).
+///
+/// Quality gates otherwise match the Python InsightFace provider to
+/// ensure consistent results across clients — confidence ≥ 0.5, ≥ 40 px
+/// face width, ≥ 0.3% image-area fraction, ≥ 15% of the largest-face
+/// area. See `src/client/workers/faces/insightface_provider.py` for the
+/// shared reference.
 ///
 /// Vision supplies bounding boxes and landmarks; embeddings come from
 /// `ArcFaceProvider` (CoreML). The 5-point landmarks Vision produces are
 /// converted to ArcFace's canonical template via
-/// `LumiverbKit.FaceLandmarks.extractAlignmentLandmarks`, and the sharpness
-/// gate is computed by `LumiverbKit.ImageQuality.laplacianVariance` — both
-/// live in the shared package so they can be unit-tested.
+/// `LumiverbKit.FaceLandmarks.extractAlignmentLandmarks`, and the
+/// Laplacian gate is computed by `LumiverbKit.ImageQuality.laplacianVariance`
+/// — both live in the shared package so they can be unit-tested.
 enum FaceDetectionProvider {
 
     // MARK: - Quality gate thresholds (match Python insightface_provider.py)
@@ -42,6 +60,20 @@ enum FaceDetectionProvider {
     /// `MIN_LAPLACIAN_VARIANCE = 15.0` computed via `cv2.Laplacian(gray, CV_64F)`
     /// with the default 3x3 4-neighbor kernel `[0,1,0; 1,-4,1; 0,1,0]`.
     static let minLaplacianVariance: Double = 15.0
+
+    /// Minimum Vision face capture quality (0…1). Apple recommends ≥ 0.5
+    /// for identity-document quality; 0.4 is the conventional clustering
+    /// threshold. Calibrated against a real library where the Laplacian
+    /// gate (15.0) was passing visibly-unrecognizable defocused
+    /// background subjects scoring 25+ — Vision's quality scorer
+    /// catches them because it accounts for pose and global blur, not
+    /// just local high-frequency content.
+    ///
+    /// Used as a *second* gate after the Laplacian variance check.
+    /// Faces must pass both to be emitted; if Vision's quality scorer
+    /// fails to run for any reason the gate falls open and only the
+    /// Laplacian check applies (the prior behavior).
+    static let minFaceCaptureQuality: Float = 0.4
 
     /// Detected face with normalized bounding box and optional landmarks.
     struct DetectedFace: Sendable {
@@ -73,16 +105,41 @@ enum FaceDetectionProvider {
     }
 
     /// Core face detection from a CGImage with quality gates.
-    /// Uses VNDetectFaceLandmarksRequest to get both bounding boxes and facial landmarks.
+    /// Uses VNDetectFaceLandmarksRequest to get bounding boxes and
+    /// facial landmarks, then chains VNDetectFaceCaptureQualityRequest
+    /// against those observations to score each face's recognition
+    /// quality (blur / pose / lighting / occlusion).
     static func detectFaces(from cgImage: CGImage) throws -> [DetectedFace] {
-        let request = VNDetectFaceLandmarksRequest()
+        let landmarksRequest = VNDetectFaceLandmarksRequest()
 
         let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-        try handler.perform([request])
+        try handler.perform([landmarksRequest])
 
-        guard let observations = request.results, !observations.isEmpty else {
+        guard let observations = landmarksRequest.results, !observations.isEmpty else {
             return []
         }
+
+        // Second pass: capture-quality scoring on the already-detected
+        // faces. We pass the landmark observations as input; Vision
+        // returns the same observations enriched with the
+        // ``faceCaptureQuality`` property. Order is preserved 1:1 with
+        // the input array, so we can index by position. If this fails
+        // for any reason (Vision unavailable, perform throws) the gate
+        // falls open and only the Laplacian check applies — see
+        // ``minFaceCaptureQuality`` docs.
+        let qualityScores: [Float?] = {
+            let qualityRequest = VNDetectFaceCaptureQualityRequest()
+            qualityRequest.inputFaceObservations = observations
+            do {
+                try handler.perform([qualityRequest])
+            } catch {
+                return Array(repeating: nil, count: observations.count)
+            }
+            let scored = qualityRequest.results ?? []
+            return (0..<observations.count).map { i in
+                i < scored.count ? scored[i].faceCaptureQuality : nil
+            }
+        }()
 
         let imageWidth = Float(cgImage.width)
         let imageHeight = Float(cgImage.height)
@@ -95,7 +152,7 @@ enum FaceDetectionProvider {
 
         var candidates: [Candidate] = []
 
-        for observation in observations {
+        for (idx, observation) in observations.enumerated() {
             let confidence = Float(observation.confidence)
             if confidence < minDetectionConfidence {
                 continue
@@ -124,12 +181,22 @@ enum FaceDetectionProvider {
                 continue
             }
 
-            // Sharpness gate: drop blurry faces that would embed unreliably.
-            // Computed on the face crop (not the whole image) matching Python.
+            // Sharpness gate 1: Laplacian variance on the face crop.
+            // Cheap, runs on every detected face. Catches obvious motion
+            // blur and totally out-of-focus crops.
             let sharpness = ImageQuality.laplacianVariance(
                 of: cgImage, bboxTopLeft: (x1, y1, x2, y2)
             )
             if sharpness < minLaplacianVariance {
+                continue
+            }
+
+            // Sharpness gate 2: Vision's purpose-built capture quality
+            // score. Catches the case where a defocused background
+            // subject scores deceptively high on Laplacian (because of
+            // ambient texture) but is visibly unrecognizable. Falls
+            // open if Vision didn't return a score for this index.
+            if let q = qualityScores[idx], q < minFaceCaptureQuality {
                 continue
             }
 
