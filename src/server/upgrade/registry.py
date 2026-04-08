@@ -11,6 +11,9 @@ from src.server.upgrade.steps.backfill_artifact_sha256 import (
 from src.server.upgrade.steps.cleanup_orphan_asset_children import (
     CleanupOrphanAssetChildrenStep,
 )
+from src.server.upgrade.steps.recompute_centroids_for_trash_filter import (
+    RecomputeCentroidsForTrashFilterStep,
+)
 
 
 def registered_upgrade_steps() -> Sequence[UpgradeStep]:
@@ -20,5 +23,9 @@ def registered_upgrade_steps() -> Sequence[UpgradeStep]:
         BackfillThumbnailSha256Step(),
         BackfillSceneRepSha256Step(),
         CleanupOrphanAssetChildrenStep(),
+        # Must run AFTER orphan cleanup so the centroid math doesn't
+        # waste a recompute on people who would have been emptied by
+        # the cleanup step anyway.
+        RecomputeCentroidsForTrashFilterStep(),
     ]
 

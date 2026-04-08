@@ -2734,13 +2734,20 @@ class FaceRepository:
         norms[norms == 0] = 1.0
         centroids = centroids / norms
 
-        # Get unassigned faces with embeddings
+        # Get unassigned faces with embeddings, excluding any face
+        # whose owning asset is in the trash. Without the asset filter,
+        # propagation would happily auto-assign trashed-asset faces to
+        # named people, and then the user would see those people gain
+        # face counts that point at 404'd thumbnails.
         rows = self._session.execute(
             text("""
                 SELECT f.face_id, f.embedding_vector::text
                 FROM faces f
                 LEFT JOIN face_person_matches m ON m.face_id = f.face_id
-                WHERE m.match_id IS NULL AND f.embedding_vector IS NOT NULL
+                JOIN assets a ON a.asset_id = f.asset_id
+                WHERE m.match_id IS NULL
+                  AND f.embedding_vector IS NOT NULL
+                  AND a.deleted_at IS NULL
                 ORDER BY f.detection_confidence DESC NULLS LAST
                 LIMIT :limit
             """),
@@ -2841,11 +2848,18 @@ class FaceRepository:
         """
         import numpy as np
 
+        # Filter out faces whose underlying asset is in the trash —
+        # otherwise the cluster review surfaces ghost clusters whose
+        # lightbox 404s, and propagation would auto-assign them to
+        # named people via centroid drift.
         sql = """
             SELECT f.face_id, f.embedding_vector::text
             FROM faces f
             LEFT JOIN face_person_matches m ON m.face_id = f.face_id
-            WHERE m.match_id IS NULL AND f.embedding_vector IS NOT NULL
+            JOIN assets a ON a.asset_id = f.asset_id
+            WHERE m.match_id IS NULL
+              AND f.embedding_vector IS NOT NULL
+              AND a.deleted_at IS NULL
             ORDER BY f.detection_confidence DESC NULLS LAST
             LIMIT :max_faces
         """
@@ -2994,11 +3008,16 @@ class PersonRepository:
         limit: int = 50,
         q: str | None = None,
     ) -> list[tuple[Person, int]]:
-        """Return people with face counts, sorted by face count desc.
+        """Return people with *visible* face counts, sorted by count desc.
+
+        Trashed-asset faces are excluded from the count via a LEFT JOIN
+        on the assets table — a person whose only photos are in the
+        trash gets count 0 instead of their pre-trash count, matching
+        what they'd see in the detail view. People with zero visible
+        faces still appear in the list (it's a LEFT JOIN, not an INNER).
 
         Cursor is base64-encoded JSON {"count": N, "id": person_id}.
         Optional q filters by display_name (case-insensitive substring match).
-        Returns list of (Person, face_count) tuples.
         """
         import base64 as _b64
 
@@ -3006,7 +3025,9 @@ class PersonRepository:
         params: dict[str, object] = {"limit": limit}
 
         if q:
-            having_conditions.append("LOWER(p.display_name) LIKE '%' || LOWER(:q) || '%'")
+            having_conditions.append(
+                "LOWER(p.display_name) LIKE '%' || LOWER(:q) || '%'"
+            )
             params["q"] = q
 
         if after:
@@ -3014,8 +3035,13 @@ class PersonRepository:
                 decoded = json.loads(_b64.urlsafe_b64decode(after + "=="))
                 cursor_count = decoded["count"]
                 cursor_id = decoded["id"]
+                # Cursor count refers to the visible-faces count (the
+                # COUNT expression in the SELECT). Use the alias rather
+                # than re-computing the COUNT(...) inline.
                 having_conditions.append(
-                    "(COUNT(m.match_id)::int < :cursor_count OR (COUNT(m.match_id)::int = :cursor_count AND p.person_id > :cursor_id))"
+                    "(COUNT(a.asset_id)::int < :cursor_count"
+                    "  OR (COUNT(a.asset_id)::int = :cursor_count"
+                    "      AND p.person_id > :cursor_id))"
                 )
                 params["cursor_count"] = cursor_count
                 params["cursor_id"] = cursor_id
@@ -3024,12 +3050,21 @@ class PersonRepository:
 
         having_sql = (" HAVING " + " AND ".join(having_conditions)) if having_conditions else ""
 
+        # The visible-faces count is COUNT(a.asset_id): the chained
+        # LEFT JOIN to assets with `deleted_at IS NULL` in the ON clause
+        # produces a row per match where the asset is NOT trashed, and
+        # NULL otherwise. COUNT skips NULLs, so this gives us exactly
+        # the visible count. People with zero visible faces still come
+        # out of the GROUP BY because the people row is preserved.
         sql = f"""
             SELECT p.person_id, p.display_name, p.created_by_user,
                    p.representative_face_id, p.confirmation_count, p.created_at,
-                   COUNT(m.match_id)::int AS cnt
+                   COUNT(a.asset_id)::int AS cnt
             FROM people p
             LEFT JOIN face_person_matches m ON m.person_id = p.person_id
+            LEFT JOIN faces f ON f.face_id = m.face_id
+            LEFT JOIN assets a
+                ON a.asset_id = f.asset_id AND a.deleted_at IS NULL
             WHERE p.dismissed = false
             GROUP BY p.person_id
             {having_sql}
@@ -3050,7 +3085,11 @@ class PersonRepository:
         after: str | None = None,
         limit: int = 50,
     ) -> list[tuple[Person, int]]:
-        """Return dismissed people with face counts, sorted by face count desc."""
+        """Return dismissed people with *visible* face counts.
+
+        Same trashed-asset filtering as ``list_with_face_counts`` — see
+        the comment there for the COUNT(a.asset_id) pattern.
+        """
         import base64 as _b64
 
         having_conditions: list[str] = []
@@ -3062,7 +3101,9 @@ class PersonRepository:
                 cursor_count = decoded["count"]
                 cursor_id = decoded["id"]
                 having_conditions.append(
-                    "(COUNT(m.match_id)::int < :cursor_count OR (COUNT(m.match_id)::int = :cursor_count AND p.person_id > :cursor_id))"
+                    "(COUNT(a.asset_id)::int < :cursor_count"
+                    "  OR (COUNT(a.asset_id)::int = :cursor_count"
+                    "      AND p.person_id > :cursor_id))"
                 )
                 params["cursor_count"] = cursor_count
                 params["cursor_id"] = cursor_id
@@ -3074,9 +3115,12 @@ class PersonRepository:
         sql = f"""
             SELECT p.person_id, p.display_name, p.created_by_user,
                    p.representative_face_id, p.confirmation_count, p.created_at,
-                   COUNT(m.match_id)::int AS cnt
+                   COUNT(a.asset_id)::int AS cnt
             FROM people p
             LEFT JOIN face_person_matches m ON m.person_id = p.person_id
+            LEFT JOIN faces f ON f.face_id = m.face_id
+            LEFT JOIN assets a
+                ON a.asset_id = f.asset_id AND a.deleted_at IS NULL
             WHERE p.dismissed = true
             GROUP BY p.person_id
             {having_sql}
@@ -3124,9 +3168,20 @@ class PersonRepository:
         return len(empty_ids)
 
     def get_face_count(self, person_id: str) -> int:
-        """Return the number of faces matched to a person."""
+        """Return the number of *visible* faces matched to a person.
+
+        Trashed assets (``deleted_at IS NOT NULL``) are excluded so the
+        count agrees with what ``get_faces`` returns and what the user
+        sees in the people grid / detail view.
+        """
         result = self._session.execute(
-            text("SELECT COUNT(*)::int FROM face_person_matches WHERE person_id = :pid"),
+            text(
+                "SELECT COUNT(*)::int"
+                " FROM face_person_matches m"
+                " JOIN faces f ON f.face_id = m.face_id"
+                " JOIN assets a ON a.asset_id = f.asset_id"
+                " WHERE m.person_id = :pid AND a.deleted_at IS NULL"
+            ),
             {"pid": person_id},
         ).scalar()
         return result or 0
@@ -3168,8 +3223,14 @@ class PersonRepository:
         after: str | None = None,
         limit: int = 50,
     ) -> list[Face]:
-        """Return faces matched to a person, cursor-paginated by face_id."""
-        conditions = ["m.person_id = :pid"]
+        """Return faces matched to a person, cursor-paginated by face_id.
+
+        Filters out faces whose underlying asset is in the trash
+        (``deleted_at IS NOT NULL``). The ``face_person_matches`` rows
+        are kept intact so untrashing the asset restores the assignment
+        automatically — only the read query hides them.
+        """
+        conditions = ["m.person_id = :pid", "a.deleted_at IS NULL"]
         params: dict[str, object] = {"pid": person_id, "limit": limit}
 
         if after:
@@ -3181,6 +3242,7 @@ class PersonRepository:
             SELECT f.face_id
             FROM faces f
             JOIN face_person_matches m ON m.face_id = f.face_id
+            JOIN assets a ON a.asset_id = f.asset_id
             WHERE {where_sql}
             ORDER BY f.face_id ASC
             LIMIT :limit
@@ -3257,7 +3319,13 @@ class PersonRepository:
             _mark_clusters_dirty(self._session)
 
     def _recompute_centroid(self, person_id: str) -> None:
-        """Recompute centroid_vector as mean of all matched face embeddings (no commit)."""
+        """Recompute centroid_vector as mean of all matched *visible* face embeddings.
+
+        Trashed-asset faces are excluded from the average so the
+        centroid doesn't drift toward photos the user has thrown away
+        — that drift would feed back into ``propagate_assignments`` and
+        snowball more trashed-asset matches into the same person.
+        """
         self._session.execute(
             text("""
                 UPDATE people SET centroid_vector = sub.avg_vec
@@ -3265,7 +3333,10 @@ class PersonRepository:
                     SELECT AVG(f.embedding_vector) AS avg_vec
                     FROM faces f
                     JOIN face_person_matches m ON m.face_id = f.face_id
-                    WHERE m.person_id = :pid AND f.embedding_vector IS NOT NULL
+                    JOIN assets a ON a.asset_id = f.asset_id
+                    WHERE m.person_id = :pid
+                      AND f.embedding_vector IS NOT NULL
+                      AND a.deleted_at IS NULL
                 ) sub
                 WHERE person_id = :pid
             """),
