@@ -70,17 +70,6 @@ actor ReEnrichmentRunner {
             await runFaceDetection(on: imageAssets)
         }
 
-        if !cancelled && operations.contains(.faceEmbeddings) {
-            if ArcFaceProvider.isAvailable {
-                phase = "face embeddings"
-                processedItems = 0
-                // Re-run face detection which now includes embeddings
-                await runFaceDetection(on: imageAssets)
-            } else {
-                skippedOperations.append("face embeddings (ArcFace model not installed)")
-            }
-        }
-
         if !cancelled && operations.contains(.embeddings) {
             phase = "embeddings"
             processedItems = 0

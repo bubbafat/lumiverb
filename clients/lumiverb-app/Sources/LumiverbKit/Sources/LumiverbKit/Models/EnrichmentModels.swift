@@ -5,7 +5,6 @@ import Foundation
 /// Operations available for re-enrichment of assets.
 public enum EnrichmentOperation: String, CaseIterable, Sendable {
     case faces = "Detect Faces"
-    case faceEmbeddings = "Face Embeddings"
     case embeddings = "Generate Embeddings"
     case ocr = "Extract Text"
     case vision = "Generate Descriptions"

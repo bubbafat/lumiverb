@@ -15,9 +15,6 @@ struct ReEnrichMenu: View {
             Button("Detect Faces") {
                 onReEnrich([.faces])
             }
-            Button("Face Embeddings") {
-                onReEnrich([.faceEmbeddings])
-            }
             Button("Generate Embeddings") {
                 onReEnrich([.embeddings])
             }
