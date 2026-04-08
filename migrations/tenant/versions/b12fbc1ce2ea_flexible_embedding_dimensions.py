@@ -42,24 +42,10 @@ def upgrade() -> None:
         sa.text("ALTER TABLE asset_embeddings ALTER COLUMN embedding_vector TYPE vector")
     )
 
-    # Recreate HNSW index without dimension constraint.
-    # pgvector 0.7+ supports dimensionless HNSW if all vectors in the index
-    # have the same dimension. Since we filter by model_id in queries, we
-    # create partial indexes per known model for optimal performance.
-    # For now, a single index works because pgvector handles mixed dimensions
-    # at query time (it just can't use the index for cross-dimension queries).
-    ctx = op.get_context()
-    with ctx.autocommit_block():
-        op.execute(
-            sa.text(
-                """
-                CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_asset_embeddings_hnsw
-                ON asset_embeddings
-                USING hnsw (embedding_vector vector_cosine_ops)
-                WITH (m = 16, ef_construction = 64)
-                """
-            )
-        )
+    # HNSW index requires fixed dimensions — skip it for dimensionless column.
+    # Exact search (sequential scan) is fine at current scale. Once the
+    # deployment settles on a single model, a dimension-specific HNSW index
+    # can be added as a partial index filtered by model_id.
 
 
 def downgrade() -> None:
