@@ -23,6 +23,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.lumiverb.app.macos
         INFOPLIST_FILE: Sources/macOS/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Sources/macOS/Lumiverb.entitlements
         MACOSX_DEPLOYMENT_TARGET: "14.0"
         SWIFT_VERSION: "5.9"
         CODE_SIGN_IDENTITY: "-"
