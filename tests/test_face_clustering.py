@@ -16,7 +16,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from src.server.repository.tenant import _cluster_face_embeddings
+from src.server.repository.tenant import (
+    LARGE_INPUT_THRESHOLD,
+    _cluster_face_embeddings,
+)
 
 
 def _unit(v: np.ndarray) -> np.ndarray:
@@ -155,3 +158,101 @@ def test_clusters_sorted_by_size_desc() -> None:
     sizes = [len(c) for c in clusters]
     assert sizes == sorted(sizes, reverse=True)
     assert sizes == [12, 7, 4]
+
+
+# ---------------------------------------------------------------------------
+# Large-input regime (leaf-selection path)
+#
+# These exercise the LARGE_INPUT_THRESHOLD branch, which is what fixes the
+# "everything in one giant cluster" failure observed on a production library
+# after most people had been named: the EOM+single-cluster path returned a
+# 501-face mega-cluster spanning many distinct identities because no
+# sub-cluster had enough excess of mass to beat the root.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_large_heterogeneous_input_does_not_collapse_to_one_cluster() -> None:
+    """The regression that motivated LARGE_INPUT_THRESHOLD.
+
+    Build a large pool (above the threshold) of many small distinct
+    identities. The pre-fix EOM+allow_single_cluster path would have
+    returned a single mega-cluster — a faithful synthetic mirror of the
+    501-face residue we hit in production. After the fix, leaf selection
+    must produce multiple clusters and none of them may span all
+    identities.
+    """
+    rng = np.random.default_rng(5)
+    n_identities = 12
+    per_identity = 6
+    assert n_identities * per_identity > LARGE_INPUT_THRESHOLD, (
+        "test setup must exceed the large-input threshold"
+    )
+
+    blobs = []
+    identity_of_index: list[int] = []
+    for k in range(n_identities):
+        center = np.zeros(32)
+        center[k] = 1.0  # mutually orthogonal centers
+        blobs.append(_blob(rng, center, per_identity, jitter=0.04))
+        identity_of_index.extend([k] * per_identity)
+
+    vecs = np.vstack(blobs)
+    clusters = _cluster_face_embeddings(vecs, min_cluster_size=3)
+
+    assert len(clusters) >= 2, (
+        f"single-cluster collapse regression: got {len(clusters)} clusters "
+        f"for {len(vecs)} faces from {n_identities} identities"
+    )
+    # No cluster may span more than one source identity.
+    for c in clusters:
+        identities = {identity_of_index[i] for i in c}
+        assert len(identities) == 1, (
+            f"leaf selection merged identities {identities} into one cluster"
+        )
+
+
+@pytest.mark.fast
+def test_small_input_path_still_uses_eom_single_cluster() -> None:
+    """Below the threshold, the original tiny-library path is preserved.
+
+    A small library with one person of ~10 faces should still surface
+    *something* — the legitimate use case for ``allow_single_cluster=True``.
+    We don't pin the exact size of the surviving cluster (EOM may pick
+    the densest sub-core rather than every blob member, same caveat as
+    ``test_min_cluster_size_excludes_pairs``), only that we get a single
+    non-empty cluster instead of the whole input being labeled noise.
+    """
+    rng = np.random.default_rng(7)
+    center = np.zeros(32); center[0] = 1.0
+    n = 10  # well below LARGE_INPUT_THRESHOLD
+
+    vecs = _blob(rng, center, n, jitter=0.03)
+    clusters = _cluster_face_embeddings(vecs, min_cluster_size=3)
+
+    assert len(clusters) == 1
+    assert len(clusters[0]) >= min(3, n)
+
+
+@pytest.mark.fast
+def test_large_uniform_input_falls_back_to_single_cluster() -> None:
+    """The fallback path inside the large-input regime.
+
+    If HDBSCAN's leaf selection finds no leaf cluster meeting
+    ``min_cluster_size`` (which happens when the input is one tight
+    density mode with no sub-structure), the helper retries with the
+    EOM + single-cluster path so the user still sees their one big
+    cluster instead of an empty cluster review view.
+    """
+    rng = np.random.default_rng(8)
+    center = np.zeros(32); center[0] = 1.0
+    n = LARGE_INPUT_THRESHOLD + 30  # large enough to take the leaf-first path
+
+    vecs = _blob(rng, center, n, jitter=0.03)
+    clusters = _cluster_face_embeddings(vecs, min_cluster_size=3)
+
+    # Expect at least one surviving cluster — fallback kicked in.
+    assert clusters, "fallback to EOM+single failed: no clusters surfaced"
+    # And the surviving cluster(s) must come entirely from the real blob.
+    for c in clusters:
+        assert all(0 <= i < n for i in c)

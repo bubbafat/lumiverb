@@ -2370,6 +2370,17 @@ def _mark_clusters_dirty(session: Session) -> None:
     )
 
 
+#: Input-size cutoff between the two HDBSCAN regimes in
+#: ``_cluster_face_embeddings``. Above this many face embeddings the helper
+#: switches from EOM-with-single-cluster (right for tiny libraries) to leaf
+#: selection (right for heterogeneous tails). Set at 50 because: a real
+#: single-person library is unlikely to exceed ~50 detected faces, and
+#: above 100 we know with certainty the input can't be one identity.
+#: Anything in between is a judgment call; 50 is intentionally toward the
+#: small side so the EOM fallback is reserved for genuinely tiny libraries.
+LARGE_INPUT_THRESHOLD = 50
+
+
 def _cluster_face_embeddings(
     vectors: "np.ndarray",
     *,
@@ -2380,11 +2391,35 @@ def _cluster_face_embeddings(
     Pure-math helper extracted from FaceRepository.compute_clusters so the
     clustering algorithm can be unit-tested without a database.
 
+    See ``LARGE_INPUT_THRESHOLD`` for the input-size cutoff that decides
+    which HDBSCAN regime applies.
+
     Runs HDBSCAN with metric='precomputed' over a cosine distance matrix.
     HDBSCAN is density-based, so a face must have at least ``min_cluster_size``
     close neighbors to anchor a cluster — this is what prevents the
     single-linkage chaining that an earlier union-find implementation
     suffered from (one bridging face would collapse two distinct identities).
+
+    **Two regimes, switched on input size**:
+
+    - **Small input (≤ ``LARGE_INPUT_THRESHOLD``).** Use the default EOM
+      ('excess of mass') selection with ``allow_single_cluster=True``.
+      This is the right call for tiny libraries — a user whose photos
+      contain only one or two people genuinely has one density mode,
+      and EOM-with-single-cluster surfaces it. Without this, EOM would
+      label everything noise because no sub-cluster has excess mass
+      relative to the root.
+
+    - **Large input (> ``LARGE_INPUT_THRESHOLD``).** Switch to ``'leaf'``
+      selection and disable single-cluster fallback. By the time the
+      unassigned-face pool is in the hundreds, we *know* the result
+      can't be one identity, but EOM+single-cluster will keep returning
+      one giant cluster because the heterogeneous tail has no sharp
+      density modes for it to find. Leaf selection walks the dendrogram
+      and picks the densest leaf-level clusters instead — fragments
+      heterogeneous tails into namable sub-groups. This is what
+      diagnosed and fixed the "501-face mega-cluster" residue from a
+      production library after most clusters had already been named.
 
     Args:
         vectors: (N, D) numpy array of L2-normalized face embeddings.
@@ -2414,17 +2449,41 @@ def _cluster_face_embeddings(
     dist = np.clip(1.0 - sim, 0.0, 2.0).astype(np.float32)
     np.fill_diagonal(dist, 0.0)  # precomputed metric requires exact zero diagonal
 
-    labels = HDBSCAN(
-        metric="precomputed",
-        min_cluster_size=min_cluster_size,
-        copy=True,  # don't let HDBSCAN mutate our distance matrix in place
-        # When the input has only one density mode, HDBSCAN's default 'eom'
-        # selection labels everything as noise (no excess of mass relative to
-        # the root). For face libraries that's wrong: a user with photos of
-        # only immediate family genuinely has one cluster, and we want to
-        # surface it.
-        allow_single_cluster=True,
-    ).fit_predict(dist)
+    is_large = len(vectors) > LARGE_INPUT_THRESHOLD
+
+    if is_large:
+        # Large input: try leaf selection first to actually fragment
+        # heterogeneous tails. If leaf returns nothing (which happens for
+        # a genuinely uniform large blob — e.g. a 100-photo library of
+        # one person), fall back to EOM+single so the user still sees
+        # their one cluster instead of an empty review screen.
+        labels = HDBSCAN(
+            metric="precomputed",
+            min_cluster_size=min_cluster_size,
+            copy=True,
+            allow_single_cluster=False,
+            cluster_selection_method="leaf",
+        ).fit_predict(dist)
+
+        if not any(lbl >= 0 for lbl in labels):
+            labels = HDBSCAN(
+                metric="precomputed",
+                min_cluster_size=min_cluster_size,
+                copy=True,
+                allow_single_cluster=True,
+                cluster_selection_method="eom",
+            ).fit_predict(dist)
+    else:
+        # Small input: original tiny-library path. EOM + single-cluster
+        # surfaces a "this whole library is one person" result, which is
+        # the legitimate use case the fallback exists for.
+        labels = HDBSCAN(
+            metric="precomputed",
+            min_cluster_size=min_cluster_size,
+            copy=True,
+            allow_single_cluster=True,
+            cluster_selection_method="eom",
+        ).fit_predict(dist)
 
     from collections import defaultdict
     by_label: dict[int, list[int]] = defaultdict(list)
