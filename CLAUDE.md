@@ -87,7 +87,7 @@ pyproject.toml             Python project, deps, pytest config, entry point
 |---|---|
 | An API endpoint | `src/server/api/routers/<area>.py` — one file per domain (people, assets, libraries, search, similarity, ingest, upkeep, admin, …) |
 | DB tables / schemas | `src/server/models/tenant.py` (tenant-scoped, the big one) + `src/server/models/control_plane.py` (tenants, users) |
-| A DB query / repository method | `src/server/repository/tenant.py` (3k+ lines — the largest file). Classes: `LibraryRepository`, `PathFilterRepository`, `AssetRepository`, `AssetMetadataRepository`, `AssetEmbeddingRepository`, `VideoSceneRepository`, `VideoIndexChunkRepository`, `CollectionRepository`, `RatingRepository`, `UnifiedBrowseRepository`, `SavedViewRepository`, `FaceRepository`, `PersonRepository`. Grep for the class, then the method |
+| A DB query / repository method | `src/server/repository/tenant.py` (3k+ lines — the largest file). ~13 `<Domain>Repository` classes; grep for the class, then the method |
 | The FastAPI entry point | `src/server/api/main.py` (`app = FastAPI(...)` at top), `src/server/api/dependencies.py` for `get_tenant_session`, `require_admin`, `require_tenant_admin`, `require_editor` |
 | Request auth / tenant resolution | `src/server/api/middleware.py` |
 | DB schema upgrades (DDL) | Alembic. Control plane: `migrations/control/versions/`. Tenant: `migrations/tenant/versions/`. Configs: `alembic-control.ini`, `alembic-tenant.ini`. Tenant env reads `ALEMBIC_TENANT_URL`. Run via `scripts/migrate.sh` (iterates `tenant_db_routing` and applies head to each) |
@@ -98,7 +98,7 @@ pyproject.toml             Python project, deps, pytest config, entry point
 | Face detection (Python / server-side CLI) | `src/client/workers/faces/insightface_provider.py` — InsightFace buffalo_l, RetinaFace + ArcFace. Driven from `src/client/cli/repair.py` |
 | Face detection (macOS) | `clients/lumiverb-app/Sources/macOS/Enrich/FaceDetectionProvider.swift` — Apple Vision. Alignment landmarks + sharpness helper live in `LumiverbKit/Sources/LumiverbKit/Faces/` so they're unit-testable |
 | ArcFace embedding (macOS) | `clients/lumiverb-app/Sources/macOS/Enrich/ArcFaceProvider.swift`. CoreML model built by `scripts/convert-models/convert_arcface.py` |
-| Enrichment orchestration (macOS) | `Sources/macOS/Enrich/EnrichmentPipeline.swift` (missing-asset loop), `ReEnrichmentRunner.swift` (user-selected assets from context menu) |
+| Enrichment orchestration (macOS) | `Sources/macOS/Enrich/` — pipeline + re-enrichment runner |
 | Proxy generation (Python) | `src/client/proxy/proxy_gen.py` — single code path for ingest + face-detect. TIFF has an OOM guard via `_load_tiff_proxy_image` + `TIFF_MAX_PIXELS` |
 | Proxy cache (Python) | `src/client/proxy/proxy_cache.py` |
 | A web UI page | `src/ui/web/src/pages/<Page>.tsx`. Shared components: `src/ui/web/src/components/`. API client: `src/ui/web/src/api/client.ts`, types: `api/types.ts` |
