@@ -1432,6 +1432,24 @@ class FaceDetectionItem(BaseModel):
     embedding: list[float] | None = None
 
 
+def _normalize_bounding_box(bb: dict[str, float]) -> dict[str, float]:
+    """Normalize bounding box to {x, y, w, h} format.
+
+    Accepts both:
+      - {x, y, w, h}: position + size (Python CLI / InsightFace)
+      - {x1, y1, x2, y2}: two corners (Swift client / Apple Vision)
+    """
+    if "x" in bb:
+        return bb
+    # Convert x1,y1,x2,y2 → x,y,w,h
+    return {
+        "x": bb["x1"],
+        "y": bb["y1"],
+        "w": bb["x2"] - bb["x1"],
+        "h": bb["y2"] - bb["y1"],
+    }
+
+
 class FaceSubmitRequest(BaseModel):
     detection_model: str = "insightface"
     detection_model_version: str = "buffalo_l"
@@ -1492,12 +1510,7 @@ def _generate_face_crops(
 
             # Expand bounding box by 40% padding, clamp to image bounds
             pad = 0.4
-            # Support both {x,y,w,h} (Python CLI) and {x1,y1,x2,y2} (Swift client) formats
-            if "x" in bb:
-                fx, fy, fw, fh = bb["x"], bb["y"], bb["w"], bb["h"]
-            else:
-                fx, fy = bb["x1"], bb["y1"]
-                fw, fh = bb["x2"] - fx, bb["y2"] - fy
+            fx, fy, fw, fh = bb["x"], bb["y"], bb["w"], bb["h"]
             cx, cy = fx + fw / 2, fy + fh / 2
             side = max(fw, fh) * (1 + pad)
             x1 = max(0.0, cx - side / 2)
@@ -1570,7 +1583,7 @@ def submit_batch_faces(
 
         faces_data = [
             {
-                "bounding_box": f.bounding_box,
+                "bounding_box": _normalize_bounding_box(f.bounding_box),
                 "detection_confidence": f.detection_confidence,
                 "embedding": [float(x) for x in f.embedding] if f.embedding else None,
             }
@@ -1614,7 +1627,7 @@ def submit_faces(
     face_repo = FaceRepository(session)
     faces_data = [
         {
-            "bounding_box": f.bounding_box,
+            "bounding_box": _normalize_bounding_box(f.bounding_box),
             "detection_confidence": f.detection_confidence,
             "embedding": [float(x) for x in f.embedding] if f.embedding else None,
         }
