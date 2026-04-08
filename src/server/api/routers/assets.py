@@ -49,6 +49,13 @@ class AssetResponse(BaseModel):
     thumbnail_key: str | None
     width: int | None
     height: int | None
+    # Source-file size in bytes. Included on the detail response (in
+    # addition to the page response) so the lightbox can render it
+    # regardless of how the user got there — e.g. opening from the
+    # cluster review face drill-down, which only has a face_id +
+    # asset_id and synthesizes a placeholder list-item with file_size=0
+    # to satisfy the AssetPageItem shape.
+    file_size: int | None = None
     sha256: str | None = None
     exif_extracted_at: str | None = None  # ISO8601
     camera_make: str | None = None
@@ -599,6 +606,7 @@ def _to_asset_response(asset) -> AssetResponse:
         thumbnail_key=asset.thumbnail_key,
         width=asset.width,
         height=asset.height,
+        file_size=asset.file_size,
         sha256=asset.sha256,
         exif_extracted_at=asset.exif_extracted_at.isoformat() if asset.exif_extracted_at else None,
         camera_make=asset.camera_make,

@@ -124,6 +124,11 @@ export interface AssetDetail {
   duration_sec: number | null;
   width: number | null;
   height: number | null;
+  // Source-file size in bytes. Optional because the lightbox uses the
+  // page item's file_size first and only falls back to detail when the
+  // page item is a synthesized placeholder (e.g. cluster review face
+  // drill-down).
+  file_size?: number | null;
   sha256: string | null;
   exif_extracted_at: string | null;
   camera_make: string | null;

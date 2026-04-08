@@ -885,8 +885,18 @@ export function Lightbox({
                   })()}
                 </div>
                 <div className="mt-2 text-sm text-gray-400">
-                  {formatFileSize(asset.file_size)} ·{" "}
-                  {detail?.media_type ?? asset.media_type}
+                  {/* Prefer the asset list-item file_size, but fall back
+                      to the detail fetch when the list item is a
+                      placeholder (file_size === 0). The cluster review
+                      face drill-down constructs minimal AssetPageItems
+                      with file_size: 0 because the cluster faces
+                      endpoint only returns face_id + asset_id + rel_path
+                      — the real bytes only come back via the detail
+                      response, which now includes file_size. */}
+                  {formatFileSize(
+                    asset.file_size || detail?.file_size || 0,
+                  )}{" "}
+                  · {detail?.media_type ?? asset.media_type}
                 </div>
               </div>
 
@@ -1327,7 +1337,9 @@ export function Lightbox({
                     <div className="flex">
                       <dt className="w-2/5 text-xs text-gray-500">File size</dt>
                       <dd className="w-3/5 text-sm text-gray-300">
-                        {formatFileSize(asset.file_size)}
+                        {formatFileSize(
+                          asset.file_size || detail?.file_size || 0,
+                        )}
                       </dd>
                     </div>
                     {(detail?.sha256 || asset.sha256) && (
