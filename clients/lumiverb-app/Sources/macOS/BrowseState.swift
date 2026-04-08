@@ -313,6 +313,7 @@ class BrowseState: ObservableObject {
     @Published var reEnrichPhase = ""
     @Published var reEnrichTotal = 0
     @Published var reEnrichProcessed = 0
+    @Published var reEnrichSkipped: [String] = []
 
     private var reEnrichRunner: ReEnrichmentRunner?
     private var reEnrichPollTask: Task<Void, Never>?
@@ -333,16 +334,23 @@ class BrowseState: ObservableObject {
                 return
             }
 
-            let runner = ReEnrichmentRunner(client: client, libraryId: libraryId)
+            let runner = ReEnrichmentRunner(
+                client: client,
+                libraryId: libraryId,
+                visionApiUrl: appState.resolvedVisionApiUrl,
+                visionApiKey: appState.resolvedVisionApiKey,
+                visionModelId: appState.resolvedVisionModelId
+            )
             reEnrichRunner = runner
             startReEnrichPolling(runner: runner)
 
-            _ = await runner.run(assets: assets, operations: operations)
+            let result = await runner.run(assets: assets, operations: operations)
 
             stopReEnrichPolling()
             reEnrichRunner = nil
             isReEnriching = false
             reEnrichPhase = ""
+            reEnrichSkipped = result.skipped
 
             // Refresh the grid and detail if open
             reloadAssets()
@@ -366,16 +374,23 @@ class BrowseState: ObservableObject {
             reEnrichProcessed = 0
             reEnrichTotal = 1
 
-            let runner = ReEnrichmentRunner(client: client, libraryId: libraryId)
+            let runner = ReEnrichmentRunner(
+                client: client,
+                libraryId: libraryId,
+                visionApiUrl: appState.resolvedVisionApiUrl,
+                visionApiKey: appState.resolvedVisionApiKey,
+                visionModelId: appState.resolvedVisionModelId
+            )
             reEnrichRunner = runner
             startReEnrichPolling(runner: runner)
 
-            _ = await runner.run(assets: [asset], operations: operations)
+            let result = await runner.run(assets: [asset], operations: operations)
 
             stopReEnrichPolling()
             reEnrichRunner = nil
             isReEnriching = false
             reEnrichPhase = ""
+            reEnrichSkipped = result.skipped
 
             // Refresh the lightbox detail
             await loadAssetDetail(assetId: assetId)

@@ -21,7 +21,7 @@ struct BrowseWindow: View {
         } detail: {
             ZStack {
                 VStack(spacing: 0) {
-                    if browseState.isReEnriching {
+                    if browseState.isReEnriching || !browseState.reEnrichSkipped.isEmpty {
                         reEnrichBanner
                     }
                     contentArea
@@ -187,24 +187,46 @@ struct BrowseWindow: View {
     // MARK: - Re-enrichment banner
 
     private var reEnrichBanner: some View {
-        HStack(spacing: 8) {
-            ProgressView()
-                .controlSize(.small)
-            Text("Re-enriching: \(browseState.reEnrichPhase)")
-                .font(.caption)
-            if browseState.reEnrichTotal > 0 {
-                Text("\(browseState.reEnrichProcessed) of \(browseState.reEnrichTotal)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+        VStack(alignment: .leading, spacing: 4) {
+            if browseState.isReEnriching {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Re-enriching: \(browseState.reEnrichPhase)")
+                        .font(.caption)
+                    if browseState.reEnrichTotal > 0 {
+                        Text("\(browseState.reEnrichProcessed) of \(browseState.reEnrichTotal)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Button {
+                        browseState.cancelReEnrich()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
-            Spacer()
-            Button {
-                browseState.cancelReEnrich()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundColor(.secondary)
+            if !browseState.reEnrichSkipped.isEmpty {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.yellow)
+                        .font(.caption)
+                    Text("Skipped: \(browseState.reEnrichSkipped.joined(separator: ", "))")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Button {
+                        browseState.reEnrichSkipped = []
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)

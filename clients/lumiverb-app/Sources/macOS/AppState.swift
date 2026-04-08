@@ -11,14 +11,44 @@ class AppState: ObservableObject {
     @Published var libraries: [Library] = []
     @Published var serverURL: String = ""
 
+    // Vision API configuration (local overrides > tenant defaults)
+    @Published var visionApiUrl: String = ""
+    @Published var visionApiKey: String = ""
+    @Published var visionModelId: String = ""
+    // Tenant-provided defaults (read-only, shown in UI for reference)
+    @Published var tenantVisionApiUrl: String = ""
+    @Published var tenantVisionModelId: String = ""
+
     private(set) var client: APIClient?
     private(set) var authManager: AuthManager?
+
+    /// Resolved vision config: local override > tenant default.
+    var resolvedVisionApiUrl: String {
+        visionApiUrl.isEmpty ? tenantVisionApiUrl : visionApiUrl
+    }
+    var resolvedVisionApiKey: String { visionApiKey }
+    var resolvedVisionModelId: String {
+        visionModelId.isEmpty ? tenantVisionModelId : visionModelId
+    }
+    var isVisionConfigured: Bool {
+        !resolvedVisionApiUrl.isEmpty && !resolvedVisionModelId.isEmpty
+    }
 
     init() {
         // Try to restore saved server URL
         if let saved = UserDefaults.standard.string(forKey: "serverURL"), !saved.isEmpty {
             serverURL = saved
         }
+        // Restore saved vision config
+        visionApiUrl = UserDefaults.standard.string(forKey: "visionApiUrl") ?? ""
+        visionApiKey = UserDefaults.standard.string(forKey: "visionApiKey") ?? ""
+        visionModelId = UserDefaults.standard.string(forKey: "visionModelId") ?? ""
+    }
+
+    func saveVisionConfig() {
+        UserDefaults.standard.set(visionApiUrl, forKey: "visionApiUrl")
+        UserDefaults.standard.set(visionApiKey, forKey: "visionApiKey")
+        UserDefaults.standard.set(visionModelId, forKey: "visionModelId")
     }
 
     func configure(serverURL: String) {
@@ -88,6 +118,20 @@ class AppState: ObservableObject {
         }
     }
 
+    /// Fetch tenant context to get vision API defaults.
+    func fetchTenantContext() async {
+        guard let client else { return }
+        do {
+            let ctx: TenantContext = try await client.get("/v1/tenant/context")
+            tenantVisionApiUrl = ctx.visionApiUrl
+            tenantVisionModelId = ctx.visionModelId
+            // Don't overwrite local key with tenant key — tenant key
+            // is returned from context but users may want their own.
+        } catch {
+            // Non-fatal — local config still works
+        }
+    }
+
     private func fetchUserAndLibraries() async {
         guard let client else { return }
 
@@ -98,6 +142,7 @@ class AppState: ObservableObject {
             libraries = libs
             isAuthenticated = true
             connectionError = nil
+            await fetchTenantContext()
         } catch {
             let firstError = error
             // Token may be expired — try refresh
@@ -109,6 +154,7 @@ class AppState: ObservableObject {
                     libraries = libs
                     isAuthenticated = true
                     connectionError = nil
+                    await fetchTenantContext()
                 } catch {
                     connectionError = "After refresh: \(error)"
                 }

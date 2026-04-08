@@ -1070,6 +1070,77 @@ final class EnrichmentModelTests: XCTestCase {
         XCTAssertEqual((box?["x1"] as? Double)!, 0.1, accuracy: 0.01)
     }
 
+    func testDecodesBatchVisionResponse() throws {
+        let json = """
+        {"updated": 8, "skipped": 1}
+        """.data(using: .utf8)!
+
+        let response = try decoder.decode(BatchVisionResponse.self, from: json)
+        XCTAssertEqual(response.updated, 8)
+        XCTAssertEqual(response.skipped, 1)
+    }
+
+    func testEncodesVisionRequest() throws {
+        let request = BatchVisionRequest(items: [
+            BatchVisionRequest.Item(
+                assetId: "ast_001",
+                modelId: "openai-compatible",
+                modelVersion: "gpt-4o",
+                description: "A sunset over the ocean",
+                tags: ["sunset", "ocean", "landscape"]
+            ),
+        ])
+
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let data = try encoder.encode(request)
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+        let items = json?["items"] as? [[String: Any]]
+        XCTAssertEqual(items?.count, 1)
+        XCTAssertEqual(items?[0]["asset_id"] as? String, "ast_001")
+        XCTAssertEqual(items?[0]["model_id"] as? String, "openai-compatible")
+        XCTAssertEqual(items?[0]["description"] as? String, "A sunset over the ocean")
+        XCTAssertEqual(items?[0]["tags"] as? [String], ["sunset", "ocean", "landscape"])
+    }
+
+    func testDecodesTenantContext() throws {
+        let json = """
+        {
+            "tenant_id": "tnt_001",
+            "vision_api_url": "http://localhost:1234/v1",
+            "vision_api_key": "sk-test",
+            "vision_model_id": "gpt-4o"
+        }
+        """.data(using: .utf8)!
+
+        let ctx = try decoder.decode(TenantContext.self, from: json)
+        XCTAssertEqual(ctx.tenantId, "tnt_001")
+        XCTAssertEqual(ctx.visionApiUrl, "http://localhost:1234/v1")
+        XCTAssertEqual(ctx.visionApiKey, "sk-test")
+        XCTAssertEqual(ctx.visionModelId, "gpt-4o")
+    }
+
+    func testDecodesTenantContextEmptyFields() throws {
+        let json = """
+        {
+            "tenant_id": "tnt_001",
+            "vision_api_url": "",
+            "vision_api_key": "",
+            "vision_model_id": ""
+        }
+        """.data(using: .utf8)!
+
+        let ctx = try decoder.decode(TenantContext.self, from: json)
+        XCTAssertEqual(ctx.tenantId, "tnt_001")
+        XCTAssertTrue(ctx.visionApiUrl.isEmpty)
+    }
+
+    func testEnrichmentOperationIncludesVision() {
+        XCTAssertTrue(EnrichmentOperation.allCases.contains(.vision))
+        XCTAssertEqual(EnrichmentOperation.vision.rawValue, "Generate Descriptions")
+    }
+
     func testEncodesEmbeddingRequest() throws {
         let request = BatchEmbeddingsRequest(items: [
             BatchEmbeddingsRequest.Item(

@@ -7,6 +7,7 @@ public enum EnrichmentOperation: String, CaseIterable, Sendable {
     case faces = "Detect Faces"
     case embeddings = "Generate Embeddings"
     case ocr = "Extract Text"
+    case vision = "Generate Descriptions"
 }
 
 // MARK: - OCR
@@ -124,6 +125,44 @@ public struct TranscriptSubmitRequest: Encodable, Sendable {
 public struct TranscriptSubmitResponse: Decodable, Sendable {
     public let assetId: String
     public let status: String
+}
+
+// MARK: - Vision (descriptions/tags)
+
+/// Request body for `POST /v1/assets/batch-vision`.
+public struct BatchVisionRequest: Encodable, Sendable {
+    public struct Item: Encodable, Sendable {
+        public let assetId: String
+        public let modelId: String
+        public let modelVersion: String
+        public let description: String
+        public let tags: [String]
+
+        public init(assetId: String, modelId: String, modelVersion: String, description: String, tags: [String]) {
+            self.assetId = assetId
+            self.modelId = modelId
+            self.modelVersion = modelVersion
+            self.description = description
+            self.tags = tags
+        }
+    }
+
+    public let items: [Item]
+    public init(items: [Item]) { self.items = items }
+}
+
+/// Response from `POST /v1/assets/batch-vision`.
+public struct BatchVisionResponse: Decodable, Sendable {
+    public let updated: Int
+    public let skipped: Int
+}
+
+/// Response from `GET /v1/tenant/context`.
+public struct TenantContext: Decodable, Sendable {
+    public let tenantId: String
+    public let visionApiUrl: String
+    public let visionApiKey: String
+    public let visionModelId: String
 }
 
 // MARK: - Repair Summary

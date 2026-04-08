@@ -13,6 +13,9 @@ actor EnrichmentPipeline {
     private let client: APIClient
     private let libraryId: String
     private let concurrency: Int
+    private let visionApiUrl: String
+    private let visionApiKey: String
+    private let visionModelId: String
 
     private(set) var phase = ""
     private(set) var totalItems = 0
@@ -26,20 +29,31 @@ actor EnrichmentPipeline {
         let embeddingsProcessed: Int
         let facesProcessed: Int
         let ocrProcessed: Int
+        let visionProcessed: Int
         let errors: Int
     }
 
-    init(client: APIClient, libraryId: String, concurrency: Int = 4) {
+    init(
+        client: APIClient,
+        libraryId: String,
+        concurrency: Int = 4,
+        visionApiUrl: String = "",
+        visionApiKey: String = "",
+        visionModelId: String = ""
+    ) {
         self.client = client
         self.libraryId = libraryId
         self.concurrency = concurrency
+        self.visionApiUrl = visionApiUrl
+        self.visionApiKey = visionApiKey
+        self.visionModelId = visionModelId
     }
 
     func cancel() { cancelled = true }
 
     func run() async -> EnrichResult {
         guard !isRunning else {
-            return EnrichResult(embeddingsProcessed: 0, facesProcessed: 0, ocrProcessed: 0, errors: 0)
+            return EnrichResult(embeddingsProcessed: 0, facesProcessed: 0, ocrProcessed: 0, visionProcessed: 0, errors: 0)
         }
         isRunning = true
         cancelled = false
@@ -49,6 +63,7 @@ actor EnrichmentPipeline {
         var embedCount = 0
         var faceCount = 0
         var ocrCount = 0
+        var visionCount = 0
 
         // Step 1: CLIP embeddings (if model available)
         if CLIPProvider.isAvailable {
@@ -68,6 +83,12 @@ actor EnrichmentPipeline {
             ocrCount = await runOCR()
         }
 
+        // Step 4: Vision AI descriptions (if configured)
+        if !cancelled && VisionProvider.isConfigured(apiURL: visionApiUrl, modelId: visionModelId) {
+            phase = "vision"
+            visionCount = await runVision()
+        }
+
         phase = "done"
         isRunning = false
 
@@ -75,6 +96,7 @@ actor EnrichmentPipeline {
             embeddingsProcessed: embedCount,
             facesProcessed: faceCount,
             ocrProcessed: ocrCount,
+            visionProcessed: visionCount,
             errors: errorCount
         )
     }
@@ -240,6 +262,72 @@ actor EnrichmentPipeline {
             return response.updated
         } catch {
             lastError = "OCR batch submit: \(error)"
+            errorCount += 1
+            return 0
+        }
+    }
+
+    // MARK: - Vision AI descriptions
+
+    private func runVision() async -> Int {
+        let assets = await fetchAssets(missing: "missing_vision")
+        totalItems = assets.count
+        processedItems = 0
+        guard !assets.isEmpty else { return 0 }
+
+        var batch: [BatchVisionRequest.Item] = []
+        var count = 0
+
+        for asset in assets {
+            if cancelled { break }
+            guard let proxyData = await loadProxy(assetId: asset.assetId) else {
+                processedItems += 1
+                continue
+            }
+
+            do {
+                let result = try await VisionProvider.describe(
+                    imageData: proxyData,
+                    apiURL: visionApiUrl,
+                    apiKey: visionApiKey,
+                    modelId: visionModelId
+                )
+                batch.append(BatchVisionRequest.Item(
+                    assetId: asset.assetId,
+                    modelId: "openai-compatible",
+                    modelVersion: visionModelId,
+                    description: result.description,
+                    tags: result.tags
+                ))
+            } catch {
+                lastError = "\(asset.relPath): \(error)"
+                errorCount += 1
+            }
+
+            processedItems += 1
+
+            if batch.count >= 10 {
+                count += await submitVisionBatch(batch)
+                batch.removeAll()
+            }
+        }
+
+        if !batch.isEmpty {
+            count += await submitVisionBatch(batch)
+        }
+
+        return count
+    }
+
+    private func submitVisionBatch(_ items: [BatchVisionRequest.Item]) async -> Int {
+        do {
+            let response: BatchVisionResponse = try await client.post(
+                "/v1/assets/batch-vision",
+                body: BatchVisionRequest(items: items)
+            )
+            return response.updated
+        } catch {
+            lastError = "Vision batch submit: \(error)"
             errorCount += 1
             return 0
         }

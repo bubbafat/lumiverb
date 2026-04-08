@@ -21,6 +21,9 @@ struct ReEnrichMenu: View {
             Button("Extract Text") {
                 onReEnrich([.ocr])
             }
+            Button("Generate Descriptions") {
+                onReEnrich([.vision])
+            }
             Divider()
             Button("All") {
                 onReEnrich(Set(EnrichmentOperation.allCases))

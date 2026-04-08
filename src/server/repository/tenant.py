@@ -2370,15 +2370,14 @@ class FaceRepository:
         """
         from sqlalchemy import delete as sa_delete
 
-        # Delete face_person_matches for faces being replaced
+        # Delete ALL existing faces for this asset (regardless of model).
+        # An asset should only have one set of face detections active at a time,
+        # even if re-detected by a different provider (e.g. insightface → apple_vision).
         old_face_ids = [
             row[0]
             for row in self._session.execute(
-                text(
-                    "SELECT face_id FROM faces"
-                    " WHERE asset_id = :aid AND detection_model = :dm AND detection_model_version = :dmv"
-                ),
-                {"aid": asset_id, "dm": detection_model, "dmv": detection_model_version},
+                text("SELECT face_id FROM faces WHERE asset_id = :aid"),
+                {"aid": asset_id},
             ).fetchall()
         ]
         if old_face_ids:
@@ -2394,13 +2393,9 @@ class FaceRepository:
                 {"fids": old_face_ids},
             )
 
-        # Delete existing faces for this asset + model combo
+        # Delete all existing faces for this asset
         self._session.execute(
-            sa_delete(Face).where(
-                Face.asset_id == asset_id,
-                Face.detection_model == detection_model,
-                Face.detection_model_version == detection_model_version,
-            )
+            sa_delete(Face).where(Face.asset_id == asset_id)
         )
 
         face_ids: list[str] = []

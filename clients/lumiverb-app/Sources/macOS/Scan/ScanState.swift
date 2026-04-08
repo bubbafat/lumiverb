@@ -157,7 +157,10 @@ class ScanState: ObservableObject {
                 phase = "enriching"
                 let enrichPipeline = EnrichmentPipeline(
                     client: client,
-                    libraryId: library.libraryId
+                    libraryId: library.libraryId,
+                    visionApiUrl: appState.resolvedVisionApiUrl,
+                    visionApiKey: appState.resolvedVisionApiKey,
+                    visionModelId: appState.resolvedVisionModelId
                 )
                 startEnrichProgressPolling(pipeline: enrichPipeline)
                 let enrichResult = await enrichPipeline.run()
