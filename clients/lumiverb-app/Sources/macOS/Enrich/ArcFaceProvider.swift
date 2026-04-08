@@ -1,16 +1,17 @@
 import Foundation
 import CoreML
-import Vision
-import AppKit
+import LumiverbKit
 
-/// ArcFace face embedding provider using CoreML.
+/// macOS-target shim around `LumiverbKit.FaceEmbedding`.
 ///
-/// Requires a converted ArcFace .mlmodelc bundle at a known path.
-/// Produces 512-dimensional face embeddings compatible with the Python
-/// InsightFace ArcFace embeddings used by the server for face clustering.
+/// Owns the model file: bundle/`~/.lumiverb/models` resolution, on-demand
+/// download via `ModelDownloader`, and the in-memory `MLModel` cache. The
+/// inference itself lives in `LumiverbKit.FaceEmbedding` so that
+/// the embedding pipeline can be tested end to end from the LumiverbKit
+/// test target.
 ///
-/// Model conversion: see `docs/adr/014-native-clients.md` for the
-/// ONNX → CoreML conversion pipeline using coremltools.
+/// Model conversion: see `docs/adr/014-native-clients.md` and
+/// `scripts/convert-models/convert_arcface.py`.
 enum ArcFaceProvider {
 
     static let modelId = "arcface"
@@ -50,107 +51,31 @@ enum ArcFaceProvider {
     static func ensureAvailable() async throws {
         if isAvailable { return }
         let url = try await ModelDownloader.ensureAvailable(ModelDownloader.arcFace)
-        // Pre-load into cache
         let model = try MLModel(contentsOf: url)
         cachedModel = model
     }
 
-    /// Compute a 512-dimensional face embedding from a cropped face image.
+    /// Compute a 512-dimensional ArcFace embedding for a pre-aligned face crop.
     ///
-    /// The input should be a tightly cropped face image (from the bounding box
-    /// returned by FaceDetectionProvider), resized to 112x112.
+    /// Caller is responsible for landmark-based alignment via
+    /// `LumiverbKit.FaceAlignment.alignedCrop` (or
+    /// `FaceDetectionProvider.extractAlignedFaceCrop` which wraps it). Passing
+    /// a raw bbox crop instead of an aligned crop produces embeddings that
+    /// look valid but contain no identity signal — ArcFace's filters were
+    /// trained on inputs warped to its canonical 112×112 template.
     static func embed(faceImage: CGImage) throws -> [Float] {
         let model = try loadModel()
-
-        // ArcFace expects 112x112 input — resize the face crop
-        guard let resized = resize(faceImage, to: CGSize(width: 112, height: 112)) else {
-            throw ArcFaceError.resizeFailed
-        }
-
-        // Convert to CVPixelBuffer for MLModel input
-        guard let pixelBuffer = cgImageToPixelBuffer(resized, width: 112, height: 112) else {
-            throw ArcFaceError.conversionFailed
-        }
-
-        let input = try MLDictionaryFeatureProvider(dictionary: ["input": pixelBuffer])
-        let output = try model.prediction(from: input)
-
-        guard let multiArray = output.featureValue(for: "output")?.multiArrayValue else {
-            throw ArcFaceError.inferenceFailure
-        }
-
-        let count = multiArray.count
-        var vector = [Float](repeating: 0, count: count)
-        let pointer = multiArray.dataPointer.bindMemory(to: Float.self, capacity: count)
-        for i in 0..<count { vector[i] = pointer[i] }
-
-        // L2 normalize
-        let norm = sqrt(vector.reduce(0) { $0 + $1 * $1 })
-        if norm > 0 { vector = vector.map { $0 / norm } }
-
-        return vector
-    }
-
-    // MARK: - Image helpers
-
-    private static func resize(_ image: CGImage, to size: CGSize) -> CGImage? {
-        let context = CGContext(
-            data: nil,
-            width: Int(size.width),
-            height: Int(size.height),
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        )
-        context?.interpolationQuality = .high
-        context?.draw(image, in: CGRect(origin: .zero, size: size))
-        return context?.makeImage()
-    }
-
-    private static func cgImageToPixelBuffer(_ image: CGImage, width: Int, height: Int) -> CVPixelBuffer? {
-        var pixelBuffer: CVPixelBuffer?
-        let attrs: [String: Any] = [
-            kCVPixelBufferCGImageCompatibilityKey as String: true,
-            kCVPixelBufferCGBitmapContextCompatibilityKey as String: true,
-        ]
-        let status = CVPixelBufferCreate(
-            kCFAllocatorDefault, width, height,
-            kCVPixelFormatType_32BGRA, attrs as CFDictionary, &pixelBuffer
-        )
-        guard status == kCVReturnSuccess, let buffer = pixelBuffer else { return nil }
-
-        CVPixelBufferLockBaseAddress(buffer, [])
-        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
-
-        guard let context = CGContext(
-            data: CVPixelBufferGetBaseAddress(buffer),
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
-        ) else { return nil }
-
-        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-        return buffer
+        return try FaceEmbedding.embed(faceImage: faceImage, model: model)
     }
 }
 
 enum ArcFaceError: Error, CustomStringConvertible {
     case modelNotFound
-    case resizeFailed
-    case conversionFailed
-    case inferenceFailure
 
     var description: String {
         switch self {
         case .modelNotFound:
             return "ArcFace model not found. Place ArcFace.mlmodelc in ~/.lumiverb/models/ or the app bundle."
-        case .resizeFailed: return "ArcFace: face crop resize failed"
-        case .conversionFailed: return "ArcFace: pixel buffer conversion failed"
-        case .inferenceFailure: return "ArcFace: inference produced no output"
         }
     }
 }
