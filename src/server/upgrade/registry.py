@@ -8,6 +8,9 @@ from src.server.upgrade.steps.backfill_artifact_sha256 import (
     BackfillThumbnailSha256Step,
     BackfillSceneRepSha256Step,
 )
+from src.server.upgrade.steps.cleanup_orphan_asset_children import (
+    CleanupOrphanAssetChildrenStep,
+)
 
 
 def registered_upgrade_steps() -> Sequence[UpgradeStep]:
@@ -16,5 +19,6 @@ def registered_upgrade_steps() -> Sequence[UpgradeStep]:
         BackfillProxySha256Step(),
         BackfillThumbnailSha256Step(),
         BackfillSceneRepSha256Step(),
+        CleanupOrphanAssetChildrenStep(),
     ]
 

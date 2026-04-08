@@ -81,13 +81,21 @@ def test_step_info_fields() -> None:
 
 
 @pytest.mark.fast
-def test_registered_steps_are_three_backfill_steps() -> None:
+def test_registered_steps_in_expected_order() -> None:
+    """Pin the registered upgrade-step list and order.
+
+    Steps run in order, so adding one in the wrong position can change
+    behavior. The orphan-cleanup step lands last because it must run
+    *after* the artifact-hash backfills (themselves data-only changes
+    that can run in any order against the live tenant).
+    """
     steps = registered_upgrade_steps()
     ids = [s.info.step_id for s in steps]
     assert ids == [
         "backfill_proxy_sha256",
         "backfill_thumbnail_sha256",
         "backfill_scene_rep_sha256",
+        "cleanup_orphan_asset_children",
     ]
 
 

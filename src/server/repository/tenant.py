@@ -788,6 +788,25 @@ class AssetRepository:
         """
         Hard delete trashed assets and all related rows in FK-safe order.
         Only deletes rows where deleted_at IS NOT NULL. Returns count of deleted asset rows.
+
+        Every table that holds an ``asset_id`` foreign key must be cleaned
+        here — none of the FK constraints are declared with
+        ``ON DELETE CASCADE``, so missing one leaves orphans whose dead
+        references break downstream lookups (the original symptom: cluster
+        review surfaced face crops whose owning asset 404'd in the
+        lightbox). The full child set is:
+
+        - ``asset_metadata``        (1:1)
+        - ``asset_embeddings``      (1:N per model)
+        - ``video_scenes``          (video assets only)
+        - ``video_index_chunks``    (video assets only)
+        - ``faces`` + transitive ``face_person_matches`` and a NULL on
+          ``people.representative_face_id`` so the FK on Person doesn't
+          block the face delete
+        - ``collection_assets``     (membership rows)
+        - ``asset_ratings``         (per-user)
+        - ``collections.cover_asset_id`` is nullable — set to NULL rather
+          than deleting the collection itself
         """
         if not asset_ids:
             return 0
@@ -808,6 +827,52 @@ class AssetRepository:
             text("DELETE FROM video_index_chunks WHERE asset_id = ANY(:asset_ids)"),
             params,
         )
+
+        # Faces have two FKs pointing back at them — face_person_matches
+        # and people.representative_face_id — so they must be cleared
+        # before the face rows themselves can be deleted.
+        self._session.execute(
+            text(
+                "DELETE FROM face_person_matches"
+                " WHERE face_id IN ("
+                "   SELECT face_id FROM faces WHERE asset_id = ANY(:asset_ids)"
+                " )"
+            ),
+            params,
+        )
+        self._session.execute(
+            text(
+                "UPDATE people SET representative_face_id = NULL"
+                " WHERE representative_face_id IN ("
+                "   SELECT face_id FROM faces WHERE asset_id = ANY(:asset_ids)"
+                " )"
+            ),
+            params,
+        )
+        self._session.execute(
+            text("DELETE FROM faces WHERE asset_id = ANY(:asset_ids)"),
+            params,
+        )
+
+        # Collection membership and ratings reference asset_id directly.
+        self._session.execute(
+            text("DELETE FROM collection_assets WHERE asset_id = ANY(:asset_ids)"),
+            params,
+        )
+        self._session.execute(
+            text("DELETE FROM asset_ratings WHERE asset_id = ANY(:asset_ids)"),
+            params,
+        )
+        # Cover image is a nullable FK — null it out instead of cascading
+        # the whole collection.
+        self._session.execute(
+            text(
+                "UPDATE collections SET cover_asset_id = NULL"
+                " WHERE cover_asset_id = ANY(:asset_ids)"
+            ),
+            params,
+        )
+
         result = self._session.execute(
             text(
                 "DELETE FROM assets WHERE asset_id = ANY(:asset_ids) AND deleted_at IS NOT NULL RETURNING asset_id"
