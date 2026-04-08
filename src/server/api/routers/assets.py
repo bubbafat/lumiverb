@@ -1427,17 +1427,30 @@ def upsert_asset(
 
 
 class FaceDetectionItem(BaseModel):
+    """A single detected face submitted by any client.
+
+    bounding_box: Normalized fractional coordinates (0.0–1.0).
+        Canonical format: {x, y, w, h} — top-left origin, width/height.
+        Also accepted: {x1, y1, x2, y2} — top-left and bottom-right corners.
+        The server normalizes to {x, y, w, h} before storage.
+    """
     bounding_box: dict[str, float]
     detection_confidence: float
     embedding: list[float] | None = None
 
 
 def _normalize_bounding_box(bb: dict[str, float]) -> dict[str, float]:
-    """Normalize bounding box to {x, y, w, h} format.
+    """Normalize bounding box to canonical {x, y, w, h} format.
 
-    Accepts both:
-      - {x, y, w, h}: position + size (Python CLI / InsightFace)
-      - {x1, y1, x2, y2}: two corners (Swift client / Apple Vision)
+    All clients MUST submit bounding boxes as normalized fractions (0.0–1.0)
+    with top-left origin. The server stores and returns {x, y, w, h}.
+
+    Accepted input formats:
+      - {x, y, w, h}: position + size — used by Python CLI (InsightFace)
+      - {x1, y1, x2, y2}: two corners — used by Swift client (Apple Vision)
+
+    Output format (stored in DB, returned by API, used by web UI):
+      - {x, y, w, h}: top-left corner + width/height, all 0.0–1.0
     """
     if "x" in bb:
         return bb
