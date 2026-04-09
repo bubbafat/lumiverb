@@ -1,3 +1,5 @@
+> **Archived 2026-04-09** — Fully implemented (all 4 phases complete)
+
 # ADR-010: Person Recognition UI
 
 ## Status

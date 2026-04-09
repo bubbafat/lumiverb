@@ -1,3 +1,5 @@
+> **Archived 2026-04-09** — Fully implemented (all 3 phases complete)
+
 # ADR-013: Video Transcription
 
 ## Status

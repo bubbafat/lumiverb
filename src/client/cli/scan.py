@@ -7,7 +7,7 @@ and a local proxy cache entry with SHA sidecar.
 Change detection compares local SHA-256 against server-stored values to
 classify files as new, changed, unchanged, or deleted.
 
-See docs/adr/011-ingest-refactor-scan-and-enrich.md for full design.
+See docs/archive/011-ingest-refactor-scan-and-enrich.md for full design.
 """
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+> **Archived 2026-04-09** — Fully implemented (all 4 phases complete)
+
 # ADR-011: Ingest Refactor — Scan and Enrich
 
 ## Status

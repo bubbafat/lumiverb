@@ -1,3 +1,5 @@
+> **Archived 2026-04-09** — Fully implemented (all 2 phases complete)
+
 # ADR-009: Face Detection and Person Recognition
 
 ## Status

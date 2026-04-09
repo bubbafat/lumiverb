@@ -1,3 +1,5 @@
+> **Archived 2026-04-09** — Fully implemented (all 4 phases complete)
+
 # ADR-008: Unified Browse and Saved Views
 
 ## Status
