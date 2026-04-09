@@ -1,95 +1,112 @@
 import Foundation
 import Vision
-import AppKit
-import LumiverbKit
+import CoreGraphics
 
 /// Detects faces in images using Apple Vision framework.
 ///
 /// Uses `VNDetectFaceLandmarksRequest` for bounding boxes, confidence, and
 /// the facial landmarks needed for ArcFace alignment. Fully local, no model
-/// downloads needed — built into macOS 14+.
+/// downloads needed — built into macOS 14+ / iOS 17+.
 ///
-/// **Two sharpness gates run in series.** A face must pass both to be
-/// emitted:
+/// **Sharpness is judged by `VNDetectFaceCaptureQualityRequest` only.**
+/// Vision's capture-quality scorer is purpose-built to answer "is this
+/// face usable for recognition" — it evaluates blur, lighting, occlusion,
+/// *and* pose together, which is exactly the signal we want. The gate
+/// runs on the landmark observations from the first pass, so no
+/// re-detection is needed.
 ///
-/// 1. ``LumiverbKit.ImageQuality.laplacianVariance`` ≥ 15.0 — the
-///    classic Python-compatible gate. Cheap, runs on the proxy crop,
-///    easily tested in the shared package. Catches obvious motion blur
-///    and totally out-of-focus crops, but is noisy: a flat bald face
-///    can score lower than a bearded face of the same sharpness, and
-///    background subjects with high-frequency texture (foliage, fabric)
-///    sneak through with deceptively high variance.
-/// 2. ``VNDetectFaceCaptureQualityRequest`` ≥ ``minFaceCaptureQuality``
-///    — Apple's purpose-built "is this face usable for recognition"
-///    score. It evaluates blur, lighting, occlusion, *and* pose
-///    together, which is exactly what we want. Catches the case where
-///    Laplacian was fooled by background texture (the canonical example:
-///    a defocused subject behind a sharp foreground person scores
-///    deceptively high on Laplacian but low on Vision's quality).
+/// Historical note: until 2026-04 this code also ran a Laplacian-variance
+/// gate on the face crop as a cheap first filter, matching the Python
+/// InsightFace provider. It was removed after it was found dropping a
+/// perfectly sharp, large, frontal face (`DSC05984.ARW` — smooth-skinned
+/// subject, Vision confidence 1.000, `faceCaptureQuality` 0.612, Laplacian
+/// 10.45 < threshold 15.0). Laplacian on a bbox crop measures local
+/// high-frequency content, which on a face is dominated by skin texture —
+/// so it conflates "sharp" with "textured" and systematically under-scores
+/// smooth-skinned subjects (kids, soft lighting) while over-scoring
+/// bearded/stubbled ones. The Vision scorer sees all of this and more,
+/// so running Laplacian as a *preflight* to it is strictly worse: it can
+/// only drop faces the better scorer would have kept. Do not re-add it
+/// without a concrete failure case Vision's scorer cannot catch.
 ///
-/// Quality gates otherwise match the Python InsightFace provider to
-/// ensure consistent results across clients — confidence ≥ 0.5, ≥ 40 px
-/// face width, ≥ 0.3% image-area fraction, ≥ 15% of the largest-face
-/// area. See `src/client/workers/faces/insightface_provider.py` for the
-/// shared reference.
+/// Numeric quality gates still match the Python InsightFace provider —
+/// confidence ≥ 0.5, ≥ 40 px face width, ≥ 0.3% image-area fraction,
+/// ≥ 15% of the largest-face area. See
+/// `src/client/workers/faces/insightface_provider.py` for the shared
+/// reference; Python keeps its Laplacian gate because it has no
+/// equivalent to Vision's capture-quality scorer.
 ///
 /// Vision supplies bounding boxes and landmarks; embeddings come from
-/// `ArcFaceProvider` (CoreML). The 5-point landmarks Vision produces are
-/// converted to ArcFace's canonical template via
-/// `LumiverbKit.FaceLandmarks.extractAlignmentLandmarks`, and the
-/// Laplacian gate is computed by `LumiverbKit.ImageQuality.laplacianVariance`
-/// — both live in the shared package so they can be unit-tested.
-enum FaceDetectionProvider {
+/// `ArcFaceProvider` (CoreML) in the macOS target. The 5-point landmarks
+/// Vision produces are converted to ArcFace's canonical template via
+/// ``FaceLandmarks/extractAlignmentLandmarks(from:imageWidth:imageHeight:)``.
+public enum FaceDetectionProvider {
 
     // MARK: - Quality gate thresholds (match Python insightface_provider.py)
 
     /// Minimum Vision detection confidence (Python: MIN_DETECTION_CONFIDENCE = 0.5).
-    static let minDetectionConfidence: Float = 0.5
+    public static let minDetectionConfidence: Float = 0.5
 
     /// Minimum bounding box area as fraction of image (Python: MIN_BBOX_AREA_FRACTION = 0.003).
-    static let minBboxAreaFraction: Float = 0.003
+    public static let minBboxAreaFraction: Float = 0.003
 
     /// Minimum face width in pixels (Python: MIN_FACE_PIXELS = 40).
-    static let minFacePixels: Float = 40
+    public static let minFacePixels: Float = 40
 
     /// Must be >= 15% area of the largest detected face (Python: MIN_RELATIVE_SIZE = 0.15).
-    static let minRelativeSize: Float = 0.15
+    public static let minRelativeSize: Float = 0.15
 
-    /// Minimum Laplacian variance — drops blurry / out-of-focus faces that would
-    /// embed unreliably and pollute clusters. Matches Python's
-    /// `MIN_LAPLACIAN_VARIANCE = 15.0` computed via `cv2.Laplacian(gray, CV_64F)`
-    /// with the default 3x3 4-neighbor kernel `[0,1,0; 1,-4,1; 0,1,0]`.
-    static let minLaplacianVariance: Double = 15.0
-
-    /// Minimum Vision face capture quality (0…1). Apple recommends ≥ 0.5
-    /// for identity-document quality; 0.4 is the conventional clustering
-    /// threshold. Calibrated against a real library where the Laplacian
-    /// gate (15.0) was passing visibly-unrecognizable defocused
-    /// background subjects scoring 25+ — Vision's quality scorer
-    /// catches them because it accounts for pose and global blur, not
-    /// just local high-frequency content.
+    /// Minimum Vision face capture quality (0…1). Apple's rough guidance:
+    /// ≥ 0.5 is "identity-document grade," lower values are still usable
+    /// for recognition but with diminishing confidence.
     ///
-    /// Used as a *second* gate after the Laplacian variance check.
-    /// Faces must pass both to be emitted; if Vision's quality scorer
-    /// fails to run for any reason the gate falls open and only the
-    /// Laplacian check applies (the prior behavior).
-    static let minFaceCaptureQuality: Float = 0.4
+    /// Calibrated against the `face_single.jpg`, `face_group.jpg`, and
+    /// `face_crowd.jpg` test fixtures:
+    ///
+    ///   - sharp frontal iPhone portrait  (`face_single`) → 0.365
+    ///   - group shot, close subjects     (`face_group`)  → 0.572 / 0.578
+    ///   - crowd, middle-distance subject (`face_crowd`)  → 0.383
+    ///   - crowd, tiny background faces   (`face_crowd`)  → 0.176–0.304
+    ///
+    /// At 0.3 the gate keeps every fixture face that is also ≥ 40 px
+    /// wide and ≥ 0.3% of the image area, and drops the tiny
+    /// background subjects in the crowd scene (all ≤ 0.304). An earlier
+    /// calibration at 0.4 was too aggressive — it dropped the sharp
+    /// iPhone portrait at 0.365, which was a real false-negative hidden
+    /// by a test suite that was bypassing the gate chain. Do not raise
+    /// this back without re-running the fixture calibration.
+    ///
+    /// This is the only sharpness gate on the Swift path. If the quality
+    /// scorer fails to run for any reason, the gate falls open and the
+    /// face is accepted — Vision's detector confidence is still checked
+    /// independently via ``minDetectionConfidence``.
+    public static let minFaceCaptureQuality: Float = 0.3
 
     /// Detected face with normalized bounding box and optional landmarks.
-    struct DetectedFace: Sendable {
+    public struct DetectedFace: Sendable {
         /// Normalized bounding box (0.0-1.0): x1, y1 (top-left), x2, y2 (bottom-right).
-        let boundingBox: FacesSubmitRequest.BoundingBox
-        let confidence: Float
+        public let boundingBox: FacesSubmitRequest.BoundingBox
+        public let confidence: Float
         /// 5 facial landmarks in pixel coords (left eye, right eye, nose, left mouth, right mouth).
         /// Used for ArcFace alignment. Nil if landmarks unavailable.
-        let landmarks: [CGPoint]?
+        public let landmarks: [CGPoint]?
+
+        public init(
+            boundingBox: FacesSubmitRequest.BoundingBox,
+            confidence: Float,
+            landmarks: [CGPoint]?
+        ) {
+            self.boundingBox = boundingBox
+            self.confidence = confidence
+            self.landmarks = landmarks
+        }
     }
 
-    static let detectionModel = "apple_vision"
-    static let detectionModelVersion = "1"
+    public static let detectionModel = "apple_vision"
+    public static let detectionModelVersion = "1"
 
     /// Detect faces in an image at the given URL.
-    static func detectFaces(from imageURL: URL) throws -> [DetectedFace] {
+    public static func detectFaces(from imageURL: URL) throws -> [DetectedFace] {
         guard let cgImage = ImageLoading.loadOriented(from: imageURL) else {
             throw FaceDetectionError.unreadableImage(imageURL.lastPathComponent)
         }
@@ -97,7 +114,7 @@ enum FaceDetectionProvider {
     }
 
     /// Detect faces from proxy cache data.
-    static func detectFaces(from imageData: Data) throws -> [DetectedFace] {
+    public static func detectFaces(from imageData: Data) throws -> [DetectedFace] {
         guard let cgImage = ImageLoading.loadOriented(from: imageData) else {
             throw FaceDetectionError.unreadableImage("proxy data")
         }
@@ -109,7 +126,7 @@ enum FaceDetectionProvider {
     /// facial landmarks, then chains VNDetectFaceCaptureQualityRequest
     /// against those observations to score each face's recognition
     /// quality (blur / pose / lighting / occlusion).
-    static func detectFaces(from cgImage: CGImage) throws -> [DetectedFace] {
+    public static func detectFaces(from cgImage: CGImage) throws -> [DetectedFace] {
         let landmarksRequest = VNDetectFaceLandmarksRequest()
 
         let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
@@ -125,8 +142,7 @@ enum FaceDetectionProvider {
         // ``faceCaptureQuality`` property. Order is preserved 1:1 with
         // the input array, so we can index by position. If this fails
         // for any reason (Vision unavailable, perform throws) the gate
-        // falls open and only the Laplacian check applies — see
-        // ``minFaceCaptureQuality`` docs.
+        // falls open — see ``minFaceCaptureQuality`` docs.
         let qualityScores: [Float?] = {
             let qualityRequest = VNDetectFaceCaptureQualityRequest()
             qualityRequest.inputFaceObservations = observations
@@ -181,21 +197,11 @@ enum FaceDetectionProvider {
                 continue
             }
 
-            // Sharpness gate 1: Laplacian variance on the face crop.
-            // Cheap, runs on every detected face. Catches obvious motion
-            // blur and totally out-of-focus crops.
-            let sharpness = ImageQuality.laplacianVariance(
-                of: cgImage, bboxTopLeft: (x1, y1, x2, y2)
-            )
-            if sharpness < minLaplacianVariance {
-                continue
-            }
-
-            // Sharpness gate 2: Vision's purpose-built capture quality
-            // score. Catches the case where a defocused background
-            // subject scores deceptively high on Laplacian (because of
-            // ambient texture) but is visibly unrecognizable. Falls
-            // open if Vision didn't return a score for this index.
+            // Sharpness gate: Vision's purpose-built capture quality
+            // score (blur / pose / lighting / occlusion, all-in-one).
+            // Falls open if Vision didn't return a score for this index.
+            // See the type docstring for why this is the only sharpness
+            // gate on the Swift path.
             if let q = qualityScores[idx], q < minFaceCaptureQuality {
                 continue
             }
@@ -224,21 +230,17 @@ enum FaceDetectionProvider {
             .map(\.detection)
     }
 
-    // MARK: - Helpers live in LumiverbKit
-    //
-    // Pure math helpers — landmark extraction, image quality, similarity-
-    // transform alignment, and ArcFace inference — all live in LumiverbKit
-    // so they can be unit-tested from the Swift package test target.
+    // MARK: - Alignment helpers
 
     /// Extract an aligned 112x112 face crop for ArcFace embedding.
     ///
     /// If landmarks are available, computes a similarity transform matching InsightFace's
     /// `norm_crop` alignment (canonical `arcface_dst` template) via
-    /// `LumiverbKit.FaceAlignment.alignedCrop`. This produces embeddings
+    /// ``FaceAlignment/alignedCrop(from:landmarks:)``. This produces embeddings
     /// compatible with existing Python InsightFace embeddings.
     ///
     /// Falls back to a simple padded bbox crop if landmarks are unavailable.
-    static func extractAlignedFaceCrop(from image: CGImage, face: DetectedFace) -> CGImage? {
+    public static func extractAlignedFaceCrop(from image: CGImage, face: DetectedFace) -> CGImage? {
         if let landmarks = face.landmarks {
             return FaceAlignment.alignedCrop(from: image, landmarks: landmarks)
         }
@@ -253,21 +255,21 @@ enum FaceDetectionProvider {
     ///
     /// Used by the enrichment pipeline to load a face's source image once and
     /// share it across detection + alignment. Routes through
-    /// `LumiverbKit.ImageLoading.loadOriented` so callers always see
-    /// right-side-up pixels regardless of how the JPG was stored — the naive
-    /// `NSImage(data:)` path this helper used to wrap silently dropped EXIF
-    /// orientation, which made face detection operate in the wrong
+    /// ``ImageLoading/loadOriented(from:)-<data overload>`` so callers always
+    /// see right-side-up pixels regardless of how the JPG was stored — the
+    /// naive `NSImage(data:)` path this helper used to wrap silently dropped
+    /// EXIF orientation, which made face detection operate in the wrong
     /// coordinate system for almost every modern phone photo and was the
     /// dominant cause of cluster collapse on real libraries.
-    static func cgImage(from data: Data) -> CGImage? {
+    public static func cgImage(from data: Data) -> CGImage? {
         return ImageLoading.loadOriented(from: data)
     }
 }
 
-enum FaceDetectionError: Error, CustomStringConvertible {
+public enum FaceDetectionError: Error, CustomStringConvertible {
     case unreadableImage(String)
 
-    var description: String {
+    public var description: String {
         switch self {
         case .unreadableImage(let file): return "Face detection: cannot read image: \(file)"
         }

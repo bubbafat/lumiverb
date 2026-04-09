@@ -12,8 +12,8 @@ import Foundation
 /// **History note:** this file used to re-implement the math inline because
 /// the production code lived as a private function inside the macOS-target
 /// `FaceDetectionProvider` and couldn't be imported. The math has since
-/// moved into `LumiverbKit.FaceAlignment` (alongside `FaceLandmarks` and
-/// `ImageQuality`) and these tests now exercise the real production code.
+/// moved into `LumiverbKit.FaceAlignment` (alongside `FaceLandmarks`) and
+/// these tests now exercise the real production code.
 final class SimilarityTransformTests: XCTestCase {
 
     // ArcFace canonical destination landmarks (112x112)
