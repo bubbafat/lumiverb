@@ -99,6 +99,30 @@ def list_people(
 
     items = []
     for person, face_count in rows:
+        # Backfill representative face if missing. This heals people
+        # whose previous representative was orphaned by face
+        # re-detection (submit_faces deletes all old face rows for an
+        # asset and inserts new ones with new ULIDs). The eager fix in
+        # FaceRepository.submit_faces re-picks a representative going
+        # forward; this lazy path covers people who were orphaned
+        # before that fix shipped, so the user doesn't see a grid full
+        # of blank tiles. Mirrors list_dismissed_people.
+        if not person.representative_face_id and face_count > 0:
+            from sqlalchemy import text as sa_text
+            rep = session.execute(
+                sa_text(
+                    "SELECT f.face_id FROM faces f "
+                    "JOIN face_person_matches m ON m.face_id = f.face_id "
+                    "WHERE m.person_id = :pid "
+                    "ORDER BY f.detection_confidence DESC NULLS LAST LIMIT 1"
+                ),
+                {"pid": person.person_id},
+            ).scalar()
+            if rep:
+                person.representative_face_id = rep
+                session.add(person)
+                session.commit()
+
         # Get representative face's asset_id for thumbnail
         rep_asset_id = None
         if person.representative_face_id:

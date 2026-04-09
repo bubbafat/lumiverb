@@ -2595,10 +2595,28 @@ class FaceRepository:
                 {"aid": asset_id},
             ).fetchall()
         ]
+        affected_person_ids: list[str] = []
         if old_face_ids:
             self._session.execute(
                 sa_delete(FacePersonMatch).where(FacePersonMatch.face_id.in_(old_face_ids))
             )
+            # Capture the people whose representative is about to dangle
+            # so we can re-pick a fresh face for each one after auto-
+            # assign runs below. Without this, redetection silently
+            # leaves named people with NULL representative_face_id and
+            # their preview tile in the people grid goes blank — see
+            # the lazy backfill in list_people / list_dismissed_people
+            # for the read-side counterpart.
+            affected_person_ids = [
+                row[0]
+                for row in self._session.execute(
+                    text(
+                        "SELECT person_id FROM people"
+                        " WHERE representative_face_id = ANY(:fids)"
+                    ),
+                    {"fids": old_face_ids},
+                ).fetchall()
+            ]
             # Null out representative_face_id on people pointing to these faces
             self._session.execute(
                 text(
@@ -2636,6 +2654,32 @@ class FaceRepository:
 
         # Auto-assign faces to known people by centroid proximity
         self._auto_assign_by_centroid(face_ids, faces)
+
+        # Re-pick representative_face_id for any person whose previous
+        # representative was deleted above. The auto-assign above will
+        # often have re-attached new faces from this very asset back to
+        # the same person, so the new representative is usually one of
+        # the freshly inserted face_ids; if not, fall back to any other
+        # face still attached to the person.
+        for pid in affected_person_ids:
+            new_rep = self._session.execute(
+                text(
+                    "SELECT f.face_id FROM faces f"
+                    " JOIN face_person_matches m ON m.face_id = f.face_id"
+                    " WHERE m.person_id = :pid"
+                    " ORDER BY f.detection_confidence DESC NULLS LAST"
+                    " LIMIT 1"
+                ),
+                {"pid": pid},
+            ).scalar()
+            if new_rep:
+                self._session.execute(
+                    text(
+                        "UPDATE people SET representative_face_id = :fid"
+                        " WHERE person_id = :pid"
+                    ),
+                    {"fid": new_rep, "pid": pid},
+                )
 
         _mark_clusters_dirty(self._session)
         self._session.commit()
