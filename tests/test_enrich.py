@@ -94,5 +94,5 @@ class TestEnrichCommand:
     def test_enrich_accepts_valid_job_types(self):
         """All ENRICH_TYPES are accepted by the command parser."""
         from src.client.cli.main import ENRICH_TYPES
-        expected = {"embed", "vision", "faces", "redetect-faces", "ocr", "video-scenes", "scene-vision", "search-sync", "all"}
+        expected = {"embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all"}
         assert set(ENRICH_TYPES) == expected

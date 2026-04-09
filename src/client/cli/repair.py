@@ -741,6 +741,17 @@ def run_repair(
     library_id = library["library_id"]
     library_name = library["name"]
 
+    # Filter helper: when asset_ids is set, restrict to those IDs only.
+    # Defined up here (rather than next to the per-type repair loop below)
+    # because the redetect-faces plan-building branch already needs to
+    # filter the page result before the plan is even built. Defining the
+    # closure later turned `_filter` into an unbound local at line 759 and
+    # crashed `lumiverb repair --job-type redetect-faces` on entry.
+    _id_set = set(asset_ids) if asset_ids else None
+
+    def _filter(assets: list[dict]) -> list[dict]:
+        return [a for a in assets if a["asset_id"] in _id_set] if _id_set else assets
+
     # Step 1: Get summary
     console.print(f"[bold]Checking library: {library_name}[/bold]")
     summary = get_repair_summary(client, library_id)
@@ -817,12 +828,6 @@ def run_repair(
     if dry_run:
         console.print("\n[dim]--dry-run: no changes made.[/dim]")
         return
-
-    # Filter helper: when asset_ids is set, restrict to those IDs only.
-    _id_set = set(asset_ids) if asset_ids else None
-
-    def _filter(assets: list[dict]) -> list[dict]:
-        return [a for a in assets if a["asset_id"] in _id_set] if _id_set else assets
 
     # Step 2: Execute repairs in logical order
     stats = _RepairStats()

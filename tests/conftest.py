@@ -16,6 +16,23 @@ import sys
 # when testcontainer Postgres stops before SQLAlchemy's pool flushes idle connections.
 os.environ.setdefault("SQLALCHEMY_NULLPOOL", "1")
 
+# pyvips imports libvips via cffi.dlopen, which on macOS only searches the
+# system dyld paths. uv's standalone Python builds do not have
+# /opt/homebrew/lib on that search list, so contributors who installed
+# libvips via Homebrew see ImportErrors at collection time. Pre-populating
+# DYLD_FALLBACK_LIBRARY_PATH from the Homebrew prefix at the top of the
+# test session lets dlopen find the dylib without forcing every contributor
+# to export the variable in their shell.
+if sys.platform == "darwin":
+    _existing_dyld = os.environ.get("DYLD_FALLBACK_LIBRARY_PATH", "")
+    for _candidate_dir in ("/opt/homebrew/lib", "/usr/local/lib"):
+        if os.path.isdir(_candidate_dir) and _candidate_dir not in _existing_dyld:
+            _existing_dyld = (
+                f"{_candidate_dir}:{_existing_dyld}" if _existing_dyld else _candidate_dir
+            )
+    if _existing_dyld:
+        os.environ["DYLD_FALLBACK_LIBRARY_PATH"] = _existing_dyld
+
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 

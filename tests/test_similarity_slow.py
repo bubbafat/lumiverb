@@ -342,8 +342,15 @@ def test_similar_from_ts_gt_to_ts_returns_422(similarity_client: Tuple[_AuthClie
 
 
 @pytest.mark.slow
+@pytest.mark.ai
 def test_search_by_image_basic(similarity_client: Tuple[_AuthClient, str, str]) -> None:
-    """POST /v1/similar/search-by-image returns ranked hits using CLIP embeddings."""
+    """POST /v1/similar/search-by-image returns ranked hits using CLIP embeddings.
+
+    Marked ``ai`` because it loads the real open_clip vision tower server-side.
+    Loading CLIP after the rest of the suite has already pulled in torch state
+    segfaults on macOS arm64, so this test is opted out of the default run and
+    must be exercised explicitly with ``pytest -m ai``.
+    """
     import base64
     import io
     from unittest.mock import patch

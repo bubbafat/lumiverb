@@ -71,6 +71,7 @@ flight_logs/
 .coverage
 .coverage.*
 coverage.xml
+coverage.json
 htmlcov/
 .tox/
 .nox/

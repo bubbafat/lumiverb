@@ -78,7 +78,16 @@ def people_client() -> Tuple[_AuthClient, str, str]:
 
 
 def _create_asset_with_faces(auth_client: _AuthClient, library_id: str, name: str, n_faces: int = 1) -> tuple[str, list[str]]:
-    """Create a test asset, submit faces, return (asset_id, face_ids)."""
+    """Create a test asset, submit faces, return (asset_id, face_ids).
+
+    Each face's embedding is derived from `name` so different helper calls
+    produce orthogonal-ish vectors. This prevents the server-side
+    `_auto_assign_by_centroid` pass from cross-attaching faces between
+    tests that share the module-scoped fixture.
+    """
+    import hashlib
+    import random as _random
+
     rel_path = f"photos/{name}.jpg"
     r = auth_client.post(
         "/v1/assets/upsert",
@@ -94,11 +103,13 @@ def _create_asset_with_faces(auth_client: _AuthClient, library_id: str, name: st
     r2 = auth_client.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
     asset_id = r2.json()["asset_id"]
 
+    seed = int(hashlib.sha256(name.encode()).hexdigest()[:8], 16)
+    rng = _random.Random(seed)
     faces = [
         {
             "bounding_box": {"x": 0.1 * i, "y": 0.1, "w": 0.1, "h": 0.15},
             "detection_confidence": 0.95 - 0.01 * i,
-            "embedding": [0.1 * (i + 1)] * 512,
+            "embedding": [rng.uniform(-1.0, 1.0) for _ in range(512)],
         }
         for i in range(n_faces)
     ]
