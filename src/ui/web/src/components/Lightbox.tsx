@@ -753,19 +753,24 @@ export function Lightbox({
                   // success state is invisible.
                   const borderColor = isNamed ? "border-emerald-400" : isHighlighted ? "border-red-500" : isDismissed ? "border-gray-500" : "border-white";
                   const isPopoverTarget = assignFaceId === face.face_id;
-                  // Auto-flip the popover anchor when the face is near
-                  // an edge of the image, so it doesn't clip off-screen.
-                  // The thresholds are intentionally generous: a face
-                  // whose bottom edge sits below 55% of the image
-                  // height anchors the popover *above* the face
-                  // instead of below; same for right-edge faces. This
-                  // matters most for super-close-up portraits where
-                  // the chin is near the bottom of the frame and the
-                  // popover's ~220px height would otherwise drop
-                  // entirely below the viewport.
-                  const faceBottom = face.bounding_box.y + face.bounding_box.h;
-                  const anchorAbove = faceBottom > 0.55;
-                  const anchorRight = face.bounding_box.x > 0.6;
+                  // Auto-flip the popover anchor based on which side
+                  // of the face has the most room. The previous
+                  // heuristic (anchor above when faceBottom > 0.55)
+                  // was wrong for tall faces near the top of the
+                  // image — a face spanning y=0.05..0.75 would anchor
+                  // above and clip off the *top* of the screen because
+                  // there was no room above. Compare room-above to
+                  // room-below directly and pick the larger; do the
+                  // same horizontally. The popover also gets
+                  // max-h-[80vh] overflow-y-auto so when neither side
+                  // has enough room (very large face) the contents
+                  // scroll inside the viewport instead of clipping.
+                  const roomAbove = face.bounding_box.y;
+                  const roomBelow = 1 - (face.bounding_box.y + face.bounding_box.h);
+                  const roomLeft = face.bounding_box.x;
+                  const roomRight = 1 - (face.bounding_box.x + face.bounding_box.w);
+                  const anchorAbove = roomAbove > roomBelow;
+                  const anchorRight = roomLeft > roomRight;
                   const popoverAnchorClass = [
                     anchorRight ? "right-0" : "left-0",
                     anchorAbove ? "bottom-full mb-1" : "top-full mt-1",
@@ -795,7 +800,7 @@ export function Lightbox({
                       {/* Face popover — assign (unidentified) or manage (identified) */}
                       {isPopoverTarget && (
                         <div
-                          className={`absolute z-50 w-64 rounded-lg border border-gray-600 bg-gray-800 p-3 shadow-xl ${popoverAnchorClass}`}
+                          className={`absolute z-50 w-64 max-h-[80vh] overflow-y-auto rounded-lg border border-gray-600 bg-gray-800 p-3 shadow-xl ${popoverAnchorClass}`}
                           onClick={(e) => e.stopPropagation()}
                         >
                           {isNamed && assignMode === "pick" ? (
