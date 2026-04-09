@@ -11,6 +11,9 @@ from src.server.upgrade.steps.backfill_artifact_sha256 import (
 from src.server.upgrade.steps.cleanup_orphan_asset_children import (
     CleanupOrphanAssetChildrenStep,
 )
+from src.server.upgrade.steps.clear_clobbered_video_preview_keys import (
+    ClearClobberedVideoPreviewKeysStep,
+)
 from src.server.upgrade.steps.recompute_centroids_for_trash_filter import (
     RecomputeCentroidsForTrashFilterStep,
 )
@@ -27,5 +30,7 @@ def registered_upgrade_steps() -> Sequence[UpgradeStep]:
         # waste a recompute on people who would have been emptied by
         # the cleanup step anyway.
         RecomputeCentroidsForTrashFilterStep(),
+        # Independent of the others — pure data fix on assets table.
+        ClearClobberedVideoPreviewKeysStep(),
     ]
 

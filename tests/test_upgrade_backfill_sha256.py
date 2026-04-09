@@ -97,6 +97,7 @@ def test_registered_steps_in_expected_order() -> None:
         "backfill_scene_rep_sha256",
         "cleanup_orphan_asset_children",
         "recompute_centroids_for_trash_filter",
+        "clear_clobbered_video_preview_keys",
     ]
 
 
