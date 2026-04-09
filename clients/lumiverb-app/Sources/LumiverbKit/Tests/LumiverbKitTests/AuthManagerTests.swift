@@ -112,7 +112,7 @@ final class AuthManagerTests: XCTestCase {
             baseURL: URL(string: "https://test.lumiverb.io")!,
             session: makeSession()
         )
-        auth = AuthManager(client: client, keychain: tokenStore)
+        auth = AuthManager(client: client, tokenStore: tokenStore)
     }
 
     override func tearDown() {

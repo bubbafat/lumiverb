@@ -38,6 +38,7 @@ enum SortOption: String, CaseIterable, Identifiable {
 /// Main browse window with library sidebar, media grid, and lightbox.
 struct BrowseWindow: View {
     @ObservedObject var appState: AppState
+    @ObservedObject var scanState: ScanState
     @StateObject private var browseState: BrowseState
     @StateObject private var peopleState: PeopleState
     @StateObject private var clusterReviewState: ClusterReviewState
@@ -47,8 +48,9 @@ struct BrowseWindow: View {
     /// view (M3), or the cluster review view (M5).
     @State private var section: SidebarSection = .library
 
-    init(appState: AppState) {
+    init(appState: AppState, scanState: ScanState) {
         self.appState = appState
+        self.scanState = scanState
         self._browseState = StateObject(wrappedValue: BrowseState(appState: appState))
         self._peopleState = StateObject(wrappedValue: PeopleState(appState: appState))
         self._clusterReviewState = StateObject(
@@ -61,6 +63,8 @@ struct BrowseWindow: View {
             LibrarySidebar(
                 libraries: appState.libraries,
                 browseState: browseState,
+                appState: appState,
+                scanState: scanState,
                 section: $section
             )
             .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 300)
@@ -87,6 +91,16 @@ struct BrowseWindow: View {
                         browseState: browseState,
                         client: appState.client
                     )
+                }
+
+                // Library-switch overlay. Sits above the content area so
+                // it's visible as soon as the user clicks a new library —
+                // before any network-bound load completes. Tied to
+                // `isChangingLibrary`, which is set synchronously in
+                // `handleSelectedLibraryChange()` and cleared when the
+                // first asset page comes back.
+                if browseState.isChangingLibrary && section == .library {
+                    changingLibraryOverlay
                 }
 
                 if browseState.selectedAssetId != nil {
@@ -160,32 +174,57 @@ struct BrowseWindow: View {
             }
             return .ignored
         }
-        .onKeyPress(.return) {
-            browseState.openFocusedAsset()
-            return .handled
-        }
+        // Arrow keys: lightbox navigates prev/next; grid scrolls one
+        // row up/down. Left/right are no-ops in grid mode (the grid
+        // has no concept of "selected cell" — click opens the lightbox).
         .onKeyPress(.leftArrow) {
             if browseState.selectedAssetId != nil {
                 browseState.navigateLightbox(direction: -1)
-            } else {
-                browseState.moveFocus(direction: -1)
+                return .handled
             }
-            return .handled
+            return .ignored
         }
         .onKeyPress(.rightArrow) {
             if browseState.selectedAssetId != nil {
                 browseState.navigateLightbox(direction: 1)
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(.upArrow) {
+            if browseState.selectedAssetId != nil {
+                browseState.navigateLightbox(direction: -1)
             } else {
-                browseState.moveFocus(direction: 1)
+                browseState.sendScrollCommand(.lineUp)
             }
             return .handled
         }
-        .onKeyPress(.upArrow) {
-            browseState.moveFocus(direction: -1, columns: 4)
+        .onKeyPress(.downArrow) {
+            if browseState.selectedAssetId != nil {
+                browseState.navigateLightbox(direction: 1)
+            } else {
+                browseState.sendScrollCommand(.lineDown)
+            }
             return .handled
         }
-        .onKeyPress(.downArrow) {
-            browseState.moveFocus(direction: 1, columns: 4)
+        // Page / Home / End: always scroll the viewport, regardless of
+        // lightbox state. With the lightbox open these are unusual
+        // gestures but harmless — the next time the user closes the
+        // lightbox they'll see the new scroll position.
+        .onKeyPress(.pageDown) {
+            browseState.sendScrollCommand(.pageDown)
+            return .handled
+        }
+        .onKeyPress(.pageUp) {
+            browseState.sendScrollCommand(.pageUp)
+            return .handled
+        }
+        .onKeyPress(.home) {
+            browseState.sendScrollCommand(.home)
+            return .handled
+        }
+        .onKeyPress(.end) {
+            browseState.sendScrollCommand(.end)
             return .handled
         }
         .onChange(of: appState.libraries.count) { _, _ in
@@ -195,6 +234,32 @@ struct BrowseWindow: View {
                appState.libraries.contains(where: { $0.libraryId == lastId }) {
                 browseState.selectedLibraryId = lastId
             }
+        }
+        .onAppear {
+            // Honor any pending menu-bar request to open with a specific
+            // library selected. Cleared after consuming so a subsequent
+            // window-open without a request doesn't re-trigger.
+            consumePendingLibraryId()
+        }
+        .onChange(of: appState.pendingSelectedLibraryId) { _, _ in
+            consumePendingLibraryId()
+        }
+        .onChange(of: browseState.selectedLibraryId) { oldValue, newValue in
+            // Reset + reload on library change. This used to live in a
+            // `didSet` on `selectedLibraryId`, but because SwiftUI's
+            // `List(selection:)` invokes the setter synchronously from
+            // inside its click-dispatch path, the 17-@Published-mutation
+            // cascade blocked the next click for as long as it took to
+            // run. Moving the trigger here means the binding setter
+            // returns immediately and SwiftUI processes the next click
+            // on the next run loop tick — one frame of old-asset flash
+            // in exchange for a responsive sidebar.
+            //
+            // We fire for nil transitions too (e.g. logout) so the old
+            // `didSet`-based behavior of clearing grid state on
+            // deselection is preserved.
+            guard newValue != oldValue else { return }
+            browseState.handleSelectedLibraryChange()
         }
     }
 
@@ -243,6 +308,27 @@ struct BrowseWindow: View {
         }
     }
 
+    // MARK: - Pending library selection (menu bar → window)
+
+    /// Apply any pending menu-bar request to switch to a specific library
+    /// and clear the request. Called from `.onAppear` (when the window
+    /// opens fresh from the menu bar) and `.onChange` (when the window
+    /// was already open and the user clicks another favorite). The
+    /// section is forced to `.library` because that's where the user
+    /// expects to land — favorites bypass People/Review.
+    private func consumePendingLibraryId() {
+        guard let id = appState.pendingSelectedLibraryId else { return }
+        // Only switch if the requested library actually exists in the
+        // current list. Otherwise leave the pending value alone in case
+        // libraries are still loading from the server.
+        guard appState.libraries.contains(where: { $0.libraryId == id }) else { return }
+        if browseState.selectedLibraryId != id {
+            browseState.selectedLibraryId = id
+        }
+        section = .library
+        appState.pendingSelectedLibraryId = nil
+    }
+
     // MARK: - Lightbox overlay
 
     @ViewBuilder
@@ -252,6 +338,80 @@ struct BrowseWindow: View {
             client: appState.client
         )
         .transition(.opacity.animation(.easeInOut(duration: 0.15)))
+    }
+
+    /// Overlay shown while a library-switch is in progress. Appears
+    /// immediately on click (tied to `browseState.isChangingLibrary`,
+    /// which is set synchronously in `handleSelectedLibraryChange()`)
+    /// and clears when the first page of assets comes back. If the
+    /// load times out (10s) or the server returns an error, the
+    /// overlay flips into an error state with Retry / Back actions
+    /// instead of dismissing — the user isn't stranded on a blank grid.
+    ///
+    /// The backdrop doesn't block hit-testing on the sidebar (it's a
+    /// child of the `detail` pane in `NavigationSplitView`), so the
+    /// user can still click a different library mid-load or mid-error.
+    @ViewBuilder
+    private var changingLibraryOverlay: some View {
+        let name = appState.libraries.first { $0.libraryId == browseState.selectedLibraryId }?.name ?? "library"
+        ZStack {
+            Color.black.opacity(0.25)
+                .ignoresSafeArea()
+            if let errorMessage = browseState.libraryChangeError {
+                libraryChangeErrorCard(name: name, message: errorMessage)
+            } else {
+                libraryChangeLoadingCard(name: name)
+            }
+        }
+        .transition(.opacity.animation(.easeInOut(duration: 0.12)))
+    }
+
+    private func libraryChangeLoadingCard(name: String) -> some View {
+        VStack(spacing: 14) {
+            ProgressView()
+                .controlSize(.large)
+            VStack(spacing: 4) {
+                Text("Loading library…")
+                    .font(.headline)
+                Text(name)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(28)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(.regularMaterial)
+        )
+    }
+
+    private func libraryChangeErrorCard(name: String, message: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 32))
+                .foregroundColor(.orange)
+            Text("Couldn't load \(name)")
+                .font(.headline)
+            Text(message)
+                .font(.callout)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 10) {
+                Button("Back") { browseState.revertLibraryChange() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Retry") { browseState.retryLibraryChange() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+            }
+            .padding(.top, 4)
+        }
+        .padding(24)
+        .frame(maxWidth: 360)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(.regularMaterial)
+        )
     }
 
     // MARK: - Mode indicator

@@ -161,13 +161,36 @@ export default function UnifiedBrowsePage() {
   });
 
   const searchQuery = useQuery({
-    queryKey: ["unified-search", activeQ, dateFrom, dateTo, browseFavorite, browseStarMin, browseStarMax, browseColor],
+    // Every filter dimension the server's /v1/search currently supports must
+    // appear here or React Query won't refetch when the user toggles it.
+    // NOTE: camera/exposure/gps/near filters are exposed in the sidebar but
+    // are not yet accepted by /v1/search — they're silently ignored in
+    // search mode until the server endpoint grows support. See
+    // src/server/api/routers/search.py `def search(...)`.
+    queryKey: [
+      "unified-search",
+      activeQ,
+      dateFrom,
+      dateTo,
+      browseMediaType,
+      browseLibraryId,
+      browseHasFaces,
+      browsePersonId,
+      browseFavorite,
+      browseStarMin,
+      browseStarMax,
+      browseColor,
+    ],
     queryFn: () =>
       searchAssets({
         q: activeQ ?? "",
+        mediaType: browseMediaType,
+        libraryId: browseLibraryId,
         dateFrom,
         dateTo,
         limit: SEARCH_RESULT_CAP,
+        hasFaces: browseHasFaces,
+        personId: browsePersonId,
         favorite: browseFavorite,
         starMin: browseStarMin,
         starMax: browseStarMax,

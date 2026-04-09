@@ -7,7 +7,13 @@ class ScanState: ObservableObject {
     let appState: AppState
 
     @Published var isScanning = false
-    @Published var isPaused = false
+    /// Persistent pause state — survives across app launches.
+    /// When true, both manual `scanAllLibraries()` calls and watcher-driven
+    /// rescans are no-ops, and the menu bar icon switches to its paused
+    /// variant. Toggled via `pauseSync()` / `resumeSync()`.
+    @Published var isPaused: Bool {
+        didSet { UserDefaults.standard.set(isPaused, forKey: "scanPaused") }
+    }
     @Published var discoveredFiles = 0   // found on disk
     @Published var serverFiles = 0       // fetched from server
     @Published var totalFiles = 0        // files needing work (new + changed)
@@ -28,8 +34,16 @@ class ScanState: ObservableObject {
     private var pipelines: [String: ScanPipeline] = [:]
     private var pollTask: Task<Void, Never>?
 
+    /// Set when the watcher fires while a scan is already running, so we
+    /// can rescan once the in-flight scan completes. Without this, file
+    /// changes during a long scan would be silently dropped — the watcher
+    /// fires once, ScanState ignores it (`isScanning` guard), and there's
+    /// no second event to re-trigger.
+    private var pendingRescan = false
+
     init(appState: AppState) {
         self.appState = appState
+        self.isPaused = UserDefaults.standard.bool(forKey: "scanPaused")
     }
 
     /// Status text for the menu bar.
@@ -50,7 +64,7 @@ class ScanState: ObservableObject {
             }
             switch phase {
             case "discovering":
-                return "Scanning files... (\(discoveredFiles) found)"
+                return "Syncing... (\(discoveredFiles) found)"
             case "checking server":
                 if serverFiles > 0 {
                     return "Checking server... (\(serverFiles) assets)"
@@ -60,34 +74,50 @@ class ScanState: ObservableObject {
                 if totalFiles == 0 {
                     return "Up to date (\(skippedFiles) unchanged)"
                 }
-                return "Processing \(processedFiles) of \(totalFiles) new files (\(skippedFiles) unchanged)"
+                return "Syncing \(processedFiles) of \(totalFiles) new files (\(skippedFiles) unchanged)"
             case "deleting":
                 return "Removing \(pendingDeletions) deleted files..."
             case "volume unavailable":
                 return "Volume unavailable — skipping"
             default:
-                return "Scanning..."
+                return "Syncing..."
             }
+        }
+        if isPaused {
+            return "Sync paused"
         }
         if isWatching {
             let count = appState.libraries.count
             return "Watching \(count) librar\(count == 1 ? "y" : "ies")"
         }
-        return "Not scanning"
+        return "Not syncing"
     }
 
-    /// Start watching all library root paths.
+    /// Start watching all library root paths. The watcher itself is
+    /// independent of `isPaused` — it always runs so we don't lose FSEvents
+    /// while paused — but its callback no-ops when paused.
+    ///
+    /// On a fresh `startWatching()` we also kick a one-shot scan so the app
+    /// actually syncs at launch instead of waiting for a filesystem event.
+    /// This was the "I just opened the app and nothing happens" gap.
     func startWatching() {
         guard appState.isAuthenticated, !appState.libraries.isEmpty else { return }
 
         let paths = appState.libraries.map(\.rootPath)
         watcher = LibraryWatcher { [weak self] in
             Task { @MainActor in
-                self?.scanAllLibraries()
+                guard let self, !self.isPaused else { return }
+                self.scanAllLibraries()
             }
         }
         watcher?.watch(paths: paths)
         isWatching = true
+
+        // Kick an initial scan so we sync at launch. Gated on `!isPaused`
+        // so the persistent pause survives across launches.
+        if !isPaused {
+            scanAllLibraries()
+        }
     }
 
     /// Stop watching.
@@ -97,13 +127,19 @@ class ScanState: ObservableObject {
         isWatching = false
     }
 
-    /// Manually trigger a scan of all libraries.
+    /// Manually trigger a scan of all libraries. No-op if paused or already
+    /// scanning. If already scanning, sets `pendingRescan` so the watcher's
+    /// "events arrived during a scan" case still runs another pass after
+    /// the current one completes.
     func scanAllLibraries() {
-        guard !isScanning, let client = appState.client else { return }
+        guard !isPaused, let client = appState.client else { return }
+        guard !isScanning else {
+            pendingRescan = true
+            return
+        }
 
         Task {
             isScanning = true
-            isPaused = false
             processedFiles = 0
             totalFiles = 0
             scanError = nil
@@ -176,24 +212,44 @@ class ScanState: ObservableObject {
 
             // Refresh the library list in browse view
             await appState.refreshLibraries()
+
+            // If the watcher fired while we were running, do one more pass
+            // to pick up the changes that arrived mid-scan. Gated on the
+            // pause flag so a user pausing mid-scan still gets a clean
+            // shutdown.
+            if pendingRescan && !isPaused {
+                pendingRescan = false
+                scanAllLibraries()
+            } else {
+                pendingRescan = false
+            }
         }
     }
 
     private var cancelled: Bool { !isScanning }
 
-    /// Pause all active scans.
-    func pauseScanning() {
+    /// Pause sync. Persistent across app launches. If a scan is in progress
+    /// it will pause gracefully (the pipeline's own pause/resume controls
+    /// stop accepting new work). The watcher keeps running so we don't lose
+    /// FSEvents while paused — its callback just no-ops.
+    func pauseSync() {
         isPaused = true
         for pipeline in pipelines.values {
             Task { await pipeline.pause() }
         }
     }
 
-    /// Resume all paused scans.
-    func resumeScanning() {
+    /// Resume sync. Clears the persistent pause, resumes any in-flight
+    /// pipeline, and (if no scan is running) kicks a one-shot scan so the
+    /// user immediately sees activity instead of waiting for the next
+    /// FSEvents callback.
+    func resumeSync() {
         isPaused = false
         for pipeline in pipelines.values {
             Task { await pipeline.resume() }
+        }
+        if !isScanning {
+            scanAllLibraries()
         }
     }
 

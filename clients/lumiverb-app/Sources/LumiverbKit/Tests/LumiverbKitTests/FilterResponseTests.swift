@@ -18,6 +18,39 @@ final class FilterResponseTests: XCTestCase {
 
         let item = try decoder.decode(FilterItem.self, from: json)
         XCTAssertEqual(item.pattern, "**/*.jpg")
+        XCTAssertNil(item.filterId)
+        XCTAssertNil(item.defaultId)
+        XCTAssertNil(item.createdAt)
+    }
+
+    func testDecodesFilterItemFromLibraryFilterShape() throws {
+        // GET /v1/libraries/{id}/filters returns full filter rows with
+        // filter_id + created_at. The settings UI needs these to delete
+        // individual rows, so make sure the richer server shape decodes.
+        let json = """
+        {"filter_id": "fil_abc", "pattern": "**/Proxy/**", "created_at": "2025-12-05T12:00:00+00:00"}
+        """.data(using: .utf8)!
+
+        let item = try decoder.decode(FilterItem.self, from: json)
+        XCTAssertEqual(item.pattern, "**/Proxy/**")
+        XCTAssertEqual(item.filterId, "fil_abc")
+        XCTAssertEqual(item.createdAt, "2025-12-05T12:00:00+00:00")
+        XCTAssertNil(item.defaultId)
+    }
+
+    func testDecodesFilterItemFromTenantDefaultShape() throws {
+        // GET /v1/tenant/filter-defaults uses `default_id` instead of
+        // `filter_id` — both fields are optional on FilterItem so one
+        // struct covers both responses.
+        let json = """
+        {"default_id": "def_xyz", "pattern": "**/._*", "created_at": "2024-01-01T00:00:00+00:00"}
+        """.data(using: .utf8)!
+
+        let item = try decoder.decode(FilterItem.self, from: json)
+        XCTAssertEqual(item.pattern, "**/._*")
+        XCTAssertEqual(item.defaultId, "def_xyz")
+        XCTAssertEqual(item.createdAt, "2024-01-01T00:00:00+00:00")
+        XCTAssertNil(item.filterId)
     }
 
     // MARK: - TenantFilterDefaultsResponse
@@ -119,13 +152,3 @@ final class FilterResponseTests: XCTestCase {
     }
 }
 
-// FilterItem doesn't have a public init in the source, so we add one for tests.
-extension FilterItem {
-    init(pattern: String) {
-        let json = """
-        {"pattern": "\(pattern)"}
-        """.data(using: .utf8)!
-        let decoder = JSONDecoder()
-        self = try! decoder.decode(FilterItem.self, from: json)
-    }
-}

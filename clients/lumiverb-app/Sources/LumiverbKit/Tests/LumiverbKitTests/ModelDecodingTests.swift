@@ -953,6 +953,92 @@ final class ProxyCacheOnDiskTests: XCTestCase {
     }
 }
 
+// MARK: - Thumbnail Cache On Disk
+
+final class ThumbnailCacheOnDiskTests: XCTestCase {
+
+    private var tempDir: URL!
+    private var cache: ThumbnailCacheOnDisk!
+
+    override func setUp() {
+        super.setUp()
+        tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("thumbnail-cache-test-\(UUID().uuidString)")
+        cache = ThumbnailCacheOnDisk(cacheDir: tempDir)
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: tempDir)
+        super.tearDown()
+    }
+
+    func testPutAndGet() {
+        let data = Data("fake-thumbnail-bytes".utf8)
+        cache.put(assetId: "ast_001", data: data)
+
+        let retrieved = cache.get(assetId: "ast_001")
+        XCTAssertEqual(retrieved, data)
+    }
+
+    func testGetMissing() {
+        XCTAssertNil(cache.get(assetId: "nonexistent"))
+    }
+
+    func testHas() {
+        XCTAssertFalse(cache.has(assetId: "ast_002"))
+        cache.put(assetId: "ast_002", data: Data("bytes".utf8))
+        XCTAssertTrue(cache.has(assetId: "ast_002"))
+    }
+
+    func testRemove() {
+        cache.put(assetId: "ast_003", data: Data("bytes".utf8))
+        XCTAssertTrue(cache.has(assetId: "ast_003"))
+        cache.remove(assetId: "ast_003")
+        XCTAssertFalse(cache.has(assetId: "ast_003"))
+    }
+
+    func testRemoveAllClearsEverything() {
+        cache.put(assetId: "ast_a", data: Data("a".utf8))
+        cache.put(assetId: "ast_b", data: Data("b".utf8))
+        cache.put(assetId: "ast_c", data: Data("c".utf8))
+        XCTAssertTrue(cache.has(assetId: "ast_a"))
+        XCTAssertTrue(cache.has(assetId: "ast_b"))
+        XCTAssertTrue(cache.has(assetId: "ast_c"))
+
+        cache.removeAll()
+
+        XCTAssertFalse(cache.has(assetId: "ast_a"))
+        XCTAssertFalse(cache.has(assetId: "ast_b"))
+        XCTAssertFalse(cache.has(assetId: "ast_c"))
+        // Cache dir must still exist — the instance should be usable
+        // after a flush, not require re-initialization.
+        cache.put(assetId: "ast_d", data: Data("d".utf8))
+        XCTAssertTrue(cache.has(assetId: "ast_d"))
+    }
+
+    func testPutOverwritesExisting() {
+        cache.put(assetId: "ast_004", data: Data("old".utf8))
+        cache.put(assetId: "ast_004", data: Data("new".utf8))
+        XCTAssertEqual(cache.get(assetId: "ast_004"), Data("new".utf8))
+    }
+
+    func testCacheDirDoesNotClashWithProxyCache() {
+        // Regression: the thumbnail cache must use a distinct directory
+        // from the proxy cache so writes don't overwrite each other when
+        // the same asset id is cached as both a thumbnail and a proxy.
+        let proxyDir = tempDir.appendingPathComponent("proxy")
+        let thumbDir = tempDir.appendingPathComponent("thumb")
+        let proxyCache = ProxyCacheOnDisk(cacheDir: proxyDir)
+        let thumbCache = ThumbnailCacheOnDisk(cacheDir: thumbDir)
+
+        proxyCache.put(assetId: "shared_id", data: Data("proxy-bytes".utf8))
+        thumbCache.put(assetId: "shared_id", data: Data("thumb-bytes".utf8))
+
+        XCTAssertEqual(proxyCache.get(assetId: "shared_id"), Data("proxy-bytes".utf8))
+        XCTAssertEqual(thumbCache.get(assetId: "shared_id"), Data("thumb-bytes".utf8))
+    }
+}
+
 // MARK: - Enrichment Models
 
 final class EnrichmentModelTests: XCTestCase {

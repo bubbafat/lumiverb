@@ -1,14 +1,38 @@
 import Foundation
+import LumiverbKit
 
 /// Watches library root paths for file changes using FSEvents.
 ///
-/// Debounces changes by 5 seconds before notifying the delegate.
+/// Coalesces bursts of events into a single delegate notification with a
+/// **trailing-debounce-with-leading-schedule** pattern: the first event in
+/// a quiet window schedules a fire `debounceInterval` seconds later;
+/// subsequent events that arrive *before* the fire are ignored (not used
+/// to reset the timer). This is intentional — the previous design reset
+/// the timer on every event, which let a single pathological writer
+/// (e.g. a video render rewriting one file every 2 seconds) starve the
+/// scan queue indefinitely. With this design, the watcher fires at most
+/// once per `debounceInterval` regardless of how busy the filesystem is.
+///
+/// Mid-scan changes are NOT lost: `ScanState` sets `pendingRescan` if the
+/// watcher fires while a scan is already running, and runs another pass
+/// after the current scan completes.
+///
+/// Half-written files (the "video being rendered" case) are filtered out
+/// by `ScanPipeline.discoverFiles()` via an mtime quarantine — files
+/// modified within the last `mtimeQuarantineSeconds` are skipped on the
+/// current pass and picked up on a later one.
+///
 /// Handles unmounted volumes gracefully.
 final class LibraryWatcher: @unchecked Sendable {
     private var stream: FSEventStreamRef?
     private var watchedPaths: [String] = []
-    private var debounceTask: Task<Void, Never>?
     private let onChange: @Sendable () -> Void
+
+    /// Leading-schedule debouncer — the first event of a quiet window
+    /// schedules a fire; subsequent events while pending are dropped.
+    /// Lives in `LumiverbKit` so its state-machine semantics can be
+    /// unit-tested independently of FSEvents (`LeadingDebounceTests`).
+    private let debouncer = LeadingDebounce()
 
     /// Debounce interval in seconds.
     private let debounceInterval: TimeInterval = 5.0
@@ -61,8 +85,7 @@ final class LibraryWatcher: @unchecked Sendable {
 
     /// Stop watching.
     func stop() {
-        debounceTask?.cancel()
-        debounceTask = nil
+        debouncer.cancel()
 
         if let stream {
             FSEventStreamStop(stream)
@@ -73,14 +96,25 @@ final class LibraryWatcher: @unchecked Sendable {
         watchedPaths = []
     }
 
-    /// Called by the FSEvents callback — debounces before forwarding.
+    /// Called by the FSEvents callback. Leading-schedule debounce: the
+    /// first event in a quiet window schedules a fire; subsequent events
+    /// arriving while a fire is pending are dropped (no reset). See
+    /// `LeadingDebounce` for the rationale and tests.
     fileprivate func handleEvent() {
-        debounceTask?.cancel()
-        debounceTask = Task { [weak self] in
-            guard let self else { return }
-            try? await Task.sleep(for: .seconds(self.debounceInterval))
-            guard !Task.isCancelled else { return }
-            self.onChange()
+        guard debouncer.tryArm() else { return }
+
+        let interval = debounceInterval
+        let onChange = self.onChange
+        let debouncer = self.debouncer
+        Task.detached {
+            try? await Task.sleep(for: .seconds(interval))
+            // Release before firing so any new events during onChange()
+            // can already schedule the next pass. ScanState's
+            // pendingRescan covers events that arrive while a scan is
+            // in flight; this release covers events that arrive while
+            // onChange is in the middle of dispatching.
+            debouncer.release()
+            onChange()
         }
     }
 }

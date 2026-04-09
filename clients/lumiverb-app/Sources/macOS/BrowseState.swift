@@ -16,14 +16,41 @@ class BrowseState: ObservableObject {
 
     // MARK: - Library selection
 
-    @Published var selectedLibraryId: String? {
-        didSet {
-            if selectedLibraryId != oldValue {
-                UserDefaults.standard.set(selectedLibraryId, forKey: "lastLibraryId")
-                resetAndLoad()
-            }
-        }
+    /// ⚠️  Do NOT put a `didSet` that does heavy work on this property.
+    ///
+    /// `List(selection: $browseState.selectedLibraryId)` invokes this
+    /// setter synchronously from inside SwiftUI's click-dispatch code
+    /// path. Anything the setter runs blocks the List from dequeueing
+    /// the *next* click — which is what caused the "I clicked but
+    /// nothing happened" UI lock we used to have here.
+    ///
+    /// The persistence write + reset cascade is now triggered by a
+    /// `.onChange(of: browseState.selectedLibraryId)` handler in
+    /// `BrowseWindow`, which runs one tick later and off the binding
+    /// write code path. See `BrowseState.handleSelectedLibraryChange()`.
+    @Published var selectedLibraryId: String?
+
+    /// One-shot scroll command sent from keyboard handlers in
+    /// `BrowseWindow` to the active grid view. The grid view observes
+    /// this via `.onChange` and forwards it to the underlying
+    /// `NSScrollView` (introspected via `NSScrollViewIntrospector`).
+    ///
+    /// AppKit handles the actual scrolling with native pageUp/pageDown
+    /// semantics — much simpler and more reliable than the SwiftUI
+    /// `ScrollViewProxy.scrollTo` route, which has fatal lazy-render
+    /// gotchas (verified empirically: backward scrolls into disposed
+    /// `LazyVStack` cells silently no-op).
+    @Published var pendingScrollCommand: ScrollCommandToken?
+
+    func sendScrollCommand(_ command: ScrollCommand) {
+        pendingScrollCommand = ScrollCommandToken(command: command)
     }
+
+    /// True while `resetAndLoad()` is in the middle of clearing state,
+    /// so that the didSets on `selectedPath` and `filters` below don't
+    /// spawn their own `reloadAssets()` Tasks — the reset already fires
+    /// a single `loadNextPage()` once clearing is done.
+    private var isResetting = false
 
     // MARK: - Directory tree
 
@@ -32,7 +59,7 @@ class BrowseState: ObservableObject {
     @Published var childDirectories: [String: [DirectoryNode]] = [:]
     @Published var selectedPath: String? {
         didSet {
-            if selectedPath != oldValue {
+            if selectedPath != oldValue && !isResetting {
                 reloadAssets()
             }
         }
@@ -42,9 +69,21 @@ class BrowseState: ObservableObject {
 
     @Published var filters = BrowseFilter() {
         didSet {
-            if filters != oldValue {
-                // Sort-only changes don't need to reset person state
-                reloadAssets()
+            if filters != oldValue && !isResetting {
+                // Dispatch the reload based on the current mode. Without
+                // this, toggling the media-type picker (or any filter)
+                // while looking at search results would silently kick
+                // off a library page reload — the search results would
+                // still show the old filter state because performSearch
+                // never re-ran. Same for similarity mode.
+                switch mode {
+                case .library:
+                    reloadAssets()
+                case .search:
+                    Task { await performSearch() }
+                case .similar(let sourceId):
+                    Task { await findSimilar(assetId: sourceId) }
+                }
             }
         }
     }
@@ -60,6 +99,40 @@ class BrowseState: ObservableObject {
     @Published var isLoadingAssets = false
     @Published var hasMoreAssets = true
     private var nextCursor: String?
+
+    /// True from the moment the user clicks a new library until the
+    /// first page of that library's assets has come back (or failed).
+    /// Distinct from `isLoadingAssets` (which tracks any page load,
+    /// including infinite-scroll) — this is specifically the "context
+    /// switch" phase. The content area shows a full-size overlay so
+    /// the user gets immediate feedback that the click was registered
+    /// even if the rest of the main thread is momentarily busy doing
+    /// reconciliation work.
+    @Published var isChangingLibrary = false
+
+    /// Error raised by the first-page load during a library switch.
+    /// Non-nil while the overlay is in its error state; cleared on
+    /// retry or when the user picks a different library.
+    @Published var libraryChangeError: String?
+
+    /// Previous library id, captured before a switch, so "Back" in the
+    /// error overlay can revert to a known-good library rather than
+    /// stranding the user on a dead selection.
+    private var previousLibraryId: String?
+
+    /// Timeout for the first-page load during a library switch. Shorter
+    /// than URLSession's 60s default because the user needs a faster
+    /// "server is unreachable" signal than a browse session normally
+    /// demands — 60 seconds of overlay on an offline server is awful.
+    private let firstPageTimeoutSeconds: TimeInterval = 10
+
+    /// In-flight asset load Task. Cancelled on library change so the new
+    /// library's load isn't blocked by the old library's slow network
+    /// request. Without this, clicking a new library during a load would
+    /// hit the `!isLoadingAssets` guard in `loadNextPage` and silently
+    /// no-op — the user sees a blank grid until the *previous* library's
+    /// request returns (the "20+ seconds locked" bug).
+    private var currentLoadTask: Task<Void, Never>?
 
     // MARK: - Search
 
@@ -184,10 +257,76 @@ class BrowseState: ObservableObject {
 
     // MARK: - Load assets
 
+    /// Called by BrowseWindow on `.onChange(of: selectedLibraryId)` — NOT
+    /// from a didSet, so that the List's click dispatch code path is not
+    /// blocked on reset work.
+    func handleSelectedLibraryChange() {
+        UserDefaults.standard.set(selectedLibraryId, forKey: "lastLibraryId")
+        // Capture the outgoing library id BEFORE clearing error state so
+        // the overlay's "Back" button can restore a known-good selection
+        // if the new library's first-page load fails.
+        if libraryChangeError == nil {
+            previousLibraryId = assets.isEmpty ? previousLibraryId : selectedLibraryId
+        }
+        libraryChangeError = nil
+        // Set FIRST, before resetAndLoad runs its state cascade. Without
+        // this the overlay appears only after the cascade's render pass,
+        // which defeats the purpose of "show something immediately".
+        isChangingLibrary = selectedLibraryId != nil
+        resetAndLoad()
+    }
+
+    /// Retry the current library's first-page load after a timeout or
+    /// network failure. Called from the overlay's Retry button.
+    func retryLibraryChange() {
+        guard selectedLibraryId != nil else { return }
+        libraryChangeError = nil
+        isChangingLibrary = true
+        resetAndLoad()
+    }
+
+    /// Revert to the previous library after a failed switch. Called from
+    /// the overlay's Back button. If there's no previous library, clears
+    /// the selection entirely so the user sees the "Select a library"
+    /// empty state instead of a stuck error.
+    func revertLibraryChange() {
+        libraryChangeError = nil
+        isChangingLibrary = false
+        let target = previousLibraryId
+        previousLibraryId = nil
+        // Cancel any in-flight load from the failed switch so it doesn't
+        // land late and clobber the previous library's state.
+        currentLoadTask?.cancel()
+        currentLoadTask = nil
+        selectedLibraryId = target
+        // `.onChange(of: selectedLibraryId)` in BrowseWindow will fire
+        // `handleSelectedLibraryChange()` if this is a real change —
+        // reloading the previous library fresh. If target == current
+        // (user already reverted via another path) nothing happens.
+    }
+
     func resetAndLoad() {
+        // Cancel the previous load. Without this, a slow network request
+        // from the old library holds `isLoadingAssets = true` and blocks
+        // the new library's load behind the guard in `loadNextPage`,
+        // manifesting as a 20+ second "UI lock" on library switch. The
+        // cancelled task's network call throws `CancellationError`;
+        // `loadNextPage`'s libraryId-mismatch check below also prevents
+        // stale writebacks if the old task's await returns after the
+        // reset has already populated new state.
+        currentLoadTask?.cancel()
+        currentLoadTask = nil
+
+        // Guard so selectedPath/filters didSets don't fire their own
+        // reloadAssets() Tasks during the clear — we fire exactly one
+        // `loadNextPage()` at the end of the reset.
+        isResetting = true
         assets = []
         nextCursor = nil
         hasMoreAssets = true
+        // Reset explicitly because the cancelled task may not have
+        // reached its `isLoadingAssets = false` epilogue yet.
+        isLoadingAssets = false
         error = nil
         mode = .library
         searchQuery = ""
@@ -202,9 +341,12 @@ class BrowseState: ObservableObject {
         childDirectories = [:]
         filters = BrowseFilter()
         personSuggestions = []
-        Task {
-            await loadRootDirectories()
-            await loadNextPage()
+        isResetting = false
+
+        currentLoadTask = Task { [weak self] in
+            guard let self else { return }
+            await self.loadRootDirectories()
+            await self.loadNextPage()
         }
     }
 
@@ -221,6 +363,10 @@ class BrowseState: ObservableObject {
         guard let client, let libraryId = selectedLibraryId else { return }
         guard !isLoadingAssets, hasMoreAssets else { return }
 
+        // Track whether this is the FIRST page so we know when to clear
+        // `isChangingLibrary`. Infinite-scroll pages shouldn't touch it.
+        let isFirstPage = nextCursor == nil
+
         isLoadingAssets = true
         error = nil
 
@@ -235,17 +381,120 @@ class BrowseState: ObservableObject {
                 query["path_prefix"] = path
             }
 
-            let response: AssetPageResponse = try await client.get(
-                "/v1/assets/page", query: query
-            )
+            // First page of a library switch races against a 10s timeout
+            // so the overlay can surface a sensible error instead of
+            // sitting on URLSession's 60s default. Infinite-scroll pages
+            // use the vanilla client call — no need to time those out.
+            let response: AssetPageResponse
+            if isFirstPage {
+                response = try await Self.loadWithTimeout(
+                    seconds: firstPageTimeoutSeconds,
+                    operation: { try await client.get("/v1/assets/page", query: query) }
+                )
+            } else {
+                response = try await client.get("/v1/assets/page", query: query)
+            }
+
+            // Between the await and here, the user may have switched
+            // libraries. If they did, the response is for the OLD library
+            // and must not be written back — otherwise we'd pollute the
+            // new library's grid with stale assets and corrupt its cursor.
+            // The cancelled-Task path from `resetAndLoad` usually throws
+            // before we get here, but URLSession occasionally completes
+            // fast enough that cancellation loses the race.
+            guard selectedLibraryId == libraryId else { return }
+
             assets.append(contentsOf: response.items)
             nextCursor = response.nextCursor
             hasMoreAssets = response.nextCursor != nil
+        } catch is CancellationError {
+            // Library change cancelled this load — nothing to report.
+            return
         } catch {
-            self.error = "Failed to load assets: \(error)"
+            // Swallow errors that surface from cancelled URLSession calls
+            // (`NSURLErrorCancelled`) the same way as CancellationError.
+            if (error as NSError).code == NSURLErrorCancelled { return }
+            // Also guard error writeback if the library changed mid-flight.
+            if selectedLibraryId != libraryId { return }
+
+            // First-page failures populate the overlay's error state.
+            // Subsequent-page failures go to the regular inline error.
+            if isFirstPage {
+                libraryChangeError = Self.describeLibraryChangeError(error)
+            } else {
+                self.error = "Failed to load assets: \(error)"
+            }
         }
 
-        isLoadingAssets = false
+        // `isLoadingAssets` is reset here for the still-current library.
+        // If the library changed mid-flight, `resetAndLoad` already reset
+        // it before spawning the new task — don't clobber that.
+        if selectedLibraryId == libraryId {
+            isLoadingAssets = false
+            // Clear the "changing library" overlay only once the first
+            // page's outcome is known, AND only when there's no error —
+            // the overlay stays up in error mode until the user retries
+            // or backs out. Infinite-scroll pages don't touch the flag.
+            if isFirstPage && libraryChangeError == nil {
+                isChangingLibrary = false
+            }
+        }
+    }
+
+    // MARK: - Library-change helpers
+
+    /// Race an async operation against a timeout. Used for the first-page
+    /// load so the overlay can surface a "server unreachable" error in
+    /// seconds instead of waiting on URLSession's 60s default. Captured
+    /// as a `@Sendable` closure so the task-group children are isolated
+    /// from the @MainActor caller.
+    private static func loadWithTimeout<T: Sendable>(
+        seconds: TimeInterval,
+        operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(for: .seconds(seconds))
+                throw LibraryChangeTimeoutError()
+            }
+            // `group.next()` returns whichever task finishes first. If
+            // that's the operation, we cancel the timer and return. If
+            // it's the timer, it throws LibraryChangeTimeoutError and
+            // the remaining operation task is cancelled by `cancelAll`.
+            guard let first = try await group.next() else {
+                throw LibraryChangeTimeoutError()
+            }
+            group.cancelAll()
+            return first
+        }
+    }
+
+    /// User-facing message for a first-page failure. Timeouts and
+    /// network-down errors get distinct, actionable copy instead of a
+    /// raw stacktrace-ish string.
+    private static func describeLibraryChangeError(_ error: Error) -> String {
+        if error is LibraryChangeTimeoutError {
+            return "Server didn't respond in time. It may be offline or very slow."
+        }
+        if let api = error as? APIError {
+            switch api {
+            case .networkError(let message):
+                return "Couldn't reach the server: \(message)"
+            case .unauthorized:
+                return "Your session has expired. Please sign in again."
+            case .serverError(let code, let message):
+                return "Server error (\(code)): \(message)"
+            case .decodingError(let message):
+                return "Server response wasn't valid: \(message)"
+            case .noToken:
+                return "Not signed in."
+            }
+        }
+        if (error as NSError).code == NSURLErrorCancelled {
+            return "Load cancelled."
+        }
+        return "Couldn't load library: \(error.localizedDescription)"
     }
 
     // MARK: - Asset detail
@@ -292,12 +541,25 @@ class BrowseState: ObservableObject {
         error = nil
 
         do {
-            var params: [String: String] = [
-                "q": query,
-                "limit": "100",
-            ]
+            // Start from the active filters so the media-type picker /
+            // person filter / star rating / etc. all apply to search
+            // results. The server's `/v1/search` accepts a subset of
+            // these (`media_type`, `library_id`, `path_prefix`, `tag`,
+            // `date_from`, `date_to`, `favorite`, `star_min`,
+            // `star_max`, `color`, `has_rating`, `has_faces`,
+            // `person_id`); camera/exposure/lens/focal/GPS filters are
+            // silently ignored by the search endpoint until the server
+            // grows support, mirroring the same gap in the web UI.
+            // Unknown query params are ignored by FastAPI, so passing
+            // the full set is safe.
+            var params = filters.queryParams
+            params["q"] = query
+            params["limit"] = "100"
             if let libraryId = selectedLibraryId {
                 params["library_id"] = libraryId
+            }
+            if let path = selectedPath {
+                params["path_prefix"] = path
             }
 
             let response: SearchResponse = try await client.get(
@@ -337,13 +599,25 @@ class BrowseState: ObservableObject {
             let embeddingModelId = CLIPProvider.isAvailable ? CLIPProvider.modelId : FeaturePrintProvider.modelId
             let embeddingModelVersion = CLIPProvider.isAvailable ? CLIPProvider.modelVersion : FeaturePrintProvider.modelVersion
 
-            let params: [String: String] = [
+            var params: [String: String] = [
                 "asset_id": assetId,
                 "library_id": libraryId,
                 "limit": "50",
                 "model_id": embeddingModelId,
                 "model_version": embeddingModelVersion,
             ]
+
+            // Map the filter UI's media-type picker onto `/v1/similar`'s
+            // `asset_types` query (comma-separated, "image"/"video"). The
+            // similar endpoint also accepts camera_make/camera_model/
+            // from_ts/to_ts but on different param names than /v1/search;
+            // we plumb only `asset_types` for now since that's the user-
+            // visible filter the picker drives. The other dimensions can
+            // be added incrementally as the UI exposes them in similar
+            // mode.
+            if let mediaType = filters.mediaType {
+                params["asset_types"] = mediaType
+            }
 
             let response: SimilarityResponse = try await client.get(
                 "/v1/similar", query: params
@@ -365,9 +639,14 @@ class BrowseState: ObservableObject {
             let nodes: [DirectoryNode] = try await client.get(
                 "/v1/libraries/\(libraryId)/directories"
             )
+            // Reject stale writebacks after a library change mid-flight —
+            // otherwise the directory tree for the PREVIOUS library lands
+            // in the new library's sidebar.
+            guard selectedLibraryId == libraryId else { return }
             directories = nodes
         } catch {
-            // Non-fatal — grid still works without tree
+            // Non-fatal — grid still works without tree. Cancellation and
+            // library-change races are absorbed silently.
         }
     }
 
@@ -378,6 +657,7 @@ class BrowseState: ObservableObject {
                 "/v1/libraries/\(libraryId)/directories",
                 query: ["parent": parentPath]
             )
+            guard selectedLibraryId == libraryId else { return }
             childDirectories[parentPath] = nodes
         } catch {
             // Non-fatal
@@ -665,17 +945,30 @@ class BrowseState: ObservableObject {
         return currentIndex + 1 < ids.count
     }
 
-    func openFocusedAsset() {
+    /// Advance focus by one (left -1 / right +1) through
+    /// `displayedAssetIds`. ONLY meaningful while the lightbox is open
+    /// — that's how lightbox prev/next works under the hood. The grid
+    /// itself no longer has a visible focus concept; PgUp/PgDn etc.
+    /// scroll the viewport directly via `scrollPageBy` instead.
+    func moveFocus(direction: Int) {
         let ids = displayedAssetIds
-        guard ids.indices.contains(focusedIndex) else { return }
-        Task { await loadAssetDetail(assetId: ids[focusedIndex]) }
-    }
-
-    func moveFocus(direction: Int, columns: Int = 1) {
-        let ids = displayedAssetIds
-        let newIndex = focusedIndex + direction * columns
+        let newIndex = focusedIndex + direction
         if ids.indices.contains(newIndex) {
             focusedIndex = newIndex
+            if selectedAssetId != nil {
+                Task { await loadAssetDetail(assetId: ids[newIndex]) }
+            }
         }
     }
+
+    // (Scrolling is now handled directly by the grid view talking to
+    // its underlying NSScrollView via the introspector — see
+    // `pendingScrollCommand` / `sendScrollCommand` above. BrowseState
+    // doesn't need to know anything about layout rows or visible
+    // cells for scroll dispatch.)
 }
+
+/// Thrown when the first-page load for a library switch exceeds the
+/// configured timeout. Surfaced in the overlay as a human-readable
+/// "Server didn't respond in time" message.
+struct LibraryChangeTimeoutError: Error, Sendable {}

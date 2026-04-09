@@ -53,15 +53,24 @@ struct MenuBarView: View {
         // Scan status
         scanStatusSection
 
-        Divider()
-
-        if appState.libraries.isEmpty {
-            Text("No libraries")
-                .foregroundColor(.secondary)
-        } else {
-            ForEach(appState.libraries) { lib in
-                Label(lib.name, systemImage: "folder")
-                    .font(.body)
+        // Favorites: only render the section if the user has actually
+        // favorited something. The previous design always listed every
+        // library here as static dead text — visually noisy and didn't
+        // scale past a handful of libraries. Favoriting is opt-in via the
+        // sidebar context menu.
+        let favorites = appState.favoriteLibraries
+        if !favorites.isEmpty {
+            Divider()
+            ForEach(favorites) { lib in
+                Button {
+                    // Open the browse window scoped to this library.
+                    // BrowseWindow consumes pendingSelectedLibraryId on
+                    // appear / onChange and clears it.
+                    appState.pendingSelectedLibraryId = lib.libraryId
+                    openBrowseWindow?()
+                } label: {
+                    Label(lib.name, systemImage: "star.fill")
+                }
             }
         }
 
@@ -96,7 +105,10 @@ struct MenuBarView: View {
     @ViewBuilder
     private var scanStatusSection: some View {
         HStack {
-            if scanState.isScanning {
+            if scanState.isPaused {
+                Image(systemName: "pause.circle.fill")
+                    .foregroundColor(.secondary)
+            } else if scanState.isScanning {
                 ProgressView()
                     .controlSize(.small)
             } else if scanState.isWatching {
@@ -117,24 +129,31 @@ struct MenuBarView: View {
                 )
                 .progressViewStyle(.linear)
             }
+        }
 
-            HStack(spacing: 8) {
-                if scanState.isPaused {
-                    Button("Resume") { scanState.resumeScanning() }
-                        .controlSize(.small)
-                } else {
-                    Button("Pause") { scanState.pauseScanning() }
-                        .controlSize(.small)
-                        .keyboardShortcut("p")
-                }
+        // Pause / Resume / Scan / Cancel — pause is a persistent toggle so
+        // the controls are visible regardless of `isScanning`. Cancel only
+        // makes sense mid-scan.
+        HStack(spacing: 8) {
+            if scanState.isPaused {
+                Button("Resume Sync") { scanState.resumeSync() }
+                    .controlSize(.small)
+                    .keyboardShortcut("p")
+            } else {
+                Button("Pause Sync") { scanState.pauseSync() }
+                    .controlSize(.small)
+                    .keyboardShortcut("p")
+            }
+
+            if scanState.isScanning {
                 Button("Cancel") { scanState.cancelScanning() }
                     .controlSize(.small)
+            } else {
+                Button("Sync Now") { scanState.scanAllLibraries() }
+                    .controlSize(.small)
+                    .keyboardShortcut("s")
+                    .disabled(appState.libraries.isEmpty || scanState.isPaused)
             }
-        } else {
-            Button("Scan Now") { scanState.scanAllLibraries() }
-                .controlSize(.small)
-                .keyboardShortcut("s")
-                .disabled(appState.libraries.isEmpty)
         }
 
         if scanState.errorCount > 0 {
@@ -154,7 +173,7 @@ struct MenuBarView: View {
         }
 
         if let lastScan = scanState.lastScanDate {
-            Text("Last scan: \(lastScan, style: .relative) ago")
+            Text("Last sync: \(lastScan, style: .relative) ago")
                 .font(.caption2)
                 .foregroundColor(.secondary)
         }

@@ -23,7 +23,8 @@ struct RefreshResponse: Decodable {
 
 // MARK: - Auth manager
 
-/// Manages authentication state: login, token refresh, and keychain persistence.
+/// Manages authentication state: login, token refresh, and persistence
+/// via a swappable `TokenStore` (defaults to `FileTokenStore`).
 ///
 /// The Lumiverb API uses a single JWT that serves as both access and refresh
 /// token. The JWT has an `exp` (access expiry, ~1 hour) and a `refresh_exp`
@@ -31,17 +32,19 @@ struct RefreshResponse: Decodable {
 /// Authorization header to `POST /v1/auth/refresh`.
 public actor AuthManager {
     private let client: APIClient
-    private let keychain: any TokenStore
+    private let tokenStore: any TokenStore
 
     /// In-memory copy of the persisted token, populated on login,
-    /// restoreSession, and refresh. The legacy macOS keychain prompts
-    /// the user (per item, per access) for any read or modification when
-    /// the calling binary is not on the item's trusted-apps list — and
-    /// dev builds compiled with `CODE_SIGNING_ALLOWED=NO` are never on
-    /// that list because each rebuild has a different identity. Caching
-    /// the token here means a normal cold start only hits the keychain
-    /// once (the unavoidable read in `restoreSession`) instead of three
-    /// times (restore + refresh-read + refresh-save).
+    /// restoreSession, and refresh. The legacy macOS keychain used to
+    /// prompt the user (per item, per access) for any read or
+    /// modification when the calling binary wasn't on the item's
+    /// trusted-apps list — dev builds compiled with
+    /// `CODE_SIGNING_ALLOWED=NO` are never on that list because each
+    /// rebuild rotates the binary identity. We've since switched the
+    /// default `tokenStore` to `FileTokenStore`, which writes to
+    /// `~/Library/Application Support/io.lumiverb.app/credentials.json`
+    /// (mode 0600) and never prompts. Caching here is still useful as
+    /// a fast path that avoids re-reading the file on every refresh.
     private var cachedToken: String?
 
     /// In-flight refresh task. Multiple 401s coalesce into a single refresh
@@ -49,9 +52,9 @@ public actor AuthManager {
     /// refreshes would each revoke the previous result, causing a cascade.
     private var refreshTask: Task<Bool, Never>?
 
-    public init(client: APIClient, keychain: any TokenStore = KeychainHelper()) {
+    public init(client: APIClient, tokenStore: any TokenStore = FileTokenStore()) {
         self.client = client
-        self.keychain = keychain
+        self.tokenStore = tokenStore
 
         // Wire up auto-refresh: when APIClient gets a 401, it calls this
         let authManager = self
@@ -72,7 +75,7 @@ public actor AuthManager {
         )
 
         await client.setAccessToken(response.accessToken)
-        try keychain.save(key: "accessToken", value: response.accessToken)
+        try tokenStore.save(key: "accessToken", value: response.accessToken)
         cachedToken = response.accessToken
     }
 
@@ -107,7 +110,7 @@ public actor AuthManager {
         let currentToken: String
         if let cached = cachedToken {
             currentToken = cached
-        } else if let read = try? keychain.read(key: "accessToken") {
+        } else if let read = try? tokenStore.read(key: "accessToken") {
             cachedToken = read
             currentToken = read
         } else {
@@ -123,7 +126,7 @@ public actor AuthManager {
                 token: currentToken
             )
             await client.setAccessToken(response.accessToken)
-            try keychain.save(key: "accessToken", value: response.accessToken)
+            try tokenStore.save(key: "accessToken", value: response.accessToken)
             cachedToken = response.accessToken
             return true
         } catch {
@@ -131,10 +134,10 @@ public actor AuthManager {
         }
     }
 
-    /// Restore a previous session from keychain. Returns `true` if a token
+    /// Restore a previous session from the token store. Returns `true` if a token
     /// was found and set on the client.
     public func restoreSession() async -> Bool {
-        guard let token = try? keychain.read(key: "accessToken") else {
+        guard let token = try? tokenStore.read(key: "accessToken") else {
             return false
         }
         cachedToken = token
@@ -146,12 +149,12 @@ public actor AuthManager {
     public func logout() async {
         await client.setAccessToken(nil)
         cachedToken = nil
-        try? keychain.delete(key: "accessToken")
+        try? tokenStore.delete(key: "accessToken")
     }
 
     /// Whether we have a stored token (may be expired).
     public func hasStoredCredentials() -> Bool {
         if cachedToken != nil { return true }
-        return (try? keychain.read(key: "accessToken")) != nil
+        return (try? tokenStore.read(key: "accessToken")) != nil
     }
 }

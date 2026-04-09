@@ -26,7 +26,12 @@ class iOSAppState: ObservableObject {
 
         let newClient = APIClient(baseURL: url)
         self.client = newClient
-        self.authManager = AuthManager(client: newClient)
+        // iOS uses the data-protection keychain (the default on iOS),
+        // which never prompts and is the right home for credentials.
+        // The macOS app's default `FileTokenStore` is needed only
+        // because the legacy macOS keychain prompts for ad-hoc dev
+        // builds.
+        self.authManager = AuthManager(client: newClient, tokenStore: KeychainHelper())
     }
 
     func tryRestoreSession() async {

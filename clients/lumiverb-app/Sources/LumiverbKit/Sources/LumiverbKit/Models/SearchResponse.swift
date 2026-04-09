@@ -34,6 +34,13 @@ public struct SearchHit: Decodable, Identifiable, Sendable {
         }
         return assetId
     }
+
+    /// Aspect ratio (width / height), defaulting to 1.0 when dimensions
+    /// are missing. Used by the justified-row grid layout.
+    public var aspectRatio: Double {
+        guard let w = width, let h = height, h > 0 else { return 1.0 }
+        return Double(w) / Double(h)
+    }
 }
 
 /// Response from `GET /v1/search`.

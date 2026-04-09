@@ -594,6 +594,7 @@ export async function mergePerson(targetPersonId: string, sourcePersonId: string
 export async function searchAssets(params: {
   libraryId?: string;
   q: string;
+  mediaType?: string;
   pathPrefix?: string;
   tag?: string;
   dateFrom?: string;
@@ -610,6 +611,7 @@ export async function searchAssets(params: {
 }): Promise<SearchResponse> {
   const qs = new URLSearchParams({ q: params.q });
   if (params.libraryId) qs.set("library_id", params.libraryId);
+  if (params.mediaType) qs.set("media_type", params.mediaType);
   if (params.pathPrefix) qs.set("path_prefix", params.pathPrefix);
   if (params.tag) qs.set("tag", params.tag);
   if (params.dateFrom) qs.set("date_from", params.dateFrom);

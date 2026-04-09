@@ -5,6 +5,15 @@ import LumiverbKit
 /// Orchestrates the full scan cycle for a single library:
 /// discover → classify → generate proxy → upload → handle deletes/moves.
 actor ScanPipeline {
+    /// Files modified within this many seconds are skipped during discovery
+    /// — they're assumed to still be in flight (partial writes from
+    /// applications like video renderers, screenshot tools, copy-on-write
+    /// duplicators). They'll be picked up on the next scan once the writer
+    /// has been quiet for at least this long. Combined with the
+    /// `LibraryWatcher`'s 5s debounce, the worst-case latency for a "just
+    /// finished writing" file is ~`mtimeQuarantineSeconds + debounceInterval`.
+    static let mtimeQuarantineSeconds: TimeInterval = 30
+
     private let client: APIClient
     private let libraryId: String
     private let rootPath: String
@@ -169,10 +178,16 @@ actor ScanPipeline {
     // MARK: - Discovery
 
     /// Walk the library root and find all supported files.
+    ///
+    /// Files modified within `mtimeQuarantineSeconds` are skipped — they're
+    /// likely still being written (renders, copies, screenshots) and would
+    /// produce a half-written upload if processed now. They'll be picked up
+    /// on a subsequent pass once the writer has been quiet long enough.
     private func discoverFiles() -> [DiscoveredFile] {
         var files: [DiscoveredFile] = []
         let rootURL = URL(fileURLWithPath: rootPath)
         let fm = FileManager.default
+        let quarantineCutoff = Date().addingTimeInterval(-Self.mtimeQuarantineSeconds)
 
         guard let enumerator = fm.enumerator(
             at: rootURL,
@@ -200,6 +215,12 @@ actor ScanPipeline {
             // Check file size > 0
             let fileSize = resourceValues.fileSize ?? 0
             guard fileSize > 0 else { continue }
+
+            // Mtime quarantine: skip files that were modified in the last
+            // `mtimeQuarantineSeconds`. The next scan will pick them up.
+            if let mtime = resourceValues.contentModificationDate, mtime > quarantineCutoff {
+                continue
+            }
 
             files.append(DiscoveredFile(
                 url: fileURL,

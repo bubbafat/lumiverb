@@ -60,6 +60,28 @@ private func jsonResponse(_ statusCode: Int, json: String, for request: URLReque
     return (response, json.data(using: .utf8)!)
 }
 
+/// URLSession may move the POST body from `httpBody` onto `httpBodyStream`
+/// before handing the request to URLProtocol. Tests that want to assert on
+/// the JSON body have to fall back to draining the stream.
+private func readRequestBody(_ request: URLRequest) -> Data? {
+    if let body = request.httpBody, !body.isEmpty {
+        return body
+    }
+    guard let stream = request.httpBodyStream else { return nil }
+    stream.open()
+    defer { stream.close() }
+    var data = Data()
+    let bufferSize = 4096
+    let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+    defer { buffer.deallocate() }
+    while stream.hasBytesAvailable {
+        let read = stream.read(buffer, maxLength: bufferSize)
+        if read <= 0 { break }
+        data.append(buffer, count: read)
+    }
+    return data.isEmpty ? nil : data
+}
+
 // MARK: - Tests
 
 final class APIClientNetworkTests: XCTestCase {
@@ -495,6 +517,250 @@ final class APIClientNetworkTests: XCTestCase {
         } catch {
             XCTFail("Unexpected error: \(error)")
         }
+    }
+
+    // MARK: - Library creation
+
+    func testCreateLibraryPostsSnakeCaseBody() async throws {
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/libraries")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
+
+            // The generic post() encoder converts camelCase → snake_case.
+            // Verify the wire payload uses the exact keys the server's
+            // CreateLibraryRequest BaseModel expects. URLSession sometimes
+            // moves the body onto httpBodyStream — read whichever is set.
+            guard let bodyData = readRequestBody(request) else {
+                XCTFail("expected request body")
+                return jsonResponse(400, json: "{}", for: request)
+            }
+            let body = try! JSONSerialization.jsonObject(with: bodyData) as! [String: Any]
+            XCTAssertEqual(body["name"] as? String, "My Photos")
+            XCTAssertEqual(body["root_path"] as? String, "/Users/alice/Pictures")
+            XCTAssertEqual(body.keys.sorted(), ["name", "root_path"])
+
+            // POST /v1/libraries returns a LibraryResponse — same field shape
+            // as list items but without last_scan_at/status. Library's
+            // Decodable should accept the subset because those fields are
+            // optional.
+            return jsonResponse(200, json: """
+            {"library_id": "lib_new", "name": "My Photos", "root_path": "/Users/alice/Pictures", "is_public": false}
+            """, for: request)
+        }
+
+        let client = makeClient()
+        let created: Library = try await client.post(
+            "/v1/libraries",
+            body: CreateLibraryRequest(name: "My Photos", rootPath: "/Users/alice/Pictures")
+        )
+        XCTAssertEqual(created.libraryId, "lib_new")
+        XCTAssertEqual(created.name, "My Photos")
+        XCTAssertEqual(created.rootPath, "/Users/alice/Pictures")
+        XCTAssertEqual(created.isPublic, false)
+        // List-only fields should decode as nil from the POST response.
+        XCTAssertNil(created.lastScanAt)
+        XCTAssertNil(created.status)
+    }
+
+    func testCreateLibrarySurfacesDuplicateNameError() async {
+        MockURLProtocol.requestHandler = { request in
+            // Match the server's error envelope shape.
+            return jsonResponse(409, json: """
+            {"error": {"code": "conflict", "message": "A library with this name already exists"}}
+            """, for: request)
+        }
+
+        let client = makeClient()
+        do {
+            let _: Library = try await client.post(
+                "/v1/libraries",
+                body: CreateLibraryRequest(name: "Dupe", rootPath: "/tmp/x")
+            )
+            XCTFail("expected serverError")
+        } catch let APIError.serverError(statusCode, message) {
+            XCTAssertEqual(statusCode, 409)
+            XCTAssertEqual(message, "A library with this name already exists")
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    // MARK: - Library settings (rename / re-root)
+
+    func testUpdateLibraryPatchesOnlyProvidedFields() async throws {
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "PATCH")
+            XCTAssertEqual(request.url?.path, "/v1/libraries/lib_1")
+
+            // Swift Encodable omits nil fields by default, so a name-only
+            // update must not send a root_path key at all — the server
+            // treats key absence as "leave unchanged".
+            guard let bodyData = readRequestBody(request) else {
+                XCTFail("expected request body")
+                return jsonResponse(400, json: "{}", for: request)
+            }
+            let body = try! JSONSerialization.jsonObject(with: bodyData) as! [String: Any]
+            XCTAssertEqual(body["name"] as? String, "Renamed")
+            XCTAssertNil(body["root_path"])
+            XCTAssertNil(body["is_public"])
+
+            return jsonResponse(200, json: """
+            {"library_id": "lib_1", "name": "Renamed", "root_path": "/old/path", "is_public": false}
+            """, for: request)
+        }
+
+        let client = makeClient()
+        let updated: Library = try await client.patch(
+            "/v1/libraries/lib_1",
+            body: LibraryUpdateRequest(name: "Renamed")
+        )
+        XCTAssertEqual(updated.name, "Renamed")
+        XCTAssertEqual(updated.rootPath, "/old/path")
+    }
+
+    func testUpdateLibraryCanChangeRootPath() async throws {
+        MockURLProtocol.requestHandler = { request in
+            guard let bodyData = readRequestBody(request) else {
+                XCTFail("expected request body")
+                return jsonResponse(400, json: "{}", for: request)
+            }
+            let body = try! JSONSerialization.jsonObject(with: bodyData) as! [String: Any]
+            XCTAssertEqual(body["root_path"] as? String, "/new/root")
+            XCTAssertNil(body["name"])
+
+            return jsonResponse(200, json: """
+            {"library_id": "lib_1", "name": "Photos", "root_path": "/new/root", "is_public": false}
+            """, for: request)
+        }
+
+        let client = makeClient()
+        let updated: Library = try await client.patch(
+            "/v1/libraries/lib_1",
+            body: LibraryUpdateRequest(rootPath: "/new/root")
+        )
+        XCTAssertEqual(updated.rootPath, "/new/root")
+    }
+
+    // MARK: - Library path filters
+
+    func testAddLibraryFilterSendsSnakeCaseBody() async throws {
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/libraries/lib_1/filters")
+
+            guard let bodyData = readRequestBody(request) else {
+                XCTFail("expected request body")
+                return jsonResponse(400, json: "{}", for: request)
+            }
+            let body = try! JSONSerialization.jsonObject(with: bodyData) as! [String: Any]
+            XCTAssertEqual(body["type"] as? String, "exclude")
+            XCTAssertEqual(body["pattern"] as? String, "**/Proxy/**")
+            XCTAssertEqual(body["trash_matching"] as? Bool, true)
+
+            return jsonResponse(201, json: """
+            {
+                "filter_id": "fil_123",
+                "type": "exclude",
+                "pattern": "**/Proxy/**",
+                "created_at": "2026-04-09T12:00:00+00:00",
+                "trashed_count": 42
+            }
+            """, for: request)
+        }
+
+        let client = makeClient()
+        let result: LibraryFilterItemWithType = try await client.post(
+            "/v1/libraries/lib_1/filters",
+            body: CreateLibraryFilterRequest(
+                type: "exclude",
+                pattern: "**/Proxy/**",
+                trashMatching: true
+            )
+        )
+        XCTAssertEqual(result.filterId, "fil_123")
+        XCTAssertEqual(result.type, "exclude")
+        XCTAssertEqual(result.trashedCount, 42)
+    }
+
+    func testPreviewLibraryFilterDecodesMatchCount() async throws {
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/libraries/lib_1/filters/preview")
+            return jsonResponse(200, json: """
+            {"matching_asset_count": 17}
+            """, for: request)
+        }
+
+        let client = makeClient()
+        let preview: PreviewFilterResponse = try await client.post(
+            "/v1/libraries/lib_1/filters/preview",
+            body: PreviewFilterRequest(type: "exclude", pattern: "**/*.tmp")
+        )
+        XCTAssertEqual(preview.matchingAssetCount, 17)
+    }
+
+    func testPreviewLibraryFilterSurfacesInvalidPatternError() async {
+        MockURLProtocol.requestHandler = { request in
+            return jsonResponse(400, json: """
+            {"error": {"code": "bad_request", "message": "invalid glob pattern"}}
+            """, for: request)
+        }
+
+        let client = makeClient()
+        do {
+            let _: PreviewFilterResponse = try await client.post(
+                "/v1/libraries/lib_1/filters/preview",
+                body: PreviewFilterRequest(type: "exclude", pattern: "[unclosed")
+            )
+            XCTFail("expected serverError")
+        } catch let APIError.serverError(statusCode, message) {
+            XCTAssertEqual(statusCode, 400)
+            XCTAssertEqual(message, "invalid glob pattern")
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    func testDeleteLibraryFilterSendsCorrectPath() async throws {
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "DELETE")
+            XCTAssertEqual(request.url?.path, "/v1/libraries/lib_1/filters/fil_abc")
+            return jsonResponse(204, json: "", for: request)
+        }
+
+        let client = makeClient()
+        try await client.delete("/v1/libraries/lib_1/filters/fil_abc")
+    }
+
+    func testListLibraryFiltersDecodesRichShape() async throws {
+        // Round-trip GET /v1/libraries/{id}/filters into LibraryFiltersResponse
+        // and verify the per-row filter_id + created_at flow through so the
+        // settings UI can delete specific rows.
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/v1/libraries/lib_1/filters")
+            return jsonResponse(200, json: """
+            {
+                "includes": [
+                    {"filter_id": "fil_in1", "pattern": "photos/**", "created_at": "2025-06-01T00:00:00+00:00"}
+                ],
+                "excludes": [
+                    {"filter_id": "fil_ex1", "pattern": "**/Proxy/**", "created_at": "2025-06-02T00:00:00+00:00"},
+                    {"filter_id": "fil_ex2", "pattern": "**/.DS_Store", "created_at": "2025-06-03T00:00:00+00:00"}
+                ]
+            }
+            """, for: request)
+        }
+
+        let client = makeClient()
+        let filters: LibraryFiltersResponse = try await client.get("/v1/libraries/lib_1/filters")
+        XCTAssertEqual(filters.includes.count, 1)
+        XCTAssertEqual(filters.includes[0].filterId, "fil_in1")
+        XCTAssertEqual(filters.includes[0].pattern, "photos/**")
+        XCTAssertEqual(filters.excludes.count, 2)
+        XCTAssertEqual(filters.excludes[0].filterId, "fil_ex1")
+        XCTAssertEqual(filters.excludes[1].filterId, "fil_ex2")
     }
 
     // MARK: - deleteWithBody
