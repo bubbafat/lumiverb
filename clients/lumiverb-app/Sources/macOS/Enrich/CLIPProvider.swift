@@ -1,7 +1,7 @@
 import Foundation
 import CoreML
 import Vision
-import AppKit
+import LumiverbKit
 
 /// CLIP image embedding provider using CoreML.
 ///
@@ -54,8 +54,13 @@ enum CLIPProvider {
 
     /// Compute a 512-dimensional CLIP embedding for an image.
     static func embed(imageData: Data) throws -> [Float] {
-        guard let nsImage = NSImage(data: imageData),
-              let cgImage = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+        // Must route through `ImageLoading.loadOriented` — the naive
+        // `NSImage(data:).cgImage(...)` path this replaced silently
+        // dropped EXIF 180° rotation on current macOS (EXIF 90° happened
+        // to work, 180° didn't), so CLIP embeddings for any upside-down
+        // or 180°-rotated photo encoded rotated scene content. Same
+        // root cause as the 2026-04 face-clustering catastrophe.
+        guard let cgImage = ImageLoading.loadOriented(from: imageData) else {
             throw CLIPError.unreadableImage
         }
         return try embed(cgImage: cgImage)

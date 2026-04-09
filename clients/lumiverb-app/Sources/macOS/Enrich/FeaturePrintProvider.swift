@@ -1,6 +1,6 @@
 import Foundation
 import Vision
-import AppKit
+import LumiverbKit
 
 /// Apple Vision feature print provider for image embeddings.
 ///
@@ -22,8 +22,14 @@ enum FeaturePrintProvider {
 
     /// Compute a feature print embedding from image data.
     static func embed(imageData: Data) throws -> [Float] {
-        guard let nsImage = NSImage(data: imageData),
-              let cgImage = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+        // Must route through `ImageLoading.loadOriented` — the naive
+        // `NSImage(data:).cgImage(...)` path this replaced silently
+        // dropped EXIF 180° rotation on current macOS, producing
+        // rotation-variant feature prints for any upside-down photo.
+        // "Find similar" across a photo and its rotated sibling then
+        // became asymmetric, and near-duplicate detection missed the
+        // canonical case.
+        guard let cgImage = ImageLoading.loadOriented(from: imageData) else {
             throw FeaturePrintError.unreadableImage
         }
         return try embed(cgImage: cgImage)

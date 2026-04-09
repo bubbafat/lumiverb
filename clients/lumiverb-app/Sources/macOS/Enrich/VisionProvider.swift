@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import LumiverbKit
 import os
 
 /// OpenAI-compatible vision API client for generating image descriptions and tags.
@@ -120,11 +121,11 @@ enum VisionProvider {
     // MARK: - Image preparation
 
     private static func prepareImageBase64(_ imageData: Data) throws -> String {
-        guard let nsImage = NSImage(data: imageData) else {
-            throw VisionError.unreadableImage
-        }
-
-        guard let cgImage = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+        // Must route through `ImageLoading.loadOriented` — the naive
+        // `NSImage(data:).cgImage(...)` path this replaced silently
+        // dropped EXIF 180° rotation on current macOS, so the remote
+        // vision API was being asked to describe upside-down images.
+        guard let cgImage = ImageLoading.loadOriented(from: imageData) else {
             throw VisionError.unreadableImage
         }
 

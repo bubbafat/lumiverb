@@ -1,6 +1,6 @@
 import Foundation
 import Vision
-import AppKit
+import LumiverbKit
 
 /// Extracts text from images using Apple Vision framework.
 ///
@@ -11,7 +11,7 @@ enum OCRProvider {
     /// Extract text from an image at the given URL.
     /// Returns the extracted text, or an empty string if no text found.
     static func extractText(from imageURL: URL) throws -> String {
-        guard let cgImage = loadCGImage(from: imageURL) else {
+        guard let cgImage = ImageLoading.loadOriented(from: imageURL) else {
             throw OCRError.unreadableImage(imageURL.lastPathComponent)
         }
 
@@ -20,8 +20,12 @@ enum OCRProvider {
 
     /// Extract text from an image loaded from proxy cache data.
     static func extractText(from imageData: Data) throws -> String {
-        guard let nsImage = NSImage(data: imageData),
-              let cgImage = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+        // Must route through `ImageLoading.loadOriented` — the naive
+        // `NSImage(data:).cgImage(...)` path this replaced silently
+        // dropped EXIF 180° rotation on current macOS. OCR on upside-
+        // down text almost never recognizes anything, so any Android or
+        // inverted-capture photo was silently producing empty OCR.
+        guard let cgImage = ImageLoading.loadOriented(from: imageData) else {
             throw OCRError.unreadableImage("proxy data")
         }
 
@@ -51,11 +55,6 @@ enum OCRProvider {
         return lines.joined(separator: "\n")
     }
 
-    /// Load a CGImage from a file URL using ImageIO.
-    private static func loadCGImage(from url: URL) -> CGImage? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-        return CGImageSourceCreateImageAtIndex(source, 0, nil)
-    }
 }
 
 enum OCRError: Error, CustomStringConvertible {
