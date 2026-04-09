@@ -248,7 +248,12 @@ struct ClusterCardView: View {
     private func openLightbox(for face: PersonFaceItem) {
         // Install the cluster's full asset list as the lightbox prev/next
         // override so left/right arrows iterate the cluster's faces.
+        // Install the parallel face_id list too — `BrowseState.navigateLightbox`
+        // chains the highlight face from this list as the user steps
+        // forward, so each cluster asset opens with its specific face
+        // highlighted and the assign popover auto-armed.
         browseState.displayedAssetIdsOverride = cluster.faces.map(\.assetId)
+        browseState.displayedFaceIdsOverride = cluster.faces.map(\.faceId)
         browseState.pendingHighlightFaceId = face.faceId
         Task { await browseState.loadAssetDetail(assetId: face.assetId) }
     }

@@ -88,6 +88,18 @@ class BrowseState: ObservableObject {
     /// `closeLightbox()`.
     @Published var displayedAssetIdsOverride: [String]?
 
+    /// Parallel to ``displayedAssetIdsOverride``: the face_id to highlight
+    /// on the asset at the same index in that list. Used by the cluster
+    /// review so navigating left/right in the lightbox doesn't just walk
+    /// asset to asset — it walks *face to face*, with the cluster's face
+    /// for each asset highlighted in turn. Without this, only the first
+    /// face the user clicked into got the red border + auto-open popover;
+    /// every subsequent navigation arrived at a photo with no clickable
+    /// hit target and the user had to manually find the right face.
+    ///
+    /// `nil` outside the cluster review handoff. Cleared by `closeLightbox()`.
+    @Published var displayedFaceIdsOverride: [String]?
+
     /// When set, the lightbox should:
     /// 1. Force the face overlay on (as if the user pressed `d`)
     /// 2. Auto-open the assign popover on this specific face
@@ -100,7 +112,9 @@ class BrowseState: ObservableObject {
     /// to dismiss the cluster and tag faces from normal browse, which
     /// is much slower.
     ///
-    /// Cleared by `closeLightbox()`.
+    /// Re-set by `navigateLightbox` from `displayedFaceIdsOverride` when
+    /// the user steps to the next/prev cluster asset. Cleared by
+    /// `closeLightbox()`.
     @Published var pendingHighlightFaceId: String?
 
     // MARK: - Mode
@@ -238,6 +252,7 @@ class BrowseState: ObservableObject {
         // Clear any People-view installed prev/next override so the next
         // lightbox open from the library grid uses the normal mode list.
         displayedAssetIdsOverride = nil
+        displayedFaceIdsOverride = nil
         // Clear any cluster-review face highlight so the next lightbox
         // open doesn't pop a stale popover.
         pendingHighlightFaceId = nil
@@ -567,7 +582,27 @@ class BrowseState: ObservableObject {
         let newIndex = currentIndex + direction
         guard ids.indices.contains(newIndex) else { return }
         focusedIndex = newIndex
+        // Chain the cluster-review face highlight: if the cluster
+        // review installed a parallel face_id list, look up the face
+        // id at the new index and arm `pendingHighlightFaceId` so the
+        // lightbox auto-opens the assign popover on it. Without this,
+        // navigation would walk asset-to-asset without surfacing the
+        // cluster's actual face on each photo.
+        if let faceIds = displayedFaceIdsOverride,
+           faceIds.indices.contains(newIndex) {
+            pendingHighlightFaceId = faceIds[newIndex]
+        }
         Task { await loadAssetDetail(assetId: ids[newIndex]) }
+    }
+
+    /// Has a next asset to navigate to. Used by the lightbox face
+    /// auto-advance after tagging a highlighted face — when the user
+    /// finishes the last cluster face we close instead of no-op'ing.
+    var hasNextAsset: Bool {
+        guard let currentId = selectedAssetId else { return false }
+        let ids = displayedAssetIds
+        guard let currentIndex = ids.firstIndex(of: currentId) else { return false }
+        return currentIndex + 1 < ids.count
     }
 
     func openFocusedAsset() {

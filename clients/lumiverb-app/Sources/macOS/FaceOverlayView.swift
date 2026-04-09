@@ -41,6 +41,37 @@ final class LightboxFacesViewModel: ObservableObject {
     @Published var isSearchingPeople: Bool = false
     private var personSearchTask: Task<Void, Never>?
 
+    // MARK: - Per-face nearest-people suggestions (rank by similarity)
+
+    /// Top-N named people ranked by cosine similarity to the *clicked
+    /// face's* embedding. This is the signal the user actually wants
+    /// in the popover — "who looks like this face?" — and replaces the
+    /// old behavior of sorting candidates by total photo count, which
+    /// was wrong for heterogeneous clusters. Populated by
+    /// ``loadNearestPeopleForFace`` when a face is selected. Hits
+    /// `GET /v1/faces/{face_id}/nearest-people` (the per-face variant
+    /// of the cluster endpoint that ClusterReviewState already uses).
+    @Published var nearestPeopleForFace: [NearestPersonItem] = []
+    @Published var isLoadingNearestForFace: Bool = false
+    private var nearestForFaceTask: Task<Void, Never>?
+
+    // MARK: - Cluster-review handoff
+
+    /// The face id the user arrived at via the cluster-review per-face
+    /// flow. Drives the red highlight border in `FaceBoxView` (named
+    /// faces still take precedence — the moment a tag lands the border
+    /// flips to green) and the auto-advance behavior in `mutate`.
+    /// Cleared whenever the lightbox switches assets.
+    @Published var highlightedFaceId: String?
+
+    /// Invoked after the user successfully tags the face matching
+    /// `highlightedFaceId`. Set by `LightboxView` to advance to the
+    /// next cluster asset (or close the lightbox if there are no more).
+    /// Fires after a brief delay so the user sees the red→green border
+    /// flash before the asset changes — otherwise the success state
+    /// is invisible.
+    var onHighlightFaceTagged: (() -> Void)?
+
     let client: APIClient?
     private var loadedAssetId: String?
 
@@ -57,8 +88,11 @@ final class LightboxFacesViewModel: ObservableObject {
         if loadedAssetId == assetId, !faces.isEmpty { return }
         loadedAssetId = assetId
         // Switching assets always closes the popover so it doesn't end
-        // up anchored to a face that's no longer on screen.
+        // up anchored to a face that's no longer on screen, and clears
+        // any cluster-review highlight from the previous asset (the new
+        // asset's highlight, if any, is set after this method returns).
         deselectFace()
+        highlightedFaceId = nil
         isLoading = true
         defer { isLoading = false }
 
@@ -77,6 +111,7 @@ final class LightboxFacesViewModel: ObservableObject {
     func reset() {
         self.faces = []
         self.loadedAssetId = nil
+        highlightedFaceId = nil
         deselectFace()
     }
 
@@ -86,7 +121,16 @@ final class LightboxFacesViewModel: ObservableObject {
         selectedFaceId = faceId
         personSearchQuery = ""
         personSearchResults = []
+        nearestPeopleForFace = []
         mutationError = nil
+        // Kick off the per-face nearest-people fetch so the popover
+        // shows similarity-ranked suggestions before the user types
+        // anything in the search box. Cancels any in-flight prior
+        // request automatically.
+        nearestForFaceTask?.cancel()
+        nearestForFaceTask = Task { [weak self] in
+            await self?.loadNearestPeopleForFace(faceId)
+        }
     }
 
     func deselectFace() {
@@ -95,6 +139,37 @@ final class LightboxFacesViewModel: ObservableObject {
         personSearchTask = nil
         personSearchQuery = ""
         personSearchResults = []
+        nearestForFaceTask?.cancel()
+        nearestForFaceTask = nil
+        nearestPeopleForFace = []
+        isLoadingNearestForFace = false
+    }
+
+    // MARK: - Per-face nearest-people loader
+
+    /// Fetch the top-N named people sorted by similarity to ``faceId``'s
+    /// embedding. Mirrors what the web Lightbox does via
+    /// `getNearestPeopleForFace`. Returns `[]` (and the popover falls
+    /// back to search-only) if the face has no embedding or the call
+    /// fails — the endpoint deliberately returns an empty list rather
+    /// than 404 in that case so callers don't need an error path.
+    private func loadNearestPeopleForFace(_ faceId: String) async {
+        guard let client else { return }
+        isLoadingNearestForFace = true
+        defer { isLoadingNearestForFace = false }
+        do {
+            let people: [NearestPersonItem] = try await client.get(
+                "/v1/faces/\(faceId)/nearest-people",
+                query: ["limit": "8"]
+            )
+            // Drop the result if the user has already moved on to a
+            // different face — otherwise we'd flash stale suggestions
+            // for ~half a second after a fast click.
+            guard selectedFaceId == faceId else { return }
+            nearestPeopleForFace = people
+        } catch {
+            // Non-fatal: empty list is fine; the search field still works.
+        }
     }
 
     // MARK: - Person search (debounced typeahead)
@@ -175,6 +250,11 @@ final class LightboxFacesViewModel: ObservableObject {
     /// Run a mutation against the server, then refetch the asset's face
     /// list so the overlay reflects the new assignment. The popover is
     /// closed on success; on failure the error is shown inside it.
+    ///
+    /// **Cluster-review handoff:** if the mutated face matches
+    /// ``highlightedFaceId``, fires ``onHighlightFaceTagged`` after a
+    /// brief delay so the user sees the red→green border flash before
+    /// the lightbox advances to the next cluster asset.
     private func mutate(
         faceId: String,
         op: (APIClient) async throws -> Void
@@ -185,6 +265,7 @@ final class LightboxFacesViewModel: ObservableObject {
         defer { pendingMutation = false }
         do {
             try await op(client)
+            let wasHighlight = (faceId == highlightedFaceId)
             // Force a re-fetch of this asset's faces.
             if let assetId = loadedAssetId {
                 let prev = assetId
@@ -193,6 +274,13 @@ final class LightboxFacesViewModel: ObservableObject {
                 await loadFaces(forAsset: prev)
             }
             deselectFace()
+            if wasHighlight {
+                let cb = onHighlightFaceTagged
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(350))
+                    cb?()
+                }
+            }
         } catch {
             mutationError = describe(error)
         }
@@ -249,7 +337,11 @@ struct FaceOverlayView: View {
                         let boxH = CGFloat(bb.height) * imgRect.height
                         let boxX = imgRect.minX + CGFloat(bb.x) * imgRect.width
                         let boxY = imgRect.minY + CGFloat(bb.y) * imgRect.height
-                        FaceBoxView(person: face.person, label: labelText(face.person))
+                        FaceBoxView(
+                            person: face.person,
+                            label: labelText(face.person),
+                            isHighlighted: vm.highlightedFaceId == face.faceId
+                        )
                             .frame(width: boxW, height: boxH)
                             .contentShape(Rectangle())
                             .onTapGesture {
@@ -297,7 +389,12 @@ struct FaceOverlayView: View {
 /// presence depend on the person attribution:
 ///
 /// - Identified (assigned to a non-dismissed person): green border, name label below.
+/// - Highlighted (came from cluster review, not yet tagged): red border.
 /// - Unidentified (no person, or assigned to a dismissed person): gray border, no label.
+///
+/// "Identified" wins over "highlighted": once a cluster-review face is
+/// tagged, the border flips green even before the lightbox auto-advances
+/// — otherwise the success state is invisible.
 ///
 /// The label is rendered as an overlay anchored to the bottom edge so it
 /// always sits just below the box regardless of how the box is positioned
@@ -305,6 +402,7 @@ struct FaceOverlayView: View {
 struct FaceBoxView: View {
     let person: FaceMatchedPerson?
     let label: String?
+    let isHighlighted: Bool
 
     private var isIdentified: Bool {
         guard let person else { return false }
@@ -312,7 +410,9 @@ struct FaceBoxView: View {
     }
 
     private var borderColor: Color {
-        isIdentified ? Color.green : Color.gray
+        if isIdentified { return .green }
+        if isHighlighted { return .red }
+        return .gray
     }
 
     var body: some View {
@@ -390,6 +490,13 @@ struct FaceAssignmentPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             currentAssignmentRow
+            // Show similarity-ranked suggestions when the user hasn't
+            // started typing, so the most-likely candidates are one
+            // click away. The search field below is the escape hatch
+            // for when the right person isn't in the top-N.
+            if showsNearestSuggestions {
+                nearestSuggestionsSection
+            }
             searchField
             resultsList
             createNewRow
@@ -397,6 +504,15 @@ struct FaceAssignmentPopover: View {
         }
         .padding(12)
         .frame(width: 280)
+    }
+
+    /// True when the per-face nearest list should be visible. Hidden
+    /// once the user starts typing — the search results take over
+    /// the same screen real estate to avoid two competing lists.
+    private var showsNearestSuggestions: Bool {
+        let hasQuery = !vm.personSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if hasQuery { return false }
+        return vm.isLoadingNearestForFace || !vm.nearestPeopleForFace.isEmpty
     }
 
     // MARK: - Sections
@@ -425,6 +541,58 @@ struct FaceAssignmentPopover: View {
                 .buttonStyle(.plain)
                 .help("Remove this face from \(person.displayName)")
                 .disabled(vm.pendingMutation)
+            }
+            Divider()
+        }
+    }
+
+    /// "Looks like…" similarity-ranked suggestions row. Mirrors the
+    /// cluster-card suggestions UI in `ClusterCardView` but the source
+    /// is per-face, not per-cluster — these are the people whose
+    /// centroids are closest to *this* face's embedding. Filters out
+    /// the face's currently-assigned person to avoid offering "change
+    /// to the same person" as a no-op suggestion.
+    private var nearestSuggestionsSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("Looks like…")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                if vm.isLoadingNearestForFace {
+                    ProgressView().controlSize(.mini)
+                }
+                Spacer()
+            }
+            let currentPersonId = face.person?.personId
+            let suggestions = vm.nearestPeopleForFace.filter { $0.personId != currentPersonId }
+            if !suggestions.isEmpty {
+                VStack(spacing: 2) {
+                    ForEach(suggestions) { person in
+                        Button {
+                            Task { await vm.assignFace(face.faceId, toPersonId: person.personId) }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "person.crop.circle.fill")
+                                    .foregroundColor(.accentColor.opacity(0.7))
+                                    .font(.caption)
+                                Text(person.displayName)
+                                    .font(.callout)
+                                    .lineLimit(1)
+                                Spacer()
+                                Text("\(person.faceCount)")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(Color.accentColor.opacity(0.10))
+                            .cornerRadius(4)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(vm.pendingMutation)
+                    }
+                }
             }
             Divider()
         }

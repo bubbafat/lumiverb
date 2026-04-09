@@ -18,7 +18,21 @@ struct LightboxView: View {
     init(browseState: BrowseState, client: APIClient?) {
         self.browseState = browseState
         self.client = client
-        _facesVM = StateObject(wrappedValue: LightboxFacesViewModel(client: client))
+        let vm = LightboxFacesViewModel(client: client)
+        // Wire the highlight-tagged callback to the navigation state.
+        // After the user successfully tags a face that came from the
+        // cluster-review handoff (red border + auto-opened popover),
+        // advance to the next cluster asset so the cluster visibly
+        // "moves along". If there's no next asset, close the lightbox
+        // entirely. Mirrors the web Lightbox auto-advance behavior.
+        vm.onHighlightFaceTagged = { [browseState] in
+            if browseState.hasNextAsset {
+                browseState.navigateLightbox(direction: 1)
+            } else {
+                browseState.closeLightbox()
+            }
+        }
+        _facesVM = StateObject(wrappedValue: vm)
     }
 
     var body: some View {
@@ -133,13 +147,17 @@ struct LightboxView: View {
                 await facesVM.loadFaces(forAsset: assetId)
                 // Cluster review hands us a `pendingHighlightFaceId`
                 // when the user clicks a face crop. After the faces
-                // load, auto-open the assign popover on that exact
-                // face so the per-face tagging path is one click
-                // instead of "open lightbox → press d → click face
-                // → assign". Cleared on consume so navigating to the
-                // next asset doesn't keep popping the same popover.
+                // load, mark that face as highlighted (red border) and
+                // auto-open the assign popover on it so the per-face
+                // tagging path is one click instead of "open lightbox
+                // → press d → click face → assign". Cleared on consume
+                // so navigating away doesn't keep popping the same
+                // popover. The highlight stays on `facesVM` (not on
+                // `browseState`) so the FaceBoxView color logic can
+                // observe it directly.
                 if let pending = browseState.pendingHighlightFaceId,
                    facesVM.faces.contains(where: { $0.faceId == pending }) {
+                    facesVM.highlightedFaceId = pending
                     facesVM.selectFace(pending)
                     browseState.pendingHighlightFaceId = nil
                 }
