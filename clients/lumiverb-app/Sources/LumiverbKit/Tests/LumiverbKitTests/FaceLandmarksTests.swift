@@ -1,7 +1,6 @@
 import XCTest
 import Foundation
 import Vision
-import AppKit
 @testable import LumiverbKit
 
 /// Tests for `FaceLandmarks.extractAlignmentLandmarks`.
@@ -15,6 +14,15 @@ import AppKit
 /// We can't assert exact pixel coordinates because Apple Vision's model
 /// output varies slightly between OS versions, but structural invariants
 /// hold regardless.
+///
+/// History: the fixture loader used to route through
+/// `NSImage(data:).cgImage(forProposedRect:)`, which silently drops EXIF
+/// 180° rotation on current macOS (and all EXIF rotations on older macOS).
+/// `face_group.jpg` is stored with EXIF 3, so landmarks were being reported
+/// in an upside-down coordinate frame; the anatomical invariants still
+/// happened to pass because they're symmetric under 180° rotation, but the
+/// test was proving something about rotated pixels, not display-oriented
+/// pixels. Switched to `ImageLoading.loadOriented` to match production.
 final class FaceLandmarksTests: XCTestCase {
 
     private func loadFixtureCGImage(_ name: String) throws -> CGImage {
@@ -23,9 +31,7 @@ final class FaceLandmarksTests: XCTestCase {
         ) else {
             throw FixtureError.notFound(name)
         }
-        let data = try Data(contentsOf: url)
-        guard let nsImage = NSImage(data: data),
-              let cg = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+        guard let cg = ImageLoading.loadOriented(from: url) else {
             throw FixtureError.unreadable
         }
         return cg
