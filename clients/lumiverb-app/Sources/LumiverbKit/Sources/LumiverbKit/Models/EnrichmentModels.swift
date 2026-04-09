@@ -9,6 +9,7 @@ public enum EnrichmentOperation: String, CaseIterable, Sendable {
     case ocr = "Extract Text"
     case vision = "Generate Descriptions"
     case videoPreview = "Generate Preview"
+    case transcribe = "Generate Transcripts"
 }
 
 // MARK: - OCR

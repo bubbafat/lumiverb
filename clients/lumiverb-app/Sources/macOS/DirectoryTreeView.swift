@@ -122,9 +122,12 @@ struct DirectoryRowView: View {
                         }
                         Divider()
                     }
-                    ReEnrichMenu { ops in
-                        browseState.reEnrich(operations: ops, pathPrefix: node.path)
-                    }
+                    ReEnrichMenu(
+                        onReEnrich: { ops in
+                            browseState.reEnrich(operations: ops, pathPrefix: node.path)
+                        },
+                        whisperEnabled: browseState.appState.whisperEnabled,
+                    )
                 }
             }
             .buttonStyle(.plain)

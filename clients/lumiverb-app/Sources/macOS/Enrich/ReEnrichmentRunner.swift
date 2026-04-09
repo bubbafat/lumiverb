@@ -16,6 +16,9 @@ actor ReEnrichmentRunner {
     private let visionApiUrl: String
     private let visionApiKey: String
     private let visionModelId: String
+    private let whisperModelSize: String
+    private let whisperLanguage: String
+    private let whisperBinaryPath: String
 
     private(set) var totalItems = 0
     private(set) var processedItems = 0
@@ -38,7 +41,10 @@ actor ReEnrichmentRunner {
         libraryRootPath: String? = nil,
         visionApiUrl: String = "",
         visionApiKey: String = "",
-        visionModelId: String = ""
+        visionModelId: String = "",
+        whisperModelSize: String = "small",
+        whisperLanguage: String = "",
+        whisperBinaryPath: String = ""
     ) {
         self.client = client
         self.libraryId = libraryId
@@ -46,6 +52,9 @@ actor ReEnrichmentRunner {
         self.visionApiUrl = visionApiUrl
         self.visionApiKey = visionApiKey
         self.visionModelId = visionModelId
+        self.whisperModelSize = whisperModelSize
+        self.whisperLanguage = whisperLanguage
+        self.whisperBinaryPath = whisperBinaryPath
     }
 
     func cancel() { cancelled = true }
@@ -62,31 +71,37 @@ actor ReEnrichmentRunner {
         let imageAssets = assets.filter { $0.mediaType == "image" }
         let videoAssets = assets.filter { $0.mediaType == "video" }
 
-        // Image-only operations
-        totalItems = imageAssets.count
+        // Total successful operations across every phase. The previous
+        // implementation returned `totalItems - errorCount`, but
+        // `totalItems` is reassigned per phase and `errorCount` is
+        // cumulative — so any errors in earlier phases would
+        // under-count later phases (and could even go negative). Track
+        // successes per phase via `runPhase` and accumulate.
+        var cumulativeSuccesses = 0
 
         if operations.contains(.faces) {
-            phase = "faces"
-            await runFaceDetection(on: imageAssets)
+            cumulativeSuccesses += await runPhase("faces", count: imageAssets.count) {
+                await self.runFaceDetection(on: imageAssets)
+            }
         }
 
         if !cancelled && operations.contains(.embeddings) {
-            phase = "embeddings"
-            processedItems = 0
-            await runEmbeddings(on: imageAssets)
+            cumulativeSuccesses += await runPhase("embeddings", count: imageAssets.count) {
+                await self.runEmbeddings(on: imageAssets)
+            }
         }
 
         if !cancelled && operations.contains(.ocr) {
-            phase = "ocr"
-            processedItems = 0
-            await runOCR(on: imageAssets)
+            cumulativeSuccesses += await runPhase("ocr", count: imageAssets.count) {
+                await self.runOCR(on: imageAssets)
+            }
         }
 
         if !cancelled && operations.contains(.vision) {
             if VisionProvider.isConfigured(apiURL: visionApiUrl, modelId: visionModelId) {
-                phase = "vision"
-                processedItems = 0
-                await runVision(on: imageAssets)
+                cumulativeSuccesses += await runPhase("vision", count: imageAssets.count) {
+                    await self.runVision(on: imageAssets)
+                }
             } else {
                 skippedOperations.append("vision (not configured — set API URL in Settings)")
             }
@@ -95,18 +110,49 @@ actor ReEnrichmentRunner {
         // Video operations
         if !cancelled && operations.contains(.videoPreview) {
             if let rootPath = libraryRootPath {
-                phase = "video previews"
-                processedItems = 0
-                totalItems = videoAssets.count
-                await runVideoPreview(on: videoAssets, rootPath: rootPath)
+                cumulativeSuccesses += await runPhase("video previews", count: videoAssets.count) {
+                    await self.runVideoPreview(on: videoAssets, rootPath: rootPath)
+                }
             } else {
                 skippedOperations.append("video preview (library root path not available)")
             }
         }
 
+        if !cancelled && operations.contains(.transcribe) {
+            if let rootPath = libraryRootPath {
+                if WhisperProvider.isConfigured(modelSize: whisperModelSize, binaryPath: whisperBinaryPath) {
+                    cumulativeSuccesses += await runPhase("transcripts", count: videoAssets.count) {
+                        await self.runTranscription(on: videoAssets, rootPath: rootPath)
+                    }
+                } else {
+                    skippedOperations.append("transcripts (whisper-cli or model file missing — see Settings)")
+                }
+            } else {
+                skippedOperations.append("transcripts (library root path not available)")
+            }
+        }
+
         phase = "done"
         isRunning = false
-        return Result(processed: totalItems - errorCount, errors: errorCount, skipped: skippedOperations)
+        return Result(processed: cumulativeSuccesses, errors: errorCount, skipped: skippedOperations)
+    }
+
+    /// Run one enrichment phase and return the count of successful
+    /// per-item operations within it. Snapshots `errorCount` before /
+    /// after the inner work to compute "errors during this phase";
+    /// `processedItems - phaseErrors` gives successes.
+    private func runPhase(
+        _ name: String,
+        count: Int,
+        _ work: () async -> Void,
+    ) async -> Int {
+        phase = name
+        processedItems = 0
+        totalItems = count
+        let preErrors = errorCount
+        await work()
+        let phaseErrors = errorCount - preErrors
+        return max(0, processedItems - phaseErrors)
     }
 
     // MARK: - Face detection
@@ -369,6 +415,49 @@ actor ReEnrichmentRunner {
                     fileData: previewData,
                     fileName: "\(asset.assetId).mp4",
                     mimeType: "video/mp4"
+                )
+            } catch {
+                lastError = "\(asset.relPath): \(error)"
+                errorCount += 1
+            }
+
+            processedItems += 1
+        }
+    }
+
+    // MARK: - Transcription
+
+    private func runTranscription(on assets: [AssetPageItem], rootPath: String) async {
+        for asset in assets {
+            if cancelled { break }
+
+            let fullPath = (rootPath as NSString).appendingPathComponent(asset.relPath)
+            let sourceURL = URL(fileURLWithPath: fullPath)
+
+            guard FileManager.default.fileExists(atPath: fullPath) else {
+                processedItems += 1
+                continue
+            }
+
+            do {
+                let result = try await WhisperProvider.transcribe(
+                    sourceURL: sourceURL,
+                    modelSize: whisperModelSize,
+                    language: whisperLanguage.isEmpty ? nil : whisperLanguage,
+                    binaryPath: whisperBinaryPath.isEmpty ? nil : whisperBinaryPath,
+                )
+                // Empty SRT is the canonical "checked, no speech" signal —
+                // the server's /v1/assets/{id}/transcript handler treats it
+                // as a deterministic completed-but-silent result so the
+                // asset is not retried on every enrichment run.
+                let body = TranscriptSubmitRequest(
+                    srt: result.srt,
+                    language: result.language,
+                    source: WhisperProvider.providerId,
+                )
+                let _: TranscriptSubmitResponse = try await client.post(
+                    "/v1/assets/\(asset.assetId)/transcript",
+                    body: body,
                 )
             } catch {
                 lastError = "\(asset.relPath): \(error)"

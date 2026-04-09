@@ -19,6 +19,18 @@ class AppState: ObservableObject {
     @Published var tenantVisionApiUrl: String = ""
     @Published var tenantVisionModelId: String = ""
 
+    // Whisper.cpp transcription config. Defaults match the Python production
+    // reference (`whisper_model="small"`). The `whisperEnabled` toggle is
+    // the primary opt-in: when off, the entire transcription pipeline is
+    // disabled — the menu item is shown but greyed out, the model directory
+    // can be cleaned up, and no model auto-downloads happen. Empty
+    // `whisperLanguage` means auto-detect; empty `whisperBinaryPath` means
+    // auto-discover from common Homebrew install locations.
+    @Published var whisperEnabled: Bool = false
+    @Published var whisperModelSize: String = "small"
+    @Published var whisperLanguage: String = ""
+    @Published var whisperBinaryPath: String = ""
+
     private(set) var client: APIClient?
     private(set) var authManager: AuthManager?
 
@@ -34,6 +46,17 @@ class AppState: ObservableObject {
         !resolvedVisionApiUrl.isEmpty && !resolvedVisionModelId.isEmpty
     }
 
+    var isWhisperConfigured: Bool {
+        WhisperProvider.isConfigured(modelSize: whisperModelSize, binaryPath: whisperBinaryPath)
+    }
+
+    /// True if whisper is enabled but the chosen model file is missing on
+    /// disk — used by Settings to surface a "Download now" banner without
+    /// auto-triggering a download as a side-effect of opening the page.
+    var isWhisperEnabledButModelMissing: Bool {
+        whisperEnabled && !isWhisperConfigured
+    }
+
     init() {
         // Try to restore saved server URL
         if let saved = UserDefaults.standard.string(forKey: "serverURL"), !saved.isEmpty {
@@ -43,12 +66,24 @@ class AppState: ObservableObject {
         visionApiUrl = UserDefaults.standard.string(forKey: "visionApiUrl") ?? ""
         visionApiKey = UserDefaults.standard.string(forKey: "visionApiKey") ?? ""
         visionModelId = UserDefaults.standard.string(forKey: "visionModelId") ?? ""
+        // Restore whisper config
+        whisperEnabled = UserDefaults.standard.bool(forKey: "whisperEnabled")
+        whisperModelSize = UserDefaults.standard.string(forKey: "whisperModelSize") ?? "small"
+        whisperLanguage = UserDefaults.standard.string(forKey: "whisperLanguage") ?? ""
+        whisperBinaryPath = UserDefaults.standard.string(forKey: "whisperBinaryPath") ?? ""
     }
 
     func saveVisionConfig() {
         UserDefaults.standard.set(visionApiUrl, forKey: "visionApiUrl")
         UserDefaults.standard.set(visionApiKey, forKey: "visionApiKey")
         UserDefaults.standard.set(visionModelId, forKey: "visionModelId")
+    }
+
+    func saveWhisperConfig() {
+        UserDefaults.standard.set(whisperEnabled, forKey: "whisperEnabled")
+        UserDefaults.standard.set(whisperModelSize, forKey: "whisperModelSize")
+        UserDefaults.standard.set(whisperLanguage, forKey: "whisperLanguage")
+        UserDefaults.standard.set(whisperBinaryPath, forKey: "whisperBinaryPath")
     }
 
     func configure(serverURL: String) {

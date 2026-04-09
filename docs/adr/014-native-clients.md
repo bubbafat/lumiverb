@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — in progress (Phases 0–3 complete; 4 and 6 partial; 5 not started)
+Accepted — in progress (Phases 0–4 complete; 6 partial; 5 not started)
 
 ## Progress
 
@@ -12,15 +12,13 @@ Accepted — in progress (Phases 0–3 complete; 4 and 6 partial; 5 not started)
 | 1 | Swift project scaffold: Xcode project, shared package, API client, auth | Complete |
 | 2 | macOS browse shell: library list, media grid, lightbox, search | Complete |
 | 3 | macOS background scan: file watching, hashing, proxy generation, upload | Complete |
-| 4 | macOS enrichment: CoreML CLIP, CoreML ArcFace, Apple Vision OCR, whisper.cpp | Partial — whisper.cpp transcription not yet integrated; CLIP / ArcFace / face detection / OCR / vision-AI / video preview all done |
+| 4 | macOS enrichment: CoreML CLIP, CoreML ArcFace, Apple Vision OCR, whisper.cpp | Complete — CLIP / ArcFace / face detection / OCR / vision-AI / video preview / whisper.cpp transcription all shipped |
 | 5 | iOS browse app: shared UI from Phase 2 adapted for iOS | Not started — only Phase 1 deliverables (login, connected screen) exist under `Sources/iOS/` |
 | 6 | Face tagging UI (both platforms) | Partial — macOS face overlay, cluster review, people page, person detail, dismiss, name flows all built; iOS blocked on Phase 5 |
 
-> **Status table verified against the working tree on 2026-04-09.** Phases 0–3 were originally documented as "Not started" and audited as complete on this date. The Phase 4 / Phase 6 sub-items below are the source of truth for what is still actually outstanding. The original table values (all "Not started") are preserved in git history.
+> **Status table verified against the working tree on 2026-04-09.** Phases 0–3 were originally documented as "Not started" and audited as complete on this date. Phase 4 was completed shortly after by adding whisper.cpp transcription via `Sources/macOS/Enrich/WhisperProvider.swift` plus `LumiverbKit/Audio/{AudioExtraction,WhisperRunner}.swift`. The Phase 6 sub-items below are the source of truth for what is still actually outstanding. The original table values (all "Not started") are preserved in git history.
 
 ## Remaining work
-
-**Phase 4 — whisper.cpp transcription on macOS.** No `Sources/macOS/Enrich/{Whisper,Transcrib}*.swift` exists. The Python CLI does this via `faster-whisper`, the API endpoint accepts SRT uploads at `POST /v1/assets/{id}/transcript`, and the search index understands the transcript hit type — so the entire missing piece is client-side: link or subprocess `whisper.cpp`, run it on audio extracted from the source video, POST the SRT.
 
 **Phase 5 — the entire iOS browse app.** `Sources/iOS/` currently contains `LumiverbiOSApp.swift`, `LoginView.swift`, `iOSAppState.swift`, `ConnectedView.swift` — the Phase 1 deliverables only. The full media-grid / lightbox / search port from the macOS code in `Sources/macOS/{BrowseWindow,MediaGridView,LightboxView,SearchResultsGrid}.swift` is unstarted, as are the platform adaptations (tab bar, touch gestures, share-sheet save, low-data mode).
 

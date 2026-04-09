@@ -45,9 +45,12 @@ struct LibrarySidebar: View {
                                     NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: lib.rootPath)
                                 }
                                 Divider()
-                                ReEnrichMenu { ops in
-                                    browseState.reEnrich(operations: ops)
-                                }
+                                ReEnrichMenu(
+                                    onReEnrich: { ops in
+                                        browseState.reEnrich(operations: ops)
+                                    },
+                                    whisperEnabled: browseState.appState.whisperEnabled,
+                                )
                             }
                     }
                 }

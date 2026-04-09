@@ -411,7 +411,10 @@ class BrowseState: ObservableObject {
                 libraryRootPath: selectedLibraryRootPath,
                 visionApiUrl: appState.resolvedVisionApiUrl,
                 visionApiKey: appState.resolvedVisionApiKey,
-                visionModelId: appState.resolvedVisionModelId
+                visionModelId: appState.resolvedVisionModelId,
+                whisperModelSize: appState.whisperModelSize,
+                whisperLanguage: appState.whisperLanguage,
+                whisperBinaryPath: appState.whisperBinaryPath
             )
             reEnrichRunner = runner
             startReEnrichPolling(runner: runner)
@@ -452,7 +455,10 @@ class BrowseState: ObservableObject {
                 libraryRootPath: selectedLibraryRootPath,
                 visionApiUrl: appState.resolvedVisionApiUrl,
                 visionApiKey: appState.resolvedVisionApiKey,
-                visionModelId: appState.resolvedVisionModelId
+                visionModelId: appState.resolvedVisionModelId,
+                whisperModelSize: appState.whisperModelSize,
+                whisperLanguage: appState.whisperLanguage,
+                whisperBinaryPath: appState.whisperBinaryPath
             )
             reEnrichRunner = runner
             startReEnrichPolling(runner: runner)

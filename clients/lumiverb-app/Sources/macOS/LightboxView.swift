@@ -132,7 +132,8 @@ struct LightboxView: View {
                             let url = URL(fileURLWithPath: fullPath)
                             NSWorkspace.shared.open(url)
                         }
-                    } : nil
+                    } : nil,
+                    whisperEnabled: browseState.appState.whisperEnabled,
                 )
                 .frame(width: 300)
             }
@@ -207,6 +208,7 @@ struct MetadataSidebar: View {
     let onReEnrich: (Set<EnrichmentOperation>) -> Void
     let onRevealInFinder: () -> Void
     let onOpenInPlayer: (() -> Void)?
+    var whisperEnabled: Bool = false
 
     var body: some View {
         ScrollView {
@@ -249,7 +251,7 @@ struct MetadataSidebar: View {
                         .help("Show face bounding boxes (D)")
                     }
 
-                    ReEnrichMenu(onReEnrich: onReEnrich)
+                    ReEnrichMenu(onReEnrich: onReEnrich, whisperEnabled: whisperEnabled)
                         .controlSize(.small)
 
                     if let onOpenInPlayer {
