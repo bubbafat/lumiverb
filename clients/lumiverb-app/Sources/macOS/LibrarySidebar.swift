@@ -49,7 +49,7 @@ struct LibrarySidebar: View {
                                     onReEnrich: { ops in
                                         browseState.reEnrich(operations: ops)
                                     },
-                                    whisperEnabled: browseState.appState.whisperEnabled,
+                                    whisperEnabled: browseState.whisperEnabled,
                                 )
                             }
                     }

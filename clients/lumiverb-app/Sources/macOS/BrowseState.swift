@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import LumiverbKit
 
@@ -129,8 +130,28 @@ class BrowseState: ObservableObject {
 
     @Published var focusedIndex: Int = 0
 
+    /// Mirror of `appState.whisperEnabled`. SwiftUI views that observe
+    /// `BrowseState` (LightboxView, LibrarySidebar, DirectoryTreeView) need
+    /// to react to whisper enable/disable changes when they host a
+    /// `ReEnrichMenu`. They don't observe `appState` directly, so reads
+    /// via `browseState.appState.whisperEnabled` would never trigger
+    /// re-renders — the menu would stay greyed out forever after the
+    /// initial paint. This published mirror is fed by a Combine sink in
+    /// `init` so any change to the underlying value flows through to the
+    /// observers automatically.
+    @Published var whisperEnabled: Bool = false
+
+    private var cancellables: Set<AnyCancellable> = []
+
     init(appState: AppState) {
         self.appState = appState
+        self.whisperEnabled = appState.whisperEnabled
+        appState.$whisperEnabled
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] newValue in
+                self?.whisperEnabled = newValue
+            }
+            .store(in: &cancellables)
     }
 
     var client: APIClient? { appState.client }
@@ -399,7 +420,19 @@ class BrowseState: ObservableObject {
             reEnrichProcessed = 0
             reEnrichTotal = 0
 
-            let assets = await fetchAllAssets(libraryId: libraryId, pathPrefix: pathPrefix)
+            // Push the media_type filter to the server when the operation
+            // set is single-modality. A 16k-image library was previously
+            // dragging all 16k rows over the wire when the user only
+            // wanted to transcribe 131 videos — the runner filters
+            // internally either way, but we'd already paid the network +
+            // server cost. Mixed operations (e.g. "All") still fetch
+            // unfiltered.
+            let mediaType = mediaTypeFilter(forOperations: operations)
+            let assets = await fetchAllAssets(
+                libraryId: libraryId,
+                pathPrefix: pathPrefix,
+                mediaType: mediaType,
+            )
             guard !assets.isEmpty else {
                 isReEnriching = false
                 return
@@ -482,8 +515,28 @@ class BrowseState: ObservableObject {
         }
     }
 
-    /// Fetch all assets for a library/path (paginated).
-    private func fetchAllAssets(libraryId: String, pathPrefix: String?) async -> [AssetPageItem] {
+    /// Returns the appropriate `media_type` query value for an
+    /// enrichment operation set, or nil if the set is mixed-modality.
+    /// Used by `reEnrich` to push the media-type filter down to the
+    /// server side and avoid pulling all images across the wire when
+    /// only video operations are requested.
+    private func mediaTypeFilter(forOperations ops: Set<EnrichmentOperation>) -> String? {
+        let imageOps: Set<EnrichmentOperation> = [.faces, .embeddings, .ocr, .vision]
+        let videoOps: Set<EnrichmentOperation> = [.videoPreview, .transcribe]
+        if !ops.isEmpty && ops.isSubset(of: videoOps) { return "video" }
+        if !ops.isEmpty && ops.isSubset(of: imageOps) { return "image" }
+        return nil
+    }
+
+    /// Fetch all assets for a library/path (paginated). When `mediaType`
+    /// is set the server filters to only that media type, avoiding the
+    /// network + server cost of returning the other side of a mixed
+    /// library.
+    private func fetchAllAssets(
+        libraryId: String,
+        pathPrefix: String?,
+        mediaType: String? = nil,
+    ) async -> [AssetPageItem] {
         guard let client else { return [] }
         var all: [AssetPageItem] = []
         var cursor: String?
@@ -497,6 +550,7 @@ class BrowseState: ObservableObject {
             ]
             if let cursor { query["after"] = cursor }
             if let pathPrefix { query["path_prefix"] = pathPrefix }
+            if let mediaType { query["media_type"] = mediaType }
 
             do {
                 let response: AssetPageResponse = try await client.get(

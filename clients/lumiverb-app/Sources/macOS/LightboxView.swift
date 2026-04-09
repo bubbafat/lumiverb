@@ -133,7 +133,7 @@ struct LightboxView: View {
                             NSWorkspace.shared.open(url)
                         }
                     } : nil,
-                    whisperEnabled: browseState.appState.whisperEnabled,
+                    whisperEnabled: browseState.whisperEnabled,
                 )
                 .frame(width: 300)
             }

@@ -195,6 +195,41 @@ final class WhisperRunnerTests: XCTestCase {
         XCTAssertTrue(result.contains("00:00:00,000"))
     }
 
+    func testSanitizeStripsKnownHallucinationThankYou() {
+        let srt = """
+        1
+        00:00:00,000 --> 00:00:06,520
+         Thank you for watching!
+
+        """
+        XCTAssertEqual(WhisperRunner.sanitizeSRT(srt), "")
+    }
+
+    func testSanitizeStripsKnownHallucinationCaseInsensitive() {
+        let srt = """
+        1
+        00:00:00,000 --> 00:00:05,000
+         THANKS FOR WATCHING.
+
+        """
+        XCTAssertEqual(WhisperRunner.sanitizeSRT(srt), "")
+    }
+
+    func testSanitizePreservesPhraseEmbeddedInLongerSpeech() {
+        // The phrase appears mid-transcript, not as the entire body.
+        // Real videos can legitimately end with "thanks for watching!" —
+        // we should NOT filter it when there's other content alongside.
+        let srt = """
+        1
+        00:00:00,000 --> 00:00:10,000
+         Welcome to the show. Today we're going to cover three topics. Thanks for watching.
+
+        """
+        let result = WhisperRunner.sanitizeSRT(srt)
+        XCTAssertTrue(result.contains("Welcome to the show"))
+        XCTAssertTrue(result.contains("Thanks for watching"))
+    }
+
     func testSanitizeMixedSilenceAndSpeechKeepsOnlySpeech() {
         let srt = """
         1

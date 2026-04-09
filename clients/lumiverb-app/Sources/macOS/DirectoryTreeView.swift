@@ -126,7 +126,7 @@ struct DirectoryRowView: View {
                         onReEnrich: { ops in
                             browseState.reEnrich(operations: ops, pathPrefix: node.path)
                         },
-                        whisperEnabled: browseState.appState.whisperEnabled,
+                        whisperEnabled: browseState.whisperEnabled,
                     )
                 }
             }

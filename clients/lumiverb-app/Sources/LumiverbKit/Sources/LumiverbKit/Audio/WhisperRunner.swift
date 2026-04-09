@@ -182,27 +182,61 @@ public enum WhisperRunner {
 
     // MARK: - SRT sanitization
 
-    /// Strip degenerate whisper output: bracketed non-speech placeholders
-    /// (`[BLANK_AUDIO]`, `[MUSIC]`, `[NOISE]`, etc.) and pathological
-    /// token-loop hallucinations that whisper produces on near-silent
-    /// input. Returns either the cleaned SRT or an empty string when
-    /// nothing meaningful remains — the empty string is the canonical
-    /// "checked, no speech" signal that the server's
+    /// Strip degenerate whisper output. Returns either the cleaned SRT or
+    /// an empty string when nothing meaningful remains — the empty string
+    /// is the canonical "checked, no speech" signal that the server's
     /// `/v1/assets/{id}/transcript` endpoint understands.
     ///
-    /// The non-speech placeholders are whisper-cli's way of marking a
-    /// segment as silent. The token-loop hallucinations (e.g.
-    /// `ʕ ʔ ʔ ʔ ʔ ʔ ʔ ʔ ʔ ʔ ʔ ʔ ʔ ʔ ʔ`) happen because macOS's AAC
-    /// decoder is slightly non-deterministic on near-silent input, and
-    /// whisper occasionally enters a self-referential prediction loop on
-    /// the resulting noise floor. This is reproducible across all model
-    /// sizes including small.
+    /// Three categories of degenerate output get dropped:
+    ///
+    /// 1. **Bracketed non-speech placeholders** (`[BLANK_AUDIO]`, `[MUSIC]`,
+    ///    `[NOISE]`) — whisper-cli emits these as "I processed this segment
+    ///    but there was no transcribable speech" markers.
+    ///
+    /// 2. **IPA token-loop hallucinations** (e.g. `ʕ ʔ ʔ ʔ ʔ ʔ ʔ ʔ ʔ ʔ`) —
+    ///    macOS's AAC decoder is non-deterministic on near-silent input,
+    ///    and the small whisper model occasionally enters a
+    ///    self-referential prediction loop on the resulting noise floor.
+    ///    Detected by the absence of any 2+ consecutive ASCII letter pair.
+    ///
+    /// 3. **Known training-data hallucinations** (`"Thank you for
+    ///    watching!"`, `"Subscribe to the channel"`, etc.) — the small
+    ///    model has these phrases baked in from YouTube training data
+    ///    and emits them when fed silent or music-only audio. They're
+    ///    well-formed English so the IPA filter doesn't catch them.
+    ///    To minimize false positives we only drop them when they make
+    ///    up the *entire* segment body — a real video where someone says
+    ///    "Thanks for watching!" inside a longer sentence will not be
+    ///    filtered.
     ///
     /// Public for testing.
     public static func sanitizeSRT(_ srt: String) -> String {
         let placeholders = [
             "[BLANK_AUDIO]", "[MUSIC]", "[NOISE]", "[SOUND]",
             "[silence]", "[music]", "[noise]", "[no audio]", "[blank audio]",
+        ]
+        // Known whisper hallucination phrases. Lowercased for
+        // case-insensitive comparison. Only matched against the *entire*
+        // segment body (after trimming and punctuation strip) so a real
+        // longer transcript that happens to contain "thanks for watching"
+        // is not filtered.
+        let hallucinationPhrases: Set<String> = [
+            "thank you for watching",
+            "thank you for watching!",
+            "thanks for watching",
+            "thanks for watching!",
+            "please subscribe to the channel",
+            "subscribe to the channel",
+            "subscribe to my channel",
+            "like and subscribe",
+            "don't forget to like and subscribe",
+            "thanks for listening",
+            "thank you so much for watching",
+            "thanks for watching, see you next time",
+            "see you next time",
+            "bye",
+            "bye bye",
+            "goodbye",
         ]
 
         // Parse out the segment text bodies. SRT segments look like:
@@ -228,6 +262,20 @@ public enum WhisperRunner {
             }
             stripped = stripped.trimmingCharacters(in: .whitespacesAndNewlines)
             if stripped.isEmpty { continue }
+
+            // Skip if the entire body matches a known training-data
+            // hallucination phrase. Compared after lowercasing and
+            // stripping trailing punctuation so "Thank you for watching!"
+            // and "thank you for watching." both match the canonical
+            // entry. Note: only the FULL body must match — a longer
+            // transcript that contains the phrase as a clause is left
+            // alone.
+            let lowered = stripped
+                .lowercased()
+                .trimmingCharacters(in: CharacterSet(charactersIn: " .!?,;:"))
+            if hallucinationPhrases.contains(lowered) {
+                continue
+            }
 
             // Skip whisper hallucinations on near-silent input. Real
             // English / Spanish / French speech always contains at least
