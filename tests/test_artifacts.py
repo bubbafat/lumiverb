@@ -93,7 +93,11 @@ def artifact_env(tmp_path_factory):
                 session.add(row)
                 session.commit()
 
-            with patch("src.server.api.routers.artifacts.get_storage", return_value=storage):
+            # Patch get_storage in every router that streams artifact files
+            # so the test storage_root is used end-to-end. Each router imports
+            # get_storage at module load, so they need separate patch targets.
+            with patch("src.server.api.routers.artifacts.get_storage", return_value=storage), \
+                 patch("src.server.api.routers.assets.get_storage", return_value=storage):
                 with TestClient(app) as raw_client:
                     auth = _AuthClient(raw_client, api_key)
                     auth_headers = {"Authorization": f"Bearer {api_key}"}
@@ -377,6 +381,73 @@ def test_upload_scene_rep_writes_file_to_scenes_path(artifact_env) -> None:
     assert body["sha256"] == _sha256(content)
     assert storage.abs_path(body["key"]).exists()
     assert storage.abs_path(body["key"]).read_bytes() == content
+
+
+@pytest.mark.slow
+def test_upload_scene_rep_does_not_overwrite_video_preview_key(artifact_env) -> None:
+    """Regression: a scene_rep upload must not touch assets.video_preview_key.
+
+    A scene_rep is a per-scene JPG keyframe stored under /scenes/; its on-disk
+    path is derived from (asset_id, rep_frame_ms) and is not recorded in any
+    asset-level column. The video_preview_key column is reserved for the MP4
+    hover-preview clip uploaded via artifact_type='video_preview' and is what
+    the /v1/assets/{id}/preview streaming endpoint serves.
+
+    Bug: a fall-through `else` branch in the artifact upload dispatch caused
+    every scene_rep upload to call set_video_preview() with the scene_rep's
+    JPG key, clobbering the real MP4 preview path. The /preview endpoint then
+    streamed the JPG bytes with Content-Type: video/mp4 and the browser <video>
+    element couldn't decode the result.
+    """
+    auth, _, library_id, _, _, tenant_url, _ = artifact_env
+
+    rel_path = f"scene_rep_no_clobber_{secrets.token_hex(4)}.mp4"
+    auth.post(
+        "/v1/assets/upsert",
+        json={
+            "library_id": library_id,
+            "rel_path": rel_path,
+            "file_size": 5000,
+            "file_mtime": "2025-01-01T12:00:00Z",
+            "media_type": "video",
+        },
+    )
+    r_vid = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
+    video_asset_id = r_vid.json()["asset_id"]
+
+    # Step 1: upload an MP4 video preview, capturing the resulting key.
+    mp4_content = b"FTYP" + secrets.token_bytes(512)
+    r_prev = auth.post(
+        f"/v1/assets/{video_asset_id}/artifacts/video_preview",
+        files={"file": ("preview.mp4", mp4_content, "video/mp4")},
+    )
+    assert r_prev.status_code == 200, r_prev.text
+    preview_key = r_prev.json()["key"]
+    assert "/previews/" in preview_key
+    assert preview_key.endswith(".mp4")
+
+    # Step 2: upload a scene_rep JPG to the same asset.
+    r_scene = auth.post(
+        f"/v1/assets/{video_asset_id}/artifacts/scene_rep",
+        files={"file": ("scene.jpg", _make_jpeg(96), "image/jpeg")},
+        data={"rep_frame_ms": "12345"},
+    )
+    assert r_scene.status_code == 200, r_scene.text
+    scene_key = r_scene.json()["key"]
+    assert "/scenes/" in scene_key
+    assert scene_key.endswith(".jpg")
+
+    # Step 3: video_preview_key must still point at the MP4 preview, not the JPG.
+    engine = create_engine(tenant_url)
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT video_preview_key FROM assets WHERE asset_id = :id"),
+            {"id": video_asset_id},
+        ).fetchone()
+    engine.dispose()
+    assert row[0] == preview_key, (
+        f"scene_rep upload clobbered video_preview_key: expected {preview_key!r}, got {row[0]!r}"
+    )
 
 
 @pytest.mark.slow
@@ -684,3 +755,107 @@ def test_download_missing_auth_returns_401(artifact_env) -> None:
     _, raw_client, _, asset_id, _, _, _ = artifact_env
     r = raw_client.get(f"/v1/assets/{asset_id}/artifacts/proxy")
     assert r.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Tests for /v1/assets/{asset_id}/preview — the streaming endpoint the
+# web UI uses to fetch video bytes for the hover preview and lightbox.
+# This is a separate route from /v1/assets/{asset_id}/artifacts/video_preview
+# (which the test_download_video_preview_returns_bytes test covers).
+# Until these tests landed, the user-facing playback path was untested.
+# ---------------------------------------------------------------------------
+
+
+def _create_video_asset(auth, library_id: str, *, prefix: str) -> str:
+    """Helper: upsert a video asset and return its id."""
+    rel_path = f"{prefix}_{secrets.token_hex(4)}.mp4"
+    auth.post(
+        "/v1/assets/upsert",
+        json={
+            "library_id": library_id,
+            "rel_path": rel_path,
+            "file_size": 5000,
+            "file_mtime": "2025-01-01T12:00:00Z",
+            "media_type": "video",
+        },
+    )
+    r = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
+    assert r.status_code == 200, r.text
+    return r.json()["asset_id"]
+
+
+@pytest.mark.slow
+def test_preview_endpoint_streams_uploaded_mp4(artifact_env) -> None:
+    """GET /v1/assets/{id}/preview returns the bytes uploaded as video_preview."""
+    auth, _, library_id, _, _, _, _ = artifact_env
+    video_asset_id = _create_video_asset(auth, library_id, prefix="preview_stream")
+
+    mp4_content = b"FTYP" + secrets.token_bytes(2048)
+    r_up = auth.post(
+        f"/v1/assets/{video_asset_id}/artifacts/video_preview",
+        files={"file": ("preview.mp4", mp4_content, "video/mp4")},
+    )
+    assert r_up.status_code == 200, r_up.text
+
+    r = auth.get(f"/v1/assets/{video_asset_id}/preview")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"] == "video/mp4"
+    assert r.content == mp4_content
+
+
+@pytest.mark.slow
+def test_preview_endpoint_serves_mp4_after_scene_rep_upload(artifact_env) -> None:
+    """Regression: /preview must keep serving the MP4 even after scene_rep uploads.
+
+    This is the end-to-end smoke test for the bug that motivated this PR.
+    Before the fix, uploading a scene_rep would clobber video_preview_key with
+    the JPG path, and /preview would stream the JPG bytes labelled as video/mp4
+    — exactly what the browser <video> element couldn't decode.
+    """
+    auth, _, library_id, _, _, _, _ = artifact_env
+    video_asset_id = _create_video_asset(auth, library_id, prefix="preview_after_scene")
+
+    mp4_content = b"FTYP" + secrets.token_bytes(2048)
+    r_up = auth.post(
+        f"/v1/assets/{video_asset_id}/artifacts/video_preview",
+        files={"file": ("preview.mp4", mp4_content, "video/mp4")},
+    )
+    assert r_up.status_code == 200, r_up.text
+
+    # Interleave a scene_rep upload — the bug clobbered video_preview_key here.
+    jpeg_content = _make_jpeg(256)
+    r_scene = auth.post(
+        f"/v1/assets/{video_asset_id}/artifacts/scene_rep",
+        files={"file": ("scene.jpg", jpeg_content, "image/jpeg")},
+        data={"rep_frame_ms": "5000"},
+    )
+    assert r_scene.status_code == 200, r_scene.text
+
+    r = auth.get(f"/v1/assets/{video_asset_id}/preview")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"] == "video/mp4"
+    assert r.content == mp4_content, (
+        "preview endpoint returned non-MP4 bytes after a scene_rep upload — "
+        "video_preview_key was clobbered"
+    )
+    # And just to be explicit: it must NOT be the JPG bytes.
+    assert r.content != jpeg_content
+
+
+@pytest.mark.slow
+def test_preview_endpoint_returns_404_when_no_preview(artifact_env) -> None:
+    """Video asset with no video_preview yet → 404 (so the UI can show a placeholder
+    rather than render <video> with bogus bytes)."""
+    auth, _, library_id, _, _, _, _ = artifact_env
+    video_asset_id = _create_video_asset(auth, library_id, prefix="preview_missing")
+
+    r = auth.get(f"/v1/assets/{video_asset_id}/preview")
+    assert r.status_code == 404
+
+
+@pytest.mark.slow
+def test_preview_endpoint_rejects_image_assets(artifact_env) -> None:
+    """Image assets must not be served via /preview (it's video-only)."""
+    auth, _, _, image_asset_id, _, _, _ = artifact_env
+    r = auth.get(f"/v1/assets/{image_asset_id}/preview")
+    assert r.status_code == 422

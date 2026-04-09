@@ -123,8 +123,13 @@ async def upload_artifact(
         asset_repo.set_proxy_artifact(asset_id, key, sha256, width, height)
     elif artifact_type == "thumbnail":
         asset_repo.set_thumbnail_artifact(asset_id, key, sha256)
-    else:  # video_preview
+    elif artifact_type == "video_preview":
         asset_repo.set_video_preview(asset_id, video_preview_key=key)
+    # scene_rep: no asset-level column to update. The on-disk path is derived
+    # from (tenant_id, library_id, asset_id, rep_frame_ms) on download via
+    # storage.scene_rep_key(), so the file is fully addressable from
+    # video_scenes.rep_frame_ms alone. (Earlier this branch fell through to
+    # set_video_preview, which clobbered the MP4 preview path with the JPG.)
 
     return ArtifactUploadResponse(key=key, sha256=sha256)
 

@@ -476,20 +476,36 @@ def test_cleanup_ignores_non_lib_dirs(tmp_path: Path) -> None:
 
 @pytest.mark.fast
 def test_cleanup_handles_multiple_artifact_types(tmp_path: Path) -> None:
-    """Cleanup checks proxies, thumbnails, previews, and scenes subdirs."""
+    """Cleanup checks proxies, thumbnails, previews, and scenes subdirs.
+
+    Critically, scene_rep JPGs (under /scenes/) are not stored in any DB column —
+    they live at a deterministic path derived from (tenant_id, library_id,
+    asset_id, rep_frame_ms) by LocalStorage.scene_rep_key(). Cleanup must
+    compute that path from video_scenes rows and treat the file as expected.
+    A previous version of this test stuffed the scene path into the
+    video_scenes.proxy_key column slot, which masked a bug where cleanup had
+    no idea about scene_rep JPGs at all.
+    """
+    from src.server.storage.local import LocalStorage
+
     tenant_id = "ten_AAAA"
     library_id = "lib_BBBB"
+    # Real ULIDs — scene_rep_key() decodes them for bucketing.
+    asset_x = "ast_01HX0000000000000000000001"
+    asset_y = "ast_01HY0000000000000000000002"
+    rep_frame_ms = 1000
 
-    proxy_key = f"{tenant_id}/{library_id}/proxies/00/ast_X_photo.webp"
-    thumb_key = f"{tenant_id}/{library_id}/thumbnails/00/ast_X_photo.webp"
-    preview_key = f"{tenant_id}/{library_id}/previews/00/ast_Y_video.mp4"
-    scene_key = f"{tenant_id}/{library_id}/scenes/00/ast_Y_0000001000.jpg"
-    orphan_key = f"{tenant_id}/{library_id}/thumbnails/00/ast_ORPHAN_photo.webp"
+    storage = LocalStorage(str(tmp_path))
+    proxy_key = storage.proxy_key(tenant_id, library_id, asset_x, "photo.jpg")
+    thumb_key = storage.thumbnail_key(tenant_id, library_id, asset_x, "photo.jpg")
+    preview_key = storage.video_preview_key(tenant_id, library_id, asset_y, "video.mp4")
+    scene_key = storage.scene_rep_key(tenant_id, library_id, asset_y, rep_frame_ms)
+    orphan_key = storage.thumbnail_key(tenant_id, library_id, asset_x, "orphan.jpg")
+    # Force the orphan key into a different filename so it's distinct from thumb_key.
+    assert orphan_key != thumb_key
 
     all_keys = [proxy_key, thumb_key, preview_key, scene_key, orphan_key]
     _setup_library_dir(tmp_path, tenant_id, library_id, all_keys)
-
-    db_keys = {proxy_key, thumb_key, preview_key, scene_key}
 
     session = MagicMock()
 
@@ -501,16 +517,18 @@ def test_cleanup_handles_multiple_artifact_types(tmp_path: Path) -> None:
             row.__getitem__ = lambda self, i: library_id
             result.fetchall.return_value = [row]
         elif "FROM assets" in sql:
-            rows = []
-            for k in [proxy_key, thumb_key, preview_key]:
-                row = MagicMock()
-                row.__iter__ = lambda self, k=k: iter([k, None, None])
-                rows.append(row)
-            result.fetchall.return_value = rows
+            # Real assets row shape: (proxy_key, thumbnail_key, video_preview_key)
+            result.fetchall.return_value = [
+                (proxy_key, thumb_key, preview_key),
+            ]
         elif "FROM video_scenes" in sql:
-            row = MagicMock()
-            row.__iter__ = lambda self: iter([scene_key, None])
-            result.fetchall.return_value = [row]
+            # Real video_scenes row shape after the cleanup fix:
+            # (asset_id, rep_frame_ms, proxy_key, thumbnail_key)
+            # The scene_rep JPG path is NOT in this row — cleanup must
+            # compute it itself via storage.scene_rep_key(...).
+            result.fetchall.return_value = [
+                (asset_y, rep_frame_ms, None, None),
+            ]
         else:
             result.fetchall.return_value = []
         return result
@@ -519,7 +537,79 @@ def test_cleanup_handles_multiple_artifact_types(tmp_path: Path) -> None:
 
     result = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False)
 
-    assert result.orphan_files == 1
+    assert result.orphan_files == 1, (
+        f"expected exactly 1 orphan but got {result.orphan_files}; "
+        f"scene_rep JPG may have been mis-classified as orphan"
+    )
     assert not (tmp_path / orphan_key).exists()
     for k in [proxy_key, thumb_key, preview_key, scene_key]:
-        assert (tmp_path / k).exists()
+        assert (tmp_path / k).exists(), f"{k} should not have been deleted"
+
+
+@pytest.mark.fast
+def test_cleanup_preserves_scene_rep_jpgs(tmp_path: Path) -> None:
+    """Regression: a scene_rep JPG with a matching video_scenes row must not
+    be flagged as orphaned, even though no DB column stores its path.
+
+    Before the fix to _get_expected_keys_for_library, this test would have
+    failed: cleanup had no awareness of scene_rep JPG paths and would have
+    flagged every one of them. The bug was hidden in production by an
+    unrelated bug in artifacts.py that accidentally stored the scene path in
+    assets.video_preview_key, putting it in the expected-keys set by accident.
+    """
+    from src.server.storage.local import LocalStorage
+
+    tenant_id = "ten_AAAA"
+    library_id = "lib_BBBB"
+    asset_id = "ast_01HZ0000000000000000000003"
+    storage = LocalStorage(str(tmp_path))
+
+    # Three scene_rep JPGs + enough proxies so that *if* the JPGs were
+    # mis-flagged as orphans, the 25% safety cap would not save them
+    # (3 / 20 = 15% < 25%) and they would actually be deleted.
+    rep_frame_msses = [1000, 5000, 9000]
+    scene_keys = [
+        storage.scene_rep_key(tenant_id, library_id, asset_id, ms)
+        for ms in rep_frame_msses
+    ]
+    proxy_keys = [
+        storage.proxy_key(tenant_id, library_id, asset_id, f"x{i}.jpg")
+        for i in range(17)
+    ]
+    _setup_library_dir(tmp_path, tenant_id, library_id, scene_keys + proxy_keys)
+
+    session = MagicMock()
+
+    def execute_side_effect(stmt, params=None):
+        result = MagicMock()
+        sql = str(stmt.text if hasattr(stmt, "text") else stmt)
+        if "FROM libraries" in sql:
+            row = MagicMock()
+            row.__getitem__ = lambda self, i: library_id
+            result.fetchall.return_value = [row]
+        elif "FROM assets" in sql:
+            # All proxy keys are tracked; no preview/thumbnail.
+            result.fetchall.return_value = [(k, None, None) for k in proxy_keys]
+        elif "FROM video_scenes" in sql:
+            result.fetchall.return_value = [
+                (asset_id, ms, None, None) for ms in rep_frame_msses
+            ]
+        else:
+            result.fetchall.return_value = []
+        return result
+
+    session.execute.side_effect = execute_side_effect
+
+    result = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False)
+
+    assert result.orphan_files == 0, (
+        f"scene_rep JPGs were mis-classified as orphans: got {result.orphan_files}"
+    )
+    # Belt-and-braces: also assert the safety cap did not trip. Without the
+    # cleanup fix this assertion would also fail (the helper would skip the
+    # library because >25% of files would have been deleted).
+    assert result.skipped_libraries == 0, (
+        f"library skipped instead of recognising scene_rep JPGs: {result.errors}"
+    )
+    for k in scene_keys:
+        assert (tmp_path / k).exists(), f"scene_rep JPG was deleted: {k}"

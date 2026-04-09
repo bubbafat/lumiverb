@@ -18,6 +18,8 @@ from pathlib import Path
 from sqlalchemy import text
 from sqlmodel import Session
 
+from src.server.storage.local import LocalStorage
+
 logger = logging.getLogger(__name__)
 
 # Files must be older than this (seconds) to be eligible for deletion.
@@ -77,10 +79,23 @@ def _rmtree(path: Path, dry_run: bool) -> int:
     return total
 
 
-def _get_expected_keys_for_library(session: Session, library_id: str) -> set[str] | None:
+def _get_expected_keys_for_library(
+    session: Session,
+    library_id: str,
+    tenant_id: str,
+    storage: LocalStorage,
+) -> set[str] | None:
     """Return the set of all artifact keys for a library (including trashed assets).
 
     Returns None on DB error (caller should skip this library).
+
+    Includes:
+      - assets.{proxy_key, thumbnail_key, video_preview_key}
+      - video_scenes.{proxy_key, thumbnail_key} (per-scene WebP artifacts)
+      - scene_rep JPG paths derived from (tenant, library, asset_id, rep_frame_ms)
+        — these are NOT stored in any column; they live at the deterministic
+        path returned by storage.scene_rep_key(). Without computing them here,
+        cleanup would flag every scene_rep JPG on disk as orphaned.
     """
     try:
         # Asset artifacts: proxy_key, thumbnail_key, video_preview_key
@@ -96,18 +111,28 @@ def _get_expected_keys_for_library(session: Session, library_id: str) -> set[str
                 if val:
                     keys.add(val)
 
-        # Scene artifacts: proxy_key, thumbnail_key from video_scenes
+        # Scene-level artifacts. video_scenes.proxy_key/thumbnail_key are the
+        # per-scene WebP previews (often null). The scene_rep JPG path is
+        # derived from rep_frame_ms and must be computed here.
         scene_rows = session.execute(text("""
-            SELECT vs.proxy_key, vs.thumbnail_key
+            SELECT vs.asset_id, vs.rep_frame_ms, vs.proxy_key, vs.thumbnail_key
             FROM video_scenes vs
             JOIN assets a ON a.asset_id = vs.asset_id
             WHERE a.library_id = :lib_id
         """), {"lib_id": library_id}).fetchall()
 
         for row in scene_rows:
-            for val in row:
-                if val:
-                    keys.add(val)
+            asset_id = row[0]
+            rep_frame_ms = row[1]
+            scene_proxy_key = row[2]
+            scene_thumb_key = row[3]
+            if scene_proxy_key:
+                keys.add(scene_proxy_key)
+            if scene_thumb_key:
+                keys.add(scene_thumb_key)
+            keys.add(
+                storage.scene_rep_key(tenant_id, library_id, asset_id, rep_frame_ms)
+            )
 
         return keys
     except Exception as exc:
@@ -125,6 +150,7 @@ def run_cleanup_for_tenant(
     """Run file cleanup for a single tenant. Session must be for the tenant DB."""
     result = CleanupResult()
     tenant_dir = data_dir / tenant_id
+    storage = LocalStorage(str(data_dir))
 
     if not tenant_dir.is_dir():
         return result
@@ -160,7 +186,9 @@ def run_cleanup_for_tenant(
             continue
 
         # Library exists in DB — check individual files
-        expected_keys = _get_expected_keys_for_library(session, lib_dir_name)
+        expected_keys = _get_expected_keys_for_library(
+            session, lib_dir_name, tenant_id, storage,
+        )
         if expected_keys is None:
             result.skipped_libraries += 1
             result.errors.append(f"Skipped library {lib_dir_name}: DB query failed")
