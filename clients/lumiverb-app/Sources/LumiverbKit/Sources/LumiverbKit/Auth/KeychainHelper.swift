@@ -30,25 +30,37 @@ public struct KeychainHelper: TokenStore, Sendable {
             throw KeychainError.encodingError
         }
 
-        // Delete existing item first (upsert)
-        let deleteQuery: [String: Any] = [
+        let baseQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
         ]
-        SecItemDelete(deleteQuery as CFDictionary)
 
-        let addQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
+        // Try update-in-place first. The previous implementation upserted via
+        // SecItemDelete + SecItemAdd, which on the legacy macOS keychain
+        // triggers a separate ACL prompt for the delete (it has to access
+        // the existing protected item to remove it). SecItemUpdate goes
+        // straight to a single modify operation.
+        let updateAttrs: [String: Any] = [
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
         ]
+        let updateStatus = SecItemUpdate(
+            baseQuery as CFDictionary, updateAttrs as CFDictionary
+        )
+        if updateStatus == errSecSuccess {
+            return
+        }
+        if updateStatus != errSecItemNotFound {
+            throw KeychainError.unexpectedStatus(updateStatus)
+        }
 
-        let status = SecItemAdd(addQuery as CFDictionary, nil)
-        guard status == errSecSuccess else {
-            throw KeychainError.unexpectedStatus(status)
+        // No existing item — create one.
+        var addQuery = baseQuery
+        addQuery[kSecValueData as String] = data
+        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        guard addStatus == errSecSuccess else {
+            throw KeychainError.unexpectedStatus(addStatus)
         }
     }
 

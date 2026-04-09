@@ -8,6 +8,16 @@ import Foundation
 final class InMemoryTokenStore: TokenStore, @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [String: String] = [:]
+    private var _readCount = 0
+
+    /// Number of times `read(key:)` has been called. Used by tests that need
+    /// to assert AuthManager is hitting the in-memory cache instead of the
+    /// keychain on every operation.
+    var readCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _readCount
+    }
 
     func save(key: String, value: String) throws {
         lock.lock()
@@ -18,6 +28,7 @@ final class InMemoryTokenStore: TokenStore, @unchecked Sendable {
     func read(key: String) throws -> String {
         lock.lock()
         defer { lock.unlock() }
+        _readCount += 1
         guard let value = storage[key] else {
             throw KeychainError.itemNotFound
         }
@@ -30,7 +41,8 @@ final class InMemoryTokenStore: TokenStore, @unchecked Sendable {
         storage.removeValue(forKey: key)
     }
 
-    /// Test helper: peek at stored value without throwing.
+    /// Test helper: peek at stored value without throwing (and without
+    /// incrementing readCount).
     func peek(key: String) -> String? {
         lock.lock()
         defer { lock.unlock() }
@@ -415,6 +427,96 @@ final class AuthManagerTests: XCTestCase {
         // Should have at most 1 refresh call (coalesced), not 2
         XCTAssertEqual(refreshCount.value, 1,
             "Expected 1 refresh call (coalesced), got \(refreshCount.value)")
+    }
+
+    // MARK: - Token caching (avoids redundant macOS keychain prompts)
+
+    /// On unsigned dev macOS builds, every keychain access prompts the user
+    /// for permission. After restoreSession() populates the in-memory cache,
+    /// a subsequent refresh() must reuse the cached token instead of doing
+    /// another keychain.read.
+    func testRefreshAfterRestoreSessionDoesNotReReadKeychain() async throws {
+        try tokenStore.save(key: "accessToken", value: "expired_jwt")
+
+        let restored = await auth.restoreSession()
+        XCTAssertTrue(restored)
+        XCTAssertEqual(tokenStore.readCount, 1, "restoreSession reads keychain once")
+
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/auth/refresh")
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: "Authorization"),
+                "Bearer expired_jwt",
+                "refresh must use the token cached from restoreSession"
+            )
+            return jsonResponse(200, json: """
+            {"access_token": "fresh_jwt", "token_type": "bearer", "expires_in": 3600}
+            """, for: request)
+        }
+
+        let success = await auth.refresh()
+        XCTAssertTrue(success)
+        XCTAssertEqual(
+            tokenStore.readCount, 1,
+            "refresh after restoreSession must use the cache, not re-read keychain"
+        )
+        XCTAssertEqual(tokenStore.peek(key: "accessToken"), "fresh_jwt")
+    }
+
+    /// hasStoredCredentials() must hit the cache after restoreSession.
+    func testHasStoredCredentialsAfterRestoreDoesNotReadKeychain() async throws {
+        try tokenStore.save(key: "accessToken", value: "stored_jwt")
+
+        _ = await auth.restoreSession()
+        XCTAssertEqual(tokenStore.readCount, 1)
+
+        let has = await auth.hasStoredCredentials()
+        XCTAssertTrue(has)
+        XCTAssertEqual(
+            tokenStore.readCount, 1,
+            "hasStoredCredentials must hit the in-memory cache when populated"
+        )
+    }
+
+    /// If refresh() is somehow called before restoreSession ran, it should
+    /// still work — fall back to a one-shot keychain read and populate the
+    /// cache so subsequent operations don't read again.
+    func testRefreshFallsBackToKeychainWhenCacheEmpty() async throws {
+        try tokenStore.save(key: "accessToken", value: "expired_jwt")
+
+        MockURLProtocol.requestHandler = { request in
+            return jsonResponse(200, json: """
+            {"access_token": "fresh_jwt", "token_type": "bearer", "expires_in": 3600}
+            """, for: request)
+        }
+
+        // First refresh: cache is empty, must read once.
+        let success1 = await auth.refresh()
+        XCTAssertTrue(success1)
+        XCTAssertEqual(
+            tokenStore.readCount, 1,
+            "first refresh with empty cache reads keychain once"
+        )
+
+        // Second refresh: cache populated by first call.
+        let success2 = await auth.refresh()
+        XCTAssertTrue(success2)
+        XCTAssertEqual(
+            tokenStore.readCount, 1,
+            "second refresh must use the populated cache (no extra read)"
+        )
+    }
+
+    /// logout() must clear the in-memory cache, otherwise hasStoredCredentials
+    /// would still report `true` after logout.
+    func testLogoutClearsCacheNotJustKeychain() async throws {
+        try tokenStore.save(key: "accessToken", value: "stored_jwt")
+        _ = await auth.restoreSession()
+
+        await auth.logout()
+
+        let has = await auth.hasStoredCredentials()
+        XCTAssertFalse(has, "hasStoredCredentials must return false after logout")
     }
 
     // MARK: - Auto-refresh wiring

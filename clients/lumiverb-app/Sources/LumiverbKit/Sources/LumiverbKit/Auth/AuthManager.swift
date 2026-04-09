@@ -33,6 +33,17 @@ public actor AuthManager {
     private let client: APIClient
     private let keychain: any TokenStore
 
+    /// In-memory copy of the persisted token, populated on login,
+    /// restoreSession, and refresh. The legacy macOS keychain prompts
+    /// the user (per item, per access) for any read or modification when
+    /// the calling binary is not on the item's trusted-apps list — and
+    /// dev builds compiled with `CODE_SIGNING_ALLOWED=NO` are never on
+    /// that list because each rebuild has a different identity. Caching
+    /// the token here means a normal cold start only hits the keychain
+    /// once (the unavoidable read in `restoreSession`) instead of three
+    /// times (restore + refresh-read + refresh-save).
+    private var cachedToken: String?
+
     /// In-flight refresh task. Multiple 401s coalesce into a single refresh
     /// call — the server revokes the old token on refresh, so concurrent
     /// refreshes would each revoke the previous result, causing a cascade.
@@ -62,6 +73,7 @@ public actor AuthManager {
 
         await client.setAccessToken(response.accessToken)
         try keychain.save(key: "accessToken", value: response.accessToken)
+        cachedToken = response.accessToken
     }
 
     /// Refresh the access token by sending the current (possibly expired) JWT.
@@ -88,7 +100,17 @@ public actor AuthManager {
     }
 
     private func performRefresh() async -> Bool {
-        guard let currentToken = try? keychain.read(key: "accessToken") else {
+        // Prefer the in-memory cache. Fall back to a one-shot keychain read if
+        // refresh ever fires before restoreSession ran (defensive — the
+        // observed app flow always restores first, so this fallback should
+        // not normally execute).
+        let currentToken: String
+        if let cached = cachedToken {
+            currentToken = cached
+        } else if let read = try? keychain.read(key: "accessToken") {
+            cachedToken = read
+            currentToken = read
+        } else {
             return false
         }
 
@@ -102,6 +124,7 @@ public actor AuthManager {
             )
             await client.setAccessToken(response.accessToken)
             try keychain.save(key: "accessToken", value: response.accessToken)
+            cachedToken = response.accessToken
             return true
         } catch {
             return false
@@ -114,6 +137,7 @@ public actor AuthManager {
         guard let token = try? keychain.read(key: "accessToken") else {
             return false
         }
+        cachedToken = token
         await client.setAccessToken(token)
         return true
     }
@@ -121,11 +145,13 @@ public actor AuthManager {
     /// Clear all stored tokens and reset the client.
     public func logout() async {
         await client.setAccessToken(nil)
+        cachedToken = nil
         try? keychain.delete(key: "accessToken")
     }
 
     /// Whether we have a stored token (may be expired).
     public func hasStoredCredentials() -> Bool {
-        (try? keychain.read(key: "accessToken")) != nil
+        if cachedToken != nil { return true }
+        return (try? keychain.read(key: "accessToken")) != nil
     }
 }
