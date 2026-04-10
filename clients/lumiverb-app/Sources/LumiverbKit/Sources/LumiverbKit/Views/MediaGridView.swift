@@ -113,36 +113,53 @@ public struct MediaGridView<ScrollIntrospector: View>: View {
         }
     }
 
+    /// Date header rendered as a standalone view with its own identity.
+    /// Uses `onTapGesture` on the full row rather than an embedded `Button`
+    /// to avoid hit-test confusion in `LazyVStack` view recycling.
+    private struct DateHeaderView: View {
+        let label: String
+        let count: Int
+        let allSelected: Bool
+        let onTap: () -> Void
+
+        var body: some View {
+            HStack {
+                Image(systemName: allSelected ? "checkmark.circle.fill" : "circle")
+                    .foregroundColor(allSelected ? .accentColor : .secondary)
+
+                Text(label)
+                    .font(.headline)
+                    .foregroundColor(.primary)
+
+                Text("\(count)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.quaternary)
+                    .cornerRadius(8)
+
+                Spacer()
+            }
+            .frame(height: MediaGridLayoutConstants.headerHeight)
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture { onTap() }
+            .padding(.top, 4)
+        }
+    }
+
     @ViewBuilder
     private func dateHeader(group: DateGroup) -> some View {
         let groupIds = group.assets.map(\.assetId)
         let allSelected = !groupIds.isEmpty && Set(groupIds).isSubset(of: browseState.selectedAssetIds)
 
-        HStack {
-            Button {
-                browseState.selectGroup(groupIds)
-            } label: {
-                Image(systemName: allSelected ? "checkmark.circle.fill" : "circle")
-                    .foregroundColor(allSelected ? .accentColor : .secondary)
-            }
-            .buttonStyle(.plain)
-
-            Text(group.label)
-                .font(.headline)
-                .foregroundColor(.primary)
-
-            Text("\(group.assets.count)")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(.quaternary)
-                .cornerRadius(8)
-
-            Spacer()
-        }
-        .frame(height: MediaGridLayoutConstants.headerHeight)
-        .padding(.top, 4)
+        DateHeaderView(
+            label: group.label,
+            count: group.assets.count,
+            allSelected: allSelected,
+            onTap: { browseState.selectGroup(groupIds) }
+        )
     }
 
     // MARK: - Row
