@@ -52,6 +52,12 @@ struct LibrarySidebar: View {
                     icon: "person.crop.rectangle.stack",
                     isActive: section == .review
                 ) { section = .review }
+
+                sidebarRow(
+                    label: "Collections",
+                    icon: "folder.fill",
+                    isActive: section == .collections || section == .collectionDetail
+                ) { section = .collections }
             }
             .padding(.top, 8)
 

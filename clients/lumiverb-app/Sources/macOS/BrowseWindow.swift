@@ -8,6 +8,8 @@ enum SidebarSection: Equatable {
     case library
     case people
     case review
+    case collections
+    case collectionDetail
 }
 
 /// Sort options for the asset grid.
@@ -42,6 +44,7 @@ struct BrowseWindow: View {
     @StateObject private var browseState: BrowseState
     @StateObject private var peopleState: PeopleState
     @StateObject private var clusterReviewState: ClusterReviewState
+    @StateObject private var collectionsState: CollectionsState
 
     /// Which top-level sidebar section is active. Drives whether the
     /// detail panel shows the existing library browse UI, the People
@@ -63,6 +66,9 @@ struct BrowseWindow: View {
         self._clusterReviewState = StateObject(
             wrappedValue: ClusterReviewState(client: appState.client)
         )
+        self._collectionsState = StateObject(
+            wrappedValue: CollectionsState(client: appState.client)
+        )
     }
 
     var body: some View {
@@ -77,6 +83,7 @@ struct BrowseWindow: View {
             .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 300)
         } detail: {
             detailContent
+                .environment(\.collectionsState, collectionsState)
         }
         .searchable(
             text: $browseState.searchQuery,
@@ -203,6 +210,13 @@ struct BrowseWindow: View {
             guard newValue != oldValue else { return }
             browseState.handleSelectedLibraryChange()
         }
+        .onChange(of: collectionsState.openCollection?.collectionId) { _, newValue in
+            if newValue != nil {
+                section = .collectionDetail
+            } else if section == .collectionDetail {
+                section = .collections
+            }
+        }
     }
 
     /// Restore the last-opened library on first load. Extracted from the
@@ -258,6 +272,17 @@ struct BrowseWindow: View {
         case .review:
             ClusterReviewView(
                 state: clusterReviewState,
+                browseState: browseState,
+                client: appState.client
+            )
+        case .collections:
+            CollectionsListView(
+                collectionsState: collectionsState,
+                client: appState.client
+            )
+        case .collectionDetail:
+            CollectionDetailView(
+                collectionsState: collectionsState,
                 browseState: browseState,
                 client: appState.client
             )

@@ -52,3 +52,19 @@ public extension EnvironmentValues {
         set { self[ScrollAccessorKey.self] = newValue }
     }
 }
+
+// MARK: - CollectionsState environment
+
+private struct CollectionsStateKey: EnvironmentKey {
+    static let defaultValue: CollectionsState? = nil
+}
+
+public extension EnvironmentValues {
+    /// Optional `CollectionsState` for views that show "Add to Collection"
+    /// context menus. Nil in previews/tests and on platforms where
+    /// collections aren't wired up yet.
+    var collectionsState: CollectionsState? {
+        get { self[CollectionsStateKey.self] }
+        set { self[CollectionsStateKey.self] = newValue }
+    }
+}
