@@ -18,7 +18,8 @@ Proposed
 | M3 | Ratings editor (stars, favorite, color) — macOS + LumiverbKit | Complete |
 | M4 | Collections CRUD (private + shared) — macOS + LumiverbKit | Complete |
 | M5 | Collection sharing UI (visibility toggle + share link) | Not started |
-| M5.5 | Date-grouped grid with multi-select + batch operations | Not started |
+| M5.5 | Date-grouped grid with multi-select + batch operations | Complete |
+| M5.6 | Clickable metadata filters in lightbox sidebar | Not started |
 | M6 | iOS app shell (tabs, library picker, browse) | Not started |
 | M7 | iOS touch adaptations for cluster/face management | Not started |
 | M8 | iOS cellular + Low Data Mode policy | Not started |
@@ -1328,6 +1329,55 @@ exactly (same date field priority, same "Unknown date" fallback, same sort order
       click a date checkbox to select all in that date, Cmd+click individual items,
       use the toolbar to batch-rate and add to collection
 - [ ] Date grouping works in search results too
+- [ ] Milestone table updated
+
+### Milestone 5.6 — Clickable metadata filters in lightbox sidebar
+
+**Goal:** Match the web client's lightbox behavior where every metadata value
+(camera, lens, ISO, aperture, focal length, tags, media type, date) is clickable
+and applies that value as a browse filter. Clicking closes the lightbox and
+returns to the browse grid filtered by that value. The same pattern will carry to
+iOS in M6.
+
+**Deliverables:**
+
+1. Add `onFilterApply: ((BrowseFilter) -> Void)?` callback to `MetadataSidebar`.
+   When non-nil, metadata values render as tappable (underlined or highlighted).
+   When nil (previews/tests), values render as static text.
+
+2. `FilterableText` helper view — wraps a text value with a tap gesture that
+   builds a `BrowseFilter` and calls `onFilterApply`. Styled with a subtle
+   underline or color to indicate clickability. On hover (macOS), shows a tooltip
+   like "Filter by Canon EOS R5".
+
+3. Make the following metadata values clickable:
+   - **Camera** (camera_make + camera_model) → sets both `cameraMake` and `cameraModel`
+   - **Lens** → sets `lensModel`
+   - **ISO** → sets `isoMin` and `isoMax` to the same value
+   - **Aperture** → sets `apertureMin` and `apertureMax`
+   - **Focal length** → sets `focalLengthMin` and `focalLengthMax`
+   - **Tags** (each tag) → performs a search for that tag
+   - **Media type** → sets `mediaType` to "image" or "video"
+   - **Taken date** → sets `dateFrom` and `dateTo` to the same day
+
+4. `BrowseState.applyFilter(_ filter: BrowseFilter)` — sets `filters`, closes
+   the lightbox, and triggers a reload. Preserves the current library selection.
+
+5. Wire `onFilterApply` in `LightboxView` → `MetadataSidebar` → closes lightbox
+   + applies filter to browseState.
+
+6. Tags use search instead of browse filter: clicking a tag calls
+   `browseState.searchQuery = tag; browseState.performSearch()`.
+
+**Does NOT include:** A filter bar/chiclet UI for clearing active filters (the
+macOS app already has filter state in `BrowseFilter` but no visible filter UI
+beyond the sidebar). That's a follow-up.
+
+**Done when:**
+- [ ] Both targets build
+- [ ] Manual: on macOS, open lightbox, click camera name → lightbox closes,
+      grid shows only assets from that camera. Click ISO → filtered by ISO.
+      Click a tag → search results for that tag.
 - [ ] Milestone table updated
 
 ### Milestone 6 — iOS app shell

@@ -733,6 +733,25 @@ public class BrowseState: ObservableObject {
         }
     }
 
+    /// Apply a filter from the lightbox metadata sidebar. Closes the
+    /// lightbox and sets the filter, which triggers a reload via the
+    /// `filters` didSet.
+    public func applyFilterFromLightbox(_ filter: BrowseFilter) {
+        closeLightbox()
+        mode = .library
+        filters = filter
+    }
+
+    /// Apply a filter by merging specific fields into the current filter.
+    /// Closes the lightbox. Preserves sort and library selection.
+    public func applyMetadataFilter(_ build: (inout BrowseFilter) -> Void) {
+        var newFilter = BrowseFilter()
+        newFilter.sortField = filters.sortField
+        newFilter.sortDirection = filters.sortDirection
+        build(&newFilter)
+        applyFilterFromLightbox(newFilter)
+    }
+
     public func closeLightbox() {
         selectedAssetId = nil
         assetDetail = nil

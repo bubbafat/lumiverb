@@ -141,6 +141,14 @@ public struct LightboxView: View {
                         #endif
                     } : nil,
                     whisperEnabled: browseState.whisperEnabled,
+                    onMetadataFilter: { build in
+                        browseState.applyMetadataFilter(build)
+                    },
+                    onTagSearch: { tag in
+                        browseState.closeLightbox()
+                        browseState.searchQuery = tag
+                        Task { await browseState.performSearch() }
+                    }
                 )
                 .frame(width: 300)
             }
@@ -237,6 +245,10 @@ struct MetadataSidebar: View {
     let onRevealInFinder: () -> Void
     let onOpenInPlayer: (() -> Void)?
     var whisperEnabled: Bool = false
+    /// When set, metadata values become clickable filter links.
+    var onMetadataFilter: (((inout BrowseFilter) -> Void) -> Void)?
+    /// When set, tags become clickable search links.
+    var onTagSearch: ((String) -> Void)?
 
     var body: some View {
         ScrollView {
@@ -310,12 +322,27 @@ struct MetadataSidebar: View {
                     metadataSection("Tags") {
                         FlowLayout(spacing: 4) {
                             ForEach(tags, id: \.self) { tag in
-                                Text(tag)
-                                    .font(.caption)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Color.accentColor.opacity(0.15))
-                                    .cornerRadius(4)
+                                if let onTagSearch {
+                                    Button {
+                                        onTagSearch(tag)
+                                    } label: {
+                                        Text(tag)
+                                            .font(.caption)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(Color.accentColor.opacity(0.15))
+                                            .cornerRadius(4)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Search for \"\(tag)\"")
+                                } else {
+                                    Text(tag)
+                                        .font(.caption)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Color.accentColor.opacity(0.15))
+                                        .cornerRadius(4)
+                                }
                             }
                         }
                     }
@@ -326,19 +353,37 @@ struct MetadataSidebar: View {
                     metadataSection("Camera") {
                         VStack(alignment: .leading, spacing: 4) {
                             if let camera = detail.cameraDescription {
-                                metadataRow("Camera", camera)
+                                filterableRow("Camera", camera) { f in
+                                    f.cameraMake = detail.cameraMake
+                                    f.cameraModel = detail.cameraModel
+                                }
                             }
                             if let lens = detail.lensModel {
-                                metadataRow("Lens", lens)
+                                filterableRow("Lens", lens) { f in
+                                    f.lensModel = lens
+                                }
                             }
                             if let iso = detail.iso {
-                                metadataRow("ISO", "\(iso)")
+                                filterableRow("ISO", "\(iso)") { f in
+                                    f.isoMin = iso
+                                    f.isoMax = iso
+                                }
                             }
                             if let exposure = detail.exposureDescription {
-                                metadataRow("Exposure", exposure)
+                                if let etus = detail.exposureTimeUs {
+                                    filterableRow("Exposure", exposure) { f in
+                                        f.exposureMinUs = etus
+                                        f.exposureMaxUs = etus
+                                    }
+                                } else {
+                                    metadataRow("Exposure", exposure)
+                                }
                             }
                             if let aperture = detail.aperture {
-                                metadataRow("Aperture", String(format: "f/%.1f", aperture))
+                                filterableRow("Aperture", String(format: "f/%.1f", aperture)) { f in
+                                    f.apertureMin = aperture
+                                    f.apertureMax = aperture
+                                }
                             }
                             if let fl = detail.focalLength {
                                 let flText: String = {
@@ -348,7 +393,10 @@ struct MetadataSidebar: View {
                                     }
                                     return s
                                 }()
-                                metadataRow("Focal Length", flText)
+                                filterableRow("Focal Length", flText) { f in
+                                    f.focalLengthMin = fl
+                                    f.focalLengthMax = fl
+                                }
                             }
                         }
                     }
@@ -358,7 +406,9 @@ struct MetadataSidebar: View {
                 metadataSection("File") {
                     VStack(alignment: .leading, spacing: 4) {
                         metadataRow("Path", detail.relPath)
-                        metadataRow("Type", detail.mediaType)
+                        filterableRow("Type", detail.mediaType) { f in
+                            f.mediaType = detail.mediaType
+                        }
                         if let dims = detail.dimensionsDescription {
                             metadataRow("Dimensions", dims)
                         }
@@ -366,7 +416,11 @@ struct MetadataSidebar: View {
                             metadataRow("Duration", formatDuration(duration))
                         }
                         if let takenAt = detail.takenAt {
-                            metadataRow("Taken", takenAt)
+                            filterableRow("Taken", takenAt, tooltip: "Filter by this date") { f in
+                                let dateKey = String(takenAt.prefix(10))
+                                f.dateFrom = dateKey
+                                f.dateTo = dateKey
+                            }
                         }
                     }
                 }
@@ -424,6 +478,41 @@ struct MetadataSidebar: View {
                 .font(.caption)
                 .textSelection(.enabled)
                 .lineLimit(3)
+        }
+    }
+
+    /// A metadata row where the value is a clickable filter link.
+    @ViewBuilder
+    private func filterableRow(
+        _ label: String,
+        _ value: String,
+        tooltip: String? = nil,
+        filter: @escaping (inout BrowseFilter) -> Void
+    ) -> some View {
+        HStack(alignment: .top) {
+            Text(label)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .frame(width: 80, alignment: .trailing)
+            if let onMetadataFilter {
+                Button {
+                    onMetadataFilter(filter)
+                } label: {
+                    Text(value)
+                        .font(.caption)
+                        .underline()
+                        .lineLimit(3)
+                        .multilineTextAlignment(.leading)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.accentColor)
+                .help(tooltip ?? "Filter by \(value)")
+            } else {
+                Text(value)
+                    .font(.caption)
+                    .textSelection(.enabled)
+                    .lineLimit(3)
+            }
         }
     }
 

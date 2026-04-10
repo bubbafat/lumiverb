@@ -17,8 +17,11 @@ public struct BrowseFilter: Equatable, Sendable {
     public var isoMax: Int?
     public var apertureMin: Double?
     public var apertureMax: Double?
+    public var exposureMinUs: Int?
+    public var exposureMaxUs: Int?
     public var focalLengthMin: Double?
     public var focalLengthMax: Double?
+    public var hasExposure: Bool?
 
     // MARK: - Flags
     public var hasGps: Bool?
@@ -43,8 +46,10 @@ public struct BrowseFilter: Equatable, Sendable {
         mediaType != nil ||
         cameraMake != nil || cameraModel != nil || lensModel != nil ||
         isoMin != nil || isoMax != nil ||
+        exposureMinUs != nil || exposureMaxUs != nil ||
         apertureMin != nil || apertureMax != nil ||
         focalLengthMin != nil || focalLengthMax != nil ||
+        hasExposure != nil ||
         hasGps != nil || hasFaces != nil || personId != nil ||
         favorite != nil || starMin != nil || starMax != nil || color != nil ||
         dateFrom != nil || dateTo != nil
@@ -62,10 +67,13 @@ public struct BrowseFilter: Equatable, Sendable {
         if let lensModel { params["lens_model"] = lensModel }
         if let isoMin { params["iso_min"] = String(isoMin) }
         if let isoMax { params["iso_max"] = String(isoMax) }
+        if let exposureMinUs { params["exposure_min_us"] = String(exposureMinUs) }
+        if let exposureMaxUs { params["exposure_max_us"] = String(exposureMaxUs) }
         if let apertureMin { params["aperture_min"] = String(apertureMin) }
         if let apertureMax { params["aperture_max"] = String(apertureMax) }
         if let focalLengthMin { params["focal_length_min"] = String(focalLengthMin) }
         if let focalLengthMax { params["focal_length_max"] = String(focalLengthMax) }
+        if let hasExposure { params["has_exposure"] = String(hasExposure) }
         if let hasGps { params["has_gps"] = String(hasGps) }
         if let hasFaces { params["has_faces"] = String(hasFaces) }
         if let personId { params["person_id"] = personId }
