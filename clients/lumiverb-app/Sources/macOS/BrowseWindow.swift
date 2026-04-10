@@ -217,7 +217,13 @@ struct BrowseWindow: View {
                 section = .collections
             }
         }
-        .toolbar(browseState.selectedAssetId != nil ? .hidden : .automatic)
+        // Lightbox: overlay on the entire window (above NavigationSplitView
+        // + toolbar) so the sidebar content isn't obscured by the search bar.
+        .overlay {
+            if browseState.selectedAssetId != nil {
+                lightboxOverlay
+            }
+        }
     }
 
     /// Restore the last-opened library on first load. Extracted from the
@@ -252,9 +258,6 @@ struct BrowseWindow: View {
             // first asset page comes back.
             if browseState.isChangingLibrary && section == .library {
                 changingLibraryOverlay
-            }
-            if browseState.selectedAssetId != nil {
-                lightboxOverlay
             }
         }
     }
