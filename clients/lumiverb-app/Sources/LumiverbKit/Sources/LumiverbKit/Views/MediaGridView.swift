@@ -45,19 +45,64 @@ public struct MediaGridView<ScrollIntrospector: View>: View {
         self.scrollIntrospector = scrollIntrospector()
     }
 
+    /// A single row in the flattened grid: either a date header or an image row.
+    /// Using a flat array of identifiable items avoids nested ForEach and
+    /// @ViewBuilder closures, which LazyVStack recycles incorrectly.
+    private enum GridRow: Identifiable {
+        case header(DateGroup)
+        case imageRow(sectionKey: String, rowIndex: Int, indices: [Int], layout: MediaLayout, assets: [AssetPageItem])
+
+        var id: String {
+            switch self {
+            case .header(let group): return "h-\(group.label)"
+            case .imageRow(let key, let idx, _, _, _): return "r-\(key)-\(idx)"
+            }
+        }
+    }
+
+    /// Build a flat list of GridRow items from date groups.
+    private static func buildGridRows(dateGroups: [DateGroup], containerWidth: CGFloat) -> [GridRow] {
+        var rows: [GridRow] = []
+        for group in dateGroups {
+            rows.append(.header(group))
+            let layout = MediaLayout.compute(
+                aspectRatios: group.assets.map { $0.aspectRatio },
+                containerWidth: containerWidth,
+                targetRowHeight: MediaGridLayoutConstants.targetRowHeight,
+                spacing: MediaGridLayoutConstants.spacing
+            )
+            let sectionKey = group.dateISO ?? group.label
+            for (idx, row) in layout.rows.enumerated() {
+                rows.append(.imageRow(
+                    sectionKey: sectionKey,
+                    rowIndex: idx,
+                    indices: row,
+                    layout: layout,
+                    assets: group.assets
+                ))
+            }
+        }
+        return rows
+    }
+
     public var body: some View {
         GeometryReader { geo in
             let containerWidth = geo.size.width - MediaGridLayoutConstants.spacing * 2
             let dateGroups = groupAssetsByDate(browseState.assets)
+            let gridRows = Self.buildGridRows(dateGroups: dateGroups, containerWidth: containerWidth)
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: MediaGridLayoutConstants.spacing) {
-                    ForEach(dateGroups, id: \.label) { group in
-                        dateSection(group: group, containerWidth: containerWidth)
+                    ForEach(gridRows) { item in
+                        switch item {
+                        case .header(let group):
+                            DateHeaderView(group: group, browseState: browseState)
+                        case .imageRow(_, _, let indices, let layout, let assets):
+                            sectionRow(row: indices, layout: layout, assets: assets)
+                        }
                     }
 
-                    // Infinite scroll sentinel — triggers next page load
-                    // when the user scrolls near the bottom.
+                    // Infinite scroll sentinel
                     Color.clear
                         .frame(height: 1)
                         .onAppear {
@@ -85,29 +130,6 @@ public struct MediaGridView<ScrollIntrospector: View>: View {
                 if let assetId = addToCollectionAssetId, let cs = collectionsState {
                     AddToCollectionSheet(collectionsState: cs, assetIds: [assetId])
                 }
-            }
-        }
-    }
-
-    // MARK: - Date section
-
-    @ViewBuilder
-    private func dateSection(group: DateGroup, containerWidth: CGFloat) -> some View {
-        let layout = MediaLayout.compute(
-            aspectRatios: group.assets.map { $0.aspectRatio },
-            containerWidth: containerWidth,
-            targetRowHeight: MediaGridLayoutConstants.targetRowHeight,
-            spacing: MediaGridLayoutConstants.spacing
-        )
-
-        // Each section is a single VStack so LazyVStack treats it as one
-        // unit and doesn't recycle headers across different date groups.
-        VStack(alignment: .leading, spacing: MediaGridLayoutConstants.spacing) {
-            DateHeaderView(group: group, browseState: browseState)
-                .id("header-\(group.label)")
-
-            ForEach(Array(layout.rows.enumerated()), id: \.offset) { _, row in
-                sectionRow(row: row, layout: layout, assets: group.assets)
             }
         }
     }
