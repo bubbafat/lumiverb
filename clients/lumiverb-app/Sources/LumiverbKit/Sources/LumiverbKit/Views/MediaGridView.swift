@@ -46,6 +46,8 @@ public struct MediaGridView<ScrollIntrospector: View>: View {
     public let scrollIntrospector: ScrollIntrospector
 
     @Environment(\.scrollAccessor) private var scrollAccessor
+    @Environment(\.collectionsState) private var collectionsState
+    @State private var addToCollectionAssetId: String?
 
     public init(
         browseState: BrowseState,
@@ -86,6 +88,14 @@ public struct MediaGridView<ScrollIntrospector: View>: View {
                 guard let token, let accessor = scrollAccessor else { return }
                 accessor.apply(token.command)
             }
+            .sheet(isPresented: Binding(
+                get: { addToCollectionAssetId != nil },
+                set: { if !$0 { addToCollectionAssetId = nil } }
+            )) {
+                if let assetId = addToCollectionAssetId, let cs = collectionsState {
+                    AddToCollectionSheet(collectionsState: cs, assetIds: [assetId])
+                }
+            }
         }
     }
 
@@ -111,6 +121,20 @@ public struct MediaGridView<ScrollIntrospector: View>: View {
                         // arrow keys can advance through the list.
                         browseState.focusedIndex = index
                         Task { await browseState.loadAssetDetail(assetId: asset.assetId) }
+                    }
+                    .contextMenu {
+                        AssetRatingContextMenu(
+                            assetId: asset.assetId,
+                            client: client
+                        )
+                        if collectionsState != nil {
+                            Divider()
+                            Button {
+                                addToCollectionAssetId = asset.assetId
+                            } label: {
+                                Label("Add to Collection...", systemImage: "folder.badge.plus")
+                            }
+                        }
                     }
                     .onAppear {
                         // Trigger infinite scroll when near the end.

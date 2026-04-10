@@ -785,4 +785,262 @@ final class APIClientNetworkTests: XCTestCase {
         )
         XCTAssertEqual(result.trashed.count, 2)
     }
+
+    // MARK: - Ratings
+
+    func testUpdateRatingSendsCorrectBody() async throws {
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "PUT")
+            XCTAssertEqual(request.url?.path, "/v1/assets/asset_1/rating")
+
+            if let bodyData = readRequestBody(request) {
+                let json = try! JSONSerialization.jsonObject(with: bodyData) as! [String: Any]
+                XCTAssertEqual(json["stars"] as? Int, 4)
+                XCTAssertEqual(json["color"] as? String, "blue")
+                XCTAssertFalse(json.keys.contains("favorite"))
+            } else {
+                XCTFail("Expected request body")
+            }
+
+            return jsonResponse(200, json: """
+            {"asset_id": "asset_1", "favorite": false, "stars": 4, "color": "blue"}
+            """, for: request)
+        }
+
+        let client = makeClient()
+        let rating = try await client.updateRating(
+            assetId: "asset_1",
+            body: RatingUpdateBody(stars: 4, color: .set(.blue))
+        )
+        XCTAssertEqual(rating.stars, 4)
+        XCTAssertEqual(rating.color, .blue)
+        XCTAssertFalse(rating.favorite)
+    }
+
+    func testUpdateRatingColorClearSendsNull() async throws {
+        MockURLProtocol.requestHandler = { request in
+            if let bodyData = readRequestBody(request) {
+                let json = try! JSONSerialization.jsonObject(with: bodyData) as! [String: Any]
+                XCTAssertTrue(json.keys.contains("color"))
+                XCTAssertTrue(json["color"] is NSNull)
+            } else {
+                XCTFail("Expected request body")
+            }
+
+            return jsonResponse(200, json: """
+            {"asset_id": "a1", "favorite": false, "stars": 0, "color": null}
+            """, for: request)
+        }
+
+        let client = makeClient()
+        let rating = try await client.updateRating(
+            assetId: "a1",
+            body: RatingUpdateBody(color: .clear)
+        )
+        XCTAssertNil(rating.color)
+    }
+
+    func testUpdateRatingColorUnchangedOmitsKey() async throws {
+        MockURLProtocol.requestHandler = { request in
+            if let bodyData = readRequestBody(request) {
+                let json = try! JSONSerialization.jsonObject(with: bodyData) as! [String: Any]
+                XCTAssertFalse(json.keys.contains("color"))
+                XCTAssertEqual(json["favorite"] as? Bool, true)
+            } else {
+                XCTFail("Expected request body")
+            }
+
+            return jsonResponse(200, json: """
+            {"asset_id": "a1", "favorite": true, "stars": 0, "color": null}
+            """, for: request)
+        }
+
+        let client = makeClient()
+        let rating = try await client.updateRating(
+            assetId: "a1",
+            body: RatingUpdateBody(favorite: true, color: .unchanged)
+        )
+        XCTAssertTrue(rating.favorite)
+    }
+
+    func testBatchUpdateRatings() async throws {
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "PUT")
+            XCTAssertEqual(request.url?.path, "/v1/assets/ratings")
+
+            if let bodyData = readRequestBody(request) {
+                let json = try! JSONSerialization.jsonObject(with: bodyData) as! [String: Any]
+                XCTAssertEqual((json["asset_ids"] as? [String])?.count, 3)
+                XCTAssertEqual(json["stars"] as? Int, 5)
+            }
+
+            return jsonResponse(200, json: """
+            {"updated": 3}
+            """, for: request)
+        }
+
+        let client = makeClient()
+        let updated = try await client.batchUpdateRatings(
+            body: BatchRatingUpdateBody(assetIds: ["a1", "a2", "a3"], stars: 5)
+        )
+        XCTAssertEqual(updated, 3)
+    }
+
+    func testLookupRatings() async throws {
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/assets/ratings/lookup")
+
+            return jsonResponse(200, json: """
+            {
+                "ratings": {
+                    "a1": {"favorite": true, "stars": 3, "color": "red"},
+                    "a2": {"favorite": false, "stars": 0, "color": null}
+                }
+            }
+            """, for: request)
+        }
+
+        let client = makeClient()
+        let ratings = try await client.lookupRatings(assetIds: ["a1", "a2"])
+        XCTAssertEqual(ratings.count, 2)
+        XCTAssertEqual(ratings["a1"]?.stars, 3)
+        XCTAssertEqual(ratings["a1"]?.color, .red)
+        XCTAssertTrue(ratings["a1"]?.favorite ?? false)
+        XCTAssertNil(ratings["a2"]?.color)
+    }
+
+    // MARK: - Collections
+
+    private static let sampleCollectionJson = """
+    {
+        "collection_id": "col_1",
+        "name": "Favorites",
+        "description": null,
+        "cover_asset_id": null,
+        "owner_user_id": "user_1",
+        "visibility": "private",
+        "ownership": "own",
+        "sort_order": "manual",
+        "asset_count": 5,
+        "created_at": "2024-01-01T00:00:00",
+        "updated_at": "2024-01-01T00:00:00"
+    }
+    """
+
+    func testListCollections() async throws {
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/v1/collections")
+            return jsonResponse(200, json: """
+            {"items": [\(Self.sampleCollectionJson)]}
+            """, for: request)
+        }
+
+        let client = makeClient()
+        let cols = try await client.listCollections()
+        XCTAssertEqual(cols.count, 1)
+        XCTAssertEqual(cols[0].name, "Favorites")
+        XCTAssertTrue(cols[0].isOwn)
+    }
+
+    func testCreateCollection() async throws {
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/collections")
+
+            if let bodyData = readRequestBody(request) {
+                let json = try! JSONSerialization.jsonObject(with: bodyData) as! [String: Any]
+                XCTAssertEqual(json["name"] as? String, "Test")
+                XCTAssertEqual(json["visibility"] as? String, "private")
+            }
+
+            return jsonResponse(201, json: Self.sampleCollectionJson, for: request)
+        }
+
+        let client = makeClient()
+        let col = try await client.createCollection(
+            body: CreateCollectionRequest(name: "Test")
+        )
+        XCTAssertEqual(col.collectionId, "col_1")
+    }
+
+    func testUpdateCollection() async throws {
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "PATCH")
+            XCTAssertTrue(request.url?.path.contains("/v1/collections/col_1") ?? false)
+            return jsonResponse(200, json: Self.sampleCollectionJson, for: request)
+        }
+
+        let client = makeClient()
+        let col = try await client.updateCollection(
+            id: "col_1", body: UpdateCollectionRequest(name: "Renamed")
+        )
+        XCTAssertEqual(col.name, "Favorites") // server returned sample
+    }
+
+    func testDeleteCollection() async throws {
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "DELETE")
+            return jsonResponse(204, json: "{}", for: request)
+        }
+
+        let client = makeClient()
+        try await client.deleteCollection(id: "col_1")
+    }
+
+    func testAddAssetsToCollection() async throws {
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertTrue(request.url?.path.contains("/assets") ?? false)
+            return jsonResponse(200, json: """
+            {"added": 2}
+            """, for: request)
+        }
+
+        let client = makeClient()
+        let added = try await client.addAssetsToCollection(id: "col_1", assetIds: ["a1", "a2"])
+        XCTAssertEqual(added, 2)
+    }
+
+    func testRemoveAssetsFromCollection() async throws {
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "DELETE")
+            return jsonResponse(200, json: """
+            {"removed": 1}
+            """, for: request)
+        }
+
+        let client = makeClient()
+        let removed = try await client.removeAssetsFromCollection(id: "col_1", assetIds: ["a1"])
+        XCTAssertEqual(removed, 1)
+    }
+
+    func testListCollectionAssets() async throws {
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
+            let items = Dictionary(uniqueKeysWithValues:
+                (components.queryItems ?? []).map { ($0.name, $0.value!) }
+            )
+            XCTAssertEqual(items["limit"], "50")
+            return jsonResponse(200, json: """
+            {
+                "items": [{
+                    "asset_id": "a1", "rel_path": "photo.jpg", "file_size": 1234,
+                    "media_type": "image", "width": 800, "height": 600,
+                    "taken_at": null, "status": "complete", "duration_sec": null,
+                    "camera_make": null, "camera_model": null
+                }],
+                "next_cursor": "cur_2"
+            }
+            """, for: request)
+        }
+
+        let client = makeClient()
+        let response = try await client.listCollectionAssets(id: "col_1", limit: 50)
+        XCTAssertEqual(response.items.count, 1)
+        XCTAssertEqual(response.items[0].assetId, "a1")
+        XCTAssertEqual(response.nextCursor, "cur_2")
+    }
 }

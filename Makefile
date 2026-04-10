@@ -8,7 +8,7 @@
 
 .PHONY: help test test-python test-swift test-fast test-slow \
         build-macos build-ios build-swift-lib \
-        run-api run-web run-macos \
+        run-api run-web run-macos run-ios refresh-ios boot-sim kill-ios \
         generate-xcode clean clean-swift clean-python \
         lint check
 
@@ -26,8 +26,11 @@ SWIFT    := swift
 XCODEGEN := xcodegen
 XBUILD   := xcodebuild
 
-# iOS simulator (override with: make build-ios IOS_DEST="platform=iOS Simulator,name=iPhone 15")
-IOS_DEST ?= platform=iOS Simulator,name=iPhone 16
+# iOS simulator (override with: make run-ios IOS_SIM="iPhone 15")
+IOS_SIM       ?= iPhone 17 Pro
+IOS_DEST      := platform=iOS Simulator,name=$(IOS_SIM)
+IOS_BUNDLE_ID := io.lumiverb.app.ios
+DERIVED_DATA  := $(SWIFT_PROJECT)/build
 
 # ──────────────────────────────────────────────
 # Help
@@ -74,6 +77,7 @@ build-macos: generate-xcode ## Build macOS app
 		-project Lumiverb.xcodeproj \
 		-scheme Lumiverb-macOS \
 		-configuration Debug \
+		-derivedDataPath build \
 		-quiet
 
 build-ios: generate-xcode ## Build iOS app (simulator)
@@ -82,6 +86,7 @@ build-ios: generate-xcode ## Build iOS app (simulator)
 		-scheme Lumiverb-iOS \
 		-configuration Debug \
 		-destination '$(IOS_DEST)' \
+		-derivedDataPath build \
 		-quiet
 
 build-web: ## Build web UI (TypeScript + Vite)
@@ -101,13 +106,23 @@ run-web: ## Start web UI dev server (port 5173)
 	cd $(WEB_DIR) && npx vite
 
 run-macos: build-macos ## Build and launch macOS app
-	@app=$$(find ~/Library/Developer/Xcode/DerivedData -name "Lumiverb.app" -path "*/Debug/*" 2>/dev/null | head -1); \
-	if [ -z "$$app" ]; then \
-		echo "Build succeeded but .app not found in DerivedData."; \
-		echo "Open $(XCODE_PROJECT) in Xcode and run from there."; \
-	else \
-		open "$$app"; \
-	fi
+	open $(DERIVED_DATA)/Build/Products/Debug/Lumiverb.app
+
+boot-sim: ## Boot iOS simulator (no-op if already booted)
+	@xcrun simctl boot "$(IOS_SIM)" 2>/dev/null || true
+	@open -a Simulator
+
+run-ios: build-ios boot-sim ## Build, install, and launch iOS app in simulator
+	xcrun simctl install booted $(DERIVED_DATA)/Build/Products/Debug-iphonesimulator/Lumiverb.app
+	xcrun simctl launch booted $(IOS_BUNDLE_ID)
+
+refresh-ios: build-ios ## Rebuild and hot-swap iOS app (simulator stays open)
+	xcrun simctl install booted $(DERIVED_DATA)/Build/Products/Debug-iphonesimulator/Lumiverb.app
+	@xcrun simctl terminate booted $(IOS_BUNDLE_ID) 2>/dev/null || true
+	xcrun simctl launch booted $(IOS_BUNDLE_ID)
+
+kill-ios: ## Terminate iOS app in simulator (keep simulator open)
+	@xcrun simctl terminate booted $(IOS_BUNDLE_ID) 2>/dev/null || true
 
 # ──────────────────────────────────────────────
 # Lint / Check
@@ -131,6 +146,5 @@ clean-python: ## Remove Python caches
 
 clean-swift: ## Remove Swift/Xcode build artifacts
 	cd $(SWIFT_PACKAGE) && $(SWIFT) package clean 2>/dev/null || true
-	rm -rf $(SWIFT_PROJECT)/build
-	rm -rf $(SWIFT_PROJECT)/DerivedData
+	rm -rf $(DERIVED_DATA)
 	rm -rf $(XCODE_PROJECT)

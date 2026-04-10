@@ -346,7 +346,7 @@ public actor APIClient {
         do {
             (data, response) = try await session.data(for: urlRequest)
         } catch {
-            logger.error("\(method) \(path) — network error: \(error.localizedDescription)")
+            logger.error("\(method, privacy: .public) \(path, privacy: .public) — network error: \(error.localizedDescription, privacy: .public)")
             throw APIError.networkError(error.localizedDescription)
         }
 
@@ -354,7 +354,7 @@ public actor APIClient {
             throw APIError.networkError("Invalid response")
         }
 
-        logger.debug("\(method) \(path) → \(http.statusCode)")
+        logger.debug("\(method, privacy: .public) \(path, privacy: .public) → \(http.statusCode, privacy: .public)")
 
         if http.statusCode == 401 && authenticated && !skipRefresh {
             let tokenUsed = urlRequest.value(forHTTPHeaderField: "Authorization")
@@ -422,6 +422,173 @@ public actor APIClient {
         } catch {
             throw APIError.decodingError(error.localizedDescription)
         }
+    }
+
+    /// Like `request` but accepts pre-serialized JSON `Data` instead of
+    /// an `Encodable`. Needed for the three-way color semantics where
+    /// "key absent" vs "key = null" matters and `Encodable` can't express both.
+    private func requestRawBody<T: Decodable>(
+        _ method: String,
+        path: String,
+        rawBody: Data,
+        skipRefresh: Bool = false
+    ) async throws -> T {
+        if accessToken == nil {
+            throw APIError.noToken
+        }
+
+        let url = baseURL.appendingPathComponent(path)
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = method
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = accessToken {
+            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        urlRequest.httpBody = rawBody
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: urlRequest)
+        } catch {
+            logger.error("\(method, privacy: .public) \(path, privacy: .public) — network error: \(error.localizedDescription, privacy: .public)")
+            throw APIError.networkError(error.localizedDescription)
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.networkError("Invalid response")
+        }
+
+        logger.debug("\(method, privacy: .public) \(path, privacy: .public) → \(http.statusCode, privacy: .public)")
+
+        if http.statusCode == 401 && !skipRefresh {
+            if let refreshHandler, await refreshHandler() {
+                return try await requestRawBody(
+                    method, path: path, rawBody: rawBody, skipRefresh: true
+                )
+            }
+            throw APIError.unauthorized(unauthorizedMessage(from: data))
+        }
+
+        if http.statusCode >= 400 {
+            if let envelope = try? decoder.decode(ErrorEnvelope.self, from: data) {
+                throw APIError.serverError(
+                    statusCode: http.statusCode,
+                    message: envelope.error.message
+                )
+            }
+            let body = String(data: data, encoding: .utf8) ?? "Unknown error"
+            throw APIError.serverError(statusCode: http.statusCode, message: body)
+        }
+
+        if data.isEmpty || http.statusCode == 204 {
+            if let empty = EmptyResponse() as? T {
+                return empty
+            }
+        }
+
+        do {
+            return try decoder.decode(T.self, from: data)
+        } catch {
+            throw APIError.decodingError(error.localizedDescription)
+        }
+    }
+}
+
+// MARK: - Ratings
+
+extension APIClient {
+    /// Set or update rating on a single asset.
+    /// `PUT /v1/assets/{assetId}/rating`
+    public func updateRating(assetId: String, body: RatingUpdateBody) async throws -> Rating {
+        let response: RatingResponse = try await requestRawBody(
+            "PUT", path: "/v1/assets/\(assetId)/rating", rawBody: body.jsonData()
+        )
+        return response.rating
+    }
+
+    /// Apply the same rating update to multiple assets.
+    /// `PUT /v1/assets/ratings`
+    public func batchUpdateRatings(body: BatchRatingUpdateBody) async throws -> Int {
+        let response: BatchRatingResponse = try await requestRawBody(
+            "PUT", path: "/v1/assets/ratings", rawBody: body.jsonData()
+        )
+        return response.updated
+    }
+
+    /// Bulk read ratings for a list of asset IDs.
+    /// `POST /v1/assets/ratings/lookup`
+    public func lookupRatings(assetIds: [String]) async throws -> [String: Rating] {
+        let body = ["asset_ids": assetIds]
+        let response: RatingLookupResponse = try await post(
+            "/v1/assets/ratings/lookup", body: body
+        )
+        return response.ratings.mapValues { $0.rating }
+    }
+}
+
+// MARK: - Collections
+
+extension APIClient {
+    /// `GET /v1/collections`
+    public func listCollections() async throws -> [AssetCollection] {
+        let response: CollectionListResponse = try await get("/v1/collections")
+        return response.items
+    }
+
+    /// `GET /v1/collections/{id}`
+    public func getCollection(id: String) async throws -> AssetCollection {
+        try await get("/v1/collections/\(id)")
+    }
+
+    /// `POST /v1/collections`
+    public func createCollection(body: CreateCollectionRequest) async throws -> AssetCollection {
+        try await post("/v1/collections", body: body)
+    }
+
+    /// `PATCH /v1/collections/{id}`
+    public func updateCollection(id: String, body: UpdateCollectionRequest) async throws -> AssetCollection {
+        try await patch("/v1/collections/\(id)", body: body)
+    }
+
+    /// `DELETE /v1/collections/{id}`
+    public func deleteCollection(id: String) async throws {
+        try await delete("/v1/collections/\(id)")
+    }
+
+    /// `POST /v1/collections/{id}/assets`
+    public func addAssetsToCollection(id: String, assetIds: [String]) async throws -> Int {
+        let response: BatchAddResponse = try await post(
+            "/v1/collections/\(id)/assets", body: AssetIdsRequest(assetIds: assetIds)
+        )
+        return response.added
+    }
+
+    /// `DELETE /v1/collections/{id}/assets`
+    public func removeAssetsFromCollection(id: String, assetIds: [String]) async throws -> Int {
+        let response: BatchRemoveResponse = try await deleteWithBody(
+            "/v1/collections/\(id)/assets", body: AssetIdsRequest(assetIds: assetIds)
+        )
+        return response.removed
+    }
+
+    /// `GET /v1/collections/{id}/assets`
+    public func listCollectionAssets(
+        id: String,
+        after: String? = nil,
+        limit: Int = 200
+    ) async throws -> CollectionAssetsResponse {
+        var query: [String: String] = ["limit": "\(limit)"]
+        if let after { query["after"] = after }
+        return try await get("/v1/collections/\(id)/assets", query: query)
+    }
+
+    /// `PATCH /v1/collections/{id}/reorder`
+    public func reorderCollection(id: String, assetIds: [String]) async throws {
+        struct OkResponse: Decodable { let ok: Bool }
+        let _: OkResponse = try await patch(
+            "/v1/collections/\(id)/reorder", body: AssetIdsRequest(assetIds: assetIds)
+        )
     }
 }
 

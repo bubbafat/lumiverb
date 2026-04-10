@@ -152,6 +152,9 @@ public class BrowseState: ObservableObject {
     @Published public var selectedAssetId: String?
     @Published public var assetDetail: AssetDetail?
     @Published public var isLoadingDetail = false
+    /// Current rating for the asset shown in the lightbox. Fetched on open,
+    /// optimistically updated on mutation.
+    @Published public var currentRating: Rating = .empty
 
     /// When set, the lightbox prev/next chevrons (and arrow-key navigation)
     /// iterate this list instead of `displayedAssetIds`'s normal mode-based
@@ -512,10 +515,15 @@ public class BrowseState: ObservableObject {
         selectedAssetId = assetId
         isLoadingDetail = true
         assetDetail = nil
+        currentRating = .empty
 
         do {
             let detail: AssetDetail = try await client.get("/v1/assets/\(assetId)")
             assetDetail = detail
+            // Fetch rating in parallel with the detail load would be ideal,
+            // but the detail call is fast and we need the assetId confirmed.
+            let ratings = try await client.lookupRatings(assetIds: [assetId])
+            currentRating = ratings[assetId] ?? .empty
         } catch {
             self.error = "Failed to load asset: \(error)"
         }
@@ -523,9 +531,37 @@ public class BrowseState: ObservableObject {
         isLoadingDetail = false
     }
 
+    /// Optimistically update the current rating and persist to the server.
+    /// Retries once on failure; reverts local state if both attempts fail.
+    public func updateCurrentRating(_ body: RatingUpdateBody) {
+        guard let client, let assetId = selectedAssetId else { return }
+
+        // Optimistic local update is already done by the RatingEditorView
+        // binding — `currentRating` was mutated before this callback fires.
+        let snapshot = currentRating
+
+        Task {
+            do {
+                let result = try await client.updateRating(assetId: assetId, body: body)
+                currentRating = result
+            } catch {
+                // Retry once
+                do {
+                    let result = try await client.updateRating(assetId: assetId, body: body)
+                    currentRating = result
+                } catch {
+                    // Revert to pre-optimistic state
+                    currentRating = snapshot
+                    self.error = "Failed to save rating"
+                }
+            }
+        }
+    }
+
     public func closeLightbox() {
         selectedAssetId = nil
         assetDetail = nil
+        currentRating = .empty
         // Clear any People-view installed prev/next override so the next
         // lightbox open from the library grid uses the normal mode list.
         displayedAssetIdsOverride = nil

@@ -111,6 +111,10 @@ public struct LightboxView: View {
                 MetadataSidebar(
                     detail: detail,
                     showFaces: $showFaces,
+                    rating: $browseState.currentRating,
+                    onRatingChange: { body in
+                        browseState.updateCurrentRating(body)
+                    },
                     onFindSimilar: {
                         Task { await browseState.findSimilar(assetId: detail.assetId) }
                     },
@@ -178,6 +182,25 @@ public struct LightboxView: View {
                 showFaces = true
             }
         }
+        #if os(macOS)
+        // Rating keyboard shortcuts (Lightroom convention):
+        // 1-5 set stars, 0 clears, F toggles favorite.
+        .onKeyPress(characters: .init(charactersIn: "012345")) { press in
+            let ch = press.characters
+            if let digit = ch.first?.wholeNumberValue, digit >= 0 && digit <= 5 {
+                browseState.currentRating.stars = digit
+                browseState.updateCurrentRating(RatingUpdateBody(stars: digit))
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(characters: .init(charactersIn: "fF")) { _ in
+            let newFav = !browseState.currentRating.favorite
+            browseState.currentRating.favorite = newFav
+            browseState.updateCurrentRating(RatingUpdateBody(favorite: newFav))
+            return .handled
+        }
+        #endif
     }
 
     /// Composite key so `.task(id:)` re-runs both when the user toggles the
@@ -207,6 +230,8 @@ public struct LightboxView: View {
 struct MetadataSidebar: View {
     let detail: AssetDetail
     @Binding var showFaces: Bool
+    @Binding var rating: Rating
+    let onRatingChange: (RatingUpdateBody) -> Void
     let onFindSimilar: () -> Void
     let onReEnrich: (Set<EnrichmentOperation>) -> Void
     let onRevealInFinder: () -> Void
@@ -220,6 +245,9 @@ struct MetadataSidebar: View {
                 Text(detail.filename)
                     .font(.headline)
                     .lineLimit(2)
+
+                // Rating
+                RatingEditorView(rating: $rating, onChange: onRatingChange)
 
                 Divider()
 
