@@ -46,6 +46,27 @@ class AppState: ObservableObject {
     private(set) var client: APIClient?
     private(set) var authManager: AuthManager?
 
+    /// Pair of platform-specific caches handed to browse views via the
+    /// SwiftUI environment. macOS uses the disk-backed implementations
+    /// (`MacProxyDiskCache.shared` shares the proxy cache with the Python
+    /// CLI; `MacThumbnailDiskCache.shared` is macOS-app-local). Defined
+    /// here in `AppState` so the BrowseWindow scene can install it as an
+    /// `.environment(\.cacheBundle, ...)` value at the root of the view
+    /// tree without needing to know which concrete types to construct.
+    let cacheBundle: CacheBundle = CacheBundle(
+        proxies: MacProxyDiskCache.shared,
+        thumbnails: MacThumbnailDiskCache.shared
+    )
+
+    /// Singleton scroll accessor for the macOS BrowseWindow's grid views.
+    /// Wraps an `NSScrollViewBox` whose `scrollView` weak reference is
+    /// populated by `NSScrollViewIntrospector` from inside whichever grid
+    /// is currently on-screen. ADR-015 M2 will switch the grid views to
+    /// read this from `@Environment(\.scrollAccessor)`; until then, the
+    /// existing per-grid `NSScrollViewBox` plumbing is what actually
+    /// drives scroll commands.
+    let scrollAccessor: MacScrollAccessor = MacScrollAccessor()
+
     /// Resolved vision config: local override > tenant default.
     var resolvedVisionApiUrl: String {
         visionApiUrl.isEmpty ? tenantVisionApiUrl : visionApiUrl

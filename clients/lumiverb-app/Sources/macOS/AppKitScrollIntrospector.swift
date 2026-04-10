@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import LumiverbKit
 
 /// Reaches into a SwiftUI `ScrollView`'s underlying `NSScrollView` and
 /// hands it back to the caller. SwiftUI's `ScrollView` doesn't expose
@@ -66,23 +67,6 @@ struct NSScrollViewIntrospector: NSViewRepresentable {
     }
 }
 
-/// One-shot scroll command sent from `BrowseState` to the active
-/// grid view. Carries a UUID so re-issuing the same command still
-/// trips `.onChange` (SwiftUI dedupes by `Equatable`).
-struct ScrollCommandToken: Equatable {
-    let id = UUID()
-    let command: ScrollCommand
-}
-
-enum ScrollCommand: Equatable {
-    case pageUp
-    case pageDown
-    case lineUp
-    case lineDown
-    case home
-    case end
-}
-
 /// Apply a `ScrollCommand` to an `NSScrollView` using AppKit's
 /// native scroll-by-page / scroll-by-line / scroll-to-edge semantics.
 ///
@@ -95,6 +79,12 @@ enum ScrollCommand: Equatable {
 ///
 /// `home` / `end` jump to the absolute top or bottom of the document
 /// view.
+///
+/// `toRow` is currently unused on macOS — keyboard nav doesn't dispatch
+/// it, so the existing keyboard surface is unchanged. When iOS lands
+/// search-hit jumping (M6) we may want to add a precise per-row table
+/// here as well; for now, this is a no-op so the switch stays
+/// exhaustive against the LumiverbKit `ScrollCommand` enum.
 @MainActor
 func applyScrollCommand(_ command: ScrollCommand, to scrollView: NSScrollView) {
     let clipView = scrollView.contentView
@@ -129,6 +119,11 @@ func applyScrollCommand(_ command: ScrollCommand, to scrollView: NSScrollView) {
         let maxY = max(0, doc.bounds.height - clipView.bounds.height)
         clipView.scroll(to: NSPoint(x: 0, y: maxY))
         scrollView.reflectScrolledClipView(clipView)
+    case .toRow:
+        // No-op for now: macOS keyboard nav doesn't dispatch this case.
+        // If/when search-hit jumping arrives on macOS, replace with a
+        // per-row offset lookup against the grid layout.
+        break
     }
 }
 
@@ -139,4 +134,23 @@ func applyScrollCommand(_ command: ScrollCommand, to scrollView: NSScrollView) {
 @MainActor
 final class NSScrollViewBox: ObservableObject {
     weak var scrollView: NSScrollView?
+}
+
+/// macOS implementation of LumiverbKit's `ScrollViewAccessor` protocol.
+/// Wraps an `NSScrollViewBox` so callers can dispatch `ScrollCommand`s
+/// without needing to know about AppKit. The grid views (M2) will
+/// consume this via `@Environment(\.scrollAccessor)`; until then, this
+/// type is constructed by `AppState` and lives alongside the existing
+/// `NSScrollViewBox`-based plumbing in the grid views, which keeps M1
+/// behavior-preserving.
+@MainActor
+final class MacScrollAccessor: ObservableObject, ScrollViewAccessor {
+    let box = NSScrollViewBox()
+
+    nonisolated init() {}
+
+    func apply(_ command: ScrollCommand) {
+        guard let sv = box.scrollView else { return }
+        applyScrollCommand(command, to: sv)
+    }
 }

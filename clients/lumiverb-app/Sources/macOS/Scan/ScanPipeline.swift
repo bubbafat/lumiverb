@@ -350,7 +350,7 @@ actor ScanPipeline {
 
             // Check if we already have a valid cached proxy for this source
             // (shared cache with Python CLI at ~/.cache/lumiverb/proxies/)
-            let cache = ProxyCacheOnDisk.shared
+            let cache = MacProxyDiskCache.shared
             // We need the asset_id from the server to use the cache, but for new files
             // we don't have one yet. For changed files we do. We'll cache after ingest.
 

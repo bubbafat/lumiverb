@@ -404,14 +404,14 @@ actor EnrichmentPipeline {
     /// Load proxy image from disk cache, falling back to server download.
     private func loadProxy(assetId: String) async -> Data? {
         // 1. Check disk cache (shared with Python CLI)
-        if let cached = ProxyCacheOnDisk.shared.get(assetId: assetId) {
+        if let cached = MacProxyDiskCache.shared.get(assetId: assetId) {
             return cached
         }
 
         // 2. Download from server and cache
         do {
             if let data = try await client.getData("/v1/assets/\(assetId)/proxy") {
-                ProxyCacheOnDisk.shared.put(assetId: assetId, data: data)
+                MacProxyDiskCache.shared.put(assetId: assetId, data: data)
                 return data
             }
         } catch {

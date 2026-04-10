@@ -31,6 +31,14 @@ struct LumiverbApp: App {
         Window("Lumiverb", id: "browse") {
             BrowseWindow(appState: appState, scanState: scanState)
                 .frame(minWidth: 800, minHeight: 500)
+                // ADR-015 M1: install the macOS cache bundle and scroll
+                // accessor as environment values so views moved into
+                // LumiverbKit (starting with AuthenticatedImageView) can
+                // resolve them without importing AppKit. M2 will move
+                // the grid views and have them consume `\.scrollAccessor`
+                // directly; for now this is wired but unused by the grids.
+                .environment(\.cacheBundle, appState.cacheBundle)
+                .environment(\.scrollAccessor, appState.scrollAccessor)
                 .onDisappear {
                     // Return to accessory mode when browse window closes
                     NSApp.setActivationPolicy(.accessory)
@@ -41,6 +49,7 @@ struct LumiverbApp: App {
         // Settings window (opened from menu bar)
         Settings {
             SettingsView(appState: appState)
+                .environment(\.cacheBundle, appState.cacheBundle)
         }
     }
 }

@@ -31,12 +31,29 @@ public struct FileTokenStore: TokenStore, Sendable {
     /// genuinely unavailable, which on macOS is essentially never. The
     /// fallback exists so init can be non-throwing and usable as a
     /// default parameter value.
+    ///
+    /// **iOS:** this initializer is intentionally a `fatalError` on iOS
+    /// (ADR-015 M1 defensive guard). The iOS app uses `KeychainHelper`
+    /// — the data-protection keychain doesn't prompt and is the right
+    /// home for credentials. `FileTokenStore`'s app-support file path is
+    /// outside the iOS sandbox model and there is no legitimate reason
+    /// to instantiate this on iOS. The struct still exists in the
+    /// LumiverbKit module on iOS so cross-platform code that references
+    /// the type compiles, but constructing it traps loudly.
     public init(bundleIdentifier: String = "io.lumiverb.app") {
+        #if os(iOS)
+        fatalError(
+            "FileTokenStore is macOS-only. Use KeychainHelper on iOS — " +
+            "the data-protection keychain never prompts and is the " +
+            "supported credentials store on iOS."
+        )
+        #else
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
         ).first ?? URL(fileURLWithPath: NSTemporaryDirectory())
         let dir = appSupport.appendingPathComponent(bundleIdentifier, isDirectory: true)
         self.fileURL = dir.appendingPathComponent("credentials.json")
+        #endif
     }
 
     /// Test seam: explicit file path. The parent directory will be

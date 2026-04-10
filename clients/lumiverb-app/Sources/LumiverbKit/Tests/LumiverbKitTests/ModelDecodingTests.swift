@@ -861,18 +861,18 @@ final class IngestResponseTests: XCTestCase {
     }
 }
 
-// MARK: - Proxy Cache On Disk
+// MARK: - Mac Proxy Disk Cache
 
-final class ProxyCacheOnDiskTests: XCTestCase {
+final class MacProxyDiskCacheTests: XCTestCase {
 
     private var tempDir: URL!
-    private var cache: ProxyCacheOnDisk!
+    private var cache: MacProxyDiskCache!
 
     override func setUp() {
         super.setUp()
         tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("proxy-cache-test-\(UUID().uuidString)")
-        cache = ProxyCacheOnDisk(cacheDir: tempDir)
+        cache = MacProxyDiskCache(cacheDir: tempDir)
     }
 
     override func tearDown() {
@@ -953,18 +953,18 @@ final class ProxyCacheOnDiskTests: XCTestCase {
     }
 }
 
-// MARK: - Thumbnail Cache On Disk
+// MARK: - Mac Thumbnail Disk Cache
 
-final class ThumbnailCacheOnDiskTests: XCTestCase {
+final class MacThumbnailDiskCacheTests: XCTestCase {
 
     private var tempDir: URL!
-    private var cache: ThumbnailCacheOnDisk!
+    private var cache: MacThumbnailDiskCache!
 
     override func setUp() {
         super.setUp()
         tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("thumbnail-cache-test-\(UUID().uuidString)")
-        cache = ThumbnailCacheOnDisk(cacheDir: tempDir)
+        cache = MacThumbnailDiskCache(cacheDir: tempDir)
     }
 
     override func tearDown() {
@@ -1028,8 +1028,8 @@ final class ThumbnailCacheOnDiskTests: XCTestCase {
         // the same asset id is cached as both a thumbnail and a proxy.
         let proxyDir = tempDir.appendingPathComponent("proxy")
         let thumbDir = tempDir.appendingPathComponent("thumb")
-        let proxyCache = ProxyCacheOnDisk(cacheDir: proxyDir)
-        let thumbCache = ThumbnailCacheOnDisk(cacheDir: thumbDir)
+        let proxyCache = MacProxyDiskCache(cacheDir: proxyDir)
+        let thumbCache = MacThumbnailDiskCache(cacheDir: thumbDir)
 
         proxyCache.put(assetId: "shared_id", data: Data("proxy-bytes".utf8))
         thumbCache.put(assetId: "shared_id", data: Data("thumb-bytes".utf8))

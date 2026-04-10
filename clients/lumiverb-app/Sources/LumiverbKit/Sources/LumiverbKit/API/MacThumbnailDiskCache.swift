@@ -1,8 +1,10 @@
+#if os(macOS)
 import Foundation
 
-/// Persistent disk cache for asset thumbnails.
+/// Persistent disk cache for asset thumbnails on macOS. This is the
+/// macOS implementation of `ThumbnailCache`.
 ///
-/// Distinct from `ProxyCacheOnDisk` because proxies follow a
+/// Distinct from `MacProxyDiskCache` because proxies follow a
 /// Python-CLI-compatible protocol (SHA sidecars, shared cache dir under
 /// `~/.cache/lumiverb/proxies/`), while thumbnails are macOS-app-local
 /// and don't need that ceremony:
@@ -23,8 +25,12 @@ import Foundation
 /// thumbnail from the server — a latent UX trap against remote servers
 /// that manifests as a multi-second "library click does nothing" stall
 /// for browse sessions that span an `NSCache` eviction or app restart.
-public final class ThumbnailCacheOnDisk: @unchecked Sendable {
-    public static let shared = ThumbnailCacheOnDisk()
+///
+/// **Renamed from `ThumbnailCacheOnDisk` in ADR-015 M1.** Same on-disk
+/// layout, same behavior — only the type name changed so the iOS app
+/// can have a `ThumbnailCache` protocol with a distinct implementation.
+public final class MacThumbnailDiskCache: @unchecked Sendable {
+    public static let shared = MacThumbnailDiskCache()
 
     private let cacheDir: URL
 
@@ -98,3 +104,10 @@ public final class ThumbnailCacheOnDisk: @unchecked Sendable {
         }
     }
 }
+
+extension MacThumbnailDiskCache: ThumbnailCache {
+    // The ThumbnailCache requirements (`get`, `put`, `has`, `remove`,
+    // `removeAll`) are already satisfied by the public methods above;
+    // this empty extension declares conformance.
+}
+#endif

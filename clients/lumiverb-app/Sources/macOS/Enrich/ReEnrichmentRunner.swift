@@ -471,12 +471,12 @@ actor ReEnrichmentRunner {
     // MARK: - Proxy loading
 
     private func loadProxy(assetId: String) async -> Data? {
-        if let cached = ProxyCacheOnDisk.shared.get(assetId: assetId) {
+        if let cached = MacProxyDiskCache.shared.get(assetId: assetId) {
             return cached
         }
         do {
             if let data = try await client.getData("/v1/assets/\(assetId)/proxy") {
-                ProxyCacheOnDisk.shared.put(assetId: assetId, data: data)
+                MacProxyDiskCache.shared.put(assetId: assetId, data: data)
                 return data
             }
         } catch {
