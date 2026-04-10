@@ -168,17 +168,74 @@ public class BrowseState: ObservableObject {
         if selectedAssetIds.isEmpty { isSelecting = false }
     }
 
-    /// Toggle all assets in a date group. If all are already selected,
-    /// deselect them; otherwise select all.
-    public func selectGroup(_ assetIds: [String]) {
+    /// Toggle all assets in a date group. Uses the locally loaded IDs for
+    /// the initial toggle, then fetches the complete set from the server
+    /// (via the search endpoint with date_from/date_to) so that assets
+    /// not yet paged in are also selected.
+    public func selectGroup(_ localAssetIds: [String], dateISO: String?) {
         if !isSelecting { isSelecting = true }
-        let groupSet = Set(assetIds)
-        if groupSet.isSubset(of: selectedAssetIds) {
-            selectedAssetIds.subtract(groupSet)
-        } else {
-            selectedAssetIds.formUnion(groupSet)
+        let localSet = Set(localAssetIds)
+
+        // If all local assets are already selected, deselect (toggle off)
+        if localSet.isSubset(of: selectedAssetIds) {
+            // Also remove any server-fetched IDs for this date
+            selectedAssetIds.subtract(localSet)
+            if let dateISO { dateGroupAllIds.removeValue(forKey: dateISO) }
+            if selectedAssetIds.isEmpty { isSelecting = false }
+            return
         }
-        if selectedAssetIds.isEmpty { isSelecting = false }
+
+        // Select the locally loaded ones immediately
+        selectedAssetIds.formUnion(localSet)
+
+        // Fetch the full set from the server in the background
+        guard let client = appContext.client, let dateISO, let libraryId = selectedLibraryId else { return }
+        Task {
+            let allIds = await fetchAllAssetIdsForDate(
+                client: client, libraryId: libraryId, dateISO: dateISO
+            )
+            dateGroupAllIds[dateISO] = allIds
+            selectedAssetIds.formUnion(allIds)
+        }
+    }
+
+    /// Cache of complete asset ID sets per date, fetched from the server.
+    private var dateGroupAllIds: [String: Set<String>] = [:]
+
+    /// Fetch all asset IDs for a given date via the search endpoint.
+    /// Pages through with offset/limit until all are collected.
+    private func fetchAllAssetIdsForDate(
+        client: APIClient,
+        libraryId: String,
+        dateISO: String
+    ) async -> Set<String> {
+        var allIds = Set<String>()
+        var offset = 0
+        let limit = 500
+
+        while true {
+            let params: [String: String] = [
+                "q": "",
+                "library_id": libraryId,
+                "date_from": dateISO,
+                "date_to": dateISO,
+                "limit": "\(limit)",
+                "offset": "\(offset)",
+            ]
+            do {
+                let response: SearchResponse = try await client.get("/v1/search", query: params)
+                for hit in response.hits {
+                    allIds.insert(hit.assetId)
+                }
+                if response.hits.count < limit || allIds.count >= response.total {
+                    break
+                }
+                offset += limit
+            } catch {
+                break
+            }
+        }
+        return allIds
     }
 
     /// Select all currently displayed assets.
