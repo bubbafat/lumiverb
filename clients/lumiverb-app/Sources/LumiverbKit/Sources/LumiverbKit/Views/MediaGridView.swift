@@ -172,7 +172,6 @@ struct DateHeaderView: View {
         .contentShape(Rectangle())
         .zIndex(1)
         .onTapGesture {
-            print("[DateHeader] tapped: \(group.label) (\(group.assets.count) assets, first=\(groupIds.first ?? "none"))")
             browseState.selectGroup(groupIds, dateISO: group.dateISO)
         }
         .padding(.top, 8)
@@ -244,7 +243,6 @@ extension MediaGridView {
     // MARK: - Tap handling
 
     private func handleTap(asset: AssetPageItem) {
-        print("[CellTap] \(asset.assetId) isSelecting=\(browseState.isSelecting)")
         if browseState.isSelecting {
             browseState.toggleSelection(assetId: asset.assetId)
         } else {
