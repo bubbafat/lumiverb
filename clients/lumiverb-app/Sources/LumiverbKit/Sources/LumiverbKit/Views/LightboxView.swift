@@ -38,8 +38,6 @@ public struct LightboxView: View {
         HStack(spacing: 0) {
             // Main image area
             ZStack {
-                Color.black
-
                 if browseState.isLoadingDetail {
                     ProgressView()
                         .tint(.white)
@@ -157,7 +155,7 @@ public struct LightboxView: View {
                 .frame(width: 300)
             }
         }
-        .background(.black)
+        .background(Color.black, ignoresSafeAreaEdges: .all)
         // Re-fetch faces whenever the visible asset changes — but only when
         // the toggle is on, so toggling off mid-browse doesn't keep paying
         // for face requests. The vm short-circuits if it already has the
