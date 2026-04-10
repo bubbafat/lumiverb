@@ -168,12 +168,14 @@ struct DateHeaderView: View {
         }
         .frame(height: MediaGridLayoutConstants.headerHeight)
         .frame(maxWidth: .infinity)
+        .background(Color.gray.opacity(0.15))
         .contentShape(Rectangle())
+        .zIndex(1)
         .onTapGesture {
             print("[DateHeader] tapped: \(group.label) (\(group.assets.count) assets, first=\(groupIds.first ?? "none"))")
             browseState.selectGroup(groupIds)
         }
-        .padding(.top, 4)
+        .padding(.top, 8)
     }
 }
 
@@ -212,6 +214,7 @@ extension MediaGridView {
             }
         }
         .frame(height: rowHeight)
+        .clipped()
     }
 
     // MARK: - Cell
