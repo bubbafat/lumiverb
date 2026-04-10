@@ -263,6 +263,7 @@ struct MetadataSidebar: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(detail.filename)
                         .font(.headline)
+                        .foregroundColor(.primary)
                         .lineLimit(2)
 
                     pathBreadcrumb
