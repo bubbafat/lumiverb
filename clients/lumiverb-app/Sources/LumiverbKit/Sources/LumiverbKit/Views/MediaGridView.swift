@@ -56,6 +56,14 @@ public struct MediaGridView<ScrollIntrospector: View>: View {
                         dateSection(group: group, containerWidth: containerWidth)
                     }
 
+                    // Infinite scroll sentinel — triggers next page load
+                    // when the user scrolls near the bottom.
+                    Color.clear
+                        .frame(height: 1)
+                        .onAppear {
+                            Task { await browseState.loadNextPage() }
+                        }
+
                     if browseState.isLoadingAssets {
                         ProgressView()
                             .padding()
@@ -162,15 +170,6 @@ public struct MediaGridView<ScrollIntrospector: View>: View {
                             } label: {
                                 Label("Add to Collection...", systemImage: "folder.badge.plus")
                             }
-                        }
-                    }
-                    .onAppear {
-                        // Trigger infinite scroll: use the global asset
-                        // index (not the section-local one) to check
-                        // proximity to the end.
-                        if let globalIndex = browseState.assets.firstIndex(where: { $0.assetId == asset.assetId }),
-                           globalIndex >= browseState.assets.count - 20 {
-                            Task { await browseState.loadNextPage() }
                         }
                     }
             }
