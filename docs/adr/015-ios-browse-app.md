@@ -15,9 +15,10 @@ Proposed
 |-----------|-------------|--------|
 | M1 | Cache + ScrollView abstractions, defensive fixes | Complete |
 | M2 | Move browse UI into LumiverbKit | Complete |
-| M3 | Ratings editor (stars, favorite, color) — macOS + LumiverbKit | Not started |
-| M4 | Collections CRUD (private + shared) — macOS + LumiverbKit | Not started |
+| M3 | Ratings editor (stars, favorite, color) — macOS + LumiverbKit | Complete |
+| M4 | Collections CRUD (private + shared) — macOS + LumiverbKit | Complete |
 | M5 | Collection sharing UI (visibility toggle + share link) | Not started |
+| M5.5 | Date-grouped grid with multi-select + batch operations | Not started |
 | M6 | iOS app shell (tabs, library picker, browse) | Not started |
 | M7 | iOS touch adaptations for cluster/face management | Not started |
 | M8 | iOS cellular + Low Data Mode policy | Not started |
@@ -1251,6 +1252,82 @@ These are mechanical extractions; behavior is preserved exactly.
 **Done when:**
 - [ ] Both targets build
 - [ ] Manual: on macOS, create a private collection, toggle to shared, toggle to public, copy link, paste into a browser and verify the web UI resolves it, toggle back to private, verify the link no longer works
+- [ ] Milestone table updated
+
+### Milestone 5.5 — Date-grouped grid with multi-select
+
+**Goal:** Match the web client's date-grouped browse grid with date-level and
+item-level selection for bulk operations. The web client groups assets by date,
+renders date headers with select-all checkboxes, and exposes a selection toolbar
+for batch rating, adding to collections, etc. The macOS client currently has a
+flat grid with no multi-select. This milestone closes that gap in LumiverbKit so
+both macOS and iOS inherit it.
+
+**Deliverables:**
+
+1. `LumiverbKit/Sources/LumiverbKit/Models/DateGroup.swift` — `DateGroup` struct
+   (`label: String`, `dateISO: String`, `assets: [AssetPageItem]`).
+   `groupAssetsByDate(_:) -> [DateGroup]` groups by day using `takenAt` with
+   `createdAt` fallback, sorted most-recent-first. Assets with neither date go
+   into an "Unknown date" group at the end.
+
+2. `BrowseState.swift` additions:
+   - `@Published var selectedAssetIds: Set<String>` — multi-select set.
+   - `@Published var isSelecting: Bool` — toggles between browse (tap → lightbox)
+     and select (tap → toggle) modes.
+   - `func toggleSelection(assetId:)` — add/remove individual.
+   - `func selectGroup(dateISO:)` — toggle all assets in a date group (select all
+     if any unselected, deselect all if all already selected).
+   - `func selectAll()` / `func clearSelection()`.
+   - Exiting select mode clears the selection.
+
+3. `MediaGridView.swift` refactor:
+   - Group `browseState.assets` into `[DateGroup]` at the top of the body.
+   - Compute `MediaLayout` per section (one call per `DateGroup`).
+   - Render date headers between sections: date label on left, checkbox + asset
+     count on right. Header taps call `browseState.selectGroup(dateISO:)`.
+   - Each cell shows a selection overlay (SF Symbol checkmark circle, bottom-left)
+     when `isSelecting` is true. Selected cells get a highlighted border.
+   - Tap behavior: in browse mode → lightbox (existing). In select mode → toggle
+     selection. On macOS, Cmd+click enters select mode and toggles the item.
+     Shift+click range-selects from the last toggled item.
+
+4. `LumiverbKit/Sources/LumiverbKit/Views/SelectionToolbarView.swift` — appears
+   above the grid when `selectedAssetIds` is non-empty.
+   - Shows count ("12 selected") and a "Deselect All" button.
+   - Inline `RatingEditorView` bound to a transient `Rating` that fires
+     `APIClient.batchUpdateRatings` on change.
+   - "Add to Collection..." button that opens `AddToCollectionSheet` with the
+     selected IDs.
+   - On macOS, keyboard shortcuts: Cmd+A selects all visible, Escape exits select
+     mode and clears selection.
+
+5. Apply the same date-grouping and selection to `SearchResultsGrid` and
+   `SimilarResultsGrid` — they use the same justified-row pattern and should
+   share the grouping logic. If the body refactor is too large, extract a shared
+   `DateGroupedGrid` view that all three grids use.
+
+6. Tests:
+   - `DateGroupTests.swift` — grouping logic: mixed dates, nil dates, sort order,
+     single-day, empty input.
+   - `SelectionTests.swift` — toggle, selectGroup, selectAll, clearSelection,
+     range-select logic.
+
+**Does NOT include:** Drag-to-select (marque selection). Shift+click range select
+is sufficient for now. Also does not include collapsible date sections (all
+sections are always expanded).
+
+**Read-ahead:** The web client's `groupByDate.ts` and `useSelection.ts` are the
+reference implementations. The Swift grouping function mirrors `groupByDate.ts`
+exactly (same date field priority, same "Unknown date" fallback, same sort order).
+
+**Done when:**
+- [ ] Both targets build
+- [ ] New tests green
+- [ ] Manual: on macOS, browse a library, see date headers with asset counts,
+      click a date checkbox to select all in that date, Cmd+click individual items,
+      use the toolbar to batch-rate and add to collection
+- [ ] Date grouping works in search results too
 - [ ] Milestone table updated
 
 ### Milestone 6 — iOS app shell

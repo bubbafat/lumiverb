@@ -1,7 +1,7 @@
 import Foundation
 
 /// A single asset in a paginated listing from `GET /v1/assets/page`.
-public struct AssetPageItem: Decodable, Identifiable, Sendable {
+public struct AssetPageItem: Decodable, Identifiable, Sendable, Equatable {
     public let assetId: String
     public let relPath: String
     public let fileSize: Int

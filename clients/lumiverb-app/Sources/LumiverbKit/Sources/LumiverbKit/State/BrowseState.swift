@@ -147,6 +147,73 @@ public class BrowseState: ObservableObject {
     @Published public var isFindingSimilar = false
     @Published public var similarSourceId: String?
 
+    // MARK: - Selection
+
+    /// Multi-select set of asset IDs. Empty when not in select mode.
+    @Published public var selectedAssetIds: Set<String> = []
+    /// When true, taps toggle selection instead of opening the lightbox.
+    @Published public var isSelecting = false
+    /// The last individually toggled asset ID, used for shift-click range select.
+    public var lastToggledAssetId: String?
+
+    /// Toggle a single asset's selection. Enters select mode if not already.
+    public func toggleSelection(assetId: String) {
+        if !isSelecting { isSelecting = true }
+        if selectedAssetIds.contains(assetId) {
+            selectedAssetIds.remove(assetId)
+        } else {
+            selectedAssetIds.insert(assetId)
+        }
+        lastToggledAssetId = assetId
+        if selectedAssetIds.isEmpty { isSelecting = false }
+    }
+
+    /// Toggle all assets in a date group. If all are already selected,
+    /// deselect them; otherwise select all.
+    public func selectGroup(_ assetIds: [String]) {
+        if !isSelecting { isSelecting = true }
+        let groupSet = Set(assetIds)
+        if groupSet.isSubset(of: selectedAssetIds) {
+            selectedAssetIds.subtract(groupSet)
+        } else {
+            selectedAssetIds.formUnion(groupSet)
+        }
+        if selectedAssetIds.isEmpty { isSelecting = false }
+    }
+
+    /// Select all currently displayed assets.
+    public func selectAll() {
+        isSelecting = true
+        selectedAssetIds = Set(assets.map(\.assetId))
+    }
+
+    /// Exit select mode and clear the selection.
+    public func clearSelection() {
+        selectedAssetIds.removeAll()
+        isSelecting = false
+        lastToggledAssetId = nil
+    }
+
+    /// Range-select from `lastToggledAssetId` to `targetId` within the
+    /// current asset list. Used for shift-click.
+    public func rangeSelect(to targetId: String) {
+        guard let fromId = lastToggledAssetId else {
+            toggleSelection(assetId: targetId)
+            return
+        }
+        let ids = assets.map(\.assetId)
+        guard let fromIdx = ids.firstIndex(of: fromId),
+              let toIdx = ids.firstIndex(of: targetId) else {
+            toggleSelection(assetId: targetId)
+            return
+        }
+        let range = min(fromIdx, toIdx)...max(fromIdx, toIdx)
+        if !isSelecting { isSelecting = true }
+        for i in range {
+            selectedAssetIds.insert(ids[i])
+        }
+    }
+
     // MARK: - Lightbox
 
     @Published public var selectedAssetId: String?

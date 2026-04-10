@@ -14,32 +14,18 @@ public enum MediaGridLayoutConstants {
     public static var verticalLineScrollHeight: CGFloat {
         targetRowHeight + spacing
     }
+    /// Height of date section headers.
+    public static let headerHeight: CGFloat = 40
 }
 
-/// Justified-row grid of asset thumbnails with infinite scroll.
+/// Justified-row grid of asset thumbnails with date-section headers,
+/// multi-select, and infinite scroll.
 ///
-/// Google Photos / Flickr-style layout: rows have uniform height but
-/// variable item count, items keep their natural aspect ratio (no
-/// cropping). The row packing happens in `MediaLayout` (LumiverbKit,
-/// unit-tested), driven by the asset's `aspectRatio` and the container
-/// width measured by a `GeometryReader`.
-///
-/// **No focus / selection.** Click opens the lightbox directly.
-///
-/// **Scrolling:** uses `LazyVStack` for lazy loading of cells, with
-/// keyboard nav delegated to the underlying scroll view via a generic
-/// `ScrollIntrospector` parameter. macOS callers pass an
-/// `NSScrollViewIntrospector` that walks up to find the `NSScrollView`
-/// and stashes it in `MacScrollAccessor.box.scrollView`. iOS callers
-/// (M6) pass a `UIScrollViewIntrospector` doing the same with
-/// `UIScrollView`. The introspector view sits inside the
-/// `LazyVStack`'s `.background` so the superview walk reaches the real
-/// scroll view rather than walking up out of it.
-///
-/// Scroll commands themselves are dispatched via
-/// `@Environment(\.scrollAccessor)` — `BrowseState.pendingScrollCommand`
-/// triggers an `accessor.apply(token.command)` call. The accessor is
-/// the same instance the introspector populated.
+/// Assets are grouped by date (taken_at with created_at fallback) and
+/// rendered in sections with date headers. Each header shows the date
+/// label, asset count, and a select-all checkbox. Cells support both
+/// browse mode (tap → lightbox) and select mode (tap → toggle selection,
+/// Cmd+click on macOS enters select mode).
 public struct MediaGridView<ScrollIntrospector: View>: View {
     @ObservedObject public var browseState: BrowseState
     public let client: APIClient?
@@ -61,17 +47,13 @@ public struct MediaGridView<ScrollIntrospector: View>: View {
 
     public var body: some View {
         GeometryReader { geo in
-            let layout = MediaLayout.compute(
-                aspectRatios: browseState.assets.map { $0.aspectRatio },
-                containerWidth: geo.size.width - MediaGridLayoutConstants.spacing * 2,
-                targetRowHeight: MediaGridLayoutConstants.targetRowHeight,
-                spacing: MediaGridLayoutConstants.spacing
-            )
+            let containerWidth = geo.size.width - MediaGridLayoutConstants.spacing * 2
+            let dateGroups = groupAssetsByDate(browseState.assets)
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: MediaGridLayoutConstants.spacing) {
-                    ForEach(Array(layout.rows.enumerated()), id: \.offset) { _, row in
-                        justifiedRow(row: row, layout: layout)
+                    ForEach(Array(dateGroups.enumerated()), id: \.offset) { _, group in
+                        dateSection(group: group, containerWidth: containerWidth)
                     }
 
                     if browseState.isLoadingAssets {
@@ -99,28 +81,74 @@ public struct MediaGridView<ScrollIntrospector: View>: View {
         }
     }
 
-    /// One row of cells laid out left-to-right with explicit per-cell
-    /// frames from `MediaLayout`. Wrapping in HStack with the row's
-    /// computed height keeps SwiftUI from doing its own layout pass —
-    /// the frame sizes are authoritative.
+    // MARK: - Date section
+
     @ViewBuilder
-    private func justifiedRow(row: [Int], layout: MediaLayout) -> some View {
+    private func dateSection(group: DateGroup, containerWidth: CGFloat) -> some View {
+        let layout = MediaLayout.compute(
+            aspectRatios: group.assets.map { $0.aspectRatio },
+            containerWidth: containerWidth,
+            targetRowHeight: MediaGridLayoutConstants.targetRowHeight,
+            spacing: MediaGridLayoutConstants.spacing
+        )
+
+        // Date header
+        dateHeader(group: group)
+
+        // Rows for this section
+        ForEach(Array(layout.rows.enumerated()), id: \.offset) { _, row in
+            sectionRow(row: row, layout: layout, assets: group.assets)
+        }
+    }
+
+    @ViewBuilder
+    private func dateHeader(group: DateGroup) -> some View {
+        let groupIds = group.assets.map(\.assetId)
+        let allSelected = !groupIds.isEmpty && Set(groupIds).isSubset(of: browseState.selectedAssetIds)
+
+        HStack {
+            Button {
+                browseState.selectGroup(groupIds)
+            } label: {
+                Image(systemName: allSelected ? "checkmark.circle.fill" : "circle")
+                    .foregroundColor(allSelected ? .accentColor : .secondary)
+            }
+            .buttonStyle(.plain)
+
+            Text(group.label)
+                .font(.headline)
+                .foregroundColor(.primary)
+
+            Text("\(group.assets.count)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(.quaternary)
+                .cornerRadius(8)
+
+            Spacer()
+        }
+        .frame(height: MediaGridLayoutConstants.headerHeight)
+        .padding(.top, 4)
+    }
+
+    // MARK: - Row
+
+    @ViewBuilder
+    private func sectionRow(row: [Int], layout: MediaLayout, assets: [AssetPageItem]) -> some View {
         let rowHeight = row.first.map { layout.frames[$0].height } ?? MediaGridLayoutConstants.targetRowHeight
         HStack(spacing: MediaGridLayoutConstants.spacing) {
             ForEach(row, id: \.self) { index in
-                let asset = browseState.assets[index]
+                let asset = assets[index]
                 let size = layout.frames[index]
-                AssetCellView(asset: asset, client: client)
+                let isSelected = browseState.selectedAssetIds.contains(asset.assetId)
+
+                assetCell(asset: asset, isSelected: isSelected)
                     .frame(width: size.width, height: size.height)
-                    // Outer .clipped() prevents .aspectRatio(.fill)
-                    // overflow from bleeding into neighboring cells.
                     .clipped()
                     .onTapGesture {
-                        // Click → lightbox. focusedIndex tracks the
-                        // current lightbox position so prev/next
-                        // arrow keys can advance through the list.
-                        browseState.focusedIndex = index
-                        Task { await browseState.loadAssetDetail(assetId: asset.assetId) }
+                        handleTap(asset: asset)
                     }
                     .contextMenu {
                         AssetRatingContextMenu(
@@ -137,14 +165,65 @@ public struct MediaGridView<ScrollIntrospector: View>: View {
                         }
                     }
                     .onAppear {
-                        // Trigger infinite scroll when near the end.
-                        if index >= browseState.assets.count - 20 {
+                        // Trigger infinite scroll: use the global asset
+                        // index (not the section-local one) to check
+                        // proximity to the end.
+                        if let globalIndex = browseState.assets.firstIndex(where: { $0.assetId == asset.assetId }),
+                           globalIndex >= browseState.assets.count - 20 {
                             Task { await browseState.loadNextPage() }
                         }
                     }
             }
         }
         .frame(height: rowHeight)
+    }
+
+    // MARK: - Cell
+
+    @ViewBuilder
+    private func assetCell(asset: AssetPageItem, isSelected: Bool) -> some View {
+        ZStack(alignment: .bottomLeading) {
+            AssetCellView(asset: asset, client: client)
+
+            // Selection overlay
+            if browseState.isSelecting || isSelected {
+                ZStack(alignment: .topLeading) {
+                    // Dim overlay when in select mode but not selected
+                    if !isSelected {
+                        Color.black.opacity(0.2)
+                    }
+
+                    // Checkmark indicator
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.title3)
+                        .foregroundColor(isSelected ? .accentColor : .white.opacity(0.8))
+                        .shadow(color: .black.opacity(0.5), radius: 2)
+                        .padding(6)
+                }
+            }
+
+            // Selected border
+            if isSelected {
+                RoundedRectangle(cornerRadius: 2)
+                    .strokeBorder(Color.accentColor, lineWidth: 3)
+            }
+        }
+        .cornerRadius(2)
+        .contentShape(Rectangle())
+    }
+
+    // MARK: - Tap handling
+
+    private func handleTap(asset: AssetPageItem) {
+        if browseState.isSelecting {
+            browseState.toggleSelection(assetId: asset.assetId)
+        } else {
+            // Browse mode: open lightbox
+            if let idx = browseState.assets.firstIndex(where: { $0.assetId == asset.assetId }) {
+                browseState.focusedIndex = idx
+            }
+            Task { await browseState.loadAssetDetail(assetId: asset.assetId) }
+        }
     }
 }
 
@@ -158,8 +237,7 @@ public extension MediaGridView where ScrollIntrospector == EmptyView {
 }
 
 /// A single cell in the media grid. Sized externally by `MediaGridView`
-/// — the cell itself fills the frame given to it. There is no focus /
-/// selection state in Lumiverb's grid; click → lightbox.
+/// — the cell itself fills the frame given to it.
 public struct AssetCellView: View {
     public let asset: AssetPageItem
     public let client: APIClient?

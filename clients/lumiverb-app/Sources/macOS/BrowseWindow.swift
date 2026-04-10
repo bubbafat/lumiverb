@@ -380,8 +380,11 @@ struct BrowseWindow: View {
             } else if browseState.assets.isEmpty && !browseState.isLoadingAssets {
                 emptyState("No assets in this library", icon: "photo.on.rectangle.angled")
             } else {
-                MediaGridView(browseState: browseState, client: appState.client) {
-                    macScrollIntrospector
+                VStack(spacing: 0) {
+                    SelectionToolbarView(browseState: browseState, client: appState.client)
+                    MediaGridView(browseState: browseState, client: appState.client) {
+                        macScrollIntrospector
+                    }
                 }
             }
 
