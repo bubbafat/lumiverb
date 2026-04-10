@@ -1,21 +1,26 @@
 import SwiftUI
 import AVKit
-import LumiverbKit
 
 /// Plays video in the lightbox using AVKit.
 ///
 /// URL resolution order:
-/// 1. Local file at `{libraryRootPath}/{relPath}` — full-length playback
+/// 1. Local file at `{libraryRootPath}/{relPath}` — full-length playback (macOS only — iOS has no local library access)
 /// 2. Server preview via `GET /v1/assets/{id}/preview` — 10-second clip, downloaded to temp file
 /// 3. Static proxy image if neither is available
-struct LightboxVideoPlayerView: View {
-    let detail: AssetDetail
-    let libraryRootPath: String?
-    let client: APIClient?
+public struct LightboxVideoPlayerView: View {
+    public let detail: AssetDetail
+    public let libraryRootPath: String?
+    public let client: APIClient?
 
     @StateObject private var viewModel = VideoPlayerViewModel()
 
-    var body: some View {
+    public init(detail: AssetDetail, libraryRootPath: String?, client: APIClient?) {
+        self.detail = detail
+        self.libraryRootPath = libraryRootPath
+        self.client = client
+    }
+
+    public var body: some View {
         ZStack {
             Color.black
 
@@ -106,9 +111,17 @@ struct LightboxVideoPlayerView: View {
     }
 }
 
-// MARK: - AppKit AVPlayerView wrapper (avoids SwiftUI VideoPlayer metadata crash)
+// MARK: - Platform AVPlayer wrapper
+//
+// SwiftUI's `VideoPlayer` view crashes on certain assets when AVKit
+// queries metadata (a known regression that's why we wrap directly).
+// Each platform gets a thin representable around its native player
+// type:
+//   - macOS: `AVPlayerView` (AppKit) wrapped in `NSViewRepresentable`
+//   - iOS:   `AVPlayerViewController` (UIKit) wrapped in
+//            `UIViewControllerRepresentable`
 
-/// Wraps AppKit's `AVPlayerView` directly for reliable video playback.
+#if canImport(AppKit)
 struct PlayerView: NSViewRepresentable {
     let player: AVPlayer
 
@@ -126,6 +139,24 @@ struct PlayerView: NSViewRepresentable {
         }
     }
 }
+#elseif canImport(UIKit)
+struct PlayerView: UIViewControllerRepresentable {
+    let player: AVPlayer
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let vc = AVPlayerViewController()
+        vc.player = player
+        vc.showsPlaybackControls = true
+        return vc
+    }
+
+    func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
+        if uiViewController.player !== player {
+            uiViewController.player = player
+        }
+    }
+}
+#endif
 
 // MARK: - View Model
 
@@ -162,7 +193,11 @@ final class VideoPlayerViewModel: ObservableObject {
             currentAssetId = detail.assetId
         }
 
-        // 1. Try local file
+        // 1. Try local file. macOS only — iOS is sandboxed and never
+        // sees a real `libraryRootPath`. The iOS BrowseAppContext returns
+        // nil for `selectedLibraryRootPath`, so this branch is dead on
+        // iOS even without the explicit gate.
+        #if os(macOS)
         if let rootPath = libraryRootPath {
             let fullPath = (rootPath as NSString).appendingPathComponent(detail.relPath)
             if FileManager.default.fileExists(atPath: fullPath) {
@@ -172,6 +207,7 @@ final class VideoPlayerViewModel: ObservableObject {
                 return
             }
         }
+        #endif
 
         // 2. Try server preview
         if detail.videoPreviewKey != nil, let client {

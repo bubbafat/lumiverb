@@ -1,5 +1,4 @@
 import SwiftUI
-import LumiverbKit
 
 /// Reusable context/dropdown menu for re-enrichment operations.
 ///
@@ -7,14 +6,22 @@ import LumiverbKit
 /// - Library sidebar (right-click library row)
 /// - Directory tree (right-click folder row)
 /// - Lightbox metadata sidebar (actions dropdown)
-struct ReEnrichMenu: View {
-    let onReEnrich: (Set<EnrichmentOperation>) -> Void
+public struct ReEnrichMenu: View {
+    public let onReEnrich: (Set<EnrichmentOperation>) -> Void
     /// When false, the transcription option is shown but greyed out so
     /// users can discover the feature without it doing anything until they
     /// enable whisper in Settings.
-    var whisperEnabled: Bool = false
+    public var whisperEnabled: Bool = false
 
-    var body: some View {
+    public init(
+        onReEnrich: @escaping (Set<EnrichmentOperation>) -> Void,
+        whisperEnabled: Bool = false
+    ) {
+        self.onReEnrich = onReEnrich
+        self.whisperEnabled = whisperEnabled
+    }
+
+    public var body: some View {
         Menu {
             Button("Detect Faces") {
                 onReEnrich([.faces])

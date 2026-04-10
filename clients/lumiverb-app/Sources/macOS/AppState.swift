@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import LumiverbKit
 
@@ -355,5 +356,30 @@ class AppState: ObservableObject {
                 connectionError = "First attempt: \(firstError)"
             }
         }
+    }
+}
+
+// MARK: - BrowseAppContext conformance
+
+/// macOS adapter for the cross-platform `BrowseAppContext` protocol that
+/// `BrowseState` consumes. All the requirements are already exposed as
+/// stored properties or computed accessors on `AppState`; this extension
+/// just declares conformance and erases `$whisperEnabled` to an
+/// `AnyPublisher` so the protocol can describe it without depending on
+/// `@Published`'s projected-value type.
+extension AppState: BrowseAppContext {
+    var whisperEnabledPublisher: AnyPublisher<Bool, Never> {
+        $whisperEnabled.eraseToAnyPublisher()
+    }
+
+    /// Embedding model id for similarity search. Returns whichever local
+    /// provider is loaded — CLIP wins when its CoreML bundle is present,
+    /// FeaturePrint is the fallback (always available via Vision).
+    var embeddingModelId: String {
+        CLIPProvider.isAvailable ? CLIPProvider.modelId : FeaturePrintProvider.modelId
+    }
+
+    var embeddingModelVersion: String {
+        CLIPProvider.isAvailable ? CLIPProvider.modelVersion : FeaturePrintProvider.modelVersion
     }
 }

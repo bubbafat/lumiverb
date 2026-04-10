@@ -1,9 +1,8 @@
 import Combine
 import SwiftUI
-import LumiverbKit
 
 /// View mode for the content area.
-enum BrowseMode: Equatable {
+public enum BrowseMode: Equatable, Sendable {
     case library         // browsing a library's assets
     case search          // showing search results
     case similar(String) // showing similar assets to the given asset ID
@@ -11,8 +10,8 @@ enum BrowseMode: Equatable {
 
 /// Observable state for the browse window.
 @MainActor
-class BrowseState: ObservableObject {
-    let appState: AppState
+public class BrowseState: ObservableObject {
+    public let appContext: any BrowseAppContext
 
     // MARK: - Library selection
 
@@ -28,7 +27,7 @@ class BrowseState: ObservableObject {
     /// `.onChange(of: browseState.selectedLibraryId)` handler in
     /// `BrowseWindow`, which runs one tick later and off the binding
     /// write code path. See `BrowseState.handleSelectedLibraryChange()`.
-    @Published var selectedLibraryId: String?
+    @Published public var selectedLibraryId: String?
 
     /// One-shot scroll command sent from keyboard handlers in
     /// `BrowseWindow` to the active grid view. The grid view observes
@@ -40,9 +39,9 @@ class BrowseState: ObservableObject {
     /// `ScrollViewProxy.scrollTo` route, which has fatal lazy-render
     /// gotchas (verified empirically: backward scrolls into disposed
     /// `LazyVStack` cells silently no-op).
-    @Published var pendingScrollCommand: ScrollCommandToken?
+    @Published public var pendingScrollCommand: ScrollCommandToken?
 
-    func sendScrollCommand(_ command: ScrollCommand) {
+    public func sendScrollCommand(_ command: ScrollCommand) {
         pendingScrollCommand = ScrollCommandToken(command: command)
     }
 
@@ -54,10 +53,10 @@ class BrowseState: ObservableObject {
 
     // MARK: - Directory tree
 
-    @Published var directories: [DirectoryNode] = []
-    @Published var expandedPaths: Set<String> = []
-    @Published var childDirectories: [String: [DirectoryNode]] = [:]
-    @Published var selectedPath: String? {
+    @Published public var directories: [DirectoryNode] = []
+    @Published public var expandedPaths: Set<String> = []
+    @Published public var childDirectories: [String: [DirectoryNode]] = [:]
+    @Published public var selectedPath: String? {
         didSet {
             if selectedPath != oldValue && !isResetting {
                 reloadAssets()
@@ -67,7 +66,7 @@ class BrowseState: ObservableObject {
 
     // MARK: - Filters
 
-    @Published var filters = BrowseFilter() {
+    @Published public var filters = BrowseFilter() {
         didSet {
             if filters != oldValue && !isResetting {
                 // Dispatch the reload based on the current mode. Without
@@ -90,14 +89,14 @@ class BrowseState: ObservableObject {
 
     // MARK: - Person search suggestions
 
-    @Published var personSuggestions: [PersonItem] = []
+    @Published public var personSuggestions: [PersonItem] = []
     private var personSearchTask: Task<Void, Never>?
 
     // MARK: - Asset grid
 
-    @Published var assets: [AssetPageItem] = []
-    @Published var isLoadingAssets = false
-    @Published var hasMoreAssets = true
+    @Published public var assets: [AssetPageItem] = []
+    @Published public var isLoadingAssets = false
+    @Published public var hasMoreAssets = true
     private var nextCursor: String?
 
     /// True from the moment the user clicks a new library until the
@@ -108,12 +107,12 @@ class BrowseState: ObservableObject {
     /// the user gets immediate feedback that the click was registered
     /// even if the rest of the main thread is momentarily busy doing
     /// reconciliation work.
-    @Published var isChangingLibrary = false
+    @Published public var isChangingLibrary = false
 
     /// Error raised by the first-page load during a library switch.
     /// Non-nil while the overlay is in its error state; cleared on
     /// retry or when the user picks a different library.
-    @Published var libraryChangeError: String?
+    @Published public var libraryChangeError: String?
 
     /// Previous library id, captured before a switch, so "Back" in the
     /// error overlay can revert to a known-good library rather than
@@ -136,23 +135,23 @@ class BrowseState: ObservableObject {
 
     // MARK: - Search
 
-    @Published var searchQuery = ""
-    @Published var searchResults: [SearchHit] = []
-    @Published var searchTotal = 0
-    @Published var isSearching = false
+    @Published public var searchQuery = ""
+    @Published public var searchResults: [SearchHit] = []
+    @Published public var searchTotal = 0
+    @Published public var isSearching = false
 
     // MARK: - Similarity
 
-    @Published var similarResults: [SimilarHit] = []
-    @Published var similarTotal = 0
-    @Published var isFindingSimilar = false
-    @Published var similarSourceId: String?
+    @Published public var similarResults: [SimilarHit] = []
+    @Published public var similarTotal = 0
+    @Published public var isFindingSimilar = false
+    @Published public var similarSourceId: String?
 
     // MARK: - Lightbox
 
-    @Published var selectedAssetId: String?
-    @Published var assetDetail: AssetDetail?
-    @Published var isLoadingDetail = false
+    @Published public var selectedAssetId: String?
+    @Published public var assetDetail: AssetDetail?
+    @Published public var isLoadingDetail = false
 
     /// When set, the lightbox prev/next chevrons (and arrow-key navigation)
     /// iterate this list instead of `displayedAssetIds`'s normal mode-based
@@ -160,7 +159,7 @@ class BrowseState: ObservableObject {
     /// face lets the user step through that person's other photos rather
     /// than the (likely empty) library grid behind them. Cleared by
     /// `closeLightbox()`.
-    @Published var displayedAssetIdsOverride: [String]?
+    @Published public var displayedAssetIdsOverride: [String]?
 
     /// Parallel to ``displayedAssetIdsOverride``: the face_id to highlight
     /// on the asset at the same index in that list. Used by the cluster
@@ -172,7 +171,7 @@ class BrowseState: ObservableObject {
     /// hit target and the user had to manually find the right face.
     ///
     /// `nil` outside the cluster review handoff. Cleared by `closeLightbox()`.
-    @Published var displayedFaceIdsOverride: [String]?
+    @Published public var displayedFaceIdsOverride: [String]?
 
     /// When set, the lightbox should:
     /// 1. Force the face overlay on (as if the user pressed `d`)
@@ -189,19 +188,19 @@ class BrowseState: ObservableObject {
     /// Re-set by `navigateLightbox` from `displayedFaceIdsOverride` when
     /// the user steps to the next/prev cluster asset. Cleared by
     /// `closeLightbox()`.
-    @Published var pendingHighlightFaceId: String?
+    @Published public var pendingHighlightFaceId: String?
 
     // MARK: - Mode
 
-    @Published var mode: BrowseMode = .library
+    @Published public var mode: BrowseMode = .library
 
     // MARK: - Error
 
-    @Published var error: String?
+    @Published public var error: String?
 
     // MARK: - Grid selection (for keyboard nav)
 
-    @Published var focusedIndex: Int = 0
+    @Published public var focusedIndex: Int = 0
 
     /// Mirror of `appState.whisperEnabled`. SwiftUI views that observe
     /// `BrowseState` (LightboxView, LibrarySidebar, DirectoryTreeView) need
@@ -212,14 +211,14 @@ class BrowseState: ObservableObject {
     /// initial paint. This published mirror is fed by a Combine sink in
     /// `init` so any change to the underlying value flows through to the
     /// observers automatically.
-    @Published var whisperEnabled: Bool = false
+    @Published public var whisperEnabled: Bool = false
 
     private var cancellables: Set<AnyCancellable> = []
 
-    init(appState: AppState) {
-        self.appState = appState
-        self.whisperEnabled = appState.whisperEnabled
-        appState.$whisperEnabled
+    public init(appContext: any BrowseAppContext) {
+        self.appContext = appContext
+        self.whisperEnabled = appContext.whisperEnabled
+        appContext.whisperEnabledPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] newValue in
                 self?.whisperEnabled = newValue
@@ -227,12 +226,12 @@ class BrowseState: ObservableObject {
             .store(in: &cancellables)
     }
 
-    var client: APIClient? { appState.client }
+    public var client: APIClient? { appContext.client }
 
     /// Root path of the currently selected library, if any.
-    var selectedLibraryRootPath: String? {
+    public var selectedLibraryRootPath: String? {
         guard let id = selectedLibraryId else { return nil }
-        return appState.libraries.first { $0.libraryId == id }?.rootPath
+        return appContext.libraries.first { $0.libraryId == id }?.rootPath
     }
 
     /// The list of asset IDs currently displayed (varies by mode). When
@@ -260,7 +259,7 @@ class BrowseState: ObservableObject {
     /// Called by BrowseWindow on `.onChange(of: selectedLibraryId)` — NOT
     /// from a didSet, so that the List's click dispatch code path is not
     /// blocked on reset work.
-    func handleSelectedLibraryChange() {
+    public func handleSelectedLibraryChange() {
         UserDefaults.standard.set(selectedLibraryId, forKey: "lastLibraryId")
         // Capture the outgoing library id BEFORE clearing error state so
         // the overlay's "Back" button can restore a known-good selection
@@ -278,7 +277,7 @@ class BrowseState: ObservableObject {
 
     /// Retry the current library's first-page load after a timeout or
     /// network failure. Called from the overlay's Retry button.
-    func retryLibraryChange() {
+    public func retryLibraryChange() {
         guard selectedLibraryId != nil else { return }
         libraryChangeError = nil
         isChangingLibrary = true
@@ -289,7 +288,7 @@ class BrowseState: ObservableObject {
     /// the overlay's Back button. If there's no previous library, clears
     /// the selection entirely so the user sees the "Select a library"
     /// empty state instead of a stuck error.
-    func revertLibraryChange() {
+    public func revertLibraryChange() {
         libraryChangeError = nil
         isChangingLibrary = false
         let target = previousLibraryId
@@ -359,7 +358,7 @@ class BrowseState: ObservableObject {
         Task { await loadNextPage() }
     }
 
-    func loadNextPage() async {
+    public func loadNextPage() async {
         guard let client, let libraryId = selectedLibraryId else { return }
         guard !isLoadingAssets, hasMoreAssets else { return }
 
@@ -387,9 +386,17 @@ class BrowseState: ObservableObject {
             // use the vanilla client call — no need to time those out.
             let response: AssetPageResponse
             if isFirstPage {
+                // Capture `query` into an immutable local so the
+                // sendable-closure check is happy under Swift 6 strict
+                // concurrency. The closure originally captured `query`
+                // by reference (`var`), which became an error after the
+                // file moved into the LumiverbKit module (the package's
+                // strict-concurrency level is higher than the macOS
+                // app's was).
+                let queryForRequest = query
                 response = try await Self.loadWithTimeout(
                     seconds: firstPageTimeoutSeconds,
-                    operation: { try await client.get("/v1/assets/page", query: query) }
+                    operation: { try await client.get("/v1/assets/page", query: queryForRequest) }
                 )
             } else {
                 response = try await client.get("/v1/assets/page", query: query)
@@ -499,7 +506,7 @@ class BrowseState: ObservableObject {
 
     // MARK: - Asset detail
 
-    func loadAssetDetail(assetId: String) async {
+    public func loadAssetDetail(assetId: String) async {
         guard let client else { return }
 
         selectedAssetId = assetId
@@ -516,7 +523,7 @@ class BrowseState: ObservableObject {
         isLoadingDetail = false
     }
 
-    func closeLightbox() {
+    public func closeLightbox() {
         selectedAssetId = nil
         assetDetail = nil
         // Clear any People-view installed prev/next override so the next
@@ -530,7 +537,7 @@ class BrowseState: ObservableObject {
 
     // MARK: - Search
 
-    func performSearch() async {
+    public func performSearch() async {
         let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty, let client else { return }
 
@@ -574,7 +581,7 @@ class BrowseState: ObservableObject {
         isSearching = false
     }
 
-    func clearSearch() {
+    public func clearSearch() {
         searchQuery = ""
         searchResults = []
         searchTotal = 0
@@ -595,9 +602,14 @@ class BrowseState: ObservableObject {
         closeLightbox()
 
         do {
-            // Pass the embedding model so the server looks up the right vectors
-            let embeddingModelId = CLIPProvider.isAvailable ? CLIPProvider.modelId : FeaturePrintProvider.modelId
-            let embeddingModelVersion = CLIPProvider.isAvailable ? CLIPProvider.modelVersion : FeaturePrintProvider.modelVersion
+            // Pass the embedding model so the server looks up the right
+            // vectors. The model id/version come from the platform
+            // BrowseAppContext: macOS reports whichever local provider is
+            // available (CLIP if loaded, otherwise FeaturePrint); iOS
+            // reports the canonical CLIP id since iOS doesn't enrich
+            // and just needs to ask for the most-likely-indexed model.
+            let embeddingModelId = appContext.embeddingModelId
+            let embeddingModelVersion = appContext.embeddingModelVersion
 
             var params: [String: String] = [
                 "asset_id": assetId,
@@ -633,7 +645,7 @@ class BrowseState: ObservableObject {
 
     // MARK: - Directory tree
 
-    func loadRootDirectories() async {
+    public func loadRootDirectories() async {
         guard let client, let libraryId = selectedLibraryId else { return }
         do {
             let nodes: [DirectoryNode] = try await client.get(
@@ -664,7 +676,7 @@ class BrowseState: ObservableObject {
         }
     }
 
-    func toggleExpanded(path: String) {
+    public func toggleExpanded(path: String) {
         if expandedPaths.contains(path) {
             expandedPaths.remove(path)
         } else {
@@ -675,24 +687,33 @@ class BrowseState: ObservableObject {
         }
     }
 
-    func selectPath(_ path: String?) {
+    public func selectPath(_ path: String?) {
         selectedPath = path
     }
 
     // MARK: - Re-enrichment
 
-    @Published var isReEnriching = false
-    @Published var reEnrichPhase = ""
-    @Published var reEnrichTotal = 0
-    @Published var reEnrichProcessed = 0
-    @Published var reEnrichSkipped: [String] = []
+    @Published public var isReEnriching = false
+    @Published public var reEnrichPhase = ""
+    @Published public var reEnrichTotal = 0
+    @Published public var reEnrichProcessed = 0
+    @Published public var reEnrichSkipped: [String] = []
 
-    private var reEnrichRunner: ReEnrichmentRunner?
-    private var reEnrichPollTask: Task<Void, Never>?
+    /// Pluggable re-enrichment runner. macOS sets this from
+    /// `BrowseWindow` to a `MacReEnrichInvoker` that wraps the real
+    /// `ReEnrichmentRunner` and its CLIP/ArcFace/Whisper providers.
+    /// iOS leaves this nil — the lightbox's re-enrich menu is hidden,
+    /// and the `reEnrich*` methods below short-circuit on a nil
+    /// invoker. Public so the platform-specific entry point can install
+    /// it after constructing `BrowseState`.
+    public var reEnrichInvoker: (any ReEnrichInvoker)?
 
     /// Re-enrich assets in the current library, optionally scoped to a path prefix.
-    func reEnrich(operations: Set<EnrichmentOperation>, pathPrefix: String? = nil) {
-        guard let client, let libraryId = selectedLibraryId, !isReEnriching else { return }
+    public func reEnrich(operations: Set<EnrichmentOperation>, pathPrefix: String? = nil) {
+        guard let invoker = reEnrichInvoker,
+              client != nil,
+              let libraryId = selectedLibraryId,
+              !isReEnriching else { return }
 
         Task {
             isReEnriching = true
@@ -718,24 +739,17 @@ class BrowseState: ObservableObject {
                 return
             }
 
-            let runner = ReEnrichmentRunner(
-                client: client,
+            let result = await invoker.reEnrich(
                 libraryId: libraryId,
                 libraryRootPath: selectedLibraryRootPath,
-                visionApiUrl: appState.resolvedVisionApiUrl,
-                visionApiKey: appState.resolvedVisionApiKey,
-                visionModelId: appState.resolvedVisionModelId,
-                whisperModelSize: appState.whisperModelSize,
-                whisperLanguage: appState.whisperLanguage,
-                whisperBinaryPath: appState.whisperBinaryPath
-            )
-            reEnrichRunner = runner
-            startReEnrichPolling(runner: runner)
+                assets: assets,
+                operations: operations
+            ) { [weak self] processed, total, phase in
+                self?.reEnrichProcessed = processed
+                self?.reEnrichTotal = total
+                self?.reEnrichPhase = phase
+            }
 
-            let result = await runner.run(assets: assets, operations: operations)
-
-            stopReEnrichPolling()
-            reEnrichRunner = nil
             isReEnriching = false
             reEnrichPhase = ""
             reEnrichSkipped = result.skipped
@@ -749,8 +763,11 @@ class BrowseState: ObservableObject {
     }
 
     /// Re-enrich a single asset (from lightbox actions).
-    func reEnrichAsset(assetId: String, operations: Set<EnrichmentOperation>) {
-        guard let client, let libraryId = selectedLibraryId, !isReEnriching else { return }
+    public func reEnrichAsset(assetId: String, operations: Set<EnrichmentOperation>) {
+        guard let invoker = reEnrichInvoker,
+              client != nil,
+              let libraryId = selectedLibraryId,
+              !isReEnriching else { return }
 
         // Find the asset in current display or fetch it
         let asset = assets.first { $0.assetId == assetId }
@@ -762,24 +779,17 @@ class BrowseState: ObservableObject {
             reEnrichProcessed = 0
             reEnrichTotal = 1
 
-            let runner = ReEnrichmentRunner(
-                client: client,
+            let result = await invoker.reEnrich(
                 libraryId: libraryId,
                 libraryRootPath: selectedLibraryRootPath,
-                visionApiUrl: appState.resolvedVisionApiUrl,
-                visionApiKey: appState.resolvedVisionApiKey,
-                visionModelId: appState.resolvedVisionModelId,
-                whisperModelSize: appState.whisperModelSize,
-                whisperLanguage: appState.whisperLanguage,
-                whisperBinaryPath: appState.whisperBinaryPath
-            )
-            reEnrichRunner = runner
-            startReEnrichPolling(runner: runner)
+                assets: [asset],
+                operations: operations
+            ) { [weak self] processed, total, phase in
+                self?.reEnrichProcessed = processed
+                self?.reEnrichTotal = total
+                self?.reEnrichPhase = phase
+            }
 
-            let result = await runner.run(assets: [asset], operations: operations)
-
-            stopReEnrichPolling()
-            reEnrichRunner = nil
             isReEnriching = false
             reEnrichPhase = ""
             reEnrichSkipped = result.skipped
@@ -789,9 +799,9 @@ class BrowseState: ObservableObject {
         }
     }
 
-    func cancelReEnrich() {
+    public func cancelReEnrich() {
         Task {
-            await reEnrichRunner?.cancel()
+            await reEnrichInvoker?.cancel()
         }
     }
 
@@ -848,25 +858,12 @@ class BrowseState: ObservableObject {
         return all
     }
 
-    private func startReEnrichPolling(runner: ReEnrichmentRunner) {
-        reEnrichPollTask?.cancel()
-        reEnrichPollTask = Task {
-            while !Task.isCancelled {
-                let total = await runner.totalItems
-                let processed = await runner.processedItems
-                let phase = await runner.phase
-                self.reEnrichTotal = total
-                self.reEnrichProcessed = processed
-                self.reEnrichPhase = phase
-                try? await Task.sleep(for: .milliseconds(250))
-            }
-        }
-    }
-
-    private func stopReEnrichPolling() {
-        reEnrichPollTask?.cancel()
-        reEnrichPollTask = nil
-    }
+    // Note: progress polling moved out of BrowseState. The polling is
+    // now the responsibility of `ReEnrichInvoker` implementations,
+    // which call BrowseState's progress closure (passed into
+    // `reEnrich(...)` above) every ~250 ms while work is in flight.
+    // BrowseState only owns the @Published mirror, not the polling
+    // mechanics.
 
     // MARK: - Person search
 
@@ -889,7 +886,7 @@ class BrowseState: ObservableObject {
     }
 
     /// Filter the grid to show only a specific person's assets.
-    func filterByPerson(_ person: PersonItem) {
+    public func filterByPerson(_ person: PersonItem) {
         filters.personId = person.personId
         filters.personDisplayName = person.displayName
         personSuggestions = []
@@ -898,13 +895,13 @@ class BrowseState: ObservableObject {
     }
 
     /// Clear the person filter.
-    func clearPersonFilter() {
+    public func clearPersonFilter() {
         filters.personId = nil
         filters.personDisplayName = nil
     }
 
     /// Debounced person search triggered by search text changes.
-    func debouncedPersonSearch(query: String) {
+    public func debouncedPersonSearch(query: String) {
         personSearchTask?.cancel()
         personSearchTask = Task {
             try? await Task.sleep(for: .milliseconds(400))
@@ -915,7 +912,7 @@ class BrowseState: ObservableObject {
 
     // MARK: - Keyboard navigation
 
-    func navigateLightbox(direction: Int) {
+    public func navigateLightbox(direction: Int) {
         guard let currentId = selectedAssetId else { return }
         let ids = displayedAssetIds
         guard let currentIndex = ids.firstIndex(of: currentId) else { return }

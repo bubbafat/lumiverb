@@ -1,5 +1,4 @@
 import SwiftUI
-import LumiverbKit
 
 /// Observable state for the cluster review panel (Phase 6 M5 of ADR-014).
 ///
@@ -11,43 +10,42 @@ import LumiverbKit
 /// rapid mutations so the unnamed cards don't shuffle as the user works
 /// down the list.
 @MainActor
-final class ClusterReviewState: ObservableObject {
-    let appState: AppState
+public final class ClusterReviewState: ObservableObject {
 
     // MARK: - Cluster list
 
-    @Published var clusters: [ClusterItem] = []
-    @Published var truncated: Bool = false
-    @Published var maxClusterSize: Int = 0
-    @Published var isLoading: Bool = false
-    @Published var error: String?
+    @Published public var clusters: [ClusterItem] = []
+    @Published public var truncated: Bool = false
+    @Published public var maxClusterSize: Int = 0
+    @Published public var isLoading: Bool = false
+    @Published public var error: String?
 
     // MARK: - Per-cluster suggestion cache
 
     /// Lazily-fetched nearest-people suggestions, keyed by `clusterIndex`.
     /// Cleared whenever `loadClusters()` runs because cluster indices
     /// rebind to new content after a recompute.
-    @Published var nearestPeople: [Int: [NearestPersonItem]] = [:]
+    @Published public var nearestPeople: [Int: [NearestPersonItem]] = [:]
     private var inFlightNearest: Set<Int> = []
 
     // MARK: - Per-cluster mutation state
 
     /// Cluster indices currently being named/dismissed. Drives spinners
     /// and disables further actions on those cards.
-    @Published var pendingMutations: Set<Int> = []
+    @Published public var pendingMutations: Set<Int> = []
 
     /// Last dismiss result, for the undo toast. The server returns the
     /// dismissed-person id; deleting that person undoes the dismissal
     /// (Phase 6 M5 toast window — auto-clears after 5s).
-    @Published var lastDismissedPersonId: String?
-    @Published var lastDismissedClusterIndex: Int?
+    @Published public var lastDismissedPersonId: String?
+    @Published public var lastDismissedClusterIndex: Int?
     private var undoExpiryTask: Task<Void, Never>?
 
-    init(appState: AppState) {
-        self.appState = appState
+    public init(client: APIClient?) {
+        self.client = client
     }
 
-    var client: APIClient? { appState.client }
+    public let client: APIClient?
 
     // MARK: - Loading
 

@@ -1,5 +1,4 @@
 import SwiftUI
-import LumiverbKit
 
 /// View model for the lightbox face overlay (M2 of ADR-014 Phase 6).
 ///

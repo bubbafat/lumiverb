@@ -1,11 +1,10 @@
 import SwiftUI
 import AVKit
-import LumiverbKit
 
 /// Full-screen lightbox overlay showing proxy image + metadata sidebar.
-struct LightboxView: View {
-    @ObservedObject var browseState: BrowseState
-    let client: APIClient?
+public struct LightboxView: View {
+    @ObservedObject public var browseState: BrowseState
+    public let client: APIClient?
 
     /// Persisted across sessions and across asset navigation. Matches the
     /// web UI's `lv_show_faces` localStorage key so users get the same
@@ -15,7 +14,7 @@ struct LightboxView: View {
 
     @StateObject private var facesVM: LightboxFacesViewModel
 
-    init(browseState: BrowseState, client: APIClient?) {
+    public init(browseState: BrowseState, client: APIClient?) {
         self.browseState = browseState
         self.client = client
         let vm = LightboxFacesViewModel(client: client)
@@ -35,7 +34,7 @@ struct LightboxView: View {
         _facesVM = StateObject(wrappedValue: vm)
     }
 
-    var body: some View {
+    public var body: some View {
         HStack(spacing: 0) {
             // Main image area
             ZStack {
@@ -119,19 +118,23 @@ struct LightboxView: View {
                         browseState.reEnrichAsset(assetId: detail.assetId, operations: ops)
                     },
                     onRevealInFinder: {
+                        #if os(macOS)
                         if let rootPath = browseState.selectedLibraryRootPath {
                             let fullPath = (rootPath as NSString).appendingPathComponent(detail.relPath)
                             NSWorkspace.shared.activateFileViewerSelecting(
                                 [URL(fileURLWithPath: fullPath)]
                             )
                         }
+                        #endif
                     },
                     onOpenInPlayer: detail.isVideo ? {
+                        #if os(macOS)
                         if let rootPath = browseState.selectedLibraryRootPath {
                             let fullPath = (rootPath as NSString).appendingPathComponent(detail.relPath)
                             let url = URL(fileURLWithPath: fullPath)
                             NSWorkspace.shared.open(url)
                         }
+                        #endif
                     } : nil,
                     whisperEnabled: browseState.whisperEnabled,
                 )
@@ -362,7 +365,11 @@ struct MetadataSidebar: View {
             }
             .padding()
         }
+        #if canImport(AppKit)
         .background(Color(nsColor: .controlBackgroundColor))
+        #elseif canImport(UIKit)
+        .background(Color(uiColor: .secondarySystemBackground))
+        #endif
     }
 
     @ViewBuilder

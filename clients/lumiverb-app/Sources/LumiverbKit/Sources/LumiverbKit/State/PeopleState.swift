@@ -1,5 +1,4 @@
 import SwiftUI
-import LumiverbKit
 
 /// Whether the People view is showing active people (`/v1/people`) or
 /// dismissed people (`/v1/people/dismissed`). Switching modes resets the
@@ -22,15 +21,14 @@ enum PeopleListMode: Equatable {
 /// - `nextFacesCursor` walks `GET /v1/people/{id}/faces` for the open
 ///   detail view; cleared whenever the selection changes.
 @MainActor
-final class PeopleState: ObservableObject {
-    let appState: AppState
+public final class PeopleState: ObservableObject {
 
     // MARK: - People list
 
-    @Published var people: [PersonItem] = []
-    @Published var isLoadingPeople = false
-    @Published var hasMorePeople = true
-    @Published var peopleError: String?
+    @Published public var people: [PersonItem] = []
+    @Published public var isLoadingPeople = false
+    @Published public var hasMorePeople = true
+    @Published public var peopleError: String?
     private var nextPeopleCursor: String?
 
     /// Active vs dismissed list source. Mutated by the segmented control
@@ -41,35 +39,35 @@ final class PeopleState: ObservableObject {
 
     /// Person ids currently undergoing rename / delete / merge / undismiss
     /// — used by the detail view to show a spinner and disable buttons.
-    @Published var pendingMutations: Set<String> = []
+    @Published public var pendingMutations: Set<String> = []
 
-    @Published var mutationError: String?
+    @Published public var mutationError: String?
 
     /// Set after a successful delete or merge so the detail view can pop
     /// itself back to the grid. Cleared by the detail view on consume.
-    @Published var dismissDetailRequest: Bool = false
+    @Published public var dismissDetailRequest: Bool = false
 
     // MARK: - Merge picker (typeahead)
 
-    @Published var mergeSearchQuery: String = ""
-    @Published var mergeSearchResults: [PersonItem] = []
-    @Published var isSearchingMerge: Bool = false
+    @Published public var mergeSearchQuery: String = ""
+    @Published public var mergeSearchResults: [PersonItem] = []
+    @Published public var isSearchingMerge: Bool = false
     private var mergeSearchTask: Task<Void, Never>?
 
     // MARK: - Person detail
 
-    @Published var selectedPerson: PersonItem?
-    @Published var personFaces: [PersonFaceItem] = []
-    @Published var isLoadingFaces = false
-    @Published var hasMoreFaces = true
-    @Published var personFacesError: String?
+    @Published public var selectedPerson: PersonItem?
+    @Published public var personFaces: [PersonFaceItem] = []
+    @Published public var isLoadingFaces = false
+    @Published public var hasMoreFaces = true
+    @Published public var personFacesError: String?
     private var nextFacesCursor: String?
 
-    init(appState: AppState) {
-        self.appState = appState
+    public init(client: APIClient?) {
+        self.client = client
     }
 
-    var client: APIClient? { appState.client }
+    public let client: APIClient?
 
     // MARK: - People list loading
 

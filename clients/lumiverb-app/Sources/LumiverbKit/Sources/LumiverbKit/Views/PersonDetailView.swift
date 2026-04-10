@@ -1,5 +1,4 @@
 import SwiftUI
-import LumiverbKit
 
 /// Detail view for a single person — header with name + face count, then
 /// a grid of every photo containing that person. Phase 6 M3 of ADR-014.

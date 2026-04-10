@@ -1,20 +1,30 @@
 import SwiftUI
-import LumiverbKit
 
 /// Displays a face crop thumbnail from the server, with caching.
-struct FaceThumbnailView: View {
-    let faceId: String?
-    let client: APIClient?
+public struct FaceThumbnailView: View {
+    public let faceId: String?
+    public let client: APIClient?
 
-    @State private var image: NSImage?
+    @State private var image: PlatformImage?
     @State private var isLoading = false
 
-    var body: some View {
+    public init(faceId: String?, client: APIClient?) {
+        self.faceId = faceId
+        self.client = client
+    }
+
+    public var body: some View {
         Group {
             if let image {
+                #if canImport(AppKit)
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFill()
+                #elseif canImport(UIKit)
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                #endif
             } else if isLoading {
                 ProgressView()
                     .controlSize(.mini)
@@ -43,9 +53,9 @@ struct FaceThumbnailView: View {
 
         do {
             if let data = try await client.getData("/v1/faces/\(faceId)/crop"),
-               let nsImage = NSImage(data: data) {
-                ImageCache.shared.setImage(nsImage, forKey: cacheKey, cost: data.count)
-                self.image = nsImage
+               let decoded = PlatformImage.from(data: data) {
+                ImageCache.shared.setImage(decoded, forKey: cacheKey, cost: data.count)
+                self.image = decoded
             }
         } catch {
             // Non-fatal — fallback icon is fine

@@ -1,5 +1,4 @@
 import SwiftUI
-import LumiverbKit
 
 /// People browse panel — a grid of named people sorted by face count
 /// descending (server side). Phase 6 M3 of ADR-014.
@@ -7,10 +6,16 @@ import LumiverbKit
 /// Read-only in M3: clicking a card pushes a `PersonDetailView`; rename /
 /// merge / delete land in M6. Wraps the grid + detail in a `NavigationStack`
 /// so SwiftUI handles back navigation and animation.
-struct PeopleView: View {
-    @ObservedObject var peopleState: PeopleState
-    @ObservedObject var browseState: BrowseState
-    let client: APIClient?
+public struct PeopleView: View {
+    @ObservedObject public var peopleState: PeopleState
+    @ObservedObject public var browseState: BrowseState
+    public let client: APIClient?
+
+    public init(peopleState: PeopleState, browseState: BrowseState, client: APIClient?) {
+        self.peopleState = peopleState
+        self.browseState = browseState
+        self.client = client
+    }
 
     /// Four columns of large-ish circular avatars; matches roughly the
     /// density of the existing media grid (4 cols) for visual rhythm.
@@ -19,7 +24,7 @@ struct PeopleView: View {
         count: 4
     )
 
-    var body: some View {
+    public var body: some View {
         NavigationStack {
             ScrollView {
                 modePicker

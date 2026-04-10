@@ -1,5 +1,4 @@
 import SwiftUI
-import LumiverbKit
 
 /// Cluster review panel — vertical list of unnamed face clusters with a
 /// "name this person" inline form. Phase 6 M5 of ADR-014.
@@ -8,12 +7,18 @@ import LumiverbKit
 /// few similar people (so frequent subjects are one click to merge),
 /// and a free-form text field for naming a brand-new person. Dismissing
 /// a cluster pops a 5-second undo toast at the bottom.
-struct ClusterReviewView: View {
-    @ObservedObject var state: ClusterReviewState
-    @ObservedObject var browseState: BrowseState
-    let client: APIClient?
+public struct ClusterReviewView: View {
+    @ObservedObject public var state: ClusterReviewState
+    @ObservedObject public var browseState: BrowseState
+    public let client: APIClient?
 
-    var body: some View {
+    public init(state: ClusterReviewState, browseState: BrowseState, client: APIClient?) {
+        self.state = state
+        self.browseState = browseState
+        self.client = client
+    }
+
+    public var body: some View {
         ZStack(alignment: .bottom) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
@@ -192,7 +197,11 @@ struct ClusterCardView: View {
             }
         }
         .padding(14)
+        #if canImport(AppKit)
         .background(Color(nsColor: .controlBackgroundColor))
+        #elseif canImport(UIKit)
+        .background(Color(uiColor: .secondarySystemBackground))
+        #endif
         .cornerRadius(10)
         .overlay(
             RoundedRectangle(cornerRadius: 10)

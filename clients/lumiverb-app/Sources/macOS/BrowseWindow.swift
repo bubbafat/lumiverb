@@ -51,10 +51,17 @@ struct BrowseWindow: View {
     init(appState: AppState, scanState: ScanState) {
         self.appState = appState
         self.scanState = scanState
-        self._browseState = StateObject(wrappedValue: BrowseState(appState: appState))
-        self._peopleState = StateObject(wrappedValue: PeopleState(appState: appState))
+        // BrowseState consumes the cross-platform `BrowseAppContext`
+        // protocol that AppState now conforms to (see AppState.swift).
+        // The re-enrich invoker is installed after construction so the
+        // closure can hold the same AppState reference for vision /
+        // whisper config lookup at run time.
+        let browseState = BrowseState(appContext: appState)
+        browseState.reEnrichInvoker = MacReEnrichInvoker(appState: appState)
+        self._browseState = StateObject(wrappedValue: browseState)
+        self._peopleState = StateObject(wrappedValue: PeopleState(client: appState.client))
         self._clusterReviewState = StateObject(
-            wrappedValue: ClusterReviewState(appState: appState)
+            wrappedValue: ClusterReviewState(client: appState.client)
         )
     }
 
@@ -69,56 +76,7 @@ struct BrowseWindow: View {
             )
             .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 300)
         } detail: {
-            ZStack {
-                switch section {
-                case .library:
-                    VStack(spacing: 0) {
-                        if browseState.isReEnriching || !browseState.reEnrichSkipped.isEmpty {
-                            reEnrichBanner
-                        } else if let libId = browseState.selectedLibraryId,
-                                  scanState.libraryStatus[libId] == .busy {
-                            // Background sync/enrich activity banner.
-                            // Shows the same status text as the menu
-                            // bar so users in the browse window don't
-                            // miss that work is in flight on the
-                            // library they're looking at. The
-                            // user-triggered re-enrich banner takes
-                            // priority when both are active — they
-                            // convey similar info and stacking both
-                            // would be noisy.
-                            scanActivityBanner
-                        }
-                        activeFiltersBar
-                        contentArea
-                    }
-                case .people:
-                    PeopleView(
-                        peopleState: peopleState,
-                        browseState: browseState,
-                        client: appState.client
-                    )
-                case .review:
-                    ClusterReviewView(
-                        state: clusterReviewState,
-                        browseState: browseState,
-                        client: appState.client
-                    )
-                }
-
-                // Library-switch overlay. Sits above the content area so
-                // it's visible as soon as the user clicks a new library —
-                // before any network-bound load completes. Tied to
-                // `isChangingLibrary`, which is set synchronously in
-                // `handleSelectedLibraryChange()` and cleared when the
-                // first asset page comes back.
-                if browseState.isChangingLibrary && section == .library {
-                    changingLibraryOverlay
-                }
-
-                if browseState.selectedAssetId != nil {
-                    lightboxOverlay
-                }
-            }
+            detailContent
         }
         .searchable(
             text: $browseState.searchQuery,
@@ -126,30 +84,7 @@ struct BrowseWindow: View {
             prompt: "Search assets or people..."
         )
         .searchSuggestions {
-            if !browseState.personSuggestions.isEmpty {
-                Section("People") {
-                    ForEach(browseState.personSuggestions) { person in
-                        Button {
-                            browseState.filterByPerson(person)
-                        } label: {
-                            HStack(spacing: 8) {
-                                FaceThumbnailView(
-                                    faceId: person.representativeFaceId,
-                                    client: appState.client
-                                )
-                                .frame(width: 28, height: 28)
-                                .clipShape(Circle())
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(person.displayName)
-                                    Text("\(person.faceCount) photos")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            personSuggestions
         }
         .onSubmit(of: .search) {
             browseState.personSuggestions = []
@@ -240,12 +175,7 @@ struct BrowseWindow: View {
             return .handled
         }
         .onChange(of: appState.libraries.count) { _, _ in
-            // Restore last opened library once libraries are loaded
-            if browseState.selectedLibraryId == nil,
-               let lastId = UserDefaults.standard.string(forKey: "lastLibraryId"),
-               appState.libraries.contains(where: { $0.libraryId == lastId }) {
-                browseState.selectedLibraryId = lastId
-            }
+            restoreLastOpenedLibraryIfNeeded()
         }
         .onAppear {
             // Honor any pending menu-bar request to open with a specific
@@ -272,6 +202,128 @@ struct BrowseWindow: View {
             // deselection is preserved.
             guard newValue != oldValue else { return }
             browseState.handleSelectedLibraryChange()
+        }
+    }
+
+    /// Restore the last-opened library on first load. Extracted from the
+    /// inline `.onChange` closure because the triple if-let-and over
+    /// cross-module `browseState.selectedLibraryId` and `appState.libraries`
+    /// pushed the type checker over its timeout after the BrowseState
+    /// move into LumiverbKit.
+    private func restoreLastOpenedLibraryIfNeeded() {
+        guard browseState.selectedLibraryId == nil else { return }
+        guard let lastId = UserDefaults.standard.string(forKey: "lastLibraryId") else { return }
+        let exists = appState.libraries.contains(where: { $0.libraryId == lastId })
+        guard exists else { return }
+        browseState.selectedLibraryId = lastId
+    }
+
+    // MARK: - Detail pane
+
+    /// Right-hand pane of the NavigationSplitView. Extracted from the
+    /// inline `detail:` closure because the inline body — switch over the
+    /// section, ZStack with two overlays, and a chain of cross-module
+    /// `browseState.*` accesses — pushed Swift's type checker over its
+    /// inference timeout after the BrowseState move into LumiverbKit.
+    @ViewBuilder
+    private var detailContent: some View {
+        ZStack {
+            sectionContent
+            // Library-switch overlay. Sits above the content area so
+            // it's visible as soon as the user clicks a new library —
+            // before any network-bound load completes. Tied to
+            // `isChangingLibrary`, which is set synchronously in
+            // `handleSelectedLibraryChange()` and cleared when the
+            // first asset page comes back.
+            if browseState.isChangingLibrary && section == .library {
+                changingLibraryOverlay
+            }
+            if browseState.selectedAssetId != nil {
+                lightboxOverlay
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var sectionContent: some View {
+        switch section {
+        case .library:
+            libraryColumn
+        case .people:
+            PeopleView(
+                peopleState: peopleState,
+                browseState: browseState,
+                client: appState.client
+            )
+        case .review:
+            ClusterReviewView(
+                state: clusterReviewState,
+                browseState: browseState,
+                client: appState.client
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var libraryColumn: some View {
+        VStack(spacing: 0) {
+            if browseState.isReEnriching || !browseState.reEnrichSkipped.isEmpty {
+                reEnrichBanner
+            } else if let libId = browseState.selectedLibraryId,
+                      scanState.libraryStatus[libId] == .busy {
+                // Background sync/enrich activity banner. Shows the same
+                // status text as the menu bar so users in the browse
+                // window don't miss that work is in flight on the
+                // library they're looking at. The user-triggered
+                // re-enrich banner takes priority when both are active —
+                // they convey similar info and stacking both would be
+                // noisy.
+                scanActivityBanner
+            }
+            activeFiltersBar
+            contentArea
+        }
+    }
+
+    // MARK: - Person search suggestions
+
+    /// Person search suggestions surface inside `.searchSuggestions { }`.
+    /// Extracted into its own ViewBuilder property because the inline form
+    /// pushed SwiftUI's type checker over the timeout limit after the
+    /// browse state moved into LumiverbKit (the protocol-existential
+    /// `appContext` and the cross-module `PersonItem` together inflated
+    /// the inference cost — splitting the body lets each subexpression
+    /// resolve independently).
+    @ViewBuilder
+    private var personSuggestions: some View {
+        if !browseState.personSuggestions.isEmpty {
+            Section("People") {
+                ForEach(browseState.personSuggestions) { person in
+                    personSuggestionRow(person: person)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func personSuggestionRow(person: PersonItem) -> some View {
+        Button {
+            browseState.filterByPerson(person)
+        } label: {
+            HStack(spacing: 8) {
+                FaceThumbnailView(
+                    faceId: person.representativeFaceId,
+                    client: appState.client
+                )
+                .frame(width: 28, height: 28)
+                .clipShape(Circle())
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(person.displayName)
+                    Text("\(person.faceCount) photos")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
         }
     }
 
