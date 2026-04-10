@@ -214,8 +214,6 @@ extension MediaGridView {
             }
         }
         .frame(height: rowHeight)
-        .fixedSize(horizontal: false, vertical: true)
-        .clipShape(Rectangle())
     }
 
     // MARK: - Cell
