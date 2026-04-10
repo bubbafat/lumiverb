@@ -392,9 +392,47 @@ environment instead:
 ```
 
 Where `scrollAccessor` is an optional environment value injected by each
-platform. macOS's `BrowseWindow` wraps the grid in the `NSScrollViewIntrospector`
-and stores the accessor; iOS's browse view uses `UIScrollViewIntrospector`
-instead.
+platform.
+
+**Grid view introspector parameter.** Dispatch via env is sufficient,
+but the *attachment* of the introspector view has to happen inside the
+grid's own `ScrollView { LazyVStack { ... } }` content (the introspector
+walks its superview chain and only finds the platform scroll view if
+it's a child). LumiverbKit can't import `NSScrollViewIntrospector` or
+`UIScrollViewIntrospector` directly, so the grid views are **generic
+over the introspector view type** and accept it as a `@ViewBuilder`
+closure parameter:
+
+```swift
+public struct MediaGridView<ScrollIntrospector: View>: View {
+    public init(
+        browseState: BrowseState,
+        client: APIClient?,
+        @ViewBuilder scrollIntrospector: () -> ScrollIntrospector
+    )
+    public var body: some View {
+        ScrollView {
+            LazyVStack { ... }
+                .background(scrollIntrospector)   // ← walks UP into the ScrollView
+        }
+    }
+}
+
+public extension MediaGridView where ScrollIntrospector == EmptyView {
+    init(browseState: BrowseState, client: APIClient?)
+}
+```
+
+macOS's `BrowseWindow` constructs the grid with a private
+`macScrollIntrospector` closure that returns an `NSScrollViewIntrospector`
+whose callback writes the discovered scroll view into
+`appState.scrollAccessor.box.scrollView`. M6 will do the same on iOS
+with `UIScrollViewIntrospector`. The `EmptyView` extension is for
+previews/tests.
+
+See "Grid views must be generic over their introspector view" in the
+Implementation Notes section below for the rationale behind this
+indirection.
 
 ### View relocation
 
@@ -838,6 +876,177 @@ tightens it.
 - `docs/adr/014-native-clients.md` — mark Phase 5 complete when this ADR's milestones finish; update Phase 6 status for iOS.
 - `CLAUDE.md` — update the "Finding things by topic" table: move browse view paths from `Sources/macOS/` to `LumiverbKit/Sources/LumiverbKit/Views/`, add rows for ratings, collections, cache protocols, scroll accessor.
 
+## Implementation Notes (learned during M1 + M2)
+
+These are patterns that surfaced during M1/M2 implementation. They apply
+to M3 and later — read this section before starting any milestone that
+moves code into LumiverbKit or makes existing observable state
+cross-module.
+
+### Cross-module observable state needs protocol abstraction
+
+When `BrowseState` moved into LumiverbKit it had hard references to
+**three** macOS-only types that couldn't follow it across the module
+boundary:
+
+1. `AppState` — full ObservableObject with enrichment config + library list + auth
+2. `ReEnrichmentRunner` — actor that imports CLIP/ArcFace/Whisper/Vision/OCR providers
+3. `CLIPProvider` / `FeaturePrintProvider` — direct module references for embedding model id/version
+
+The fix is the same in each case: define a protocol in LumiverbKit that
+captures the *minimal* surface BrowseState needs, and have the macOS
+type conform via an extension. The macOS type stays in `Sources/macOS/`
+and pulls in whatever providers it wants; LumiverbKit only sees the
+protocol shape.
+
+This pattern will recur in every milestone that adds a feature to a
+LumiverbKit-resident view. **Apply it when:**
+- The feature wants something that lives in macOS-only enrichment code
+- The feature wants something from `AppState` that isn't already on `BrowseAppContext`
+- The feature wants to invoke a runner/provider with a long-running task
+
+**Don't try to move the macOS-only thing into LumiverbKit** — the
+providers genuinely cannot move (they import CoreML / Vision / Speech /
+custom CoreML models that the iOS browse target doesn't link). The
+protocol seam is the right answer.
+
+### Different state classes need different protocol surfaces
+
+`BrowseState` needs the full `BrowseAppContext` (vision/whisper config,
+embedding model id, library list, client). But `PeopleState` and
+`ClusterReviewState` only need a `client: APIClient?`. Don't force all
+state classes through the same protocol — minimal-surface initialization
+keeps the test/preview story simple. iOS-side construction is just
+`PeopleState(client: someClient)`, no protocol existential gymnastics.
+
+### Grid views must be generic over their introspector view
+
+The `\.scrollAccessor` env value is sufficient for *dispatching* scroll
+commands, but the **attachment** of the introspector view has to happen
+*inside* the grid's `ScrollView { LazyVStack { ... } }` content. The
+introspector walks UP its superview chain to find the platform scroll
+view; if you put it outside the ScrollView (e.g. as a `.background` of
+the grid itself), it walks the wrong direction.
+
+LumiverbKit can't import `NSScrollViewIntrospector` / `UIScrollViewIntrospector`
+directly, so the grids are **generic over `ScrollIntrospector: View`**
+and accept the introspector as a `@ViewBuilder` closure parameter. The
+macOS callsite passes `NSScrollViewIntrospector { ... }`; the iOS
+callsite (M6) will pass `UIScrollViewIntrospector { ... }`. Provide an
+`extension where ScrollIntrospector == EmptyView` convenience init for
+previews/tests.
+
+Apply this same pattern to any future LumiverbKit view that needs to
+attach a *platform-specific child view* whose location matters. The env
+value is for cross-cutting state; the generic parameter is for child
+views.
+
+### Visibility cascade is the dominant cost of moving state
+
+Making `BrowseState` cross-module required adding `public` to:
+- The class declaration + the `init`
+- ~25 `@Published` properties (every one read or written from outside the module)
+- ~15 methods called from `BrowseWindow.swift` or grid views
+- 1 associated enum (`BrowseMode`) with `Sendable` conformance for the public property
+
+This was a significant chunk of mechanical work and several `replace_all`
+gotchas. Budget for ~50 `public` annotations whenever you move an
+observable-state class to LumiverbKit. Use `git diff --stat` after each
+publication pass to track surface growth.
+
+**Replace_all gotcha:** the Edit tool's `replace_all` mode silently
+trims trailing whitespace from `old_string` / `new_string`. Don't try
+`@Published var ` → `@Published public var ` (with trailing spaces) — it
+becomes `@Published public var<no space>` and breaks every declaration.
+Use `@Published var X` → `@Published public var X` per-property if you
+need the trailing space, or include the next character explicitly in
+the pattern.
+
+### Swift type-checker timeout on cross-module SwiftUI bodies
+
+After `BrowseState` becomes a cross-module public type, several inline
+SwiftUI closures in `BrowseWindow.swift` start failing with:
+
+> error: the compiler is unable to type-check this expression in
+> reasonable time; try breaking up the expression into distinct
+> sub-expressions
+
+The trigger is the combination of:
+- Cross-module observable references (each access goes through a public getter)
+- Existential types (`any BrowseAppContext`)
+- Nested SwiftUI bodies (ZStack + switch + ForEach + condition chains)
+- Optional unwrap chains over cross-module properties
+
+The fix is mechanical: extract the offending body into a `@ViewBuilder`
+helper (`private var thingX: some View` / `private func thingX(arg:) -> some View`).
+Each helper is type-checked independently. We hit this 3 times in M2 —
+expect to hit it again whenever you add features to `BrowseWindow.swift`
+or any other macOS-side view that consumes BrowseState.
+
+**Symptom → fix lookup:**
+- Inline `.searchSuggestions { ForEach(...) }` over cross-module models → extract `personSuggestions`/`personSuggestionRow`-style helpers
+- Inline `detail: { ZStack { switch ... } }` → extract `detailContent`/`sectionContent`/`columnContent`
+- Multi-condition `if let ... else if let ... else if ...` chains → extract `private func evaluateX()`
+
+### Color literals need conditional compilation
+
+`Color(nsColor: .controlBackgroundColor)` is macOS-only. iOS uses
+`Color(uiColor: .secondarySystemBackground)`. Wrap in
+`#if canImport(AppKit) / #elseif canImport(UIKit)`. We hit two instances
+in M2 (LightboxView, ClusterReviewView) — when porting any view that
+sets a system background or fill color, grep for `nsColor:` /
+`NSColor.` first.
+
+### Trace dependencies before listing files to move
+
+The original M2 file list missed three files: `FaceThumbnailView`,
+`LightboxVideoPlayerView`, `ReEnrichMenu`. They're not "browse views"
+in the obvious sense, but they're transitively referenced from
+`PersonDetailView` / `ClusterReviewView` / `LightboxView` and have to
+move with them. Before any future relocation milestone, grep the
+files-to-move for type names that aren't in the move set, and add them.
+
+### `LightboxVideoPlayerView` shows the cross-platform video pattern
+
+Video playback in the lightbox needs both platforms but uses different
+AVKit APIs:
+
+```swift
+#if canImport(AppKit)
+struct PlayerView: NSViewRepresentable {
+    let player: AVPlayer
+    func makeNSView(context: Context) -> AVPlayerView { ... }
+    func updateNSView(_ nsView: AVPlayerView, context: Context) { ... }
+}
+#elseif canImport(UIKit)
+struct PlayerView: UIViewControllerRepresentable {
+    let player: AVPlayer
+    func makeUIViewController(context: Context) -> AVPlayerViewController { ... }
+    func updateUIViewController(_ uiVC: AVPlayerViewController, context: Context) { ... }
+}
+#endif
+```
+
+Same pattern applies to any future view that needs a `PlatformRepresentable`
+wrapper around an AppKit/UIKit class. Keep the type name identical
+(`PlayerView`) so the call site doesn't need conditional compilation —
+only the implementation does.
+
+### iOS "no library root" path is dead code on iOS, gate explicitly
+
+`LightboxVideoPlayerView`'s "try local file at `{libraryRootPath}/{relPath}`"
+branch is dead on iOS because iOS has no library root path (iOS is
+sandboxed and never sees a real filesystem path). The iOS
+`BrowseAppContext` will return nil for `selectedLibraryRootPath`, so
+the `if let rootPath` guard already short-circuits. We *also* gate the
+whole branch with `#if os(macOS)` to make the intent explicit and
+avoid carrying any AppKit-coupled `(rootPath as NSString)...`
+incantations into iOS builds.
+
+When you encounter a branch that "is dead on iOS because the iOS
+context returns nil," gate it with `#if os(macOS)` anyway. Future
+edits to the runtime shouldn't quietly resurrect the dead branch.
+
 ## Build Milestones
 
 ### Requirements
@@ -873,10 +1082,10 @@ Every milestone must satisfy all of the following before it is marked complete:
 **Read-ahead:** M2 moves grid views. When `MediaGridView` moves, it will take a `@Environment(\.scrollAccessor)` — the environment key for `ScrollViewAccessor` should be defined in M1 alongside the `CacheBundle` environment key.
 
 **Done when:**
-- [ ] Both targets build
-- [ ] `swift test` green
-- [ ] Existing macOS app browse flow verified manually
-- [ ] Milestone table updated
+- [x] Both targets build
+- [x] `swift test` green
+- [x] Existing macOS app browse flow verified manually
+- [x] Milestone table updated
 
 ### Milestone 2 — Move browse UI into LumiverbKit
 
@@ -886,32 +1095,91 @@ Every milestone must satisfy all of the following before it is marked complete:
 
 | From | To | Adjustments |
 |------|----|-------------|
-| `Sources/macOS/FaceOverlayView.swift` | `LumiverbKit/Sources/LumiverbKit/Views/FaceOverlayView.swift` | Remove `import AppKit` if present |
-| `Sources/macOS/LightboxView.swift` | `LumiverbKit/Sources/LumiverbKit/Views/LightboxView.swift` | Remove any `NSImage` references — use `PlatformImage` |
-| `Sources/macOS/MediaGridView.swift` | `LumiverbKit/Sources/LumiverbKit/Views/MediaGridView.swift` | Replace `NSScrollViewBox`/`NSScrollViewIntrospector` usage with `@Environment(\.scrollAccessor) var scrollAccessor`. Remove `import AppKit`. |
-| `Sources/macOS/SearchResultsGrid.swift` | `LumiverbKit/Sources/LumiverbKit/Views/SearchResultsGrid.swift` | Same scroll-accessor swap |
-| `Sources/macOS/SimilarResultsGrid.swift` | `LumiverbKit/Sources/LumiverbKit/Views/SimilarResultsGrid.swift` | Same scroll-accessor swap |
-| `Sources/macOS/PeopleView.swift` | `LumiverbKit/Sources/LumiverbKit/Views/PeopleView.swift` | Pure move |
-| `Sources/macOS/PersonDetailView.swift` | `LumiverbKit/Sources/LumiverbKit/Views/PersonDetailView.swift` | Pure move |
-| `Sources/macOS/ClusterReviewView.swift` | `LumiverbKit/Sources/LumiverbKit/Views/ClusterReviewView.swift` | Pure move |
-| `Sources/macOS/BrowseState.swift` | `LumiverbKit/Sources/LumiverbKit/State/BrowseState.swift` | Remove NSScrollViewBox field; remove any direct AppKit references |
-| `Sources/macOS/PeopleState.swift` | `LumiverbKit/Sources/LumiverbKit/State/PeopleState.swift` | Pure move |
-| `Sources/macOS/ClusterReviewState.swift` | `LumiverbKit/Sources/LumiverbKit/State/ClusterReviewState.swift` | Pure move |
+| `Sources/macOS/FaceOverlayView.swift` | `LumiverbKit/Sources/LumiverbKit/Views/FaceOverlayView.swift` | Remove `import LumiverbKit` (now self-import) |
+| `Sources/macOS/LightboxView.swift` | `LumiverbKit/Sources/LumiverbKit/Views/LightboxView.swift` | Gate `NSWorkspace.shared.activateFileViewerSelecting` and `NSWorkspace.shared.open` with `#if os(macOS)`. Gate `Color(nsColor: .controlBackgroundColor)` with `#if canImport(AppKit) / #elseif canImport(UIKit) → Color(uiColor: .secondarySystemBackground)` |
+| `Sources/macOS/FaceThumbnailView.swift` | `LumiverbKit/Sources/LumiverbKit/Views/FaceThumbnailView.swift` | **Discovered during M2** — referenced from PersonDetailView/ClusterReviewView, has to move with them. Swap `NSImage` → `PlatformImage` + `Image(nsImage:)` / `Image(uiImage:)` under `#if canImport`. Make `public struct` + `public init`. |
+| `Sources/macOS/LightboxVideoPlayerView.swift` | `LumiverbKit/Sources/LumiverbKit/Views/LightboxVideoPlayerView.swift` | **Discovered during M2** — referenced from LightboxView. The `PlayerView` wrapper splits into two `#if canImport(AppKit) / canImport(UIKit)` branches: `NSViewRepresentable<AVPlayerView>` for macOS, `UIViewControllerRepresentable<AVPlayerViewController>` for iOS. The local-file playback branch is gated `#if os(macOS)` because iOS has no library root. |
+| `Sources/macOS/ReEnrichMenu.swift` | `LumiverbKit/Sources/LumiverbKit/Views/ReEnrichMenu.swift` | **Discovered during M2** — referenced from LightboxView. Pure SwiftUI; just needs `public struct` + `public init`. |
+| `Sources/macOS/MediaGridView.swift` | `LumiverbKit/Sources/LumiverbKit/Views/MediaGridView.swift` | Make generic over `ScrollIntrospector: View` parameter; consume `@Environment(\.scrollAccessor)` for command dispatch. See "grid view introspector pattern" below. |
+| `Sources/macOS/SearchResultsGrid.swift` | `LumiverbKit/Sources/LumiverbKit/Views/SearchResultsGrid.swift` | Same generic introspector pattern |
+| `Sources/macOS/SimilarResultsGrid.swift` | `LumiverbKit/Sources/LumiverbKit/Views/SimilarResultsGrid.swift` | Same generic introspector pattern |
+| `Sources/macOS/PeopleView.swift` | `LumiverbKit/Sources/LumiverbKit/Views/PeopleView.swift` | `public struct` + `public init` |
+| `Sources/macOS/PersonDetailView.swift` | `LumiverbKit/Sources/LumiverbKit/Views/PersonDetailView.swift` | `public struct` + `public init` |
+| `Sources/macOS/ClusterReviewView.swift` | `LumiverbKit/Sources/LumiverbKit/Views/ClusterReviewView.swift` | `public struct` + `public init`. Same `Color(nsColor:)` gating as LightboxView. |
+| `Sources/macOS/BrowseState.swift` | `LumiverbKit/Sources/LumiverbKit/State/BrowseState.swift` | Major refactor — see "BrowseState cross-module surgery" below |
+| `Sources/macOS/PeopleState.swift` | `LumiverbKit/Sources/LumiverbKit/State/PeopleState.swift` | `public final class`. Drop `appState: AppState` field; take `client: APIClient?` directly. |
+| `Sources/macOS/ClusterReviewState.swift` | `LumiverbKit/Sources/LumiverbKit/State/ClusterReviewState.swift` | Same: `public final class`, take `client: APIClient?`. |
+
+**New files in LumiverbKit (created during M2 to break cross-module dependencies):**
+- `LumiverbKit/Sources/LumiverbKit/State/BrowseAppContext.swift` — protocol that BrowseState consumes instead of holding a concrete `AppState` reference. Surfaces: `client`, `libraries`, `whisperEnabled` (+ `whisperEnabledPublisher: AnyPublisher<Bool, Never>`), `embeddingModelId`, `embeddingModelVersion`, vision/whisper enrichment config (`resolvedVisionApiUrl`/`resolvedVisionApiKey`/`resolvedVisionModelId`/`whisperModelSize`/`whisperLanguage`/`whisperBinaryPath`). macOS `AppState` conforms via an extension at the bottom of `Sources/macOS/AppState.swift`. iOS will get an `iOSAppState` adapter in M6.
+- `LumiverbKit/Sources/LumiverbKit/State/ReEnrichInvoker.swift` — pluggable re-enrichment runner protocol. BrowseState delegates `reEnrich` / `reEnrichAsset` to the invoker so LumiverbKit doesn't need to import macOS-only enrichment providers (CLIP, ArcFace, Whisper, Vision, OCR, FeaturePrint). Includes a `ReEnrichmentResult` value type. iOS leaves it nil; the methods short-circuit.
+
+**New files in macOS sources:**
+- `Sources/macOS/Enrich/MacReEnrichInvoker.swift` — wraps the existing `ReEnrichmentRunner`, owns the polling task that forwards progress (`processed`/`total`/`phase`) into BrowseState's `@Published` fields via the closure parameter.
+
+**Grid view introspector pattern.** The grid views (`MediaGridView`, `SearchResultsGrid`, `SimilarResultsGrid`) cannot consume the `\.scrollAccessor` env value alone — they also need to *attach* a platform-specific introspector view inside their `ScrollView { LazyVStack { ... } }` content so the introspector's superview walk reaches the real `NSScrollView` / `UIScrollView`. LumiverbKit can't import `NSScrollViewIntrospector` directly, so the grids are **generic over the introspector view type**:
+
+```swift
+public struct MediaGridView<ScrollIntrospector: View>: View {
+    public init(
+        browseState: BrowseState,
+        client: APIClient?,
+        @ViewBuilder scrollIntrospector: () -> ScrollIntrospector
+    ) { ... }
+
+    public var body: some View {
+        ScrollView {
+            LazyVStack { ... }
+                .background(scrollIntrospector)   // ← inside the scroll view content
+        }
+        .onChange(of: browseState.pendingScrollCommand) { _, token in
+            scrollAccessor?.apply(token.command)  // ← env-injected dispatch
+        }
+    }
+}
+
+public extension MediaGridView where ScrollIntrospector == EmptyView {
+    init(browseState: BrowseState, client: APIClient?) {
+        self.init(browseState: browseState, client: client) { EmptyView() }
+    }
+}
+```
+
+The macOS-side `BrowseWindow` constructs the grids with a private `macScrollIntrospector` view that wraps `NSScrollViewIntrospector` and writes the discovered scroll view into `appState.scrollAccessor.box.scrollView`. The iOS side (M6) will pass a `UIScrollViewIntrospector` doing the same with `UIScrollView`. The `EmptyView` extension exists for previews and tests that don't have a real scroll view to attach to.
+
+A new public `MediaGridLayoutConstants` enum at the top of `MediaGridView.swift` exposes `targetRowHeight` (180), `spacing` (4), and `verticalLineScrollHeight` (184) so the macOS introspector callback can configure `NSScrollView.verticalLineScroll` to match the grid's row height (one arrow-key tap should advance ~one row, not the AppKit ~10pt default).
+
+**BrowseState cross-module surgery.** The original M2 plan said "remove NSScrollViewBox field; remove any direct AppKit references." In practice the move was much larger because BrowseState had hard references to:
+
+1. **`AppState`** (macOS-only ObservableObject with enrichment config) → Replaced with `appContext: any BrowseAppContext`. The init signature changed from `init(appState: AppState)` to `init(appContext: any BrowseAppContext)`. macOS `BrowseWindow.init` now passes `appState` (which conforms to the protocol via an extension).
+2. **`ReEnrichmentRunner`** (macOS-only enrichment runner that imports CLIP/ArcFace/Whisper/Vision/OCR providers) → BrowseState's `reEnrich` / `reEnrichAsset` methods now delegate to a pluggable `reEnrichInvoker: (any ReEnrichInvoker)?` property. macOS sets this from `BrowseWindow.init` to a `MacReEnrichInvoker(appState:)`. iOS leaves it nil and the methods short-circuit. The progress polling moved out of BrowseState into the macOS-side invoker; BrowseState only owns the `@Published` mirror that the invoker updates via a closure parameter.
+3. **`CLIPProvider.modelId` / `CLIPProvider.modelVersion` / `FeaturePrintProvider.modelId`/`modelVersion`** (used by `findSimilar` to tell the server which embedding vectors to look up) → replaced with `appContext.embeddingModelId` / `embeddingModelVersion`. macOS reports the local provider; iOS reports a canonical CLIP id since iOS doesn't enrich.
+4. **`var query` capture in a sendable closure** (Swift 6 strict-concurrency violation that was a *warning* in the macOS target but became an *error* in LumiverbKit's stricter mode) → captured into an immutable `let queryForRequest` before the closure.
+
+The class declaration becomes `@MainActor public class BrowseState: ObservableObject` and **all** of the following gain `public` modifiers because they're called from `BrowseWindow.swift` (cross-module): `appContext`, `selectedLibraryRootPath`, `client`, `init`, `sendScrollCommand`, all 25+ `@Published` properties (selectedLibraryId, pendingScrollCommand, directories, expandedPaths, childDirectories, selectedPath, filters, personSuggestions, assets, isLoadingAssets, hasMoreAssets, isChangingLibrary, libraryChangeError, searchQuery, searchResults, searchTotal, isSearching, similarResults, similarTotal, isFindingSimilar, similarSourceId, selectedAssetId, assetDetail, isLoadingDetail, displayedAssetIdsOverride, displayedFaceIdsOverride, pendingHighlightFaceId, mode, error, focusedIndex, whisperEnabled, isReEnriching, reEnrichPhase, reEnrichTotal, reEnrichProcessed, reEnrichSkipped), the `reEnrichInvoker` property, and ~15 methods (`loadNextPage`, `loadAssetDetail`, `loadRootDirectories`, `selectPath`, `toggleExpanded`, `performSearch`, `clearSearch`, `debouncedPersonSearch`, `filterByPerson`, `clearPersonFilter`, `closeLightbox`, `navigateLightbox`, `revertLibraryChange`, `retryLibraryChange`, `handleSelectedLibraryChange`, `cancelReEnrich`, `reEnrich`, `reEnrichAsset`). The associated `BrowseMode` enum also needs `public enum BrowseMode: Equatable, Sendable`.
+
+**BrowseWindow.swift type-checker fixes.** After BrowseState becomes a cross-module public type, several inline closures in `BrowseWindow.swift` exceed Swift's type-checker timeout ("the compiler is unable to type-check this expression in reasonable time"). Three locations need extraction into helpers:
+1. The `.searchSuggestions { }` `ForEach` over `[PersonItem]` → extract `personSuggestions: some View` and `personSuggestionRow(person:) -> some View`
+2. The `detail: { }` closure of `NavigationSplitView` → extract `detailContent: some View`, `sectionContent: some View`, `libraryColumn: some View`
+3. The `.onChange(of: appState.libraries.count)` block with a triple if-let chain → extract `private func restoreLastOpenedLibraryIfNeeded()`
+
+These are mechanical extractions; behavior is preserved exactly.
 
 **Additional adjustments:**
-- Any SwiftUI modifier that was macOS-only (`.onHover`, right-click `.contextMenu` with mouse-specific behavior) is wrapped in `#if os(macOS)` inside the moved view file. Do not try to "generalize" these in this milestone — the goal is relocation without feature change.
-- The macOS app's `BrowseWindow.swift` stays in `Sources/macOS/` and imports `LumiverbKit` to use the moved `MediaGridView`, `LightboxView`, etc. It installs the `CacheBundle` and `MacScrollAccessor` as environment values before rendering the grid.
-- Update any test imports in `LumiverbKit/Tests/LumiverbKitTests/` that referenced moved files.
+- Remove `import LumiverbKit` from every moved file (it becomes a self-import after the move).
+- The macOS app's `BrowseWindow.swift` stays in `Sources/macOS/` and imports `LumiverbKit` to use the moved views. It already installs the `CacheBundle` and `MacScrollAccessor` as environment values from M1.
+- Update test imports/references in `LumiverbKit/Tests/LumiverbKitTests/` that referenced moved types (none did in practice — the tests touch models/API/cache/scroll, not browse state).
+- `Sources/macOS/AppState.swift` adds `import Combine` at the top (needed for `AnyPublisher` in the conformance extension).
 
 **Does NOT include:** Any iOS UI work. iOS still lands in `ConnectedView` — we haven't built the tab bar yet.
 
-**Read-ahead:** M6 builds the iOS TabView. `MediaGridView` will be consumed by the iOS Browse tab unchanged.
+**Read-ahead:** M6 builds the iOS TabView. `MediaGridView` will be consumed by the iOS Browse tab — the iOS callsite will pass a `UIScrollViewIntrospector` closure and otherwise look identical to the macOS callsite.
 
 **Done when:**
-- [ ] Both targets build (iOS build doesn't need to *use* the new views yet, just compile them)
-- [ ] `swift test` green
-- [ ] macOS app browse + search + people + clusters all work manually
-- [ ] Milestone table updated
+- [x] Both targets build (iOS build doesn't need to *use* the new views yet, just compile them)
+- [x] `swift test` green
+- [x] macOS app browse + search + people + clusters all work manually
+- [x] Milestone table updated
 
 ### Milestone 3 — Ratings editor
 
