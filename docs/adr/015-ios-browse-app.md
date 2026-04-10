@@ -14,7 +14,7 @@ Proposed
 | Milestone | Description | Status |
 |-----------|-------------|--------|
 | M1 | Cache + ScrollView abstractions, defensive fixes | Complete |
-| M2 | Move browse UI into LumiverbKit | Not started |
+| M2 | Move browse UI into LumiverbKit | Complete |
 | M3 | Ratings editor (stars, favorite, color) — macOS + LumiverbKit | Not started |
 | M4 | Collections CRUD (private + shared) — macOS + LumiverbKit | Not started |
 | M5 | Collection sharing UI (visibility toggle + share link) | Not started |

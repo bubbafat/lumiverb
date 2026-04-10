@@ -1,5 +1,20 @@
 import SwiftUI
-import LumiverbKit
+
+/// Layout constants for the justified-row media grid. Public so the
+/// macOS-side `NSScrollViewIntrospector` callback can match the grid's
+/// row height when configuring `NSScrollView.verticalLineScroll` (so one
+/// arrow-key press scrolls roughly one row, not the AppKit default
+/// ~10pt). iOS doesn't need this — touch scrolling has no concept of
+/// "one line" — but it's harmless to expose.
+public enum MediaGridLayoutConstants {
+    public static let targetRowHeight: CGFloat = 180
+    public static let spacing: CGFloat = 4
+    /// `verticalLineScroll` target for AppKit's `NSScrollView`. One arrow
+    /// key tap should advance roughly one row.
+    public static var verticalLineScrollHeight: CGFloat {
+        targetRowHeight + spacing
+    }
+}
 
 /// Justified-row grid of asset thumbnails with infinite scroll.
 ///
@@ -12,36 +27,47 @@ import LumiverbKit
 /// **No focus / selection.** Click opens the lightbox directly.
 ///
 /// **Scrolling:** uses `LazyVStack` for lazy loading of cells, with
-/// keyboard nav delegated to the underlying `NSScrollView` via the
-/// `NSScrollViewIntrospector`. PgUp/PgDn/Home/End/Up/Down all go
-/// through AppKit's native scroll API which handles edges and
-/// disposed cells correctly. See `AppKitScrollIntrospector.swift`.
-struct MediaGridView: View {
-    @ObservedObject var browseState: BrowseState
-    let client: APIClient?
+/// keyboard nav delegated to the underlying scroll view via a generic
+/// `ScrollIntrospector` parameter. macOS callers pass an
+/// `NSScrollViewIntrospector` that walks up to find the `NSScrollView`
+/// and stashes it in `MacScrollAccessor.box.scrollView`. iOS callers
+/// (M6) pass a `UIScrollViewIntrospector` doing the same with
+/// `UIScrollView`. The introspector view sits inside the
+/// `LazyVStack`'s `.background` so the superview walk reaches the real
+/// scroll view rather than walking up out of it.
+///
+/// Scroll commands themselves are dispatched via
+/// `@Environment(\.scrollAccessor)` — `BrowseState.pendingScrollCommand`
+/// triggers an `accessor.apply(token.command)` call. The accessor is
+/// the same instance the introspector populated.
+public struct MediaGridView<ScrollIntrospector: View>: View {
+    @ObservedObject public var browseState: BrowseState
+    public let client: APIClient?
+    public let scrollIntrospector: ScrollIntrospector
 
-    /// Aspirational row height before scaling. Wider rows shrink, narrower
-    /// ones grow, but the average stays close. 180pt feels right at
-    /// typical macOS window widths.
-    private let targetRowHeight: CGFloat = 180
+    @Environment(\.scrollAccessor) private var scrollAccessor
 
-    /// Cell-to-cell gap, both horizontal (within a row) and vertical
-    /// (between rows).
-    private let spacing: CGFloat = 4
+    public init(
+        browseState: BrowseState,
+        client: APIClient?,
+        @ViewBuilder scrollIntrospector: () -> ScrollIntrospector
+    ) {
+        self.browseState = browseState
+        self.client = client
+        self.scrollIntrospector = scrollIntrospector()
+    }
 
-    @StateObject private var scrollBox = NSScrollViewBox()
-
-    var body: some View {
+    public var body: some View {
         GeometryReader { geo in
             let layout = MediaLayout.compute(
                 aspectRatios: browseState.assets.map { $0.aspectRatio },
-                containerWidth: geo.size.width - spacing * 2,
-                targetRowHeight: targetRowHeight,
-                spacing: spacing
+                containerWidth: geo.size.width - MediaGridLayoutConstants.spacing * 2,
+                targetRowHeight: MediaGridLayoutConstants.targetRowHeight,
+                spacing: MediaGridLayoutConstants.spacing
             )
 
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: spacing) {
+                LazyVStack(alignment: .leading, spacing: MediaGridLayoutConstants.spacing) {
                     ForEach(Array(layout.rows.enumerated()), id: \.offset) { _, row in
                         justifiedRow(row: row, layout: layout)
                     }
@@ -52,20 +78,13 @@ struct MediaGridView: View {
                             .frame(maxWidth: .infinity)
                     }
                 }
-                .padding(spacing)
-                .background(
-                    NSScrollViewIntrospector { sv in
-                        scrollBox.scrollView = sv
-                        // One arrow-key tap should scroll roughly one
-                        // row, not the AppKit default ~10pt.
-                        sv.verticalLineScroll = targetRowHeight + spacing
-                    }
-                )
+                .padding(MediaGridLayoutConstants.spacing)
+                .background(scrollIntrospector)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onChange(of: browseState.pendingScrollCommand) { _, token in
-                guard let token, let sv = scrollBox.scrollView else { return }
-                applyScrollCommand(token.command, to: sv)
+                guard let token, let accessor = scrollAccessor else { return }
+                accessor.apply(token.command)
             }
         }
     }
@@ -76,8 +95,8 @@ struct MediaGridView: View {
     /// the frame sizes are authoritative.
     @ViewBuilder
     private func justifiedRow(row: [Int], layout: MediaLayout) -> some View {
-        let rowHeight = row.first.map { layout.frames[$0].height } ?? targetRowHeight
-        HStack(spacing: spacing) {
+        let rowHeight = row.first.map { layout.frames[$0].height } ?? MediaGridLayoutConstants.targetRowHeight
+        HStack(spacing: MediaGridLayoutConstants.spacing) {
             ForEach(row, id: \.self) { index in
                 let asset = browseState.assets[index]
                 let size = layout.frames[index]
@@ -105,14 +124,28 @@ struct MediaGridView: View {
     }
 }
 
+/// Convenience initializer for callers (e.g. previews and test contexts)
+/// that don't have a real platform scroll introspector to attach. The
+/// grid will render correctly but scroll commands will silently no-op.
+public extension MediaGridView where ScrollIntrospector == EmptyView {
+    init(browseState: BrowseState, client: APIClient?) {
+        self.init(browseState: browseState, client: client) { EmptyView() }
+    }
+}
+
 /// A single cell in the media grid. Sized externally by `MediaGridView`
 /// — the cell itself fills the frame given to it. There is no focus /
 /// selection state in Lumiverb's grid; click → lightbox.
-struct AssetCellView: View {
-    let asset: AssetPageItem
-    let client: APIClient?
+public struct AssetCellView: View {
+    public let asset: AssetPageItem
+    public let client: APIClient?
 
-    var body: some View {
+    public init(asset: AssetPageItem, client: APIClient?) {
+        self.asset = asset
+        self.client = client
+    }
+
+    public var body: some View {
         ZStack(alignment: .bottomLeading) {
             AuthenticatedImageView(
                 assetId: asset.assetId,

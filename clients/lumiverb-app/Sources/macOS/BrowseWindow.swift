@@ -285,6 +285,23 @@ struct BrowseWindow: View {
         }
     }
 
+    // MARK: - Scroll introspector
+
+    /// AppKit scroll introspector view that the LumiverbKit grids embed
+    /// inside their `LazyVStack`'s `.background` so the introspector's
+    /// superview walk can find the `NSScrollView`. The introspector
+    /// callback wires the discovered scroll view into
+    /// `appState.scrollAccessor.box` so `BrowseState.pendingScrollCommand`
+    /// can dispatch through it via `MacScrollAccessor.apply(_:)`. The
+    /// callback also tunes `verticalLineScroll` to the grid's row
+    /// height so one arrow-key press advances ~one row.
+    private var macScrollIntrospector: some View {
+        NSScrollViewIntrospector { sv in
+            appState.scrollAccessor.box.scrollView = sv
+            sv.verticalLineScroll = MediaGridLayoutConstants.verticalLineScrollHeight
+        }
+    }
+
     // MARK: - Person search suggestions
 
     /// Person search suggestions surface inside `.searchSuggestions { }`.
@@ -338,7 +355,9 @@ struct BrowseWindow: View {
             } else if browseState.assets.isEmpty && !browseState.isLoadingAssets {
                 emptyState("No assets in this library", icon: "photo.on.rectangle.angled")
             } else {
-                MediaGridView(browseState: browseState, client: appState.client)
+                MediaGridView(browseState: browseState, client: appState.client) {
+                    macScrollIntrospector
+                }
             }
 
         case .search:
@@ -347,7 +366,9 @@ struct BrowseWindow: View {
             } else if browseState.searchResults.isEmpty {
                 emptyState("No results for \"\(browseState.searchQuery)\"", icon: "magnifyingglass")
             } else {
-                SearchResultsGrid(browseState: browseState, client: appState.client)
+                SearchResultsGrid(browseState: browseState, client: appState.client) {
+                    macScrollIntrospector
+                }
             }
 
         case .similar(let sourceId):
@@ -360,7 +381,9 @@ struct BrowseWindow: View {
                     browseState: browseState,
                     sourceAssetId: sourceId,
                     client: appState.client
-                )
+                ) {
+                    macScrollIntrospector
+                }
             }
         }
 

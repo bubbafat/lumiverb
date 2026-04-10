@@ -1,19 +1,28 @@
 import SwiftUI
-import LumiverbKit
 
 /// Justified-row grid for similarity search results. Same layout +
 /// scroll-nav pattern as `MediaGridView` and `SearchResultsGrid`.
-struct SimilarResultsGrid: View {
-    @ObservedObject var browseState: BrowseState
-    let sourceAssetId: String
-    let client: APIClient?
+public struct SimilarResultsGrid<ScrollIntrospector: View>: View {
+    @ObservedObject public var browseState: BrowseState
+    public let sourceAssetId: String
+    public let client: APIClient?
+    public let scrollIntrospector: ScrollIntrospector
 
-    private let targetRowHeight: CGFloat = 180
-    private let spacing: CGFloat = 4
+    @Environment(\.scrollAccessor) private var scrollAccessor
 
-    @StateObject private var scrollBox = NSScrollViewBox()
+    public init(
+        browseState: BrowseState,
+        sourceAssetId: String,
+        client: APIClient?,
+        @ViewBuilder scrollIntrospector: () -> ScrollIntrospector
+    ) {
+        self.browseState = browseState
+        self.sourceAssetId = sourceAssetId
+        self.client = client
+        self.scrollIntrospector = scrollIntrospector()
+    }
 
-    var body: some View {
+    public var body: some View {
         VStack(spacing: 0) {
             // Header showing source asset
             HStack {
@@ -42,28 +51,23 @@ struct SimilarResultsGrid: View {
             GeometryReader { geo in
                 let layout = MediaLayout.compute(
                     aspectRatios: browseState.similarResults.map { $0.aspectRatio },
-                    containerWidth: geo.size.width - spacing * 2,
-                    targetRowHeight: targetRowHeight,
-                    spacing: spacing
+                    containerWidth: geo.size.width - MediaGridLayoutConstants.spacing * 2,
+                    targetRowHeight: MediaGridLayoutConstants.targetRowHeight,
+                    spacing: MediaGridLayoutConstants.spacing
                 )
 
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: spacing) {
+                    LazyVStack(alignment: .leading, spacing: MediaGridLayoutConstants.spacing) {
                         ForEach(Array(layout.rows.enumerated()), id: \.offset) { _, row in
                             justifiedRow(row: row, layout: layout)
                         }
                     }
-                    .padding(spacing)
-                    .background(
-                        NSScrollViewIntrospector { sv in
-                            scrollBox.scrollView = sv
-                            sv.verticalLineScroll = targetRowHeight + spacing
-                        }
-                    )
+                    .padding(MediaGridLayoutConstants.spacing)
+                    .background(scrollIntrospector)
                 }
                 .onChange(of: browseState.pendingScrollCommand) { _, token in
-                    guard let token, let sv = scrollBox.scrollView else { return }
-                    applyScrollCommand(token.command, to: sv)
+                    guard let token, let accessor = scrollAccessor else { return }
+                    accessor.apply(token.command)
                 }
             }
         }
@@ -72,8 +76,8 @@ struct SimilarResultsGrid: View {
 
     @ViewBuilder
     private func justifiedRow(row: [Int], layout: MediaLayout) -> some View {
-        let rowHeight = row.first.map { layout.frames[$0].height } ?? targetRowHeight
-        HStack(spacing: spacing) {
+        let rowHeight = row.first.map { layout.frames[$0].height } ?? MediaGridLayoutConstants.targetRowHeight
+        HStack(spacing: MediaGridLayoutConstants.spacing) {
             ForEach(row, id: \.self) { index in
                 let hit = browseState.similarResults[index]
                 let size = layout.frames[index]
@@ -90,12 +94,27 @@ struct SimilarResultsGrid: View {
     }
 }
 
-/// A single cell for a similarity result. Sized externally by the parent.
-struct SimilarHitCellView: View {
-    let hit: SimilarHit
-    let client: APIClient?
+public extension SimilarResultsGrid where ScrollIntrospector == EmptyView {
+    init(browseState: BrowseState, sourceAssetId: String, client: APIClient?) {
+        self.init(
+            browseState: browseState,
+            sourceAssetId: sourceAssetId,
+            client: client
+        ) { EmptyView() }
+    }
+}
 
-    var body: some View {
+/// A single cell for a similarity result. Sized externally by the parent.
+public struct SimilarHitCellView: View {
+    public let hit: SimilarHit
+    public let client: APIClient?
+
+    public init(hit: SimilarHit, client: APIClient?) {
+        self.hit = hit
+        self.client = client
+    }
+
+    public var body: some View {
         ZStack(alignment: .bottomTrailing) {
             AuthenticatedImageView(
                 assetId: hit.assetId,

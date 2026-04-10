@@ -1,52 +1,56 @@
 import SwiftUI
-import LumiverbKit
 
 /// Justified-row grid for search results. Same layout + scroll-nav
-/// pattern as `MediaGridView` — see that file for the rationale.
-struct SearchResultsGrid: View {
-    @ObservedObject var browseState: BrowseState
-    let client: APIClient?
+/// pattern as `MediaGridView` — see that file for the rationale on the
+/// generic `ScrollIntrospector` parameter and the `@Environment(\.scrollAccessor)`
+/// dispatch.
+public struct SearchResultsGrid<ScrollIntrospector: View>: View {
+    @ObservedObject public var browseState: BrowseState
+    public let client: APIClient?
+    public let scrollIntrospector: ScrollIntrospector
 
-    private let targetRowHeight: CGFloat = 180
-    private let spacing: CGFloat = 4
+    @Environment(\.scrollAccessor) private var scrollAccessor
 
-    @StateObject private var scrollBox = NSScrollViewBox()
+    public init(
+        browseState: BrowseState,
+        client: APIClient?,
+        @ViewBuilder scrollIntrospector: () -> ScrollIntrospector
+    ) {
+        self.browseState = browseState
+        self.client = client
+        self.scrollIntrospector = scrollIntrospector()
+    }
 
-    var body: some View {
+    public var body: some View {
         GeometryReader { geo in
             let layout = MediaLayout.compute(
                 aspectRatios: browseState.searchResults.map { $0.aspectRatio },
-                containerWidth: geo.size.width - spacing * 2,
-                targetRowHeight: targetRowHeight,
-                spacing: spacing
+                containerWidth: geo.size.width - MediaGridLayoutConstants.spacing * 2,
+                targetRowHeight: MediaGridLayoutConstants.targetRowHeight,
+                spacing: MediaGridLayoutConstants.spacing
             )
 
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: spacing) {
+                LazyVStack(alignment: .leading, spacing: MediaGridLayoutConstants.spacing) {
                     ForEach(Array(layout.rows.enumerated()), id: \.offset) { _, row in
                         justifiedRow(row: row, layout: layout)
                     }
                 }
-                .padding(spacing)
-                .background(
-                    NSScrollViewIntrospector { sv in
-                        scrollBox.scrollView = sv
-                        sv.verticalLineScroll = targetRowHeight + spacing
-                    }
-                )
+                .padding(MediaGridLayoutConstants.spacing)
+                .background(scrollIntrospector)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onChange(of: browseState.pendingScrollCommand) { _, token in
-                guard let token, let sv = scrollBox.scrollView else { return }
-                applyScrollCommand(token.command, to: sv)
+                guard let token, let accessor = scrollAccessor else { return }
+                accessor.apply(token.command)
             }
         }
     }
 
     @ViewBuilder
     private func justifiedRow(row: [Int], layout: MediaLayout) -> some View {
-        let rowHeight = row.first.map { layout.frames[$0].height } ?? targetRowHeight
-        HStack(spacing: spacing) {
+        let rowHeight = row.first.map { layout.frames[$0].height } ?? MediaGridLayoutConstants.targetRowHeight
+        HStack(spacing: MediaGridLayoutConstants.spacing) {
             ForEach(row, id: \.self) { index in
                 let hit = browseState.searchResults[index]
                 let size = layout.frames[index]
@@ -63,12 +67,23 @@ struct SearchResultsGrid: View {
     }
 }
 
-/// A single cell for a search result. Sized externally by the parent.
-struct SearchHitCellView: View {
-    let hit: SearchHit
-    let client: APIClient?
+public extension SearchResultsGrid where ScrollIntrospector == EmptyView {
+    init(browseState: BrowseState, client: APIClient?) {
+        self.init(browseState: browseState, client: client) { EmptyView() }
+    }
+}
 
-    var body: some View {
+/// A single cell for a search result. Sized externally by the parent.
+public struct SearchHitCellView: View {
+    public let hit: SearchHit
+    public let client: APIClient?
+
+    public init(hit: SearchHit, client: APIClient?) {
+        self.hit = hit
+        self.client = client
+    }
+
+    public var body: some View {
         ZStack(alignment: .bottomLeading) {
             AuthenticatedImageView(
                 assetId: hit.assetId,
