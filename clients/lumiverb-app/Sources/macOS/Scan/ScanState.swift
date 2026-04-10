@@ -1,6 +1,21 @@
 import SwiftUI
 import LumiverbKit
 
+/// Per-library health indicator. Drives the colored dot in the
+/// sidebar and the "is this library currently being worked on" check
+/// for the browse window's progress banner.
+enum LibraryStatus: Equatable {
+    /// Default healthy state — no pending work, root reachable.
+    /// Rendered as green.
+    case idle
+    /// Currently being scanned or enriched. Rendered as orange.
+    case busy
+    /// Root path doesn't exist on disk (unmounted volume, moved
+    /// folder, bad path). Rendered as red. Scan skips these until
+    /// they come back online.
+    case offline
+}
+
 /// Observable state for scan/processing status shown in the menu bar.
 @MainActor
 class ScanState: ObservableObject {
@@ -29,6 +44,14 @@ class ScanState: ObservableObject {
 
     /// Per-library scan results from the last run.
     @Published var lastResults: [String: ScanPipeline.ScanResult] = [:]
+
+    /// Per-library health status. Populated by `scanAllLibraries` as
+    /// it iterates. `.offline` is sticky across scans (it's only
+    /// cleared by a successful root-existence check on the next
+    /// scan). Consumed by `LibrarySidebar` to render the colored
+    /// status dot and by `BrowseWindow` to decide when to show its
+    /// "background activity" banner.
+    @Published var libraryStatus: [String: LibraryStatus] = [:]
 
     private var watcher: LibraryWatcher?
     private var pipelines: [String: ScanPipeline] = [:]
@@ -153,8 +176,25 @@ class ScanState: ObservableObject {
                 tenantFilters = TenantFilterDefaultsResponse(includes: [], excludes: [])
             }
 
+            // Process each library fully (scan + enrich) before moving
+            // on to the next. This used to be two separate loops
+            // (scan all, then enrich all), but that made the per-
+            // library status indicator flap weirdly — a library would
+            // go .busy → .idle → .busy as it moved between phases. The
+            // new ordering keeps `.busy` contiguous per library, which
+            // is also closer to the natural "one library at a time"
+            // mental model.
             for library in appState.libraries {
                 guard isScanning else { break }
+
+                // Root-existence check. An unmounted volume or a
+                // moved folder shouldn't abort the whole sweep — mark
+                // the library offline and continue to the next one.
+                guard FileManager.default.fileExists(atPath: library.rootPath) else {
+                    libraryStatus[library.libraryId] = .offline
+                    continue
+                }
+                libraryStatus[library.libraryId] = .busy
 
                 // Fetch library-specific filters
                 let libraryFilters: LibraryFiltersResponse
@@ -168,6 +208,7 @@ class ScanState: ObservableObject {
 
                 let pathFilter = PathFilter(tenant: tenantFilters, library: libraryFilters)
 
+                // --- Scan ---
                 let pipeline = ScanPipeline(
                     client: client,
                     libraryId: library.libraryId,
@@ -175,21 +216,13 @@ class ScanState: ObservableObject {
                     pathFilter: pathFilter
                 )
                 pipelines[library.libraryId] = pipeline
-
-                // Poll progress
                 startProgressPolling(pipeline: pipeline)
-
                 let result = await pipeline.run()
                 lastResults[library.libraryId] = result
-
                 stopProgressPolling()
                 pipelines.removeValue(forKey: library.libraryId)
-            }
 
-            // Run enrichment after scan for each library
-            for library in appState.libraries {
-                if cancelled { break }
-
+                // --- Enrich ---
                 phase = "enriching"
                 let enrichPipeline = EnrichmentPipeline(
                     client: client,
@@ -205,6 +238,8 @@ class ScanState: ObservableObject {
                 if enrichResult.errors > 0 {
                     scanError = "\(enrichResult.errors) enrichment errors"
                 }
+
+                libraryStatus[library.libraryId] = .idle
             }
 
             isScanning = false

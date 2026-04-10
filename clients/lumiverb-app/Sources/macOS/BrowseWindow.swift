@@ -75,6 +75,18 @@ struct BrowseWindow: View {
                     VStack(spacing: 0) {
                         if browseState.isReEnriching || !browseState.reEnrichSkipped.isEmpty {
                             reEnrichBanner
+                        } else if let libId = browseState.selectedLibraryId,
+                                  scanState.libraryStatus[libId] == .busy {
+                            // Background sync/enrich activity banner.
+                            // Shows the same status text as the menu
+                            // bar so users in the browse window don't
+                            // miss that work is in flight on the
+                            // library they're looking at. The
+                            // user-triggered re-enrich banner takes
+                            // priority when both are active — they
+                            // convey similar info and stacking both
+                            // would be noisy.
+                            scanActivityBanner
                         }
                         activeFiltersBar
                         contentArea
@@ -494,6 +506,25 @@ struct BrowseWindow: View {
                     .buttonStyle(.plain)
                 }
             }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(.bar)
+    }
+
+    // MARK: - Scan activity banner
+
+    /// Thin progress banner shown when the currently-selected library
+    /// is being scanned or enriched by the background scan. Gives the
+    /// browse-window user the same visibility into pipeline state
+    /// that the menu bar dropdown already provides.
+    private var scanActivityBanner: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+            Text(scanState.statusText)
+                .font(.caption)
+            Spacer()
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
