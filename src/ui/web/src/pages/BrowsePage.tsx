@@ -386,6 +386,42 @@ export default function BrowsePage() {
     [orderedAssets],
   );
   const selection = useSelection(orderedAssetIds);
+
+  // Complete last date group: auto-fetch next page if the tail date is
+  // split across a page boundary. Also auto-select new arrivals for
+  // dates the user has already selected.
+  const prevAssetCountRef = useRef(0);
+  useEffect(() => {
+    if (orderedAssets.length <= prevAssetCountRef.current) {
+      prevAssetCountRef.current = orderedAssets.length;
+      return;
+    }
+    // Auto-select new assets matching selected dates
+    const newAssets = orderedAssets.slice(prevAssetCountRef.current);
+    selection.autoSelectForDates(newAssets);
+    prevAssetCountRef.current = orderedAssets.length;
+
+    // Complete last date group: if there are more pages and the last
+    // group has the same date as the tail of the previous page, fetch more
+    if (!hasNextPage || isFetchingNextPage || isSearchMode) return;
+    const lastAsset = orderedAssets[orderedAssets.length - 1];
+    if (!lastAsset) return;
+    const lastDate = lastAsset.taken_at ?? lastAsset.file_mtime;
+    if (!lastDate) return;
+    const lastDateKey = new Date(lastDate).toISOString().slice(0, 10);
+
+    // Check if the last group is the same date as the very last asset
+    const lastGroup = groups[groups.length - 1];
+    if (!lastGroup?.dateIso || lastGroup.dateIso !== lastDateKey) return;
+
+    // The last asset is in the last group — check if this group might
+    // be incomplete. If assets.length is a multiple of PAGE_SIZE,
+    // the page was full and the date likely continues.
+    if (orderedAssets.length % PAGE_SIZE === 0) {
+      fetchNextPage();
+    }
+  }, [orderedAssets, groups, hasNextPage, isFetchingNextPage, isSearchMode, fetchNextPage, selection]);
+
   const [pickerAssetIds, setPickerAssetIds] = useState<string[] | null>(null);
 
   // ---------------------------------------------------------------------------
@@ -937,7 +973,7 @@ export default function BrowsePage() {
                     <div className="flex items-center gap-1">
                       <button
                         type="button"
-                        onClick={() => selection.selectGroup(groupIds)}
+                        onClick={() => selection.selectGroup(groupIds, headerGroup?.dateIso)}
                         className="flex items-center gap-2 px-1 py-2 text-sm font-semibold text-gray-400 hover:text-gray-200"
                       >
                         <span className={`inline-flex h-4 w-4 items-center justify-center rounded border transition-all ${

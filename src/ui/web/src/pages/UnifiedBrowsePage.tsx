@@ -632,7 +632,7 @@ export default function UnifiedBrowsePage() {
                     <div className="flex items-center gap-1">
                       <button
                         type="button"
-                        onClick={() => selection.selectGroup(groupIds)}
+                        onClick={() => selection.selectGroup(groupIds, headerGroup?.dateIso)}
                         className="flex items-center gap-2 px-1 py-2 text-sm font-semibold text-gray-400 hover:text-gray-200"
                       >
                         <span className={`inline-flex h-4 w-4 items-center justify-center rounded border transition-all ${
