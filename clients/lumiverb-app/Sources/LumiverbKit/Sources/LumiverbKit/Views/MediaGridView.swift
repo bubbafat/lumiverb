@@ -100,22 +100,16 @@ public struct MediaGridView<ScrollIntrospector: View>: View {
             spacing: MediaGridLayoutConstants.spacing
         )
 
-        // Date header
-        dateHeader(group: group)
+        // Each section is a single VStack so LazyVStack treats it as one
+        // unit and doesn't recycle headers across different date groups.
+        VStack(alignment: .leading, spacing: MediaGridLayoutConstants.spacing) {
+            DateHeaderView(group: group, browseState: browseState)
+                .id("header-\(group.label)")
 
-        // Rows for this section — use a stable ID combining the section's
-        // dateISO with the row offset so SwiftUI can differentiate rows
-        // across sections.
-        let sectionKey = group.dateISO ?? "unknown"
-        ForEach(Array(layout.rows.enumerated()), id: \.offset) { rowIdx, row in
-            sectionRow(row: row, layout: layout, assets: group.assets)
-                .id("\(sectionKey)-\(rowIdx)")
+            ForEach(Array(layout.rows.enumerated()), id: \.offset) { _, row in
+                sectionRow(row: row, layout: layout, assets: group.assets)
+            }
         }
-    }
-
-    @ViewBuilder
-    private func dateHeader(group: DateGroup) -> some View {
-        DateHeaderView(group: group, browseState: browseState)
     }
 }
 
