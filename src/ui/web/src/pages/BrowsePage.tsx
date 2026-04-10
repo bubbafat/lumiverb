@@ -989,6 +989,9 @@ export default function BrowsePage() {
                         </span>
                         {vr.label}
                       </button>
+                      <span className="rounded-full bg-gray-700 px-2 py-0.5 text-xs text-gray-400">
+                        {headerGroup?.assets.length ?? 0}
+                      </span>
                       {vr.dateIso && (
                         <button
                           type="button"
