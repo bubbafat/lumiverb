@@ -401,23 +401,13 @@ export default function BrowsePage() {
     selection.autoSelectForDates(newAssets);
     prevAssetCountRef.current = orderedAssets.length;
 
-    // Complete last date group: if there are more pages and the last
-    // group has the same date as the tail of the previous page, fetch more
+    // Complete last date group: if we received a full page (PAGE_SIZE
+    // items), the tail date probably continues on the next page.
+    // Fetch until the page is short (meaning the server ran out or
+    // we've crossed a date boundary). This matches the macOS client's
+    // completeLastDateGroup behavior.
     if (!hasNextPage || isFetchingNextPage || isSearchMode) return;
-    const lastAsset = orderedAssets[orderedAssets.length - 1];
-    if (!lastAsset) return;
-    const lastDate = lastAsset.taken_at ?? lastAsset.file_mtime;
-    if (!lastDate) return;
-    const lastDateKey = new Date(lastDate).toISOString().slice(0, 10);
-
-    // Check if the last group is the same date as the very last asset
-    const lastGroup = groups[groups.length - 1];
-    if (!lastGroup?.dateIso || lastGroup.dateIso !== lastDateKey) return;
-
-    // The last asset is in the last group — check if this group might
-    // be incomplete. If assets.length is a multiple of PAGE_SIZE,
-    // the page was full and the date likely continues.
-    if (orderedAssets.length % PAGE_SIZE === 0) {
+    if (newAssets.length >= PAGE_SIZE) {
       fetchNextPage();
     }
   }, [orderedAssets, groups, hasNextPage, isFetchingNextPage, isSearchMode, fetchNextPage, selection]);
