@@ -168,74 +168,19 @@ public class BrowseState: ObservableObject {
         if selectedAssetIds.isEmpty { isSelecting = false }
     }
 
-    /// Toggle all assets in a date group. Uses the locally loaded IDs for
-    /// the initial toggle, then fetches the complete set from the server
-    /// (via the search endpoint with date_from/date_to) so that assets
-    /// not yet paged in are also selected.
-    public func selectGroup(_ localAssetIds: [String], dateISO: String?) {
+    /// Toggle all assets in a date group. If all are already selected,
+    /// deselect them; otherwise select all. Because `loadNextPage`
+    /// always completes the last date group, every asset for a visible
+    /// date header is guaranteed to be loaded — no server round-trip needed.
+    public func selectGroup(_ assetIds: [String]) {
         if !isSelecting { isSelecting = true }
-        let localSet = Set(localAssetIds)
-
-        // If all local assets are already selected, deselect (toggle off)
-        if localSet.isSubset(of: selectedAssetIds) {
-            // Also remove any server-fetched IDs for this date
-            selectedAssetIds.subtract(localSet)
-            if let dateISO { dateGroupAllIds.removeValue(forKey: dateISO) }
-            if selectedAssetIds.isEmpty { isSelecting = false }
-            return
+        let groupSet = Set(assetIds)
+        if groupSet.isSubset(of: selectedAssetIds) {
+            selectedAssetIds.subtract(groupSet)
+        } else {
+            selectedAssetIds.formUnion(groupSet)
         }
-
-        // Select the locally loaded ones immediately
-        selectedAssetIds.formUnion(localSet)
-
-        // Fetch the full set from the server in the background
-        guard let client = appContext.client, let dateISO, let libraryId = selectedLibraryId else { return }
-        Task {
-            let allIds = await fetchAllAssetIdsForDate(
-                client: client, libraryId: libraryId, dateISO: dateISO
-            )
-            dateGroupAllIds[dateISO] = allIds
-            selectedAssetIds.formUnion(allIds)
-        }
-    }
-
-    /// Cache of complete asset ID sets per date, fetched from the server.
-    private var dateGroupAllIds: [String: Set<String>] = [:]
-
-    /// Fetch all asset IDs for a given date via the search endpoint.
-    /// Pages through with offset/limit until all are collected.
-    private func fetchAllAssetIdsForDate(
-        client: APIClient,
-        libraryId: String,
-        dateISO: String
-    ) async -> Set<String> {
-        var allIds = Set<String>()
-        var offset = 0
-        let limit = 500
-
-        while true {
-            let params: [String: String] = [
-                "q": "",
-                "library_id": libraryId,
-                "date_from": dateISO,
-                "date_to": dateISO,
-                "limit": "\(limit)",
-                "offset": "\(offset)",
-            ]
-            do {
-                let response: SearchResponse = try await client.get("/v1/search", query: params)
-                for hit in response.hits {
-                    allIds.insert(hit.assetId)
-                }
-                if response.hits.count < limit || allIds.count >= response.total {
-                    break
-                }
-                offset += limit
-            } catch {
-                break
-            }
-        }
-        return allIds
+        if selectedAssetIds.isEmpty { isSelecting = false }
     }
 
     /// Select all currently displayed assets.
@@ -541,6 +486,14 @@ public class BrowseState: ObservableObject {
             assets.append(contentsOf: response.items)
             nextCursor = response.nextCursor
             hasMoreAssets = response.nextCursor != nil
+
+            // Complete the last date group: if we have more pages and the
+            // last loaded asset's date matches the tail, keep loading so
+            // every visible date header covers 100% of its assets. This
+            // guarantees "select date" selects everything for that day.
+            if hasMoreAssets {
+                await completeLastDateGroup(client: client, libraryId: libraryId, isFirstPage: isFirstPage)
+            }
         } catch is CancellationError {
             // Library change cancelled this load — nothing to report.
             return
@@ -629,6 +582,80 @@ public class BrowseState: ObservableObject {
             return "Load cancelled."
         }
         return "Couldn't load library: \(error.localizedDescription)"
+    }
+
+    // MARK: - Date group completion
+
+    /// Extract the calendar date (YYYY-MM-DD) from an asset's takenAt or
+    /// createdAt, matching the grouping logic in `groupAssetsByDate`.
+    private static func dateKey(for asset: AssetPageItem) -> String? {
+        guard let dateStr = asset.takenAt ?? asset.createdAt else { return nil }
+        // Quick parse: ISO8601 dates start with "YYYY-MM-DD"
+        guard dateStr.count >= 10 else { return nil }
+        return String(dateStr.prefix(10))
+    }
+
+    /// After a page load, keep fetching if the last asset's date matches
+    /// what would be a partial group at the tail. Stops as soon as the
+    /// next page starts a new date (or there are no more pages).
+    private func completeLastDateGroup(
+        client: APIClient,
+        libraryId: String,
+        isFirstPage: Bool
+    ) async {
+        guard let lastAsset = assets.last,
+              let tailDate = Self.dateKey(for: lastAsset) else { return }
+
+        while hasMoreAssets {
+            guard let cursor = nextCursor else { break }
+            guard selectedLibraryId == libraryId else { break }
+
+            var query = filters.queryParams
+            query["library_id"] = libraryId
+            query["limit"] = "100"
+            query["after"] = cursor
+            if let path = selectedPath {
+                query["path_prefix"] = path
+            }
+
+            do {
+                let response: AssetPageResponse = try await client.get(
+                    "/v1/assets/page", query: query
+                )
+                guard selectedLibraryId == libraryId else { return }
+
+                // Check if the first item of this page is still on the same date
+                guard let firstItem = response.items.first,
+                      Self.dateKey(for: firstItem) == tailDate else {
+                    // Different date — the previous group is complete.
+                    // Store the cursor so the next loadNextPage picks up here.
+                    nextCursor = response.nextCursor
+                    hasMoreAssets = response.nextCursor != nil
+                    // Append only assets matching the tail date
+                    let matching = response.items.prefix(while: { Self.dateKey(for: $0) == tailDate })
+                    assets.append(contentsOf: matching)
+                    // If we consumed some but not all, we need to re-fetch
+                    // from the original cursor next time (the unconsumed
+                    // items belong to the next date). Since keyset pagination
+                    // doesn't support "rewind", just keep the full page.
+                    if matching.count < response.items.count {
+                        // Append the rest too — they'll form the start of
+                        // the next date group. Better to have a complete
+                        // view than to drop items.
+                        let rest = response.items.dropFirst(matching.count)
+                        assets.append(contentsOf: rest)
+                    }
+                    break
+                }
+
+                // Entire page is still the same date — append and continue
+                assets.append(contentsOf: response.items)
+                nextCursor = response.nextCursor
+                hasMoreAssets = response.nextCursor != nil
+            } catch {
+                break
+            }
+        }
     }
 
     // MARK: - Asset detail

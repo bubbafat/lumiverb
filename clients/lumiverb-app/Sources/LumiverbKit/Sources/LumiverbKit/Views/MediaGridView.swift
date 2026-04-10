@@ -120,7 +120,7 @@ public struct MediaGridView<ScrollIntrospector: View>: View {
 
         HStack {
             Button {
-                browseState.selectGroup(groupIds, dateISO: group.dateISO)
+                browseState.selectGroup(groupIds)
             } label: {
                 Image(systemName: allSelected ? "checkmark.circle.fill" : "circle")
                     .foregroundColor(allSelected ? .accentColor : .secondary)
