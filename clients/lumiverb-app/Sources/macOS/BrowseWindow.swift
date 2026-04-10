@@ -217,6 +217,7 @@ struct BrowseWindow: View {
                 section = .collections
             }
         }
+        .toolbar(browseState.selectedAssetId != nil ? .hidden : .automatic)
     }
 
     /// Restore the last-opened library on first load. Extracted from the
@@ -452,8 +453,6 @@ struct BrowseWindow: View {
             browseState: browseState,
             client: appState.client
         )
-        .ignoresSafeArea()
-        .toolbar(.hidden)
         .transition(.opacity.animation(.easeInOut(duration: 0.15)))
     }
 
