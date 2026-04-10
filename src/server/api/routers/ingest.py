@@ -377,6 +377,10 @@ async def create_and_ingest(
         if file_mtime_dt is not None:
             existing.file_mtime = file_mtime_dt
         existing.media_type = media_type
+        # Re-ingesting a soft-deleted asset restores it. Without this,
+        # the asset stays invisible (active_assets filters deleted_at)
+        # and the scanner re-discovers it every cycle.
+        existing.deleted_at = None
         session.add(existing)
 
     result = _do_ingest(
