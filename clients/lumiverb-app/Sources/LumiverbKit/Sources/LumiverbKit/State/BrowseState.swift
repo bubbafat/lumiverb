@@ -155,6 +155,9 @@ public class BrowseState: ObservableObject {
     @Published public var isSelecting = false
     /// The last individually toggled asset ID, used for shift-click range select.
     public var lastToggledAssetId: String?
+    /// Date keys (YYYY-MM-DD) with active group selections. Assets arriving
+    /// after a date-select click are auto-added if their date is in this set.
+    private var selectedDateKeys: Set<String> = []
 
     /// Toggle a single asset's selection. Enters select mode if not already.
     public func toggleSelection(assetId: String) {
@@ -168,19 +171,35 @@ public class BrowseState: ObservableObject {
         if selectedAssetIds.isEmpty { isSelecting = false }
     }
 
-    /// Toggle all assets in a date group. If all are already selected,
-    /// deselect them; otherwise select all. Because `loadNextPage`
-    /// always completes the last date group, every asset for a visible
-    /// date header is guaranteed to be loaded — no server round-trip needed.
-    public func selectGroup(_ assetIds: [String]) {
+    /// Toggle all assets in a date group. Tracks the date key so that
+    /// assets arriving later (from page completion) are auto-selected.
+    public func selectGroup(_ assetIds: [String], dateISO: String?) {
         if !isSelecting { isSelecting = true }
         let groupSet = Set(assetIds)
         if groupSet.isSubset(of: selectedAssetIds) {
+            // Deselect
             selectedAssetIds.subtract(groupSet)
+            if let key = dateISO { selectedDateKeys.remove(key) }
         } else {
+            // Select
             selectedAssetIds.formUnion(groupSet)
+            if let key = dateISO { selectedDateKeys.insert(key) }
         }
-        if selectedAssetIds.isEmpty { isSelecting = false }
+        if selectedAssetIds.isEmpty {
+            isSelecting = false
+            selectedDateKeys.removeAll()
+        }
+    }
+
+    /// Called after new assets are appended. Auto-selects any that belong
+    /// to a date group the user has already selected.
+    private func autoSelectNewAssets(_ newAssets: [AssetPageItem]) {
+        guard !selectedDateKeys.isEmpty else { return }
+        for asset in newAssets {
+            if let key = Self.dateKey(for: asset), selectedDateKeys.contains(key) {
+                selectedAssetIds.insert(asset.assetId)
+            }
+        }
     }
 
     /// Select all currently displayed assets.
@@ -192,6 +211,7 @@ public class BrowseState: ObservableObject {
     /// Exit select mode and clear the selection.
     public func clearSelection() {
         selectedAssetIds.removeAll()
+        selectedDateKeys.removeAll()
         isSelecting = false
         lastToggledAssetId = nil
     }
@@ -484,6 +504,7 @@ public class BrowseState: ObservableObject {
             guard selectedLibraryId == libraryId else { return }
 
             assets.append(contentsOf: response.items)
+            autoSelectNewAssets(response.items)
             nextCursor = response.nextCursor
             hasMoreAssets = response.nextCursor != nil
 
@@ -634,6 +655,7 @@ public class BrowseState: ObservableObject {
                     // Append only assets matching the tail date
                     let matching = response.items.prefix(while: { Self.dateKey(for: $0) == tailDate })
                     assets.append(contentsOf: matching)
+                    autoSelectNewAssets(Array(matching))
                     // If we consumed some but not all, we need to re-fetch
                     // from the original cursor next time (the unconsumed
                     // items belong to the next date). Since keyset pagination
@@ -642,14 +664,16 @@ public class BrowseState: ObservableObject {
                         // Append the rest too — they'll form the start of
                         // the next date group. Better to have a complete
                         // view than to drop items.
-                        let rest = response.items.dropFirst(matching.count)
+                        let rest = Array(response.items.dropFirst(matching.count))
                         assets.append(contentsOf: rest)
+                        autoSelectNewAssets(rest)
                     }
                     break
                 }
 
                 // Entire page is still the same date — append and continue
                 assets.append(contentsOf: response.items)
+                autoSelectNewAssets(response.items)
                 nextCursor = response.nextCursor
                 hasMoreAssets = response.nextCursor != nil
             } catch {

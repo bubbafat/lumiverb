@@ -173,7 +173,7 @@ struct DateHeaderView: View {
         .zIndex(1)
         .onTapGesture {
             print("[DateHeader] tapped: \(group.label) (\(group.assets.count) assets, first=\(groupIds.first ?? "none"))")
-            browseState.selectGroup(groupIds)
+            browseState.selectGroup(groupIds, dateISO: group.dateISO)
         }
         .padding(.top, 8)
     }
