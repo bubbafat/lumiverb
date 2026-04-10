@@ -148,6 +148,10 @@ public struct LightboxView: View {
                         browseState.closeLightbox()
                         browseState.searchQuery = tag
                         Task { await browseState.performSearch() }
+                    },
+                    onPathClick: { path in
+                        browseState.closeLightbox()
+                        browseState.selectedPath = path
                     }
                 )
                 .frame(width: 300)
@@ -249,14 +253,20 @@ struct MetadataSidebar: View {
     var onMetadataFilter: (((inout BrowseFilter) -> Void) -> Void)?
     /// When set, tags become clickable search links.
     var onTagSearch: ((String) -> Void)?
+    /// When set, path segments become clickable directory filters.
+    var onPathClick: ((String) -> Void)?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                // Filename
-                Text(detail.filename)
-                    .font(.headline)
-                    .lineLimit(2)
+                // Filename + path breadcrumb
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(detail.filename)
+                        .font(.headline)
+                        .lineLimit(2)
+
+                    pathBreadcrumb
+                }
 
                 // Rating
                 RatingEditorView(rating: $rating, onChange: onRatingChange)
@@ -405,7 +415,6 @@ struct MetadataSidebar: View {
                 // File info
                 metadataSection("File") {
                     VStack(alignment: .leading, spacing: 4) {
-                        metadataRow("Path", detail.relPath)
                         filterableRow("Type", detail.mediaType) { f in
                             f.mediaType = detail.mediaType
                         }
@@ -512,6 +521,48 @@ struct MetadataSidebar: View {
                     .font(.caption)
                     .textSelection(.enabled)
                     .lineLimit(3)
+            }
+        }
+    }
+
+    /// Path rendered as clickable breadcrumb segments, matching the web
+    /// lightbox. Each directory component is a button that filters by
+    /// that path prefix. The filename (last segment) is static.
+    @ViewBuilder
+    private var pathBreadcrumb: some View {
+        let parts = detail.relPath.split(separator: "/").map(String.init)
+        let dirParts = parts.dropLast()
+
+        if dirParts.isEmpty {
+            Text(detail.relPath)
+                .font(.caption)
+                .foregroundColor(.secondary)
+        } else {
+            HStack(spacing: 0) {
+                ForEach(Array(dirParts.enumerated()), id: \.offset) { idx, segment in
+                    if idx > 0 {
+                        Text("/")
+                            .font(.caption)
+                            .foregroundColor(.secondary.opacity(0.5))
+                    }
+                    if let onPathClick {
+                        let path = dirParts.prefix(idx + 1).joined(separator: "/")
+                        Button {
+                            onPathClick(path)
+                        } label: {
+                            Text(segment)
+                                .font(.caption)
+                                .underline()
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(.accentColor)
+                        .help("Filter by \(path)")
+                    } else {
+                        Text(segment)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
             }
         }
     }
