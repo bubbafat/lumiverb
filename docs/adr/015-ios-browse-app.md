@@ -22,6 +22,7 @@ Proposed
 | M7 | iOS touch adaptations for cluster/face management | Not started |
 | M8 | iOS cellular + Low Data Mode policy | Not started |
 | M9 | Tests, docs, launch checklist | Not started |
+| M10 | Trash view: visibility + selective undelete | Not started |
 
 ## Overview
 
@@ -1336,6 +1337,77 @@ These are mechanical extractions; behavior is preserved exactly.
 - [ ] `xcodebuild` green for both targets
 - [ ] Docs updated
 - [ ] ADR-014 and ADR-015 status tables updated
+- [ ] Milestone table updated
+
+### Milestone 10 — Trash view: visibility + selective undelete
+
+**Goal:** Soft-deleted assets are currently invisible and irrecoverable from any
+client. The scan pipeline (or a user action) can soft-delete hundreds of assets
+in one pass — a runaway delete phase, a filter misconfiguration, or a
+temporarily-offline volume can make assets disappear with no way to notice or
+recover. This milestone adds a "Trash" view so users can see what was deleted,
+when, and restore individual assets or bulk-undelete.
+
+**Motivation (incident 2026-04-10):** The macOS scan pipeline's delete phase
+batch-deleted 1500 assets that were still on disk. The scanner's
+`fetchServerAssets` returned them, `discoverFiles` missed them (likely a transient
+volume enumeration issue), and classification marked them as "deleted from disk."
+The batch DELETE calls succeeded (200 OK), and the assets became invisible.
+Subsequent scans re-discovered the files, re-ingested them (also 200 OK), but the
+ingest endpoint updated the existing soft-deleted rows without clearing
+`deleted_at`. A deletion safety gate and `deleted_at` clearing on re-ingest were
+shipped as hotfixes, but the core data-trust problem remains: there is no way to
+see or undo deletions from the client.
+
+**Deliverables:**
+
+1. **Server endpoint:** `GET /v1/assets/trash?library_id=...&after=...&limit=200`
+   — paginated list of soft-deleted assets for a library, sorted by `deleted_at`
+   descending (most recently deleted first). Response shape matches
+   `AssetPageResponse` but queries `assets WHERE deleted_at IS NOT NULL` instead
+   of `active_assets`.
+
+2. **Server endpoint:** `POST /v1/assets/restore` — accepts `{"asset_ids": [...]}`
+   and sets `deleted_at = NULL` on each. Returns `{"restored": N}`. Max 1000 IDs
+   per call (same limit as batch ratings).
+
+3. **Server endpoint:** `POST /v1/assets/hard-delete` — permanently removes
+   soft-deleted assets (proxy, thumbnail, all child rows). Only operates on
+   assets where `deleted_at IS NOT NULL`. This is the "empty trash" action.
+   Requires `admin` role.
+
+4. `LumiverbKit/Models/TrashedAsset.swift` — model for the trash list response.
+   Includes `deletedAt` so the UI can show when each asset was deleted.
+
+5. `APIClient.swift` additions: `listTrash`, `restoreAssets`, `hardDeleteAssets`.
+
+6. `LumiverbKit/State/TrashState.swift` — observable state holding the trash
+   list, loading flags, pagination.
+
+7. `LumiverbKit/Views/TrashView.swift` — asset grid (reuse `MediaGridView`
+   layout or a simpler list), with a banner showing count + date range. Each cell
+   has a "Restore" context menu item. Toolbar has "Restore All" and "Empty Trash"
+   (with confirmation dialog for both).
+
+8. **macOS integration:** Add a "Trash" section to `LibrarySidebar.swift` with a
+   badge showing the count of trashed assets. Tapping opens `TrashView` in the
+   detail pane.
+
+9. **Scan pipeline integration:** After the delete phase, if any assets were
+   deleted, log the count at `.warning` level and set `ScanState.lastTrashCount`
+   so the sidebar badge can surface it without an extra API call.
+
+10. Tests for restore and hard-delete endpoints; model decoding tests.
+
+**Does NOT include:** Automatic expiry (e.g., "permanently delete after 30 days").
+That's a server-side policy decision for a future milestone. Also does not include
+undo for user-initiated deletes from the web UI — that's a separate feature.
+
+**Done when:**
+- [ ] Both targets build
+- [ ] New tests green
+- [ ] Manual: on macOS, soft-delete an asset, see it in Trash view, restore it, verify it reappears in browse
+- [ ] Manual: "Empty Trash" permanently removes assets
 - [ ] Milestone table updated
 
 ## Alternatives Considered
