@@ -52,7 +52,7 @@ public struct MediaGridView<ScrollIntrospector: View>: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: MediaGridLayoutConstants.spacing) {
-                    ForEach(Array(dateGroups.enumerated()), id: \.offset) { _, group in
+                    ForEach(dateGroups, id: \.label) { group in
                         dateSection(group: group, containerWidth: containerWidth)
                     }
 
@@ -103,9 +103,13 @@ public struct MediaGridView<ScrollIntrospector: View>: View {
         // Date header
         dateHeader(group: group)
 
-        // Rows for this section
-        ForEach(Array(layout.rows.enumerated()), id: \.offset) { _, row in
+        // Rows for this section — use a stable ID combining the section's
+        // dateISO with the row offset so SwiftUI can differentiate rows
+        // across sections.
+        let sectionKey = group.dateISO ?? "unknown"
+        ForEach(Array(layout.rows.enumerated()), id: \.offset) { rowIdx, row in
             sectionRow(row: row, layout: layout, assets: group.assets)
+                .id("\(sectionKey)-\(rowIdx)")
         }
     }
 
@@ -181,25 +185,16 @@ public struct MediaGridView<ScrollIntrospector: View>: View {
 
     @ViewBuilder
     private func assetCell(asset: AssetPageItem, isSelected: Bool) -> some View {
-        ZStack(alignment: .bottomLeading) {
+        ZStack(alignment: .topLeading) {
             AssetCellView(asset: asset, client: client)
 
-            // Selection overlay
-            if browseState.isSelecting || isSelected {
-                ZStack(alignment: .topLeading) {
-                    // Dim overlay when in select mode but not selected
-                    if !isSelected {
-                        Color.black.opacity(0.2)
-                    }
-
-                    // Checkmark indicator
-                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .font(.title3)
-                        .foregroundColor(isSelected ? .accentColor : .white.opacity(0.8))
-                        .shadow(color: .black.opacity(0.5), radius: 2)
-                        .padding(6)
-                }
-            }
+            // Selection circle — always visible so users know they can
+            // select. Becomes filled + blue when selected.
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                .font(.title3)
+                .foregroundColor(isSelected ? .accentColor : .white.opacity(0.6))
+                .shadow(color: .black.opacity(0.5), radius: 2)
+                .padding(6)
 
             // Selected border
             if isSelected {
