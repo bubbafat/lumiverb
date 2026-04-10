@@ -247,6 +247,13 @@ def _do_ingest(
     # --- Bump library revision for UI polling ---
     LibraryRepository(session).bump_revision(library_id)
 
+    # Commit all changes atomically. The tenant session does NOT auto-commit
+    # (SQLModel's `with Session` rolls back on exit), so every write path
+    # must commit explicitly. The update-existing branch in create_and_ingest
+    # already commits; this covers the new-asset branch and the standalone
+    # /v1/assets/{id}/ingest endpoint.
+    session.commit()
+
     return IngestResponse(
         asset_id=asset_id,
         proxy_key=proxy_key,
@@ -371,7 +378,6 @@ async def create_and_ingest(
             existing.file_mtime = file_mtime_dt
         existing.media_type = media_type
         session.add(existing)
-        session.commit()
 
     result = _do_ingest(
         asset_id=asset_id,
