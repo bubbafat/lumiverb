@@ -66,11 +66,11 @@ public struct AuthenticatedImageView: View {
                 #if canImport(AppKit)
                 Image(nsImage: image)
                     .resizable()
-                    .aspectRatio(contentMode: .fit)
+                    .aspectRatio(contentMode: .fill)
                 #elseif canImport(UIKit)
                 Image(uiImage: image)
                     .resizable()
-                    .aspectRatio(contentMode: .fit)
+                    .aspectRatio(contentMode: .fill)
                 #endif
             } else if isLoading {
                 ProgressView()

@@ -193,7 +193,7 @@ extension MediaGridView {
 
                 assetCell(asset: asset, isSelected: isSelected)
                     .frame(width: size.width, height: size.height)
-                    .contentShape(Rectangle())
+                    .clipShape(Rectangle())
                     .onTapGesture {
                         handleTap(asset: asset)
                     }
