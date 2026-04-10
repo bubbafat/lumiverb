@@ -1,5 +1,8 @@
 import SwiftUI
 import LumiverbKit
+import os.log
+
+private let scanStateLogger = Logger(subsystem: "io.lumiverb.app", category: "ScanState")
 
 /// Per-library health indicator. Drives the colored dot in the
 /// sidebar and the "is this library currently being worked on" check
@@ -207,6 +210,7 @@ class ScanState: ObservableObject {
                 }
 
                 let pathFilter = PathFilter(tenant: tenantFilters, library: libraryFilters)
+                scanStateLogger.info("Filters for \(library.name, privacy: .public): tenant includes=\(tenantFilters.includes.map(\.pattern), privacy: .public) excludes=\(tenantFilters.excludes.map(\.pattern), privacy: .public) | library includes=\(libraryFilters.includes.map(\.pattern), privacy: .public) excludes=\(libraryFilters.excludes.map(\.pattern), privacy: .public)")
 
                 // --- Scan ---
                 let pipeline = ScanPipeline(

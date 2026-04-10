@@ -1,6 +1,9 @@
 import Foundation
 import ImageIO
 import LumiverbKit
+import os.log
+
+private let scanLogger = Logger(subsystem: "io.lumiverb.app", category: "ScanPipeline")
 
 /// Orchestrates the full scan cycle for a single library:
 /// discover → classify → generate proxy → upload → handle deletes/moves.
@@ -91,6 +94,8 @@ actor ScanPipeline {
             return ScanResult(newFiles: 0, changedFiles: 0, unchangedFiles: 0, deletedFiles: 0, errors: 0)
         }
 
+        scanLogger.info("Starting scan for library \(self.libraryId, privacy: .public) at \(self.rootPath, privacy: .public)")
+
         // Phase 1: Discover local files
         phase = "discovering"
         let localFiles = discoverFiles()
@@ -112,6 +117,19 @@ actor ScanPipeline {
         totalFiles = allWork.count
         skippedFiles = unchangedFiles.count
         pendingDeletions = deletedAssetIds.count
+
+        scanLogger.info("Classification: \(localFiles.count, privacy: .public) local, \(serverAssets.count, privacy: .public) server → \(newFiles.count, privacy: .public) new, \(changedFiles.count, privacy: .public) changed, \(unchangedFiles.count, privacy: .public) unchanged, \(deletedAssetIds.count, privacy: .public) deleted")
+
+        // Log a sample of "new" files to diagnose re-discovery bugs
+        if !newFiles.isEmpty {
+            let sample = newFiles.prefix(5)
+            for file in sample {
+                scanLogger.info("  new: \(file.relPath, privacy: .public)")
+            }
+            if newFiles.count > 5 {
+                scanLogger.info("  ... and \(newFiles.count - 5, privacy: .public) more")
+            }
+        }
 
         // Phase 4: Process new + changed files concurrently
         phase = "processing"
@@ -165,6 +183,7 @@ actor ScanPipeline {
 
         phase = "done"
         isRunning = false
+        scanLogger.info("Scan complete: \(self.processedFiles, privacy: .public) processed, \(self.errorCount, privacy: .public) errors, \(deleteCount, privacy: .public) deleted")
 
         return ScanResult(
             newFiles: newCount,
@@ -412,6 +431,7 @@ actor ScanPipeline {
 
             return true
         } catch {
+            scanLogger.error("processFile failed: \(file.relPath, privacy: .public) — \(error, privacy: .public)")
             lastError = "\(file.relPath): \(error)"
             return false
         }
