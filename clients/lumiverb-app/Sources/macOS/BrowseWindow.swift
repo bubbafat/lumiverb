@@ -241,19 +241,21 @@ struct BrowseWindow: View {
     /// inference timeout after the BrowseState move into LumiverbKit.
     @ViewBuilder
     private var detailContent: some View {
-        ZStack {
-            sectionContent
-            // Library-switch overlay. Sits above the content area so
-            // it's visible as soon as the user clicks a new library —
-            // before any network-bound load completes. Tied to
-            // `isChangingLibrary`, which is set synchronously in
-            // `handleSelectedLibraryChange()` and cleared when the
-            // first asset page comes back.
-            if browseState.isChangingLibrary && section == .library {
-                changingLibraryOverlay
-            }
-            if browseState.selectedAssetId != nil {
-                lightboxOverlay
+        if browseState.selectedAssetId != nil {
+            // Lightbox replaces the grid content (not overlaid on top).
+            // This gives the lightbox its own layout context that
+            // respects the detail pane's safe area independently of the
+            // grid's ScrollView.
+            lightboxOverlay
+        } else {
+            ZStack {
+                sectionContent
+                // Library-switch overlay. Sits above the content area so
+                // it's visible as soon as the user clicks a new library —
+                // before any network-bound load completes.
+                if browseState.isChangingLibrary && section == .library {
+                    changingLibraryOverlay
+                }
             }
         }
     }
