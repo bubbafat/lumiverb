@@ -452,6 +452,8 @@ struct BrowseWindow: View {
             browseState: browseState,
             client: appState.client
         )
+        .ignoresSafeArea()
+        .toolbar(.hidden)
         .transition(.opacity.animation(.easeInOut(duration: 0.15)))
     }
 
