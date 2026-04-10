@@ -175,10 +175,28 @@ actor ScanPipeline {
         changedCount = changedFiles.count
 
         // Phase 5: Handle deletions
+        //
+        // Safety gate: if the server has significantly more assets than we
+        // found locally, skip deletions entirely. This protects against
+        // external volumes that are slow to mount or temporarily offline —
+        // the root directory may exist (mount point) but enumeration returns
+        // a partial or empty file list, causing the classification to mark
+        // hundreds or thousands of assets as "deleted from disk" when they're
+        // actually still there.
+        //
+        // Threshold: skip if we'd delete more than 5% of the server's known
+        // assets AND more than 50 files. Small libraries or genuine bulk
+        // deletes (< 50 files) proceed normally.
         var deleteCount = 0
+        let deletionRatio = serverAssets.isEmpty ? 0.0 : Double(deletedAssetIds.count) / Double(serverAssets.count)
         if !deletedAssetIds.isEmpty && !cancelled {
-            phase = "deleting"
-            deleteCount = await handleDeletions(assetIds: deletedAssetIds)
+            if deletedAssetIds.count > 50 && deletionRatio > 0.05 {
+                scanLogger.warning("Skipping \(deletedAssetIds.count, privacy: .public) deletions — \(String(format: "%.1f", deletionRatio * 100), privacy: .public)% of server assets would be removed. Possible volume mount issue.")
+                phase = "skipped deletions (safety)"
+            } else {
+                phase = "deleting"
+                deleteCount = await handleDeletions(assetIds: deletedAssetIds)
+            }
         }
 
         phase = "done"
