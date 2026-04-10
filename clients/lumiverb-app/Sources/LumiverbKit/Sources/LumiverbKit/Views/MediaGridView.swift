@@ -113,55 +113,55 @@ public struct MediaGridView<ScrollIntrospector: View>: View {
         }
     }
 
-    /// Date header rendered as a standalone view with its own identity.
-    /// Uses `onTapGesture` on the full row rather than an embedded `Button`
-    /// to avoid hit-test confusion in `LazyVStack` view recycling.
-    private struct DateHeaderView: View {
-        let label: String
-        let count: Int
-        let allSelected: Bool
-        let onTap: () -> Void
-
-        var body: some View {
-            HStack {
-                Image(systemName: allSelected ? "checkmark.circle.fill" : "circle")
-                    .foregroundColor(allSelected ? .accentColor : .secondary)
-
-                Text(label)
-                    .font(.headline)
-                    .foregroundColor(.primary)
-
-                Text("\(count)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(.quaternary)
-                    .cornerRadius(8)
-
-                Spacer()
-            }
-            .frame(height: MediaGridLayoutConstants.headerHeight)
-            .frame(maxWidth: .infinity)
-            .contentShape(Rectangle())
-            .onTapGesture { onTap() }
-            .padding(.top, 4)
-        }
-    }
-
     @ViewBuilder
     private func dateHeader(group: DateGroup) -> some View {
+        DateHeaderView(group: group, browseState: browseState)
+    }
+}
+
+/// Standalone struct view for date headers. Receives the `DateGroup` and
+/// `BrowseState` directly so SwiftUI re-evaluates the body (including
+/// the tap closure) when the view is recycled by `LazyVStack`. Closures
+/// captured in `@ViewBuilder` functions are NOT re-evaluated on recycle,
+/// which caused the second header to fire the first header's action.
+struct DateHeaderView: View {
+    let group: DateGroup
+    @ObservedObject var browseState: BrowseState
+
+    var body: some View {
         let groupIds = group.assets.map(\.assetId)
         let allSelected = !groupIds.isEmpty && Set(groupIds).isSubset(of: browseState.selectedAssetIds)
 
-        DateHeaderView(
-            label: group.label,
-            count: group.assets.count,
-            allSelected: allSelected,
-            onTap: { browseState.selectGroup(groupIds) }
-        )
-    }
+        HStack {
+            Image(systemName: allSelected ? "checkmark.circle.fill" : "circle")
+                .foregroundColor(allSelected ? .accentColor : .secondary)
 
+            Text(group.label)
+                .font(.headline)
+                .foregroundColor(.primary)
+
+            Text("\(group.assets.count)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(.quaternary)
+                .cornerRadius(8)
+
+            Spacer()
+        }
+        .frame(height: MediaGridLayoutConstants.headerHeight)
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            print("[DateHeader] tapped: \(group.label) (\(group.assets.count) assets, first=\(groupIds.first ?? "none"))")
+            browseState.selectGroup(groupIds)
+        }
+        .padding(.top, 4)
+    }
+}
+
+extension MediaGridView {
     // MARK: - Row
 
     @ViewBuilder
@@ -226,6 +226,7 @@ public struct MediaGridView<ScrollIntrospector: View>: View {
     // MARK: - Tap handling
 
     private func handleTap(asset: AssetPageItem) {
+        print("[CellTap] \(asset.assetId) isSelecting=\(browseState.isSelecting)")
         if browseState.isSelecting {
             browseState.toggleSelection(assetId: asset.assetId)
         } else {
