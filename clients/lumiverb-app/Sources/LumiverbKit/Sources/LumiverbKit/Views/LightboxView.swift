@@ -36,8 +36,12 @@ public struct LightboxView: View {
 
     public var body: some View {
         HStack(spacing: 0) {
-            // Main image area
+            // Main image area. Rectangle (not Color) for the black
+            // background because Color ignores safe areas by default,
+            // which pulls the sidebar content under the toolbar.
             ZStack {
+                Rectangle().fill(.black)
+
                 if browseState.isLoadingDetail {
                     ProgressView()
                         .tint(.white)
@@ -155,7 +159,7 @@ public struct LightboxView: View {
                 .frame(width: 300)
             }
         }
-        .background(Color.black, ignoresSafeAreaEdges: .all)
+        .background(Rectangle().fill(.black))
         // Re-fetch faces whenever the visible asset changes — but only when
         // the toggle is on, so toggling off mid-browse doesn't keep paying
         // for face requests. The vm short-circuits if it already has the
