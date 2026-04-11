@@ -34,6 +34,8 @@ public struct BrowseFilter: Equatable, Sendable {
     public var starMin: Int?
     public var starMax: Int?
     public var color: String?
+    public var hasRating: Bool?
+    public var hasColor: Bool?
 
     // MARK: - Tag
     public var tag: String?
@@ -54,7 +56,7 @@ public struct BrowseFilter: Equatable, Sendable {
         focalLengthMin != nil || focalLengthMax != nil ||
         hasExposure != nil ||
         hasGps != nil || hasFaces != nil || personId != nil ||
-        favorite != nil || starMin != nil || starMax != nil || color != nil ||
+        favorite != nil || starMin != nil || starMax != nil || color != nil || hasRating != nil || hasColor != nil ||
         tag != nil ||
         dateFrom != nil || dateTo != nil
     }
@@ -123,6 +125,12 @@ public struct BrowseFilter: Equatable, Sendable {
         if hasFaces == true {
             result.append(ActiveFilter(id: "hasFaces", label: "Has faces") { f in f.hasFaces = nil })
         }
+        if hasRating != nil {
+            result.append(ActiveFilter(id: "hasRating", label: hasRating == true ? "Has rating" : "No rating") { f in f.hasRating = nil })
+        }
+        if hasColor != nil {
+            result.append(ActiveFilter(id: "hasColor", label: hasColor == true ? "Has color" : "No color") { f in f.hasColor = nil })
+        }
         if hasGps == true {
             result.append(ActiveFilter(id: "hasGps", label: "Has GPS") { f in f.hasGps = nil })
         }
@@ -181,6 +189,8 @@ public struct BrowseFilter: Equatable, Sendable {
         if let starMin { params["star_min"] = String(starMin) }
         if let starMax { params["star_max"] = String(starMax) }
         if let color { params["color"] = color }
+        if let hasRating { params["has_rating"] = String(hasRating) }
+        if let hasColor { params["has_color"] = String(hasColor) }
         if let tag { params["tag"] = tag }
         if let dateFrom { params["date_from"] = dateFrom }
         if let dateTo { params["date_to"] = dateTo }

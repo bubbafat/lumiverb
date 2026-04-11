@@ -476,6 +476,9 @@ class AssetRepository:
         star_max: int | None = None,
         color: list[str] | None = None,
         has_rating: bool | None = None,
+        has_color: bool | None = None,
+        date_from: object | None = None,
+        date_to: object | None = None,
     ) -> list[Asset]:
         """Keyset pagination with composite cursor, sorting, and filtering.
 
@@ -640,10 +643,18 @@ class AssetRepository:
             params["min_lon"] = near_lon - lon_delta
             params["max_lon"] = near_lon + lon_delta
 
+        # --- Date filters ---
+        if date_from is not None:
+            conditions.append("COALESCE(a.taken_at, a.file_mtime) >= :date_from")
+            params["date_from"] = date_from
+        if date_to is not None:
+            conditions.append("COALESCE(a.taken_at, a.file_mtime) < :date_to")
+            params["date_to"] = date_to
+
         # --- Rating filters (LEFT JOIN on asset_ratings) ---
         join_ratings = (
             rating_user_id is not None
-            and (favorite is not None or star_min is not None or star_max is not None or color is not None or has_rating is not None)
+            and (favorite is not None or star_min is not None or star_max is not None or color is not None or has_rating is not None or has_color is not None)
         )
         if join_ratings:
             params["rating_user_id"] = rating_user_id
@@ -666,6 +677,10 @@ class AssetRepository:
                 conditions.append("r.user_id IS NOT NULL")
             elif has_rating is False:
                 conditions.append("r.user_id IS NULL")
+            if has_color is True:
+                conditions.append("r.color IS NOT NULL")
+            elif has_color is False:
+                conditions.append("(r.user_id IS NULL OR r.color IS NULL)")
 
         # --- Build query ---
         # Lateral join only needed for tag filtering (m.tags reference).
@@ -1614,6 +1629,8 @@ class CollectionRepository:
         description: str | None = None,
         sort_order: str = "manual",
         visibility: str = "private",
+        type: str = "static",
+        saved_query: dict | None = None,
     ) -> Collection:
         collection_id = "col_" + str(ULID())
         collection = Collection(
@@ -1623,6 +1640,8 @@ class CollectionRepository:
             description=description,
             sort_order=sort_order,
             visibility=visibility,
+            type=type,
+            saved_query=saved_query,
         )
         self._session.add(collection)
         self._session.commit()
@@ -1659,6 +1678,7 @@ class CollectionRepository:
         visibility: str | None = None,
         sort_order: str | None = None,
         cover_asset_id: str | None = _SENTINEL,
+        saved_query: dict | None = _SENTINEL,
     ) -> Collection | None:
         col = self.get_by_id(collection_id)
         if col is None:
@@ -1673,6 +1693,8 @@ class CollectionRepository:
             col.sort_order = sort_order
         if cover_asset_id is not _SENTINEL:
             col.cover_asset_id = cover_asset_id
+        if saved_query is not _SENTINEL:
+            col.saved_query = saved_query
         col.updated_at = utcnow()
         self._session.add(col)
         self._session.commit()
@@ -2068,6 +2090,157 @@ class RatingRepository:
         return result.rowcount  # type: ignore[return-value]
 
 
+def _apply_browse_filters(
+    filters: "BrowseFilters",
+    conditions: list[str],
+    params: dict,
+    rating_user_id: str | None,
+    _math: object,
+) -> tuple[bool, bool]:
+    """Apply BrowseFilters to SQL conditions/params. Returns (join_ratings, join_metadata)."""
+    from src.server.models.browse_filters import BrowseFilters as _BF  # noqa: F811
+
+    # --- Tag ---
+    if filters.tag is not None:
+        conditions.append("m.tags @> jsonb_build_array(:tag)")
+        params["tag"] = filters.tag
+
+    # --- Missing enrichment flags ---
+    if filters.missing_vision:
+        conditions.append(MISSING_CONDITIONS["missing_vision"])
+    if filters.missing_embeddings:
+        conditions.append(MISSING_CONDITIONS["missing_embeddings"])
+    if filters.missing_faces:
+        conditions.append(MISSING_CONDITIONS["missing_faces"])
+    if filters.missing_face_embeddings:
+        conditions.append(MISSING_CONDITIONS["missing_face_embeddings"])
+    if filters.missing_video_scenes:
+        conditions.append(MISSING_CONDITIONS["missing_video_scenes"])
+    if filters.missing_ocr:
+        conditions.append(MISSING_CONDITIONS["missing_ocr"])
+    if filters.missing_scene_vision:
+        conditions.append(MISSING_CONDITIONS["missing_scene_vision"])
+    if filters.missing_transcription:
+        conditions.append(MISSING_CONDITIONS["missing_transcription"])
+
+    # --- Faces / people ---
+    if filters.has_faces is True:
+        conditions.append("a.face_count > 0")
+    elif filters.has_faces is False:
+        conditions.append("(a.face_count IS NULL OR a.face_count = 0)")
+    if filters.person_id:
+        conditions.append("a.asset_id IN (SELECT asset_id FROM faces WHERE person_id = :person_id)")
+        params["person_id"] = filters.person_id
+
+    # --- Media type ---
+    if filters.media_types:
+        clauses = []
+        if "image" in filters.media_types:
+            clauses.append("a.media_type = 'image'")
+        if "video" in filters.media_types:
+            clauses.append("a.media_type = 'video'")
+        if clauses:
+            conditions.append(f"({' OR '.join(clauses)})")
+
+    # --- Camera / lens ---
+    if filters.camera_make:
+        conditions.append("a.camera_make = :camera_make")
+        params["camera_make"] = filters.camera_make
+    if filters.camera_model:
+        conditions.append("a.camera_model = :camera_model")
+        params["camera_model"] = filters.camera_model
+    if filters.lens_model:
+        conditions.append("a.lens_model = :lens_model")
+        params["lens_model"] = filters.lens_model
+
+    # --- EXIF ranges ---
+    if filters.iso_min is not None:
+        conditions.append("a.iso >= :iso_min")
+        params["iso_min"] = filters.iso_min
+    if filters.iso_max is not None:
+        conditions.append("a.iso <= :iso_max")
+        params["iso_max"] = filters.iso_max
+    if filters.exposure_min_us is not None:
+        conditions.append("a.exposure_time_us >= :exposure_min_us")
+        params["exposure_min_us"] = filters.exposure_min_us
+    if filters.exposure_max_us is not None:
+        conditions.append("a.exposure_time_us <= :exposure_max_us")
+        params["exposure_max_us"] = filters.exposure_max_us
+    if filters.aperture_min is not None:
+        conditions.append("a.aperture >= :aperture_min")
+        params["aperture_min"] = filters.aperture_min
+    if filters.aperture_max is not None:
+        conditions.append("a.aperture <= :aperture_max")
+        params["aperture_max"] = filters.aperture_max
+    if filters.focal_length_min is not None:
+        conditions.append("a.focal_length >= :focal_length_min")
+        params["focal_length_min"] = filters.focal_length_min
+    if filters.focal_length_max is not None:
+        conditions.append("a.focal_length <= :focal_length_max")
+        params["focal_length_max"] = filters.focal_length_max
+
+    # --- Exposure data ---
+    if filters.has_exposure is True:
+        conditions.append(
+            "(a.iso IS NOT NULL OR a.exposure_time_us IS NOT NULL OR a.aperture IS NOT NULL)"
+        )
+    elif filters.has_exposure is False:
+        conditions.append(
+            "a.iso IS NULL AND a.exposure_time_us IS NULL AND a.aperture IS NULL"
+        )
+
+    # --- GPS ---
+    if filters.has_gps:
+        conditions.append("a.gps_lat IS NOT NULL AND a.gps_lon IS NOT NULL")
+    if filters.near_lat is not None and filters.near_lon is not None:
+        lat_delta = filters.near_radius_km / 111.0
+        lon_delta = filters.near_radius_km / (111.0 * _math.cos(_math.radians(filters.near_lat)))  # type: ignore[attr-defined]
+        conditions.append("a.gps_lat BETWEEN :min_lat AND :max_lat")
+        conditions.append("a.gps_lon BETWEEN :min_lon AND :max_lon")
+        params["min_lat"] = filters.near_lat - lat_delta
+        params["max_lat"] = filters.near_lat + lat_delta
+        params["min_lon"] = filters.near_lon - lon_delta
+        params["max_lon"] = filters.near_lon + lon_delta
+
+    # --- Date ---
+    if filters.date_from is not None:
+        conditions.append("COALESCE(a.taken_at, a.file_mtime) >= :date_from")
+        params["date_from"] = filters.date_from
+    if filters.date_to is not None:
+        conditions.append("COALESCE(a.taken_at, a.file_mtime) < :date_to")
+        params["date_to"] = filters.date_to
+
+    # --- Rating (LEFT JOIN on asset_ratings) ---
+    join_ratings = rating_user_id is not None and filters.needs_rating_join
+    if join_ratings:
+        params["rating_user_id"] = rating_user_id
+        if filters.favorite is True:
+            conditions.append("r.favorite = TRUE")
+        elif filters.favorite is False:
+            conditions.append("(r.favorite IS NULL OR r.favorite = FALSE)")
+        if filters.star_min is not None:
+            conditions.append("COALESCE(r.stars, 0) >= :star_min")
+            params["star_min"] = filters.star_min
+        if filters.star_max is not None:
+            conditions.append("COALESCE(r.stars, 0) <= :star_max")
+            params["star_max"] = filters.star_max
+        if filters.color is not None and len(filters.color) > 0:
+            placeholders = ", ".join(f":color_{i}" for i in range(len(filters.color)))
+            conditions.append(f"r.color IN ({placeholders})")
+            for i, c in enumerate(filters.color):
+                params[f"color_{i}"] = c
+        if filters.has_rating is True:
+            conditions.append("r.user_id IS NOT NULL")
+        elif filters.has_rating is False:
+            conditions.append("r.user_id IS NULL")
+        if filters.has_color is True:
+            conditions.append("r.color IS NOT NULL")
+        elif filters.has_color is False:
+            conditions.append("(r.user_id IS NULL OR r.color IS NULL)")
+
+    return join_ratings, filters.tag is not None
+
+
 class UnifiedBrowseRepository:
     """Cross-library browse — queries active_assets without library_id constraint."""
 
@@ -2081,54 +2254,22 @@ class UnifiedBrowseRepository:
 
     def page(
         self,
-        after: str | None,
-        limit: int,
-        library_ids: list[str] | None = None,
-        path_prefix: str | None = None,
-        tag: str | None = None,
-        missing_vision: bool = False,
-        missing_embeddings: bool = False,
-        missing_faces: bool = False,
-        missing_face_embeddings: bool = False,
-        missing_video_scenes: bool = False,
-        missing_ocr: bool = False,
-        missing_scene_vision: bool = False,
-        missing_transcription: bool = False,
         *,
-        sort: str = "taken_at",
-        direction: str = "desc",
-        media_types: list[str] | None = None,
-        camera_make: str | None = None,
-        camera_model: str | None = None,
-        lens_model: str | None = None,
-        iso_min: int | None = None,
-        iso_max: int | None = None,
-        exposure_min_us: int | None = None,
-        exposure_max_us: int | None = None,
-        aperture_min: float | None = None,
-        aperture_max: float | None = None,
-        focal_length_min: float | None = None,
-        focal_length_max: float | None = None,
-        has_exposure: bool | None = None,
-        has_gps: bool = False,
-        near_lat: float | None = None,
-        near_lon: float | None = None,
-        near_radius_km: float = 1.0,
+        filters: "BrowseFilters | None" = None,
         rating_user_id: str | None = None,
-        favorite: bool | None = None,
-        star_min: int | None = None,
-        star_max: int | None = None,
-        color: list[str] | None = None,
-        has_rating: bool | None = None,
-        has_faces: bool | None = None,
-        person_id: str | None = None,
+        after: str | None = None,
+        limit: int = 500,
     ) -> list[Asset]:
-        """Keyset pagination across all libraries. Same filter support as page_by_library."""
+        """Keyset pagination across all libraries using BrowseFilters."""
+        from src.server.models.browse_filters import BrowseFilters as _BF
         import base64 as _b64
         import math as _math
 
-        sort_col = sort if sort in self.SORTABLE_COLUMNS else "taken_at"
-        is_desc = direction.lower() == "desc"
+        if filters is None:
+            filters = _BF()
+
+        sort_col = filters.sort if filters.sort in self.SORTABLE_COLUMNS else "taken_at"
+        is_desc = filters.direction.lower() == "desc"
         cmp_op = "<" if is_desc else ">"
         order_dir = "DESC" if is_desc else "ASC"
 
@@ -2136,17 +2277,17 @@ class UnifiedBrowseRepository:
         params: dict[str, object] = {"limit": limit}
 
         # --- Library filter ---
-        if library_ids:
+        if filters.library_ids:
             conditions.append("a.library_id = ANY(:library_ids)")
-            params["library_ids"] = library_ids
+            params["library_ids"] = filters.library_ids
 
         # --- Path prefix (requires library_ids) ---
-        if path_prefix:
+        if filters.path_prefix:
             conditions.append(
                 "(a.rel_path = :path_prefix OR a.rel_path LIKE :path_prefix_like)"
             )
-            params["path_prefix"] = path_prefix
-            params["path_prefix_like"] = path_prefix + "/%"
+            params["path_prefix"] = filters.path_prefix
+            params["path_prefix_like"] = filters.path_prefix + "/%"
 
         # --- Composite cursor ---
         if after is not None:
@@ -2178,133 +2319,12 @@ class UnifiedBrowseRepository:
                 params["cursor_value"] = cursor_value
                 params["cursor_id"] = cursor_id
 
-        # --- Tag / missing filters (use shared MISSING_CONDITIONS) ---
-        if tag is not None:
-            conditions.append("m.tags @> jsonb_build_array(:tag)")
-            params["tag"] = tag
-        if missing_vision:
-            conditions.append(MISSING_CONDITIONS["missing_vision"])
-        if missing_embeddings:
-            conditions.append(MISSING_CONDITIONS["missing_embeddings"])
-        if missing_faces:
-            conditions.append(MISSING_CONDITIONS["missing_faces"])
-        if missing_face_embeddings:
-            conditions.append(MISSING_CONDITIONS["missing_face_embeddings"])
-        if missing_video_scenes:
-            conditions.append(MISSING_CONDITIONS["missing_video_scenes"])
-        if missing_ocr:
-            conditions.append(MISSING_CONDITIONS["missing_ocr"])
-        if missing_scene_vision:
-            conditions.append(MISSING_CONDITIONS["missing_scene_vision"])
-        if missing_transcription:
-            conditions.append(MISSING_CONDITIONS["missing_transcription"])
-        if has_faces is True:
-            conditions.append("a.face_count > 0")
-        elif has_faces is False:
-            conditions.append("(a.face_count IS NULL OR a.face_count = 0)")
-        if person_id:
-            conditions.append("a.asset_id IN (SELECT asset_id FROM faces WHERE person_id = :person_id)")
-            params["person_id"] = person_id
-
-        # --- Media type filter ---
-        if media_types:
-            clauses = []
-            if "image" in media_types:
-                clauses.append("a.media_type = 'image'")
-            if "video" in media_types:
-                clauses.append("a.media_type = 'video'")
-            if clauses:
-                conditions.append(f"({' OR '.join(clauses)})")
-
-        # --- Camera / lens filters ---
-        if camera_make:
-            conditions.append("a.camera_make = :camera_make")
-            params["camera_make"] = camera_make
-        if camera_model:
-            conditions.append("a.camera_model = :camera_model")
-            params["camera_model"] = camera_model
-        if lens_model:
-            conditions.append("a.lens_model = :lens_model")
-            params["lens_model"] = lens_model
-
-        # --- EXIF range filters ---
-        if iso_min is not None:
-            conditions.append("a.iso >= :iso_min")
-            params["iso_min"] = iso_min
-        if iso_max is not None:
-            conditions.append("a.iso <= :iso_max")
-            params["iso_max"] = iso_max
-        if exposure_min_us is not None:
-            conditions.append("a.exposure_time_us >= :exposure_min_us")
-            params["exposure_min_us"] = exposure_min_us
-        if exposure_max_us is not None:
-            conditions.append("a.exposure_time_us <= :exposure_max_us")
-            params["exposure_max_us"] = exposure_max_us
-        if aperture_min is not None:
-            conditions.append("a.aperture >= :aperture_min")
-            params["aperture_min"] = aperture_min
-        if aperture_max is not None:
-            conditions.append("a.aperture <= :aperture_max")
-            params["aperture_max"] = aperture_max
-        if focal_length_min is not None:
-            conditions.append("a.focal_length >= :focal_length_min")
-            params["focal_length_min"] = focal_length_min
-        if focal_length_max is not None:
-            conditions.append("a.focal_length <= :focal_length_max")
-            params["focal_length_max"] = focal_length_max
-
-        # --- Exposure data filter ---
-        if has_exposure is True:
-            conditions.append(
-                "(a.iso IS NOT NULL OR a.exposure_time_us IS NOT NULL OR a.aperture IS NOT NULL)"
-            )
-        elif has_exposure is False:
-            conditions.append(
-                "a.iso IS NULL AND a.exposure_time_us IS NULL AND a.aperture IS NULL"
-            )
-
-        # --- GPS filters ---
-        if has_gps:
-            conditions.append("a.gps_lat IS NOT NULL AND a.gps_lon IS NOT NULL")
-        if near_lat is not None and near_lon is not None:
-            lat_delta = near_radius_km / 111.0
-            lon_delta = near_radius_km / (111.0 * _math.cos(_math.radians(near_lat)))
-            conditions.append("a.gps_lat BETWEEN :min_lat AND :max_lat")
-            conditions.append("a.gps_lon BETWEEN :min_lon AND :max_lon")
-            params["min_lat"] = near_lat - lat_delta
-            params["max_lat"] = near_lat + lat_delta
-            params["min_lon"] = near_lon - lon_delta
-            params["max_lon"] = near_lon + lon_delta
-
-        # --- Rating filters (LEFT JOIN on asset_ratings) ---
-        join_ratings = (
-            rating_user_id is not None
-            and (favorite is not None or star_min is not None or star_max is not None or color is not None or has_rating is not None)
+        # Apply filters from BrowseFilters object
+        join_ratings, join_metadata = _apply_browse_filters(
+            filters, conditions, params, rating_user_id, _math
         )
-        if join_ratings:
-            params["rating_user_id"] = rating_user_id
-            if favorite is True:
-                conditions.append("r.favorite = TRUE")
-            elif favorite is False:
-                conditions.append("(r.favorite IS NULL OR r.favorite = FALSE)")
-            if star_min is not None:
-                conditions.append("COALESCE(r.stars, 0) >= :star_min")
-                params["star_min"] = star_min
-            if star_max is not None:
-                conditions.append("COALESCE(r.stars, 0) <= :star_max")
-                params["star_max"] = star_max
-            if color is not None and len(color) > 0:
-                placeholders = ", ".join(f":color_{i}" for i in range(len(color)))
-                conditions.append(f"r.color IN ({placeholders})")
-                for i, c in enumerate(color):
-                    params[f"color_{i}"] = c
-            if has_rating is True:
-                conditions.append("r.user_id IS NOT NULL")
-            elif has_rating is False:
-                conditions.append("r.user_id IS NULL")
 
         # --- Build query ---
-        join_metadata = tag is not None
         where_sql = " AND ".join(conditions) if conditions else "TRUE"
 
         lateral_join = ""
@@ -2319,9 +2339,9 @@ class UnifiedBrowseRepository:
             ) m ON TRUE
             """
 
-        rating_join = ""
+        rating_join_sql = ""
         if join_ratings:
-            rating_join = """
+            rating_join_sql = """
             LEFT JOIN asset_ratings r ON r.asset_id = a.asset_id AND r.user_id = :rating_user_id
             """
 
@@ -2334,7 +2354,7 @@ class UnifiedBrowseRepository:
             SELECT a.asset_id
             FROM active_assets a
             {lateral_join}
-            {rating_join}
+            {rating_join_sql}
             WHERE {where_sql}
             ORDER BY {order_clause}
             LIMIT :limit

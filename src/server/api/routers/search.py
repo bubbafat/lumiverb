@@ -100,6 +100,7 @@ def search(
     star_max: int | None = None,
     color: str | None = None,
     has_rating: bool | None = None,
+    has_color: bool | None = None,
     has_faces: bool | None = None,
     person_id: str | None = None,
 ) -> SearchResponse:
@@ -150,6 +151,7 @@ def search(
     if not q and (dt_from or dt_to):
         return _search_by_date(
             session=session,
+            request=request,
             library_id=library_id,
             dt_from=dt_from,
             dt_to=dt_to,
@@ -157,6 +159,15 @@ def search(
             tag=tag,
             limit=limit,
             offset=offset,
+            favorite=favorite,
+            star_min=star_min,
+            star_max=star_max,
+            color=color,
+            has_rating=has_rating,
+            has_color=has_color,
+            has_faces=has_faces,
+            person_id=person_id,
+            media_type=media_type,
         )
 
     settings = get_settings()
@@ -541,6 +552,7 @@ def search(
 def _search_by_date(
     *,
     session: Session,
+    request: Request,
     library_id: str | None,
     dt_from: datetime | None,
     dt_to: datetime | None,
@@ -548,8 +560,19 @@ def _search_by_date(
     tag: str | None,
     limit: int,
     offset: int,
+    favorite: bool | None = None,
+    star_min: int | None = None,
+    star_max: int | None = None,
+    color: str | None = None,
+    has_rating: bool | None = None,
+    has_color: bool | None = None,
+    has_faces: bool | None = None,
+    person_id: str | None = None,
+    media_type: str = "all",
 ) -> SearchResponse:
     """Direct DB query for date-only search (no text query)."""
+    from src.server.api.dependencies import get_current_user_id as _get_uid
+
     conditions: list[str] = []
     params: dict = {"limit": limit, "offset": offset}
 
@@ -570,6 +593,12 @@ def _search_by_date(
         params["path_prefix"] = path_prefix
         params["path_prefix_like"] = path_prefix + "/%"
 
+    # Media type
+    if media_type == "image":
+        conditions.append("a.media_type = 'image'")
+    elif media_type == "video":
+        conditions.append("a.media_type = 'video'")
+
     tag_join = ""
     if tag:
         conditions.append("m.tags @> jsonb_build_array(:tag)")
@@ -584,12 +613,59 @@ def _search_by_date(
             ) m ON TRUE
         """
 
+    # Face filters
+    if has_faces is True:
+        conditions.append("a.face_count > 0")
+    elif has_faces is False:
+        conditions.append("(a.face_count IS NULL OR a.face_count = 0)")
+    if person_id:
+        conditions.append("a.asset_id IN (SELECT asset_id FROM faces WHERE person_id = :person_id)")
+        params["person_id"] = person_id
+
+    # Rating filters (LEFT JOIN on asset_ratings)
+    rating_join = ""
+    needs_rating = favorite is not None or star_min is not None or star_max is not None or color is not None or has_rating is not None or has_color is not None
+    if needs_rating:
+        user_id = getattr(request.state, "user_id", None)
+        if not user_id:
+            key_id = getattr(request.state, "key_id", None)
+            if key_id:
+                user_id = f"key:{key_id}"
+        if user_id:
+            rating_join = "LEFT JOIN asset_ratings r ON r.asset_id = a.asset_id AND r.user_id = :rating_user_id"
+            params["rating_user_id"] = user_id
+            if favorite is True:
+                conditions.append("r.favorite = TRUE")
+            elif favorite is False:
+                conditions.append("(r.favorite IS NULL OR r.favorite = FALSE)")
+            if star_min is not None:
+                conditions.append("COALESCE(r.stars, 0) >= :star_min")
+                params["star_min"] = star_min
+            if star_max is not None:
+                conditions.append("COALESCE(r.stars, 0) <= :star_max")
+                params["star_max"] = star_max
+            if color is not None:
+                color_list = [c.strip() for c in color.split(",") if c.strip()]
+                if color_list:
+                    placeholders = ", ".join(f":color_{i}" for i in range(len(color_list)))
+                    conditions.append(f"r.color IN ({placeholders})")
+                    for i, c in enumerate(color_list):
+                        params[f"color_{i}"] = c
+            if has_rating is True:
+                conditions.append("r.user_id IS NOT NULL")
+            elif has_rating is False:
+                conditions.append("r.user_id IS NULL")
+            if has_color is True:
+                conditions.append("r.color IS NOT NULL")
+            elif has_color is False:
+                conditions.append("(r.user_id IS NULL OR r.color IS NULL)")
+
     where_sql = " AND ".join(conditions) if conditions else "TRUE"
 
     # Count total matching rows for accurate capped-results messaging
     count_params = {k: v for k, v in params.items() if k not in ("limit", "offset")}
     count_sql = text(
-        f"SELECT COUNT(*) FROM active_assets a {tag_join} WHERE {where_sql}"
+        f"SELECT COUNT(*) FROM active_assets a {tag_join} {rating_join} WHERE {where_sql}"
     ).bindparams(**count_params)
     total_count: int = session.execute(count_sql).scalar_one()
 
@@ -600,6 +676,7 @@ def _search_by_date(
                a.camera_make, a.camera_model, a.taken_at
         FROM active_assets a
         {tag_join}
+        {rating_join}
         WHERE {where_sql}
         ORDER BY COALESCE(a.taken_at, a.file_mtime) DESC NULLS LAST
         LIMIT :limit OFFSET :offset

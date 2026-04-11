@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_current_user_id, get_tenant_session
+from src.server.models.browse_filters import BrowseFilters
 from src.shared.io_utils import normalize_path_prefix
 from src.server.repository.tenant import LibraryRepository, UnifiedBrowseRepository
 
@@ -90,8 +91,11 @@ def browse_assets(
     star_max: int | None = None,
     color: str | None = None,
     has_rating: bool | None = None,
+    has_color: bool | None = None,
     has_faces: bool | None = None,
     person_id: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> BrowseResponse:
     """Cross-library paginated browse with full filter support."""
     if limit > 500:
@@ -106,9 +110,6 @@ def browse_assets(
             detail="path_prefix requires library_id (paths are library-relative)",
         )
 
-    sort_col = sort if sort in SORT_COLUMNS else "taken_at"
-    direction = dir if dir in ("asc", "desc") else "desc"
-
     normalized_prefix: str | None = None
     if path_prefix is not None:
         normalized_prefix = normalize_path_prefix(path_prefix)
@@ -118,32 +119,14 @@ def browse_assets(
                 detail="Invalid path_prefix; path traversal not allowed",
             )
 
-    library_ids: list[str] | None = None
-    if library_id:
-        library_ids = [lid.strip() for lid in library_id.split(",") if lid.strip()]
-
-    media_types: list[str] | None = None
-    if media_type:
-        media_types = [m.strip() for m in media_type.split(",") if m.strip()]
-
-    # Rating filters use current user identity
-    rating_user_id: str | None = None
-    color_list: list[str] | None = None
-    needs_rating_filter = favorite is not None or star_min is not None or star_max is not None or color is not None or has_rating is not None
-    if needs_rating_filter:
-        rating_user_id = user_id
-        if color is not None:
-            color_list = [c.strip() for c in color.split(",") if c.strip()]
-
-    browse_repo = UnifiedBrowseRepository(session)
-    assets = browse_repo.page(
-        after=after,
-        limit=limit,
-        library_ids=library_ids,
+    # Build filters from query params
+    filters = BrowseFilters.from_query_params(
+        sort=sort,
+        direction=dir,
+        library_id=library_id,
         path_prefix=normalized_prefix,
-        sort=sort_col,
-        direction=direction,
-        media_types=media_types,
+        tag=tag,
+        media_type=media_type,
         camera_make=camera_make,
         camera_model=camera_model,
         lens_model=lens_model,
@@ -156,18 +139,28 @@ def browse_assets(
         focal_length_min=focal_length_min,
         focal_length_max=focal_length_max,
         has_exposure=has_exposure,
-        has_gps=has_gps,
+        has_gps=has_gps if has_gps else None,
         near_lat=near_lat,
         near_lon=near_lon,
         near_radius_km=near_radius_km,
-        rating_user_id=rating_user_id,
+        date_from=date_from,
+        date_to=date_to,
         favorite=favorite,
         star_min=star_min,
         star_max=star_max,
-        color=color_list,
+        color=color,
         has_rating=has_rating,
+        has_color=has_color,
         has_faces=has_faces,
         person_id=person_id,
+    )
+
+    browse_repo = UnifiedBrowseRepository(session)
+    assets = browse_repo.page(
+        filters=filters,
+        rating_user_id=user_id if filters.needs_rating_join else None,
+        after=after,
+        limit=limit,
     )
 
     # Resolve library names
@@ -178,6 +171,8 @@ def browse_assets(
         lib = lib_repo.get_by_id(lid)
         if lib:
             libs_by_id[lid] = lib.name
+
+    sort_col = filters.sort if filters.sort in SORT_COLUMNS else "taken_at"
 
     items = [
         BrowseItem(

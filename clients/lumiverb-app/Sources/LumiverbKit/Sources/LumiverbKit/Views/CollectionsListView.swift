@@ -73,6 +73,11 @@ public struct CollectionsListView: View {
                         .foregroundColor(.secondary)
                 }
                 Spacer()
+                if col.isSmart {
+                    Image(systemName: "wand.and.stars")
+                        .font(.caption)
+                        .foregroundColor(.purple)
+                }
                 if col.parsedVisibility == .shared {
                     Image(systemName: "person.2")
                         .font(.caption)

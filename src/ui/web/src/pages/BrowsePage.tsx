@@ -21,6 +21,7 @@ import { AssetCell } from "../components/AssetCell";
 import { CollectionPicker } from "../components/CollectionPicker";
 import { Lightbox } from "../components/Lightbox";
 import { FilterBar } from "../components/FilterBar";
+import { SaveSmartCollectionModal, toSnakeCaseFilters } from "../components/SaveSmartCollectionModal";
 import { SelectionToolbar } from "../components/SelectionToolbar";
 import { ZoomControl } from "../components/ZoomControl";
 import { DrawerOverlay } from "../components/DrawerOverlay";
@@ -413,6 +414,7 @@ export default function BrowsePage() {
   }, [orderedAssets, groups, hasNextPage, isFetchingNextPage, isSearchMode, fetchNextPage, selection]);
 
   const [pickerAssetIds, setPickerAssetIds] = useState<string[] | null>(null);
+  const [showSmartColModal, setShowSmartColModal] = useState(false);
 
   // ---------------------------------------------------------------------------
   // Ratings
@@ -771,7 +773,19 @@ export default function BrowsePage() {
           });
         }}
         facets={facets}
+        onSaveSmartCollection={() => setShowSmartColModal(true)}
       />
+
+      {showSmartColModal && (
+        <SaveSmartCollectionModal
+          savedQuery={{
+            q: activeQ || undefined,
+            filters: toSnakeCaseFilters(browseOpts),
+            library_id: libraryId,
+          }}
+          onClose={() => setShowSmartColModal(false)}
+        />
+      )}
 
       {/* Toolbar: status line + sort */}
       {!isLoading && (

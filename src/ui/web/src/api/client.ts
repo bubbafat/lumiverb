@@ -293,6 +293,9 @@ export interface PageAssetsOptions {
   starMax?: number;
   color?: string;
   hasRating?: boolean;
+  hasColor?: boolean;
+  dateFrom?: string;
+  dateTo?: string;
 }
 
 /** Paginated assets for a library with sort/filter support. */
@@ -333,6 +336,9 @@ export async function pageAssets(
   if (opts?.starMax != null) params.set("star_max", String(opts.starMax));
   if (opts?.color) params.set("color", opts.color);
   if (opts?.hasRating != null) params.set("has_rating", String(opts.hasRating));
+  if (opts?.hasColor != null) params.set("has_color", String(opts.hasColor));
+  if (opts?.dateFrom) params.set("date_from", opts.dateFrom);
+  if (opts?.dateTo) params.set("date_to", opts.dateTo);
   return apiFetch<AssetPageResponse>(`/assets/page?${params}`);
 }
 
@@ -374,6 +380,9 @@ export async function browseAll(
   if (opts?.starMax != null) params.set("star_max", String(opts.starMax));
   if (opts?.color) params.set("color", opts.color);
   if (opts?.hasRating != null) params.set("has_rating", String(opts.hasRating));
+  if (opts?.hasColor != null) params.set("has_color", String(opts.hasColor));
+  if (opts?.dateFrom) params.set("date_from", opts.dateFrom);
+  if (opts?.dateTo) params.set("date_to", opts.dateTo);
   return apiFetch<BrowseResponse>(`/browse?${params}`);
 }
 
@@ -828,7 +837,14 @@ export async function getCollection(
 
 export async function createCollection(
   name: string,
-  opts?: { description?: string; sort_order?: string; visibility?: string; asset_ids?: string[] },
+  opts?: {
+    description?: string;
+    sort_order?: string;
+    visibility?: string;
+    asset_ids?: string[];
+    type?: string;
+    saved_query?: { q?: string; filters: Record<string, unknown>; library_id?: string };
+  },
 ): Promise<CollectionItem> {
   return apiFetch<CollectionItem>("/collections", {
     method: "POST",
@@ -844,6 +860,7 @@ export async function updateCollection(
     visibility?: string;
     sort_order?: string;
     cover_asset_id?: string | null;
+    saved_query?: { q?: string; filters: Record<string, unknown>; library_id?: string } | null;
   },
 ): Promise<CollectionItem> {
   return apiFetch<CollectionItem>(`/collections/${collectionId}`, {

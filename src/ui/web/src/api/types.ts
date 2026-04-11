@@ -206,6 +206,12 @@ export interface LibraryRevision {
   asset_count: number;
 }
 
+export interface SavedQuery {
+  q?: string;
+  filters: Record<string, unknown>;
+  library_id?: string;
+}
+
 export interface CollectionItem {
   collection_id: string;
   name: string;
@@ -215,6 +221,8 @@ export interface CollectionItem {
   visibility: string;  // "private" | "shared" | "public"
   ownership: string;   // "own" | "shared"
   sort_order: string;
+  type: string;        // "static" | "smart"
+  saved_query: SavedQuery | null;
   asset_count: number;
   created_at: string;
   updated_at: string;

@@ -284,6 +284,8 @@ class Collection(SQLModel, table=True):
     owner_user_id: str | None = Field(default=None, nullable=True)
     visibility: str = Field(default="private", nullable=False)  # private | shared | public
     sort_order: str = Field(default="manual", nullable=False)
+    type: str = Field(default="static", nullable=False)  # static | smart
+    saved_query: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),

@@ -50,6 +50,7 @@ struct BrowseWindow: View {
     /// detail panel shows the existing library browse UI, the People
     /// view (M3), or the cluster review view (M5).
     @State private var section: SidebarSection = .library
+    @State private var showSmartCollectionSheet = false
 
     init(appState: AppState, scanState: ScanState) {
         self.appState = appState
@@ -217,6 +218,12 @@ struct BrowseWindow: View {
                 section = .collections
             }
         }
+        .sheet(isPresented: $showSmartCollectionSheet) {
+            SaveSmartCollectionSheet(
+                browseState: browseState,
+                collectionsState: collectionsState
+            )
+        }
     }
 
     /// Restore the last-opened library on first load. Extracted from the
@@ -300,7 +307,9 @@ struct BrowseWindow: View {
                 // noisy.
                 scanActivityBanner
             }
-            FilterChicletBar(browseState: browseState)
+            FilterChicletBar(browseState: browseState) {
+                showSmartCollectionSheet = true
+            }
             contentArea
         }
     }

@@ -16,6 +16,7 @@ import { Lightbox } from "../components/Lightbox";
 import { SelectionToolbar } from "../components/SelectionToolbar";
 import { ZoomControl } from "../components/ZoomControl";
 import type { AssetPageItem } from "../api/types";
+import { formatSavedQuery } from "../components/SaveSmartCollectionModal";
 import { useScrollContainer } from "../context/ScrollContainerContext";
 import { groupAssetsByDate } from "../lib/groupByDate";
 import { useSelection } from "../lib/useSelection";
@@ -277,10 +278,27 @@ export default function CollectionDetailPage() {
           <h1 className="truncate text-lg font-semibold text-gray-100">
             {collection.name}
           </h1>
+          {collection.type === "smart" && (
+            <span className="shrink-0 rounded bg-indigo-900/60 px-1.5 py-0.5 text-[10px] text-indigo-300">
+              Smart
+            </span>
+          )}
           <span className="shrink-0 text-sm text-gray-500">
             {collection.asset_count} {collection.asset_count === 1 ? "item" : "items"}
           </span>
         </div>
+        {collection.type === "smart" && collection.saved_query && (
+          <div className="flex flex-wrap gap-1.5">
+            {formatSavedQuery(collection.saved_query).map((label) => (
+              <span
+                key={label}
+                className="rounded-full bg-indigo-900/40 px-2.5 py-0.5 text-xs text-indigo-300"
+              >
+                {label}
+              </span>
+            ))}
+          </div>
+        )}
         <div className="flex items-center gap-2">
           <ZoomControl value={zoomLevel} onChange={setZoomLevel} />
           <button
@@ -422,14 +440,16 @@ export default function CollectionDetailPage() {
         >
           Add to collection
         </button>
-        <button
-          type="button"
-          onClick={() => removeMutation.mutate()}
-          disabled={removeMutation.isPending}
-          className="rounded-lg border border-red-700/50 px-3 py-1.5 text-sm font-medium text-red-400 transition-colors hover:bg-red-900/30 disabled:opacity-50"
-        >
-          {removeMutation.isPending ? "Removing..." : "Remove from collection"}
-        </button>
+        {collection?.type !== "smart" && (
+          <button
+            type="button"
+            onClick={() => removeMutation.mutate()}
+            disabled={removeMutation.isPending}
+            className="rounded-lg border border-red-700/50 px-3 py-1.5 text-sm font-medium text-red-400 transition-colors hover:bg-red-900/30 disabled:opacity-50"
+          >
+            {removeMutation.isPending ? "Removing..." : "Remove from collection"}
+          </button>
+        )}
       </SelectionToolbar>
 
       {/* Collection picker */}

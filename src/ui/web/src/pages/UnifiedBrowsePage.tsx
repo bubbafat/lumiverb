@@ -16,6 +16,7 @@ import { CollectionPicker } from "../components/CollectionPicker";
 import { Lightbox } from "../components/Lightbox";
 import { FilterBar } from "../components/FilterBar";
 import { SelectionToolbar } from "../components/SelectionToolbar";
+import { SaveSmartCollectionModal, toSnakeCaseFilters } from "../components/SaveSmartCollectionModal";
 import { ZoomControl } from "../components/ZoomControl";
 import type { AssetPageItem, AssetRating, BrowseItem, RatingColor } from "../api/types";
 import { HeartButton, StarPicker, ColorPicker } from "../components/RatingControls";
@@ -266,6 +267,7 @@ export default function UnifiedBrowsePage() {
   );
   const selection = useSelection(orderedAssetIds);
   const [pickerAssetIds, setPickerAssetIds] = useState<string[] | null>(null);
+  const [showSmartColModal, setShowSmartColModal] = useState(false);
 
   // ---------------------------------------------------------------------------
   // Ratings
@@ -537,7 +539,19 @@ export default function UnifiedBrowsePage() {
           });
         }}
         facets={null}
+        onSaveSmartCollection={() => setShowSmartColModal(true)}
       />
+
+      {showSmartColModal && (
+        <SaveSmartCollectionModal
+          savedQuery={{
+            q: activeQ || undefined,
+            filters: toSnakeCaseFilters(browseOpts),
+            library_id: browseOpts.libraryId,
+          }}
+          onClose={() => setShowSmartColModal(false)}
+        />
+      )}
 
       {/* Status line */}
       {!isLoading && browseCount > 0 && (

@@ -68,6 +68,7 @@ def browse_env():
         os.environ["CONTROL_PLANE_DATABASE_URL"] = control_url
         os.environ["TENANT_DATABASE_URL_TEMPLATE"] = tenant_tpl
         os.environ["ADMIN_KEY"] = "test-admin-browse"
+        os.environ["JWT_SECRET"] = "test-jwt-secret-browse"
         get_settings.cache_clear()
         _engines.clear()
 

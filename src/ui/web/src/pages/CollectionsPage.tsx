@@ -72,6 +72,11 @@ function CollectionCard({
                 {collection.asset_count}{" "}
                 {collection.asset_count === 1 ? "item" : "items"}
               </span>
+              {collection.type === "smart" && (
+                <span className="rounded bg-indigo-900/60 px-1.5 py-0.5 text-[10px] text-indigo-300">
+                  Smart
+                </span>
+              )}
               {collection.ownership === "shared" && (
                 <span className="rounded bg-gray-700/60 px-1.5 py-0.5 text-[10px] text-gray-400">
                   Shared

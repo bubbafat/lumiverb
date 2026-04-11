@@ -2,12 +2,15 @@ import SwiftUI
 
 /// Horizontal bar of filter chiclets shown above the grid when any
 /// browse filter is active. Each chiclet shows the filter label and
-/// an X button to clear it. A "Clear all" button clears everything.
+/// an X button to clear it. A "..." menu offers "Clear all" and
+/// "Save as Smart Collection".
 public struct FilterChicletBar: View {
     @ObservedObject public var browseState: BrowseState
+    public var onSaveSmartCollection: (() -> Void)?
 
-    public init(browseState: BrowseState) {
+    public init(browseState: BrowseState, onSaveSmartCollection: (() -> Void)? = nil) {
         self.browseState = browseState
+        self.onSaveSmartCollection = onSaveSmartCollection
     }
 
     public var body: some View {
@@ -20,7 +23,7 @@ public struct FilterChicletBar: View {
                 HStack(spacing: 6) {
                     // Path filter (lives on BrowseState, not BrowseFilter)
                     if let path = browseState.selectedPath {
-                        FilterChiclet(label: "📁 \(path)") {
+                        FilterChiclet(label: "\u{1F4C1} \(path)") {
                             browseState.selectedPath = nil
                         }
                     }
@@ -34,13 +37,27 @@ public struct FilterChicletBar: View {
                         }
                     }
 
-                    if totalCount > 1 {
-                        Button("Clear all") {
+                    Menu {
+                        if onSaveSmartCollection != nil {
+                            Button {
+                                onSaveSmartCollection?()
+                            } label: {
+                                Label("Save as Smart Collection", systemImage: "wand.and.stars")
+                            }
+                            Divider()
+                        }
+
+                        Button(role: .destructive) {
                             browseState.filters.clearAll()
                             browseState.selectedPath = nil
+                        } label: {
+                            Label("Clear All Filters", systemImage: "xmark.circle")
                         }
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .font(.body)
+                            .foregroundColor(.secondary)
+                            .frame(minWidth: 32, minHeight: 32)
                     }
                 }
                 .padding(.horizontal, MediaGridLayoutConstants.spacing)

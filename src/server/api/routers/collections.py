@@ -21,11 +21,16 @@ router = APIRouter(prefix="/v1/collections", tags=["collections"])
 # ---------------------------------------------------------------------------
 
 
+_VALID_TYPES = {"static", "smart"}
+
+
 class CreateCollectionRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=2000)
     sort_order: str = "manual"
-    visibility: str = "private"  # private | shared
+    visibility: str = "private"  # private | shared | public
+    type: str = "static"  # static | smart
+    saved_query: dict | None = None
     asset_ids: list[str] | None = Field(default=None, max_length=10_000)
 
 
@@ -35,6 +40,7 @@ class UpdateCollectionRequest(BaseModel):
     visibility: str | None = None
     sort_order: str | None = None
     cover_asset_id: str | None = None
+    saved_query: dict | None = None
 
 
 class CollectionItem(BaseModel):
@@ -46,6 +52,8 @@ class CollectionItem(BaseModel):
     visibility: str
     ownership: str  # "own" | "shared"
     sort_order: str
+    type: str = "static"
+    saved_query: dict | None = None
     asset_count: int
     created_at: str
     updated_at: str
@@ -104,7 +112,32 @@ def _ownership_label(col, user_id: str) -> str:
     return "shared"
 
 
-def _collection_to_item(col, repo: CollectionRepository, user_id: str) -> CollectionItem:
+def _collection_to_item(
+    col, repo: CollectionRepository, user_id: str, *, session: Session | None = None
+) -> CollectionItem:
+    col_type = getattr(col, "type", "static") or "static"
+
+    # Smart collections compute asset_count via live query
+    if col_type == "smart" and col.saved_query and session is not None:
+        from src.server.models.browse_filters import BrowseFilters
+        from src.server.repository.tenant import UnifiedBrowseRepository
+
+        saved = col.saved_query
+        filters_data = saved.get("filters", {})
+        if "library_id" in saved:
+            filters_data["library_ids"] = [saved["library_id"]]
+        filters = BrowseFilters.from_json(filters_data)
+        browse_repo = UnifiedBrowseRepository(session)
+        # Use a large limit to get the count (no COUNT query on the browse repo yet)
+        live_assets = browse_repo.page(
+            filters=filters,
+            rating_user_id=user_id if filters.needs_rating_join else None,
+            limit=10000,
+        )
+        count = len(live_assets)
+    else:
+        count = repo.asset_count(col.collection_id)
+
     return CollectionItem(
         collection_id=col.collection_id,
         name=col.name,
@@ -114,7 +147,9 @@ def _collection_to_item(col, repo: CollectionRepository, user_id: str) -> Collec
         visibility=col.visibility,
         ownership=_ownership_label(col, user_id),
         sort_order=col.sort_order,
-        asset_count=repo.asset_count(col.collection_id),
+        type=col_type,
+        saved_query=getattr(col, "saved_query", None),
+        asset_count=count,
         created_at=col.created_at.isoformat(),
         updated_at=col.updated_at.isoformat(),
     )
@@ -142,6 +177,15 @@ def _can_view(col, user_id: str) -> bool:
     return col.visibility in ("shared", "public")
 
 
+def _require_static(col) -> None:
+    """Raise 400 if collection is smart (dynamic)."""
+    if getattr(col, "type", "static") == "smart":
+        raise HTTPException(
+            status_code=400,
+            detail="Smart collections do not support manual asset management",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Collection CRUD
 # ---------------------------------------------------------------------------
@@ -159,6 +203,12 @@ def create_collection(
         raise HTTPException(status_code=400, detail=f"Invalid sort_order. Must be one of: {', '.join(_VALID_SORT_ORDERS)}")
     if body.visibility not in _VALID_VISIBILITIES:
         raise HTTPException(status_code=400, detail=f"Invalid visibility. Must be one of: {', '.join(_VALID_VISIBILITIES)}")
+    if body.type not in _VALID_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid type. Must be one of: {', '.join(_VALID_TYPES)}")
+    if body.type == "smart" and not body.saved_query:
+        raise HTTPException(status_code=400, detail="Smart collections require a saved_query")
+    if body.type == "static" and body.saved_query is not None:
+        raise HTTPException(status_code=400, detail="Static collections must not have a saved_query")
 
     repo = CollectionRepository(session)
     col = repo.create(
@@ -167,6 +217,8 @@ def create_collection(
         description=body.description,
         sort_order=body.sort_order,
         visibility=body.visibility,
+        type=body.type,
+        saved_query=body.saved_query,
     )
 
     if body.asset_ids:
@@ -177,7 +229,7 @@ def create_collection(
                 raise HTTPException(status_code=404, detail=f"Asset {aid} not found or trashed")
         repo.add_assets(col.collection_id, body.asset_ids)
 
-    return _collection_to_item(col, repo, user_id)
+    return _collection_to_item(col, repo, user_id, session=session)
 
 
 @router.get("", response_model=CollectionListResponse)
@@ -190,7 +242,7 @@ def list_collections(
     repo = CollectionRepository(session)
     collections = repo.list_for_user(user_id)
     return CollectionListResponse(
-        items=[_collection_to_item(c, repo, user_id) for c in collections]
+        items=[_collection_to_item(c, repo, user_id, session=session) for c in collections]
     )
 
 
@@ -206,7 +258,7 @@ def get_collection(
     col = _get_collection_or_404(repo, collection_id)
     if not _can_view(col, user_id):
         raise HTTPException(status_code=404, detail="Collection not found")
-    return _collection_to_item(col, repo, user_id)
+    return _collection_to_item(col, repo, user_id, session=session)
 
 
 @router.patch("/{collection_id}", response_model=CollectionItem)
@@ -247,6 +299,8 @@ def update_collection(
         kwargs["cover_asset_id"] = body.cover_asset_id
     else:
         kwargs["cover_asset_id"] = _SENTINEL
+    if "saved_query" in raw:
+        kwargs["saved_query"] = body.saved_query
 
     col = repo.update(collection_id, **kwargs)
 
@@ -262,7 +316,7 @@ def update_collection(
                 else:
                     pub_repo.delete(collection_id)
 
-    return _collection_to_item(col, repo, user_id)
+    return _collection_to_item(col, repo, user_id, session=session)
 
 
 @router.delete("/{collection_id}", status_code=204)
@@ -302,6 +356,7 @@ def add_assets_to_collection(
     repo = CollectionRepository(session)
     col = _get_collection_or_404(repo, collection_id)
     _require_owner(col, user_id)
+    _require_static(col)
 
     asset_repo = AssetRepository(session)
     for aid in body.asset_ids:
@@ -325,6 +380,7 @@ def remove_assets_from_collection(
     repo = CollectionRepository(session)
     col = _get_collection_or_404(repo, collection_id)
     _require_owner(col, user_id)
+    _require_static(col)
     removed = repo.remove_assets(collection_id, body.asset_ids)
     return BatchRemoveResponse(removed=removed)
 
@@ -338,12 +394,54 @@ def list_collection_assets(
     after: str | None = Query(None, description="Pagination cursor"),
     limit: int = Query(200, ge=1, le=1000),
 ) -> CollectionAssetsResponse:
-    """List assets in a collection. Must be owner or collection must be shared."""
+    """List assets in a collection. Must be owner or collection must be shared.
+
+    For smart collections, executes the saved query to return live results.
+    """
     repo = CollectionRepository(session)
     col = _get_collection_or_404(repo, collection_id)
     if not _can_view(col, user_id):
         raise HTTPException(status_code=404, detail="Collection not found")
 
+    if getattr(col, "type", "static") == "smart" and col.saved_query:
+        # Smart collection: execute saved query via UnifiedBrowseRepository
+        from src.server.models.browse_filters import BrowseFilters
+        from src.server.repository.tenant import UnifiedBrowseRepository
+
+        saved = col.saved_query
+        filters_data = saved.get("filters", {})
+        # Merge top-level scope fields into filters
+        if "library_id" in saved:
+            filters_data["library_ids"] = [saved["library_id"]]
+        filters = BrowseFilters.from_json(filters_data)
+
+        browse_repo = UnifiedBrowseRepository(session)
+        assets = browse_repo.page(
+            filters=filters,
+            rating_user_id=user_id if filters.needs_rating_join else None,
+            after=after,
+            limit=limit,
+        )
+
+        items = [
+            CollectionAssetItem(
+                asset_id=a.asset_id,
+                rel_path=a.rel_path,
+                file_size=a.file_size,
+                media_type=a.media_type,
+                width=a.width,
+                height=a.height,
+                taken_at=a.taken_at.isoformat() if a.taken_at else None,
+                status=a.status,
+                duration_sec=a.duration_sec,
+                camera_make=a.camera_make,
+                camera_model=a.camera_model,
+            )
+            for a in assets
+        ]
+        return CollectionAssetsResponse(items=items, next_cursor=None)
+
+    # Static collection: list manual assets
     assets, next_cursor = repo.list_assets(
         collection_id, sort_order=col.sort_order, after_cursor=after, limit=limit
     )
@@ -385,6 +483,7 @@ def reorder_collection(
     repo = CollectionRepository(session)
     col = _get_collection_or_404(repo, collection_id)
     _require_owner(col, user_id)
+    _require_static(col)
 
     try:
         repo.reorder(collection_id, body.asset_ids)

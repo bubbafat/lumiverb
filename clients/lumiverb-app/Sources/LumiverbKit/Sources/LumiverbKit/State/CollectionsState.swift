@@ -1,5 +1,9 @@
 import Foundation
 
+enum CollectionsError: Error {
+    case noClient
+}
+
 /// Observable state for the collections feature. Holds the list of
 /// collections, the currently-open collection's assets, and loading flags.
 @MainActor
@@ -105,6 +109,13 @@ public final class CollectionsState: ObservableObject {
             self.error = "Failed to create collection: \(error)"
             return nil
         }
+    }
+
+    public func createSmartCollection(request: CreateCollectionRequest) async throws -> AssetCollection {
+        guard let client else { throw CollectionsError.noClient }
+        let created = try await client.createCollection(body: request)
+        collections.insert(created, at: 0)
+        return created
     }
 
     public func renameCollection(id: String, name: String) async {

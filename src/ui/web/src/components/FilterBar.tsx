@@ -107,6 +107,8 @@ interface FilterBarProps {
   onChangeFilter: (key: string, value: string | null) => void;
   onChangeFilters?: (changes: Record<string, string | null>) => void;
   facets: FacetsResponse | null;
+  /** Called when user clicks "Save as Smart Collection" in the filter menu. */
+  onSaveSmartCollection?: () => void;
 }
 
 function PersonChiclet({ personId, onClear }: { personId: string; onClear: () => void }) {
@@ -231,6 +233,7 @@ export function FilterBar({
   onChangeFilter,
   onChangeFilters,
   facets,
+  onSaveSmartCollection,
 }: FilterBarProps) {
   const setFilters = (changes: Record<string, string | null>) => {
     if (onChangeFilters) {
@@ -363,6 +366,8 @@ export function FilterBar({
   const showQChiclet = q !== null && q.length > 0;
   const showTagChiclet = tag !== null && tag.length > 0;
   const showPathChiclet = path !== null && path.length > 0;
+  const hasActiveChiclets = showQChiclet || showTagChiclet || showPathChiclet ||
+    hasDateFilter || hasActiveFilters || !!personId;
   const presets = getDatePresets();
 
   const selectCls = "rounded-md border border-gray-700 bg-gray-800 px-2 py-1.5 text-xs text-gray-200 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500";
@@ -643,6 +648,43 @@ export function FilterBar({
               label={colorFilter.includes(",") ? "Multiple colors" : colorFilter.charAt(0).toUpperCase() + colorFilter.slice(1)}
               onClear={() => onChangeFilter("color", null)}
             />
+          )}
+          {hasActiveChiclets && (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  for (const key of [
+                    "q", "tag", "date_from", "date_to",
+                    "media_type", "camera_make", "camera_model", "lens_model",
+                    "iso_min", "iso_max", "aperture_min", "aperture_max",
+                    "focal_length_min", "focal_length_max", "has_gps", "has_faces",
+                    "near_lat", "near_lon", "near_radius_km",
+                    "favorite", "star_min", "star_max", "color",
+                    "has_rating", "has_color", "has_exposure",
+                    "exposure_min_us", "exposure_max_us", "person_id",
+                  ]) {
+                    onChangeFilter(key, null);
+                  }
+                  onChangeQ(null);
+                  onChangeTag(null);
+                  onChangePath(null);
+                  onChangeDateRange(null, null);
+                }}
+                className="text-xs text-gray-500 hover:text-gray-300 whitespace-nowrap"
+              >
+                Clear filters
+              </button>
+              {onSaveSmartCollection && (
+                <button
+                  type="button"
+                  onClick={onSaveSmartCollection}
+                  className="text-xs text-indigo-400 hover:text-indigo-300 whitespace-nowrap"
+                >
+                  Save collection
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -926,22 +968,79 @@ export function FilterBar({
           </div>
 
           {hasActiveFilters && (
-            <button
-              type="button"
-              onClick={() => {
+            <FilterMenu
+              onClearAll={() => {
                 for (const key of [
                   "media_type", "camera_make", "camera_model", "lens_model",
                   "iso_min", "iso_max", "aperture_min", "aperture_max",
                   "focal_length_min", "focal_length_max", "has_gps", "has_faces",
                   "near_lat", "near_lon", "near_radius_km",
                   "favorite", "star_min", "star_max", "color",
+                  "has_rating", "has_color", "date_from", "date_to",
                 ]) {
                   onChangeFilter(key, null);
                 }
               }}
-              className="ml-auto text-xs text-gray-500 hover:text-gray-300"
+              onSaveSmartCollection={onSaveSmartCollection}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FilterMenu({
+  onClearAll,
+  onSaveSmartCollection,
+}: {
+  onClearAll: () => void;
+  onSaveSmartCollection?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative ml-auto">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="rounded px-2 py-1 text-xs text-gray-500 hover:bg-gray-700 hover:text-gray-300"
+        title="Filter actions"
+      >
+        ...
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-50 mt-1 min-w-[200px] rounded-md border border-gray-700 bg-gray-800 py-1 shadow-lg">
+          <button
+            type="button"
+            onClick={() => { onClearAll(); setOpen(false); }}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-300 hover:bg-gray-700"
+          >
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
+              <path d="M18.36 5.64l-12.72 12.72M5.64 5.64l12.72 12.72" />
+            </svg>
+            Clear all filters
+          </button>
+          {onSaveSmartCollection && (
+            <button
+              type="button"
+              onClick={() => { onSaveSmartCollection(); setOpen(false); }}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-300 hover:bg-gray-700"
             >
-              Clear all filters
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              Save as Smart Collection
             </button>
           )}
         </div>
