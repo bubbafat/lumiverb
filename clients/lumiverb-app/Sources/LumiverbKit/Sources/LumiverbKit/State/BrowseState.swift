@@ -828,6 +828,9 @@ public class BrowseState: ObservableObject {
         searchResults = []
         searchTotal = 0
         mode = .library
+        // Reload library assets with current filters (tag, camera, etc.)
+        // so stale pre-search data doesn't show.
+        reloadAssets()
     }
 
     // MARK: - Similarity
