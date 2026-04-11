@@ -270,6 +270,10 @@ export default function BrowsePage() {
   const error = browseQuery.error;
   const isError = browseQuery.isError;
 
+  // Stable ref for scroll/pagination handlers
+  const fetchNextPageRef = useRef(fetchNextPage);
+  fetchNextPageRef.current = fetchNextPage;
+
   const browseCount = useMemo(() => {
     return browseQuery.data?.pages.flatMap((p) => p?.items ?? []).length ?? 0;
   }, [browseQuery.data]);
@@ -327,9 +331,9 @@ export default function BrowsePage() {
     // completeLastDateGroup behavior.
     if (!hasNextPage || isFetchingNextPage) return;
     if (newAssets.length >= PAGE_SIZE) {
-      fetchNextPage();
+      fetchNextPageRef.current();
     }
-  }, [orderedAssets, groups, hasNextPage, isFetchingNextPage, fetchNextPage, selection]);
+  }, [orderedAssets, groups, hasNextPage, isFetchingNextPage, selection]);
 
   const [pickerAssetIds, setPickerAssetIds] = useState<string[] | null>(null);
   const [showSmartColModal, setShowSmartColModal] = useState(false);
@@ -439,12 +443,12 @@ export default function BrowsePage() {
         hasNextPageRef.current &&
         !isFetchingNextPageRef.current
       ) {
-        fetchNextPage();
+        fetchNextPageRef.current();
       }
     };
     parentEl.addEventListener("scroll", onScroll);
     return () => parentEl.removeEventListener("scroll", onScroll);
-  }, [fetchNextPage, parentEl]);
+  }, [parentEl]);
 
   const handleAssetClick = useCallback((asset: AssetPageItem) => {
     setLightboxAsset(asset);
@@ -459,10 +463,10 @@ export default function BrowsePage() {
       const asset = orderedAssets[index];
       if (asset) setLightboxAsset(asset);
       if (hasNextPage && !isFetchingNextPage && index >= orderedAssets.length - 20) {
-        fetchNextPage();
+        fetchNextPageRef.current();
       }
     },
-    [orderedAssets, hasNextPage, isFetchingNextPage, fetchNextPage],
+    [orderedAssets, hasNextPage, isFetchingNextPage],
   );
 
   if (!libraryId) {

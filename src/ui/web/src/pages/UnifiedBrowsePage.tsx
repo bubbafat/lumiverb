@@ -177,6 +177,10 @@ export default function UnifiedBrowsePage() {
   const hasNextPage = browseQuery.hasNextPage;
   const fetchNextPage = browseQuery.fetchNextPage;
 
+  // Stable ref for scroll handler — avoids re-attaching listener on every data update
+  const fetchNextPageRef = useRef(fetchNextPage);
+  fetchNextPageRef.current = fetchNextPage;
+
   const browseCount = flatAssets.length;
 
   const groups = useMemo(
@@ -300,12 +304,12 @@ export default function UnifiedBrowsePage() {
         hasNextPageRef.current &&
         !isFetchingNextPageRef.current
       ) {
-        fetchNextPage();
+        fetchNextPageRef.current();
       }
     };
     parentEl.addEventListener("scroll", onScroll);
     return () => parentEl.removeEventListener("scroll", onScroll);
-  }, [fetchNextPage, parentEl]);
+  }, [parentEl]);
 
   const handleAssetClick = useCallback((asset: AssetPageItem) => {
     setLightboxAsset(asset);
@@ -320,10 +324,10 @@ export default function UnifiedBrowsePage() {
       const asset = orderedAssets[index];
       if (asset) setLightboxAsset(asset);
       if (hasNextPage && !isFetchingNextPage && index >= orderedAssets.length - 20) {
-        fetchNextPage();
+        fetchNextPageRef.current();
       }
     },
-    [orderedAssets, hasNextPage, isFetchingNextPage, fetchNextPage],
+    [orderedAssets, hasNextPage, isFetchingNextPage],
   );
 
   const handleLightboxDateClick = useCallback(
