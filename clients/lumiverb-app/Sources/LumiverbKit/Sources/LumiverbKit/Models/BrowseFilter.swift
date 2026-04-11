@@ -55,6 +55,80 @@ public struct BrowseFilter: Equatable, Sendable {
         dateFrom != nil || dateTo != nil
     }
 
+    /// Each active filter as a displayable chiclet with a label and
+    /// a mutating closure that clears just that filter.
+    public struct ActiveFilter: Identifiable {
+        public let id: String
+        public let label: String
+        public let clear: (inout BrowseFilter) -> Void
+    }
+
+    /// List of currently active filters for display in a chiclet bar.
+    public var activeFilters: [ActiveFilter] {
+        var result: [ActiveFilter] = []
+
+        if let mediaType {
+            result.append(ActiveFilter(id: "mediaType", label: mediaType.capitalized) { f in f.mediaType = nil })
+        }
+        if cameraMake != nil || cameraModel != nil {
+            let label = [cameraMake, cameraModel].compactMap { $0 }.joined(separator: " ")
+            result.append(ActiveFilter(id: "camera", label: label) { f in f.cameraMake = nil; f.cameraModel = nil })
+        }
+        if let lensModel {
+            result.append(ActiveFilter(id: "lens", label: lensModel) { f in f.lensModel = nil })
+        }
+        if let isoMin {
+            let label = isoMin == isoMax ? "ISO \(isoMin)" : "ISO \(isoMin)–\(isoMax ?? isoMin)"
+            result.append(ActiveFilter(id: "iso", label: label) { f in f.isoMin = nil; f.isoMax = nil })
+        }
+        if exposureMinUs != nil {
+            let label = "Exposure"
+            result.append(ActiveFilter(id: "exposure", label: label) { f in f.exposureMinUs = nil; f.exposureMaxUs = nil })
+        }
+        if let apertureMin {
+            let label = apertureMin == apertureMax ? String(format: "f/%.1f", apertureMin) : String(format: "f/%.1f–%.1f", apertureMin, apertureMax ?? apertureMin)
+            result.append(ActiveFilter(id: "aperture", label: label) { f in f.apertureMin = nil; f.apertureMax = nil })
+        }
+        if let focalLengthMin {
+            let label = focalLengthMin == focalLengthMax ? String(format: "%.0fmm", focalLengthMin) : String(format: "%.0f–%.0fmm", focalLengthMin, focalLengthMax ?? focalLengthMin)
+            result.append(ActiveFilter(id: "focal", label: label) { f in f.focalLengthMin = nil; f.focalLengthMax = nil })
+        }
+        if let dateFrom {
+            let label = dateFrom == dateTo ? dateFrom : "\(dateFrom) – \(dateTo ?? "")"
+            result.append(ActiveFilter(id: "date", label: label) { f in f.dateFrom = nil; f.dateTo = nil })
+        }
+        if favorite == true {
+            result.append(ActiveFilter(id: "favorite", label: "Favorites") { f in f.favorite = nil })
+        }
+        if let starMin {
+            let label = starMin == starMax ? "\(starMin)★" : "\(starMin)–\(starMax ?? starMin)★"
+            result.append(ActiveFilter(id: "stars", label: label) { f in f.starMin = nil; f.starMax = nil })
+        }
+        if let color {
+            result.append(ActiveFilter(id: "color", label: color.capitalized) { f in f.color = nil })
+        }
+        if let personDisplayName {
+            result.append(ActiveFilter(id: "person", label: personDisplayName) { f in f.personId = nil; f.personDisplayName = nil })
+        }
+        if hasFaces == true {
+            result.append(ActiveFilter(id: "hasFaces", label: "Has faces") { f in f.hasFaces = nil })
+        }
+        if hasGps == true {
+            result.append(ActiveFilter(id: "hasGps", label: "Has GPS") { f in f.hasGps = nil })
+        }
+
+        return result
+    }
+
+    /// Clear all filters, keeping sort settings.
+    public mutating func clearAll() {
+        let sort = sortField
+        let dir = sortDirection
+        self = BrowseFilter()
+        self.sortField = sort
+        self.sortDirection = dir
+    }
+
     /// Build query parameters for the API call.
     public var queryParams: [String: String] {
         var params: [String: String] = [

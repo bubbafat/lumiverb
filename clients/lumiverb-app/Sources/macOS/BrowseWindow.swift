@@ -377,6 +377,7 @@ struct BrowseWindow: View {
             } else {
                 VStack(spacing: 0) {
                     SelectionToolbarView(browseState: browseState, client: appState.client)
+                    FilterChicletBar(browseState: browseState)
                     MediaGridView(browseState: browseState, client: appState.client) {
                         macScrollIntrospector
                     }
