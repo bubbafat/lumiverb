@@ -1,19 +1,18 @@
 import SwiftUI
 import LumiverbKit
 
-/// Post-login root view. Owns the shared `BrowseState` and injects the
-/// cache bundle + collections state into the SwiftUI environment so all
-/// descendant views (shared LumiverbKit grids, lightbox, etc.) can read
-/// them via `@Environment`.
+/// Post-login root view. Tab bar mirrors Google Photos layout:
+/// Libraries (photo grid), Collections, People, Search, Settings.
+///
+/// Owns the shared `BrowseState` and injects the cache bundle +
+/// collections state into the SwiftUI environment so all descendant
+/// views can read them via `@Environment`.
 struct MainTabView: View {
     @ObservedObject var appState: iOSAppState
     @StateObject private var browseState: BrowseState
     @StateObject private var peopleState: PeopleState
     @StateObject private var collectionsState: CollectionsState
 
-    /// iOS cache bundle: in-memory proxy cache (no disk — iOS proxies are
-    /// lightweight and re-fetched on next launch) + disk-backed thumbnail
-    /// cache with ~200 MB LRU eviction.
     private let cacheBundle: CacheBundle
 
     init(appState: iOSAppState) {
@@ -21,7 +20,6 @@ struct MainTabView: View {
 
         let context = iOSBrowseAppContext(appState: appState)
         let bs = BrowseState(appContext: context)
-        // iOS is browse-only — no re-enrich action in the lightbox.
         bs.reEnrichInvoker = nil
 
         self._browseState = StateObject(wrappedValue: bs)
@@ -44,9 +42,52 @@ struct MainTabView: View {
                 .navigationTitle("Libraries")
             }
             .tabItem {
-                Label("Libraries", systemImage: "photo.stack")
+                Label("Photos", systemImage: "photo.fill")
+            }
+
+            NavigationStack {
+                CollectionsListView(
+                    collectionsState: collectionsState,
+                    client: appState.client
+                )
+                .navigationTitle("Collections")
+            }
+            .tabItem {
+                Label("Collections", systemImage: "rectangle.stack.fill")
+            }
+
+            NavigationStack {
+                PeopleView(
+                    peopleState: peopleState,
+                    browseState: browseState,
+                    client: appState.client
+                )
+                .navigationTitle("People")
+            }
+            .tabItem {
+                Label("People", systemImage: "person.2.fill")
+            }
+
+            NavigationStack {
+                SearchTab(
+                    appState: appState,
+                    browseState: browseState,
+                    peopleState: peopleState
+                )
+            }
+            .tabItem {
+                Label("Search", systemImage: "magnifyingglass")
+            }
+
+            NavigationStack {
+                iOSSettingsView(appState: appState)
+                    .navigationTitle("Settings")
+            }
+            .tabItem {
+                Label("Settings", systemImage: "gearshape.fill")
             }
         }
+        .preferredColorScheme(.dark)
         .environment(\.cacheBundle, cacheBundle)
         .environment(\.collectionsState, collectionsState)
     }

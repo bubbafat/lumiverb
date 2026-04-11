@@ -8,6 +8,9 @@ struct LibraryBrowseView: View {
     @ObservedObject var appState: iOSAppState
     @ObservedObject var browseState: BrowseState
 
+    /// Preview asset IDs per library for 2x2 thumbnail grids.
+    @State private var libraryPreviews: [String: [String]] = [:]
+
     var body: some View {
         Group {
             if browseState.selectedLibraryId != nil {
@@ -17,7 +20,7 @@ struct LibraryBrowseView: View {
             }
         }
         .fullScreenCover(isPresented: lightboxBinding) {
-            LightboxView(browseState: browseState, client: appState.client)
+            iOSLightboxView(browseState: browseState, client: appState.client)
         }
         .onChange(of: browseState.selectedLibraryId) { _, newValue in
             guard newValue != nil else { return }
@@ -42,7 +45,7 @@ struct LibraryBrowseView: View {
         } else {
             ScrollView {
                 LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 160), spacing: 12)],
+                    columns: [GridItem(.flexible()), GridItem(.flexible())],
                     spacing: 12
                 ) {
                     ForEach(appState.libraries) { lib in
@@ -51,13 +54,18 @@ struct LibraryBrowseView: View {
                         } label: {
                             LibraryCardView(
                                 library: lib,
+                                previewAssetIds: libraryPreviews[lib.libraryId] ?? [],
                                 client: appState.client
                             )
                         }
                         .buttonStyle(.plain)
                     }
                 }
-                .padding()
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+            }
+            .task {
+                await fetchAllPreviews()
             }
         }
     }
@@ -170,6 +178,43 @@ struct LibraryBrowseView: View {
                 }
             }
         )
+    }
+
+    // MARK: - Preview fetching
+
+    private func fetchAllPreviews() async {
+        guard let client = appState.client else { return }
+        await withTaskGroup(of: (String, [String]).self) { group in
+            for lib in appState.libraries {
+                guard libraryPreviews[lib.libraryId] == nil else { continue }
+                group.addTask {
+                    let ids = await Self.fetchPreviewIds(
+                        client: client, libraryId: lib.libraryId
+                    )
+                    return (lib.libraryId, ids)
+                }
+            }
+            for await (libId, ids) in group {
+                libraryPreviews[libId] = ids
+            }
+        }
+    }
+
+    private static func fetchPreviewIds(
+        client: APIClient, libraryId: String
+    ) async -> [String] {
+        do {
+            let response: QueryResponse = try await client.get(
+                "/v1/query",
+                queryItems: [
+                    URLQueryItem(name: "library_id", value: libraryId),
+                    URLQueryItem(name: "page_size", value: "4"),
+                ]
+            )
+            return response.items.map(\.assetId)
+        } catch {
+            return []
+        }
     }
 
     // MARK: - Last-opened library restore

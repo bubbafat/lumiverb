@@ -7,8 +7,13 @@ import SwiftUI
 /// ~10pt). iOS doesn't need this — touch scrolling has no concept of
 /// "one line" — but it's harmless to expose.
 public enum MediaGridLayoutConstants {
+    #if os(iOS)
+    public static let targetRowHeight: CGFloat = 120
+    public static let spacing: CGFloat = 2
+    #else
     public static let targetRowHeight: CGFloat = 180
     public static let spacing: CGFloat = 4
+    #endif
     /// `verticalLineScroll` target for AppKit's `NSScrollView`. One arrow
     /// key tap should advance roughly one row.
     public static var verticalLineScrollHeight: CGFloat {

@@ -1146,6 +1146,10 @@ public class BrowseState: ObservableObject {
         personSuggestions = []
         searchQuery = ""
         mode = .library
+        // Reload assets with the person filter applied. Can't use
+        // resetAndLoad() — it wipes filters. reloadAssets() preserves
+        // them and re-fetches from page 1.
+        reloadAssets()
     }
 
     /// Clear the person filter.

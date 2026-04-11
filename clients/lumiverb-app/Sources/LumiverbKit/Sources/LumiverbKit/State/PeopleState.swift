@@ -73,7 +73,7 @@ public final class PeopleState: ObservableObject {
 
     /// First-time load. Idempotent: skips work if the list is already
     /// populated, so revisiting the People tab doesn't re-fetch page 1.
-    func loadIfNeeded() async {
+    public func loadIfNeeded() async {
         if people.isEmpty, hasMorePeople {
             await loadNextPage()
         }

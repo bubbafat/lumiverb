@@ -17,12 +17,19 @@ public struct PeopleView: View {
         self.client = client
     }
 
-    /// Four columns of large-ish circular avatars; matches roughly the
-    /// density of the existing media grid (4 cols) for visual rhythm.
+    /// Four columns of circular avatars. iOS uses tighter spacing to
+    /// fit 72pt circles; macOS uses wider spacing for 120pt circles.
+    #if os(iOS)
+    private let columns = Array(
+        repeating: GridItem(.flexible(), spacing: 8),
+        count: 4
+    )
+    #else
     private let columns = Array(
         repeating: GridItem(.flexible(), spacing: 16),
         count: 4
     )
+    #endif
 
     public var body: some View {
         NavigationStack {
@@ -143,10 +150,16 @@ struct PersonCardView: View {
     let person: PersonItem
     let client: APIClient?
 
+    #if os(iOS)
+    private let faceSize: CGFloat = 72
+    #else
+    private let faceSize: CGFloat = 120
+    #endif
+
     var body: some View {
         VStack(spacing: 6) {
             FaceThumbnailView(faceId: person.representativeFaceId, client: client)
-                .frame(width: 120, height: 120)
+                .frame(width: faceSize, height: faceSize)
                 .background(Circle().fill(Color.gray.opacity(0.15)))
                 .clipShape(Circle())
                 .overlay(
