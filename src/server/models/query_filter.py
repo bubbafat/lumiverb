@@ -1212,7 +1212,7 @@ class TagFilter(LeafFilter):
     def to_sql(self, params: dict, counter: list[int]) -> str:
         p = self._param_name("tag", counter)
         params[p] = self.value
-        return f"m.tags @> jsonb_build_array(:{p})"
+        return f"m.data->'tags' @> jsonb_build_array(:{p})"
 
     def to_url_value(self) -> str:
         return self.value

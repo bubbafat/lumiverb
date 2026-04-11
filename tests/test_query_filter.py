@@ -538,7 +538,7 @@ class TestPersonFilter:
 class TestTagFilter:
     def test_sql(self):
         frag, params = _sql(TagFilter(value="sunset"))
-        assert "jsonb_build_array" in frag
+        assert "m.data->'tags' @> jsonb_build_array" in frag, f"TagFilter must query m.data->'tags', got: {frag}"
         assert "sunset" in params.values()
 
     def test_needs_metadata_join(self):
