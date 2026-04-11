@@ -206,10 +206,18 @@ export interface LibraryRevision {
   asset_count: number;
 }
 
-export interface SavedQuery {
+/** Legacy saved query format (deprecated). */
+export interface SavedQueryLegacy {
   q?: string;
   filters: Record<string, unknown>;
   library_id?: string;
+}
+
+/** New saved query format using filter algebra. */
+export interface SavedQuery {
+  filters: Array<{ type: string; value: string }>;
+  sort?: string;
+  direction?: string;
 }
 
 export interface CollectionItem {

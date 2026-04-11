@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
 import type { CollectionItem } from "./types";
-import { toSnakeCaseFilters, formatSavedQuery } from "../components/SaveSmartCollectionModal";
+import type { LeafFilter, SavedQueryV2 } from "../lib/queryFilter";
+import { savedQueryLabels, buildSavedQuery } from "../lib/queryFilter";
 
 /**
  * Tests for smart collection type fields and saved query serialization.
- * These tests verify the type contracts that the UI depends on.
- * Tests are written first — they will fail until types.ts and client.ts are updated.
+ * Updated for the filter algebra format.
  */
 
 describe("CollectionItem type", () => {
@@ -29,7 +29,7 @@ describe("CollectionItem type", () => {
     expect(item.saved_query).toBeNull();
   });
 
-  it("supports smart type with saved_query", () => {
+  it("supports smart type with saved_query using filter algebra", () => {
     const item: CollectionItem = {
       collection_id: "col_456",
       name: "Canon Favorites",
@@ -41,12 +41,14 @@ describe("CollectionItem type", () => {
       sort_order: "manual",
       type: "smart",
       saved_query: {
-        filters: {
-          camera_make: "Canon",
-          favorite: true,
-          star_min: 3,
-        },
-        library_id: "lib_1",
+        filters: [
+          { type: "camera_make", value: "Canon" },
+          { type: "favorite", value: "yes" },
+          { type: "stars", value: "3+" },
+          { type: "library", value: "lib_1" },
+        ],
+        sort: "taken_at",
+        direction: "desc",
       },
       asset_count: 42,
       created_at: "2024-01-01T00:00:00Z",
@@ -54,11 +56,11 @@ describe("CollectionItem type", () => {
     };
     expect(item.type).toBe("smart");
     expect(item.saved_query).not.toBeNull();
-    expect(item.saved_query!.filters.camera_make).toBe("Canon");
-    expect(item.saved_query!.library_id).toBe("lib_1");
+    const cameraMake = item.saved_query!.filters.find((f) => f.type === "camera_make");
+    expect(cameraMake?.value).toBe("Canon");
   });
 
-  it("supports smart type with search query text", () => {
+  it("supports smart type with search query filter", () => {
     const item: CollectionItem = {
       collection_id: "col_789",
       name: "Sunset Search",
@@ -70,23 +72,23 @@ describe("CollectionItem type", () => {
       sort_order: "manual",
       type: "smart",
       saved_query: {
-        q: "sunset",
-        filters: {
-          color: "orange",
-          media_types: ["image"],
-        },
+        filters: [
+          { type: "query", value: "sunset" },
+          { type: "color", value: "orange" },
+          { type: "media", value: "image" },
+        ],
       },
       asset_count: 15,
       created_at: "2024-01-01T00:00:00Z",
       updated_at: "2024-01-01T00:00:00Z",
     };
-    expect(item.saved_query!.q).toBe("sunset");
+    const queryFilter = item.saved_query!.filters.find((f) => f.type === "query");
+    expect(queryFilter?.value).toBe("sunset");
   });
 });
 
 describe("PageAssetsOptions type", () => {
   it("includes hasColor field", () => {
-    // This import will fail if the field doesn't exist on the type
     const opts: import("./client").PageAssetsOptions = {
       hasColor: true,
     };
@@ -101,168 +103,79 @@ describe("PageAssetsOptions type", () => {
     expect(opts.dateFrom).toBe("2024-01-01");
     expect(opts.dateTo).toBe("2024-12-31");
   });
-
-  it("all new filter fields coexist with existing ones", () => {
-    const opts: import("./client").PageAssetsOptions = {
-      cameraMake: "Canon",
-      favorite: true,
-      starMin: 3,
-      color: "red",
-      hasRating: true,
-      hasColor: true,
-      dateFrom: "2024-06-01",
-      dateTo: "2024-06-30",
-      hasFaces: true,
-    };
-    expect(opts.cameraMake).toBe("Canon");
-    expect(opts.hasColor).toBe(true);
-    expect(opts.dateFrom).toBe("2024-06-01");
-  });
 });
 
-describe("camelCase to snake_case conversion", () => {
-  it("converts PageAssetsOptions keys to server format", () => {
-    // This is the exact shape browseOpts has in the browse pages
-    const browseOpts = {
-      cameraMake: "Canon",
-      starMin: 3,
-      favorite: true,
-      hasGps: true,
-      mediaType: "image",
-      sort: "taken_at",
-      dir: "desc",
-    };
-
-    // uses top-level import
-    const snaked = toSnakeCaseFilters(browseOpts);
-
-    // Server expects snake_case keys
-    expect(snaked["camera_make"]).toBe("Canon");
-    expect(snaked["star_min"]).toBe(3);
-    expect(snaked["favorite"]).toBe(true);
-    expect(snaked["has_gps"]).toBe(true);
-    expect(snaked["media_type"]).toBe("image");
-
-    // camelCase keys must NOT be present
-    expect(snaked["cameraMake"]).toBeUndefined();
-    expect(snaked["starMin"]).toBeUndefined();
-    expect(snaked["hasGps"]).toBeUndefined();
-    expect(snaked["mediaType"]).toBeUndefined();
+describe("filter algebra serialization", () => {
+  it("builds a saved query from filters", () => {
+    const filters: LeafFilter[] = [
+      { type: "camera_make", value: "Canon" },
+      { type: "stars", value: "4+" },
+      { type: "favorite", value: "yes" },
+    ];
+    const sq = buildSavedQuery(filters, "taken_at", "desc");
+    expect(sq.filters).toEqual(filters);
+    expect(sq.sort).toBe("taken_at");
+    expect(sq.direction).toBe("desc");
   });
 
-  it("drops null/undefined values", () => {
-    const snaked = toSnakeCaseFilters({
-      cameraMake: "Canon",
-      cameraModel: null,
-      isoMin: undefined,
-    });
-
-    expect(snaked["camera_make"]).toBe("Canon");
-    expect("camera_model" in snaked).toBe(false);
-    expect("iso_min" in snaked).toBe(false);
-  });
-
-  it("drops false boolean defaults", () => {
-    const snaked = toSnakeCaseFilters({
-      cameraMake: "Canon",
-      hasGps: false,    // page default, not a user selection
-      hasFaces: false,  // page default, not a user selection
-      favorite: true,   // this IS a user selection
-    });
-
-    expect(snaked["camera_make"]).toBe("Canon");
-    expect(snaked["favorite"]).toBe(true);
-    expect("has_gps" in snaked).toBe(false);
-    expect("has_faces" in snaked).toBe(false);
-  });
-
-  it("strips sort/dir defaults and library_id from filters", () => {
-    const snaked = toSnakeCaseFilters({
-      sort: "taken_at",
-      dir: "desc",
-      libraryId: "lib_1",
-      cameraMake: "Canon",
-    });
-
-    expect(snaked["camera_make"]).toBe("Canon");
-    expect("sort" in snaked).toBe(false);
-    expect("dir" in snaked).toBe(false);
-    expect("library_id" in snaked).toBe(false);
-  });
-});
-
-describe("saved query serialization", () => {
   it("round-trips through JSON", () => {
-    const savedQuery = {
-      filters: {
-        camera_make: "Canon",
-        star_min: 4,
-        color: "red",
-        has_gps: true,
-        date_from: "2024-01-01T00:00:00+00:00",
-      },
-      library_id: "lib_abc",
+    const sq: SavedQueryV2 = {
+      filters: [
+        { type: "camera_make", value: "Canon" },
+        { type: "stars", value: "4+" },
+        { type: "color", value: "red" },
+        { type: "has_gps", value: "yes" },
+        { type: "library", value: "lib_abc" },
+      ],
+      sort: "taken_at",
+      direction: "desc",
     };
 
-    const json = JSON.stringify(savedQuery);
-    const parsed = JSON.parse(json);
+    const json = JSON.stringify(sq);
+    const parsed: SavedQueryV2 = JSON.parse(json);
 
-    expect(parsed.filters.camera_make).toBe("Canon");
-    expect(parsed.filters.star_min).toBe(4);
-    expect(parsed.filters.color).toBe("red");
-    expect(parsed.library_id).toBe("lib_abc");
+    expect(parsed.filters).toEqual(sq.filters);
+    expect(parsed.sort).toBe("taken_at");
   });
 
   it("handles empty filters", () => {
-    const savedQuery = { filters: {} };
-    const json = JSON.stringify(savedQuery);
-    const parsed = JSON.parse(json);
-    expect(parsed.filters).toEqual({});
-  });
-
-  it("handles search query with filters", () => {
-    const savedQuery = {
-      q: "portrait",
-      filters: {
-        media_types: ["image"],
-        has_faces: true,
-      },
-    };
-    const json = JSON.stringify(savedQuery);
-    const parsed = JSON.parse(json);
-    expect(parsed.q).toBe("portrait");
-    expect(parsed.filters.has_faces).toBe(true);
+    const sq: SavedQueryV2 = { filters: [] };
+    const json = JSON.stringify(sq);
+    const parsed: SavedQueryV2 = JSON.parse(json);
+    expect(parsed.filters).toEqual([]);
   });
 });
 
 describe("saved query display helpers", () => {
-  it("formatSavedQuery produces human-readable filter descriptions", () => {
-    // uses top-level import
-    const labels = formatSavedQuery({
-      filters: {
-        camera_make: "Canon",
-        star_min: 3,
-        favorite: true,
-        media_type: "image",
-      },
+  it("savedQueryLabels produces human-readable labels excluding library", () => {
+    const labels = savedQueryLabels({
+      filters: [
+        { type: "camera_make", value: "Canon" },
+        { type: "stars", value: "3+" },
+        { type: "favorite", value: "yes" },
+        { type: "media", value: "image" },
+        { type: "library", value: "lib_1" },
+      ],
     });
 
-    expect(labels).toContain("Camera: Canon");
-    expect(labels).toContain("Stars: 3+");
+    expect(labels).toContain("Camera Make: Canon");
+    expect(labels).toContain("3+ stars");
     expect(labels).toContain("Favorites");
-    expect(labels).toContain("Photos only");
+    expect(labels).toContain("Photos");
+    // Library should be excluded
+    expect(labels.some((l) => l.includes("lib_1"))).toBe(false);
   });
 
   it("returns empty array for empty filters", () => {
-    // uses top-level import
-    expect(formatSavedQuery({ filters: {} })).toEqual([]);
+    expect(savedQueryLabels({ filters: [] })).toEqual([]);
   });
 
-  it("includes search query", () => {
-    // uses top-level import
-    const labels = formatSavedQuery({
-      q: "sunset",
-      filters: { color: "orange" },
+  it("includes search query label", () => {
+    const labels = savedQueryLabels({
+      filters: [
+        { type: "query", value: "sunset" },
+        { type: "color", value: "orange" },
+      ],
     });
     expect(labels).toContain('Search: "sunset"');
     expect(labels).toContain("Color: orange");

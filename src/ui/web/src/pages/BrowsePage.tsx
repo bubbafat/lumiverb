@@ -6,34 +6,34 @@ import {
   ApiError,
   batchRateAssets,
   getApiKey,
-  getFacets,
+  getFilteredFacets,
   getLibrary,
   getLibraryRevision,
   listDirectories,
   lookupRatings,
-  pageAssets,
+  queryAssets,
   rateAsset,
-  searchAssets,
-  searchPeople,
 } from "../api/client";
-import type { PageAssetsOptions } from "../api/client";
+import type { QueryItem } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
 import { CollectionPicker } from "../components/CollectionPicker";
 import { Lightbox } from "../components/Lightbox";
 import { FilterBar } from "../components/FilterBar";
-import { SaveSmartCollectionModal, toSnakeCaseFilters } from "../components/SaveSmartCollectionModal";
+import { SaveSmartCollectionModal } from "../components/SaveSmartCollectionModal";
 import { SelectionToolbar } from "../components/SelectionToolbar";
 import { ZoomControl } from "../components/ZoomControl";
 import { DrawerOverlay } from "../components/DrawerOverlay";
 import { DirectoryTree } from "../components/DirectoryTree";
 import type { AssetPageItem, AssetRating, FacetsResponse, RatingColor } from "../api/types";
 import { HeartButton, StarPicker, ColorPicker } from "../components/RatingControls";
+import { paramsToFilters, setFilter, buildSavedQuery, composeDate } from "../lib/queryFilter";
+import type { LeafFilter } from "../lib/queryFilter";
 import { useScrollContainer } from "../context/ScrollContainerContext";
 import { groupAssetsByDate } from "../lib/groupByDate";
 import { useSelection } from "../lib/useSelection";
 import { buildVirtualRows, buildFixedGridRows } from "../lib/virtualRows";
 import { useLocalStorage } from "../lib/useLocalStorage";
-import { parseSearchQuery } from "../lib/parseSearchQuery";
+// parseSearchQuery available for future prefix query support
 import type { VirtualRowKind } from "../lib/virtualRows";
 
 const PAGE_SIZE = 100;
@@ -49,22 +49,10 @@ const ZOOM_LEVELS = [
 ] as const;
 
 const CELL_ASPECT_RATIO = 1.0;
-const SEARCH_RESULT_CAP = 500;
-
-type SortKey = "date" | "filename" | "score";
-type SortDir = "asc" | "desc";
 
 export default function BrowsePage() {
   const { libraryId } = useParams<{ libraryId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
-  const pathPrefix = searchParams.get("path") ?? undefined;
-  const activeQ = searchParams.get("q");
-  const activeTag = searchParams.get("tag");
-  const dateFrom = searchParams.get("date_from") ?? undefined;
-  const dateTo = searchParams.get("date_to") ?? undefined;
-  const sortKey = (searchParams.get("sort") as SortKey | null) ?? "date";
-  const sortDir = (searchParams.get("dir") as SortDir | null) ?? "desc";
-
   const parentEl = useScrollContainer();
   const isFetchingNextPageRef = useRef(false);
   const hasNextPageRef = useRef(false);
@@ -74,7 +62,67 @@ export default function BrowsePage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [zoomLevel, setZoomLevel] = useLocalStorage("lv_grid_zoom", 2);
 
-  const isSearchMode = !!(activeQ || dateFrom);
+  // --- Filter algebra: read filters from URL ---
+  const { filters: urlFilters, sort: browseSort, direction: browseDir } = useMemo(
+    () => paramsToFilters(searchParams),
+    [searchParams],
+  );
+
+  // Add implicit library scope filter
+  const filters: LeafFilter[] = useMemo(() => {
+    const hasLib = urlFilters.some((f) => f.type === "library");
+    if (hasLib || !libraryId) return urlFilters;
+    return [...urlFilters, { type: "library", value: libraryId }];
+  }, [urlFilters, libraryId]);
+
+  // Legacy compat: read path from URL for directory tree
+  const pathPrefix = searchParams.get("path") ?? undefined;
+
+  // Add path filter if set via directory tree
+  const filtersWithPath: LeafFilter[] = useMemo(() => {
+    if (!pathPrefix) return filters;
+    const hasPath = filters.some((f) => f.type === "path");
+    if (hasPath) return filters;
+    return [...filters, { type: "path", value: pathPrefix }];
+  }, [filters, pathPrefix]);
+
+  const handleSetFilter = useCallback(
+    (type: string, value: string | null) => {
+      setSearchParams((prev) => {
+        const current = paramsToFilters(prev);
+        const updated = setFilter(current.filters, type, value);
+        const next = new URLSearchParams();
+        for (const f of updated) next.append("f", `${f.type}:${f.value}`);
+        const s = prev.get("sort");
+        if (s) next.set("sort", s);
+        const d = prev.get("dir");
+        if (d) next.set("dir", d);
+        // Preserve path for directory tree
+        const p = prev.get("path");
+        if (p) next.set("path", p);
+        return next;
+      });
+    },
+    [setSearchParams],
+  );
+
+  const handleSetSort = useCallback(
+    (sort: string, dir: "asc" | "desc") => {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        if (sort && sort !== "taken_at") next.set("sort", sort);
+        else next.delete("sort");
+        if (dir && dir !== "desc") next.set("dir", dir);
+        else next.delete("dir");
+        return next;
+      });
+    },
+    [setSearchParams],
+  );
+
+  const handleClearAll = useCallback(() => {
+    setSearchParams(new URLSearchParams());
+  }, [setSearchParams]);
 
   function setParam(key: string, value: string | null) {
     setSearchParams((prev) => {
@@ -85,31 +133,12 @@ export default function BrowsePage() {
     });
   }
 
-  const handleChangeDateRange = useCallback(
-    (from: string | null, to: string | null) => {
-      setSearchParams((prev) => {
-        const next = new URLSearchParams(prev);
-        if (from) next.set("date_from", from);
-        else next.delete("date_from");
-        if (to) next.set("date_to", to);
-        else next.delete("date_to");
-        return next;
-      });
-    },
-    [setSearchParams],
-  );
-
   const handleLightboxDateClick = useCallback(
     (dateStr: string) => {
-      setSearchParams((prev) => {
-        const next = new URLSearchParams(prev);
-        next.set("date_from", dateStr);
-        next.set("date_to", dateStr);
-        return next;
-      });
+      handleSetFilter("date", composeDate(dateStr, dateStr));
       setLightboxAsset(null);
     },
-    [setSearchParams],
+    [handleSetFilter],
   );
 
   const apiKey = getApiKey();
@@ -171,190 +200,73 @@ export default function BrowsePage() {
     }
   }, [revision, libraryId, queryClient]);
 
-  // Facets query for filter dropdowns
+  // Facets scoped to active filters
   const facetsQuery = useQuery({
-    queryKey: ["facets", libraryId!, pathPrefix ?? null],
-    queryFn: () => getFacets(libraryId!, pathPrefix),
+    queryKey: ["filtered-facets", filtersWithPath],
+    queryFn: () => getFilteredFacets(filtersWithPath),
     enabled: !!libraryId && canFetchAssets,
     staleTime: 5 * 60_000, // 5 minutes
   });
   const facets: FacetsResponse | null = facetsQuery.data ?? null;
 
-  // Build filter/sort options from URL search params
-  const browseSort = searchParams.get("sort") ?? "taken_at";
-  const browseDir = (searchParams.get("dir") as "asc" | "desc" | null) ?? "desc";
-  const browseMediaType = searchParams.get("media_type") ?? undefined;
-  const browseCameraMake = searchParams.get("camera_make") ?? undefined;
-  const browseCameraModel = searchParams.get("camera_model") ?? undefined;
-  const browseLensModel = searchParams.get("lens_model") ?? undefined;
-  const browseIsoMin = searchParams.get("iso_min") ? Number(searchParams.get("iso_min")) : undefined;
-  const browseIsoMax = searchParams.get("iso_max") ? Number(searchParams.get("iso_max")) : undefined;
-  const browseExposureMinUs = searchParams.get("exposure_min_us") ? Number(searchParams.get("exposure_min_us")) : undefined;
-  const browseExposureMaxUs = searchParams.get("exposure_max_us") ? Number(searchParams.get("exposure_max_us")) : undefined;
-  const browseApertureMin = searchParams.get("aperture_min") ? Number(searchParams.get("aperture_min")) : undefined;
-  const browseApertureMax = searchParams.get("aperture_max") ? Number(searchParams.get("aperture_max")) : undefined;
-  const browseFocalLengthMin = searchParams.get("focal_length_min") ? Number(searchParams.get("focal_length_min")) : undefined;
-  const browseFocalLengthMax = searchParams.get("focal_length_max") ? Number(searchParams.get("focal_length_max")) : undefined;
-  const browseHasExposure = searchParams.has("has_exposure") ? searchParams.get("has_exposure") === "true" : undefined;
-  const browseHasGps = searchParams.get("has_gps") === "true";
-  const browseHasFaces = searchParams.get("has_faces") === "true";
-  const browsePersonId = searchParams.get("person_id") ?? undefined;
-  const browseNearLat = searchParams.get("near_lat") ? Number(searchParams.get("near_lat")) : undefined;
-  const browseNearLon = searchParams.get("near_lon") ? Number(searchParams.get("near_lon")) : undefined;
-  const browseNearRadiusKm = searchParams.get("near_radius_km") ? Number(searchParams.get("near_radius_km")) : undefined;
-  const browseFavorite = searchParams.has("favorite") ? searchParams.get("favorite") === "true" : undefined;
-  const browseStarMin = searchParams.get("star_min") ? Number(searchParams.get("star_min")) : undefined;
-  const browseStarMax = searchParams.get("star_max") ? Number(searchParams.get("star_max")) : undefined;
-  const browseColor = searchParams.get("color") ?? undefined;
-
-  const browseOpts: PageAssetsOptions = useMemo(() => ({
-    pathPrefix,
-    tag: activeTag ?? undefined,
-    sort: browseSort,
-    dir: browseDir,
-    mediaType: browseMediaType,
-    cameraMake: browseCameraMake,
-    cameraModel: browseCameraModel,
-    lensModel: browseLensModel,
-    isoMin: browseIsoMin,
-    isoMax: browseIsoMax,
-    exposureMinUs: browseExposureMinUs,
-    exposureMaxUs: browseExposureMaxUs,
-    apertureMin: browseApertureMin,
-    apertureMax: browseApertureMax,
-    focalLengthMin: browseFocalLengthMin,
-    focalLengthMax: browseFocalLengthMax,
-    hasExposure: browseHasExposure,
-    hasGps: browseHasGps,
-    hasFaces: browseHasFaces,
-    personId: browsePersonId,
-    nearLat: browseNearLat,
-    nearLon: browseNearLon,
-    nearRadiusKm: browseNearRadiusKm,
-    favorite: browseFavorite,
-    starMin: browseStarMin,
-    starMax: browseStarMax,
-    color: browseColor,
-  }), [
-    pathPrefix, activeTag, browseSort, browseDir, browseMediaType,
-    browseCameraMake, browseCameraModel, browseLensModel,
-    browseIsoMin, browseIsoMax, browseExposureMinUs, browseExposureMaxUs,
-    browseApertureMin, browseApertureMax,
-    browseFocalLengthMin, browseFocalLengthMax, browseHasExposure, browseHasGps, browseHasFaces, browsePersonId,
-    browseNearLat, browseNearLon, browseNearRadiusKm,
-    browseFavorite, browseStarMin, browseStarMax, browseColor,
-  ]);
-
+  // --- Unified query: one call for both browse and search ---
   const browseQuery = useInfiniteQuery({
-    queryKey: ["assets", libraryId!, browseOpts],
+    queryKey: ["unified-query", filtersWithPath, browseSort, browseDir],
     queryFn: ({ pageParam }) =>
-      pageAssets(libraryId!, pageParam, PAGE_SIZE, browseOpts),
+      queryAssets(filtersWithPath, {
+        sort: browseSort,
+        dir: browseDir,
+        after: pageParam,
+        limit: PAGE_SIZE,
+      }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage?.next_cursor ?? undefined,
-    enabled: !!libraryId && !isSearchMode && canFetchAssets,
+    enabled: !!libraryId && canFetchAssets,
   });
 
-  const searchQuery = useQuery({
-    queryKey: [
-      "search",
-      libraryId!,
-      activeQ,
-      pathPrefix ?? null,
-      activeTag ?? null,
-      dateFrom ?? null,
-      dateTo ?? null,
-    ],
-    queryFn: () =>
-      searchAssets({
-        libraryId: libraryId!,
-        q: activeQ ?? "",
-        pathPrefix,
-        tag: activeTag ?? undefined,
-        dateFrom,
-        dateTo,
-        limit: SEARCH_RESULT_CAP,
-        favorite: browseFavorite,
-        starMin: browseStarMin,
-        starMax: browseStarMax,
-        color: browseColor,
-      }),
-    enabled: !!libraryId && isSearchMode && canFetchAssets,
-  });
-
-  const flatAssets = useMemo(() => {
-    if (isSearchMode) {
-      return (searchQuery.data?.hits ?? []).map((h): AssetPageItem => ({
-        asset_id: h.asset_id,
-        rel_path: h.rel_path,
-        file_size: h.file_size ?? 0,
+  const flatAssets: AssetPageItem[] = useMemo(() => {
+    if (!browseQuery.data?.pages) return [];
+    return browseQuery.data.pages.flatMap((p) =>
+      (p?.items ?? []).map((item: QueryItem): AssetPageItem => ({
+        asset_id: item.asset_id,
+        rel_path: item.rel_path,
+        file_size: item.file_size,
         file_mtime: null,
         sha256: null,
-        media_type: h.media_type ?? "image/jpeg",
-        width: h.width ?? null,
-        height: h.height ?? null,
-        taken_at: h.taken_at ?? null,
-        status: "indexed",
-        duration_sec: h.duration_sec ?? null,
-        camera_make: h.camera_make ?? null,
-        camera_model: h.camera_model ?? null,
-        iso: null,
-        aperture: null,
-        focal_length: null,
-        focal_length_35mm: null,
-        lens_model: null,
-        flash_fired: null,
-        gps_lat: null,
-        gps_lon: null,
-        created_at: null,
-      }));
-    }
-    if (!browseQuery.data?.pages) return [];
-    return browseQuery.data.pages.flatMap((p) => p?.items ?? []);
-  }, [isSearchMode, searchQuery.data, browseQuery.data]);
+        media_type: item.media_type,
+        width: item.width,
+        height: item.height,
+        taken_at: item.taken_at,
+        status: item.status,
+        duration_sec: item.duration_sec,
+        camera_make: item.camera_make,
+        camera_model: item.camera_model,
+        iso: item.iso,
+        aperture: item.aperture,
+        focal_length: item.focal_length,
+        focal_length_35mm: item.focal_length_35mm,
+        lens_model: item.lens_model,
+        flash_fired: item.flash_fired,
+        gps_lat: item.gps_lat,
+        gps_lon: item.gps_lon,
+        created_at: item.created_at,
+      })),
+    );
+  }, [browseQuery.data]);
 
-  // Sort in search mode (client-side, all results are loaded)
-  const sortedAssets = useMemo(() => {
-    if (!isSearchMode) return flatAssets;
-    const copy = [...flatAssets];
-    if (sortKey === "date") {
-      copy.sort((a, b) => {
-        const da = new Date(a.taken_at ?? a.file_mtime ?? "").getTime() || 0;
-        const db = new Date(b.taken_at ?? b.file_mtime ?? "").getTime() || 0;
-        return sortDir === "asc" ? da - db : db - da;
-      });
-    } else if (sortKey === "filename") {
-      copy.sort((a, b) => a.rel_path.localeCompare(b.rel_path));
-      if (sortDir === "desc") copy.reverse();
-    }
-    return copy;
-  }, [flatAssets, isSearchMode, sortKey, sortDir]);
+  // No more client-side sort — server handles it
+  const displayAssets = flatAssets;
 
-  // For relevance sort in search mode, use the original hit order (already sorted by score)
-  const displayAssets = useMemo(() => {
-    if (isSearchMode && sortKey === "score") {
-      return sortDir === "asc" ? [...flatAssets].reverse() : flatAssets;
-    }
-    return sortedAssets;
-  }, [sortedAssets, flatAssets, isSearchMode, sortKey, sortDir]);
-
-  const isLoading = isSearchMode
-    ? searchQuery.isLoading
-    : browseQuery.isLoading;
-  const isFetchingNextPage = isSearchMode
-    ? false
-    : browseQuery.isFetchingNextPage;
-  const hasNextPage = isSearchMode ? false : browseQuery.hasNextPage;
+  const isLoading = browseQuery.isLoading;
+  const isFetchingNextPage = browseQuery.isFetchingNextPage;
+  const hasNextPage = browseQuery.hasNextPage ?? false;
   const fetchNextPage = browseQuery.fetchNextPage;
-  const error = isSearchMode ? searchQuery.error : browseQuery.error;
-  const isError = isSearchMode ? searchQuery.isError : browseQuery.isError;
-
-  const searchTotal = searchQuery.data?.total ?? 0;
-  const isCapped = isSearchMode && searchTotal >= SEARCH_RESULT_CAP;
+  const error = browseQuery.error;
+  const isError = browseQuery.isError;
 
   const browseCount = useMemo(() => {
-    if (isSearchMode) return 0;
     return browseQuery.data?.pages.flatMap((p) => p?.items ?? []).length ?? 0;
-  }, [isSearchMode, browseQuery.data]);
+  }, [browseQuery.data]);
 
   // To show "X of Y photos", look up the current directory node from its parent listing.
   // Only relevant when a pathPrefix is active (root has no single directory node).
@@ -407,11 +319,11 @@ export default function BrowsePage() {
     // Fetch until the page is short (meaning the server ran out or
     // we've crossed a date boundary). This matches the macOS client's
     // completeLastDateGroup behavior.
-    if (!hasNextPage || isFetchingNextPage || isSearchMode) return;
+    if (!hasNextPage || isFetchingNextPage) return;
     if (newAssets.length >= PAGE_SIZE) {
       fetchNextPage();
     }
-  }, [orderedAssets, groups, hasNextPage, isFetchingNextPage, isSearchMode, fetchNextPage, selection]);
+  }, [orderedAssets, groups, hasNextPage, isFetchingNextPage, fetchNextPage, selection]);
 
   const [pickerAssetIds, setPickerAssetIds] = useState<string[] | null>(null);
   const [showSmartColModal, setShowSmartColModal] = useState(false);
@@ -704,139 +616,28 @@ export default function BrowsePage() {
 
       {/* Filter bar */}
       <FilterBar
-        q={activeQ}
-        tag={activeTag}
-        path={pathPrefix ?? null}
-        dateFrom={dateFrom ?? null}
-        dateTo={dateTo ?? null}
-        onChangeQ={async (v) => {
-          if (v) {
-            const { text, filters } = parseSearchQuery(v);
-            // Resolve person name to person_id
-            if (filters.person) {
-              const res = await searchPeople(filters.person, 1);
-              if (res.items.length > 0) {
-                filters.person_id = res.items[0].person_id;
-              }
-              delete filters.person;
-            }
-            setSearchParams((prev) => {
-              const next = new URLSearchParams(prev);
-              next.set("q", text || "");
-              if (!text) next.delete("q");
-              for (const [k, val] of Object.entries(filters)) {
-                next.set(k, val);
-              }
-              return next;
-            });
-          } else {
-            setParam("q", null);
-          }
-        }}
-        onChangeTag={(v) => setParam("tag", v)}
-        onChangePath={(v) => setParam("path", v)}
-        onChangeDateRange={handleChangeDateRange}
+        filters={urlFilters}
         sort={browseSort}
         dir={browseDir}
-        mediaType={browseMediaType ?? null}
-        cameraMake={browseCameraMake ?? null}
-        cameraModel={browseCameraModel ?? null}
-        lensModel={browseLensModel ?? null}
-        isoMin={searchParams.get("iso_min")}
-        isoMax={searchParams.get("iso_max")}
-        exposureMinUs={searchParams.get("exposure_min_us")}
-        exposureMaxUs={searchParams.get("exposure_max_us")}
-        apertureMin={searchParams.get("aperture_min")}
-        apertureMax={searchParams.get("aperture_max")}
-        focalLengthMin={searchParams.get("focal_length_min")}
-        focalLengthMax={searchParams.get("focal_length_max")}
-        hasExposure={browseHasExposure ?? null}
-        hasGps={browseHasGps}
-        hasFaces={browseHasFaces}
-        personId={browsePersonId ?? null}
-        nearLat={searchParams.get("near_lat")}
-        nearLon={searchParams.get("near_lon")}
-        nearRadiusKm={searchParams.get("near_radius_km")}
-        favorite={browseFavorite ?? null}
-        starMin={searchParams.get("star_min")}
-        starMax={searchParams.get("star_max")}
-        color={searchParams.get("color")}
-        onChangeFilter={(key, value) => setParam(key, value)}
-        onChangeFilters={(changes) => {
-          setSearchParams((prev) => {
-            const next = new URLSearchParams(prev);
-            for (const [k, v] of Object.entries(changes)) {
-              if (v) next.set(k, v);
-              else next.delete(k);
-            }
-            return next;
-          });
-        }}
+        onSetFilter={handleSetFilter}
+        onSetSort={handleSetSort}
+        onClearAll={handleClearAll}
         facets={facets}
         onSaveSmartCollection={() => setShowSmartColModal(true)}
       />
 
       {showSmartColModal && (
         <SaveSmartCollectionModal
-          savedQuery={{
-            q: activeQ || undefined,
-            filters: toSnakeCaseFilters(browseOpts),
-            library_id: libraryId,
-          }}
+          savedQuery={buildSavedQuery(filtersWithPath, browseSort, browseDir)}
           onClose={() => setShowSmartColModal(false)}
         />
       )}
 
-      {/* Toolbar: status line + sort */}
-      {!isLoading && (
-        <div className="flex items-center justify-between gap-4">
-          <p className="text-xs text-gray-500">
-            {isSearchMode ? (
-              displayAssets.length === 0 ? null : (
-                <>
-                  {displayAssets.length.toLocaleString()}
-                  {isCapped ? `+ ` : " "}
-                  {displayAssets.length === 1 ? "result" : "results"}
-                  {isCapped && (
-                    <span className="ml-1 text-yellow-600">
-                      — narrow your filters to see more
-                    </span>
-                  )}
-                </>
-              )
-            ) : browseCount > 0 ? (
-              `${browseCount.toLocaleString()}${currentDirTotal != null ? ` of ${currentDirTotal.toLocaleString()}` : ""} photo${browseCount === 1 ? "" : "s"}`
-            ) : null}
-          </p>
-
-          {isSearchMode && displayAssets.length > 0 && (
-            <select
-              value={`${sortKey}-${sortDir}`}
-              onChange={(e) => {
-                const [key, dir] = e.target.value.split("-");
-                setSearchParams((prev) => {
-                  const next = new URLSearchParams(prev);
-                  if (key === "date" && dir === "desc") {
-                    next.delete("sort");
-                    next.delete("dir");
-                  } else {
-                    next.set("sort", key);
-                    next.set("dir", dir);
-                  }
-                  return next;
-                });
-              }}
-              className="rounded-md border border-gray-700 bg-gray-800 px-2 py-1 text-xs text-gray-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-              aria-label="Sort results"
-            >
-              <option value="date-desc">Newest first</option>
-              <option value="date-asc">Oldest first</option>
-              <option value="filename-asc">Filename A–Z</option>
-              <option value="filename-desc">Filename Z–A</option>
-              {activeQ && <option value="score-desc">Most relevant</option>}
-            </select>
-          )}
-        </div>
+      {/* Toolbar: status line */}
+      {!isLoading && browseCount > 0 && (
+        <p className="text-xs text-gray-500">
+          {browseCount.toLocaleString()}{currentDirTotal != null ? ` of ${currentDirTotal.toLocaleString()}` : ""} photo{browseCount === 1 ? "" : "s"}
+        </p>
       )}
 
       {isLoading ? (
@@ -850,33 +651,7 @@ export default function BrowsePage() {
         </div>
       ) : displayAssets.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-lg border border-gray-700/50 bg-gray-900/50 py-16 text-center px-6">
-          {isSearchMode || activeTag ? (
-            // Search/filter mode — no results
-            <>
-              <svg
-                className="mb-3 h-10 w-10 text-gray-600"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                aria-hidden
-              >
-                <circle cx="11" cy="11" r="7" />
-                <line x1="16.65" y1="16.65" x2="21" y2="21" />
-              </svg>
-              <p className="text-sm text-gray-400 mb-2">No results</p>
-              <ul className="text-xs text-gray-600 space-y-1">
-                {activeQ && <li>Try different search terms</li>}
-                {dateFrom && <li>Try a wider date range</li>}
-                {activeTag && <li>Remove the tag filter</li>}
-                {pathPrefix && <li>Browse a different folder</li>}
-              </ul>
-            </>
-          ) : (browseMediaType || browseCameraMake || browseLensModel ||
-                searchParams.get("iso_min") || searchParams.get("iso_max") ||
-                searchParams.get("aperture_min") || searchParams.get("aperture_max") ||
-                searchParams.get("focal_length_min") || searchParams.get("focal_length_max") ||
-                browseHasGps || searchParams.get("near_lat")) ? (
+          {urlFilters.length > 0 ? (
             // Browse mode with active filters — no matches
             <>
               <svg
@@ -894,21 +669,7 @@ export default function BrowsePage() {
               <p className="text-sm text-gray-400 mb-2">No photos match your filters</p>
               <button
                 type="button"
-                onClick={() => {
-                  setSearchParams((prev) => {
-                    const next = new URLSearchParams(prev);
-                    for (const key of [
-                      "media_type", "camera_make", "camera_model", "lens_model",
-                      "iso_min", "iso_max", "exposure_min_us", "exposure_max_us",
-                      "aperture_min", "aperture_max",
-                      "focal_length_min", "focal_length_max", "has_exposure", "has_gps",
-                      "near_lat", "near_lon", "near_radius_km",
-                    ]) {
-                      next.delete(key);
-                    }
-                    return next;
-                  });
-                }}
+                onClick={handleClearAll}
                 className="mt-2 rounded-md bg-gray-700 px-3 py-1.5 text-xs text-gray-200 hover:bg-gray-600"
               >
                 Clear all filters

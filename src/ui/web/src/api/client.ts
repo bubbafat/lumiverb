@@ -396,6 +396,90 @@ export async function getFacets(
   return apiFetch<FacetsResponse>(`/assets/facets?${params}`);
 }
 
+// ---------- Unified Query (filter algebra) ----------
+
+import type { LeafFilter, FilterCapability } from "../lib/queryFilter";
+
+/** Response from GET /v1/query. */
+export interface QueryItem {
+  asset_id: string;
+  library_id: string;
+  library_name: string;
+  rel_path: string;
+  file_size: number;
+  media_type: string;
+  width: number | null;
+  height: number | null;
+  taken_at: string | null;
+  status: string;
+  duration_sec: number | null;
+  camera_make: string | null;
+  camera_model: string | null;
+  iso: number | null;
+  aperture: number | null;
+  focal_length: number | null;
+  focal_length_35mm: number | null;
+  lens_model: string | null;
+  flash_fired: boolean | null;
+  gps_lat: number | null;
+  gps_lon: number | null;
+  face_count: number | null;
+  thumbnail_key: string | null;
+  proxy_key: string | null;
+  created_at: string | null;
+  search_context: {
+    score: number;
+    hit_type: string;
+    snippet: string | null;
+    start_ms: number | null;
+    end_ms: number | null;
+  } | null;
+}
+
+export interface QueryResponse {
+  items: QueryItem[];
+  next_cursor: string | null;
+  total_estimate: number | null;
+}
+
+/** Unified query using filter algebra: GET /v1/query?f=prefix:value&... */
+export async function queryAssets(
+  filters: LeafFilter[],
+  opts?: {
+    sort?: string;
+    dir?: "asc" | "desc";
+    after?: string;
+    limit?: number;
+  },
+): Promise<QueryResponse> {
+  const params = new URLSearchParams();
+  for (const f of filters) {
+    params.append("f", `${f.type}:${f.value}`);
+  }
+  if (opts?.sort) params.set("sort", opts.sort);
+  if (opts?.dir) params.set("dir", opts.dir);
+  if (opts?.after) params.set("after", opts.after);
+  if (opts?.limit) params.set("limit", String(opts.limit));
+  return apiFetch<QueryResponse>(`/query?${params}`);
+}
+
+/** Fetch facets scoped by the active filter set. */
+export async function getFilteredFacets(
+  filters: LeafFilter[],
+): Promise<FacetsResponse> {
+  const params = new URLSearchParams();
+  for (const f of filters) {
+    params.append("f", `${f.type}:${f.value}`);
+  }
+  return apiFetch<FacetsResponse>(`/assets/facets?${params}`);
+}
+
+/** Fetch filter capabilities catalog from the server. */
+export async function fetchFilterCapabilities(): Promise<FilterCapability[]> {
+  const data = await apiFetch<{ filters: FilterCapability[] }>("/filters/capabilities");
+  return data.filters;
+}
+
 /** List detected faces for an asset. */
 export async function listFaces(assetId: string): Promise<FaceListResponse> {
   return apiFetch<FaceListResponse>(`/assets/${assetId}/faces`);
@@ -843,7 +927,7 @@ export async function createCollection(
     visibility?: string;
     asset_ids?: string[];
     type?: string;
-    saved_query?: { q?: string; filters: Record<string, unknown>; library_id?: string };
+    saved_query?: Record<string, unknown>;
   },
 ): Promise<CollectionItem> {
   return apiFetch<CollectionItem>("/collections", {

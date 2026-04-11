@@ -2,9 +2,20 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { FacetsResponse } from "../api/types";
 import { RATING_COLORS, COLOR_HEX } from "../api/types";
-import { formatExposure } from "../lib/format";
+// formatExposure available if exposure filter UI is restored
 import { searchPeople, getPerson } from "../api/client";
 import { FaceCropImage } from "./FaceCropImage";
+import type { LeafFilter } from "../lib/queryFilter";
+import {
+  getFilterValue,
+  filterLabel,
+  parseRange,
+  composeRange,
+  parseNear,
+  composeNear,
+  parseDate,
+  composeDate,
+} from "../lib/queryFilter";
 
 interface DatePreset {
   label: string;
@@ -68,46 +79,24 @@ const SORT_OPTIONS = [
   { value: "rel_path", label: "Filename" },
 ] as const;
 
+// ---------------------------------------------------------------------------
+// New filter algebra interface
+// ---------------------------------------------------------------------------
+
 interface FilterBarProps {
-  q: string | null;
-  tag: string | null;
-  path: string | null;
-  dateFrom: string | null;
-  dateTo: string | null;
-  onChangeQ: (q: string | null) => void;
-  onChangeTag: (tag: string | null) => void;
-  onChangePath: (path: string | null) => void;
-  onChangeDateRange: (from: string | null, to: string | null) => void;
-  // Sort/filter state
+  /** Active filters from the URL. */
+  filters: LeafFilter[];
   sort: string;
   dir: "asc" | "desc";
-  mediaType: string | null;
-  cameraMake: string | null;
-  cameraModel: string | null;
-  lensModel: string | null;
-  isoMin: string | null;
-  isoMax: string | null;
-  exposureMinUs: string | null;
-  exposureMaxUs: string | null;
-  apertureMin: string | null;
-  apertureMax: string | null;
-  focalLengthMin: string | null;
-  focalLengthMax: string | null;
-  hasExposure: boolean | null;
-  hasGps: boolean;
-  hasFaces: boolean;
-  personId: string | null;
-  nearLat: string | null;
-  nearLon: string | null;
-  nearRadiusKm: string | null;
-  favorite: boolean | null;
-  starMin: string | null;
-  starMax: string | null;
-  color: string | null;
-  onChangeFilter: (key: string, value: string | null) => void;
-  onChangeFilters?: (changes: Record<string, string | null>) => void;
+  /** Set or remove a single filter. value=null removes it. */
+  onSetFilter: (type: string, value: string | null) => void;
+  /** Set sort + direction. */
+  onSetSort: (sort: string, dir: "asc" | "desc") => void;
+  /** Clear all filters. */
+  onClearAll: () => void;
+  /** Facets for populating dropdowns. */
   facets: FacetsResponse | null;
-  /** Called when user clicks "Save as Smart Collection" in the filter menu. */
+  /** Called when user clicks "Save as Smart Collection". */
   onSaveSmartCollection?: () => void;
 }
 
@@ -196,60 +185,44 @@ function PersonFilterDropdown({
 }
 
 export function FilterBar({
-  q,
-  tag,
-  path,
-  dateFrom,
-  dateTo,
-  onChangeQ,
-  onChangeTag,
-  onChangePath,
-  onChangeDateRange,
+  filters,
   sort,
   dir,
-  mediaType,
-  cameraMake,
-  cameraModel,
-  lensModel,
-  isoMin,
-  isoMax,
-  exposureMinUs,
-  exposureMaxUs,
-  apertureMin,
-  apertureMax,
-  focalLengthMin,
-  focalLengthMax,
-  hasExposure,
-  hasGps,
-  hasFaces,
-  personId,
-  nearLat,
-  nearLon,
-  nearRadiusKm,
-  favorite,
-  starMin,
-  starMax,
-  color: colorFilter,
-  onChangeFilter,
-  onChangeFilters,
+  onSetFilter,
+  onSetSort,
+  onClearAll,
   facets,
   onSaveSmartCollection,
 }: FilterBarProps) {
-  const setFilters = (changes: Record<string, string | null>) => {
-    if (onChangeFilters) {
-      onChangeFilters(changes);
-    } else {
-      for (const [k, v] of Object.entries(changes)) {
-        onChangeFilter(k, v);
-      }
-    }
-  };
+  // --- Read individual values from filter array ---
+  const q = getFilterValue(filters, "query") ?? null;
+  const tag = getFilterValue(filters, "tag") ?? null;
+  const mediaType = getFilterValue(filters, "media") ?? null;
+  const cameraMake = getFilterValue(filters, "camera_make") ?? null;
+  const cameraModel = getFilterValue(filters, "camera_model") ?? null;
+  const lensModel = getFilterValue(filters, "lens") ?? null;
+  const isoRange = parseRange(getFilterValue(filters, "iso"));
+  const apertureRange = parseRange(getFilterValue(filters, "aperture"));
+  const focalLengthRange = parseRange(getFilterValue(filters, "focal_length"));
+  const _exposureRange = parseRange(getFilterValue(filters, "exposure"));
+  const _hasExposureVal = getFilterValue(filters, "has_exposure");
+  void _exposureRange; void _hasExposureVal; // available for future exposure filter UI
+  const hasGps = getFilterValue(filters, "has_gps") === "yes";
+  const hasFaces = getFilterValue(filters, "has_faces") === "yes";
+  const personId = getFilterValue(filters, "person") ?? null;
+  const nearVal = parseNear(getFilterValue(filters, "near"));
+  const dateVal = parseDate(getFilterValue(filters, "date"));
+  const favoriteVal = getFilterValue(filters, "favorite");
+  const favorite = favoriteVal === "yes" ? true : favoriteVal === "no" ? false : null;
+  const starVal = parseRange(getFilterValue(filters, "stars"));
+  const colorFilter = getFilterValue(filters, "color") ?? null;
+
   const [inputValue, setInputValue] = useState(q ?? "");
   const [searchFocused, setSearchFocused] = useState(false);
   const searchContainerRef = useRef<HTMLDivElement>(null);
-  const [showDateRow, setShowDateRow] = useState(Boolean(dateFrom));
-  const [customFrom, setCustomFrom] = useState(dateFrom ?? "");
-  const [customTo, setCustomTo] = useState(dateTo ?? "");
+  const [showDateRow, setShowDateRow] = useState(Boolean(dateVal.from));
+  const [customFrom, setCustomFrom] = useState(dateVal.from ?? "");
+  const [customTo, setCustomTo] = useState(dateVal.to ?? "");
   const [showCustom, setShowCustom] = useState(false);
   const customFromRef = useRef<HTMLInputElement>(null);
   const [showFilters, setShowFilters] = useState(() => {
@@ -267,10 +240,10 @@ export function FilterBar({
 
   // Sync custom fields when external date changes
   useEffect(() => {
-    setCustomFrom(dateFrom ?? "");
-    setCustomTo(dateTo ?? "");
-    if (dateFrom) setShowDateRow(true);
-  }, [dateFrom, dateTo]);
+    setCustomFrom(dateVal.from ?? "");
+    setCustomTo(dateVal.to ?? "");
+    if (dateVal.from) setShowDateRow(true);
+  }, [dateVal.from, dateVal.to]);
 
   // Person suggestions in main search bar
   const showPersonSuggestions = searchFocused && inputValue.trim().length >= 2 && !personId;
@@ -295,9 +268,9 @@ export function FilterBar({
   const applySearch = useCallback(
     (value: string) => {
       const trimmed = value.trim();
-      onChangeQ(trimmed.length > 0 ? trimmed : null);
+      onSetFilter("query", trimmed.length > 0 ? trimmed : null);
     },
-    [onChangeQ],
+    [onSetFilter],
   );
 
   useEffect(() => {
@@ -316,21 +289,21 @@ export function FilterBar({
 
   const handleClear = () => {
     setInputValue("");
-    onChangeQ(null);
+    onSetFilter("query", null);
   };
 
   const applyPreset = (preset: DatePreset) => {
     setCustomFrom(preset.from);
     setCustomTo(preset.to);
     setShowCustom(false);
-    onChangeDateRange(preset.from, preset.to);
+    onSetFilter("date", composeDate(preset.from, preset.to));
   };
 
   const applyCustom = () => {
     if (customFrom && customTo) {
-      onChangeDateRange(customFrom, customTo);
+      onSetFilter("date", composeDate(customFrom, customTo));
     } else if (customFrom) {
-      onChangeDateRange(customFrom, customFrom);
+      onSetFilter("date", composeDate(customFrom, customFrom));
     }
   };
 
@@ -338,7 +311,7 @@ export function FilterBar({
     setCustomFrom("");
     setCustomTo("");
     setShowCustom(false);
-    onChangeDateRange(null, null);
+    onSetFilter("date", null);
   };
 
   const toggleDateRow = () => {
@@ -355,19 +328,17 @@ export function FilterBar({
     } catch { /* ignore */ }
   };
 
-  const hasDateFilter = Boolean(dateFrom);
-  const hasActiveFilters = !!(
-    mediaType || cameraMake || cameraModel || lensModel ||
-    isoMin || isoMax || exposureMinUs || exposureMaxUs || apertureMin || apertureMax ||
-    focalLengthMin || focalLengthMax || hasExposure != null || hasGps || hasFaces || nearLat ||
-    favorite != null || starMin || starMax || colorFilter
+  const hasDateFilter = Boolean(dateVal.from);
+  // Filters excluding query/tag/date/library (those have their own chiclets or are scope)
+  const structuralFilters = filters.filter(
+    (f) => !["query", "tag", "date", "library", "path"].includes(f.type),
   );
+  const hasActiveFilters = structuralFilters.length > 0;
 
   const showQChiclet = q !== null && q.length > 0;
   const showTagChiclet = tag !== null && tag.length > 0;
-  const showPathChiclet = path !== null && path.length > 0;
-  const hasActiveChiclets = showQChiclet || showTagChiclet || showPathChiclet ||
-    hasDateFilter || hasActiveFilters || !!personId;
+  const hasActiveChiclets = showQChiclet || showTagChiclet ||
+    hasDateFilter || hasActiveFilters;
   const presets = getDatePresets();
 
   const selectCls = "rounded-md border border-gray-700 bg-gray-800 px-2 py-1.5 text-xs text-gray-200 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500";
@@ -421,9 +392,9 @@ export function FilterBar({
                   key={p.person_id}
                   type="button"
                   onClick={() => {
-                    onChangeFilter("person_id", p.person_id);
+                    onSetFilter("person", p.person_id);
                     setInputValue("");
-                    onChangeQ(null);
+                    onSetFilter("query", null);
                     setSearchFocused(false);
                   }}
                   className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-gray-200 hover:bg-gray-700"
@@ -451,7 +422,7 @@ export function FilterBar({
               <button
                 key={mt}
                 type="button"
-                onClick={() => onChangeFilter("media_type", mt === "all" ? null : mt)}
+                onClick={() => onSetFilter("media", mt === "all" ? null : mt)}
                 className={`px-3 py-1.5 transition-colors ${
                   isActive
                     ? "bg-indigo-600 text-white"
@@ -468,7 +439,7 @@ export function FilterBar({
         <div className="flex items-center gap-1">
           <select
             value={sort}
-            onChange={(e) => onChangeFilter("sort", e.target.value)}
+            onChange={(e) => onSetSort(e.target.value, dir)}
             className={selectCls}
           >
             {SORT_OPTIONS.map((o) => (
@@ -479,7 +450,7 @@ export function FilterBar({
           </select>
           <button
             type="button"
-            onClick={() => onChangeFilter("dir", dir === "asc" ? "desc" : "asc")}
+            onClick={() => onSetSort(sort, dir === "asc" ? "desc" : "asc")}
             className="flex h-7 w-7 items-center justify-center rounded-md border border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600 hover:text-gray-200 text-xs"
             title={dir === "asc" ? "Ascending" : "Descending"}
           >
@@ -541,136 +512,34 @@ export function FilterBar({
           )}
         </button>
 
-        {/* Active chiclets */}
+        {/* Active chiclets — rendered generically from filter array */}
         <div className="flex flex-wrap items-center gap-2">
-          {showPathChiclet && (
-            <Chiclet label={`/${path}`} onClear={() => onChangePath(null)} />
-          )}
-          {showQChiclet && (
-            <Chiclet label={`"${q}"`} onClear={() => onChangeQ(null)} />
-          )}
-          {showTagChiclet && (
-            <Chiclet label={`#${tag}`} onClear={() => onChangeTag(null)} />
-          )}
-          {hasDateFilter && dateFrom && dateTo && (
-            <Chiclet label={formatDateChiclet(dateFrom, dateTo)} onClear={clearDate} />
-          )}
-          {mediaType && (
-            <Chiclet
-              label={mediaType === "image" ? "Photos only" : "Videos only"}
-              onClear={() => onChangeFilter("media_type", null)}
-            />
-          )}
-          {cameraMake && (
-            <Chiclet label={cameraMake} onClear={() => { onChangeFilter("camera_make", null); onChangeFilter("camera_model", null); }} />
-          )}
-          {cameraModel && (
-            <Chiclet label={cameraModel} onClear={() => onChangeFilter("camera_model", null)} />
-          )}
-          {lensModel && (
-            <Chiclet label={lensModel} onClear={() => onChangeFilter("lens_model", null)} />
-          )}
-          {(isoMin || isoMax) && (
-            <Chiclet
-              label={isoMin && isoMax && isoMin === isoMax
-                ? `ISO ${isoMin}`
-                : `ISO ${isoMin ?? ""}${isoMin && isoMax ? "–" : ""}${isoMax ?? ""}`}
-              onClear={() => { onChangeFilter("iso_min", null); onChangeFilter("iso_max", null); }}
-            />
-          )}
-          {(exposureMinUs || exposureMaxUs) && (() => {
-            const minLabel = exposureMinUs ? formatExposure(Number(exposureMinUs)) : null;
-            const maxLabel = exposureMaxUs ? formatExposure(Number(exposureMaxUs)) : null;
-            const label = minLabel && maxLabel && minLabel === maxLabel
-              ? minLabel
-              : `${minLabel ?? ""}${minLabel && maxLabel ? " – " : ""}${maxLabel ?? ""}`;
-            return (
-              <Chiclet
-                label={label}
-                onClear={() => { onChangeFilter("exposure_min_us", null); onChangeFilter("exposure_max_us", null); }}
-              />
-            );
-          })()}
-          {(apertureMin || apertureMax) && (
-            <Chiclet
-              label={apertureMin && apertureMax && apertureMin === apertureMax
-                ? `f/${apertureMin}`
-                : `f/${apertureMin ?? ""}${apertureMin && apertureMax ? "–" : ""}${apertureMax ?? ""}`}
-              onClear={() => { onChangeFilter("aperture_min", null); onChangeFilter("aperture_max", null); }}
-            />
-          )}
-          {(focalLengthMin || focalLengthMax) && (
-            <Chiclet
-              label={focalLengthMin && focalLengthMax && focalLengthMin === focalLengthMax
-                ? `${focalLengthMin}mm`
-                : `${focalLengthMin ?? ""}${focalLengthMin && focalLengthMax ? "–" : ""}${focalLengthMax ?? ""}mm`}
-              onClear={() => { onChangeFilter("focal_length_min", null); onChangeFilter("focal_length_max", null); }}
-            />
-          )}
-          {hasExposure === false && (
-            <Chiclet label="No exposure data" onClear={() => onChangeFilter("has_exposure", null)} />
-          )}
-          {hasExposure === true && (
-            <Chiclet label="Has exposure data" onClear={() => onChangeFilter("has_exposure", null)} />
-          )}
-          {hasGps && !nearLat && (
-            <Chiclet label="Has location" onClear={() => onChangeFilter("has_gps", null)} />
-          )}
-          {hasFaces && (
-            <Chiclet label="Has faces" onClear={() => onChangeFilter("has_faces", null)} />
-          )}
-          {personId && (
-            <PersonChiclet personId={personId} onClear={() => onChangeFilter("person_id", null)} />
-          )}
-          {nearLat && nearLon && (
-            <Chiclet
-              label={`Within ${nearRadiusKm ?? "1"}km`}
-              onClear={() => {
-                onChangeFilter("near_lat", null);
-                onChangeFilter("near_lon", null);
-                onChangeFilter("near_radius_km", null);
-              }}
-            />
-          )}
-          {favorite === true && (
-            <Chiclet label="Favorites" onClear={() => onChangeFilter("favorite", null)} />
-          )}
-          {(starMin || starMax) && (
-            <Chiclet
-              label={starMin && starMax && starMin === starMax
-                ? `${starMin} star${starMin === "1" ? "" : "s"}`
-                : `${starMin ? `${starMin}+` : ""}${starMax ? `≤${starMax}` : ""} stars`}
-              onClear={() => { onChangeFilter("star_min", null); onChangeFilter("star_max", null); }}
-            />
-          )}
-          {colorFilter && (
-            <Chiclet
-              label={colorFilter.includes(",") ? "Multiple colors" : colorFilter.charAt(0).toUpperCase() + colorFilter.slice(1)}
-              onClear={() => onChangeFilter("color", null)}
-            />
-          )}
+          {filters
+            .filter((f) => f.type !== "library") // don't show library scope as chiclet
+            .map((f) => {
+              // Special handling for certain filter types
+              if (f.type === "person") {
+                return <PersonChiclet key={f.type} personId={f.value} onClear={() => onSetFilter("person", null)} />;
+              }
+              if (f.type === "date" && dateVal.from && dateVal.to) {
+                return <Chiclet key={f.type} label={formatDateChiclet(dateVal.from, dateVal.to)} onClear={clearDate} />;
+              }
+              if (f.type === "near" && nearVal) {
+                return <Chiclet key={f.type} label={`Within ${nearVal.radius}km`} onClear={() => onSetFilter("near", null)} />;
+              }
+              return (
+                <Chiclet
+                  key={`${f.type}:${f.value}`}
+                  label={filterLabel(f)}
+                  onClear={() => onSetFilter(f.type, null)}
+                />
+              );
+            })}
           {hasActiveChiclets && (
             <>
               <button
                 type="button"
-                onClick={() => {
-                  for (const key of [
-                    "q", "tag", "date_from", "date_to",
-                    "media_type", "camera_make", "camera_model", "lens_model",
-                    "iso_min", "iso_max", "aperture_min", "aperture_max",
-                    "focal_length_min", "focal_length_max", "has_gps", "has_faces",
-                    "near_lat", "near_lon", "near_radius_km",
-                    "favorite", "star_min", "star_max", "color",
-                    "has_rating", "has_color", "has_exposure",
-                    "exposure_min_us", "exposure_max_us", "person_id",
-                  ]) {
-                    onChangeFilter(key, null);
-                  }
-                  onChangeQ(null);
-                  onChangeTag(null);
-                  onChangePath(null);
-                  onChangeDateRange(null, null);
-                }}
+                onClick={onClearAll}
                 className="text-xs text-gray-500 hover:text-gray-300 whitespace-nowrap"
               >
                 Clear filters
@@ -693,7 +562,7 @@ export function FilterBar({
       {showDateRow && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-700/50 bg-gray-900/60 px-3 py-2">
           {presets.map((p) => {
-            const isActive = dateFrom === p.from && dateTo === p.to;
+            const isActive = dateVal.from === p.from && dateVal.to === p.to;
             return (
               <button
                 key={p.label}
@@ -777,8 +646,8 @@ export function FilterBar({
               value={cameraMake ?? ""}
               options={facets.camera_makes}
               onChange={(v) => {
-                onChangeFilter("camera_make", v || null);
-                if (!v) onChangeFilter("camera_model", null);
+                onSetFilter("camera_make", v || null);
+                if (!v) onSetFilter("camera_model", null);
               }}
             />
           )}
@@ -791,7 +660,7 @@ export function FilterBar({
               options={facets.camera_models.filter(
                 (m) => !cameraMake || m.toLowerCase().includes(cameraMake.toLowerCase()),
               )}
-              onChange={(v) => onChangeFilter("camera_model", v || null)}
+              onChange={(v) => onSetFilter("camera_model", v || null)}
             />
           )}
 
@@ -801,7 +670,7 @@ export function FilterBar({
               label="Lens"
               value={lensModel ?? ""}
               options={facets.lens_models}
-              onChange={(v) => onChangeFilter("lens_model", v || null)}
+              onChange={(v) => onSetFilter("lens", v || null)}
             />
           )}
 
@@ -809,12 +678,12 @@ export function FilterBar({
           {facets && facets.iso_range[0] != null && (
             <RangeInputs
               label="ISO"
-              min={isoMin ?? ""}
-              max={isoMax ?? ""}
+              min={isoRange.min ?? ""}
+              max={isoRange.max ?? ""}
               placeholderMin={String(facets.iso_range[0] ?? "")}
               placeholderMax={String(facets.iso_range[1] ?? "")}
-              onChangeMin={(v) => onChangeFilter("iso_min", v || null)}
-              onChangeMax={(v) => onChangeFilter("iso_max", v || null)}
+              onChangeMin={(v) => onSetFilter("iso", composeRange(v || null, isoRange.max))}
+              onChangeMax={(v) => onSetFilter("iso", composeRange(isoRange.min, v || null))}
             />
           )}
 
@@ -822,12 +691,12 @@ export function FilterBar({
           {facets && facets.aperture_range[0] != null && (
             <RangeInputs
               label="Aperture (f/)"
-              min={apertureMin ?? ""}
-              max={apertureMax ?? ""}
+              min={apertureRange.min ?? ""}
+              max={apertureRange.max ?? ""}
               placeholderMin={String(facets.aperture_range[0] ?? "")}
               placeholderMax={String(facets.aperture_range[1] ?? "")}
-              onChangeMin={(v) => onChangeFilter("aperture_min", v || null)}
-              onChangeMax={(v) => onChangeFilter("aperture_max", v || null)}
+              onChangeMin={(v) => onSetFilter("aperture", composeRange(v || null, apertureRange.max))}
+              onChangeMax={(v) => onSetFilter("aperture", composeRange(apertureRange.min, v || null))}
             />
           )}
 
@@ -835,12 +704,12 @@ export function FilterBar({
           {facets && facets.focal_length_range[0] != null && (
             <RangeInputs
               label="Focal (mm)"
-              min={focalLengthMin ?? ""}
-              max={focalLengthMax ?? ""}
+              min={focalLengthRange.min ?? ""}
+              max={focalLengthRange.max ?? ""}
               placeholderMin={String(facets.focal_length_range[0] ?? "")}
               placeholderMax={String(facets.focal_length_range[1] ?? "")}
-              onChangeMin={(v) => onChangeFilter("focal_length_min", v || null)}
-              onChangeMax={(v) => onChangeFilter("focal_length_max", v || null)}
+              onChangeMin={(v) => onSetFilter("focal_length", composeRange(v || null, focalLengthRange.max))}
+              onChangeMax={(v) => onSetFilter("focal_length", composeRange(focalLengthRange.min, v || null))}
             />
           )}
 
@@ -850,7 +719,7 @@ export function FilterBar({
               <input
                 type="checkbox"
                 checked={hasGps}
-                onChange={(e) => onChangeFilter("has_gps", e.target.checked ? "true" : null)}
+                onChange={(e) => onSetFilter("has_gps", e.target.checked ? "yes" : null)}
                 className="rounded border-gray-700 bg-gray-800 text-indigo-600 focus:ring-indigo-500"
               />
               Has location ({facets.has_gps_count})
@@ -863,7 +732,7 @@ export function FilterBar({
               <input
                 type="checkbox"
                 checked={hasFaces}
-                onChange={(e) => onChangeFilter("has_faces", e.target.checked ? "true" : null)}
+                onChange={(e) => onSetFilter("has_faces", e.target.checked ? "yes" : null)}
                 className="rounded border-gray-700 bg-gray-800 text-indigo-600 focus:ring-indigo-500"
               />
               Has faces ({facets.has_face_count})
@@ -873,16 +742,16 @@ export function FilterBar({
           {/* Person filter */}
           <PersonFilterDropdown
             personId={personId}
-            onSelect={(pid) => onChangeFilter("person_id", pid)}
+            onSelect={(pid) => onSetFilter("person", pid)}
           />
 
-          {/* Geo-proximity radius selector (only when near_lat is set) */}
-          {nearLat && nearLon && (
+          {/* Geo-proximity radius selector (only when near filter is set) */}
+          {nearVal && (
             <div className="flex items-center gap-1.5">
               <span className="text-xs text-gray-400">Radius:</span>
               <select
-                value={nearRadiusKm ?? "1"}
-                onChange={(e) => onChangeFilter("near_radius_km", e.target.value)}
+                value={nearVal.radius}
+                onChange={(e) => onSetFilter("near", composeNear(nearVal.lat, nearVal.lon, e.target.value))}
                 className={selectCls}
               >
                 {[0.5, 1, 5, 10, 50].map((r) => (
@@ -899,7 +768,7 @@ export function FilterBar({
             <span className="text-xs font-medium text-gray-400">Rating</span>
             <button
               type="button"
-              onClick={() => onChangeFilter("favorite", favorite === true ? null : "true")}
+              onClick={() => onSetFilter("favorite", favorite === true ? null : "yes")}
               className={`flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors ${
                 favorite === true
                   ? "border-red-500/50 bg-red-900/20 text-red-400"
@@ -914,29 +783,32 @@ export function FilterBar({
             <div className="flex items-center gap-1">
               <span className="text-xs text-gray-500">Stars</span>
               {[1, 2, 3, 4, 5].map((n) => {
-                const min = starMin != null ? Number(starMin) : null;
-                const max = starMax != null ? Number(starMax) : null;
+                const min = starVal.min != null ? Number(starVal.min) : null;
+                const max = starVal.max != null ? Number(starVal.max) : null;
                 const isActive = min != null && max != null && n >= min && n <= max;
                 return (
                   <button
                     key={n}
                     type="button"
                     onClick={() => {
+                      let newMin: string | null;
+                      let newMax: string | null;
                       if (min == null || max == null) {
-                        setFilters({ star_min: String(n), star_max: String(n) });
+                        newMin = String(n); newMax = String(n);
                       } else if (n < min) {
-                        setFilters({ star_min: String(n) });
+                        newMin = String(n); newMax = String(max);
                       } else if (n > max) {
-                        setFilters({ star_max: String(n) });
+                        newMin = String(min); newMax = String(n);
                       } else if (n === min && n === max) {
-                        setFilters({ star_min: null, star_max: null });
+                        newMin = null; newMax = null;
                       } else if (n === min) {
-                        setFilters({ star_min: String(n + 1) });
+                        newMin = String(n + 1); newMax = String(max);
                       } else if (n === max) {
-                        setFilters({ star_max: String(n - 1) });
+                        newMin = String(min); newMax = String(n - 1);
                       } else {
-                        setFilters({ star_min: String(n) });
+                        newMin = String(n); newMax = String(max);
                       }
+                      onSetFilter("stars", composeRange(newMin, newMax));
                     }}
                     className={`transition-colors ${isActive ? "text-amber-400" : "text-gray-600 hover:text-amber-300"}`}
                     title={`${n} stars`}
@@ -954,7 +826,7 @@ export function FilterBar({
                 <button
                   key={c}
                   type="button"
-                  onClick={() => onChangeFilter("color", colorFilter === c ? null : c)}
+                  onClick={() => onSetFilter("color", colorFilter === c ? null : c)}
                   className={`h-4 w-4 rounded-full transition-all ${
                     colorFilter === c
                       ? "ring-2 ring-white/70 ring-offset-1 ring-offset-gray-900"
@@ -969,18 +841,7 @@ export function FilterBar({
 
           {hasActiveFilters && (
             <FilterMenu
-              onClearAll={() => {
-                for (const key of [
-                  "media_type", "camera_make", "camera_model", "lens_model",
-                  "iso_min", "iso_max", "aperture_min", "aperture_max",
-                  "focal_length_min", "focal_length_max", "has_gps", "has_faces",
-                  "near_lat", "near_lon", "near_radius_km",
-                  "favorite", "star_min", "star_max", "color",
-                  "has_rating", "has_color", "date_from", "date_to",
-                ]) {
-                  onChangeFilter(key, null);
-                }
-              }}
+              onClearAll={onClearAll}
               onSaveSmartCollection={onSaveSmartCollection}
             />
           )}
@@ -1120,17 +981,17 @@ function RangeInputs({
         <input
           type="number"
           value={min}
-          placeholder={placeholderMin}
           onChange={(e) => onChangeMin(e.target.value)}
-          className="w-20 rounded-md border border-gray-700 bg-gray-800 px-2 py-1.5 text-xs text-gray-200 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          placeholder={placeholderMin}
+          className="w-16 rounded-md border border-gray-700 bg-gray-800 px-2 py-1.5 text-xs text-gray-200 placeholder:text-gray-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
         />
-        <span className="text-xs text-gray-500">-</span>
+        <span className="text-xs text-gray-500">–</span>
         <input
           type="number"
           value={max}
-          placeholder={placeholderMax}
           onChange={(e) => onChangeMax(e.target.value)}
-          className="w-20 rounded-md border border-gray-700 bg-gray-800 px-2 py-1.5 text-xs text-gray-200 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          placeholder={placeholderMax}
+          className="w-16 rounded-md border border-gray-700 bg-gray-800 px-2 py-1.5 text-xs text-gray-200 placeholder:text-gray-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
         />
       </div>
     </div>

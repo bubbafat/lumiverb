@@ -4,19 +4,19 @@ import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-quer
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   batchRateAssets,
-  browseAll,
   createSavedView,
+  getFilteredFacets,
   lookupRatings,
+  queryAssets,
   rateAsset,
-  searchAssets,
 } from "../api/client";
-import type { PageAssetsOptions } from "../api/client";
+import type { QueryItem } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
 import { CollectionPicker } from "../components/CollectionPicker";
 import { Lightbox } from "../components/Lightbox";
 import { FilterBar } from "../components/FilterBar";
 import { SelectionToolbar } from "../components/SelectionToolbar";
-import { SaveSmartCollectionModal, toSnakeCaseFilters } from "../components/SaveSmartCollectionModal";
+import { SaveSmartCollectionModal } from "../components/SaveSmartCollectionModal";
 import { ZoomControl } from "../components/ZoomControl";
 import type { AssetPageItem, AssetRating, BrowseItem, RatingColor } from "../api/types";
 import { HeartButton, StarPicker, ColorPicker } from "../components/RatingControls";
@@ -26,6 +26,7 @@ import { useSelection } from "../lib/useSelection";
 import { buildVirtualRows, buildFixedGridRows } from "../lib/virtualRows";
 import { useLocalStorage } from "../lib/useLocalStorage";
 import type { VirtualRowKind } from "../lib/virtualRows";
+import { paramsToFilters, setFilter, buildSavedQuery, composeDate, composeNear } from "../lib/queryFilter";
 
 const PAGE_SIZE = 100;
 const ROW_GAP = 4;
@@ -55,183 +56,102 @@ export default function UnifiedBrowsePage() {
   const [saveViewName, setSaveViewName] = useState("");
   const [savingView, setSavingView] = useState(false);
 
-  function setParam(key: string, value: string | null) {
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      if (value) next.set(key, value);
-      else next.delete(key);
-      return next;
-    });
-  }
+  // --- Filter algebra: read filters from URL ---
+  const { filters, sort: browseSort, direction: browseDir } = useMemo(
+    () => paramsToFilters(searchParams),
+    [searchParams],
+  );
 
-  const handleChangeDateRange = useCallback(
-    (from: string | null, to: string | null) => {
+  const handleSetFilter = useCallback(
+    (type: string, value: string | null) => {
       setSearchParams((prev) => {
-        const next = new URLSearchParams(prev);
-        if (from) next.set("date_from", from);
-        else next.delete("date_from");
-        if (to) next.set("date_to", to);
-        else next.delete("date_to");
+        const current = paramsToFilters(prev);
+        const updated = setFilter(current.filters, type, value);
+        const next = new URLSearchParams();
+        for (const f of updated) next.append("f", `${f.type}:${f.value}`);
+        // Preserve sort/dir
+        const s = prev.get("sort");
+        if (s) next.set("sort", s);
+        const d = prev.get("dir");
+        if (d) next.set("dir", d);
         return next;
       });
     },
     [setSearchParams],
   );
 
-  // Search query from URL
-  const activeQ = searchParams.get("q");
-  const dateFrom = searchParams.get("date_from") ?? undefined;
-  const dateTo = searchParams.get("date_to") ?? undefined;
-  const isSearchMode = !!(activeQ || dateFrom);
+  const handleSetSort = useCallback(
+    (sort: string, dir: "asc" | "desc") => {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        if (sort && sort !== "taken_at") next.set("sort", sort);
+        else next.delete("sort");
+        if (dir && dir !== "desc") next.set("dir", dir);
+        else next.delete("dir");
+        return next;
+      });
+    },
+    [setSearchParams],
+  );
 
-  // Build filter/sort options from URL search params
-  const browseSort = searchParams.get("sort") ?? "taken_at";
-  const browseDir = (searchParams.get("dir") as "asc" | "desc" | null) ?? "desc";
-  const browseMediaType = searchParams.get("media_type") ?? undefined;
-  const browseCameraMake = searchParams.get("camera_make") ?? undefined;
-  const browseCameraModel = searchParams.get("camera_model") ?? undefined;
-  const browseLensModel = searchParams.get("lens_model") ?? undefined;
-  const browseIsoMin = searchParams.get("iso_min") ? Number(searchParams.get("iso_min")) : undefined;
-  const browseIsoMax = searchParams.get("iso_max") ? Number(searchParams.get("iso_max")) : undefined;
-  const browseExposureMinUs = searchParams.get("exposure_min_us") ? Number(searchParams.get("exposure_min_us")) : undefined;
-  const browseExposureMaxUs = searchParams.get("exposure_max_us") ? Number(searchParams.get("exposure_max_us")) : undefined;
-  const browseApertureMin = searchParams.get("aperture_min") ? Number(searchParams.get("aperture_min")) : undefined;
-  const browseApertureMax = searchParams.get("aperture_max") ? Number(searchParams.get("aperture_max")) : undefined;
-  const browseFocalLengthMin = searchParams.get("focal_length_min") ? Number(searchParams.get("focal_length_min")) : undefined;
-  const browseFocalLengthMax = searchParams.get("focal_length_max") ? Number(searchParams.get("focal_length_max")) : undefined;
-  const browseHasExposure = searchParams.has("has_exposure") ? searchParams.get("has_exposure") === "true" : undefined;
-  const browseHasGps = searchParams.get("has_gps") === "true";
-  const browseHasFaces = searchParams.get("has_faces") === "true";
-  const browsePersonId = searchParams.get("person_id") ?? undefined;
-  const browseNearLat = searchParams.get("near_lat") ? Number(searchParams.get("near_lat")) : undefined;
-  const browseNearLon = searchParams.get("near_lon") ? Number(searchParams.get("near_lon")) : undefined;
-  const browseNearRadiusKm = searchParams.get("near_radius_km") ? Number(searchParams.get("near_radius_km")) : undefined;
-  const browseFavorite = searchParams.has("favorite") ? searchParams.get("favorite") === "true" : undefined;
-  const browseStarMin = searchParams.get("star_min") ? Number(searchParams.get("star_min")) : undefined;
-  const browseStarMax = searchParams.get("star_max") ? Number(searchParams.get("star_max")) : undefined;
-  const browseColor = searchParams.get("color") ?? undefined;
-  const browseLibraryId = searchParams.get("library_id") ?? undefined;
+  const handleClearAll = useCallback(() => {
+    setSearchParams(new URLSearchParams());
+  }, [setSearchParams]);
 
-  const browseOpts: PageAssetsOptions & { libraryId?: string } = useMemo(() => ({
-    sort: browseSort,
-    dir: browseDir,
-    mediaType: browseMediaType,
-    cameraMake: browseCameraMake,
-    cameraModel: browseCameraModel,
-    lensModel: browseLensModel,
-    isoMin: browseIsoMin,
-    isoMax: browseIsoMax,
-    exposureMinUs: browseExposureMinUs,
-    exposureMaxUs: browseExposureMaxUs,
-    apertureMin: browseApertureMin,
-    apertureMax: browseApertureMax,
-    focalLengthMin: browseFocalLengthMin,
-    focalLengthMax: browseFocalLengthMax,
-    hasExposure: browseHasExposure,
-    hasGps: browseHasGps,
-    hasFaces: browseHasFaces,
-    personId: browsePersonId,
-    nearLat: browseNearLat,
-    nearLon: browseNearLon,
-    nearRadiusKm: browseNearRadiusKm,
-    favorite: browseFavorite,
-    starMin: browseStarMin,
-    starMax: browseStarMax,
-    color: browseColor,
-    libraryId: browseLibraryId,
-  }), [
-    browseSort, browseDir, browseMediaType,
-    browseCameraMake, browseCameraModel, browseLensModel,
-    browseIsoMin, browseIsoMax, browseExposureMinUs, browseExposureMaxUs,
-    browseApertureMin, browseApertureMax,
-    browseFocalLengthMin, browseFocalLengthMax, browseHasExposure, browseHasGps, browseHasFaces, browsePersonId,
-    browseNearLat, browseNearLon, browseNearRadiusKm,
-    browseFavorite, browseStarMin, browseStarMax, browseColor,
-    browseLibraryId,
-  ]);
+  const browseFavorite = filters.some((f) => f.type === "favorite" && f.value === "yes");
 
-  const SEARCH_RESULT_CAP = 500;
-
+  // --- Unified query: one call for both browse and search ---
   const browseQuery = useInfiniteQuery({
-    queryKey: ["unified-browse", browseOpts],
+    queryKey: ["unified-query", filters, browseSort, browseDir],
     queryFn: ({ pageParam }) =>
-      browseAll(pageParam, PAGE_SIZE, browseOpts),
+      queryAssets(filters, {
+        sort: browseSort,
+        dir: browseDir,
+        after: pageParam,
+        limit: PAGE_SIZE,
+      }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage?.next_cursor ?? undefined,
-    enabled: !isSearchMode,
   });
 
-  const searchQuery = useQuery({
-    // Every filter dimension the server's /v1/search currently supports must
-    // appear here or React Query won't refetch when the user toggles it.
-    // NOTE: camera/exposure/gps/near filters are exposed in the sidebar but
-    // are not yet accepted by /v1/search — they're silently ignored in
-    // search mode until the server endpoint grows support. See
-    // src/server/api/routers/search.py `def search(...)`.
-    queryKey: [
-      "unified-search",
-      activeQ,
-      dateFrom,
-      dateTo,
-      browseMediaType,
-      browseLibraryId,
-      browseHasFaces,
-      browsePersonId,
-      browseFavorite,
-      browseStarMin,
-      browseStarMax,
-      browseColor,
-    ],
-    queryFn: () =>
-      searchAssets({
-        q: activeQ ?? "",
-        mediaType: browseMediaType,
-        libraryId: browseLibraryId,
-        dateFrom,
-        dateTo,
-        limit: SEARCH_RESULT_CAP,
-        hasFaces: browseHasFaces,
-        personId: browsePersonId,
-        favorite: browseFavorite,
-        starMin: browseStarMin,
-        starMax: browseStarMax,
-        color: browseColor,
-      }),
-    enabled: isSearchMode,
+  // --- Facets scoped to active filters ---
+  const facetsQuery = useQuery({
+    queryKey: ["filtered-facets", filters],
+    queryFn: () => getFilteredFacets(filters),
+    staleTime: 30_000,
   });
 
   const flatAssets: BrowseItem[] = useMemo(() => {
-    if (isSearchMode) {
-      return (searchQuery.data?.hits ?? []).map((h): BrowseItem => ({
-        asset_id: h.asset_id,
-        library_id: h.library_id ?? "",
-        library_name: h.library_name ?? "",
-        rel_path: h.rel_path,
-        file_size: h.file_size ?? 0,
+    if (!browseQuery.data?.pages) return [];
+    return browseQuery.data.pages.flatMap((p) =>
+      (p?.items ?? []).map((item: QueryItem): BrowseItem => ({
+        asset_id: item.asset_id,
+        library_id: item.library_id,
+        library_name: item.library_name,
+        rel_path: item.rel_path,
+        file_size: item.file_size,
         file_mtime: null,
         sha256: null,
-        media_type: h.media_type ?? "image",
-        width: h.width ?? null,
-        height: h.height ?? null,
-        taken_at: h.taken_at ?? null,
-        status: "indexed",
-        duration_sec: h.duration_sec ?? null,
-        camera_make: h.camera_make ?? null,
-        camera_model: h.camera_model ?? null,
-        iso: null,
-        aperture: null,
-        focal_length: null,
-        focal_length_35mm: null,
-        lens_model: null,
-        flash_fired: null,
-        gps_lat: null,
-        gps_lon: null,
-        created_at: null,
-      }));
-    }
-    if (!browseQuery.data?.pages) return [];
-    return browseQuery.data.pages.flatMap((p) => p?.items ?? []);
-  }, [isSearchMode, searchQuery.data, browseQuery.data]);
+        media_type: item.media_type,
+        width: item.width,
+        height: item.height,
+        taken_at: item.taken_at,
+        status: item.status,
+        duration_sec: item.duration_sec,
+        camera_make: item.camera_make,
+        camera_model: item.camera_model,
+        iso: item.iso,
+        aperture: item.aperture,
+        focal_length: item.focal_length,
+        focal_length_35mm: item.focal_length_35mm,
+        lens_model: item.lens_model,
+        flash_fired: item.flash_fired,
+        gps_lat: item.gps_lat,
+        gps_lon: item.gps_lon,
+        created_at: item.created_at,
+      })),
+    );
+  }, [browseQuery.data]);
 
   // Build a library name lookup from the browse results
   const libraryNames: Record<string, string> = useMemo(() => {
@@ -244,9 +164,9 @@ export default function UnifiedBrowsePage() {
     return map;
   }, [flatAssets]);
 
-  const isLoading = isSearchMode ? searchQuery.isLoading : browseQuery.isLoading;
-  const isFetchingNextPage = isSearchMode ? false : browseQuery.isFetchingNextPage;
-  const hasNextPage = isSearchMode ? false : browseQuery.hasNextPage;
+  const isLoading = browseQuery.isLoading;
+  const isFetchingNextPage = browseQuery.isFetchingNextPage;
+  const hasNextPage = browseQuery.hasNextPage;
   const fetchNextPage = browseQuery.fetchNextPage;
 
   const browseCount = flatAssets.length;
@@ -400,15 +320,10 @@ export default function UnifiedBrowsePage() {
 
   const handleLightboxDateClick = useCallback(
     (dateStr: string) => {
-      setSearchParams((prev) => {
-        const next = new URLSearchParams(prev);
-        next.set("date_from", dateStr);
-        next.set("date_to", dateStr);
-        return next;
-      });
+      handleSetFilter("date", composeDate(dateStr, dateStr));
       setLightboxAsset(null);
     },
-    [setSearchParams],
+    [handleSetFilter],
   );
 
   // Determine page title based on active filters
@@ -417,7 +332,7 @@ export default function UnifiedBrowsePage() {
     return "All Photos";
   }, [browseFavorite]);
 
-  const hasActiveFilters = searchParams.toString().length > 0;
+  const hasActiveFilters = filters.length > 0;
 
   const handleSaveView = useCallback(async () => {
     if (!saveViewName.trim()) return;
@@ -493,62 +408,19 @@ export default function UnifiedBrowsePage() {
 
       {/* Filter bar */}
       <FilterBar
-        q={activeQ}
-        tag={searchParams.get("tag")}
-        path={null}
-        dateFrom={searchParams.get("date_from")}
-        dateTo={searchParams.get("date_to")}
-        onChangeQ={(v) => setParam("q", v)}
-        onChangeTag={(v) => setParam("tag", v)}
-        onChangePath={() => {}}
-        onChangeDateRange={handleChangeDateRange}
+        filters={filters}
         sort={browseSort}
         dir={browseDir}
-        mediaType={browseMediaType ?? null}
-        cameraMake={browseCameraMake ?? null}
-        cameraModel={browseCameraModel ?? null}
-        lensModel={browseLensModel ?? null}
-        isoMin={searchParams.get("iso_min")}
-        isoMax={searchParams.get("iso_max")}
-        exposureMinUs={searchParams.get("exposure_min_us")}
-        exposureMaxUs={searchParams.get("exposure_max_us")}
-        apertureMin={searchParams.get("aperture_min")}
-        apertureMax={searchParams.get("aperture_max")}
-        focalLengthMin={searchParams.get("focal_length_min")}
-        focalLengthMax={searchParams.get("focal_length_max")}
-        hasExposure={browseHasExposure ?? null}
-        hasGps={browseHasGps}
-        hasFaces={browseHasFaces}
-        personId={browsePersonId ?? null}
-        nearLat={searchParams.get("near_lat")}
-        nearLon={searchParams.get("near_lon")}
-        nearRadiusKm={searchParams.get("near_radius_km")}
-        favorite={browseFavorite ?? null}
-        starMin={searchParams.get("star_min")}
-        starMax={searchParams.get("star_max")}
-        color={searchParams.get("color")}
-        onChangeFilter={(key, value) => setParam(key, value)}
-        onChangeFilters={(changes) => {
-          setSearchParams((prev) => {
-            const next = new URLSearchParams(prev);
-            for (const [k, v] of Object.entries(changes)) {
-              if (v) next.set(k, v);
-              else next.delete(k);
-            }
-            return next;
-          });
-        }}
-        facets={null}
+        onSetFilter={handleSetFilter}
+        onSetSort={handleSetSort}
+        onClearAll={handleClearAll}
+        facets={facetsQuery.data ?? null}
         onSaveSmartCollection={() => setShowSmartColModal(true)}
       />
 
       {showSmartColModal && (
         <SaveSmartCollectionModal
-          savedQuery={{
-            q: activeQ || undefined,
-            filters: toSnakeCaseFilters(browseOpts),
-            library_id: browseOpts.libraryId,
-          }}
+          savedQuery={buildSavedQuery(filters, browseSort, browseDir)}
           onClose={() => setShowSmartColModal(false)}
         />
       )}
@@ -556,7 +428,7 @@ export default function UnifiedBrowsePage() {
       {/* Status line */}
       {!isLoading && browseCount > 0 && (
         <p className="text-xs text-gray-500">
-          {browseCount.toLocaleString()} {isSearchMode ? "result" : "photo"}{browseCount === 1 ? "" : "s"}
+          {browseCount.toLocaleString()} photo{browseCount === 1 ? "" : "s"}
         </p>
       )}
 
@@ -579,9 +451,7 @@ export default function UnifiedBrowsePage() {
               <p className="text-sm text-gray-400">No favorites yet</p>
               <p className="mt-1 text-xs text-gray-600">Heart an image to add it here.</p>
             </>
-          ) : (browseMediaType || browseCameraMake || browseLensModel || browseColor ||
-                searchParams.get("iso_min") || searchParams.get("star_min") ||
-                browseHasGps || searchParams.get("near_lat")) ? (
+          ) : filters.length > 0 ? (
             <>
               <svg className="mb-3 h-10 w-10 text-gray-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
                 <line x1="4" y1="6" x2="20" y2="6" />
@@ -670,13 +540,7 @@ export default function UnifiedBrowsePage() {
                           type="button"
                           title="Browse all photos from this date"
                           onClick={() => {
-                            setSearchParams((prev) => {
-                              const next = new URLSearchParams(prev);
-                              next.set("date_from", vr.dateIso!);
-                              next.set("date_to", vr.dateIso!);
-                              next.delete("q");
-                              return next;
-                            });
+                            handleSetFilter("date", composeDate(vr.dateIso!, vr.dateIso!));
                           }}
                           className="p-1 text-gray-500 hover:text-indigo-400 transition-colors"
                         >
@@ -770,23 +634,14 @@ export default function UnifiedBrowsePage() {
           onRatingChange={handleRatingChange}
           onFilterClick={(params) => {
             setLightboxAsset(null);
-            setSearchParams((prev) => {
-              const next = new URLSearchParams(prev);
-              for (const [k, v] of Object.entries(params)) {
-                next.set(k, v);
-              }
-              return next;
-            });
+            // Translate old-style lightbox filter params to filter algebra
+            for (const [k, v] of Object.entries(params)) {
+              handleSetFilter(k, v);
+            }
           }}
           onNearbyClick={(lat, lon) => {
             setLightboxAsset(null);
-            setSearchParams((prev) => {
-              const next = new URLSearchParams(prev);
-              next.set("near_lat", String(lat));
-              next.set("near_lon", String(lon));
-              next.set("near_radius_km", "1");
-              return next;
-            });
+            handleSetFilter("near", composeNear(String(lat), String(lon), "1"));
           }}
         />
       )}
