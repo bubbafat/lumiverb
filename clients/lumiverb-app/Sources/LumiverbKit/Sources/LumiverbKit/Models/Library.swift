@@ -8,6 +8,7 @@ public struct Library: Decodable, Identifiable, Sendable {
     public let lastScanAt: String?
     public let status: String?
     public let isPublic: Bool?
+    public let coverAssetId: String?
 
     public var id: String { libraryId }
 }

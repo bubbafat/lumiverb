@@ -32,6 +32,7 @@ class LibraryResponse(BaseModel):
     name: str
     root_path: str
     is_public: bool = False
+    cover_asset_id: str | None = None
 
 
 class LibraryListItem(BaseModel):
@@ -41,6 +42,7 @@ class LibraryListItem(BaseModel):
     last_scan_at: str | None
     status: str = "active"
     is_public: bool = False
+    cover_asset_id: str | None = None
 
 
 class EmptyTrashResponse(BaseModel):
@@ -98,6 +100,7 @@ def list_libraries(
             last_scan_at=lib.last_scan_at.isoformat() if lib.last_scan_at else None,
             status=lib.status,
             is_public=lib.is_public,
+            cover_asset_id=repo.resolve_cover(lib),
         )
         for lib in libraries
     ]
@@ -142,6 +145,7 @@ def get_library(
         name=library.name,
         root_path=library.root_path,
         is_public=library.is_public,
+        cover_asset_id=repo.resolve_cover(library),
     )
 
 
@@ -185,6 +189,7 @@ def update_library(
         name=library.name,
         root_path=library.root_path,
         is_public=library.is_public,
+        cover_asset_id=repo.resolve_cover(library),
     )
 
 

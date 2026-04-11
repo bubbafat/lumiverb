@@ -8,7 +8,7 @@ struct LumiverbiOSApp: App {
     var body: some Scene {
         WindowGroup {
             if appState.isAuthenticated {
-                ConnectedView(appState: appState)
+                MainTabView(appState: appState)
             } else {
                 LoginView(appState: appState)
             }

@@ -14,41 +14,40 @@ struct LoginView: View {
                         .textContentType(.URL)
                         .autocapitalization(.none)
                         .keyboardType(.URL)
+                        .foregroundColor(serverURL.isEmpty ? .secondary : .primary)
                 }
 
-                if !serverURL.isEmpty {
-                    Section("Credentials") {
-                        TextField("Email", text: $email)
-                            .textContentType(.emailAddress)
-                            .autocapitalization(.none)
-                            .keyboardType(.emailAddress)
-                        SecureField("Password", text: $password)
-                            .textContentType(.password)
-                    }
+                Section("Credentials") {
+                    TextField("Email", text: $email)
+                        .textContentType(.emailAddress)
+                        .autocapitalization(.none)
+                        .keyboardType(.emailAddress)
+                    SecureField("Password", text: $password)
+                        .textContentType(.password)
+                }
 
+                Section {
+                    Button(action: {
+                        appState.configure(serverURL: serverURL)
+                        Task {
+                            await appState.login(email: email, password: password)
+                        }
+                    }) {
+                        if appState.isConnecting {
+                            ProgressView()
+                                .frame(maxWidth: .infinity)
+                        } else {
+                            Text("Connect")
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
+                    .disabled(serverURL.isEmpty || email.isEmpty || password.isEmpty || appState.isConnecting)
+                }
+
+                if let error = appState.connectionError {
                     Section {
-                        Button(action: {
-                            appState.configure(serverURL: serverURL)
-                            Task {
-                                await appState.login(email: email, password: password)
-                            }
-                        }) {
-                            if appState.isConnecting {
-                                ProgressView()
-                                    .frame(maxWidth: .infinity)
-                            } else {
-                                Text("Connect")
-                                    .frame(maxWidth: .infinity)
-                            }
-                        }
-                        .disabled(email.isEmpty || password.isEmpty || appState.isConnecting)
-                    }
-
-                    if let error = appState.connectionError {
-                        Section {
-                            Text(error)
-                                .foregroundColor(.red)
-                        }
+                        Text(error)
+                            .foregroundColor(.red)
                     }
                 }
             }

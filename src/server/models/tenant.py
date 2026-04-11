@@ -39,6 +39,9 @@ class Library(SQLModel, table=True):
     )
     is_public: bool = Field(default=False, nullable=False)
     revision: int = Field(default=0, nullable=False)
+    cover_asset_id: str | None = Field(
+        default=None, foreign_key="assets.asset_id", nullable=True
+    )
 
 
 class LibraryPathFilter(SQLModel, table=True):

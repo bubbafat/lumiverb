@@ -247,6 +247,41 @@ class LibraryRepository:
         self._session.execute(text("DELETE FROM libraries WHERE library_id = :library_id"), params)
         self._session.commit()
 
+    def resolve_cover(self, library: Library) -> str | None:
+        """Return the effective cover asset_id, applying lazy self-healing.
+
+        If cover_asset_id is set and the asset is still active, return it.
+        Otherwise fall back to the most recent asset by taken_at, and null
+        out any stale cover_asset_id.
+        """
+        if library.cover_asset_id:
+            row = self._session.execute(
+                select(Asset.asset_id).where(
+                    Asset.asset_id == library.cover_asset_id,
+                    Asset.library_id == library.library_id,
+                    Asset.deleted_at.is_(None),  # type: ignore[union-attr]
+                )
+            ).first()
+            if row:
+                return library.cover_asset_id
+
+            # Stale — null it out (lazy self-healing)
+            library.cover_asset_id = None
+            library.updated_at = utcnow()
+            self._session.add(library)
+            self._session.commit()
+
+        # Fallback: most recent active asset by taken_at
+        row = self._session.execute(
+            select(Asset.asset_id).where(
+                Asset.library_id == library.library_id,
+                Asset.deleted_at.is_(None),  # type: ignore[union-attr]
+            )
+            .order_by(Asset.taken_at.desc().nullslast())  # type: ignore[union-attr]
+            .limit(1)
+        ).first()
+        return row[0] if row else None
+
 
 class PathFilterRepository:
     """Repository for library_path_filters and tenant_path_filter_defaults."""
@@ -883,6 +918,15 @@ class AssetRepository:
         self._session.execute(
             text(
                 "UPDATE collections SET cover_asset_id = NULL"
+                " WHERE cover_asset_id = ANY(:asset_ids)"
+            ),
+            params,
+        )
+
+        # Same for library covers.
+        self._session.execute(
+            text(
+                "UPDATE libraries SET cover_asset_id = NULL"
                 " WHERE cover_asset_id = ANY(:asset_ids)"
             ),
             params,
