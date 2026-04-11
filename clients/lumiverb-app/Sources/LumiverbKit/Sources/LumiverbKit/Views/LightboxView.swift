@@ -140,9 +140,9 @@ public struct LightboxView: View {
                         browseState.applyMetadataFilter(build)
                     },
                     onTagSearch: { tag in
-                        browseState.closeLightbox()
-                        browseState.searchQuery = tag
-                        Task { await browseState.performSearch() }
+                        browseState.applyMetadataFilter { f in
+                            f.tag = tag
+                        }
                     },
                     onPathClick: { path in
                         browseState.closeLightbox()

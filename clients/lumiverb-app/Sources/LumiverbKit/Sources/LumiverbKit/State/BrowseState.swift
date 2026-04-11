@@ -79,7 +79,7 @@ public class BrowseState: ObservableObject {
                 case .library:
                     reloadAssets()
                 case .search:
-                    Task { await performSearch() }
+                    Task { await executeSearch() }
                 case .similar(let sourceId):
                     Task { await findSimilar(assetId: sourceId) }
                 }
@@ -768,15 +768,19 @@ public class BrowseState: ObservableObject {
 
     // MARK: - Search
 
+    /// User-initiated search (from search bar). Clears all filters.
     public func performSearch() async {
-        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty, let client else { return }
-
-        // New search clears all refinement filters. The user stacks
-        // filters by clicking metadata in the lightbox; a new text
-        // search is a new intent that starts fresh.
         filters.clearAll()
         selectedPath = nil
+        await executeSearch()
+    }
+
+    /// Internal search that preserves existing filters. Used when
+    /// code (not the user) triggers a search — e.g., tag click from
+    /// the lightbox, which is a refinement, not a new intent.
+    public func executeSearch() async {
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty, let client else { return }
 
         mode = .search
         isSearching = true

@@ -35,6 +35,9 @@ public struct BrowseFilter: Equatable, Sendable {
     public var starMax: Int?
     public var color: String?
 
+    // MARK: - Tag
+    public var tag: String?
+
     // MARK: - Date
     public var dateFrom: String?  // "YYYY-MM-DD"
     public var dateTo: String?
@@ -52,6 +55,7 @@ public struct BrowseFilter: Equatable, Sendable {
         hasExposure != nil ||
         hasGps != nil || hasFaces != nil || personId != nil ||
         favorite != nil || starMin != nil || starMax != nil || color != nil ||
+        tag != nil ||
         dateFrom != nil || dateTo != nil
     }
 
@@ -95,6 +99,9 @@ public struct BrowseFilter: Equatable, Sendable {
         if let focalLengthMin {
             let label = focalLengthMin == focalLengthMax ? String(format: "%.0fmm", focalLengthMin) : String(format: "%.0f–%.0fmm", focalLengthMin, focalLengthMax ?? focalLengthMin)
             result.append(ActiveFilter(id: "focal", label: label) { f in f.focalLengthMin = nil; f.focalLengthMax = nil })
+        }
+        if let tag {
+            result.append(ActiveFilter(id: "tag", label: "Tag: \(tag)") { f in f.tag = nil })
         }
         if let dateFrom {
             let label = dateFrom == dateTo ? dateFrom : "\(dateFrom) – \(dateTo ?? "")"
@@ -174,6 +181,7 @@ public struct BrowseFilter: Equatable, Sendable {
         if let starMin { params["star_min"] = String(starMin) }
         if let starMax { params["star_max"] = String(starMax) }
         if let color { params["color"] = color }
+        if let tag { params["tag"] = tag }
         if let dateFrom { params["date_from"] = dateFrom }
         if let dateTo { params["date_to"] = dateTo }
         return params
