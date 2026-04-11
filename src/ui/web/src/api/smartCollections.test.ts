@@ -87,24 +87,6 @@ describe("CollectionItem type", () => {
   });
 });
 
-describe("PageAssetsOptions type", () => {
-  it("includes hasColor field", () => {
-    const opts: import("./client").PageAssetsOptions = {
-      hasColor: true,
-    };
-    expect(opts.hasColor).toBe(true);
-  });
-
-  it("includes dateFrom and dateTo fields", () => {
-    const opts: import("./client").PageAssetsOptions = {
-      dateFrom: "2024-01-01",
-      dateTo: "2024-12-31",
-    };
-    expect(opts.dateFrom).toBe("2024-01-01");
-    expect(opts.dateTo).toBe("2024-12-31");
-  });
-});
-
 describe("filter algebra serialization", () => {
   it("builds a saved query from filters", () => {
     const filters: LeafFilter[] = [

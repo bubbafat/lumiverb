@@ -3,7 +3,6 @@ import type {
   ApiKeyItem,
   AssetDetail,
   AssetPageItem,
-  AssetPageResponse,
   BatchAddResponse,
   BatchRemoveResponse,
   CollectionAssetsResponse,
@@ -17,13 +16,11 @@ import type {
   LibraryListItem,
   LibraryResponse,
   LibraryRevision,
-  SearchResponse,
   SimilarityResponse,
   UserItem,
   RatingResponse,
   RatingLookupResponse,
   BatchRatingResponse,
-  BrowseResponse,
 } from "./types";
 
 export class ApiError extends Error {
@@ -264,129 +261,7 @@ export async function getLibraryRevision(
   return apiFetch<LibraryRevision>(`/libraries/${libraryId}/revision`);
 }
 
-export interface PageAssetsOptions {
-  pathPrefix?: string;
-  tag?: string;
-  sort?: string;
-  dir?: "asc" | "desc";
-  mediaType?: string;
-  cameraMake?: string;
-  cameraModel?: string;
-  lensModel?: string;
-  isoMin?: number;
-  isoMax?: number;
-  exposureMinUs?: number;
-  exposureMaxUs?: number;
-  apertureMin?: number;
-  apertureMax?: number;
-  focalLengthMin?: number;
-  focalLengthMax?: number;
-  hasExposure?: boolean;
-  hasGps?: boolean;
-  hasFaces?: boolean;
-  personId?: string;
-  nearLat?: number;
-  nearLon?: number;
-  nearRadiusKm?: number;
-  favorite?: boolean;
-  starMin?: number;
-  starMax?: number;
-  color?: string;
-  hasRating?: boolean;
-  hasColor?: boolean;
-  dateFrom?: string;
-  dateTo?: string;
-}
-
-/** Paginated assets for a library with sort/filter support. */
-export async function pageAssets(
-  libraryId: string,
-  cursor?: string,
-  limit = 100,
-  opts?: PageAssetsOptions,
-): Promise<AssetPageResponse> {
-  const params = new URLSearchParams({ library_id: libraryId });
-  if (cursor) params.set("after", cursor);
-  params.set("limit", String(limit));
-  if (opts?.pathPrefix) params.set("path_prefix", opts.pathPrefix);
-  if (opts?.tag) params.set("tag", opts.tag);
-  if (opts?.sort) params.set("sort", opts.sort);
-  if (opts?.dir) params.set("dir", opts.dir);
-  if (opts?.mediaType) params.set("media_type", opts.mediaType);
-  if (opts?.cameraMake) params.set("camera_make", opts.cameraMake);
-  if (opts?.cameraModel) params.set("camera_model", opts.cameraModel);
-  if (opts?.lensModel) params.set("lens_model", opts.lensModel);
-  if (opts?.isoMin != null) params.set("iso_min", String(opts.isoMin));
-  if (opts?.isoMax != null) params.set("iso_max", String(opts.isoMax));
-  if (opts?.exposureMinUs != null) params.set("exposure_min_us", String(opts.exposureMinUs));
-  if (opts?.exposureMaxUs != null) params.set("exposure_max_us", String(opts.exposureMaxUs));
-  if (opts?.apertureMin != null) params.set("aperture_min", String(opts.apertureMin));
-  if (opts?.apertureMax != null) params.set("aperture_max", String(opts.apertureMax));
-  if (opts?.focalLengthMin != null) params.set("focal_length_min", String(opts.focalLengthMin));
-  if (opts?.focalLengthMax != null) params.set("focal_length_max", String(opts.focalLengthMax));
-  if (opts?.hasExposure != null) params.set("has_exposure", String(opts.hasExposure));
-  if (opts?.hasGps) params.set("has_gps", "true");
-  if (opts?.hasFaces) params.set("has_faces", "true");
-  if (opts?.personId) params.set("person_id", opts.personId);
-  if (opts?.nearLat != null) params.set("near_lat", String(opts.nearLat));
-  if (opts?.nearLon != null) params.set("near_lon", String(opts.nearLon));
-  if (opts?.nearRadiusKm != null) params.set("near_radius_km", String(opts.nearRadiusKm));
-  if (opts?.favorite != null) params.set("favorite", String(opts.favorite));
-  if (opts?.starMin != null) params.set("star_min", String(opts.starMin));
-  if (opts?.starMax != null) params.set("star_max", String(opts.starMax));
-  if (opts?.color) params.set("color", opts.color);
-  if (opts?.hasRating != null) params.set("has_rating", String(opts.hasRating));
-  if (opts?.hasColor != null) params.set("has_color", String(opts.hasColor));
-  if (opts?.dateFrom) params.set("date_from", opts.dateFrom);
-  if (opts?.dateTo) params.set("date_to", opts.dateTo);
-  return apiFetch<AssetPageResponse>(`/assets/page?${params}`);
-}
-
-/** Cross-library paginated browse with full filter support. */
-export async function browseAll(
-  cursor?: string,
-  limit = 100,
-  opts?: PageAssetsOptions & { libraryId?: string },
-): Promise<BrowseResponse> {
-  const params = new URLSearchParams();
-  if (cursor) params.set("after", cursor);
-  params.set("limit", String(limit));
-  if (opts?.libraryId) params.set("library_id", opts.libraryId);
-  if (opts?.pathPrefix) params.set("path_prefix", opts.pathPrefix);
-  if (opts?.tag) params.set("tag", opts.tag);
-  if (opts?.sort) params.set("sort", opts.sort);
-  if (opts?.dir) params.set("dir", opts.dir);
-  if (opts?.mediaType) params.set("media_type", opts.mediaType);
-  if (opts?.cameraMake) params.set("camera_make", opts.cameraMake);
-  if (opts?.cameraModel) params.set("camera_model", opts.cameraModel);
-  if (opts?.lensModel) params.set("lens_model", opts.lensModel);
-  if (opts?.isoMin != null) params.set("iso_min", String(opts.isoMin));
-  if (opts?.isoMax != null) params.set("iso_max", String(opts.isoMax));
-  if (opts?.exposureMinUs != null) params.set("exposure_min_us", String(opts.exposureMinUs));
-  if (opts?.exposureMaxUs != null) params.set("exposure_max_us", String(opts.exposureMaxUs));
-  if (opts?.apertureMin != null) params.set("aperture_min", String(opts.apertureMin));
-  if (opts?.apertureMax != null) params.set("aperture_max", String(opts.apertureMax));
-  if (opts?.focalLengthMin != null) params.set("focal_length_min", String(opts.focalLengthMin));
-  if (opts?.focalLengthMax != null) params.set("focal_length_max", String(opts.focalLengthMax));
-  if (opts?.hasExposure != null) params.set("has_exposure", String(opts.hasExposure));
-  if (opts?.hasGps) params.set("has_gps", "true");
-  if (opts?.hasFaces) params.set("has_faces", "true");
-  if (opts?.personId) params.set("person_id", opts.personId);
-  if (opts?.nearLat != null) params.set("near_lat", String(opts.nearLat));
-  if (opts?.nearLon != null) params.set("near_lon", String(opts.nearLon));
-  if (opts?.nearRadiusKm != null) params.set("near_radius_km", String(opts.nearRadiusKm));
-  if (opts?.favorite != null) params.set("favorite", String(opts.favorite));
-  if (opts?.starMin != null) params.set("star_min", String(opts.starMin));
-  if (opts?.starMax != null) params.set("star_max", String(opts.starMax));
-  if (opts?.color) params.set("color", opts.color);
-  if (opts?.hasRating != null) params.set("has_rating", String(opts.hasRating));
-  if (opts?.hasColor != null) params.set("has_color", String(opts.hasColor));
-  if (opts?.dateFrom) params.set("date_from", opts.dateFrom);
-  if (opts?.dateTo) params.set("date_to", opts.dateTo);
-  return apiFetch<BrowseResponse>(`/browse?${params}`);
-}
-
-/** Fetch aggregated filter facets for a library. */
+/** Fetch aggregated filter facets for a library (legacy — use getFilteredFacets). */
 export async function getFacets(
   libraryId: string,
   pathPrefix?: string,
@@ -682,43 +557,6 @@ export async function mergePerson(targetPersonId: string, sourcePersonId: string
     method: "POST",
     body: { source_person_id: sourcePersonId },
   });
-}
-
-export async function searchAssets(params: {
-  libraryId?: string;
-  q: string;
-  mediaType?: string;
-  pathPrefix?: string;
-  tag?: string;
-  dateFrom?: string;
-  dateTo?: string;
-  limit?: number;
-  offset?: number;
-  favorite?: boolean;
-  starMin?: number;
-  starMax?: number;
-  color?: string;
-  hasRating?: boolean;
-  hasFaces?: boolean;
-  personId?: string;
-}): Promise<SearchResponse> {
-  const qs = new URLSearchParams({ q: params.q });
-  if (params.libraryId) qs.set("library_id", params.libraryId);
-  if (params.mediaType) qs.set("media_type", params.mediaType);
-  if (params.pathPrefix) qs.set("path_prefix", params.pathPrefix);
-  if (params.tag) qs.set("tag", params.tag);
-  if (params.dateFrom) qs.set("date_from", params.dateFrom);
-  if (params.dateTo) qs.set("date_to", params.dateTo);
-  if (params.limit) qs.set("limit", String(params.limit));
-  if (params.offset) qs.set("offset", String(params.offset));
-  if (params.favorite != null) qs.set("favorite", String(params.favorite));
-  if (params.starMin != null) qs.set("star_min", String(params.starMin));
-  if (params.starMax != null) qs.set("star_max", String(params.starMax));
-  if (params.color) qs.set("color", params.color);
-  if (params.hasRating != null) qs.set("has_rating", String(params.hasRating));
-  if (params.hasFaces) qs.set("has_faces", "true");
-  if (params.personId) qs.set("person_id", params.personId);
-  return apiFetch<SearchResponse>(`/search?${qs.toString()}`);
 }
 
 export async function getAsset(assetId: string, publicLibraryId?: string): Promise<AssetDetail> {

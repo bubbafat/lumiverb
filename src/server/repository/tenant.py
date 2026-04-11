@@ -2090,157 +2090,6 @@ class RatingRepository:
         return result.rowcount  # type: ignore[return-value]
 
 
-def _apply_browse_filters(
-    filters: "BrowseFilters",
-    conditions: list[str],
-    params: dict,
-    rating_user_id: str | None,
-    _math: object,
-) -> tuple[bool, bool]:
-    """Apply BrowseFilters to SQL conditions/params. Returns (join_ratings, join_metadata)."""
-    from src.server.models.browse_filters import BrowseFilters as _BF  # noqa: F811
-
-    # --- Tag ---
-    if filters.tag is not None:
-        conditions.append("m.tags @> jsonb_build_array(:tag)")
-        params["tag"] = filters.tag
-
-    # --- Missing enrichment flags ---
-    if filters.missing_vision:
-        conditions.append(MISSING_CONDITIONS["missing_vision"])
-    if filters.missing_embeddings:
-        conditions.append(MISSING_CONDITIONS["missing_embeddings"])
-    if filters.missing_faces:
-        conditions.append(MISSING_CONDITIONS["missing_faces"])
-    if filters.missing_face_embeddings:
-        conditions.append(MISSING_CONDITIONS["missing_face_embeddings"])
-    if filters.missing_video_scenes:
-        conditions.append(MISSING_CONDITIONS["missing_video_scenes"])
-    if filters.missing_ocr:
-        conditions.append(MISSING_CONDITIONS["missing_ocr"])
-    if filters.missing_scene_vision:
-        conditions.append(MISSING_CONDITIONS["missing_scene_vision"])
-    if filters.missing_transcription:
-        conditions.append(MISSING_CONDITIONS["missing_transcription"])
-
-    # --- Faces / people ---
-    if filters.has_faces is True:
-        conditions.append("a.face_count > 0")
-    elif filters.has_faces is False:
-        conditions.append("(a.face_count IS NULL OR a.face_count = 0)")
-    if filters.person_id:
-        conditions.append("a.asset_id IN (SELECT asset_id FROM faces WHERE person_id = :person_id)")
-        params["person_id"] = filters.person_id
-
-    # --- Media type ---
-    if filters.media_types:
-        clauses = []
-        if "image" in filters.media_types:
-            clauses.append("a.media_type = 'image'")
-        if "video" in filters.media_types:
-            clauses.append("a.media_type = 'video'")
-        if clauses:
-            conditions.append(f"({' OR '.join(clauses)})")
-
-    # --- Camera / lens ---
-    if filters.camera_make:
-        conditions.append("a.camera_make = :camera_make")
-        params["camera_make"] = filters.camera_make
-    if filters.camera_model:
-        conditions.append("a.camera_model = :camera_model")
-        params["camera_model"] = filters.camera_model
-    if filters.lens_model:
-        conditions.append("a.lens_model = :lens_model")
-        params["lens_model"] = filters.lens_model
-
-    # --- EXIF ranges ---
-    if filters.iso_min is not None:
-        conditions.append("a.iso >= :iso_min")
-        params["iso_min"] = filters.iso_min
-    if filters.iso_max is not None:
-        conditions.append("a.iso <= :iso_max")
-        params["iso_max"] = filters.iso_max
-    if filters.exposure_min_us is not None:
-        conditions.append("a.exposure_time_us >= :exposure_min_us")
-        params["exposure_min_us"] = filters.exposure_min_us
-    if filters.exposure_max_us is not None:
-        conditions.append("a.exposure_time_us <= :exposure_max_us")
-        params["exposure_max_us"] = filters.exposure_max_us
-    if filters.aperture_min is not None:
-        conditions.append("a.aperture >= :aperture_min")
-        params["aperture_min"] = filters.aperture_min
-    if filters.aperture_max is not None:
-        conditions.append("a.aperture <= :aperture_max")
-        params["aperture_max"] = filters.aperture_max
-    if filters.focal_length_min is not None:
-        conditions.append("a.focal_length >= :focal_length_min")
-        params["focal_length_min"] = filters.focal_length_min
-    if filters.focal_length_max is not None:
-        conditions.append("a.focal_length <= :focal_length_max")
-        params["focal_length_max"] = filters.focal_length_max
-
-    # --- Exposure data ---
-    if filters.has_exposure is True:
-        conditions.append(
-            "(a.iso IS NOT NULL OR a.exposure_time_us IS NOT NULL OR a.aperture IS NOT NULL)"
-        )
-    elif filters.has_exposure is False:
-        conditions.append(
-            "a.iso IS NULL AND a.exposure_time_us IS NULL AND a.aperture IS NULL"
-        )
-
-    # --- GPS ---
-    if filters.has_gps:
-        conditions.append("a.gps_lat IS NOT NULL AND a.gps_lon IS NOT NULL")
-    if filters.near_lat is not None and filters.near_lon is not None:
-        lat_delta = filters.near_radius_km / 111.0
-        lon_delta = filters.near_radius_km / (111.0 * _math.cos(_math.radians(filters.near_lat)))  # type: ignore[attr-defined]
-        conditions.append("a.gps_lat BETWEEN :min_lat AND :max_lat")
-        conditions.append("a.gps_lon BETWEEN :min_lon AND :max_lon")
-        params["min_lat"] = filters.near_lat - lat_delta
-        params["max_lat"] = filters.near_lat + lat_delta
-        params["min_lon"] = filters.near_lon - lon_delta
-        params["max_lon"] = filters.near_lon + lon_delta
-
-    # --- Date ---
-    if filters.date_from is not None:
-        conditions.append("COALESCE(a.taken_at, a.file_mtime) >= :date_from")
-        params["date_from"] = filters.date_from
-    if filters.date_to is not None:
-        conditions.append("COALESCE(a.taken_at, a.file_mtime) < :date_to")
-        params["date_to"] = filters.date_to
-
-    # --- Rating (LEFT JOIN on asset_ratings) ---
-    join_ratings = rating_user_id is not None and filters.needs_rating_join
-    if join_ratings:
-        params["rating_user_id"] = rating_user_id
-        if filters.favorite is True:
-            conditions.append("r.favorite = TRUE")
-        elif filters.favorite is False:
-            conditions.append("(r.favorite IS NULL OR r.favorite = FALSE)")
-        if filters.star_min is not None:
-            conditions.append("COALESCE(r.stars, 0) >= :star_min")
-            params["star_min"] = filters.star_min
-        if filters.star_max is not None:
-            conditions.append("COALESCE(r.stars, 0) <= :star_max")
-            params["star_max"] = filters.star_max
-        if filters.color is not None and len(filters.color) > 0:
-            placeholders = ", ".join(f":color_{i}" for i in range(len(filters.color)))
-            conditions.append(f"r.color IN ({placeholders})")
-            for i, c in enumerate(filters.color):
-                params[f"color_{i}"] = c
-        if filters.has_rating is True:
-            conditions.append("r.user_id IS NOT NULL")
-        elif filters.has_rating is False:
-            conditions.append("r.user_id IS NULL")
-        if filters.has_color is True:
-            conditions.append("r.color IS NOT NULL")
-        elif filters.has_color is False:
-            conditions.append("(r.user_id IS NULL OR r.color IS NULL)")
-
-    return join_ratings, filters.tag is not None
-
-
 class UnifiedBrowseRepository:
     """Cross-library browse — queries active_assets without library_id constraint."""
 
@@ -2252,10 +2101,10 @@ class UnifiedBrowseRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def page(
+    def _DELETED_OLD_page(
         self,
         *,
-        filters: "BrowseFilters | None" = None,
+        filters: "object | None" = None,
         rating_user_id: str | None = None,
         after: str | None = None,
         limit: int = 500,
