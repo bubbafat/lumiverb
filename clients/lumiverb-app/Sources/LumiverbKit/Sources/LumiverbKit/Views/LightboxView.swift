@@ -52,22 +52,16 @@ public struct LightboxView: View {
                             libraryRootPath: browseState.selectedLibraryRootPath,
                             client: client
                         )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
                         AuthenticatedImageView(
                             assetId: detail.assetId,
                             client: client,
                             type: .proxy
                         )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
 
-                // Face overlay layer — sibling of the image so both inherit
-                // the same parent frame from the ZStack and the aspect-fit
-                // math here matches the image's actual rendered rect.
-                // Stills only — videos can have face data but the player
-                // doesn't have a single frame to overlay against.
+                // Face overlay
                 if showFaces,
                    let detail = browseState.assetDetail,
                    !detail.isVideo,
@@ -79,7 +73,6 @@ public struct LightboxView: View {
                         imageHeight: h,
                         vm: facesVM
                     )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
 
                 // Navigation arrows
@@ -160,23 +153,9 @@ public struct LightboxView: View {
             }
         }
         .background(Rectangle().fill(.black))
-        // Re-fetch faces whenever the visible asset changes — but only when
-        // the toggle is on, so toggling off mid-browse doesn't keep paying
-        // for face requests. The vm short-circuits if it already has the
-        // current asset's faces cached.
         .task(id: showFacesTaskKey) {
             if showFaces, let assetId = browseState.assetDetail?.assetId {
                 await facesVM.loadFaces(forAsset: assetId)
-                // Cluster review hands us a `pendingHighlightFaceId`
-                // when the user clicks a face crop. After the faces
-                // load, mark that face as highlighted (red border) and
-                // auto-open the assign popover on it so the per-face
-                // tagging path is one click instead of "open lightbox
-                // → press d → click face → assign". Cleared on consume
-                // so navigating away doesn't keep popping the same
-                // popover. The highlight stays on `facesVM` (not on
-                // `browseState`) so the FaceBoxView color logic can
-                // observe it directly.
                 if let pending = browseState.pendingHighlightFaceId,
                    facesVM.faces.contains(where: { $0.faceId == pending }) {
                     facesVM.highlightedFaceId = pending
@@ -187,18 +166,12 @@ public struct LightboxView: View {
                 facesVM.reset()
             }
         }
-        // Force the face overlay on whenever the cluster review hands
-        // us a highlighted face — without this the user opens the
-        // lightbox to a photo with no clickable hit target and falls
-        // back to the bulk "name everything" path.
         .onChange(of: browseState.pendingHighlightFaceId) { _, newValue in
             if newValue != nil && !showFaces {
                 showFaces = true
             }
         }
         #if os(macOS)
-        // Rating keyboard shortcuts (Lightroom convention):
-        // 1-5 set stars, 0 clears, F toggles favorite.
         .onKeyPress(characters: .init(charactersIn: "012345")) { press in
             let ch = press.characters
             if let digit = ch.first?.wholeNumberValue, digit >= 0 && digit <= 5 {

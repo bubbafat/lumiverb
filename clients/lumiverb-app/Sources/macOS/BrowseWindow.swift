@@ -242,17 +242,10 @@ struct BrowseWindow: View {
     @ViewBuilder
     private var detailContent: some View {
         if browseState.selectedAssetId != nil {
-            // Lightbox replaces the grid content (not overlaid on top).
-            // This gives the lightbox its own layout context that
-            // respects the detail pane's safe area independently of the
-            // grid's ScrollView.
             lightboxOverlay
         } else {
             ZStack {
                 sectionContent
-                // Library-switch overlay. Sits above the content area so
-                // it's visible as soon as the user clicks a new library —
-                // before any network-bound load completes.
                 if browseState.isChangingLibrary && section == .library {
                     changingLibraryOverlay
                 }
@@ -454,7 +447,6 @@ struct BrowseWindow: View {
             browseState: browseState,
             client: appState.client
         )
-        .transition(.opacity.animation(.easeInOut(duration: 0.15)))
     }
 
     /// Overlay shown while a library-switch is in progress. Appears
