@@ -16,11 +16,19 @@ public struct FilterChicletBar: View {
     public var body: some View {
         let filterChiclets = browseState.filters.activeFilters
         let hasPath = browseState.selectedPath != nil
-        let totalCount = filterChiclets.count + (hasPath ? 1 : 0)
+        let hasSearch = browseState.mode == .search && !browseState.searchQuery.isEmpty
+        let totalCount = filterChiclets.count + (hasPath ? 1 : 0) + (hasSearch ? 1 : 0)
 
         if totalCount > 0 {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
+                    // Search query chiclet
+                    if hasSearch {
+                        FilterChiclet(label: "Search: \"\(browseState.searchQuery)\"") {
+                            browseState.clearSearch()
+                        }
+                    }
+
                     // Path filter (lives on BrowseState, not BrowseFilter)
                     if let path = browseState.selectedPath {
                         FilterChiclet(label: "\u{1F4C1} \(path)") {
