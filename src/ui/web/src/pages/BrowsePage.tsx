@@ -62,6 +62,84 @@ export default function BrowsePage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [zoomLevel, setZoomLevel] = useLocalStorage("lv_grid_zoom", 2);
 
+  // --- Migrate legacy URL params to f= format on mount ---
+  useEffect(() => {
+    const LEGACY_MAP: Record<string, string> = {
+      q: "query", tag: "tag", media_type: "media",
+      camera_make: "camera_make", camera_model: "camera_model",
+      lens_model: "lens", color: "color", favorite: "favorite",
+      has_gps: "has_gps", has_faces: "has_faces", has_exposure: "has_exposure",
+      has_rating: "has_rating", has_color: "has_color", person_id: "person",
+    };
+    const LEGACY_RANGE: Record<string, string> = {
+      iso_min: "iso", iso_max: "iso",
+      aperture_min: "aperture", aperture_max: "aperture",
+      focal_length_min: "focal_length", focal_length_max: "focal_length",
+      exposure_min_us: "exposure", exposure_max_us: "exposure",
+      star_min: "stars", star_max: "stars",
+    };
+    const BOOL_YES = new Set(["has_gps", "has_faces", "has_exposure", "has_rating", "has_color", "favorite"]);
+
+    let migrated = false;
+    const next = new URLSearchParams(searchParams);
+
+    for (const [oldKey, filterType] of Object.entries(LEGACY_MAP)) {
+      const v = next.get(oldKey);
+      if (v != null) {
+        next.delete(oldKey);
+        const fVal = BOOL_YES.has(oldKey) ? (v === "true" ? "yes" : "no") : v;
+        next.append("f", `${filterType}:${fVal}`);
+        migrated = true;
+      }
+    }
+    // Range params: combine min/max into single filter
+    const rangeDone = new Set<string>();
+    for (const [oldKey, filterType] of Object.entries(LEGACY_RANGE)) {
+      if (rangeDone.has(filterType)) continue;
+      const isMin = oldKey.includes("min");
+      const minKey = isMin ? oldKey : oldKey.replace("max", "min");
+      const maxKey = isMin ? oldKey.replace("min", "max") : oldKey;
+      const lo = next.get(minKey);
+      const hi = next.get(maxKey);
+      if (lo != null || hi != null) {
+        next.delete(minKey);
+        next.delete(maxKey);
+        let val: string;
+        if (lo && hi && lo === hi) val = lo;
+        else if (lo && hi) val = `${lo}-${hi}`;
+        else if (lo) val = `${lo}+`;
+        else val = `-${hi}`;
+        next.append("f", `${filterType}:${val}`);
+        rangeDone.add(filterType);
+        migrated = true;
+      }
+    }
+    // Date params
+    const df = next.get("date_from");
+    const dt = next.get("date_to");
+    if (df || dt) {
+      next.delete("date_from");
+      next.delete("date_to");
+      next.append("f", `date:${df ?? ""},${dt ?? ""}`);
+      migrated = true;
+    }
+    // Near params
+    const nLat = next.get("near_lat");
+    const nLon = next.get("near_lon");
+    const nRad = next.get("near_radius_km");
+    if (nLat && nLon) {
+      next.delete("near_lat");
+      next.delete("near_lon");
+      next.delete("near_radius_km");
+      next.append("f", `near:${nLat},${nLon},${nRad ?? "1"}`);
+      migrated = true;
+    }
+
+    if (migrated) {
+      setSearchParamsRef.current(next, { replace: true });
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // --- Filter algebra: read filters from URL ---
   // Read raw values from searchParams — primitives are stable across renders
   const fParams = searchParams.getAll("f");
