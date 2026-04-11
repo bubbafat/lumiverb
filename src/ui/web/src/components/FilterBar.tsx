@@ -233,9 +233,13 @@ export function FilterBar({
     }
   });
 
-  // Keep input in sync when external q changes
+  // When query filter is dismissed (chiclet cleared), reset input.
+  // When query filter is SET, clear the input — the chiclet represents
+  // the active search, and the input is ready for a new query.
+  // This prevents ESC in the lightbox from propagating to the search
+  // input and accidentally clearing the search filter.
   useEffect(() => {
-    setInputValue(q ?? "");
+    setInputValue("");
   }, [q]);
 
   // Sync custom fields when external date changes
@@ -265,10 +269,22 @@ export function FilterBar({
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
+  // Track whether the input was cleared by the user (typing/ESC) vs
+  // by the sync effect (chiclet created). Only user-initiated clears
+  // should remove the query filter.
+  const userTypingRef = useRef(false);
+
   const applySearch = useCallback(
     (value: string) => {
       const trimmed = value.trim();
-      onSetFilter("query", trimmed.length > 0 ? trimmed : null);
+      if (trimmed.length > 0) {
+        onSetFilter("query", trimmed);
+      } else if (userTypingRef.current) {
+        // User explicitly cleared the input — remove the filter
+        onSetFilter("query", null);
+      }
+      // If userTypingRef is false, the input was cleared by the sync
+      // effect (chiclet was created) — don't remove the filter.
     },
     [onSetFilter],
   );
@@ -276,6 +292,7 @@ export function FilterBar({
   useEffect(() => {
     const handle = window.setTimeout(() => {
       applySearch(inputValue);
+      userTypingRef.current = false;
     }, 500);
     return () => window.clearTimeout(handle);
   }, [inputValue, applySearch]);
@@ -288,6 +305,7 @@ export function FilterBar({
   };
 
   const handleClear = () => {
+    userTypingRef.current = true;
     setInputValue("");
     onSetFilter("query", null);
   };
@@ -368,7 +386,7 @@ export function FilterBar({
             className="w-full rounded-lg border border-gray-700 bg-gray-800 pl-9 pr-8 py-2 text-sm text-gray-100 placeholder:text-gray-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             placeholder="Search ..."
             value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
+            onChange={(e) => { userTypingRef.current = true; setInputValue(e.target.value); }}
             onKeyDown={handleKeyDown}
             onFocus={() => setSearchFocused(true)}
           />
