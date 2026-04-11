@@ -55,7 +55,10 @@ quickwit/     Quickwit index schemas
 | DDL migrations | `migrations/control/versions/`, `migrations/tenant/versions/`. Run via `scripts/migrate.sh` |
 | Online data backfills | `src/server/upgrade/` (`steps/`, `registry.py`, `runner.py`). For long-running migrations that can't run in one Alembic txn |
 | Video transcription | Client: `src/client/cli/repair.py` (ffmpeg → faster-whisper). Server: `api/routers/assets.py`, `server/srt.py`. Index `lumiverb_{tenant}_transcripts` |
-| Search (Quickwit) | `src/server/search/quickwit_client.py`, `sync.py`, `cleanup.py`, `postgres_search.py` (fallback) |
+| Filter algebra | `src/server/models/query_filter.py` (23 leaf types), `filter_registry.py` (parsing + capabilities). Web: `src/ui/web/src/lib/queryFilter.ts`. Swift: `LumiverbKit/Models/QueryFilter.swift` |
+| Unified query endpoint | `src/server/api/routers/query.py` — single `GET /v1/query?f=prefix:value` replaces old `/v1/browse` + `/v1/search`. Candidate-set pattern for text search (Quickwit → Postgres filters) |
+| Filter capabilities | `src/server/api/routers/filters.py` — `GET /v1/filters/capabilities` returns all filter types for generic client rendering |
+| Search (Quickwit) | `src/server/search/quickwit_client.py`, `sync.py`, `cleanup.py`, `postgres_search.py` (ILIKE fallback) |
 | CLI command | `src/client/cli/<command>.py`. Dispatcher: `main.py`. HTTP: `client.py` (`LumiverbClient`) |
 | Face detection (Python) | `src/client/workers/faces/insightface_provider.py` (InsightFace buffalo_l) |
 | Face detection (macOS/iOS) | `LumiverbKit/Sources/LumiverbKit/Faces/FaceDetectionProvider.swift` (Vision). Lives in LumiverbKit so tests drive the full gate chain end-to-end. Callers: `Sources/macOS/Enrich/{EnrichmentPipeline,ReEnrichmentRunner}.swift` |
@@ -66,7 +69,7 @@ quickwit/     Quickwit index schemas
 | Menu bar / app lifecycle (macOS) | `Sources/macOS/{LumiverbApp,MenuBarView}.swift`. 3-state SF symbol: `pause.rectangle.fill` (paused) / `arrow.triangle.2.circlepath` (scanning) / `photo.stack` (idle). Favorites (`AppState.favoriteLibraryIds`, persisted) surface in the menu bar; clicking sets `appState.pendingSelectedLibraryId` which `BrowseWindow.consumePendingLibraryId()` consumes on appear/onChange. Start at Login via `SMAppService.mainApp` toggle in Settings (requires app in `/Applications` to actually fire). |
 | Proxy gen / cache (Python) | `src/client/proxy/proxy_gen.py`, `proxy_cache.py` |
 | Image caches (macOS) | `LumiverbKit/Sources/LumiverbKit/API/ImageCache.swift` (NSCache in-memory, 200 MB / 2000 items), `ProxyCacheOnDisk.swift` (`~/.cache/lumiverb/proxies/`, Python-CLI-compatible, SHA sidecars), `ThumbnailCacheOnDisk.swift` (`~/.cache/lumiverb/thumbnails/`, macOS-local, no sidecar). `AuthenticatedImageView` resolves in-memory → disk → server, on a detached Task so disk I/O and `NSImage(data:)` decode stay off the main actor. |
-| Web UI page | `src/ui/web/src/pages/<Page>.tsx`. API client: `src/ui/web/src/api/client.ts` |
+| Web UI page | `src/ui/web/src/pages/<Page>.tsx`. API client: `src/ui/web/src/api/client.ts`. Filter state: `src/ui/web/src/lib/queryFilter.ts` |
 | Face clustering / people | `repository/tenant.py` (`PersonRepository`, `FaceRepository`); `routers/people.py`. Cluster cache in `system_metadata`, invalidated on writes |
 | Python ↔ Swift shared | `src/shared/` — twins in `LumiverbKit/Sources/LumiverbKit/Models/`: `path_filter.py` ↔ `PathFilter.swift`, `file_extensions.py` ↔ `FileExtensions.swift` |
 | Server config / env | `src/server/config.py` (`Settings(BaseSettings)`). CLI: `src/client/cli/config.py`. Prod env: `/etc/lumiverb/env` |
