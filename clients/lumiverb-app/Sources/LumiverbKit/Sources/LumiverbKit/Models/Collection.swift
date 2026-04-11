@@ -171,7 +171,7 @@ public struct CreateCollectionRequest: Encodable, Sendable {
     public let sortOrder: String
     public let visibility: String
     public let type: String
-    public let savedQuery: SavedQuery?
+    public let savedQuery: SavedQueryV2?
     public let assetIds: [String]?
 
     public init(
@@ -180,7 +180,7 @@ public struct CreateCollectionRequest: Encodable, Sendable {
         sortOrder: CollectionSortOrder = .manual,
         visibility: CollectionVisibility = .private,
         type: CollectionType = .static,
-        savedQuery: SavedQuery? = nil,
+        savedQuery: SavedQueryV2? = nil,
         assetIds: [String]? = nil
     ) {
         self.name = name

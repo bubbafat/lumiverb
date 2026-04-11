@@ -196,4 +196,117 @@ public struct BrowseFilter: Equatable, Sendable {
         if let dateTo { params["date_to"] = dateTo }
         return params
     }
+
+    // MARK: - Filter Algebra Conversion
+
+    /// Convert to an array of LeafFilter for the unified /v1/query endpoint.
+    /// Optionally includes library scope and search query as filters.
+    public func toLeafFilters(
+        libraryId: String? = nil,
+        pathPrefix: String? = nil,
+        searchQuery: String? = nil
+    ) -> [LeafFilter] {
+        var filters: [LeafFilter] = []
+
+        if let searchQuery, !searchQuery.isEmpty {
+            filters.append(LeafFilter(type: "query", value: searchQuery))
+        }
+        if let libraryId {
+            filters.append(LeafFilter(type: "library", value: libraryId))
+        }
+        if let pathPrefix {
+            filters.append(LeafFilter(type: "path", value: pathPrefix))
+        }
+        if let mediaType {
+            filters.append(LeafFilter(type: "media", value: mediaType))
+        }
+        if let cameraMake {
+            filters.append(LeafFilter(type: "camera_make", value: cameraMake))
+        }
+        if let cameraModel {
+            filters.append(LeafFilter(type: "camera_model", value: cameraModel))
+        }
+        if let lensModel {
+            filters.append(LeafFilter(type: "lens", value: lensModel))
+        }
+        if let val = composeRange(
+            min: isoMin.map(String.init),
+            max: isoMax.map(String.init)
+        ) {
+            filters.append(LeafFilter(type: "iso", value: val))
+        }
+        if let val = composeRange(
+            min: apertureMin.map { String($0) },
+            max: apertureMax.map { String($0) }
+        ) {
+            filters.append(LeafFilter(type: "aperture", value: val))
+        }
+        if let val = composeRange(
+            min: focalLengthMin.map { String($0) },
+            max: focalLengthMax.map { String($0) }
+        ) {
+            filters.append(LeafFilter(type: "focal_length", value: val))
+        }
+        if let val = composeRange(
+            min: exposureMinUs.map(String.init),
+            max: exposureMaxUs.map(String.init)
+        ) {
+            filters.append(LeafFilter(type: "exposure", value: val))
+        }
+        if let hasExposure {
+            filters.append(LeafFilter(type: "has_exposure", value: hasExposure ? "yes" : "no"))
+        }
+        if let hasGps, hasGps {
+            filters.append(LeafFilter(type: "has_gps", value: "yes"))
+        }
+        if let hasFaces, hasFaces {
+            filters.append(LeafFilter(type: "has_faces", value: "yes"))
+        }
+        if let personId {
+            filters.append(LeafFilter(type: "person", value: personId))
+        }
+        if let favorite, favorite {
+            filters.append(LeafFilter(type: "favorite", value: "yes"))
+        }
+        if let val = composeRange(
+            min: starMin.map(String.init),
+            max: starMax.map(String.init)
+        ) {
+            filters.append(LeafFilter(type: "stars", value: val))
+        }
+        if let color {
+            filters.append(LeafFilter(type: "color", value: color))
+        }
+        if let hasRating {
+            filters.append(LeafFilter(type: "has_rating", value: hasRating ? "yes" : "no"))
+        }
+        if let hasColor {
+            filters.append(LeafFilter(type: "has_color", value: hasColor ? "yes" : "no"))
+        }
+        if let tag {
+            filters.append(LeafFilter(type: "tag", value: tag))
+        }
+        if let val = composeDate(from: dateFrom, to: dateTo) {
+            filters.append(LeafFilter(type: "date", value: val))
+        }
+
+        return filters
+    }
+
+    /// Build URL query items for the unified /v1/query endpoint.
+    public func queryItems(
+        libraryId: String? = nil,
+        pathPrefix: String? = nil,
+        searchQuery: String? = nil,
+        after: String? = nil,
+        limit: Int? = nil
+    ) -> [URLQueryItem] {
+        filtersToQueryItems(
+            toLeafFilters(libraryId: libraryId, pathPrefix: pathPrefix, searchQuery: searchQuery),
+            sort: sortField,
+            direction: sortDirection,
+            after: after,
+            limit: limit
+        )
+    }
 }

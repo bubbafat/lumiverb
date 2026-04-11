@@ -78,6 +78,14 @@ public actor APIClient {
         try await request("GET", path: path, query: query)
     }
 
+    /// GET with explicit URLQueryItem array (supports repeated keys like f=...).
+    public func get<T: Decodable>(
+        _ path: String,
+        queryItems: [URLQueryItem]
+    ) async throws -> T {
+        try await requestWithQueryItems("GET", path: path, queryItems: queryItems)
+    }
+
     public func post<T: Decodable>(
         _ path: String,
         body: (any Encodable)? = nil
@@ -422,6 +430,72 @@ public actor APIClient {
         } catch {
             throw APIError.decodingError(error.localizedDescription)
         }
+    }
+
+    /// Like `request` but accepts [URLQueryItem] to support repeated keys (e.g. f=...).
+    private func requestWithQueryItems<T: Decodable>(
+        _ method: String,
+        path: String,
+        queryItems: [URLQueryItem],
+        authenticated: Bool = true
+    ) async throws -> T {
+        if authenticated && accessToken == nil {
+            throw APIError.noToken
+        }
+
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent(path),
+            resolvingAgainstBaseURL: false
+        )!
+        if !queryItems.isEmpty {
+            components.queryItems = queryItems
+        }
+
+        var urlRequest = URLRequest(url: components.url!)
+        urlRequest.httpMethod = method
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if authenticated, let token = accessToken {
+            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: urlRequest)
+        } catch {
+            throw APIError.networkError(error.localizedDescription)
+        }
+
+        let http = response as! HTTPURLResponse
+
+        if http.statusCode == 401 {
+            if let refreshHandler, await refreshHandler() {
+                return try await requestWithQueryItems(
+                    method, path: path, queryItems: queryItems,
+                    authenticated: true
+                )
+            }
+            throw APIError.unauthorized(unauthorizedMessage(from: data))
+        }
+
+        if http.statusCode >= 400 {
+            if let envelope = try? decoder.decode(ErrorEnvelope.self, from: data) {
+                throw APIError.serverError(
+                    statusCode: http.statusCode,
+                    message: envelope.error.message
+                )
+            }
+            let body = String(data: data, encoding: .utf8) ?? "Unknown error"
+            throw APIError.serverError(statusCode: http.statusCode, message: body)
+        }
+
+        if data.isEmpty || http.statusCode == 204 {
+            if let empty = EmptyResponse() as? T {
+                return empty
+            }
+        }
+
+        return try decoder.decode(T.self, from: data)
     }
 
     /// Like `request` but accepts pre-serialized JSON `Data` instead of

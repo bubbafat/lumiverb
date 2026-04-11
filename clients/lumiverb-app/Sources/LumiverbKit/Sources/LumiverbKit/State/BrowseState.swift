@@ -462,36 +462,27 @@ public class BrowseState: ObservableObject {
         error = nil
 
         do {
-            var query = filters.queryParams
-            query["library_id"] = libraryId
-            query["limit"] = "100"
-            if let cursor = nextCursor {
-                query["after"] = cursor
-            }
-            if let path = selectedPath {
-                query["path_prefix"] = path
-            }
+            let items = filters.queryItems(
+                libraryId: libraryId,
+                pathPrefix: selectedPath,
+                searchQuery: mode == .search ? searchQuery : nil,
+                after: nextCursor,
+                limit: 100
+            )
 
             // First page of a library switch races against a 10s timeout
             // so the overlay can surface a sensible error instead of
             // sitting on URLSession's 60s default. Infinite-scroll pages
             // use the vanilla client call — no need to time those out.
-            let response: AssetPageResponse
+            let response: QueryResponse
             if isFirstPage {
-                // Capture `query` into an immutable local so the
-                // sendable-closure check is happy under Swift 6 strict
-                // concurrency. The closure originally captured `query`
-                // by reference (`var`), which became an error after the
-                // file moved into the LumiverbKit module (the package's
-                // strict-concurrency level is higher than the macOS
-                // app's was).
-                let queryForRequest = query
+                let queryForRequest = items
                 response = try await Self.loadWithTimeout(
                     seconds: firstPageTimeoutSeconds,
-                    operation: { try await client.get("/v1/assets/page", query: queryForRequest) }
+                    operation: { try await client.get("/v1/query", queryItems: queryForRequest) }
                 )
             } else {
-                response = try await client.get("/v1/assets/page", query: query)
+                response = try await client.get("/v1/query", queryItems: items)
             }
 
             // Between the await and here, the user may have switched
@@ -503,8 +494,9 @@ public class BrowseState: ObservableObject {
             // fast enough that cancellation loses the race.
             guard selectedLibraryId == libraryId else { return }
 
-            assets.append(contentsOf: response.items)
-            autoSelectNewAssets(response.items)
+            let pageItems = response.items.map { $0.toPageItem() }
+            assets.append(contentsOf: pageItems)
+            autoSelectNewAssets(pageItems)
             nextCursor = response.nextCursor
             hasMoreAssets = response.nextCursor != nil
 
@@ -631,40 +623,33 @@ public class BrowseState: ObservableObject {
             guard let cursor = nextCursor else { break }
             guard selectedLibraryId == libraryId else { break }
 
-            var query = filters.queryParams
-            query["library_id"] = libraryId
-            query["limit"] = "100"
-            query["after"] = cursor
-            if let path = selectedPath {
-                query["path_prefix"] = path
-            }
+            let items = filters.queryItems(
+                libraryId: libraryId,
+                pathPrefix: selectedPath,
+                searchQuery: mode == .search ? searchQuery : nil,
+                after: cursor,
+                limit: 100
+            )
 
             do {
-                let response: AssetPageResponse = try await client.get(
-                    "/v1/assets/page", query: query
+                let response: QueryResponse = try await client.get(
+                    "/v1/query", queryItems: items
                 )
                 guard selectedLibraryId == libraryId else { return }
 
+                let pageItems = response.items.map { $0.toPageItem() }
+
                 // Check if the first item of this page is still on the same date
-                guard let firstItem = response.items.first,
+                guard let firstItem = pageItems.first,
                       Self.dateKey(for: firstItem) == tailDate else {
                     // Different date — the previous group is complete.
-                    // Store the cursor so the next loadNextPage picks up here.
                     nextCursor = response.nextCursor
                     hasMoreAssets = response.nextCursor != nil
-                    // Append only assets matching the tail date
-                    let matching = response.items.prefix(while: { Self.dateKey(for: $0) == tailDate })
+                    let matching = pageItems.prefix(while: { Self.dateKey(for: $0) == tailDate })
                     assets.append(contentsOf: matching)
                     autoSelectNewAssets(Array(matching))
-                    // If we consumed some but not all, we need to re-fetch
-                    // from the original cursor next time (the unconsumed
-                    // items belong to the next date). Since keyset pagination
-                    // doesn't support "rewind", just keep the full page.
-                    if matching.count < response.items.count {
-                        // Append the rest too — they'll form the start of
-                        // the next date group. Better to have a complete
-                        // view than to drop items.
-                        let rest = Array(response.items.dropFirst(matching.count))
+                    if matching.count < pageItems.count {
+                        let rest = Array(pageItems.dropFirst(matching.count))
                         assets.append(contentsOf: rest)
                         autoSelectNewAssets(rest)
                     }
@@ -672,8 +657,8 @@ public class BrowseState: ObservableObject {
                 }
 
                 // Entire page is still the same date — append and continue
-                assets.append(contentsOf: response.items)
-                autoSelectNewAssets(response.items)
+                assets.append(contentsOf: pageItems)
+                autoSelectNewAssets(pageItems)
                 nextCursor = response.nextCursor
                 hasMoreAssets = response.nextCursor != nil
             } catch {
@@ -788,32 +773,49 @@ public class BrowseState: ObservableObject {
         error = nil
 
         do {
-            // Start from the active filters so the media-type picker /
-            // person filter / star rating / etc. all apply to search
-            // results. The server's `/v1/search` accepts a subset of
-            // these (`media_type`, `library_id`, `path_prefix`, `tag`,
-            // `date_from`, `date_to`, `favorite`, `star_min`,
-            // `star_max`, `color`, `has_rating`, `has_faces`,
-            // `person_id`); camera/exposure/lens/focal/GPS filters are
-            // silently ignored by the search endpoint until the server
-            // grows support, mirroring the same gap in the web UI.
-            // Unknown query params are ignored by FastAPI, so passing
-            // the full set is safe.
-            var params = filters.queryParams
-            params["q"] = query
-            params["limit"] = "100"
-            if let libraryId = selectedLibraryId {
-                params["library_id"] = libraryId
-            }
-            if let path = selectedPath {
-                params["path_prefix"] = path
-            }
-
-            let response: SearchResponse = try await client.get(
-                "/v1/search", query: params
+            // Use unified /v1/query with all filters + search query.
+            // The filter algebra sends ALL structured filters alongside
+            // the text search, eliminating the old search/browse gap.
+            let items = filters.queryItems(
+                libraryId: selectedLibraryId,
+                pathPrefix: selectedPath,
+                searchQuery: query,
+                limit: 500
             )
-            searchResults = response.hits
-            searchTotal = response.total
+
+            let response: QueryResponse = try await client.get(
+                "/v1/query", queryItems: items
+            )
+            // Convert QueryItem to SearchHit for compatibility with existing views
+            searchResults = response.items.map { item in
+                SearchHit(
+                    type: "image",
+                    assetId: item.assetId,
+                    libraryId: item.libraryId,
+                    libraryName: item.libraryName,
+                    relPath: item.relPath,
+                    thumbnailKey: item.thumbnailKey,
+                    proxyKey: item.proxyKey,
+                    description: item.searchContext?.snippet ?? "",
+                    tags: [],
+                    score: item.searchContext?.score ?? 0,
+                    source: item.searchContext?.hitType ?? "query",
+                    cameraMake: item.cameraMake,
+                    cameraModel: item.cameraModel,
+                    sceneId: nil,
+                    startMs: item.searchContext?.startMs,
+                    endMs: item.searchContext?.endMs,
+                    mediaType: item.mediaType,
+                    fileSize: item.fileSize,
+                    durationSec: item.durationSec,
+                    width: item.width,
+                    height: item.height,
+                    takenAt: item.takenAt,
+                    snippet: item.searchContext?.snippet,
+                    language: nil
+                )
+            }
+            searchTotal = response.totalEstimate ?? response.items.count
         } catch {
             self.error = "Search failed: \(error)"
         }
@@ -1072,21 +1074,22 @@ public class BrowseState: ObservableObject {
         var cursor: String?
 
         repeat {
-            var query: [String: String] = [
-                "library_id": libraryId,
-                "limit": "500",
-                "sort": "asset_id",
-                "dir": "asc",
-            ]
-            if let cursor { query["after"] = cursor }
-            if let pathPrefix { query["path_prefix"] = pathPrefix }
-            if let mediaType { query["media_type"] = mediaType }
+            var leafFilters = [LeafFilter(type: "library", value: libraryId)]
+            if let pathPrefix { leafFilters.append(LeafFilter(type: "path", value: pathPrefix)) }
+            if let mediaType { leafFilters.append(LeafFilter(type: "media", value: mediaType)) }
+            let items = filtersToQueryItems(
+                leafFilters,
+                sort: "asset_id",
+                direction: "asc",
+                after: cursor,
+                limit: 500
+            )
 
             do {
-                let response: AssetPageResponse = try await client.get(
-                    "/v1/assets/page", query: query
+                let response: QueryResponse = try await client.get(
+                    "/v1/query", queryItems: items
                 )
-                all.append(contentsOf: response.items)
+                all.append(contentsOf: response.items.map { $0.toPageItem() })
                 cursor = response.nextCursor
                 reEnrichTotal = all.count
             } catch {

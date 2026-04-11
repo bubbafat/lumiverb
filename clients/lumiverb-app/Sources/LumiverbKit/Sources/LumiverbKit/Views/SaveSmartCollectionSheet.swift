@@ -54,31 +54,16 @@ public struct SaveSmartCollectionSheet: View {
         isSaving = true
         errorMessage = nil
 
-        // Build the saved query from current browse state
-        var filterDict: [String: Any] = [:]
-        let params = browseState.filters.queryParams
-        for (key, value) in params {
-            // Skip sort defaults
-            if key == "sort" && value == "taken_at" { continue }
-            if key == "dir" && value == "desc" { continue }
-            // Convert numeric strings back to numbers
-            if let intVal = Int(value) {
-                filterDict[key] = intVal
-            } else if let doubleVal = Double(value), value.contains(".") {
-                filterDict[key] = doubleVal
-            } else if value == "true" {
-                filterDict[key] = true
-            } else if value == "false" {
-                filterDict[key] = false
-            } else {
-                filterDict[key] = value
-            }
-        }
-
-        let savedQuery = SavedQuery(
-            q: browseState.mode == .search ? browseState.searchQuery : nil,
-            filters: filterDict,
-            libraryId: browseState.selectedLibraryId
+        // Build the saved query from current filter state using filter algebra
+        let leafFilters = browseState.filters.toLeafFilters(
+            libraryId: browseState.selectedLibraryId,
+            pathPrefix: browseState.selectedPath,
+            searchQuery: browseState.mode == .search ? browseState.searchQuery : nil
+        )
+        let savedQuery = SavedQueryV2(
+            filters: leafFilters,
+            sort: browseState.filters.sortField,
+            direction: browseState.filters.sortDirection
         )
 
         let request = CreateCollectionRequest(

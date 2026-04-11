@@ -226,11 +226,11 @@ final class CollectionModelTests: XCTestCase {
     }
 
     func testCreateSmartCollectionRequestEncoding() throws {
-        let savedQuery = SavedQuery(
-            q: nil,
-            filters: ["camera_make": "Canon", "star_min": 3],
-            libraryId: "lib_1"
-        )
+        let savedQuery = SavedQueryV2(filters: [
+            LeafFilter(type: "camera_make", value: "Canon"),
+            LeafFilter(type: "stars", value: "3+"),
+            LeafFilter(type: "library", value: "lib_1"),
+        ])
         let req = CreateCollectionRequest(
             name: "Canon Favorites",
             type: .smart,
@@ -246,13 +246,13 @@ final class CollectionModelTests: XCTestCase {
         XCTAssertNotNil(dict["saved_query"])
     }
 
-    func testSmartCollectionSavedQueryEncodesFilterKeysCorrectly() throws {
-        // Simulates what SaveSmartCollectionSheet builds from BrowseFilter.queryParams
-        let savedQuery = SavedQuery(
-            q: nil,
-            filters: ["camera_make": "Canon", "star_min": 3, "favorite": true],
-            libraryId: "lib_1"
-        )
+    func testSmartCollectionSavedQueryEncodesFilterAlgebra() throws {
+        let savedQuery = SavedQueryV2(filters: [
+            LeafFilter(type: "camera_make", value: "Canon"),
+            LeafFilter(type: "stars", value: "3+"),
+            LeafFilter(type: "favorite", value: "yes"),
+            LeafFilter(type: "library", value: "lib_1"),
+        ], sort: "taken_at", direction: "desc")
         let req = CreateCollectionRequest(
             name: "Test",
             type: .smart,
@@ -264,57 +264,42 @@ final class CollectionModelTests: XCTestCase {
         let data = try encoder.encode(req)
         let dict = try JSONSerialization.jsonObject(with: data) as! [String: Any]
 
-        // Verify the saved_query structure matches what the server expects
         let sq = dict["saved_query"] as! [String: Any]
-        let filters = sq["filters"] as! [String: Any]
+        let filters = sq["filters"] as! [[String: String]]
 
-        // Filter keys must be snake_case (matching Python BrowseFilters field names)
-        XCTAssertEqual(filters["camera_make"] as? String, "Canon", "camera_make key must survive encoding")
-        XCTAssertEqual(filters["star_min"] as? Int, 3, "star_min must be an Int, not String")
-        XCTAssertEqual(filters["favorite"] as? Bool, true, "favorite must be a Bool, not String")
-
-        // library_id must be at top level of saved_query, not inside filters
-        XCTAssertEqual(sq["library_id"] as? String, "lib_1")
-
-        // convertToSnakeCase must NOT mangle the filter dict keys
-        // (e.g. "camera_make" should not become "camera_make" -> "camera_make" is fine,
-        //  but "cameraMake" would become "camera_make" — we need to verify keys stay as-is)
-        XCTAssertNil(filters["cameraMake"], "camelCase keys must not appear")
+        // Verify filter algebra format: [{type: "camera_make", value: "Canon"}, ...]
+        XCTAssertEqual(filters.count, 4)
+        let types = filters.map { $0["type"]! }
+        XCTAssertTrue(types.contains("camera_make"))
+        XCTAssertTrue(types.contains("stars"))
+        XCTAssertTrue(types.contains("favorite"))
+        XCTAssertTrue(types.contains("library"))
     }
 
-    func testSmartCollectionQueryParamsToFilters() throws {
-        // Simulates the exact flow from SaveSmartCollectionSheet:
-        // BrowseFilter.queryParams -> [String: String] -> convert to typed values -> SavedQuery
+    func testBrowseFilterToLeafFilters() throws {
+        // Simulates the flow from SaveSmartCollectionSheet:
+        // BrowseFilter -> toLeafFilters() -> SavedQueryV2
         var browseFilter = BrowseFilter()
         browseFilter.cameraMake = "Canon"
         browseFilter.starMin = 3
         browseFilter.favorite = true
 
-        let params = browseFilter.queryParams  // [String: String]
+        let leafFilters = browseFilter.toLeafFilters(libraryId: "lib_1")
 
-        // The sheet converts string values to typed values
-        var filterDict: [String: Any] = [:]
-        for (key, value) in params {
-            if key == "sort" && value == "taken_at" { continue }
-            if key == "dir" && value == "desc" { continue }
-            if let intVal = Int(value) {
-                filterDict[key] = intVal
-            } else if value == "true" {
-                filterDict[key] = true
-            } else if value == "false" {
-                filterDict[key] = false
-            } else {
-                filterDict[key] = value
-            }
-        }
+        // Verify filter types
+        let types = Set(leafFilters.map { $0.type })
+        XCTAssertTrue(types.contains("camera_make"))
+        XCTAssertTrue(types.contains("stars"))
+        XCTAssertTrue(types.contains("favorite"))
+        XCTAssertTrue(types.contains("library"))
 
-        // Verify the keys are snake_case
-        XCTAssertEqual(filterDict["camera_make"] as? String, "Canon")
-        XCTAssertEqual(filterDict["star_min"] as? Int, 3)
-        XCTAssertEqual(filterDict["favorite"] as? Bool, true)
+        // Verify values
+        XCTAssertEqual(leafFilters.first(where: { $0.type == "camera_make" })?.value, "Canon")
+        XCTAssertEqual(leafFilters.first(where: { $0.type == "stars" })?.value, "3+")
+        XCTAssertEqual(leafFilters.first(where: { $0.type == "favorite" })?.value, "yes")
 
-        // Build SavedQuery and encode
-        let sq = SavedQuery(q: nil, filters: filterDict, libraryId: "lib_1")
+        // Build SavedQueryV2 and encode
+        let sq = SavedQueryV2(filters: leafFilters, sort: "taken_at", direction: "desc")
         let req = CreateCollectionRequest(name: "Test", type: .smart, savedQuery: sq)
 
         let encoder = JSONEncoder()
@@ -322,12 +307,11 @@ final class CollectionModelTests: XCTestCase {
         let data = try encoder.encode(req)
         let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
         let savedQuery = json["saved_query"] as! [String: Any]
-        let filters = savedQuery["filters"] as! [String: Any]
+        let filters = savedQuery["filters"] as! [[String: String]]
 
-        // The server's BrowseFilters.from_json() matches on these exact keys
-        XCTAssertEqual(filters["camera_make"] as? String, "Canon")
-        XCTAssertEqual(filters["star_min"] as? Int, 3)
-        XCTAssertEqual(filters["favorite"] as? Bool, true)
+        XCTAssertTrue(filters.contains(where: { $0["type"] == "camera_make" && $0["value"] == "Canon" }))
+        XCTAssertTrue(filters.contains(where: { $0["type"] == "stars" && $0["value"] == "3+" }))
+        XCTAssertTrue(filters.contains(where: { $0["type"] == "favorite" && $0["value"] == "yes" }))
     }
 }
 
