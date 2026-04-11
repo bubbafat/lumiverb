@@ -26,7 +26,7 @@ import { DrawerOverlay } from "../components/DrawerOverlay";
 import { DirectoryTree } from "../components/DirectoryTree";
 import type { AssetPageItem, AssetRating, FacetsResponse, RatingColor } from "../api/types";
 import { HeartButton, StarPicker, ColorPicker } from "../components/RatingControls";
-import { buildSavedQuery, composeDate } from "../lib/queryFilter";
+import { buildSavedQuery, composeDate, composeNear } from "../lib/queryFilter";
 import type { LeafFilter } from "../lib/queryFilter";
 import { useScrollContainer } from "../context/ScrollContainerContext";
 import { groupAssetsByDate } from "../lib/groupByDate";
@@ -864,8 +864,8 @@ export default function BrowsePage() {
           onClose={handleLightboxClose}
           onNavigate={handleLightboxNavigate}
           onTagClick={(tag) => {
-            setParam("tag", tag);
             setLightboxAsset(null);
+            handleSetFilter("tag", tag);
           }}
           onPathClick={(path) => {
             setLightboxAsset(null);
@@ -883,23 +883,28 @@ export default function BrowsePage() {
           }}
           onFilterClick={(params) => {
             setLightboxAsset(null);
-            setSearchParams((prev) => {
-              const next = new URLSearchParams(prev);
-              for (const [k, v] of Object.entries(params)) {
-                next.set(k, v);
-              }
-              return next;
-            });
+            if (params.camera_make) handleSetFilter("camera_make", params.camera_make);
+            if (params.camera_model) handleSetFilter("camera_model", params.camera_model);
+            if (params.lens_model) handleSetFilter("lens", params.lens_model);
+            if (params.iso_min || params.iso_max) {
+              const v = params.iso_min === params.iso_max ? params.iso_min : `${params.iso_min ?? ""}-${params.iso_max ?? ""}`;
+              handleSetFilter("iso", v);
+            }
+            if (params.aperture_min || params.aperture_max) {
+              const v = params.aperture_min === params.aperture_max ? params.aperture_min : `${params.aperture_min ?? ""}-${params.aperture_max ?? ""}`;
+              handleSetFilter("aperture", v);
+            }
+            if (params.exposure_min_us || params.exposure_max_us) {
+              const v = params.exposure_min_us === params.exposure_max_us ? params.exposure_min_us : `${params.exposure_min_us ?? ""}-${params.exposure_max_us ?? ""}`;
+              handleSetFilter("exposure", v);
+            }
+            if (params.has_exposure) handleSetFilter("has_exposure", params.has_exposure === "true" ? "yes" : "no");
+            if (params.has_gps) handleSetFilter("has_gps", params.has_gps === "true" ? "yes" : "no");
+            if (params.media_type) handleSetFilter("media", params.media_type);
           }}
           onNearbyClick={(lat, lon) => {
             setLightboxAsset(null);
-            setSearchParams((prev) => {
-              const next = new URLSearchParams(prev);
-              next.set("near_lat", String(lat));
-              next.set("near_lon", String(lon));
-              next.set("near_radius_km", "1");
-              return next;
-            });
+            handleSetFilter("near", composeNear(String(lat), String(lon), "1"));
           }}
         />
       )}

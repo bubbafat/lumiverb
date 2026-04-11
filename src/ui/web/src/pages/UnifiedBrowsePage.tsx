@@ -653,12 +653,35 @@ export default function UnifiedBrowsePage() {
           onAddToCollection={(assetId) => setPickerAssetIds([assetId])}
           rating={lightboxAsset ? ratingsMap[lightboxAsset.asset_id] : undefined}
           onRatingChange={handleRatingChange}
+          onTagClick={(tag) => {
+            setLightboxAsset(null);
+            handleSetFilter("tag", tag);
+          }}
           onFilterClick={(params) => {
             setLightboxAsset(null);
-            // Translate old-style lightbox filter params to filter algebra
-            for (const [k, v] of Object.entries(params)) {
-              handleSetFilter(k, v);
+            // Translate old-style lightbox params to filter algebra types
+            if (params.camera_make) handleSetFilter("camera_make", params.camera_make);
+            if (params.camera_model) handleSetFilter("camera_model", params.camera_model);
+            if (params.lens_model) handleSetFilter("lens", params.lens_model);
+            if (params.iso_min || params.iso_max) {
+              const v = params.iso_min === params.iso_max ? params.iso_min : `${params.iso_min ?? ""}-${params.iso_max ?? ""}`;
+              handleSetFilter("iso", v);
             }
+            if (params.aperture_min || params.aperture_max) {
+              const v = params.aperture_min === params.aperture_max ? params.aperture_min : `${params.aperture_min ?? ""}-${params.aperture_max ?? ""}`;
+              handleSetFilter("aperture", v);
+            }
+            if (params.exposure_min_us || params.exposure_max_us) {
+              const v = params.exposure_min_us === params.exposure_max_us ? params.exposure_min_us : `${params.exposure_min_us ?? ""}-${params.exposure_max_us ?? ""}`;
+              handleSetFilter("exposure", v);
+            }
+            if (params.focal_length_min || params.focal_length_max) {
+              const v = params.focal_length_min === params.focal_length_max ? params.focal_length_min : `${params.focal_length_min ?? ""}-${params.focal_length_max ?? ""}`;
+              handleSetFilter("focal_length", v);
+            }
+            if (params.has_exposure) handleSetFilter("has_exposure", params.has_exposure === "true" ? "yes" : "no");
+            if (params.has_gps) handleSetFilter("has_gps", params.has_gps === "true" ? "yes" : "no");
+            if (params.media_type) handleSetFilter("media", params.media_type);
           }}
           onNearbyClick={(lat, lon) => {
             setLightboxAsset(null);
