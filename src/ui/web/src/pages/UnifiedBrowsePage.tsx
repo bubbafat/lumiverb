@@ -26,7 +26,7 @@ import { useSelection } from "../lib/useSelection";
 import { buildVirtualRows, buildFixedGridRows } from "../lib/virtualRows";
 import { useLocalStorage } from "../lib/useLocalStorage";
 import type { VirtualRowKind } from "../lib/virtualRows";
-import { paramsToFilters, setFilter, buildSavedQuery, composeDate, composeNear } from "../lib/queryFilter";
+import { paramsToFilters, buildSavedQuery, composeDate, composeNear } from "../lib/queryFilter";
 
 const PAGE_SIZE = 100;
 const ROW_GAP = 4;
@@ -65,15 +65,19 @@ export default function UnifiedBrowsePage() {
   const handleSetFilter = useCallback(
     (type: string, value: string | null) => {
       setSearchParams((prev) => {
-        const current = paramsToFilters(prev);
-        const updated = setFilter(current.filters, type, value);
-        const next = new URLSearchParams();
-        for (const f of updated) next.append("f", `${f.type}:${f.value}`);
-        // Preserve sort/dir
-        const s = prev.get("sort");
-        if (s) next.set("sort", s);
-        const d = prev.get("dir");
-        if (d) next.set("dir", d);
+        const next = new URLSearchParams(prev);
+        // Remove all existing f= params for this type
+        const existing = next.getAll("f");
+        next.delete("f");
+        for (const raw of existing) {
+          const colon = raw.indexOf(":");
+          if (colon > 0 && raw.slice(0, colon) === type) continue; // skip old value for this type
+          next.append("f", raw);
+        }
+        // Add the new value if non-null
+        if (value != null && value !== "") {
+          next.append("f", `${type}:${value}`);
+        }
         return next;
       });
     },

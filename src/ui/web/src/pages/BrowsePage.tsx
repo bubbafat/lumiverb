@@ -26,7 +26,7 @@ import { DrawerOverlay } from "../components/DrawerOverlay";
 import { DirectoryTree } from "../components/DirectoryTree";
 import type { AssetPageItem, AssetRating, FacetsResponse, RatingColor } from "../api/types";
 import { HeartButton, StarPicker, ColorPicker } from "../components/RatingControls";
-import { paramsToFilters, setFilter, buildSavedQuery, composeDate } from "../lib/queryFilter";
+import { paramsToFilters, buildSavedQuery, composeDate } from "../lib/queryFilter";
 import type { LeafFilter } from "../lib/queryFilter";
 import { useScrollContainer } from "../context/ScrollContainerContext";
 import { groupAssetsByDate } from "../lib/groupByDate";
@@ -89,17 +89,18 @@ export default function BrowsePage() {
   const handleSetFilter = useCallback(
     (type: string, value: string | null) => {
       setSearchParams((prev) => {
-        const current = paramsToFilters(prev);
-        const updated = setFilter(current.filters, type, value);
-        const next = new URLSearchParams();
-        for (const f of updated) next.append("f", `${f.type}:${f.value}`);
-        const s = prev.get("sort");
-        if (s) next.set("sort", s);
-        const d = prev.get("dir");
-        if (d) next.set("dir", d);
-        // Preserve path for directory tree
-        const p = prev.get("path");
-        if (p) next.set("path", p);
+        const next = new URLSearchParams(prev);
+        // Remove all existing f= params for this type
+        const existing = next.getAll("f");
+        next.delete("f");
+        for (const raw of existing) {
+          const colon = raw.indexOf(":");
+          if (colon > 0 && raw.slice(0, colon) === type) continue;
+          next.append("f", raw);
+        }
+        if (value != null && value !== "") {
+          next.append("f", `${type}:${value}`);
+        }
         return next;
       });
     },

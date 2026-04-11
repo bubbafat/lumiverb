@@ -109,6 +109,9 @@ def _run_quickwit_search(
     scores: dict[str, float] = {}
     contexts: dict[str, SearchContext] = {}
 
+    from src.server.config import get_settings
+    settings = get_settings()
+
     try:
         from src.server.search.quickwit_client import QuickwitClient
         qw = QuickwitClient()
@@ -194,6 +197,14 @@ def _run_quickwit_search(
                         start_ms=ctx.start_ms,
                         end_ms=ctx.end_ms,
                     )
+
+            # If Quickwit returned results, use them
+            if scores:
+                return scores, contexts, "quickwit"
+
+            # Quickwit returned empty — fall back to postgres if configured
+            if settings.quickwit_fallback_to_postgres:
+                return scores, contexts, "postgres_fallback"
 
             return scores, contexts, "quickwit"
 
