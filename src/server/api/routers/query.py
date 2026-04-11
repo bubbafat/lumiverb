@@ -282,9 +282,10 @@ def unified_query(
         )
 
         if source == "postgres_fallback":
-            combined_query = " AND ".join(f"({st.q})" for st in search_terms if st.q)
+            # Join raw terms for ILIKE — no parentheses (those are Quickwit syntax)
+            pg_query = " ".join(st.q for st in search_terms if st.q)
             scores, contexts = _run_postgres_fallback(
-                session, combined_query, library_ids, limit=MAX_CANDIDATE_IDS,
+                session, pg_query, library_ids, limit=MAX_CANDIDATE_IDS,
             )
 
         if not scores:

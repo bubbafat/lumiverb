@@ -70,9 +70,9 @@ def get_facets(
                 tenant_id, spec.search_terms, library_ids, limit=MAX_CANDIDATE_IDS,
             )
             if source == "postgres_fallback":
-                combined_query = " AND ".join(f"({st.q})" for st in spec.search_terms if st.q)
+                pg_query = " ".join(st.q for st in spec.search_terms if st.q)
                 scores, contexts = _run_postgres_fallback(
-                    session, combined_query, library_ids, limit=MAX_CANDIDATE_IDS,
+                    session, pg_query, library_ids, limit=MAX_CANDIDATE_IDS,
                 )
             if not scores:
                 return _empty_facets()
