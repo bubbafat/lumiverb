@@ -37,7 +37,7 @@ final class SearchFilterStackingTests: XCTestCase {
 
     // MARK: - performSearch clears filters
 
-    func testPerformSearchClearsFilters() async {
+    func testPerformSearchPreservesFilters() async {
         let state = makeBrowseState()
         state.filters.cameraMake = "Canon"
         state.filters.isoMin = 800
@@ -45,16 +45,15 @@ final class SearchFilterStackingTests: XCTestCase {
         state.filters.tag = "sunset"
         state.selectedPath = "2024/Travel"
 
-        // performSearch requires a non-empty query and a client,
-        // but we can verify the clearing happens even without a client
-        // (it will return early after clearing).
         state.searchQuery = "Brian"
         await state.performSearch()
 
-        XCTAssertNil(state.filters.cameraMake)
-        XCTAssertNil(state.filters.isoMin)
-        XCTAssertNil(state.filters.tag)
-        XCTAssertNil(state.selectedPath)
+        // Filters stack — performSearch does NOT clear them.
+        // Only the chiclet bar's "Clear all" clears filters.
+        XCTAssertEqual(state.filters.cameraMake, "Canon")
+        XCTAssertEqual(state.filters.isoMin, 800)
+        XCTAssertEqual(state.filters.tag, "sunset")
+        XCTAssertEqual(state.selectedPath, "2024/Travel")
     }
 
     // MARK: - applyMetadataFilter stacks
@@ -206,6 +205,70 @@ final class SearchFilterStackingTests: XCTestCase {
         // Others preserved
         XCTAssertEqual(filter.cameraMake, "Canon")
         XCTAssertEqual(filter.tag, "sunset")
+    }
+
+    // MARK: - Person filter + tag stacking (exact user scenario)
+
+    func testPersonFilterThenTagPreservesPerson() {
+        let state = makeBrowseState()
+
+        // Step 1: User picks Susan from person dropdown
+        let personJSON = """
+        {"person_id":"person_1","display_name":"Susan","face_count":50,"representative_face_id":"face_1","representative_asset_id":null,"confirmation_count":0}
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let person = try! decoder.decode(PersonItem.self, from: personJSON)
+        state.filterByPerson(person)
+
+        XCTAssertEqual(state.mode, .library)
+        XCTAssertEqual(state.filters.personId, "person_1")
+        XCTAssertEqual(state.filters.personDisplayName, "Susan")
+
+        // Step 2: User clicks an image (lightbox opens)
+        state.selectedAssetId = "asset_1"
+
+        // Step 3: User clicks "sunglasses" tag in lightbox
+        state.applyMetadataFilter { f in
+            f.tag = "sunglasses"
+        }
+
+        // Person filter must be preserved
+        XCTAssertEqual(state.filters.personId, "person_1", "Person filter lost after tag click")
+        XCTAssertEqual(state.filters.personDisplayName, "Susan", "Person display name lost after tag click")
+        // Tag must be added
+        XCTAssertEqual(state.filters.tag, "sunglasses", "Tag not set")
+        // Lightbox must be closed
+        XCTAssertNil(state.selectedAssetId)
+        // Must stay in library mode (person filter is a browse filter)
+        XCTAssertEqual(state.mode, .library)
+    }
+
+    func testPersonFilterChicletExists() {
+        var filter = BrowseFilter()
+        filter.personId = "person_1"
+        filter.personDisplayName = "Susan"
+
+        let active = filter.activeFilters
+        XCTAssertTrue(active.contains(where: { $0.id == "person" }), "Person chiclet missing")
+        XCTAssertEqual(active.first(where: { $0.id == "person" })?.label, "Susan")
+    }
+
+    // MARK: - Person suggestion + onSubmit race
+
+    func testPerformSearchNeverClearsFilters() async {
+        let state = makeBrowseState()
+        state.filters.personId = "person_1"
+        state.filters.personDisplayName = "Susan"
+        state.filters.isoMin = 400
+
+        // With or without a query, filters are preserved
+        state.searchQuery = "Brian"
+        await state.performSearch()
+
+        XCTAssertEqual(state.filters.personId, "person_1")
+        XCTAssertEqual(state.filters.personDisplayName, "Susan")
+        XCTAssertEqual(state.filters.isoMin, 400)
     }
 
     // MARK: - Lightbox close preserves filters

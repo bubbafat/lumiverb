@@ -738,10 +738,6 @@ public class BrowseState: ObservableObject {
     /// `filters` didSet.
     public func applyFilterFromLightbox(_ filter: BrowseFilter) {
         closeLightbox()
-        // Stay in the current mode. If the user is searching, the
-        // filter change triggers executeSearch() via filters.didSet.
-        // If browsing, it triggers reloadAssets(). Switching to
-        // .library here would lose the search query.
         filters = filter
     }
 
@@ -771,10 +767,10 @@ public class BrowseState: ObservableObject {
 
     // MARK: - Search
 
-    /// User-initiated search (from search bar). Clears all filters.
+    /// User-initiated search (from search bar). Filters are NOT cleared
+    /// — they stack. The user clears filters explicitly via the chiclet
+    /// bar's "Clear all" button.
     public func performSearch() async {
-        filters.clearAll()
-        selectedPath = nil
         await executeSearch()
     }
 
