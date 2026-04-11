@@ -85,6 +85,9 @@ public struct BrowseFilter: Equatable, Sendable {
             let label = "Exposure"
             result.append(ActiveFilter(id: "exposure", label: label) { f in f.exposureMinUs = nil; f.exposureMaxUs = nil })
         }
+        if hasExposure != nil {
+            result.append(ActiveFilter(id: "hasExposure", label: hasExposure == true ? "Has exposure" : "No exposure") { f in f.hasExposure = nil })
+        }
         if let apertureMin {
             let label = apertureMin == apertureMax ? String(format: "f/%.1f", apertureMin) : String(format: "f/%.1f–%.1f", apertureMin, apertureMax ?? apertureMin)
             result.append(ActiveFilter(id: "aperture", label: label) { f in f.apertureMin = nil; f.apertureMax = nil })

@@ -11,11 +11,22 @@ public struct FilterChicletBar: View {
     }
 
     public var body: some View {
-        let chiclets = browseState.filters.activeFilters
-        if !chiclets.isEmpty {
+        let filterChiclets = browseState.filters.activeFilters
+        let hasPath = browseState.selectedPath != nil
+        let totalCount = filterChiclets.count + (hasPath ? 1 : 0)
+
+        if totalCount > 0 {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    ForEach(chiclets) { chiclet in
+                    // Path filter (lives on BrowseState, not BrowseFilter)
+                    if let path = browseState.selectedPath {
+                        FilterChiclet(label: "📁 \(path)") {
+                            browseState.selectedPath = nil
+                        }
+                    }
+
+                    // BrowseFilter chiclets
+                    ForEach(filterChiclets) { chiclet in
                         FilterChiclet(label: chiclet.label) {
                             var f = browseState.filters
                             chiclet.clear(&f)
@@ -23,9 +34,10 @@ public struct FilterChicletBar: View {
                         }
                     }
 
-                    if chiclets.count > 1 {
+                    if totalCount > 1 {
                         Button("Clear all") {
                             browseState.filters.clearAll()
+                            browseState.selectedPath = nil
                         }
                         .font(.caption)
                         .foregroundColor(.secondary)
