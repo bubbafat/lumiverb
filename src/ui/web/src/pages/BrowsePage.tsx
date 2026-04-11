@@ -63,12 +63,21 @@ export default function BrowsePage() {
   const [zoomLevel, setZoomLevel] = useLocalStorage("lv_grid_zoom", 2);
 
   // --- Filter algebra: read filters from URL ---
-  // Stabilize searchParams identity by keying on the string representation
-  const searchString = searchParams.toString();
-  const { filters: urlFilters, sort: browseSort, direction: browseDir } = useMemo(
-    () => paramsToFilters(new URLSearchParams(searchString)),
-    [searchString],
-  );
+  // Read raw values from searchParams — primitives are stable across renders
+  const fParams = searchParams.getAll("f");
+  const fKey = fParams.join("\0");  // stable string for memo dep
+  const sortParam = searchParams.get("sort");
+  const dirParam = searchParams.get("dir");
+  const { filters: urlFilters, sort: browseSort, direction: browseDir } = useMemo(() => {
+    const filters = fParams.map((raw) => {
+      const colon = raw.indexOf(":");
+      if (colon <= 0) return null;
+      return { type: raw.slice(0, colon), value: raw.slice(colon + 1) };
+    }).filter((f): f is { type: string; value: string } => f !== null);
+    const sort = sortParam ?? "taken_at";
+    const direction: "asc" | "desc" = dirParam === "asc" ? "asc" : "desc";
+    return { filters, sort, direction };
+  }, [fKey, sortParam, dirParam]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Add implicit library scope filter
   const filters: LeafFilter[] = useMemo(() => {

@@ -57,12 +57,21 @@ export default function UnifiedBrowsePage() {
   const [savingView, setSavingView] = useState(false);
 
   // --- Filter algebra: read filters from URL ---
-  // Stabilize searchParams identity by keying on the string representation
-  const searchString = searchParams.toString();
-  const { filters, sort: browseSort, direction: browseDir } = useMemo(
-    () => paramsToFilters(new URLSearchParams(searchString)),
-    [searchString],
-  );
+  // Read raw values — primitives are stable across renders
+  const fParams = searchParams.getAll("f");
+  const fKey = fParams.join("\0");
+  const sortParam = searchParams.get("sort");
+  const dirParam = searchParams.get("dir");
+  const { filters, sort: browseSort, direction: browseDir } = useMemo(() => {
+    const parsed = fParams.map((raw) => {
+      const colon = raw.indexOf(":");
+      if (colon <= 0) return null;
+      return { type: raw.slice(0, colon), value: raw.slice(colon + 1) };
+    }).filter((f): f is { type: string; value: string } => f !== null);
+    const sort = sortParam ?? "taken_at";
+    const direction: "asc" | "desc" = dirParam === "asc" ? "asc" : "desc";
+    return { filters: parsed, sort, direction };
+  }, [fKey, sortParam, dirParam]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Ref to avoid setSearchParams identity in useCallback deps
   const setSearchParamsRef = useRef(setSearchParams);

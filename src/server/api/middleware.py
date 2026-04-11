@@ -41,7 +41,7 @@ def _error_response(status_code: int, code: str, message: str, details: dict | N
 
 # Routes where an unauthenticated GET may resolve the tenant from a library_id.
 _PUBLIC_ELIGIBLE_PATH = re.compile(
-    r"^/v1/(libraries/[^/]+|assets/[^/]+|search|similar)"
+    r"^/v1/(libraries/[^/]+|assets/[^/]+|search|similar|query)"
 )
 
 
@@ -51,6 +51,14 @@ def _extract_library_id_from_path(path: str) -> str | None:
     # parts: ['', 'v1', 'libraries', '{library_id}', ...]
     if len(parts) >= 4 and parts[2] == "libraries":
         return parts[3] or None
+    return None
+
+
+def _extract_library_from_f_params(query_params) -> str | None:
+    """Extract library_id from filter algebra ?f=library:xxx params."""
+    for raw in query_params.getlist("f"):
+        if raw.startswith("library:"):
+            return raw[8:] or None
     return None
 
 
@@ -134,6 +142,7 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
                 _extract_library_id_from_path(request.url.path)
                 or request.query_params.get("library_id")        # /search, /similar, /assets/page
                 or request.query_params.get("public_library_id") # /assets/{id}/...
+                or _extract_library_from_f_params(request.query_params)  # /query?f=library:xxx
             )
             if library_id:
                 with get_control_session() as session:

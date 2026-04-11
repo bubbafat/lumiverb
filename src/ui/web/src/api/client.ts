@@ -443,6 +443,7 @@ export interface QueryResponse {
 }
 
 /** Unified query using filter algebra: GET /v1/query?f=prefix:value&... */
+let _queryCount = 0;
 export async function queryAssets(
   filters: LeafFilter[],
   opts?: {
@@ -452,6 +453,7 @@ export async function queryAssets(
     limit?: number;
   },
 ): Promise<QueryResponse> {
+  _queryCount++;
   const params = new URLSearchParams();
   for (const f of filters) {
     params.append("f", `${f.type}:${f.value}`);
@@ -460,6 +462,10 @@ export async function queryAssets(
   if (opts?.dir) params.set("dir", opts.dir);
   if (opts?.after) params.set("after", opts.after);
   if (opts?.limit) params.set("limit", String(opts.limit));
+  console.warn(`[queryAssets #${_queryCount}] after=${opts?.after ?? "null"} key=${params.toString()}`);
+  if (_queryCount > 10) {
+    console.error(`[queryAssets] LOOP DETECTED — ${_queryCount} calls. Trace:`, new Error().stack);
+  }
   return apiFetch<QueryResponse>(`/query?${params}`);
 }
 
