@@ -2372,6 +2372,134 @@ class UnifiedBrowseRepository:
         return [assets_by_id[aid] for aid in asset_ids if aid in assets_by_id]
 
 
+    def query_page(
+        self,
+        *,
+        spec: "QuerySpec",
+        candidate_ids: list[str] | None = None,
+        candidate_scores: dict[str, float] | None = None,
+        rating_user_id: str | None = None,
+        after: str | None = None,
+        limit: int = 500,
+    ) -> list[Asset]:
+        """Keyset pagination using the QueryFilter algebra.
+
+        If candidate_ids is provided (from Quickwit text search), an additional
+        ``a.asset_id = ANY(:candidate_ids)`` filter is applied.
+        """
+        from src.server.models.query_filter import QuerySpec as _QS
+        import base64 as _b64
+
+        sort_col = spec.sort if spec.sort in self.SORTABLE_COLUMNS else "taken_at"
+        is_desc = spec.direction.lower() == "desc"
+        cmp_op = "<" if is_desc else ">"
+        order_dir = "DESC" if is_desc else "ASC"
+
+        conditions: list[str] = []
+        params: dict[str, object] = {"limit": limit}
+        counter = [0]
+
+        # --- Candidate set from text search ---
+        if candidate_ids is not None:
+            conditions.append("a.asset_id = ANY(:candidate_ids)")
+            params["candidate_ids"] = candidate_ids
+
+        # --- Composite cursor ---
+        if after is not None:
+            cursor_value = None
+            cursor_id = after
+            try:
+                decoded = json.loads(_b64.urlsafe_b64decode(after + "=="))
+                cursor_value = decoded["v"]
+                cursor_id = decoded["id"]
+            except Exception:
+                if sort_col != "asset_id":
+                    sort_col = "asset_id"
+
+            if sort_col == "asset_id":
+                conditions.append(f"a.asset_id {cmp_op} :cursor_id")
+                params["cursor_id"] = cursor_id
+            else:
+                conditions.append(f"""(
+                    CASE
+                        WHEN :cursor_value IS NULL THEN
+                            a.{sort_col} IS NOT NULL
+                            OR (a.{sort_col} IS NULL AND a.asset_id {cmp_op} :cursor_id)
+                        WHEN a.{sort_col} IS NULL THEN
+                            FALSE
+                        ELSE
+                            (a.{sort_col}, a.asset_id) {cmp_op} (:cursor_value, :cursor_id)
+                    END
+                )""")
+                params["cursor_value"] = cursor_value
+                params["cursor_id"] = cursor_id
+
+        # --- Apply structured filters from the QuerySpec tree ---
+        join_ratings = False
+        join_metadata = False
+
+        for leaf in spec.structured_filters:
+            sql_frag = leaf.to_sql(params, counter)
+            if sql_frag and sql_frag != "TRUE":
+                conditions.append(sql_frag)
+            if leaf.needs_rating_join:
+                join_ratings = True
+            if leaf.needs_metadata_join:
+                join_metadata = True
+
+        if join_ratings and rating_user_id:
+            params["rating_user_id"] = rating_user_id
+        else:
+            join_ratings = False
+
+        # --- Build query ---
+        where_sql = " AND ".join(conditions) if conditions else "TRUE"
+
+        lateral_join = ""
+        if join_metadata:
+            lateral_join = """
+            LEFT JOIN LATERAL (
+                SELECT data->'tags' AS tags
+                FROM asset_metadata
+                WHERE asset_id = a.asset_id
+                ORDER BY generated_at DESC
+                LIMIT 1
+            ) m ON TRUE
+            """
+
+        rating_join_sql = ""
+        if join_ratings:
+            rating_join_sql = """
+            LEFT JOIN asset_ratings r ON r.asset_id = a.asset_id AND r.user_id = :rating_user_id
+            """
+
+        if sort_col == "asset_id":
+            order_clause = f"a.asset_id {order_dir}"
+        else:
+            order_clause = f"a.{sort_col} {order_dir} NULLS LAST, a.asset_id {order_dir}"
+
+        id_sql = f"""
+            SELECT a.asset_id
+            FROM active_assets a
+            {lateral_join}
+            {rating_join_sql}
+            WHERE {where_sql}
+            ORDER BY {order_clause}
+            LIMIT :limit
+        """
+        result = self._session.execute(text(id_sql).bindparams(**params))
+        asset_ids = [row[0] for row in result.all()]
+        if not asset_ids:
+            return []
+        stmt = (
+            select(Asset)
+            .where(Asset.asset_id.in_(asset_ids))
+            .where(Asset.deleted_at.is_(None))
+        )
+        assets_by_id = {a.asset_id: a for a in self._session.exec(stmt).all()}
+        return [assets_by_id[aid] for aid in asset_ids if aid in assets_by_id]
+
+
 class SavedViewRepository:
     """CRUD for saved views (bookmarked filter presets)."""
 

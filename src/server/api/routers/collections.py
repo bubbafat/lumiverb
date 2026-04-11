@@ -119,19 +119,14 @@ def _collection_to_item(
 
     # Smart collections compute asset_count via live query
     if col_type == "smart" and col.saved_query and session is not None:
-        from src.server.models.browse_filters import BrowseFilters
+        from src.server.models.filter_registry import from_json
         from src.server.repository.tenant import UnifiedBrowseRepository
 
-        saved = col.saved_query
-        filters_data = saved.get("filters", {})
-        if "library_id" in saved:
-            filters_data["library_ids"] = [saved["library_id"]]
-        filters = BrowseFilters.from_json(filters_data)
+        spec = from_json(col.saved_query)
         browse_repo = UnifiedBrowseRepository(session)
-        # Use a large limit to get the count (no COUNT query on the browse repo yet)
-        live_assets = browse_repo.page(
-            filters=filters,
-            rating_user_id=user_id if filters.needs_rating_join else None,
+        live_assets = browse_repo.query_page(
+            spec=spec,
+            rating_user_id=user_id if spec.needs_rating_join else None,
             limit=10000,
         )
         count = len(live_assets)
@@ -388,6 +383,7 @@ def remove_assets_from_collection(
 @router.get("/{collection_id}/assets", response_model=CollectionAssetsResponse)
 def list_collection_assets(
     collection_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
     user_id: Annotated[str, Depends(get_current_user_id)],
@@ -404,21 +400,44 @@ def list_collection_assets(
         raise HTTPException(status_code=404, detail="Collection not found")
 
     if getattr(col, "type", "static") == "smart" and col.saved_query:
-        # Smart collection: execute saved query via UnifiedBrowseRepository
-        from src.server.models.browse_filters import BrowseFilters
+        # Smart collection: execute saved query via filter algebra + query_page
+        from src.server.models.filter_registry import from_json
+        from src.server.models.query_filter import LibraryScope
         from src.server.repository.tenant import UnifiedBrowseRepository
 
-        saved = col.saved_query
-        filters_data = saved.get("filters", {})
-        # Merge top-level scope fields into filters
-        if "library_id" in saved:
-            filters_data["library_ids"] = [saved["library_id"]]
-        filters = BrowseFilters.from_json(filters_data)
+        spec = from_json(col.saved_query)
+
+        # Candidate-set pattern for text search (SearchTerm filters)
+        candidate_ids: list[str] | None = None
+        candidate_scores: dict[str, float] | None = None
+        if spec.search_terms:
+            tenant_id = getattr(request.state, "tenant_id", None)
+            library_ids: list[str] | None = None
+            for leaf in spec.leaves:
+                if isinstance(leaf, LibraryScope):
+                    library_ids = list(leaf.library_ids)
+                    break
+            if tenant_id:
+                from src.server.api.routers.query import _run_quickwit_search, _run_postgres_fallback, MAX_CANDIDATE_IDS
+                scores, contexts, source = _run_quickwit_search(
+                    tenant_id, spec.search_terms, library_ids, limit=MAX_CANDIDATE_IDS,
+                )
+                if source == "postgres_fallback":
+                    combined_query = " AND ".join(f"({st.q})" for st in spec.search_terms if st.q)
+                    scores, contexts = _run_postgres_fallback(
+                        session, combined_query, library_ids, limit=MAX_CANDIDATE_IDS,
+                    )
+                if not scores:
+                    return CollectionAssetsResponse(items=[], next_cursor=None)
+                candidate_ids = list(scores.keys())
+                candidate_scores = scores
 
         browse_repo = UnifiedBrowseRepository(session)
-        assets = browse_repo.page(
-            filters=filters,
-            rating_user_id=user_id if filters.needs_rating_join else None,
+        assets = browse_repo.query_page(
+            spec=spec,
+            candidate_ids=candidate_ids,
+            candidate_scores=candidate_scores,
+            rating_user_id=user_id if spec.needs_rating_join else None,
             after=after,
             limit=limit,
         )

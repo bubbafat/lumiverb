@@ -47,6 +47,8 @@ from src.server.api.routers.similarity import router as similarity_router
 from src.server.api.routers.public_collections import router as public_collections_router
 from src.server.api.routers.ratings import router as ratings_router
 from src.server.api.routers.browse import router as browse_router
+from src.server.api.routers.query import router as query_router
+from src.server.api.routers.filters import router as filters_router
 from src.server.api.routers.views import router as views_router
 from src.server.api.routers.upkeep import router as upkeep_router
 from src.server.api.routers.people import router as people_router, faces_router
@@ -71,9 +73,11 @@ app.include_router(artifacts_router)
 app.include_router(ingest_router)
 app.include_router(ratings_router)
 app.include_router(browse_router)
+app.include_router(query_router)
 app.include_router(views_router)
 app.include_router(people_router)
 app.include_router(faces_router)
+app.include_router(filters_router)
 app.include_router(facets_router)
 app.include_router(assets.router)
 app.include_router(collections.router)

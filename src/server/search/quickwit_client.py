@@ -212,7 +212,7 @@ class QuickwitClient:
                 "camera_model": doc.get("camera_model"),
                 "description": doc.get("description", ""),
                 "tags": doc.get("tags", []),
-                "score": 0.0,
+                "score": hit.get("_score", 0.0),
                 "source": "quickwit",
             })
         return results
@@ -244,7 +244,7 @@ class QuickwitClient:
                 "duration_sec": doc.get("duration_sec"),
                 "description": doc.get("description", ""),
                 "tags": doc.get("tags", []),
-                "score": 0.0,
+                "score": hit.get("_score", 0.0),
                 "source": "quickwit_scenes",
             })
         return results
@@ -273,7 +273,7 @@ class QuickwitClient:
                 "end_ms": doc.get("end_ms"),
                 "text": doc.get("text", ""),
                 "language": doc.get("language", ""),
-                "score": 0.0,
+                "score": hit.get("_score", 0.0),
                 "source": "quickwit_transcripts",
             })
         return results
