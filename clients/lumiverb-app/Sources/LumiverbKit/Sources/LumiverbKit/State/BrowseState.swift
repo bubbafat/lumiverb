@@ -738,7 +738,10 @@ public class BrowseState: ObservableObject {
     /// `filters` didSet.
     public func applyFilterFromLightbox(_ filter: BrowseFilter) {
         closeLightbox()
-        mode = .library
+        // Stay in the current mode. If the user is searching, the
+        // filter change triggers executeSearch() via filters.didSet.
+        // If browsing, it triggers reloadAssets(). Switching to
+        // .library here would lose the search query.
         filters = filter
     }
 
