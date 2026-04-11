@@ -772,6 +772,12 @@ public class BrowseState: ObservableObject {
         let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty, let client else { return }
 
+        // New search clears all refinement filters. The user stacks
+        // filters by clicking metadata in the lightbox; a new text
+        // search is a new intent that starts fresh.
+        filters.clearAll()
+        selectedPath = nil
+
         mode = .search
         isSearching = true
         searchResults = []
