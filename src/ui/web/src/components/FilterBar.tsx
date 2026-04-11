@@ -302,6 +302,13 @@ export function FilterBar({
       e.preventDefault();
       applySearch(inputValue);
     }
+    // Prevent ESC from clearing the search input when a query chiclet
+    // already exists. The chiclet is the source of truth — use its X
+    // button to dismiss, not ESC on the empty input.
+    if (e.key === "Escape" && q) {
+      e.preventDefault();
+      (e.target as HTMLInputElement).blur();
+    }
   };
 
   const handleClear = () => {
