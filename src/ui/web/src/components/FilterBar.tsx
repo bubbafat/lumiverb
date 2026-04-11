@@ -514,6 +514,7 @@ export function FilterBar({
 
         {/* Active chiclets — rendered generically from filter array */}
         <div className="flex flex-wrap items-center gap-2">
+          {(() => { if (filters.length > 0) console.warn("[FilterBar chiclets]", JSON.stringify(filters)); return null; })()}
           {filters
             .filter((f) => f.type !== "library") // don't show library scope as chiclet
             .map((f) => {
