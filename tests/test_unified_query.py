@@ -40,8 +40,9 @@ def _ingest_asset(
     *,
     media_type="image",
     exif_data=None,
+    vision_data=None,
 ) -> str:
-    """Helper: ingest a minimal asset with optional EXIF data."""
+    """Helper: ingest a minimal asset with optional EXIF and vision data."""
     from PIL import Image as PILImage
 
     img = PILImage.new("RGB", (100, 100), color=(50, 100, 150))
@@ -59,6 +60,8 @@ def _ingest_asset(
     }
     if exif_data is not None:
         data["exif"] = json.dumps(exif_data)
+    if vision_data is not None:
+        data["vision"] = json.dumps(vision_data)
 
     r = client.post(
         "/v1/ingest",
@@ -152,6 +155,16 @@ def query_env():
                     client, api_key, library_id, "iphone/photo3.jpg",
                     exif_data={"camera_make": "Apple", "camera_model": "iPhone 15 Pro", "iso": 50},
                 )
+                # Asset with vision metadata for text search testing
+                described_photo = _ingest_asset(
+                    client, api_key, library_id, "described/woman_portrait.jpg",
+                    exif_data={"camera_make": "Canon", "camera_model": "EOS R5"},
+                    vision_data={
+                        "model_id": "test-vision",
+                        "description": "A woman standing in a sunlit garden",
+                        "tags": ["woman", "portrait", "garden", "sunlight"],
+                    },
+                )
 
                 # Rate some assets
                 client.put(f"/v1/assets/{canon_photo}/rating", json={"stars": 5, "favorite": True}, headers=_headers(api_key))
@@ -165,6 +178,7 @@ def query_env():
                     "sony_photo": sony_photo,
                     "sony_video": sony_video,
                     "iphone_photo": iphone_photo,
+                    "described_photo": described_photo,
                 }
 
         _engines.clear()
@@ -413,6 +427,66 @@ def test_query_no_matches(query_env):
     r = e["client"].get("/v1/query?f=camera_make:Nikon", headers=_headers(e["api_key"]))
     assert r.status_code == 200
     assert r.json()["items"] == []
+
+
+# ---------------------------------------------------------------------------
+# Postgres fallback text search (Quickwit disabled)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.slow
+def test_query_text_search_postgres_fallback(query_env):
+    """Text search with Quickwit disabled falls back to Postgres ILIKE.
+
+    This exercises the real database path — no mocks. Verifies that the
+    query term is not wrapped in Quickwit syntax (parentheses) when passed
+    to the postgres ILIKE search.
+    """
+    e = query_env
+
+    # Mock Quickwit as disabled — forces postgres fallback
+    mock_qw = MagicMock()
+    mock_qw.enabled = False
+
+    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=mock_qw):
+        r = e["client"].get(
+            "/v1/query?f=query:woman",
+            headers=_headers(e["api_key"]),
+        )
+    assert r.status_code == 200
+    ids = [i["asset_id"] for i in r.json()["items"]]
+    assert e["described_photo"] in ids, (
+        f"Postgres fallback search for 'woman' should find the described photo. "
+        f"Got {len(ids)} results: {ids}"
+    )
+
+
+@pytest.mark.slow
+def test_query_text_search_postgres_fallback_with_structured_filter(query_env):
+    """Postgres fallback text search + structured filter AND together."""
+    e = query_env
+
+    mock_qw = MagicMock()
+    mock_qw.enabled = False
+
+    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=mock_qw):
+        # Search for "woman" + camera_make:Canon → should find described_photo (Canon)
+        r = e["client"].get(
+            "/v1/query?f=query:woman&f=camera_make:Canon",
+            headers=_headers(e["api_key"]),
+        )
+    assert r.status_code == 200
+    ids = [i["asset_id"] for i in r.json()["items"]]
+    assert e["described_photo"] in ids
+
+    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=mock_qw):
+        # Search for "woman" + camera_make:Sony → should find nothing
+        r2 = e["client"].get(
+            "/v1/query?f=query:woman&f=camera_make:Sony",
+            headers=_headers(e["api_key"]),
+        )
+    assert r2.status_code == 200
+    ids2 = [i["asset_id"] for i in r2.json()["items"]]
+    assert e["described_photo"] not in ids2
 
 
 # ---------------------------------------------------------------------------
