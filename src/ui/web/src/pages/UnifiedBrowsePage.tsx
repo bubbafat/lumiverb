@@ -57,36 +57,40 @@ export default function UnifiedBrowsePage() {
   const [savingView, setSavingView] = useState(false);
 
   // --- Filter algebra: read filters from URL ---
+  // Stabilize searchParams identity by keying on the string representation
+  const searchString = searchParams.toString();
   const { filters, sort: browseSort, direction: browseDir } = useMemo(
-    () => paramsToFilters(searchParams),
-    [searchParams],
+    () => paramsToFilters(new URLSearchParams(searchString)),
+    [searchString],
   );
+
+  // Ref to avoid setSearchParams identity in useCallback deps
+  const setSearchParamsRef = useRef(setSearchParams);
+  setSearchParamsRef.current = setSearchParams;
 
   const handleSetFilter = useCallback(
     (type: string, value: string | null) => {
-      setSearchParams((prev) => {
+      setSearchParamsRef.current((prev) => {
         const next = new URLSearchParams(prev);
-        // Remove all existing f= params for this type
         const existing = next.getAll("f");
         next.delete("f");
         for (const raw of existing) {
           const colon = raw.indexOf(":");
-          if (colon > 0 && raw.slice(0, colon) === type) continue; // skip old value for this type
+          if (colon > 0 && raw.slice(0, colon) === type) continue;
           next.append("f", raw);
         }
-        // Add the new value if non-null
         if (value != null && value !== "") {
           next.append("f", `${type}:${value}`);
         }
         return next;
       });
     },
-    [setSearchParams],
+    [],
   );
 
   const handleSetSort = useCallback(
     (sort: string, dir: "asc" | "desc") => {
-      setSearchParams((prev) => {
+      setSearchParamsRef.current((prev) => {
         const next = new URLSearchParams(prev);
         if (sort && sort !== "taken_at") next.set("sort", sort);
         else next.delete("sort");
@@ -95,12 +99,12 @@ export default function UnifiedBrowsePage() {
         return next;
       });
     },
-    [setSearchParams],
+    [],
   );
 
   const handleClearAll = useCallback(() => {
-    setSearchParams(new URLSearchParams());
-  }, [setSearchParams]);
+    setSearchParamsRef.current(new URLSearchParams());
+  }, []);
 
   const browseFavorite = filters.some((f) => f.type === "favorite" && f.value === "yes");
 

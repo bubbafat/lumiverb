@@ -63,9 +63,11 @@ export default function BrowsePage() {
   const [zoomLevel, setZoomLevel] = useLocalStorage("lv_grid_zoom", 2);
 
   // --- Filter algebra: read filters from URL ---
+  // Stabilize searchParams identity by keying on the string representation
+  const searchString = searchParams.toString();
   const { filters: urlFilters, sort: browseSort, direction: browseDir } = useMemo(
-    () => paramsToFilters(searchParams),
-    [searchParams],
+    () => paramsToFilters(new URLSearchParams(searchString)),
+    [searchString],
   );
 
   // Add implicit library scope filter
@@ -86,11 +88,14 @@ export default function BrowsePage() {
     return [...filters, { type: "path", value: pathPrefix }];
   }, [filters, pathPrefix]);
 
+  // Ref to avoid setSearchParams identity in useCallback deps
+  const setSearchParamsRef = useRef(setSearchParams);
+  setSearchParamsRef.current = setSearchParams;
+
   const handleSetFilter = useCallback(
     (type: string, value: string | null) => {
-      setSearchParams((prev) => {
+      setSearchParamsRef.current((prev) => {
         const next = new URLSearchParams(prev);
-        // Remove all existing f= params for this type
         const existing = next.getAll("f");
         next.delete("f");
         for (const raw of existing) {
@@ -104,12 +109,12 @@ export default function BrowsePage() {
         return next;
       });
     },
-    [setSearchParams],
+    [],
   );
 
   const handleSetSort = useCallback(
     (sort: string, dir: "asc" | "desc") => {
-      setSearchParams((prev) => {
+      setSearchParamsRef.current((prev) => {
         const next = new URLSearchParams(prev);
         if (sort && sort !== "taken_at") next.set("sort", sort);
         else next.delete("sort");
@@ -118,15 +123,15 @@ export default function BrowsePage() {
         return next;
       });
     },
-    [setSearchParams],
+    [],
   );
 
   const handleClearAll = useCallback(() => {
-    setSearchParams(new URLSearchParams());
-  }, [setSearchParams]);
+    setSearchParamsRef.current(new URLSearchParams());
+  }, []);
 
   function setParam(key: string, value: string | null) {
-    setSearchParams((prev) => {
+    setSearchParamsRef.current((prev) => {
       const next = new URLSearchParams(prev);
       if (value) next.set(key, value);
       else next.delete(key);
