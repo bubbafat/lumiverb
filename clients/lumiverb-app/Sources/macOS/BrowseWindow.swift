@@ -300,7 +300,7 @@ struct BrowseWindow: View {
                 // noisy.
                 scanActivityBanner
             }
-            activeFiltersBar
+            FilterChicletBar(browseState: browseState)
             contentArea
         }
     }
@@ -377,7 +377,6 @@ struct BrowseWindow: View {
             } else {
                 VStack(spacing: 0) {
                     SelectionToolbarView(browseState: browseState, client: appState.client)
-                    FilterChicletBar(browseState: browseState)
                     MediaGridView(browseState: browseState, client: appState.client) {
                         macScrollIntrospector
                     }
@@ -679,57 +678,6 @@ struct BrowseWindow: View {
     // MARK: - Active filters bar
 
     @ViewBuilder
-    private var activeFiltersBar: some View {
-        if browseState.filters.hasActiveFilters {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    if browseState.filters.mediaType != nil {
-                        filterChiclet(
-                            label: browseState.filters.mediaType == "image" ? "Photos" : "Videos"
-                        ) {
-                            browseState.filters.mediaType = nil
-                        }
-                    }
-                    if let name = browseState.filters.personDisplayName {
-                        filterChiclet(label: name) {
-                            browseState.clearPersonFilter()
-                        }
-                    }
-                    if browseState.filters.sortField != "taken_at" || browseState.filters.sortDirection != "desc" {
-                        let option = SortOption(rawValue: browseState.filters.sortField)
-                        let dir = browseState.filters.sortDirection == "asc" ? "Asc" : "Desc"
-                        filterChiclet(label: "\(option?.label ?? browseState.filters.sortField) \(dir)") {
-                            browseState.filters.sortField = "taken_at"
-                            browseState.filters.sortDirection = "desc"
-                        }
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
-            }
-            .background(.bar)
-        }
-    }
-
-    private func filterChiclet(label: String, onRemove: @escaping () -> Void) -> some View {
-        HStack(spacing: 4) {
-            Text(label)
-                .font(.caption)
-                .lineLimit(1)
-            Button {
-                onRemove()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(.quaternary)
-        .cornerRadius(12)
-    }
 
     private func emptyState(_ message: String, icon: String) -> some View {
         VStack(spacing: 12) {

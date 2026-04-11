@@ -119,6 +119,22 @@ public struct BrowseFilter: Equatable, Sendable {
         if hasGps == true {
             result.append(ActiveFilter(id: "hasGps", label: "Has GPS") { f in f.hasGps = nil })
         }
+        // Non-default sort
+        if sortField != "taken_at" || sortDirection != "desc" {
+            let fieldLabel: String
+            switch sortField {
+            case "created_at": fieldLabel = "Created"
+            case "file_size": fieldLabel = "Size"
+            case "rel_path": fieldLabel = "Path"
+            case "asset_id": fieldLabel = "ID"
+            default: fieldLabel = sortField
+            }
+            let dir = sortDirection == "asc" ? "↑" : "↓"
+            result.append(ActiveFilter(id: "sort", label: "Sort: \(fieldLabel) \(dir)") { f in
+                f.sortField = "taken_at"
+                f.sortDirection = "desc"
+            })
+        }
 
         return result
     }

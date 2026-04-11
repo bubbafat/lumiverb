@@ -744,12 +744,13 @@ public class BrowseState: ObservableObject {
 
     /// Apply a filter by merging specific fields into the current filter.
     /// Closes the lightbox. Preserves sort and library selection.
+    /// Merge a new filter constraint into the current filters, close the
+    /// lightbox, and reload. Stacks with existing filters rather than
+    /// replacing them.
     public func applyMetadataFilter(_ build: (inout BrowseFilter) -> Void) {
-        var newFilter = BrowseFilter()
-        newFilter.sortField = filters.sortField
-        newFilter.sortDirection = filters.sortDirection
-        build(&newFilter)
-        applyFilterFromLightbox(newFilter)
+        var merged = filters
+        build(&merged)
+        applyFilterFromLightbox(merged)
     }
 
     public func closeLightbox() {
