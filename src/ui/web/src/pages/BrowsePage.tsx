@@ -319,30 +319,17 @@ export default function BrowsePage() {
   );
   const selection = useSelection(orderedAssetIds);
 
-  // Complete last date group: auto-fetch next page if the tail date is
-  // split across a page boundary. Also auto-select new arrivals for
-  // dates the user has already selected.
+  // Auto-select new arrivals for dates the user has already selected.
   const prevAssetCountRef = useRef(0);
   useEffect(() => {
     if (orderedAssets.length <= prevAssetCountRef.current) {
       prevAssetCountRef.current = orderedAssets.length;
       return;
     }
-    // Auto-select new assets matching selected dates
     const newAssets = orderedAssets.slice(prevAssetCountRef.current);
     selection.autoSelectForDates(newAssets);
     prevAssetCountRef.current = orderedAssets.length;
-
-    // Complete last date group: if we received a full page (PAGE_SIZE
-    // items), the tail date probably continues on the next page.
-    // Fetch until the page is short (meaning the server ran out or
-    // we've crossed a date boundary). This matches the macOS client's
-    // completeLastDateGroup behavior.
-    if (!hasNextPage || isFetchingNextPage) return;
-    if (newAssets.length >= PAGE_SIZE) {
-      fetchNextPageRef.current();
-    }
-  }, [orderedAssets, groups, hasNextPage, isFetchingNextPage, selection]);
+  }, [orderedAssets, selection]);
 
   const [pickerAssetIds, setPickerAssetIds] = useState<string[] | null>(null);
   const [showSmartColModal, setShowSmartColModal] = useState(false);
