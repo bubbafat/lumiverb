@@ -105,7 +105,13 @@ def get_facets(
         )
     if needs_metadata:
         joins.append(
-            "LEFT JOIN asset_metadata m ON m.asset_id = a.asset_id"
+            """LEFT JOIN LATERAL (
+                SELECT data->'tags' AS tags
+                FROM asset_metadata
+                WHERE asset_id = a.asset_id
+                ORDER BY generated_at DESC
+                LIMIT 1
+            ) m ON TRUE"""
         )
 
     where_sql = " AND ".join(conditions) if conditions else "TRUE"
