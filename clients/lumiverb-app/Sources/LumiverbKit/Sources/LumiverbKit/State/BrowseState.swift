@@ -136,6 +136,10 @@ public class BrowseState: ObservableObject {
     // MARK: - Search
 
     @Published public var searchQuery = ""
+    /// The search query that was committed (submitted). Survives the
+    /// searchable field clearing on ESC. The chiclet and API calls use
+    /// this, not searchQuery (which is the live field text).
+    @Published public var committedSearchQuery = ""
     @Published public var searchResults: [SearchHit] = []
     @Published public var searchTotal = 0
     @Published public var isSearching = false
@@ -465,7 +469,7 @@ public class BrowseState: ObservableObject {
             let items = filters.queryItems(
                 libraryId: libraryId,
                 pathPrefix: selectedPath,
-                searchQuery: mode == .search ? searchQuery : nil,
+                searchQuery: mode == .search ? committedSearchQuery : nil,
                 after: nextCursor,
                 limit: 100
             )
@@ -756,6 +760,9 @@ public class BrowseState: ObservableObject {
     /// — they stack. The user clears filters explicitly via the chiclet
     /// bar's "Clear all" button.
     public func performSearch() async {
+        // Commit the search text and clear the input field
+        committedSearchQuery = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        searchQuery = "" // Clear field — chiclet represents the search
         await executeSearch()
     }
 
@@ -763,7 +770,7 @@ public class BrowseState: ObservableObject {
     /// code (not the user) triggers a search — e.g., tag click from
     /// the lightbox, which is a refinement, not a new intent.
     public func executeSearch() async {
-        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = committedSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty, let client else { return }
 
         mode = .search
@@ -825,6 +832,7 @@ public class BrowseState: ObservableObject {
 
     public func clearSearch() {
         searchQuery = ""
+        committedSearchQuery = ""
         searchResults = []
         searchTotal = 0
         mode = .library

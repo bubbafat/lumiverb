@@ -100,7 +100,13 @@ struct BrowseWindow: View {
         }
         .onChange(of: browseState.searchQuery) { _, newValue in
             if newValue.isEmpty {
-                browseState.clearSearch()
+                // Only clear search if no committed query exists.
+                // ESC clears the searchable field text but should not
+                // dismiss the search chiclet — that's what the X button
+                // on the chiclet is for.
+                if browseState.committedSearchQuery.isEmpty {
+                    browseState.clearSearch()
+                }
                 browseState.personSuggestions = []
             } else {
                 browseState.debouncedPersonSearch(query: newValue)

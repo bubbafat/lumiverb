@@ -58,7 +58,7 @@ public struct SaveSmartCollectionSheet: View {
         let leafFilters = browseState.filters.toLeafFilters(
             libraryId: browseState.selectedLibraryId,
             pathPrefix: browseState.selectedPath,
-            searchQuery: browseState.mode == .search ? browseState.searchQuery : nil
+            searchQuery: browseState.mode == .search ? browseState.committedSearchQuery : nil
         )
         let savedQuery = SavedQueryV2(
             filters: leafFilters,

@@ -233,13 +233,9 @@ export function FilterBar({
     }
   });
 
-  // When query filter is dismissed (chiclet cleared), reset input.
-  // When query filter is SET, clear the input — the chiclet represents
-  // the active search, and the input is ready for a new query.
-  // This prevents ESC in the lightbox from propagating to the search
-  // input and accidentally clearing the search filter.
+  // Keep input in sync when query filter is dismissed via chiclet X
   useEffect(() => {
-    setInputValue("");
+    if (!q) setInputValue("");
   }, [q]);
 
   // Sync custom fields when external date changes
