@@ -26,7 +26,7 @@ import { useSelection } from "../lib/useSelection";
 import { buildVirtualRows, buildFixedGridRows } from "../lib/virtualRows";
 import { useLocalStorage } from "../lib/useLocalStorage";
 import type { VirtualRowKind } from "../lib/virtualRows";
-import { paramsToFilters, buildSavedQuery, composeDate, composeNear } from "../lib/queryFilter";
+import { buildSavedQuery, composeDate, composeNear } from "../lib/queryFilter";
 
 const PAGE_SIZE = 100;
 const ROW_GAP = 4;

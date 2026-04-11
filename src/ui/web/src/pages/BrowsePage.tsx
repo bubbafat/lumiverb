@@ -26,7 +26,7 @@ import { DrawerOverlay } from "../components/DrawerOverlay";
 import { DirectoryTree } from "../components/DirectoryTree";
 import type { AssetPageItem, AssetRating, FacetsResponse, RatingColor } from "../api/types";
 import { HeartButton, StarPicker, ColorPicker } from "../components/RatingControls";
-import { paramsToFilters, buildSavedQuery, composeDate } from "../lib/queryFilter";
+import { buildSavedQuery, composeDate } from "../lib/queryFilter";
 import type { LeafFilter } from "../lib/queryFilter";
 import { useScrollContainer } from "../context/ScrollContainerContext";
 import { groupAssetsByDate } from "../lib/groupByDate";

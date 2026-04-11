@@ -55,7 +55,7 @@ function TestHarness({ libraryId }: { libraryId: string }) {
   }, [urlFilters, libraryId]);
 
   // Facets query — same as BrowsePage
-  const facetsQuery = useQuery({
+  void useQuery({
     queryKey: ["filtered-facets", filters],
     queryFn: () => Promise.resolve({
       media_types: ["image"], camera_makes: ["Canon"], camera_models: [],
