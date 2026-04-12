@@ -58,6 +58,7 @@ class PersonFaceItem(BaseModel):
     bounding_box: dict | None = None
     detection_confidence: float | None = None
     rel_path: str | None = None
+    taken_at: str | None = None  # ISO 8601, used by client-side date grouping
 
 
 class PersonFacesResponse(BaseModel):
@@ -478,10 +479,10 @@ def list_person_faces(
     asset_ids = list({f.asset_id for f in faces})
     from src.server.models.tenant import Asset
     from sqlmodel import select
-    asset_map: dict[str, str] = {}
+    asset_map: dict[str, tuple[str, object]] = {}
     if asset_ids:
-        stmt = select(Asset.asset_id, Asset.rel_path).where(Asset.asset_id.in_(asset_ids))
-        asset_map = {r[0]: r[1] for r in session.exec(stmt).all()}
+        stmt = select(Asset.asset_id, Asset.rel_path, Asset.taken_at).where(Asset.asset_id.in_(asset_ids))
+        asset_map = {r[0]: (r[1], r[2]) for r in session.exec(stmt).all()}
 
     items = [
         PersonFaceItem(
@@ -489,7 +490,10 @@ def list_person_faces(
             asset_id=f.asset_id,
             bounding_box=f.bounding_box_json,
             detection_confidence=f.detection_confidence,
-            rel_path=asset_map.get(f.asset_id),
+            rel_path=(asset_map.get(f.asset_id) or (None, None))[0],
+            taken_at=(asset_map.get(f.asset_id) or (None, None))[1].isoformat()
+                if (asset_map.get(f.asset_id) or (None, None))[1] is not None
+                else None,
         )
         for f in faces
     ]
@@ -965,22 +969,26 @@ def list_cluster_faces(
     faces_by_id = {f.face_id: f for f in session.exec(stmt).all()}
 
     asset_ids = list({faces_by_id[fid].asset_id for fid in page_ids if fid in faces_by_id})
-    asset_map: dict[str, str] = {}
+    asset_map: dict[str, tuple[str, object]] = {}
     if asset_ids:
-        rows = session.exec(select(Asset.asset_id, Asset.rel_path).where(Asset.asset_id.in_(asset_ids))).all()
-        asset_map = {r[0]: r[1] for r in rows}
+        rows = session.exec(
+            select(Asset.asset_id, Asset.rel_path, Asset.taken_at).where(Asset.asset_id.in_(asset_ids))
+        ).all()
+        asset_map = {r[0]: (r[1], r[2]) for r in rows}
 
     items = []
     for fid in page_ids:
         f = faces_by_id.get(fid)
         if not f:
             continue
+        rel, taken = asset_map.get(f.asset_id) or (None, None)
         items.append(PersonFaceItem(
             face_id=f.face_id,
             asset_id=f.asset_id,
             bounding_box=f.bounding_box_json,
             detection_confidence=f.detection_confidence,
-            rel_path=asset_map.get(f.asset_id),
+            rel_path=rel,
+            taken_at=taken.isoformat() if taken is not None else None,
         ))
 
     next_cursor = page_ids[-1] if len(page_ids) == limit and start + limit < total else None

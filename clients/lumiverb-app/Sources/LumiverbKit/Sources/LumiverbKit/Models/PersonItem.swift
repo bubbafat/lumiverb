@@ -78,6 +78,7 @@ public struct PersonFaceItem: Decodable, Identifiable, Sendable {
     public let boundingBox: FaceBoundingBox?
     public let detectionConfidence: Float?
     public let relPath: String?
+    public let takenAt: String?  // ISO 8601, used by client-side date grouping
 
     public var id: String { faceId }
 }
