@@ -64,6 +64,9 @@ struct LibraryBrowseView: View {
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
             }
+            .refreshable {
+                await refreshAllPreviews()
+            }
             // Use an unstructured Task in onAppear (rather than `.task`)
             // so the fetch survives a transient view teardown — `.task`
             // cancels its work when the view disappears, which surfaces
@@ -132,6 +135,9 @@ struct LibraryBrowseView: View {
                 MediaGridView(browseState: browseState, client: appState.client) {
                     EmptyView()
                 }
+                .refreshable {
+                    await browseState.refreshCurrent()
+                }
             }
         }
     }
@@ -187,11 +193,18 @@ struct LibraryBrowseView: View {
 
     // MARK: - Preview fetching
 
+    /// Fetch previews for libraries that don't have an entry yet (initial
+    /// load). Skips libraries we've already fetched so re-renders don't
+    /// re-hit the network.
     private func fetchAllPreviews() async {
         guard let client = appState.client else { return }
+        // Snapshot which libraries already have previews. Reading
+        // libraryPreviews once up front avoids the SwiftUI struct/state
+        // capture trap where the closure sees a stale snapshot.
+        let alreadyFetched = libraryPreviews
         await withTaskGroup(of: (String, [String]).self) { group in
             for lib in appState.libraries {
-                guard libraryPreviews[lib.libraryId] == nil else { continue }
+                guard alreadyFetched[lib.libraryId] == nil else { continue }
                 group.addTask {
                     let ids = await Self.fetchPreviewIds(
                         client: client, libraryId: lib.libraryId
@@ -203,6 +216,30 @@ struct LibraryBrowseView: View {
                 libraryPreviews[libId] = ids
             }
         }
+    }
+
+    /// Force-refresh: re-fetch every library's previews and atomically
+    /// swap. Builds a new dict locally so SwiftUI's @State capture
+    /// semantics don't make the workers see a stale snapshot.
+    private func refreshAllPreviews() async {
+        guard let client = appState.client else { return }
+        var newPreviews: [String: [String]] = [:]
+        await withTaskGroup(of: (String, [String]).self) { group in
+            for lib in appState.libraries {
+                group.addTask {
+                    let ids = await Self.fetchPreviewIds(
+                        client: client, libraryId: lib.libraryId
+                    )
+                    return (lib.libraryId, ids)
+                }
+            }
+            for await (libId, ids) in group {
+                newPreviews[libId] = ids
+            }
+        }
+        // Atomic swap — never empty the dict before the new data lands,
+        // so cards don't flash to the cover_asset_id fallback.
+        libraryPreviews = newPreviews
     }
 
     private static func fetchPreviewIds(

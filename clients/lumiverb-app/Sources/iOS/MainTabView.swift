@@ -12,6 +12,7 @@ struct MainTabView: View {
     @StateObject private var browseState: BrowseState
     @StateObject private var peopleState: PeopleState
     @StateObject private var collectionsState: CollectionsState
+    @StateObject private var networkMonitor = NetworkMonitor()
 
     private let cacheBundle: CacheBundle
 
@@ -90,5 +91,6 @@ struct MainTabView: View {
         .preferredColorScheme(.dark)
         .environment(\.cacheBundle, cacheBundle)
         .environment(\.collectionsState, collectionsState)
+        .environmentObject(networkMonitor)
     }
 }

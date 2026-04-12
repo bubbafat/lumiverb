@@ -445,6 +445,50 @@ public class BrowseState: ObservableObject {
         }
     }
 
+    /// Async pull-to-refresh entry point. Re-fetches the first page
+    /// without going through `loadNextPage` so iOS's `.refreshable`
+    /// awaits the actual network call. We can't use `loadNextPage`
+    /// here because clearing `assets = []` causes `MediaGridView`'s
+    /// infinite-scroll sentinel to re-fire `loadNextPage` on its
+    /// own, racing against ours and winning the `isLoadingAssets`
+    /// guard. Doing the fetch inline and atomically swapping `assets`
+    /// avoids the race entirely.
+    public func refreshCurrent() async {
+        guard let client, let libraryId = selectedLibraryId else { return }
+        // Cancel any in-flight load so its writeback doesn't race ours.
+        currentLoadTask?.cancel()
+        currentLoadTask = nil
+        isLoadingAssets = true
+        defer {
+            if selectedLibraryId == libraryId {
+                isLoadingAssets = false
+            }
+        }
+        do {
+            let items = filters.queryItems(
+                libraryId: libraryId,
+                pathPrefix: selectedPath,
+                searchQuery: mode == .search ? committedSearchQuery : nil,
+                after: nil,
+                limit: 100
+            )
+            let response: QueryResponse = try await client.get(
+                "/v1/query", queryItems: items
+            )
+            guard selectedLibraryId == libraryId else { return }
+            let pageItems = response.items.map { $0.toPageItem() }
+            // Atomic swap — never empty the array, so the grid sentinel
+            // doesn't re-fire mid-refresh.
+            assets = pageItems
+            nextCursor = response.nextCursor
+            hasMoreAssets = response.nextCursor != nil
+            error = nil
+        } catch {
+            if (error as NSError).code == NSURLErrorCancelled { return }
+            self.error = "Failed to refresh: \(error)"
+        }
+    }
+
     /// Reload assets when path filter changes (without resetting directory tree).
     private func reloadAssets() {
         assets = []

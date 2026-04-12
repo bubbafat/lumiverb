@@ -125,6 +125,9 @@ struct SearchTab: View {
                 SearchResultsGrid(browseState: browseState, client: appState.client) {
                     EmptyView()
                 }
+                .refreshable {
+                    await browseState.executeSearch()
+                }
             }
         }
     }

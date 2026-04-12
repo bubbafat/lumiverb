@@ -124,10 +124,17 @@ struct iOSLightboxView: View {
 
     // MARK: - Bottom bar
 
+    @State private var shareItem: ShareableImage?
+    @State private var isPreparingShare = false
+
     private var bottomBar: some View {
         HStack(spacing: 0) {
-            bottomButton("Share", systemImage: "square.and.arrow.up") {
-                // TODO: share sheet
+            bottomButton(
+                "Share",
+                systemImage: "square.and.arrow.up",
+                isLoading: isPreparingShare
+            ) {
+                Task { await prepareShare() }
             }
             bottomButton("Add to", systemImage: "plus.rectangle.on.folder") {
                 // TODO: add to collection
@@ -138,17 +145,57 @@ struct iOSLightboxView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
+        .sheet(item: $shareItem) { item in
+            ShareSheet(items: [item.url])
+                .ignoresSafeArea()
+        }
+    }
+
+    /// Fetches the proxy bytes for the current asset, writes them to a
+    /// temp file, then surfaces the file URL via the share sheet so the
+    /// user can save to camera roll or send anywhere.
+    private func prepareShare() async {
+        guard let assetId = browseState.selectedAssetId, !isPreparingShare else { return }
+        isPreparingShare = true
+        defer { isPreparingShare = false }
+
+        do {
+            guard let data = try await client?.getData("/v1/assets/\(assetId)/proxy") else {
+                return
+            }
+            // Build a sensible filename — strip the path, fall back to assetId.
+            let filename: String
+            if let detail = browseState.assetDetail {
+                filename = (detail.relPath as NSString).lastPathComponent
+            } else {
+                filename = "\(assetId).jpg"
+            }
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent(filename)
+            try data.write(to: url, options: .atomic)
+            shareItem = ShareableImage(url: url)
+        } catch {
+            // Swallow — the share button just doesn't open. Logging
+            // here would be noise; users can retry.
+        }
     }
 
     private func bottomButton(
         _ label: String,
         systemImage: String,
+        isLoading: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             VStack(spacing: 4) {
-                Image(systemName: systemImage)
-                    .font(.title3)
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(height: 22)
+                } else {
+                    Image(systemName: systemImage)
+                        .font(.title3)
+                }
                 Text(label)
                     .font(.caption2)
             }
@@ -288,4 +335,24 @@ where Data.Element: Hashable {
             }
         }
     }
+}
+
+// MARK: - Share sheet plumbing
+
+/// Identifiable wrapper around a temp-file URL so SwiftUI's `.sheet(item:)`
+/// dismisses the share sheet when set back to nil.
+private struct ShareableImage: Identifiable {
+    let url: URL
+    var id: String { url.path }
+}
+
+/// Wraps `UIActivityViewController` so SwiftUI can present it as a sheet.
+private struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
