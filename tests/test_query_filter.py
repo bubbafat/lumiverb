@@ -757,6 +757,34 @@ class TestFromJson:
         spec = from_json({})
         assert spec.leaves == []
 
+    def test_filter_entry_is_string_skips_safely(self):
+        """Defensive: pre-V2 saved queries occasionally had string entries
+        in `filters`. Don't crash — skip the bad entry, keep the good ones,
+        return a valid QuerySpec. Regression test for the production crash
+        loading collections list with a corrupt smart query in the DB."""
+        data = {
+            "filters": [
+                "camera_make:Canon",  # bad: string instead of dict
+                {"type": "favorite", "value": "yes"},
+            ],
+        }
+        spec = from_json(data)
+        # The string is skipped; the favorite filter survives.
+        assert len(spec.leaves) == 1
+
+    def test_filters_field_is_string_returns_empty(self):
+        """Defensive: if `filters` is a string instead of a list, treat
+        it as empty rather than iterating its characters and crashing."""
+        data = {"filters": "camera_make:Canon"}
+        spec = from_json(data)
+        assert spec.leaves == []
+
+    def test_data_is_not_dict_returns_empty(self):
+        """Defensive: if the saved_query column is somehow a string at
+        the top level, return an empty QuerySpec rather than crashing."""
+        spec = from_json("not a dict")  # type: ignore[arg-type]
+        assert spec.leaves == []
+
 
 # ---------------------------------------------------------------------------
 # Registry: capabilities

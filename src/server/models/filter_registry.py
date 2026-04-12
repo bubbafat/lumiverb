@@ -134,9 +134,31 @@ def from_json(data: dict) -> QuerySpec:
         "sort": "taken_at",       # optional
         "direction": "desc"       # optional
     }
+
+    Defensive against bad data: anything that isn't a dict-shaped filter
+    is logged and skipped instead of crashing the request. We've seen
+    pre-V2 saved queries in the wild with strings or other shapes in
+    `filters` — the smart collection still loads, just with the bad
+    leaves dropped.
     """
+    if not isinstance(data, dict):
+        logger.warning("Saved query is not a dict: %r", type(data).__name__)
+        return QuerySpec(
+            root=GroupFilter(combinator=Combinator.AND, children=()),
+            sort="taken_at",
+            direction="desc",
+        )
+
+    raw_filters = data.get("filters", [])
+    if not isinstance(raw_filters, list):
+        logger.warning("Saved query 'filters' is not a list: %r", type(raw_filters).__name__)
+        raw_filters = []
+
     leaves: list[LeafFilter] = []
-    for item in data.get("filters", []):
+    for item in raw_filters:
+        if not isinstance(item, dict):
+            logger.warning("Saved query filter entry is not a dict, skipping: %r", item)
+            continue
         type_name = item.get("type", "")
         cls = TYPE_MAP.get(type_name)
         if cls is None:
