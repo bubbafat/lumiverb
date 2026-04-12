@@ -45,15 +45,23 @@ cli = [
     "rich>=13.0",
     "httpx>=0.27",
 ]
-# Workers: image/video processing and AI (runs on the client machine)
+# Embeddings: server-side CLIP for /v1/similar/search-by-image. The
+# server installs this on top of the cli extra so iOS clients can
+# upload an arbitrary image and have the server embed it. Workers
+# (which already need torch + open-clip for indexing) inherit it.
+embeddings = [
+    "torch>=2.10.0",
+    "open-clip-torch>=3.3.0",
+]
+# Workers: image/video processing and AI (runs on the client machine).
+# Includes embeddings so the indexing path has CLIP available.
 workers = [
+    "lumiverb[embeddings]",
     "rawpy>=0.26.1",
     "pyvips>=3.1.1",
     "imagehash>=4.3.0",
     "opencv-python-headless>=4.8.0",
     "pyexiftool>=0.5",
-    "torch>=2.10.0",
-    "open-clip-torch>=3.3.0",
     "insightface>=0.7.3",
     "onnxruntime>=1.17.0",
     "faster-whisper>=1.0.0",

@@ -337,8 +337,8 @@ chown -R "$SVC_USER":"$SVC_USER" "$APP_DIR"
 # ---------------------------------------------------------------------------
 step "Installing Python dependencies"
 
-sudo -u "$SVC_USER" "$UV_BIN" sync --extra cli
-ok "Python venv ready (server + cli)"
+sudo -u "$SVC_USER" "$UV_BIN" sync --extra cli --extra embeddings
+ok "Python venv ready (server + cli + embeddings)"
 
 # ---------------------------------------------------------------------------
 # 9. Run migrations
