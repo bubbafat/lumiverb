@@ -64,8 +64,13 @@ struct LibraryBrowseView: View {
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
             }
-            .task {
-                await fetchAllPreviews()
+            // Use an unstructured Task in onAppear (rather than `.task`)
+            // so the fetch survives a transient view teardown — `.task`
+            // cancels its work when the view disappears, which surfaces
+            // as a `cancelled` URL error and leaves us with no preview
+            // data. Same pattern as PeopleView.
+            .onAppear {
+                Task { await fetchAllPreviews() }
             }
         }
     }
