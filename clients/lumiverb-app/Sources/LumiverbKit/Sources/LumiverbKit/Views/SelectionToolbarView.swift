@@ -5,14 +5,26 @@ import SwiftUI
 public struct SelectionToolbarView: View {
     @ObservedObject public var browseState: BrowseState
     public let client: APIClient?
+    /// Optional callback fired after a successful batch update
+    /// (favorite/unfavorite, color, etc). Hosting views that derive
+    /// their item list from a server query — e.g. FavoritesView
+    /// fetching `f=favorite:yes` — pass a reload closure here so
+    /// the grid reflects the mutation immediately. Views that read
+    /// directly from `browseState.assets` don't need it.
+    public let onBatchUpdated: (() -> Void)?
 
     @Environment(\.collectionsState) private var collectionsState
     @State private var showAddToCollection = false
     @State private var batchRating = Rating.empty
 
-    public init(browseState: BrowseState, client: APIClient?) {
+    public init(
+        browseState: BrowseState,
+        client: APIClient?,
+        onBatchUpdated: (() -> Void)? = nil
+    ) {
         self.browseState = browseState
         self.client = client
+        self.onBatchUpdated = onBatchUpdated
     }
 
     public var body: some View {
@@ -115,7 +127,10 @@ public struct SelectionToolbarView: View {
                 Button {
                     let ids = Array(browseState.selectedAssetIds)
                     let body = BatchRatingUpdateBody(assetIds: ids, color: .set(label))
-                    Task { _ = try? await client?.batchUpdateRatings(body: body) }
+                    Task {
+                        _ = try? await client?.batchUpdateRatings(body: body)
+                        onBatchUpdated?()
+                    }
                 } label: {
                     Circle()
                         .fill(colorForLabel(label))
@@ -174,5 +189,6 @@ public struct SelectionToolbarView: View {
         // run if the selection changes, but it doesn't on a no-op
         // tap so we update by hand.
         allFavorited = target
+        onBatchUpdated?()
     }
 }

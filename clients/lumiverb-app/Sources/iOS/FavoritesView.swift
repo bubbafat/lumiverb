@@ -23,7 +23,16 @@ struct FavoritesView: View {
     var body: some View {
         VStack(spacing: 0) {
             if browseState.isSelecting {
-                SelectionToolbarView(browseState: browseState, client: appState.client)
+                SelectionToolbarView(
+                    browseState: browseState,
+                    client: appState.client,
+                    onBatchUpdated: {
+                        // Refetch after batch favorite/unfavorite so
+                        // unfavorited items immediately drop out of
+                        // the favorites grid.
+                        Task { await loadFavorites() }
+                    }
+                )
                 Divider()
             }
             content
@@ -35,6 +44,16 @@ struct FavoritesView: View {
             // unfavoriting from the lightbox and tapping back is
             // reflected immediately.
             Task { await loadFavorites() }
+        }
+        .onChange(of: browseState.selectedAssetId) { oldValue, newValue in
+            // Lightbox is presented over MainTabView's fullScreenCover,
+            // so this view doesn't disappear/reappear when it opens.
+            // When the lightbox closes (selectedAssetId nil → after a
+            // possible favorite toggle), refetch so unfavorited items
+            // disappear from the grid immediately.
+            if oldValue != nil && newValue == nil {
+                Task { await loadFavorites() }
+            }
         }
         .refreshable {
             await loadFavorites()
