@@ -13,6 +13,7 @@ import type {
   EmptyTrashResponse,
   FaceListResponse,
   FacetsResponse,
+  LibraryHealthItem,
   LibraryListItem,
   LibraryResponse,
   LibraryRevision,
@@ -259,6 +260,13 @@ export async function getLibraryRevision(
   libraryId: string,
 ): Promise<LibraryRevision> {
   return apiFetch<LibraryRevision>(`/libraries/${libraryId}/revision`);
+}
+
+/** Bulk health check — one row per non-trashed library, single SQL call.
+ * `healthy` is `pending == 0`. Used to render a green/orange dot per
+ * library on the libraries page without N+1ing repair-summary. */
+export async function listLibraryHealth(): Promise<LibraryHealthItem[]> {
+  return apiFetch<LibraryHealthItem[]>("/libraries/health");
 }
 
 /** Fetch aggregated filter facets for a library (legacy — use getFilteredFacets). */

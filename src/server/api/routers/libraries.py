@@ -106,6 +106,60 @@ def list_libraries(
     ]
 
 
+class LibraryHealthItem(BaseModel):
+    library_id: str
+    healthy: bool
+    pending: int
+
+
+@router.get("/health", response_model=list[LibraryHealthItem])
+def list_library_health(
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> list[LibraryHealthItem]:
+    """Return one row per non-trashed library indicating whether any
+    enrichment work is pending. `pending` is the number of assets that
+    would show up on `repair --dry-run`; `healthy` is `pending == 0`.
+
+    A single SQL query (GROUP BY library_id over `active_assets`) so the
+    UI can render a green/orange dot per library without N+1ing the
+    repair-summary endpoint. Trashed libraries are excluded — they have
+    no work to do and shouldn't surface in the indicator either.
+    """
+    from sqlalchemy import text
+    from src.server.repository.tenant import MISSING_CONDITIONS
+
+    pending_clause = " OR ".join(
+        f"({cond})" for cond in MISSING_CONDITIONS.values()
+    )
+    pending_clause = f"a.proxy_key IS NULL OR {pending_clause}"
+
+    rows = session.execute(
+        text(f"""
+            SELECT
+                a.library_id,
+                COUNT(*) FILTER (WHERE {pending_clause}) AS pending
+            FROM active_assets a
+            JOIN libraries l ON l.library_id = a.library_id
+            WHERE l.status != 'trashed'
+            GROUP BY a.library_id
+        """)
+    ).all()
+
+    # Include libraries with zero assets (or all healthy) explicitly so
+    # the UI can render a dot for them too. The GROUP BY above only
+    # returns rows for libraries that have at least one asset.
+    seen = {row.library_id: row.pending for row in rows}
+    repo = LibraryRepository(session)
+    return [
+        LibraryHealthItem(
+            library_id=lib.library_id,
+            pending=seen.get(lib.library_id, 0),
+            healthy=seen.get(lib.library_id, 0) == 0,
+        )
+        for lib in repo.list_all(include_trashed=False)
+    ]
+
+
 @router.post("/empty-trash", response_model=EmptyTrashResponse)
 def empty_trash(
     request: Request,

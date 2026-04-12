@@ -283,13 +283,15 @@ struct iOSLightboxView: View {
 
                     if let tags = detail.aiTags, !tags.isEmpty {
                         Section("Tags") {
-                            FlowLayout(tags: tags) { tag in
-                                Text(tag)
-                                    .font(.caption)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 5)
-                                    .background(Color.gray.opacity(0.2))
-                                    .cornerRadius(12)
+                            ChicletFlowLayout(spacing: 6) {
+                                ForEach(tags, id: \.self) { tag in
+                                    Text(tag)
+                                        .font(.caption)
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 5)
+                                        .background(Color.gray.opacity(0.2))
+                                        .cornerRadius(12)
+                                }
                             }
                         }
                     }
@@ -359,16 +361,70 @@ struct iOSLightboxView: View {
 
 // MARK: - Flow layout for tags
 
-private struct FlowLayout<Data: RandomAccessCollection, Content: View>: View
-where Data.Element: Hashable {
-    let tags: Data
-    let content: (Data.Element) -> Content
+/// True flow layout: places each subview left-to-right and wraps to a
+/// new line when the next subview would overflow the proposed width.
+/// Replaces an earlier `LazyVGrid(.adaptive)` hack that wasted space
+/// on short tags and clipped long ones — adaptive grid columns are
+/// fixed width per row, which is the wrong shape for variable-width
+/// chiclets. This honors each subview's `sizeThatFits(.unspecified)`.
+private struct ChicletFlowLayout: Layout {
+    var spacing: CGFloat = 6
 
-    var body: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 60))], spacing: 6) {
-            ForEach(Array(tags), id: \.self) { tag in
-                content(tag)
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var rowWidth: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var totalHeight: CGFloat = 0
+        var totalWidth: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            // Wrap if adding this subview would overflow the row.
+            if rowWidth > 0 && rowWidth + spacing + size.width > maxWidth {
+                totalHeight += rowHeight + spacing
+                totalWidth = max(totalWidth, rowWidth)
+                rowWidth = size.width
+                rowHeight = size.height
+            } else {
+                rowWidth += (rowWidth > 0 ? spacing : 0) + size.width
+                rowHeight = max(rowHeight, size.height)
             }
+        }
+        totalHeight += rowHeight
+        totalWidth = max(totalWidth, rowWidth)
+        return CGSize(width: totalWidth, height: totalHeight)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let maxWidth = bounds.width
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            // Wrap to next row if this subview won't fit on the current row.
+            if x > bounds.minX && x + size.width > bounds.minX + maxWidth {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            subview.place(
+                at: CGPoint(x: x, y: y),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(size)
+            )
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
         }
     }
 }

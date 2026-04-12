@@ -315,6 +315,35 @@ def test_trash_public_library_removes_control_plane_row(libraries_client: tuple[
 
 
 @pytest.mark.slow
+def test_library_health_endpoint(libraries_client: tuple[TestClient, str]) -> None:
+    """GET /v1/libraries/health returns one row per non-trashed library
+    with healthy/pending fields. A freshly-created library with no
+    assets has pending=0 and healthy=true. Trashed libraries are
+    excluded so the indicator doesn't surface them."""
+    client, api_key = libraries_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+
+    name = "HealthLib_" + __import__("secrets").token_urlsafe(6)
+    r = client.post("/v1/libraries", json={"name": name, "root_path": "/health"}, headers=auth)
+    assert r.status_code == 200
+    library_id = r.json()["library_id"]
+
+    r_health = client.get("/v1/libraries/health", headers=auth)
+    assert r_health.status_code == 200, r_health.text
+    rows = r_health.json()
+    matched = [row for row in rows if row["library_id"] == library_id]
+    assert len(matched) == 1
+    assert matched[0]["healthy"] is True
+    assert matched[0]["pending"] == 0
+
+    # Trash it; should disappear from health output entirely.
+    client.delete(f"/v1/libraries/{library_id}", headers=auth)
+    r_health2 = client.get("/v1/libraries/health", headers=auth)
+    assert r_health2.status_code == 200
+    assert not any(row["library_id"] == library_id for row in r_health2.json())
+
+
+@pytest.mark.slow
 def test_hard_delete_public_library_removes_control_plane_row(libraries_client: tuple[TestClient, str]) -> None:
     """empty-trash on a public library cleans up the public_libraries row."""
     client, api_key = libraries_client

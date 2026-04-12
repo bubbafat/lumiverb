@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   listLibraries,
+  listLibraryHealth,
   createLibrary,
   deleteLibrary,
   emptyTrash,
@@ -44,6 +45,20 @@ export default function LibrariesPage() {
     queryFn: () => listLibraries(true),
     refetchInterval: 10_000,
   });
+
+  // Health is a separate query because it's a bulk endpoint (one SQL
+  // call for every library). Polled at the same 10s cadence so the
+  // green/orange dot stays in sync with the rest of the page without
+  // dragging the libraries fetch into a more expensive query.
+  const { data: health } = useQuery({
+    queryKey: ["library-health"],
+    queryFn: listLibraryHealth,
+    refetchInterval: 10_000,
+  });
+
+  const healthByLibraryId = new Map(
+    (health ?? []).map((row) => [row.library_id, row]),
+  );
 
   const createMutation = useMutation({
     mutationFn: () => createLibrary(addName.trim(), addPath.trim()),
@@ -169,6 +184,29 @@ export default function LibrariesPage() {
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
+                        {lib.status !== "trashed" && (() => {
+                          const h = healthByLibraryId.get(lib.library_id);
+                          // Default to neutral grey if health hasn't loaded
+                          // yet — avoids a misleading green flash on first
+                          // paint.
+                          const color = !h
+                            ? "bg-gray-500"
+                            : h.healthy
+                              ? "bg-green-500"
+                              : "bg-amber-500";
+                          const title = !h
+                            ? "Health: loading…"
+                            : h.healthy
+                              ? "All enrichment complete"
+                              : `${h.pending} asset${h.pending === 1 ? "" : "s"} need repair`;
+                          return (
+                            <span
+                              className={`inline-block h-2 w-2 rounded-full ${color}`}
+                              title={title}
+                              aria-label={title}
+                            />
+                          );
+                        })()}
                         <span className="font-semibold text-gray-100">
                           {lib.name}
                         </span>

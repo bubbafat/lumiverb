@@ -206,6 +206,12 @@ export interface LibraryRevision {
   asset_count: number;
 }
 
+export interface LibraryHealthItem {
+  library_id: string;
+  healthy: boolean;
+  pending: number;
+}
+
 /** Legacy saved query format (deprecated). */
 export interface SavedQueryLegacy {
   q?: string;
