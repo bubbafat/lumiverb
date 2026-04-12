@@ -204,11 +204,13 @@ struct LibraryBrowseView: View {
         client: APIClient, libraryId: String
     ) async -> [String] {
         do {
+            // Use the f= filter prefix syntax — query endpoint ignores
+            // library_id as a plain query param.
             let response: QueryResponse = try await client.get(
                 "/v1/query",
                 queryItems: [
-                    URLQueryItem(name: "library_id", value: libraryId),
-                    URLQueryItem(name: "page_size", value: "4"),
+                    URLQueryItem(name: "f", value: "library:\(libraryId)"),
+                    URLQueryItem(name: "limit", value: "4"),
                 ]
             )
             return response.items.map(\.assetId)

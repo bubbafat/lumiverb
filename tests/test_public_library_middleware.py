@@ -37,6 +37,7 @@ def public_lib_client():
         os.environ["CONTROL_PLANE_DATABASE_URL"] = control_url
         os.environ["TENANT_DATABASE_URL_TEMPLATE"] = str(u.set(database="{tenant_id}"))
         os.environ["ADMIN_KEY"] = "test-admin-secret"
+        os.environ["JWT_SECRET"] = "test-jwt-secret-public-lib-mw"
         get_settings.cache_clear()
         _engines.clear()
 
@@ -153,18 +154,16 @@ def test_unauthenticated_assets_page_public_library(public_lib_client) -> None:
 
 
 @pytest.mark.slow
-def test_unauthenticated_search_public_library(public_lib_client) -> None:
-    """GET /v1/search?library_id= for a public library without auth → 200."""
+def test_unauthenticated_query_public_library(public_lib_client) -> None:
+    """
+    GET /v1/query?f=library:<id> for a public library without auth.
+    Today this 401s because get_current_user_id requires a user identity
+    (public requests have neither user_id nor key_id). The 401 is the
+    current defense; the explicit guard in the query handler is defense
+    in depth for if user_id is later relaxed for public browsing.
+    """
     client, _, library_id, _ = public_lib_client
-    r = client.get("/v1/search", params={"library_id": library_id, "q": "sunset"})
-    assert r.status_code == 200
-
-
-@pytest.mark.slow
-def test_unauthenticated_search_private_library_returns_401(public_lib_client) -> None:
-    """GET /v1/search?library_id= for a private library without auth → 401."""
-    client, _, _, private_library_id = public_lib_client
-    r = client.get("/v1/search", params={"library_id": private_library_id, "q": "sunset"})
+    r = client.get("/v1/query", params=[("f", f"library:{library_id}")])
     assert r.status_code == 401
 
 
@@ -236,3 +235,50 @@ def test_handler_rejects_stale_public_libraries_row(public_lib_client) -> None:
 
     # Cleanup: restore public so other tests aren't affected
     client.patch(f"/v1/libraries/{library_id}", json={"is_public": True}, headers=auth)
+
+
+# ---------------------------------------------------------------------------
+# /v1/query: cross-library leak prevention via public request
+# ---------------------------------------------------------------------------
+
+@pytest.mark.slow
+def test_query_public_request_cannot_leak_private_library(public_lib_client) -> None:
+    """
+    Attack: an unauthenticated user passes both a public and a private
+    library in the f=library: filter. The middleware authorizes based on
+    the FIRST library: param, but without a handler-side guard the query
+    would also return content from the private library.
+
+    The endpoint must reject this — either via the get_current_user_id
+    dependency (current defense) or via the explicit is_public_request
+    guard in the query handler (defense in depth). Either way, the
+    response must NOT be a 200 with private content.
+    """
+    client, _, public_library_id, private_library_id = public_lib_client
+    r = client.get(
+        "/v1/query",
+        params=[
+            ("f", f"library:{public_library_id}"),
+            ("f", f"library:{private_library_id}"),
+        ],
+    )
+    # Must be blocked. 401 (current: get_current_user_id) or 404 (the
+    # explicit guard once user_id is allowed for public requests). Both
+    # are safe. A 200 with items from the private library would be a leak.
+    assert r.status_code in (401, 404), (r.status_code, r.text)
+
+
+@pytest.mark.slow
+def test_query_public_request_only_private_library_returns_401(public_lib_client) -> None:
+    """
+    Public request with only a private library in f=library: must be
+    rejected by the middleware (no authorized public library found).
+    """
+    client, _, _, private_library_id = public_lib_client
+    r = client.get(
+        "/v1/query",
+        params=[("f", f"library:{private_library_id}")],
+    )
+    # Middleware finds the f=library:private_id, looks up public_libraries,
+    # finds nothing, falls through to 401.
+    assert r.status_code == 401

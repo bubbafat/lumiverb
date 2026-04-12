@@ -258,6 +258,32 @@ def unified_query(
     """
     spec = parse_f_params(f, sort=sort, direction=dir)
 
+    # --- Public-request guard ---
+    # Public (unauthenticated) requests are authorized for exactly one
+    # public library by the middleware. Enforce here that the LibraryScope
+    # filter contains exactly that library and no others — otherwise an
+    # attacker could pass `f=library:<public>&f=library:<private>` and
+    # the middleware (which only inspects the first library: param)
+    # would authorize the request for the public library while the
+    # query handler returned content from the private one too.
+    #
+    # Today this is also blocked by `get_current_user_id` 401-ing public
+    # requests, but that's a coincidental defense — this guard makes the
+    # endpoint safe even if the user_id requirement is later relaxed for
+    # anonymous public browsing.
+    if getattr(request.state, "is_public_request", False):
+        lib_repo = LibraryRepository(session)
+        scoped_lib_ids: set[str] = set()
+        for leaf in spec.leaves:
+            if isinstance(leaf, LibraryScope):
+                scoped_lib_ids.update(leaf.library_ids)
+        if not scoped_lib_ids:
+            raise HTTPException(status_code=403, detail="Public access requires library scope")
+        for lid in scoped_lib_ids:
+            lib = lib_repo.get_by_id(lid)
+            if lib is None or not lib.is_public:
+                raise HTTPException(status_code=404, detail="Not found")
+
     search_terms = spec.search_terms
     candidate_ids: list[str] | None = None
     candidate_scores: dict[str, float] | None = None
