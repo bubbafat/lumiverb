@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 import LumiverbKit
 
 /// Search tab with face circles, search bar, and results.
@@ -9,9 +10,18 @@ struct SearchTab: View {
     @ObservedObject var browseState: BrowseState
     @ObservedObject var peopleState: PeopleState
 
+    // M7: similar-by-image state
+    @State private var imageSimilarPickedItem: PhotosPickerItem?
+    @State private var imageSimilarSource: UIImage?
+    @State private var imageSimilarHits: [SimilarHit] = []
+    @State private var imageSimilarLoading = false
+    @State private var imageSimilarError: String?
+
     var body: some View {
         VStack(spacing: 0) {
-            if browseState.mode == .search || browseState.isSearching {
+            if imageSimilarSource != nil || imageSimilarLoading || !imageSimilarHits.isEmpty {
+                imageSimilarContent
+            } else if browseState.mode == .search || browseState.isSearching {
                 searchResultsContent
             } else if browseState.filters.personId != nil {
                 personFilterContent
@@ -22,6 +32,21 @@ struct SearchTab: View {
             }
         }
         .navigationTitle("Search")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                PhotosPicker(
+                    selection: $imageSimilarPickedItem,
+                    matching: .images,
+                    photoLibrary: .shared()
+                ) {
+                    Image(systemName: "photo.badge.magnifyingglass")
+                }
+            }
+        }
+        .onChange(of: imageSimilarPickedItem) { _, newItem in
+            guard let newItem else { return }
+            Task { await runImageSimilarSearch(item: newItem) }
+        }
         .searchable(
             text: $browseState.searchQuery,
             placement: .navigationBarDrawer(displayMode: .always),
@@ -213,5 +238,160 @@ struct SearchTab: View {
             get: { browseState.selectedAssetId != nil },
             set: { if !$0 { browseState.closeLightbox() } }
         )
+    }
+
+    // MARK: - M7: similar-by-image
+
+    @ViewBuilder
+    private var imageSimilarContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    if let source = imageSimilarSource {
+                        Image(uiImage: source)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 80, height: 80)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Similar to")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text(imageSimilarLoading
+                             ? "Searching..."
+                             : "\(imageSimilarHits.count) result\(imageSimilarHits.count == 1 ? "" : "s")")
+                            .font(.subheadline.weight(.medium))
+                    }
+                    Spacer()
+                    Button {
+                        clearImageSimilar()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+
+                if let error = imageSimilarError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                        .padding(.horizontal, 16)
+                }
+
+                if imageSimilarLoading {
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 40)
+                } else if imageSimilarHits.isEmpty && imageSimilarSource != nil {
+                    ContentUnavailableView(
+                        "No Similar Photos",
+                        systemImage: "square.stack.3d.up",
+                        description: Text("Nothing close enough was found")
+                    )
+                    .padding(.top, 40)
+                } else {
+                    let columns = [
+                        GridItem(.flexible(), spacing: 2),
+                        GridItem(.flexible(), spacing: 2),
+                        GridItem(.flexible(), spacing: 2),
+                    ]
+                    LazyVGrid(columns: columns, spacing: 2) {
+                        ForEach(imageSimilarHits) { hit in
+                            Color.clear
+                                .aspectRatio(1, contentMode: .fit)
+                                .overlay(
+                                    AuthenticatedImageView(
+                                        assetId: hit.assetId,
+                                        client: appState.client,
+                                        type: .thumbnail
+                                    )
+                                )
+                                .clipped()
+                                .onTapGesture {
+                                    Task { await browseState.loadAssetDetail(assetId: hit.assetId) }
+                                }
+                        }
+                    }
+                    .padding(.horizontal, 2)
+                }
+            }
+        }
+    }
+
+    private func clearImageSimilar() {
+        imageSimilarPickedItem = nil
+        imageSimilarSource = nil
+        imageSimilarHits = []
+        imageSimilarError = nil
+        imageSimilarLoading = false
+    }
+
+    /// Loads the picked photo, downscales for upload, base64-encodes,
+    /// and POSTs to /v1/similar/search-by-image.
+    private func runImageSimilarSearch(item: PhotosPickerItem) async {
+        guard let client = appState.client else { return }
+        // Pick a library: prefer the currently selected one, fall back
+        // to the first available. The endpoint requires a library_id.
+        let libraryId: String
+        if let selected = browseState.selectedLibraryId {
+            libraryId = selected
+        } else if let first = appState.libraries.first {
+            libraryId = first.libraryId
+        } else {
+            imageSimilarError = "No library available"
+            return
+        }
+
+        imageSimilarLoading = true
+        imageSimilarHits = []
+        imageSimilarError = nil
+        defer { imageSimilarLoading = false }
+
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self),
+                  let uiImage = UIImage(data: data) else {
+                imageSimilarError = "Couldn't load image"
+                return
+            }
+            // Downscale to 512px on the long edge — keeps upload size
+            // reasonable. The server CLIP model only sees ~224px anyway.
+            let resized = downscaleImage(uiImage, maxDimension: 512)
+            guard let jpeg = resized.jpegData(compressionQuality: 0.85) else {
+                imageSimilarError = "Couldn't encode image"
+                return
+            }
+            imageSimilarSource = resized
+
+            let request = ImageSimilarityRequest(
+                libraryId: libraryId,
+                imageB64: jpeg.base64EncodedString(),
+                limit: 30
+            )
+            let response: ImageSimilarityResponse = try await client.post(
+                "/v1/similar/search-by-image",
+                body: request
+            )
+            imageSimilarHits = response.hits
+        } catch {
+            imageSimilarError = "Search failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func downscaleImage(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
+        let size = image.size
+        let longEdge = max(size.width, size.height)
+        guard longEdge > maxDimension else { return image }
+        let scale = maxDimension / longEdge
+        let newSize = CGSize(width: size.width * scale, height: size.height * scale)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: newSize))
+        }
     }
 }

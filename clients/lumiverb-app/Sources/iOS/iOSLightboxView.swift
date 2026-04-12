@@ -83,6 +83,13 @@ struct iOSLightboxView: View {
 
             HStack(spacing: 16) {
                 Button {
+                    showFaces.toggle()
+                } label: {
+                    Image(systemName: showFaces ? "face.smiling.inverse" : "face.smiling")
+                        .foregroundColor(showFaces ? .accentColor : .white)
+                }
+
+                Button {
                     var updated = browseState.currentRating
                     updated.favorite.toggle()
                     browseState.currentRating = updated
@@ -106,17 +113,33 @@ struct iOSLightboxView: View {
 
     // MARK: - Image area
 
+    @State private var showFaces = false
+
     @ViewBuilder
     private var imageArea: some View {
         if let assetId = browseState.selectedAssetId {
-            AuthenticatedImageView(
-                assetId: assetId,
-                client: client,
-                type: .proxy
-            )
-            .aspectRatio(contentMode: .fit)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
+            ZStack {
+                AuthenticatedImageView(
+                    assetId: assetId,
+                    client: client,
+                    type: .proxy
+                )
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+
+                if showFaces,
+                   let detail = browseState.assetDetail,
+                   let width = detail.width,
+                   let height = detail.height {
+                    iOSFaceOverlayView(
+                        assetId: assetId,
+                        imageWidth: width,
+                        imageHeight: height,
+                        client: client
+                    )
+                }
+            }
         } else {
             Color.clear
         }

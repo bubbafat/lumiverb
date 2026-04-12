@@ -12,6 +12,7 @@ struct MainTabView: View {
     @StateObject private var browseState: BrowseState
     @StateObject private var peopleState: PeopleState
     @StateObject private var collectionsState: CollectionsState
+    @StateObject private var clusterReviewState: ClusterReviewState
     @StateObject private var networkMonitor = NetworkMonitor()
 
     private let cacheBundle: CacheBundle
@@ -26,6 +27,7 @@ struct MainTabView: View {
         self._browseState = StateObject(wrappedValue: bs)
         self._peopleState = StateObject(wrappedValue: PeopleState(client: appState.client))
         self._collectionsState = StateObject(wrappedValue: CollectionsState(client: appState.client))
+        self._clusterReviewState = StateObject(wrappedValue: ClusterReviewState(client: appState.client))
 
         self.cacheBundle = CacheBundle(
             proxies: MemoryImageCache(name: "ios.proxies"),
@@ -57,14 +59,14 @@ struct MainTabView: View {
                 Label("Collections", systemImage: "rectangle.stack.fill")
             }
 
-            NavigationStack {
-                PeopleView(
-                    peopleState: peopleState,
-                    browseState: browseState,
-                    client: appState.client
-                )
-                .navigationTitle("People")
-            }
+            // PeopleView wraps itself in a NavigationStack — don't
+            // double-wrap.
+            PeopleView(
+                peopleState: peopleState,
+                browseState: browseState,
+                client: appState.client,
+                clusterReviewState: clusterReviewState
+            )
             .tabItem {
                 Label("People", systemImage: "person.2.fill")
             }
