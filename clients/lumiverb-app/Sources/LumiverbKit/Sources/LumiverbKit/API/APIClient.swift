@@ -6,12 +6,27 @@ private let logger = Logger(subsystem: "io.lumiverb.app", category: "APIClient")
 // MARK: - Errors
 
 /// Errors from the Lumiverb API client.
-public enum APIError: Error, Equatable {
+public enum APIError: Error, Equatable, LocalizedError {
     case unauthorized(String)
     case serverError(statusCode: Int, message: String)
     case decodingError(String)
     case networkError(String)
     case noToken
+
+    public var errorDescription: String? {
+        switch self {
+        case .unauthorized(let message):
+            return "Unauthorized: \(message)"
+        case .serverError(let statusCode, let message):
+            return "Server error (\(statusCode)): \(message)"
+        case .decodingError(let message):
+            return "Decoding error: \(message)"
+        case .networkError(let message):
+            return "Network error: \(message)"
+        case .noToken:
+            return "No access token"
+        }
+    }
 }
 
 /// Matches the server error envelope: `{"error": {"code": "...", "message": "..."}}`.

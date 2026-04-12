@@ -11,10 +11,22 @@ public struct PeopleView: View {
     @ObservedObject public var browseState: BrowseState
     public let client: APIClient?
 
-    public init(peopleState: PeopleState, browseState: BrowseState, client: APIClient?) {
+    /// Optional cluster review state. When provided, the People view
+    /// renders a "Review unnamed faces" entry at the top that pushes
+    /// `ClusterReviewView` via the navigation stack. macOS doesn't pass
+    /// this — its sidebar already has a separate cluster-review section.
+    public let clusterReviewState: ClusterReviewState?
+
+    public init(
+        peopleState: PeopleState,
+        browseState: BrowseState,
+        client: APIClient?,
+        clusterReviewState: ClusterReviewState? = nil
+    ) {
         self.peopleState = peopleState
         self.browseState = browseState
         self.client = client
+        self.clusterReviewState = clusterReviewState
     }
 
     /// Four columns of circular avatars. iOS uses tighter spacing to
@@ -34,6 +46,12 @@ public struct PeopleView: View {
     public var body: some View {
         NavigationStack {
             ScrollView {
+                if clusterReviewState != nil {
+                    reviewEntryPoint
+                        .padding(.horizontal, 20)
+                        .padding(.top, 12)
+                }
+
                 modePicker
                     .padding(.horizontal, 20)
                     .padding(.top, 12)
@@ -92,6 +110,16 @@ public struct PeopleView: View {
                     peopleState.clearSelection()
                 }
             }
+            .navigationDestination(for: ClusterReviewDestination.self) { _ in
+                if let clusterReviewState {
+                    ClusterReviewView(
+                        state: clusterReviewState,
+                        browseState: browseState,
+                        client: client
+                    )
+                    .navigationTitle("Review Faces")
+                }
+            }
         }
         // Use an unstructured Task in onAppear (rather than `.task`) so
         // the initial fetch survives a transient view teardown — for
@@ -102,6 +130,41 @@ public struct PeopleView: View {
         .onAppear {
             Task { await peopleState.loadIfNeeded() }
         }
+    }
+
+    /// "Review unnamed faces" entry point shown above the people grid.
+    /// NavigationLink uses the `ClusterReviewDestination` marker type
+    /// matched by the `.navigationDestination` modifier on the
+    /// surrounding ScrollView.
+    private var reviewEntryPoint: some View {
+        NavigationLink(value: ClusterReviewDestination.shared) {
+            HStack(spacing: 12) {
+                Image(systemName: "person.crop.rectangle.stack")
+                    .font(.title2)
+                    .foregroundColor(.accentColor)
+                    .frame(width: 40, height: 40)
+                    .background(Color.accentColor.opacity(0.15))
+                    .clipShape(Circle())
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Review unnamed faces")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundColor(.primary)
+                    Text("Tap to name new people in your library")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.secondary)
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.gray.opacity(0.1))
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     /// Segmented control switching between active and dismissed lists.
@@ -178,4 +241,13 @@ struct PersonCardView: View {
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
     }
+}
+
+/// Marker type for the cluster review navigation destination. Singleton
+/// because there's only one cluster review screen — using a struct
+/// (rather than a Bool flag) lets us hang it off the navigation stack
+/// the same way `PersonItem` does, with a clean back button.
+public struct ClusterReviewDestination: Hashable, Sendable {
+    public static let shared = ClusterReviewDestination()
+    private init() {}
 }
