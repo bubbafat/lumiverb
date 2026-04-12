@@ -1,8 +1,10 @@
 import SwiftUI
 
 /// A library/album card showing the name and a 2x2 thumbnail grid,
-/// matching the Google Photos album card style. Falls back to a single
-/// cover image or placeholder when fewer than 4 preview IDs are available.
+/// matching the Google Photos album card style. The grid always
+/// reserves a 2x2 layout — empty cells are filled with a placeholder
+/// background so single-image libraries don't make the card collapse
+/// or distort the parent's flex column.
 public struct LibraryCardView: View {
     public let library: Library
     public let previewAssetIds: [String]
@@ -38,60 +40,47 @@ public struct LibraryCardView: View {
         let ids = Array(previewAssetIds.prefix(4))
         if ids.isEmpty {
             emptyPlaceholder
-        } else if ids.count == 1 {
-            singleImage(ids[0])
         } else {
-            multiImageGrid(ids)
-        }
-    }
-
-    private func singleImage(_ assetId: String) -> some View {
-        AuthenticatedImageView(
-            assetId: assetId,
-            client: client,
-            type: .thumbnail
-        )
-        .aspectRatio(1, contentMode: .fill)
-        .clipped()
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-    }
-
-    @ViewBuilder
-    private func multiImageGrid(_ ids: [String]) -> some View {
-        let spacing: CGFloat = 2
-        GeometryReader { geo in
-            let half = (geo.size.width - spacing) / 2
-            VStack(spacing: spacing) {
-                HStack(spacing: spacing) {
-                    thumbnailCell(ids[0], size: half)
-                    if ids.count > 1 {
-                        thumbnailCell(ids[1], size: half)
-                    }
-                }
-                if ids.count > 2 {
-                    HStack(spacing: spacing) {
-                        thumbnailCell(ids[2], size: half)
-                        if ids.count > 3 {
-                            thumbnailCell(ids[3], size: half)
-                        } else {
-                            Color.clear.frame(width: half, height: half)
-                        }
+            // Always render a 2x2 grid. Missing cells use the placeholder
+            // background so the card maintains a square aspect ratio
+            // regardless of how many previews are available.
+            let spacing: CGFloat = 2
+            let columns = Array(
+                repeating: GridItem(.flexible(), spacing: spacing),
+                count: 2
+            )
+            LazyVGrid(columns: columns, spacing: spacing) {
+                ForEach(0..<4, id: \.self) { i in
+                    if i < ids.count {
+                        // Color.clear sizes the cell to a square via
+                        // aspectRatio. The overlay puts the image inside
+                        // that frame, and .clipped() crops the image's
+                        // .fill content to the cell's bounds. Without
+                        // this pattern, AuthenticatedImageView's internal
+                        // .aspectRatio(.fill) lets the image overflow
+                        // and bleed over neighbouring cells.
+                        Color.clear
+                            .aspectRatio(1, contentMode: .fit)
+                            .overlay(
+                                AuthenticatedImageView(
+                                    assetId: ids[i],
+                                    client: client,
+                                    type: .thumbnail
+                                )
+                            )
+                            .clipped()
+                    } else {
+                        emptyCell
                     }
                 }
             }
+            .clipShape(RoundedRectangle(cornerRadius: 12))
         }
-        .aspectRatio(1, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
-    private func thumbnailCell(_ assetId: String, size: CGFloat) -> some View {
-        AuthenticatedImageView(
-            assetId: assetId,
-            client: client,
-            type: .thumbnail
-        )
-        .frame(width: size, height: size)
-        .clipped()
+    private var emptyCell: some View {
+        Color.gray.opacity(0.15)
+            .aspectRatio(1, contentMode: .fit)
     }
 
     private var emptyPlaceholder: some View {
