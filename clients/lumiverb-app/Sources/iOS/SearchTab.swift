@@ -330,8 +330,16 @@ struct SearchTab: View {
         imageSimilarLoading = false
     }
 
-    /// Loads the picked photo, downscales for upload, base64-encodes,
-    /// and POSTs to /v1/similar/search-by-image.
+    /// Loads the picked photo, embeds it locally with Apple Vision
+    /// feature prints, and POSTs the vector to /v1/similar/search-by-vector.
+    ///
+    /// We embed client-side rather than uploading the image bytes
+    /// because the macOS app indexes libraries with `apple_vision`
+    /// feature prints (model_id `apple_vision`, model_version
+    /// `feature_print_v1`). The server-side search-by-image endpoint
+    /// embeds with CLIP, which lives in a different vector space and
+    /// would never match the indexed assets — so we have to compute
+    /// the embedding here, in the same space the library was indexed in.
     private func runImageSimilarSearch(item: PhotosPickerItem) async {
         guard let client = appState.client else { return }
         // Pick a library: prefer the currently selected one, fall back
@@ -357,22 +365,25 @@ struct SearchTab: View {
                 imageSimilarError = "Couldn't load image"
                 return
             }
-            // Downscale to 512px on the long edge — keeps upload size
-            // reasonable. The server CLIP model only sees ~224px anyway.
-            let resized = downscaleImage(uiImage, maxDimension: 512)
-            guard let jpeg = resized.jpegData(compressionQuality: 0.85) else {
-                imageSimilarError = "Couldn't encode image"
-                return
-            }
-            imageSimilarSource = resized
+            // Show a downscaled preview at the top of the results.
+            // The full-resolution data is what we feed to Vision —
+            // VNGenerateImageFeaturePrintRequest does its own
+            // resampling internally.
+            imageSimilarSource = downscaleImage(uiImage, maxDimension: 512)
 
-            let request = ImageSimilarityRequest(
+            // Embed on the iOS device — must use Apple Vision feature
+            // prints to match what the macOS app indexed with.
+            let vector = try iOSFeaturePrintEmbedder.embed(imageData: data)
+
+            let request = VectorSimilarityRequest(
                 libraryId: libraryId,
-                imageB64: jpeg.base64EncodedString(),
+                vector: vector,
+                modelId: iOSFeaturePrintEmbedder.modelId,
+                modelVersion: iOSFeaturePrintEmbedder.modelVersion,
                 limit: 30
             )
             let response: ImageSimilarityResponse = try await client.post(
-                "/v1/similar/search-by-image",
+                "/v1/similar/search-by-vector",
                 body: request
             )
             imageSimilarHits = response.hits

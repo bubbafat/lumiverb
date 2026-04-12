@@ -51,6 +51,37 @@ public struct ImageSimilarityRequest: Encodable, Sendable {
     }
 }
 
+/// Request body for `POST /v1/similar/search-by-vector`. For clients
+/// that embed locally — iOS uses Apple Vision feature prints, macOS
+/// uses CLIP via CoreML or Vision feature prints. The model_id /
+/// model_version must match how the library was indexed, otherwise
+/// the server's vector lookup returns no results (different vector
+/// spaces).
+public struct VectorSimilarityRequest: Encodable, Sendable {
+    public let libraryId: String
+    public let vector: [Float]
+    public let modelId: String
+    public let modelVersion: String
+    public let limit: Int
+    public let offset: Int
+
+    public init(
+        libraryId: String,
+        vector: [Float],
+        modelId: String,
+        modelVersion: String,
+        limit: Int = 20,
+        offset: Int = 0
+    ) {
+        self.libraryId = libraryId
+        self.vector = vector
+        self.modelId = modelId
+        self.modelVersion = modelVersion
+        self.limit = limit
+        self.offset = offset
+    }
+}
+
 /// Response from `POST /v1/similar/search-by-image` (and search-by-vector).
 /// Has `hits` + `total` but no `source_asset_id` (the source is the
 /// uploaded image, not a stored asset).
