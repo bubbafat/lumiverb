@@ -22,10 +22,20 @@ struct PersonDetailView: View {
     @State private var showRestoreSheet = false
     @State private var confirmDelete = false
 
+    /// 2 columns on iOS to match the user's preference for the
+    /// browse density. macOS keeps 4 columns since its window is
+    /// wider.
+    #if os(iOS)
+    private let columns = Array(
+        repeating: GridItem(.flexible(), spacing: 2),
+        count: 2
+    )
+    #else
     private let columns = Array(
         repeating: GridItem(.flexible(), spacing: 2),
         count: 4
     )
+    #endif
 
     /// Whichever is freshest — the parameter we were pushed with, or the
     /// `peopleState.selectedPerson` if a successful rename / merge has
@@ -59,8 +69,18 @@ struct PersonDetailView: View {
                     .padding(.vertical, 8)
                     .background(Color.red.opacity(0.12))
                 }
+                if browseState.isSelecting {
+                    SelectionToolbarView(browseState: browseState, client: client)
+                }
                 Divider()
                 grid
+            }
+        }
+        .onDisappear {
+            // Clear shared browseState selection so it doesn't leak
+            // into other tabs after the user navigates back.
+            if browseState.isSelecting {
+                browseState.clearSelection()
             }
         }
         .navigationTitle(current.displayName)
@@ -182,26 +202,52 @@ struct PersonDetailView: View {
             .frame(maxWidth: .infinity)
             .padding(.top, 60)
         } else {
+            #if os(iOS)
+            DateGroupedGrid(
+                browseState: browseState,
+                items: peopleState.personFaces,
+                client: client,
+                dateString: { $0.takenAt },
+                assetId: { $0.assetId },
+                isLoading: peopleState.isLoadingFaces,
+                onTap: { face in openLightbox(at: face) },
+                onLastItemAppear: { _ in
+                    Task { await peopleState.loadNextFacesPage() }
+                }
+            )
+            #else
             LazyVGrid(columns: columns, spacing: 2) {
                 ForEach(peopleState.personFaces) { face in
-                    PersonFaceCellView(face: face, client: client)
-                        .onTapGesture {
+                    let isSelected = browseState.selectedAssetIds.contains(face.assetId)
+                    PersonFaceCellView(
+                        face: face,
+                        client: client,
+                        isSelected: isSelected,
+                        onToggleSelect: {
+                            browseState.toggleSelection(assetId: face.assetId)
+                        }
+                    )
+                    .onTapGesture {
+                        if browseState.isSelecting {
+                            browseState.toggleSelection(assetId: face.assetId)
+                        } else {
                             openLightbox(at: face)
                         }
-                        .onAppear {
-                            if let last = peopleState.personFaces.last,
-                               last.faceId == face.faceId {
-                                Task { await peopleState.loadNextFacesPage() }
-                            }
+                    }
+                    .onAppear {
+                        if let last = peopleState.personFaces.last,
+                           last.faceId == face.faceId {
+                            Task { await peopleState.loadNextFacesPage() }
                         }
+                    }
                 }
             }
             .padding(2)
-        }
-
-        if peopleState.isLoadingFaces {
-            ProgressView()
-                .padding()
+            if peopleState.isLoadingFaces {
+                ProgressView()
+                    .padding()
+            }
+            #endif
         }
 
         if let error = peopleState.personFacesError {
@@ -227,19 +273,16 @@ struct PersonDetailView: View {
 private struct PersonFaceCellView: View {
     let face: PersonFaceItem
     let client: APIClient?
+    let isSelected: Bool
+    let onToggleSelect: () -> Void
 
     var body: some View {
-        AuthenticatedImageView(
+        AssetGridCell(
             assetId: face.assetId,
+            isSelected: isSelected,
             client: client,
-            type: .thumbnail
+            onToggleSelect: onToggleSelect
         )
-        .frame(minHeight: 120)
-        .clipped()
-        .background(Color.gray.opacity(0.1))
-        .aspectRatio(1, contentMode: .fill)
-        .cornerRadius(2)
-        .contentShape(Rectangle())
     }
 }
 

@@ -56,6 +56,99 @@ private let isoDateFormatter: DateFormatter = {
     return f
 }()
 
+/// Generic date bucket for any item type. Used by `DateGroupedGrid` so
+/// all four iOS grids (Photos / Collections / People / Favorites) can
+/// share the same date-grouping logic regardless of their item shape.
+public struct DateBucket<Item>: Identifiable {
+    public let label: String
+    public let dateISO: String?
+    public let items: [Item]
+    public let assetIds: [String]  // for select-all-in-date
+
+    public var id: String { label }
+}
+
+/// Internal accumulator for `bucketByDate`. Defined at file scope
+/// because Swift doesn't allow generic structs nested inside generic
+/// functions.
+fileprivate struct DateBucketAccumulator<I> {
+    var label: String
+    var dateISO: String?
+    var items: [I] = []
+    var assetIds: [String] = []
+    var latestTimestamp: Date?
+}
+
+/// Generic version of `groupAssetsByDate`. Each item supplies its
+/// `takenAt` (or fallback) string via a closure and its assetId via
+/// another. Used by `DateGroupedGrid` to bucket any item shape.
+public func bucketByDate<Item>(
+    _ items: [Item],
+    dateString: (Item) -> String?,
+    assetId: (Item) -> String
+) -> [DateBucket<Item>] {
+    guard !items.isEmpty else { return [] }
+
+    var groupsByLabel: [String: DateBucketAccumulator<Item>] = [:]
+    var insertionOrder: [String] = []
+
+    for item in items {
+        let dateStr = dateString(item)
+        var label = "Unknown date"
+        var dateISO: String?
+        var timestamp: Date?
+
+        if let dateStr, let parsed = parseISO8601(dateStr) {
+            label = labelFormatter.string(from: parsed)
+            dateISO = isoDateFormatter.string(from: parsed)
+            timestamp = parsed
+        }
+
+        let id = assetId(item)
+        if var existing = groupsByLabel[label] {
+            existing.items.append(item)
+            existing.assetIds.append(id)
+            if let ts = timestamp {
+                if let current = existing.latestTimestamp {
+                    existing.latestTimestamp = max(current, ts)
+                } else {
+                    existing.latestTimestamp = ts
+                }
+            }
+            groupsByLabel[label] = existing
+        } else {
+            groupsByLabel[label] = DateBucketAccumulator<Item>(
+                label: label,
+                dateISO: dateISO,
+                items: [item],
+                assetIds: [id],
+                latestTimestamp: timestamp
+            )
+            insertionOrder.append(label)
+        }
+    }
+
+    var groups = insertionOrder.compactMap { groupsByLabel[$0] }
+
+    groups.sort { a, b in
+        switch (a.latestTimestamp, b.latestTimestamp) {
+        case (nil, nil): return false
+        case (nil, _): return false
+        case (_, nil): return true
+        case let (aTs?, bTs?): return aTs > bTs
+        }
+    }
+
+    return groups.map {
+        DateBucket(
+            label: $0.label,
+            dateISO: $0.dateISO,
+            items: $0.items,
+            assetIds: $0.assetIds
+        )
+    }
+}
+
 /// Group assets by calendar date using `takenAt` with `createdAt` fallback.
 /// Sorted most-recent-first; assets with no parseable date go into an
 /// "Unknown date" group at the end.

@@ -51,9 +51,21 @@ struct MainTabView: View {
             NavigationStack {
                 CollectionsListView(
                     collectionsState: collectionsState,
-                    client: appState.client
+                    client: appState.client,
+                    showFavoritesLink: true
                 )
                 .navigationTitle("Collections")
+                .navigationDestination(for: FavoritesDestination.self) { _ in
+                    FavoritesView(appState: appState, browseState: browseState)
+                }
+                .navigationDestination(for: CollectionDetailRoute.self) { route in
+                    CollectionDetailDestinationView(
+                        route: route,
+                        collectionsState: collectionsState,
+                        browseState: browseState,
+                        client: appState.client
+                    )
+                }
             }
             .tabItem {
                 Label("Collections", systemImage: "rectangle.stack.fill")
@@ -112,5 +124,45 @@ struct MainTabView: View {
                 }
             }
         )
+    }
+}
+
+/// Wrapper for the iOS collection-detail navigation destination.
+/// Loads the collection's assets via `openCollectionDetail` on appear,
+/// and pops the navigation stack when `collectionsState.openCollection`
+/// becomes nil — that's how `CollectionsState.deleteCollection` signals
+/// "the detail you were looking at is gone, get out". Without this,
+/// deleting a collection from CollectionDetailView left a blank detail
+/// pane on the navigation stack.
+private struct CollectionDetailDestinationView: View {
+    let route: CollectionDetailRoute
+    @ObservedObject var collectionsState: CollectionsState
+    @ObservedObject var browseState: BrowseState
+    let client: APIClient?
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        CollectionDetailView(
+            collectionsState: collectionsState,
+            browseState: browseState,
+            client: client
+        )
+        .task {
+            // Mirror what `openCollectionDetail` does on macOS via the
+            // sidebar tap — load the collection's assets when the
+            // detail screen first appears.
+            if let col = collectionsState.collections.first(
+                where: { $0.collectionId == route.collectionId }
+            ) {
+                await collectionsState.openCollectionDetail(col)
+            }
+        }
+        .onChange(of: collectionsState.openCollection?.collectionId) { _, newId in
+            // Delete cleared the open collection — pop back to the list.
+            if newId == nil {
+                dismiss()
+            }
+        }
     }
 }

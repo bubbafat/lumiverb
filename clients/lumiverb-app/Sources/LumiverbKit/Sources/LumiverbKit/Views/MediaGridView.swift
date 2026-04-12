@@ -8,7 +8,12 @@ import SwiftUI
 /// "one line" — but it's harmless to expose.
 public enum MediaGridLayoutConstants {
     #if os(iOS)
-    public static let targetRowHeight: CGFloat = 120
+    // 180pt target row height gives ~2 cells per row on iPhone for
+    // typical landscape and square photos (390pt screen / 180pt ≈
+    // 2.2 cells of natural width). Tall portraits still squeeze 3
+    // per row, which is fine. The user explicitly asked for 2-wide
+    // consistency across Photos / Collections / People / Favorites.
+    public static let targetRowHeight: CGFloat = 180
     public static let spacing: CGFloat = 2
     #else
     public static let targetRowHeight: CGFloat = 180
@@ -91,6 +96,51 @@ public struct MediaGridView<ScrollIntrospector: View>: View {
     }
 
     public var body: some View {
+        #if os(iOS)
+        iosBody
+        #else
+        macBody
+        #endif
+    }
+
+    #if os(iOS)
+    /// iOS body: shared `DateGroupedGrid`. Photos / Collections / People
+    /// / Favorites all use the same component so changes propagate.
+    @ViewBuilder
+    private var iosBody: some View {
+        DateGroupedGrid(
+            browseState: browseState,
+            items: browseState.assets,
+            client: client,
+            dateString: { $0.takenAt ?? $0.createdAt },
+            assetId: { $0.assetId },
+            isVideo: { $0.isVideo },
+            isLoading: browseState.isLoadingAssets,
+            onTap: { asset in
+                if let idx = browseState.assets.firstIndex(where: { $0.assetId == asset.assetId }) {
+                    browseState.focusedIndex = idx
+                }
+                Task { await browseState.loadAssetDetail(assetId: asset.assetId) }
+            },
+            onLastItemAppear: { _ in
+                Task { await browseState.loadNextPage() }
+            }
+        )
+        .sheet(isPresented: Binding(
+            get: { addToCollectionAssetId != nil },
+            set: { if !$0 { addToCollectionAssetId = nil } }
+        )) {
+            if let assetId = addToCollectionAssetId, let cs = collectionsState {
+                AddToCollectionSheet(collectionsState: cs, assetIds: [assetId])
+            }
+        }
+    }
+    #endif
+
+    /// macOS body: original justified-row layout. Window width is
+    /// generous enough that the variable-density look reads well.
+    @ViewBuilder
+    private var macBody: some View {
         GeometryReader { geo in
             let containerWidth = geo.size.width - MediaGridLayoutConstants.spacing * 2
             let dateGroups = groupAssetsByDate(browseState.assets)
@@ -195,26 +245,28 @@ extension MediaGridView {
                 let size = layout.frames[index]
                 let isSelected = browseState.selectedAssetIds.contains(asset.assetId)
 
-                assetCell(asset: asset, isSelected: isSelected)
-                    .frame(width: size.width, height: size.height)
-                    .clipShape(Rectangle())
-                    .onTapGesture {
-                        handleTap(asset: asset)
-                    }
-                    .contextMenu {
-                        AssetRatingContextMenu(
-                            assetId: asset.assetId,
-                            client: client
-                        )
-                        if collectionsState != nil {
-                            Divider()
-                            Button {
-                                addToCollectionAssetId = asset.assetId
-                            } label: {
-                                Label("Add to Collection...", systemImage: "folder.badge.plus")
-                            }
+                assetCellWithOverlays(
+                    asset: asset,
+                    isSelected: isSelected,
+                    size: size
+                )
+                .onTapGesture {
+                    handleTap(asset: asset)
+                }
+                .contextMenu {
+                    AssetRatingContextMenu(
+                        assetId: asset.assetId,
+                        client: client
+                    )
+                    if collectionsState != nil {
+                        Divider()
+                        Button {
+                            addToCollectionAssetId = asset.assetId
+                        } label: {
+                            Label("Add to Collection...", systemImage: "folder.badge.plus")
                         }
                     }
+                }
             }
         }
         .frame(height: rowHeight)
@@ -222,27 +274,48 @@ extension MediaGridView {
 
     // MARK: - Cell
 
+    /// Frame the image FIRST, then apply the selection circle and
+    /// border as overlays so they're positioned relative to the
+    /// cell's actual frame instead of the image's natural size.
+    /// Without this, .aspectRatio(.fill) on the image overflows the
+    /// cell, the selection indicators get pushed out of bounds, and
+    /// the parent .clipped() crops them away — which is why
+    /// portrait/odd-aspect photos rendered without a visible
+    /// selection state when the user tapped "select date".
     @ViewBuilder
-    private func assetCell(asset: AssetPageItem, isSelected: Bool) -> some View {
-        ZStack(alignment: .topLeading) {
-            AssetCellView(asset: asset, client: client)
-
-            // Selection circle — always visible so users know they can
-            // select. Becomes filled + blue when selected.
-            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                .font(.title3)
-                .foregroundColor(isSelected ? .accentColor : .white.opacity(0.6))
-                .shadow(color: .black.opacity(0.5), radius: 2)
-                .padding(6)
-
-            // Selected border
-            if isSelected {
-                RoundedRectangle(cornerRadius: 2)
-                    .strokeBorder(Color.accentColor, lineWidth: 3)
+    private func assetCellWithOverlays(
+        asset: AssetPageItem,
+        isSelected: Bool,
+        size: CGSize
+    ) -> some View {
+        AssetCellView(asset: asset, client: client)
+            .frame(width: size.width, height: size.height)
+            .clipped()
+            .cornerRadius(2)
+            .overlay(alignment: .topLeading) {
+                // Selection circle — always visible so users know they
+                // can select. Tapping the circle always toggles
+                // selection (and enters selection mode), regardless of
+                // the parent tap which opens the lightbox.
+                Button {
+                    browseState.toggleSelection(assetId: asset.assetId)
+                } label: {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.title3)
+                        .foregroundColor(isSelected ? .accentColor : .white.opacity(0.85))
+                        .shadow(color: .black.opacity(0.5), radius: 2)
+                        .padding(10)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
-        }
-        .cornerRadius(2)
-        .contentShape(Rectangle())
+            .overlay {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 2)
+                        .strokeBorder(Color.accentColor, lineWidth: 3)
+                }
+            }
+            .contentShape(Rectangle())
     }
 
     // MARK: - Tap handling

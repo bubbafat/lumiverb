@@ -25,6 +25,10 @@ public struct CollectionDetailView: View {
                 // Header
                 collectionHeader(col)
 
+                if browseState.isSelecting {
+                    SelectionToolbarView(browseState: browseState, client: client)
+                }
+
                 Divider()
 
                 // Asset grid
@@ -40,6 +44,12 @@ public struct CollectionDetailView: View {
                 } else {
                     collectionAssetGrid
                 }
+            }
+        }
+        .onDisappear {
+            // Clear shared selection so it doesn't leak into other tabs.
+            if browseState.isSelecting {
+                browseState.clearSelection()
             }
         }
         .overlay {
@@ -169,7 +179,28 @@ public struct CollectionDetailView: View {
         return labels
     }
 
+    @ViewBuilder
     private var collectionAssetGrid: some View {
+        #if os(iOS)
+        DateGroupedGrid(
+            browseState: browseState,
+            items: collectionsState.collectionAssets,
+            client: client,
+            dateString: { $0.takenAt },
+            assetId: { $0.assetId },
+            isVideo: { $0.isVideo },
+            isLoading: collectionsState.isLoadingAssets,
+            onTap: { asset in
+                if let idx = collectionsState.collectionAssets.firstIndex(where: { $0.assetId == asset.assetId }) {
+                    browseState.focusedIndex = idx
+                }
+                Task { await browseState.loadAssetDetail(assetId: asset.assetId) }
+            },
+            onLastItemAppear: { _ in
+                Task { await collectionsState.loadNextPage() }
+            }
+        )
+        #else
         GeometryReader { geo in
             let layout = MediaLayout.compute(
                 aspectRatios: collectionsState.collectionAssets.map { $0.aspectRatio },
@@ -194,7 +225,25 @@ public struct CollectionDetailView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        #endif
     }
+
+    #if os(iOS)
+    /// Thin wrapper over the shared `AssetGridCell`.
+    @ViewBuilder
+    private func iosCollectionCell(
+        asset: CollectionAsset,
+        isSelected: Bool
+    ) -> some View {
+        AssetGridCell(
+            assetId: asset.assetId,
+            isVideo: asset.isVideo,
+            isSelected: isSelected,
+            client: client,
+            onToggleSelect: { browseState.toggleSelection(assetId: asset.assetId) }
+        )
+    }
+    #endif
 
     @ViewBuilder
     private func collectionAssetRow(row: [Int], layout: MediaLayout) -> some View {
@@ -203,12 +252,15 @@ public struct CollectionDetailView: View {
             ForEach(row, id: \.self) { index in
                 let asset = collectionsState.collectionAssets[index]
                 let size = layout.frames[index]
-                collectionAssetCell(asset: asset)
-                    .frame(width: size.width, height: size.height)
-                    .clipped()
+                let isSelected = browseState.selectedAssetIds.contains(asset.assetId)
+                collectionAssetCell(asset: asset, isSelected: isSelected, size: size)
                     .onTapGesture {
-                        browseState.focusedIndex = index
-                        Task { await browseState.loadAssetDetail(assetId: asset.assetId) }
+                        if browseState.isSelecting {
+                            browseState.toggleSelection(assetId: asset.assetId)
+                        } else {
+                            browseState.focusedIndex = index
+                            Task { await browseState.loadAssetDetail(assetId: asset.assetId) }
+                        }
                     }
                     .contextMenu {
                         if let col = collectionsState.openCollection, col.isOwn {
@@ -233,26 +285,52 @@ public struct CollectionDetailView: View {
         .frame(height: rowHeight)
     }
 
+    /// Same frame-first + overlay pattern as MediaGridView's
+    /// `assetCellWithOverlays` so the selection indicators are
+    /// positioned relative to the cell's actual frame and don't get
+    /// clipped when the image's `.aspectRatio(.fill)` overflows.
     @ViewBuilder
-    private func collectionAssetCell(asset: CollectionAsset) -> some View {
-        ZStack(alignment: .bottomLeading) {
-            AuthenticatedImageView(
-                assetId: asset.assetId,
-                client: client,
-                type: .thumbnail
-            )
-            .background(Color.gray.opacity(0.1))
-            .clipped()
-
+    private func collectionAssetCell(
+        asset: CollectionAsset,
+        isSelected: Bool,
+        size: CGSize
+    ) -> some View {
+        AuthenticatedImageView(
+            assetId: asset.assetId,
+            client: client,
+            type: .thumbnail
+        )
+        .background(Color.gray.opacity(0.1))
+        .frame(width: size.width, height: size.height)
+        .clipped()
+        .cornerRadius(2)
+        .overlay {
             if asset.isVideo {
                 Image(systemName: "play.fill")
                     .font(.title2)
                     .foregroundColor(.white.opacity(0.9))
                     .shadow(color: .black.opacity(0.5), radius: 4)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .cornerRadius(2)
+        .overlay(alignment: .topLeading) {
+            Button {
+                browseState.toggleSelection(assetId: asset.assetId)
+            } label: {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundColor(isSelected ? .accentColor : .white.opacity(0.85))
+                    .shadow(color: .black.opacity(0.5), radius: 2)
+                    .padding(10)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .overlay {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 2)
+                    .strokeBorder(Color.accentColor, lineWidth: 3)
+            }
+        }
         .contentShape(Rectangle())
     }
 }
