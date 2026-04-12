@@ -543,7 +543,11 @@ faces_router = APIRouter(prefix="/v1/faces", tags=["faces"])
 
 
 class ClusterNameRequest(BaseModel):
-    display_name: str
+    # Either display_name (create new person) or person_id (merge into
+    # existing). The handler validates exactly one is provided. Both
+    # are optional at the schema level so Pydantic doesn't reject
+    # merge-only requests before the handler can run.
+    display_name: str | None = None
     person_id: str | None = None  # assign to existing person instead of creating new
 
 
@@ -560,7 +564,8 @@ def name_cluster(
     from src.server.repository.system_metadata import SystemMetadataRepository
     from src.server.repository.tenant import PersonRepository, FaceRepository
 
-    if not body.display_name.strip() and not body.person_id:
+    has_name = body.display_name is not None and body.display_name.strip() != ""
+    if not has_name and not body.person_id:
         raise HTTPException(status_code=400, detail="Provide display_name or person_id")
 
     # Get cluster face IDs from cache — use existing cache even if dirty
@@ -620,7 +625,9 @@ def name_cluster(
             _mark_clusters_dirty(session)
             session.commit()
     else:
-        # Create new person with all cluster faces
+        # Create new person with all cluster faces. has_name guarantees
+        # display_name is non-None and non-empty here.
+        assert body.display_name is not None
         person = person_repo.create(body.display_name.strip(), face_ids=face_ids)
 
     face_count = person_repo.get_face_count(person.person_id)

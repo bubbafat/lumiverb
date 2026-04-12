@@ -283,6 +283,35 @@ def test_name_cluster_assigns_to_existing_person(clusters_client) -> None:
 
 
 @pytest.mark.slow
+def test_name_cluster_merge_without_display_name(clusters_client) -> None:
+    """
+    Merge-only flow: Swift client sends `{person_id: ...}` with no
+    display_name field at all when assigning a cluster to an existing
+    person. The endpoint must accept this — display_name and person_id
+    are mutually exclusive, not both required.
+
+    Regression test for the 422 "field required" error users hit when
+    confirming a face match in the macOS app.
+    """
+    auth_client, _ = clusters_client
+
+    r = auth_client.post("/v1/people", json={"display_name": "MergeTarget"})
+    assert r.status_code == 201
+    person_id = r.json()["person_id"]
+
+    clusters = auth_client.get("/v1/faces/clusters").json()["clusters"]
+    target_cluster = clusters[0]
+
+    # Send ONLY person_id, exactly as the Swift client does for merge.
+    r = auth_client.post(
+        f"/v1/faces/clusters/{target_cluster['cluster_index']}/name",
+        json={"person_id": person_id},
+    )
+    assert r.status_code == 201, (r.status_code, r.text)
+    assert r.json()["person_id"] == person_id
+
+
+@pytest.mark.slow
 def test_name_cluster_validation_errors(clusters_client) -> None:
     auth_client, _ = clusters_client
 
