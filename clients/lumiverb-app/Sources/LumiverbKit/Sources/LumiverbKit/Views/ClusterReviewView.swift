@@ -79,7 +79,7 @@ public struct ClusterReviewView: View {
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
-            Text("Cluster Review")
+            Text("Review Faces")
                 .font(.largeTitle)
                 .fontWeight(.bold)
             Spacer()
@@ -187,10 +187,18 @@ struct ClusterCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            #if os(iOS)
+            // iPhone screens are too narrow for facesStrip + actionsColumn
+            // side by side. Stack vertically and let the strip scroll
+            // horizontally within its own row.
+            facesStrip
+            actionsColumn
+            #else
             HStack(alignment: .top, spacing: 16) {
                 facesStrip
                 actionsColumn
             }
+            #endif
             if !suggestions.isEmpty {
                 Divider()
                 suggestionsRow
@@ -219,32 +227,45 @@ struct ClusterCardView: View {
                 Text("\(cluster.size) face\(cluster.size == 1 ? "" : "s")")
                     .font(.caption)
                     .foregroundColor(.secondary)
-                Text("· click a face to tag individually")
+                Text("· tap a face to tag individually")
                     .font(.caption2)
                     .foregroundColor(.secondary.opacity(0.7))
             }
 
-            HStack(spacing: 6) {
-                ForEach(cluster.faces.prefix(8)) { face in
-                    Button {
-                        openLightbox(for: face)
-                    } label: {
-                        FaceThumbnailView(faceId: face.faceId, client: client)
-                            .frame(width: 64, height: 64)
-                            .clipShape(RoundedRectangle(cornerRadius: 4))
-                            .background(Color.gray.opacity(0.1))
-                    }
-                    .buttonStyle(.plain)
-                    .help("Open this photo to tag just this face")
-                }
-                if cluster.size > cluster.faces.count {
-                    Text("+\(cluster.size - cluster.faces.count)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+            #if os(iOS)
+            // Horizontal scroll keeps the strip from overflowing the
+            // card on narrow iPhone screens. macOS has plenty of width
+            // and doesn't need the scroll wrapper.
+            ScrollView(.horizontal, showsIndicators: false) {
+                facesRow
+            }
+            #else
+            facesRow
+            #endif
+        }
+    }
+
+    private var facesRow: some View {
+        HStack(spacing: 6) {
+            ForEach(cluster.faces.prefix(8)) { face in
+                Button {
+                    openLightbox(for: face)
+                } label: {
+                    FaceThumbnailView(faceId: face.faceId, client: client)
                         .frame(width: 64, height: 64)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
                         .background(Color.gray.opacity(0.1))
-                        .cornerRadius(4)
                 }
+                .buttonStyle(.plain)
+                .help("Open this photo to tag just this face")
+            }
+            if cluster.size > cluster.faces.count {
+                Text("+\(cluster.size - cluster.faces.count)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(width: 64, height: 64)
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(4)
             }
         }
     }
@@ -271,6 +292,34 @@ struct ClusterCardView: View {
 
     private var actionsColumn: some View {
         VStack(alignment: .leading, spacing: 8) {
+            #if os(iOS)
+            // iOS: text field on its own row, then Tag + Dismiss share
+            // the action row to save vertical space.
+            HStack(spacing: 6) {
+                Image(systemName: "person.crop.circle.badge.plus")
+                    .foregroundColor(.secondary)
+                TextField("Name all \(cluster.size) faces…", text: $nameInput)
+                    .textFieldStyle(.roundedBorder)
+                    .submitLabel(.done)
+                    .onSubmit(submitName)
+            }
+            HStack(spacing: 8) {
+                Button("Tag all \(cluster.size)", action: submitName)
+                    .buttonStyle(.borderedProminent)
+                    .frame(maxWidth: .infinity)
+                    .disabled(nameInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if isPending {
+                    ProgressView().controlSize(.small)
+                }
+                Button(role: .destructive) {
+                    Task { await state.dismissCluster(cluster.clusterIndex) }
+                } label: {
+                    Label("Dismiss", systemImage: "trash")
+                        .labelStyle(.iconOnly)
+                }
+                .buttonStyle(.bordered)
+            }
+            #else
             HStack(spacing: 6) {
                 Image(systemName: "person.crop.circle.badge.plus")
                     .foregroundColor(.secondary)
@@ -294,6 +343,7 @@ struct ClusterCardView: View {
                 }
                 .controlSize(.small)
             }
+            #endif
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -305,39 +355,56 @@ struct ClusterCardView: View {
             Text("Looks like…")
                 .font(.caption)
                 .foregroundColor(.secondary)
+            #if os(iOS)
+            // iOS: stack vertically so long names don't overflow.
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(suggestions) { person in
+                    suggestionButton(person: person)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            #else
+            // macOS: horizontal scroll keeps the card compact since
+            // window width is plentiful.
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(suggestions) { person in
-                        Button {
-                            Task {
-                                await state.mergeCluster(
-                                    cluster.clusterIndex,
-                                    intoPersonId: person.personId
-                                )
-                            }
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "person.crop.circle")
-                                    .foregroundColor(.secondary)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(person.displayName)
-                                        .font(.callout)
-                                        .lineLimit(1)
-                                    Text("\(person.faceCount) photos")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.accentColor.opacity(0.12))
-                            .cornerRadius(6)
-                        }
-                        .buttonStyle(.plain)
+                        suggestionButton(person: person)
                     }
                 }
             }
+            #endif
         }
+    }
+
+    private func suggestionButton(person: NearestPersonItem) -> some View {
+        Button {
+            Task {
+                await state.mergeCluster(
+                    cluster.clusterIndex,
+                    intoPersonId: person.personId
+                )
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "person.crop.circle")
+                    .foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(person.displayName)
+                        .font(.callout)
+                        .lineLimit(1)
+                    Text("\(person.faceCount) photos")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.accentColor.opacity(0.12))
+            .cornerRadius(6)
+        }
+        .buttonStyle(.plain)
     }
 
     private func submitName() {

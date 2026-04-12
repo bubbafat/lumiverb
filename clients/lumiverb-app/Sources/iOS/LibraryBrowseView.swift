@@ -19,9 +19,8 @@ struct LibraryBrowseView: View {
                 libraryPickerGrid
             }
         }
-        .fullScreenCover(isPresented: lightboxBinding) {
-            iOSLightboxView(browseState: browseState, client: appState.client)
-        }
+        // Lightbox is presented from MainTabView at the top level so
+        // it works from any tab. No fullScreenCover here.
         .onChange(of: browseState.selectedLibraryId) { _, newValue in
             guard newValue != nil else { return }
             browseState.handleSelectedLibraryChange()
@@ -178,18 +177,6 @@ struct LibraryBrowseView: View {
         }
     }
 
-    // MARK: - Lightbox binding
-
-    private var lightboxBinding: Binding<Bool> {
-        Binding(
-            get: { browseState.selectedAssetId != nil },
-            set: { isPresented in
-                if !isPresented {
-                    browseState.closeLightbox()
-                }
-            }
-        )
-    }
 
     // MARK: - Preview fetching
 

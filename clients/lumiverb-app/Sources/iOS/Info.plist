@@ -18,7 +18,10 @@
     <key>NSPhotoLibraryAddUsageDescription</key>
     <string>Lumiverb needs permission to save photos to your library.</string>
     <key>UILaunchScreen</key>
-    <dict/>
+    <dict>
+        <key>UIColorName</key>
+        <string>LaunchBackground</string>
+    </dict>
     <key>UISupportedInterfaceOrientations</key>
     <array>
         <string>UIInterfaceOrientationPortrait</string>

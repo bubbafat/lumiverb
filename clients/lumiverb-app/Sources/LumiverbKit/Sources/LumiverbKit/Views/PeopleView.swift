@@ -112,12 +112,19 @@ public struct PeopleView: View {
             }
             .navigationDestination(for: ClusterReviewDestination.self) { _ in
                 if let clusterReviewState {
+                    // No `.navigationTitle` here — ClusterReviewView's
+                    // own header already shows "Review Faces", so a
+                    // nav title would just duplicate it on iOS. The
+                    // back button still works (it shows the parent's
+                    // "People" title automatically).
                     ClusterReviewView(
                         state: clusterReviewState,
                         browseState: browseState,
                         client: client
                     )
-                    .navigationTitle("Review Faces")
+                    #if os(iOS)
+                    .navigationBarTitleDisplayMode(.inline)
+                    #endif
                 }
             }
         }

@@ -69,9 +69,8 @@ struct SearchTab: View {
         .searchSuggestions {
             personSuggestions
         }
-        .fullScreenCover(isPresented: lightboxBinding) {
-            iOSLightboxView(browseState: browseState, client: appState.client)
-        }
+        // Lightbox is presented from MainTabView at the top level so
+        // it works from any tab. No fullScreenCover here.
     }
 
     // MARK: - Search home (no active search)
@@ -229,15 +228,6 @@ struct SearchTab: View {
                 }
             }
         }
-    }
-
-    // MARK: - Lightbox
-
-    private var lightboxBinding: Binding<Bool> {
-        Binding(
-            get: { browseState.selectedAssetId != nil },
-            set: { if !$0 { browseState.closeLightbox() } }
-        )
     }
 
     // MARK: - M7: similar-by-image

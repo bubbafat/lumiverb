@@ -94,5 +94,23 @@ struct MainTabView: View {
         .environment(\.cacheBundle, cacheBundle)
         .environment(\.collectionsState, collectionsState)
         .environmentObject(networkMonitor)
+        // Top-level lightbox so any tab can open it (People tab's
+        // cluster review opens the lightbox to highlight a face for
+        // tagging — without this it'd silently set selectedAssetId
+        // and nothing would happen).
+        .fullScreenCover(isPresented: lightboxBinding) {
+            iOSLightboxView(browseState: browseState, client: appState.client)
+        }
+    }
+
+    private var lightboxBinding: Binding<Bool> {
+        Binding(
+            get: { browseState.selectedAssetId != nil },
+            set: { isPresented in
+                if !isPresented {
+                    browseState.closeLightbox()
+                }
+            }
+        )
     }
 }

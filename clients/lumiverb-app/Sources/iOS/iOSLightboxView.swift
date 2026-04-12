@@ -49,6 +49,18 @@ struct iOSLightboxView: View {
         .sheet(isPresented: $showDetails) {
             detailsSheet
         }
+        // Auto-enable face overlay when the cluster review handed us a
+        // face to highlight. Mirrors the macOS LightboxView behavior.
+        .onAppear {
+            if browseState.pendingHighlightFaceId != nil {
+                showFaces = true
+            }
+        }
+        .onChange(of: browseState.pendingHighlightFaceId) { _, newValue in
+            if newValue != nil {
+                showFaces = true
+            }
+        }
     }
 
     @State private var showDetails = false
@@ -136,7 +148,8 @@ struct iOSLightboxView: View {
                         assetId: assetId,
                         imageWidth: width,
                         imageHeight: height,
-                        client: client
+                        client: client,
+                        browseState: browseState
                     )
                 }
             }
