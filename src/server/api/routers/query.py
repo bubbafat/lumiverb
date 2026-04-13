@@ -84,6 +84,11 @@ class QueryResponse(BaseModel):
     # glance whether the BM25 index is engaged. None when no text
     # search was run at all.
     search_source: str | None = None
+    # Temporary: returns the constructed Quickwit query, raw hit
+    # counts per index, and any exception text. Lets us debug
+    # "search_source=postgres_fallback" without SSH access to logs.
+    # Remove once the underlying issue is fixed.
+    diag: dict | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +105,7 @@ def _run_quickwit_search(
     search_terms: list[SearchTerm],
     library_ids: list[str] | None,
     limit: int,
+    diag: dict | None = None,
 ) -> tuple[dict[str, float], dict[str, SearchContext], str]:
     """Run text search through Quickwit (or Postgres fallback).
 
@@ -107,6 +113,9 @@ def _run_quickwit_search(
       - scores: {asset_id: best_score}
       - contexts: {asset_id: SearchContext} (scene/transcript annotations)
       - source: "quickwit" | "postgres"
+
+    If `diag` is provided, populates it with query string, hit counts,
+    and any exception text — for surfacing to clients during debug.
     """
     from src.server.search.query_builder import build_quickwit_query
 
@@ -119,6 +128,9 @@ def _run_quickwit_search(
     if not per_term:
         return {}, {}, "none"
     combined_query = " AND ".join(f"({q})" for q in per_term)
+    if diag is not None:
+        diag["quickwit_query"] = combined_query
+        diag["library_ids"] = library_ids
 
     scores: dict[str, float] = {}
     contexts: dict[str, SearchContext] = {}
@@ -129,6 +141,9 @@ def _run_quickwit_search(
     try:
         from src.server.search.quickwit_client import QuickwitClient
         qw = QuickwitClient()
+        if diag is not None:
+            diag["quickwit_enabled"] = qw.enabled
+            diag["quickwit_base_url"] = getattr(qw, "_base_url", None)
 
         if qw.enabled:
             # Asset index
@@ -138,6 +153,10 @@ def _run_quickwit_search(
                 library_ids=library_ids,
                 max_hits=limit,
             )
+            if diag is not None:
+                diag["asset_hits"] = len(asset_hits)
+                if asset_hits:
+                    diag["asset_top_score"] = asset_hits[0].get("score")
             for hit in asset_hits:
                 aid = hit["asset_id"]
                 score = hit.get("score", 0.0)
@@ -222,8 +241,10 @@ def _run_quickwit_search(
 
             return scores, contexts, "quickwit"
 
-    except Exception:
-        logger.warning("Quickwit unavailable, falling back to Postgres search", exc_info=True)
+    except Exception as exc:
+        if diag is not None:
+            diag["quickwit_exception"] = repr(exc)
+        logger.warning("Quickwit raised %r — falling back to Postgres", exc, exc_info=True)
 
     # Postgres ILIKE fallback
     return scores, contexts, "postgres_fallback"
@@ -304,6 +325,7 @@ def unified_query(
     search_contexts: dict[str, SearchContext] = {}
     total_estimate: int | None = None
     search_source: str | None = None
+    diag: dict | None = {} if search_terms else None
 
     # --- Text search via candidate-set pattern ---
     if search_terms:
@@ -320,6 +342,7 @@ def unified_query(
 
         scores, contexts, source = _run_quickwit_search(
             tenant_id, search_terms, library_ids, limit=MAX_CANDIDATE_IDS,
+            diag=diag,
         )
         search_source = source
 
@@ -331,7 +354,9 @@ def unified_query(
             )
 
         if not scores:
-            return QueryResponse(items=[], total_estimate=0, search_source=search_source)
+            return QueryResponse(
+                items=[], total_estimate=0, search_source=search_source, diag=diag,
+            )
 
         # Cap candidate set
         if len(scores) > MAX_CANDIDATE_IDS:
@@ -412,4 +437,5 @@ def unified_query(
         next_cursor=next_cursor,
         total_estimate=total_estimate,
         search_source=search_source,
+        diag=diag,
     )
