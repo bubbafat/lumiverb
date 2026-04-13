@@ -78,17 +78,12 @@ class QueryResponse(BaseModel):
     items: list[QueryItem]
     next_cursor: str | None = None
     total_estimate: int | None = None
-    # Diagnostic: which search backend produced the candidate set —
-    # "quickwit" (BM25), "postgres_fallback" (ILIKE substring), or
-    # "none" (no text search). Lets clients (and operators) tell at a
-    # glance whether the BM25 index is engaged. None when no text
-    # search was run at all.
+    # Which search backend produced the candidate set — "quickwit"
+    # (BM25), "postgres_fallback" (ILIKE substring), or "none" (no
+    # text search). Lets clients (and operators) tell at a glance
+    # whether the BM25 index is engaged. None when no text search
+    # was run at all.
     search_source: str | None = None
-    # Temporary: returns the constructed Quickwit query, raw hit
-    # counts per index, and any exception text. Lets us debug
-    # "search_source=postgres_fallback" without SSH access to logs.
-    # Remove once the underlying issue is fixed.
-    diag: dict | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +100,6 @@ def _run_quickwit_search(
     search_terms: list[SearchTerm],
     library_ids: list[str] | None,
     limit: int,
-    diag: dict | None = None,
 ) -> tuple[dict[str, float], dict[str, SearchContext], str]:
     """Run text search through Quickwit (or Postgres fallback).
 
@@ -113,9 +107,6 @@ def _run_quickwit_search(
       - scores: {asset_id: best_score}
       - contexts: {asset_id: SearchContext} (scene/transcript annotations)
       - source: "quickwit" | "postgres"
-
-    If `diag` is provided, populates it with query string, hit counts,
-    and any exception text — for surfacing to clients during debug.
     """
     from src.server.search.query_builder import (
         ASSET_FIELDS,
@@ -161,13 +152,6 @@ def _run_quickwit_search(
 
     if not asset_query:
         return {}, {}, "none"
-    if diag is not None:
-        diag["asset_query"] = asset_query
-        diag["asset_prefix_query"] = asset_prefix_query
-        diag["scene_query"] = scene_query
-        diag["scene_prefix_query"] = scene_prefix_query
-        diag["transcript_query"] = transcript_query
-        diag["library_ids"] = library_ids
 
     scores: dict[str, float] = {}
     contexts: dict[str, SearchContext] = {}
@@ -178,12 +162,7 @@ def _run_quickwit_search(
     try:
         from src.server.search.quickwit_client import QuickwitClient
         qw = QuickwitClient()
-        if diag is not None:
-            diag["quickwit_enabled"] = qw.enabled
-            diag["quickwit_base_url"] = getattr(qw, "_base_url", None)
     except Exception as exc:
-        if diag is not None:
-            diag["quickwit_client_exception"] = repr(exc)
         logger.warning("Quickwit client init failed: %r", exc, exc_info=True)
         qw = None
 
@@ -211,20 +190,27 @@ def _run_quickwit_search(
                 library_ids=library_ids,
                 max_hits=limit,
             )
-            if diag is not None:
-                diag["asset_hits"] = len(asset_hits)
-                if asset_hits:
-                    diag["asset_top_score"] = asset_hits[0].get("score")
-                    diag["asset_top_hit"] = asset_hits[0].get("rel_path")
             for hit in asset_hits:
                 aid = hit["asset_id"]
                 score = hit.get("score", 0.0)
                 if aid not in scores or score > scores[aid]:
                     scores[aid] = score
-                    contexts[aid] = SearchContext(score=score, hit_type="asset")
+                    # Surface the asset's AI description as the snippet
+                    # so iOS cell captions and the lightbox Match
+                    # section have something to show for photo hits.
+                    # Falls back to joining the top tags when the
+                    # description is missing.
+                    snippet = hit.get("description") or ""
+                    if not snippet:
+                        tags = hit.get("tags") or []
+                        if tags:
+                            snippet = " · ".join(tags[:4])
+                    contexts[aid] = SearchContext(
+                        score=score,
+                        hit_type="asset",
+                        snippet=snippet or None,
+                    )
         except Exception as exc:
-            if diag is not None:
-                diag["asset_exception"] = repr(exc)
             logger.warning("Quickwit asset search failed: %r", exc, exc_info=True)
 
         # Asset prefix expansion — separate call so prefix-only
@@ -238,8 +224,6 @@ def _run_quickwit_search(
                     library_ids=library_ids,
                     max_hits=limit,
                 )
-                if diag is not None:
-                    diag["asset_prefix_hits"] = len(prefix_hits)
                 # Apply prefix penalty so a prefix rank-0 ties with
                 # exact rank-1 (1/(1+1)=0.5). High-rank prefix matches
                 # still surface above low-rank exact matches.
@@ -250,10 +234,17 @@ def _run_quickwit_search(
                     score = raw_score * PREFIX_PENALTY
                     if aid not in scores or score > scores[aid]:
                         scores[aid] = score
-                        contexts[aid] = SearchContext(score=score, hit_type="asset")
+                        snippet = hit.get("description") or ""
+                        if not snippet:
+                            tags = hit.get("tags") or []
+                            if tags:
+                                snippet = " · ".join(tags[:4])
+                        contexts[aid] = SearchContext(
+                            score=score,
+                            hit_type="asset",
+                            snippet=snippet or None,
+                        )
             except Exception as exc:
-                if diag is not None:
-                    diag["asset_prefix_exception"] = repr(exc)
                 logger.warning("Quickwit asset prefix search failed: %r", exc, exc_info=True)
 
         # Scene index — uses scene-restricted query (description, tags only)
@@ -264,8 +255,6 @@ def _run_quickwit_search(
                 library_ids=library_ids,
                 max_hits=limit,
             )
-            if diag is not None:
-                diag["scene_hits"] = len(scene_hits)
             for hit in scene_hits:
                 aid = hit["asset_id"]
                 score = hit.get("score", 0.0)
@@ -293,8 +282,6 @@ def _run_quickwit_search(
                         end_ms=ctx.end_ms,
                     )
         except Exception as exc:
-            if diag is not None:
-                diag["scene_exception"] = repr(exc)
             logger.warning("Quickwit scene search failed: %r", exc, exc_info=True)
 
         # Scene prefix expansion — same pattern as the asset prefix
@@ -308,8 +295,6 @@ def _run_quickwit_search(
                     library_ids=library_ids,
                     max_hits=limit,
                 )
-                if diag is not None:
-                    diag["scene_prefix_hits"] = len(scene_prefix_hits)
                 PREFIX_PENALTY = 0.5
                 for hit in scene_prefix_hits:
                     aid = hit["asset_id"]
@@ -326,8 +311,6 @@ def _run_quickwit_search(
                         scores[aid] = score
                         contexts[aid] = ctx
             except Exception as exc:
-                if diag is not None:
-                    diag["scene_prefix_exception"] = repr(exc)
                 logger.warning("Quickwit scene prefix search failed: %r", exc, exc_info=True)
 
         # Transcript index — uses transcript-restricted query (text only).
@@ -343,8 +326,6 @@ def _run_quickwit_search(
                 library_ids=library_ids,
                 max_hits=limit * 3,
             )
-            if diag is not None:
-                diag["transcript_hits"] = len(transcript_hits)
             # Deduplicate: keep best per asset
             for hit in transcript_hits:
                 aid = hit["asset_id"]
@@ -371,8 +352,6 @@ def _run_quickwit_search(
                         end_ms=ctx.end_ms,
                     )
         except Exception as exc:
-            if diag is not None:
-                diag["transcript_exception"] = repr(exc)
             logger.warning("Quickwit transcript search failed: %r", exc, exc_info=True)
 
         # If Quickwit (any index) returned results, use them
@@ -465,7 +444,6 @@ def unified_query(
     search_contexts: dict[str, SearchContext] = {}
     total_estimate: int | None = None
     search_source: str | None = None
-    diag: dict | None = {} if search_terms else None
 
     # --- Text search via candidate-set pattern ---
     if search_terms:
@@ -482,7 +460,6 @@ def unified_query(
 
         scores, contexts, source = _run_quickwit_search(
             tenant_id, search_terms, library_ids, limit=MAX_CANDIDATE_IDS,
-            diag=diag,
         )
         search_source = source
 
@@ -495,7 +472,7 @@ def unified_query(
 
         if not scores:
             return QueryResponse(
-                items=[], total_estimate=0, search_source=search_source, diag=diag,
+                items=[], total_estimate=0, search_source=search_source,
             )
 
         # Cap candidate set
@@ -577,5 +554,4 @@ def unified_query(
         next_cursor=next_cursor,
         total_estimate=total_estimate,
         search_source=search_source,
-        diag=diag,
     )

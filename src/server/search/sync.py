@@ -199,6 +199,21 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
 
     try:
         index_recreated = qw.ensure_tenant_index(tenant_id)
+        # Eagerly ensure the transcript index exists even when the
+        # tenant has no video transcripts yet. Without this the
+        # search endpoint's per-query transcript search hits a
+        # non-existent index on every single search and Quickwit
+        # returns 400 — which we catch and log, but that's dozens
+        # of warning-level log lines per active user per day.
+        # Cheap idempotent call; creates the index from the schema
+        # if missing, no-op if already there.
+        try:
+            qw.ensure_tenant_transcript_index(tenant_id)
+        except Exception as exc:
+            logger.warning(
+                "Could not ensure tenant transcript index for %s: %s",
+                tenant_id, exc,
+            )
         if index_recreated:
             logger.info("Quickwit asset index recreated for %s — forcing full re-sync", tenant_id)
             session.execute(text("UPDATE assets SET search_synced_at = NULL"))
