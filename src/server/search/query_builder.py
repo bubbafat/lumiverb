@@ -3,20 +3,28 @@
 The default Quickwit query (`combined_query`) just dumps the raw user
 input into the engine, which then searches every default field with
 equal weight. That made search underperform: an OCR'd street sign
-saying "card" would outrank a photo whose AI description was literally
+saying "card" outranked a photo whose AI description was literally
 "Christmas card" because BM25 had no field-level signal to break the
 tie. The schema's `default` tokenizer is already whole-word, so the
 fix isn't about tokenization — it's about teaching the engine that a
-match in `description`/`tags` is far more authoritative than a match
-in `ocr_text`/`path_tokens`.
+match in `description`/`tags` is more authoritative than a match in
+`ocr_text`/`path_tokens`.
 
-This module builds field-boosted Quickwit queries:
+**Why this file doesn't use Quickwit boost syntax (`field:term^N`):**
+The first attempt did, and Quickwit silently returned 0 hits, which
+fell through to the Postgres ILIKE fallback (which has no scoring and
+matches `%card%` against "cardboard"). Quickwit's REST query parser is
+NOT the full Tantivy parser — boosts aren't reliably supported. The
+safe approach is field-restricted OR clauses without boosts, then we
+do the actual *ranking* in two ways:
 
-- Per-token, per-field clauses with boosts (description / tags > note >
-  ocr_text / transcript_text > path_tokens).
-- For multi-token queries, an additional **phrase boost** that fires
-  when the entire phrase appears in description/tags/note. So
-  "greeting card" finds the literal phrase before any per-word match.
+1. The query string includes high-priority fields (description, tags,
+   note) FIRST. BM25 scores naturally favor matches in those fields
+   because they're tighter (lower fieldnorm) than ocr_text / path
+   tokens.
+2. For multi-token queries we add explicit phrase clauses (`"greeting
+   card"`). Phrases are rarer than tokens → higher IDF → naturally
+   outrank per-token matches.
 
 It also exposes a small helper for ranking the Postgres ILIKE fallback
 by whole-word presence so the fallback path doesn't undo the gains.
@@ -26,26 +34,22 @@ from __future__ import annotations
 
 import re
 
-# Field boosts in descending authority. Numbers are arbitrary but the
-# *ratio* matters: AI-derived signal beats extracted text by 2x or more,
-# extracted text beats path tokens by 2x or more.
-FIELD_BOOSTS: list[tuple[str, int]] = [
-    ("description", 5),
-    ("tags", 5),
-    ("note", 3),
-    ("transcript_text", 2),
-    ("ocr_text", 2),
-    ("path_tokens", 1),
+# Fields searched for a per-token match, in priority order. Quickwit
+# scores all of them with BM25 — putting high-signal fields in this
+# list (vs leaving them to default_search_fields) targets recall to
+# the right places without depending on boost syntax.
+QUERY_FIELDS: list[str] = [
+    "description",
+    "tags",
+    "note",
+    "transcript_text",
+    "ocr_text",
+    "path_tokens",
 ]
 
-# Fields where a phrase match is meaningful enough to warrant a big
-# boost. We don't phrase-boost ocr_text or path_tokens because phrases
-# in those fields are noisy / accidental.
-PHRASE_BOOST_FIELDS: list[tuple[str, int]] = [
-    ("description", 15),
-    ("tags", 15),
-    ("note", 9),
-]
+# Fields where a phrase match is meaningful. Excludes ocr_text and
+# path_tokens because phrases in those fields are noisy / accidental.
+PHRASE_FIELDS: list[str] = ["description", "tags", "note"]
 
 # Whitelist of characters allowed in a token. Quickwit's query parser is
 # strict about reserved characters (`:`, `^`, `(`, `"` etc.), and the
@@ -63,11 +67,15 @@ def tokenize(query: str) -> list[str]:
 
 
 def build_quickwit_query(raw: str) -> str:
-    """Build a field-boosted Quickwit query from raw user input.
+    """Build a field-restricted Quickwit query from raw user input.
 
     Returns an empty string when the input has no usable tokens — the
     caller should treat that as "no text search" and skip the engine
     entirely rather than sending a malformed query.
+
+    Uses no boost syntax (Quickwit's REST parser doesn't reliably
+    support it). Ranking comes from BM25 over the explicit field set
+    plus phrase clauses for multi-token queries.
     """
     tokens = tokenize(raw)
     if not tokens:
@@ -75,22 +83,24 @@ def build_quickwit_query(raw: str) -> str:
 
     parts: list[str] = []
 
-    # 1. Phrase boost — multi-token queries get an exact-phrase clause
-    # in description/tags/note with a much higher boost than per-token
-    # clauses. This is what makes "greeting card" outrank "cardigan"
-    # (which wouldn't even match) AND outrank a photo that just happens
-    # to have "card" and "greeting" scattered across different fields.
+    # 1. Phrase clauses — multi-token queries get exact-phrase matches
+    # in high-signal fields. Phrases are rarer than tokens so BM25
+    # naturally ranks them higher via IDF, no boost needed.
     if len(tokens) > 1:
         phrase = " ".join(tokens)
-        for field, boost in PHRASE_BOOST_FIELDS:
-            parts.append(f'{field}:"{phrase}"^{boost}')
+        for field in PHRASE_FIELDS:
+            parts.append(f'{field}:"{phrase}"')
 
-    # 2. Per-token, per-field clauses. Description/tags get a 5x boost
-    # over path_tokens so an AI tag match dominates a path-substring
-    # match for the same word.
+    # 2. Per-token, per-field clauses. Listing description/tags/note
+    # before ocr_text/path_tokens doesn't change BM25 scoring on its
+    # own — Quickwit ORs them all — but it keeps the query readable
+    # and makes the recall set explicit. Whole-word matches in any
+    # listed field are kept; substring "card" → "cardboard" no longer
+    # leaks in via the Postgres ILIKE fallback because Quickwit
+    # actually returns hits now.
     for token in tokens:
-        for field, boost in FIELD_BOOSTS:
-            parts.append(f"{field}:{token}^{boost}")
+        for field in QUERY_FIELDS:
+            parts.append(f"{field}:{token}")
 
     return " OR ".join(parts)
 

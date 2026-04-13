@@ -43,50 +43,53 @@ class TestBuildQuickwitQuery:
         assert build_quickwit_query("   ") == ""
         assert build_quickwit_query("???") == ""
 
-    def test_single_token_field_boosts(self) -> None:
+    def test_single_token_targets_priority_fields(self) -> None:
         q = build_quickwit_query("card")
-        # Description and tags should be present with the highest boost
-        assert "description:card^5" in q
-        assert "tags:card^5" in q
-        # Note has medium boost
-        assert "note:card^3" in q
-        # OCR / transcript / path get lower boosts
-        assert "ocr_text:card^2" in q
-        assert "transcript_text:card^2" in q
-        assert "path_tokens:card^1" in q
+        # All priority fields are queried explicitly. No boost syntax —
+        # Quickwit's REST parser doesn't reliably support `^N`.
+        assert "description:card" in q
+        assert "tags:card" in q
+        assert "note:card" in q
+        assert "ocr_text:card" in q
+        assert "transcript_text:card" in q
+        assert "path_tokens:card" in q
         # Single-token query has no phrase clause
         assert '"' not in q
+        # Definitely no boost syntax leaking in
+        assert "^" not in q
 
-    def test_multi_token_phrase_boost(self) -> None:
+    def test_multi_token_phrase_clauses(self) -> None:
         q = build_quickwit_query("greeting card")
-        # Phrase clauses come first, with the highest boost
-        assert 'description:"greeting card"^15' in q
-        assert 'tags:"greeting card"^15' in q
-        assert 'note:"greeting card"^9' in q
+        # Phrase clauses on the high-signal fields
+        assert 'description:"greeting card"' in q
+        assert 'tags:"greeting card"' in q
+        assert 'note:"greeting card"' in q
         # Per-token clauses still present
-        assert "description:greeting^5" in q
-        assert "description:card^5" in q
+        assert "description:greeting" in q
+        assert "description:card" in q
+        # No boost syntax
+        assert "^" not in q
 
-    def test_phrase_clauses_outweigh_per_token(self) -> None:
-        """The phrase clauses must rank ahead of per-token clauses so
-        a literal "greeting card" beats a doc that just contains both
-        words scattered."""
+    def test_phrase_clauses_listed_before_per_token(self) -> None:
+        """Phrase clauses come first in the OR'd query — Quickwit's
+        BM25 will naturally rank phrase matches higher than per-token
+        because phrases are rarer (higher IDF), no boost needed."""
         q = build_quickwit_query("greeting card")
-        # Find the boost for the phrase and the per-token clauses
-        assert q.index('description:"greeting card"^15') < q.index("description:greeting^5")
+        assert q.index('description:"greeting card"') < q.index("description:greeting")
 
     def test_input_sanitization(self) -> None:
         # User can't inject Quickwit syntax via the query string
         q = build_quickwit_query('description:"injected" OR (foo)^99')
-        # No raw colons or boosts from the user input — only our own
-        assert "description:description^5" in q  # the literal word survives as a token
+        # The literal words survive as tokens; the syntax is stripped
+        assert "description:description" in q  # the word "description" matches itself as a token
+        assert "description:injected" in q
         # No double-quoted phrase from user content
         assert '"injected"' not in q
         assert "^99" not in q
 
     def test_uppercase_normalized(self) -> None:
         q = build_quickwit_query("CARD")
-        assert "description:card^5" in q
+        assert "description:card" in q
         assert "CARD" not in q
 
 

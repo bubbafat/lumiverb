@@ -78,6 +78,12 @@ class QueryResponse(BaseModel):
     items: list[QueryItem]
     next_cursor: str | None = None
     total_estimate: int | None = None
+    # Diagnostic: which search backend produced the candidate set —
+    # "quickwit" (BM25), "postgres_fallback" (ILIKE substring), or
+    # "none" (no text search). Lets clients (and operators) tell at a
+    # glance whether the BM25 index is engaged. None when no text
+    # search was run at all.
+    search_source: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +303,7 @@ def unified_query(
     candidate_scores: dict[str, float] | None = None
     search_contexts: dict[str, SearchContext] = {}
     total_estimate: int | None = None
+    search_source: str | None = None
 
     # --- Text search via candidate-set pattern ---
     if search_terms:
@@ -314,6 +321,7 @@ def unified_query(
         scores, contexts, source = _run_quickwit_search(
             tenant_id, search_terms, library_ids, limit=MAX_CANDIDATE_IDS,
         )
+        search_source = source
 
         if source == "postgres_fallback":
             # Join raw terms for ILIKE — no parentheses (those are Quickwit syntax)
@@ -323,7 +331,7 @@ def unified_query(
             )
 
         if not scores:
-            return QueryResponse(items=[], total_estimate=0)
+            return QueryResponse(items=[], total_estimate=0, search_source=search_source)
 
         # Cap candidate set
         if len(scores) > MAX_CANDIDATE_IDS:
@@ -403,4 +411,5 @@ def unified_query(
         items=items,
         next_cursor=next_cursor,
         total_estimate=total_estimate,
+        search_source=search_source,
     )
