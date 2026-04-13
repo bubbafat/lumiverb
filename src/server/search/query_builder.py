@@ -34,11 +34,15 @@ from __future__ import annotations
 
 import re
 
-# Fields searched for a per-token match, in priority order. Quickwit
-# scores all of them with BM25 — putting high-signal fields in this
-# list (vs leaving them to default_search_fields) targets recall to
-# the right places without depending on boost syntax.
-QUERY_FIELDS: list[str] = [
+# Per-index field profiles. Quickwit's three indexes (asset / scene /
+# transcript) have *different* schemas, and a query that names a field
+# the target index doesn't define returns 400 from Quickwit's parser.
+# That 400 used to crash the whole search into the Postgres fallback —
+# the asset index would match plenty, but the transcript index would
+# choke on `description:` and the exception caught in
+# `_run_quickwit_search` would discard everything. So we now build a
+# different query per index with the fields it actually has.
+ASSET_FIELDS: list[str] = [
     "description",
     "tags",
     "note",
@@ -46,10 +50,21 @@ QUERY_FIELDS: list[str] = [
     "ocr_text",
     "path_tokens",
 ]
+ASSET_PHRASE_FIELDS: list[str] = ["description", "tags", "note"]
 
-# Fields where a phrase match is meaningful. Excludes ocr_text and
-# path_tokens because phrases in those fields are noisy / accidental.
-PHRASE_FIELDS: list[str] = ["description", "tags", "note"]
+SCENE_FIELDS: list[str] = ["description", "tags"]
+SCENE_PHRASE_FIELDS: list[str] = ["description", "tags"]
+
+# Transcript schema only stores `text`. The transcript_text on the
+# asset index is asset-level full transcript; the per-segment text
+# lives here under a different field name.
+TRANSCRIPT_FIELDS: list[str] = ["text"]
+TRANSCRIPT_PHRASE_FIELDS: list[str] = ["text"]
+
+# Backwards-compat alias used by older callers / tests that don't pass
+# explicit field lists. Defaults to the asset profile (the broadest).
+QUERY_FIELDS: list[str] = ASSET_FIELDS
+PHRASE_FIELDS: list[str] = ASSET_PHRASE_FIELDS
 
 # Whitelist of characters allowed in a token. Quickwit's query parser is
 # strict about reserved characters (`:`, `^`, `(`, `"` etc.), and the
@@ -66,7 +81,11 @@ def tokenize(query: str) -> list[str]:
     return _TOKEN_RE.findall(query.lower())
 
 
-def build_quickwit_query(raw: str) -> str:
+def build_quickwit_query(
+    raw: str,
+    fields: list[str] | None = None,
+    phrase_fields: list[str] | None = None,
+) -> str:
     """Build a field-restricted Quickwit query from raw user input.
 
     Returns an empty string when the input has no usable tokens — the
@@ -76,10 +95,19 @@ def build_quickwit_query(raw: str) -> str:
     Uses no boost syntax (Quickwit's REST parser doesn't reliably
     support it). Ranking comes from BM25 over the explicit field set
     plus phrase clauses for multi-token queries.
+
+    `fields` and `phrase_fields` default to the asset-index profile
+    so existing callers keep working. Pass index-specific lists when
+    targeting the scene or transcript index — naming a field the
+    target index doesn't define will make Quickwit return 400 and
+    drop the entire search into the Postgres fallback.
     """
     tokens = tokenize(raw)
     if not tokens:
         return ""
+
+    use_fields = fields if fields is not None else QUERY_FIELDS
+    use_phrase_fields = phrase_fields if phrase_fields is not None else PHRASE_FIELDS
 
     parts: list[str] = []
 
@@ -88,7 +116,7 @@ def build_quickwit_query(raw: str) -> str:
     # naturally ranks them higher via IDF, no boost needed.
     if len(tokens) > 1:
         phrase = " ".join(tokens)
-        for field in PHRASE_FIELDS:
+        for field in use_phrase_fields:
             parts.append(f'{field}:"{phrase}"')
 
     # 2. Per-token, per-field clauses. Listing description/tags/note
@@ -99,7 +127,7 @@ def build_quickwit_query(raw: str) -> str:
     # leaks in via the Postgres ILIKE fallback because Quickwit
     # actually returns hits now.
     for token in tokens:
-        for field in QUERY_FIELDS:
+        for field in use_fields:
             parts.append(f"{field}:{token}")
 
     return " OR ".join(parts)

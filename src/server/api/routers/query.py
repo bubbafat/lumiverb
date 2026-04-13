@@ -117,19 +117,41 @@ def _run_quickwit_search(
     If `diag` is provided, populates it with query string, hit counts,
     and any exception text — for surfacing to clients during debug.
     """
-    from src.server.search.query_builder import build_quickwit_query
+    from src.server.search.query_builder import (
+        ASSET_FIELDS,
+        ASSET_PHRASE_FIELDS,
+        SCENE_FIELDS,
+        SCENE_PHRASE_FIELDS,
+        TRANSCRIPT_FIELDS,
+        TRANSCRIPT_PHRASE_FIELDS,
+        build_quickwit_query,
+    )
 
-    # Build per-term field-boosted clauses, then AND the terms together
-    # at the top level. This is the difference between "underperforming"
-    # search and search that ranks descriptive matches above incidental
-    # OCR / path noise — see query_builder for the rationale.
-    per_term = [build_quickwit_query(st.q) for st in search_terms if st.q]
-    per_term = [q for q in per_term if q]
-    if not per_term:
+    # Quickwit's three indexes have *different* schemas — naming a
+    # field the target index doesn't define makes Quickwit return 400
+    # and the catch below silently drops the whole search into the
+    # Postgres fallback. So we build a different query string per
+    # index, each restricted to fields that index actually has.
+    def _build(fields: list[str], phrase_fields: list[str]) -> str:
+        per_term = [
+            build_quickwit_query(st.q, fields=fields, phrase_fields=phrase_fields)
+            for st in search_terms if st.q
+        ]
+        per_term = [q for q in per_term if q]
+        if not per_term:
+            return ""
+        return " AND ".join(f"({q})" for q in per_term)
+
+    asset_query = _build(ASSET_FIELDS, ASSET_PHRASE_FIELDS)
+    scene_query = _build(SCENE_FIELDS, SCENE_PHRASE_FIELDS)
+    transcript_query = _build(TRANSCRIPT_FIELDS, TRANSCRIPT_PHRASE_FIELDS)
+
+    if not asset_query:
         return {}, {}, "none"
-    combined_query = " AND ".join(f"({q})" for q in per_term)
     if diag is not None:
-        diag["quickwit_query"] = combined_query
+        diag["asset_query"] = asset_query
+        diag["scene_query"] = scene_query
+        diag["transcript_query"] = transcript_query
         diag["library_ids"] = library_ids
 
     scores: dict[str, float] = {}
@@ -149,7 +171,7 @@ def _run_quickwit_search(
             # Asset index
             asset_hits = qw.search_tenant(
                 tenant_id=tenant_id,
-                query=combined_query,
+                query=asset_query,
                 library_ids=library_ids,
                 max_hits=limit,
             )
@@ -157,6 +179,7 @@ def _run_quickwit_search(
                 diag["asset_hits"] = len(asset_hits)
                 if asset_hits:
                     diag["asset_top_score"] = asset_hits[0].get("score")
+                    diag["asset_top_hit"] = asset_hits[0].get("rel_path")
             for hit in asset_hits:
                 aid = hit["asset_id"]
                 score = hit.get("score", 0.0)
@@ -164,13 +187,15 @@ def _run_quickwit_search(
                     scores[aid] = score
                     contexts[aid] = SearchContext(score=score, hit_type="asset")
 
-            # Scene index
+            # Scene index — uses scene-restricted query (description, tags only)
             scene_hits = qw.search_tenant_scenes(
                 tenant_id=tenant_id,
-                query=combined_query,
+                query=scene_query,
                 library_ids=library_ids,
                 max_hits=limit,
             )
+            if diag is not None:
+                diag["scene_hits"] = len(scene_hits)
             for hit in scene_hits:
                 aid = hit["asset_id"]
                 score = hit.get("score", 0.0)
@@ -198,13 +223,18 @@ def _run_quickwit_search(
                         end_ms=ctx.end_ms,
                     )
 
-            # Transcript index
+            # Transcript index — uses transcript-restricted query (text only).
+            # The transcript index has none of the asset-index fields,
+            # so reusing the asset query made Quickwit return 400 here
+            # and dropped the entire search into the postgres fallback.
             transcript_hits = qw.search_tenant_transcripts(
                 tenant_id=tenant_id,
-                query=combined_query,
+                query=transcript_query,
                 library_ids=library_ids,
                 max_hits=limit * 3,
             )
+            if diag is not None:
+                diag["transcript_hits"] = len(transcript_hits)
             # Deduplicate: keep best per asset
             for hit in transcript_hits:
                 aid = hit["asset_id"]
