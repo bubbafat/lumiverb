@@ -166,9 +166,21 @@ def _run_quickwit_search(
         if diag is not None:
             diag["quickwit_enabled"] = qw.enabled
             diag["quickwit_base_url"] = getattr(qw, "_base_url", None)
+    except Exception as exc:
+        if diag is not None:
+            diag["quickwit_client_exception"] = repr(exc)
+        logger.warning("Quickwit client init failed: %r", exc, exc_info=True)
+        qw = None
 
-        if qw.enabled:
-            # Asset index
+    if qw is not None and qw.enabled:
+        # Each per-index search is wrapped in its own try/except so a
+        # failure on one index (e.g. transcript index doesn't exist for
+        # this tenant) doesn't crash the whole search into the
+        # Postgres fallback. Previously a 400 from the transcript
+        # index would discard 1142 perfectly good asset hits.
+
+        # Asset index
+        try:
             asset_hits = qw.search_tenant(
                 tenant_id=tenant_id,
                 query=asset_query,
@@ -186,8 +198,13 @@ def _run_quickwit_search(
                 if aid not in scores or score > scores[aid]:
                     scores[aid] = score
                     contexts[aid] = SearchContext(score=score, hit_type="asset")
+        except Exception as exc:
+            if diag is not None:
+                diag["asset_exception"] = repr(exc)
+            logger.warning("Quickwit asset search failed: %r", exc, exc_info=True)
 
-            # Scene index — uses scene-restricted query (description, tags only)
+        # Scene index — uses scene-restricted query (description, tags only)
+        try:
             scene_hits = qw.search_tenant_scenes(
                 tenant_id=tenant_id,
                 query=scene_query,
@@ -222,11 +239,18 @@ def _run_quickwit_search(
                         start_ms=ctx.start_ms,
                         end_ms=ctx.end_ms,
                     )
+        except Exception as exc:
+            if diag is not None:
+                diag["scene_exception"] = repr(exc)
+            logger.warning("Quickwit scene search failed: %r", exc, exc_info=True)
 
-            # Transcript index — uses transcript-restricted query (text only).
-            # The transcript index has none of the asset-index fields,
-            # so reusing the asset query made Quickwit return 400 here
-            # and dropped the entire search into the postgres fallback.
+        # Transcript index — uses transcript-restricted query (text only).
+        # The transcript index is created lazily on first transcript
+        # submission, so for libraries with no video transcripts the
+        # index doesn't exist and Quickwit returns 400. We swallow that
+        # specifically — no transcripts means no transcript hits, which
+        # is fine. Other transcript failures still get logged.
+        try:
             transcript_hits = qw.search_tenant_transcripts(
                 tenant_id=tenant_id,
                 query=transcript_query,
@@ -260,21 +284,21 @@ def _run_quickwit_search(
                         start_ms=ctx.start_ms,
                         end_ms=ctx.end_ms,
                     )
+        except Exception as exc:
+            if diag is not None:
+                diag["transcript_exception"] = repr(exc)
+            logger.warning("Quickwit transcript search failed: %r", exc, exc_info=True)
 
-            # If Quickwit returned results, use them
-            if scores:
-                return scores, contexts, "quickwit"
-
-            # Quickwit returned empty — fall back to postgres if configured
-            if settings.quickwit_fallback_to_postgres:
-                return scores, contexts, "postgres_fallback"
-
+        # If Quickwit (any index) returned results, use them
+        if scores:
             return scores, contexts, "quickwit"
 
-    except Exception as exc:
-        if diag is not None:
-            diag["quickwit_exception"] = repr(exc)
-        logger.warning("Quickwit raised %r — falling back to Postgres", exc, exc_info=True)
+        # Quickwit returned empty across all indexes — fall back to
+        # postgres if configured.
+        if settings.quickwit_fallback_to_postgres:
+            return scores, contexts, "postgres_fallback"
+
+        return scores, contexts, "quickwit"
 
     # Postgres ILIKE fallback
     return scores, contexts, "postgres_fallback"
