@@ -323,13 +323,23 @@ struct SearchTab: View {
     /// Loads the picked photo, embeds it locally with Apple Vision
     /// feature prints, and POSTs the vector to /v1/similar/search-by-vector.
     ///
-    /// We embed client-side rather than uploading the image bytes
-    /// because the macOS app indexes libraries with `apple_vision`
-    /// feature prints (model_id `apple_vision`, model_version
-    /// `feature_print_v1`). The server-side search-by-image endpoint
-    /// embeds with CLIP, which lives in a different vector space and
-    /// would never match the indexed assets — so we have to compute
-    /// the embedding here, in the same space the library was indexed in.
+    /// We embed client-side rather than relying on `search-by-image`'s
+    /// server CLIP because the macOS app indexes libraries with
+    /// `apple_vision` feature prints (model_id `apple_vision`, model
+    /// version `feature_print_v1`). The server's CLIP model lives in a
+    /// different vector space and would never match the indexed assets
+    /// — so the *scene* path has to embed here, in the same space the
+    /// library was indexed in.
+    ///
+    /// **Hybrid mode**: alongside the scene vector we ship a downscaled
+    /// JPEG so the server can run face detection and ArcFace embedding,
+    /// then RRF-fuse the identity hits with the scene cosine results.
+    /// This is the fix for "the photo of my daughter doesn't find other
+    /// photos of my daughter" — Apple Vision feature prints encode
+    /// scene-level signal, not identity, and ArcFace is purpose-built
+    /// for the identity case. The downscale to ~768px keeps upload
+    /// bandwidth bounded while staying well above the face-detection
+    /// minimum face size.
     private func runImageSimilarSearch(item: PhotosPickerItem) async {
         guard let client = appState.client else { return }
         // Pick a library: prefer the currently selected one, fall back
@@ -365,12 +375,22 @@ struct SearchTab: View {
             // prints to match what the macOS app indexed with.
             let vector = try iOSFeaturePrintEmbedder.embed(imageData: data)
 
+            // Build the hybrid upload bytes: downscale to 768px max
+            // edge and re-encode at 0.85 JPEG quality. The server only
+            // needs enough resolution for InsightFace (which itself
+            // resizes to 640x640 internally), so anything larger is
+            // pure bandwidth waste.
+            let uploadImage = downscaleImage(uiImage, maxDimension: 768)
+            let imageB64 = uploadImage.jpegData(compressionQuality: 0.85)?
+                .base64EncodedString()
+
             let request = VectorSimilarityRequest(
                 libraryId: libraryId,
                 vector: vector,
                 modelId: iOSFeaturePrintEmbedder.modelId,
                 modelVersion: iOSFeaturePrintEmbedder.modelVersion,
-                limit: 30
+                limit: 30,
+                imageB64: imageB64
             )
             let response: ImageSimilarityResponse = try await client.post(
                 "/v1/similar/search-by-vector",

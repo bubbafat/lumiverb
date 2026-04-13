@@ -2609,6 +2609,51 @@ class FaceRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
+    def find_similar_by_vector(
+        self,
+        library_id: str,
+        vector: list[float],
+        limit: int,
+        exclude_asset_id: str | None = None,
+    ) -> list[tuple[str, float]]:
+        """Find assets whose faces are nearest to the given face embedding.
+
+        Used by hybrid similarity search to retrieve identity matches.
+        Multiple faces on the same asset are aggregated by best (lowest)
+        cosine distance — we want one row per asset, not per face, so
+        the downstream rank fusion sees a clean list. Filters to
+        `availability = 'online'` and the requested library.
+
+        Returns ``[(asset_id, distance)]`` sorted by distance ascending.
+        """
+        conditions = [
+            "a.library_id = :library_id",
+            "a.availability = 'online'",
+            "f.embedding_vector IS NOT NULL",
+        ]
+        params: dict = {
+            "vec": str(vector),
+            "library_id": library_id,
+            "limit": limit,
+        }
+        if exclude_asset_id is not None:
+            conditions.append("f.asset_id != :exclude_id")
+            params["exclude_id"] = exclude_asset_id
+        where = " AND ".join(conditions)
+        sql = f"""
+            SELECT
+                f.asset_id,
+                MIN(f.embedding_vector <=> CAST(:vec AS vector)) AS distance
+            FROM faces f
+            JOIN active_assets a ON a.asset_id = f.asset_id
+            WHERE {where}
+            GROUP BY f.asset_id
+            ORDER BY distance ASC
+            LIMIT :limit
+        """
+        rows = self._session.execute(text(sql), params).fetchall()
+        return [(r.asset_id, float(r.distance)) for r in rows]
+
     def submit_faces(
         self,
         asset_id: str,

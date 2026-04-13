@@ -1213,6 +1213,11 @@ embeddings = [
     { name = "open-clip-torch" },
     { name = "torch" },
 ]
+face-recognition = [
+    { name = "insightface" },
+    { name = "onnxruntime" },
+    { name = "opencv-python-headless" },
+]
 workers = [
     { name = "faster-whisper" },
     { name = "imagehash" },
@@ -1234,14 +1239,17 @@ requires-dist = [
     { name = "faster-whisper", marker = "extra == 'workers'", specifier = ">=1.0.0" },
     { name = "httpx", marker = "extra == 'cli'", specifier = ">=0.27" },
     { name = "imagehash", marker = "extra == 'workers'", specifier = ">=4.3.0" },
+    { name = "insightface", marker = "extra == 'face-recognition'", specifier = ">=0.7.3" },
     { name = "insightface", marker = "extra == 'workers'", specifier = ">=0.7.3" },
     { name = "lumiverb", extras = ["all"], marker = "extra == 'dev'" },
     { name = "lumiverb", extras = ["cli"], marker = "extra == 'all'" },
     { name = "lumiverb", extras = ["embeddings"], marker = "extra == 'workers'" },
     { name = "lumiverb", extras = ["workers"], marker = "extra == 'all'" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8" },
+    { name = "onnxruntime", marker = "extra == 'face-recognition'", specifier = ">=1.17.0" },
     { name = "onnxruntime", marker = "extra == 'workers'", specifier = ">=1.17.0" },
     { name = "open-clip-torch", marker = "extra == 'embeddings'", specifier = ">=3.3.0" },
+    { name = "opencv-python-headless", marker = "extra == 'face-recognition'", specifier = ">=4.8.0" },
     { name = "opencv-python-headless", marker = "extra == 'workers'", specifier = ">=4.8.0" },
     { name = "pgvector", specifier = ">=0.3.0" },
     { name = "pillow", specifier = ">=11.1" },
@@ -1267,7 +1275,7 @@ requires-dist = [
     { name = "typer", marker = "extra == 'cli'", specifier = ">=0.12" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
-provides-extras = ["cli", "embeddings", "workers", "all", "dev"]
+provides-extras = ["cli", "embeddings", "face-recognition", "workers", "all", "dev"]
 
 [[package]]
 name = "mako"

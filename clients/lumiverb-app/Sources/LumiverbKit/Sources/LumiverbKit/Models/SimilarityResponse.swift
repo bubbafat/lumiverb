@@ -57,6 +57,15 @@ public struct ImageSimilarityRequest: Encodable, Sendable {
 /// model_version must match how the library was indexed, otherwise
 /// the server's vector lookup returns no results (different vector
 /// spaces).
+///
+/// **Hybrid mode**: when `imageB64` is also supplied, the server runs
+/// face detection on the image, embeds each face with ArcFace, and
+/// fuses the per-face identity matches with the scene-vector cosine
+/// results via Reciprocal Rank Fusion. The bytes are additive — the
+/// scene `vector` is still the primary signal — so legacy callers
+/// that only set `vector` keep working unchanged. Pass the same image
+/// you embedded, downscaled to a face-detection-friendly size (~768px
+/// max edge) to keep upload bandwidth bounded.
 public struct VectorSimilarityRequest: Encodable, Sendable {
     public let libraryId: String
     public let vector: [Float]
@@ -64,6 +73,7 @@ public struct VectorSimilarityRequest: Encodable, Sendable {
     public let modelVersion: String
     public let limit: Int
     public let offset: Int
+    public let imageB64: String?
 
     public init(
         libraryId: String,
@@ -71,7 +81,8 @@ public struct VectorSimilarityRequest: Encodable, Sendable {
         modelId: String,
         modelVersion: String,
         limit: Int = 20,
-        offset: Int = 0
+        offset: Int = 0,
+        imageB64: String? = nil
     ) {
         self.libraryId = libraryId
         self.vector = vector
@@ -79,6 +90,7 @@ public struct VectorSimilarityRequest: Encodable, Sendable {
         self.modelVersion = modelVersion
         self.limit = limit
         self.offset = offset
+        self.imageB64 = imageB64
     }
 }
 

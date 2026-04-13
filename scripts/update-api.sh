@@ -66,8 +66,8 @@ ok "$(sudo -u "$SVC_USER" git log --oneline -1)"
 
 # ---------------------------------------------------------------------------
 step "Updating Python dependencies"
-sudo -u "$SVC_USER" "$UV_BIN" sync --extra cli --extra embeddings
-ok "Python venv synced (server + cli + embeddings)"
+sudo -u "$SVC_USER" "$UV_BIN" sync --extra cli --extra embeddings --extra face_recognition
+ok "Python venv synced (server + cli + embeddings + face_recognition)"
 
 # ---------------------------------------------------------------------------
 step "Running migrations"

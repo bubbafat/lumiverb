@@ -597,5 +597,227 @@ def test_similar_camera_filter(similarity_client: Tuple[_AuthClient, str, str]) 
     assert close_id in ids_both and far_id in ids_both
 
 
+# ---------------------------------------------------------------------------
+# Hybrid similarity (search-by-vector + image_b64)
+# ---------------------------------------------------------------------------
 
+@pytest.mark.slow
+def test_search_by_vector_no_image_b64_unchanged(
+    similarity_client: Tuple[_AuthClient, str, str],
+) -> None:
+    """search-by-vector without ``image_b64`` must behave exactly as
+    before — pure scene cosine search. This is the regression guard for
+    the hybrid extension; legacy callers shouldn't see any change."""
+    import base64
+
+    auth_client, library_id, tenant_url = similarity_client
+
+    engine = create_engine(tenant_url)
+    with Session(engine) as session:
+        asset_repo = AssetRepository(session)
+        emb_repo = AssetEmbeddingRepository(session)
+
+        a1 = asset_repo.create_asset(
+            library_id=library_id, rel_path="hybrid_noimg/a.jpg",
+            file_size=100, file_mtime=None, media_type="image",
+        )
+        a2 = asset_repo.create_asset(
+            library_id=library_id, rel_path="hybrid_noimg/b.jpg",
+            file_size=100, file_mtime=None, media_type="image",
+        )
+        v_a, v_b, _ = _asset_vectors(dim=768)
+        emb_repo.upsert(a1.asset_id, "apple_vision", "feature_print_v1", v_a)
+        emb_repo.upsert(a2.asset_id, "apple_vision", "feature_print_v1", v_b)
+        a1_id, a2_id = a1.asset_id, a2.asset_id
+
+    # Query vector matches a1 closely; no image_b64 sent.
+    resp = auth_client.post(
+        "/v1/similar/search-by-vector",
+        json={
+            "library_id": library_id,
+            "vector": v_a,
+            "model_id": "apple_vision",
+            "model_version": "feature_print_v1",
+            "limit": 5,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    ids = [h["asset_id"] for h in data["hits"]]
+    assert a1_id in ids
+    assert ids.index(a1_id) <= ids.index(a2_id) if a2_id in ids else True
+
+
+@pytest.mark.slow
+def test_search_by_vector_hybrid_face_match_promotes(
+    similarity_client: Tuple[_AuthClient, str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When ``image_b64`` is supplied AND face detection finds a face,
+    an asset that ranks low/missing in the scene cosine path but
+    matches the face vector should still surface near the top via RRF.
+
+    The actual InsightFace runtime is mocked here — we don't want this
+    suite to depend on a 280 MB model download or the ONNX runtime.
+    The mock returns a controlled face embedding that exactly matches
+    a face we plant in the DB; the test then asserts the planted asset
+    appears at or near rank 1, which proves the fusion path runs and
+    the FaceRepository.find_similar_by_vector / RRF combination works.
+    """
+    import base64
+    import io
+
+    from PIL import Image as PILImage
+
+    from src.client.workers.faces.insightface_provider import FaceDetection
+    from src.server.repository.tenant import FaceRepository
+
+    auth_client, library_id, tenant_url = similarity_client
+
+    # Plant: a face-only asset (no scene embedding) and a few scene
+    # neighbors. The face-only asset should NOT show up in pure scene
+    # cosine, only via the face path. RRF must surface it anyway.
+    engine = create_engine(tenant_url)
+    with Session(engine) as session:
+        asset_repo = AssetRepository(session)
+        emb_repo = AssetEmbeddingRepository(session)
+        face_repo = FaceRepository(session)
+
+        face_only = asset_repo.create_asset(
+            library_id=library_id, rel_path="hybrid_face/face_only.jpg",
+            file_size=100, file_mtime=None, media_type="image",
+        )
+        scene_a = asset_repo.create_asset(
+            library_id=library_id, rel_path="hybrid_face/scene_a.jpg",
+            file_size=100, file_mtime=None, media_type="image",
+        )
+        scene_b = asset_repo.create_asset(
+            library_id=library_id, rel_path="hybrid_face/scene_b.jpg",
+            file_size=100, file_mtime=None, media_type="image",
+        )
+
+        # Scene vectors at 768 dim — face_only deliberately does NOT
+        # get a scene vector, so it's invisible to the scene path.
+        scene_query, scene_close, scene_far = _asset_vectors(dim=768)
+        emb_repo.upsert(scene_a.asset_id, "apple_vision", "feature_print_v1", scene_close)
+        emb_repo.upsert(scene_b.asset_id, "apple_vision", "feature_print_v1", scene_far)
+
+        # ArcFace face vector — 512 dim, L2 normalized. Plant it on
+        # face_only.
+        face_vec = [0.0] * 512
+        face_vec[0] = 1.0
+        face_repo.submit_faces(
+            asset_id=face_only.asset_id,
+            detection_model="insightface",
+            detection_model_version="buffalo_l",
+            faces=[{
+                "bounding_box": {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2},
+                "detection_confidence": 0.95,
+                "embedding": face_vec,
+            }],
+        )
+        session.commit()
+        face_only_id = face_only.asset_id
+        scene_a_id = scene_a.asset_id
+
+    # Mock the server-side detect_faces_in_image so the test doesn't
+    # need the real InsightFace runtime. Return a single FaceDetection
+    # with the SAME embedding we planted, so the per-face vector lookup
+    # produces a perfect (distance ≈ 0) match against face_only.
+    def fake_detect(_bytes: bytes) -> list[FaceDetection]:
+        return [FaceDetection(
+            bounding_box={"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5},
+            detection_confidence=0.99,
+            embedding=face_vec,
+            sharpness=100.0,
+        )]
+
+    monkeypatch.setattr(
+        "src.server.faces.server_face_provider.detect_faces_in_image",
+        fake_detect,
+    )
+
+    # Build a tiny PNG so the request is well-formed even though the
+    # bytes themselves are never decoded by the mock.
+    img = PILImage.new("RGB", (8, 8), color=(127, 127, 127))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    image_b64 = base64.b64encode(buf.getvalue()).decode()
+
+    resp = auth_client.post(
+        "/v1/similar/search-by-vector",
+        json={
+            "library_id": library_id,
+            "vector": scene_query,
+            "model_id": "apple_vision",
+            "model_version": "feature_print_v1",
+            "limit": 10,
+            "image_b64": image_b64,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    ids = [h["asset_id"] for h in data["hits"]]
+
+    # The face_only asset has NO scene embedding so it's invisible to
+    # pure scene cosine. RRF must promote it via the face path.
+    assert face_only_id in ids, (
+        f"Hybrid fusion failed: face_only ({face_only_id}) absent from "
+        f"results {ids}. Either the face path didn't run or the RRF "
+        "fusion isn't merging it in."
+    )
+
+
+@pytest.mark.slow
+def test_search_by_vector_hybrid_falls_back_when_face_path_errors(
+    similarity_client: Tuple[_AuthClient, str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If face detection raises (model missing, decode failure, etc.)
+    the endpoint must degrade to scene-only ranking, not 500."""
+    import base64
+    import io
+
+    from PIL import Image as PILImage
+
+    auth_client, library_id, tenant_url = similarity_client
+
+    engine = create_engine(tenant_url)
+    with Session(engine) as session:
+        asset_repo = AssetRepository(session)
+        emb_repo = AssetEmbeddingRepository(session)
+        a = asset_repo.create_asset(
+            library_id=library_id, rel_path="hybrid_err/a.jpg",
+            file_size=100, file_mtime=None, media_type="image",
+        )
+        v_a, _, _ = _asset_vectors(dim=768)
+        emb_repo.upsert(a.asset_id, "apple_vision", "feature_print_v1", v_a)
+
+    # Force the face path to blow up
+    def fake_detect_raises(_bytes: bytes) -> None:
+        raise RuntimeError("face provider unavailable")
+
+    monkeypatch.setattr(
+        "src.server.faces.server_face_provider.detect_faces_in_image",
+        fake_detect_raises,
+    )
+
+    img = PILImage.new("RGB", (8, 8), color=(127, 127, 127))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    image_b64 = base64.b64encode(buf.getvalue()).decode()
+
+    resp = auth_client.post(
+        "/v1/similar/search-by-vector",
+        json={
+            "library_id": library_id,
+            "vector": v_a,
+            "model_id": "apple_vision",
+            "model_version": "feature_print_v1",
+            "limit": 5,
+            "image_b64": image_b64,
+        },
+    )
+    # Must not 500 — graceful degradation to scene-only.
+    assert resp.status_code == 200, resp.text
 

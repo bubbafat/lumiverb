@@ -102,9 +102,17 @@ def _run_quickwit_search(
       - contexts: {asset_id: SearchContext} (scene/transcript annotations)
       - source: "quickwit" | "postgres"
     """
-    combined_query = " AND ".join(f"({st.q})" for st in search_terms if st.q)
-    if not combined_query:
+    from src.server.search.query_builder import build_quickwit_query
+
+    # Build per-term field-boosted clauses, then AND the terms together
+    # at the top level. This is the difference between "underperforming"
+    # search and search that ranks descriptive matches above incidental
+    # OCR / path noise — see query_builder for the rationale.
+    per_term = [build_quickwit_query(st.q) for st in search_terms if st.q]
+    per_term = [q for q in per_term if q]
+    if not per_term:
         return {}, {}, "none"
+    combined_query = " AND ".join(f"({q})" for q in per_term)
 
     scores: dict[str, float] = {}
     contexts: dict[str, SearchContext] = {}

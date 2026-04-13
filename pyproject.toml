@@ -53,6 +53,17 @@ embeddings = [
     "torch>=2.10.0",
     "open-clip-torch>=3.3.0",
 ]
+# Face recognition: server-side InsightFace (detection + ArcFace
+# embedding) used by the hybrid similarity search to find photos that
+# match by *identity* in addition to scene similarity. Without this
+# extra, search-by-image falls back to scene-only ranking. Workers
+# already pull insightface in via the worker bundle, so this extra is
+# only needed by the server-only install path.
+face_recognition = [
+    "insightface>=0.7.3",
+    "onnxruntime>=1.17.0",
+    "opencv-python-headless>=4.8.0",
+]
 # Workers: image/video processing and AI (runs on the client machine).
 # Includes embeddings so the indexing path has CLIP available.
 workers = [

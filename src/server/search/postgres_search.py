@@ -22,11 +22,18 @@ def search_assets(
     - asset_metadata.data->>'tags'         (most recent per asset, any model)
 
     When library_id is None, searches across all libraries (cross-library).
-    Returns list of dicts with asset_id, rel_path, thumbnail_key,
-    proxy_key, description, tags, score=0.0 (no ranking).
+    Results are ordered by `query_builder.postgres_rank_clauses` so a
+    whole-word phrase match outranks a per-token whole-word match,
+    which outranks a substring-only match — keeping the fallback path
+    consistent with the field-boosted Quickwit ranking. Returns list of
+    dicts with asset_id, rel_path, thumbnail_key, proxy_key, description,
+    tags, score=0.0 (no BM25 in the fallback).
     """
+    from src.server.search.query_builder import postgres_rank_clauses
+
     like = f"%{query}%"
     lib_condition = "a.library_id = :library_id AND" if library_id else ""
+    rank_expr, rank_params = postgres_rank_clauses(query)
     sql = text(
         f"""
         SELECT DISTINCT
@@ -38,7 +45,8 @@ def search_assets(
             a.camera_make,
             a.camera_model,
             COALESCE(m.data->>'description', '') AS description,
-            COALESCE(m.data->'tags', '[]'::jsonb) AS tags
+            COALESCE(m.data->'tags', '[]'::jsonb) AS tags,
+            {rank_expr} AS rank
         FROM active_assets a
         LEFT JOIN LATERAL (
             SELECT data
@@ -60,11 +68,11 @@ def search_assets(
            OR a.note ILIKE :like
            OR a.transcript_text ILIKE :like
           )
-        ORDER BY a.asset_id
+        ORDER BY rank ASC, a.asset_id
         LIMIT :limit OFFSET :offset
     """
     )
-    params: dict = {"like": like, "limit": limit, "offset": offset}
+    params: dict = {"like": like, "limit": limit, "offset": offset, **rank_params}
     if library_id:
         params["library_id"] = library_id
     rows = session.execute(sql, params).fetchall()
