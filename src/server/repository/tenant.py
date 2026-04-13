@@ -2277,12 +2277,21 @@ class UnifiedBrowseRepository:
     ) -> list[Asset]:
         """Keyset pagination using the QueryFilter algebra.
 
-        If candidate_ids is provided (from Quickwit text search), an additional
-        ``a.asset_id = ANY(:candidate_ids)`` filter is applied.
+        If candidate_ids is provided (from Quickwit text search), an
+        additional ``a.asset_id = ANY(:candidate_ids)`` filter is
+        applied. When candidate_scores is also provided, the result is
+        ordered by relevance (score DESC) instead of the default
+        chronological sort — text search ALWAYS prefers relevance,
+        because returning Cards/* mixed with chronologically-newer
+        non-Cards results was the core "search is confusing" complaint.
         """
         from src.server.models.query_filter import QuerySpec as _QS
         import base64 as _b64
 
+        # Text search forces relevance ordering. Without this override
+        # the default sort=taken_at runs and Quickwit's BM25 ranking
+        # is thrown on the floor.
+        relevance_order = candidate_ids is not None and candidate_scores is not None
         sort_col = spec.sort if spec.sort in self.SORTABLE_COLUMNS else "taken_at"
         is_desc = spec.direction.lower() == "desc"
         cmp_op = "<" if is_desc else ">"
@@ -2293,12 +2302,33 @@ class UnifiedBrowseRepository:
         counter = [0]
 
         # --- Candidate set from text search ---
+        # When in relevance mode we sort the candidate id list by score
+        # descending up here, and feed that ordered list to a SQL
+        # `array_position` ORDER BY below. The dict-of-floats only
+        # exists to do this sort — once it's done, only the order
+        # matters.
+        ordered_candidate_ids: list[str] | None = None
         if candidate_ids is not None:
             conditions.append("a.asset_id = ANY(:candidate_ids)")
             params["candidate_ids"] = candidate_ids
+            if relevance_order:
+                # mypy guard — the relevance_order branch implies non-None
+                assert candidate_scores is not None
+                ordered_candidate_ids = sorted(
+                    candidate_ids,
+                    key=lambda aid: (-candidate_scores.get(aid, 0.0), aid),
+                )
+                params["ordered_candidate_ids"] = ordered_candidate_ids
 
-        # --- Composite cursor ---
-        if after is not None:
+        # --- Composite cursor (skipped in relevance mode) ---
+        # The composite cursor below paginates by (sort_col, asset_id),
+        # which doesn't make sense when results are ordered by an
+        # ad-hoc candidate score that isn't a column. For text search
+        # we keep it simple: cap at the first `limit` results sorted
+        # by score. The candidate set is already capped at
+        # MAX_CANDIDATE_IDS=5000 upstream, so the user is paging
+        # through a bounded list and most queries fit a single page.
+        if after is not None and not relevance_order:
             cursor_value = None
             cursor_id = after
             try:
@@ -2366,7 +2396,14 @@ class UnifiedBrowseRepository:
             LEFT JOIN asset_ratings r ON r.asset_id = a.asset_id AND r.user_id = :rating_user_id
             """
 
-        if sort_col == "asset_id":
+        if relevance_order:
+            # Sort by the candidate's position in the relevance-ordered
+            # array. `array_position` is O(N) per row but the candidate
+            # set is bounded (≤MAX_CANDIDATE_IDS=5000) so the constant
+            # is small. This replaces the old chronological default
+            # which was throwing Quickwit's BM25 ranking on the floor.
+            order_clause = "array_position(:ordered_candidate_ids, a.asset_id)"
+        elif sort_col == "asset_id":
             order_clause = f"a.asset_id {order_dir}"
         else:
             order_clause = f"a.{sort_col} {order_dir} NULLS LAST, a.asset_id {order_dir}"

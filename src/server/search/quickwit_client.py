@@ -195,12 +195,23 @@ class QuickwitClient:
         max_hits: int = 20,
         start_offset: int = 0,
     ) -> list[dict]:
-        """BM25 search on the per-tenant asset index. Optionally filter by library_id(s)."""
+        """BM25 search on the per-tenant asset index. Optionally filter by library_id(s).
+
+        Quickwit's search response returns hits in BM25 relevance order
+        but does NOT include a `_score` field per hit (that's an
+        Elasticsearch convention, not Quickwit's). Without an explicit
+        score the existing merge logic in `_run_quickwit_search` (which
+        does `if score > scores[aid]`) collapses to comparing zeros and
+        loses the relevance signal. We synthesize a position-based
+        score: `1.0 / (1 + rank)` so rank 0 = 1.0, rank 1 = 0.5, rank 9
+        = 0.1, etc. Strictly decreasing, all positive, comparable across
+        per-index calls.
+        """
         effective_query = self._apply_library_filter(query, library_ids)
         index_id = self.tenant_index_id(tenant_id)
         raw_hits = self._search_index(index_id, effective_query, max_hits, start_offset)
         results: list[dict] = []
-        for hit in raw_hits:
+        for rank, hit in enumerate(raw_hits):
             doc = hit.get("_source", hit)
             results.append({
                 "asset_id": doc.get("asset_id", ""),
@@ -212,7 +223,7 @@ class QuickwitClient:
                 "camera_model": doc.get("camera_model"),
                 "description": doc.get("description", ""),
                 "tags": doc.get("tags", []),
-                "score": hit.get("_score", 0.0),
+                "score": 1.0 / (1 + rank),
                 "source": "quickwit",
             })
         return results
@@ -225,12 +236,14 @@ class QuickwitClient:
         max_hits: int = 20,
         start_offset: int = 0,
     ) -> list[dict]:
-        """BM25 search on the per-tenant scene index. Optionally filter by library_id(s)."""
+        """BM25 search on the per-tenant scene index. Optionally
+        filter by library_id(s). Position-based scoring — see
+        ``search_tenant`` for the rationale."""
         effective_query = self._apply_library_filter(query, library_ids)
         index_id = self.tenant_scene_index_id(tenant_id)
         raw_hits = self._search_index(index_id, effective_query, max_hits, start_offset)
         results: list[dict] = []
-        for hit in raw_hits:
+        for rank, hit in enumerate(raw_hits):
             doc = hit.get("_source", hit)
             results.append({
                 "scene_id": doc.get("scene_id", ""),
@@ -244,7 +257,7 @@ class QuickwitClient:
                 "duration_sec": doc.get("duration_sec"),
                 "description": doc.get("description", ""),
                 "tags": doc.get("tags", []),
-                "score": hit.get("_score", 0.0),
+                "score": 1.0 / (1 + rank),
                 "source": "quickwit_scenes",
             })
         return results
@@ -257,12 +270,14 @@ class QuickwitClient:
         max_hits: int = 60,
         start_offset: int = 0,
     ) -> list[dict]:
-        """BM25 search on the per-tenant transcript index. Returns per-segment hits."""
+        """BM25 search on the per-tenant transcript index. Returns
+        per-segment hits with position-based scoring — see
+        ``search_tenant`` for the rationale."""
         effective_query = self._apply_library_filter(query, library_ids)
         index_id = self.tenant_transcript_index_id(tenant_id)
         raw_hits = self._search_index(index_id, effective_query, max_hits, start_offset)
         results: list[dict] = []
-        for hit in raw_hits:
+        for rank, hit in enumerate(raw_hits):
             doc = hit.get("_source", hit)
             results.append({
                 "asset_id": doc.get("asset_id", ""),
@@ -273,7 +288,7 @@ class QuickwitClient:
                 "end_ms": doc.get("end_ms"),
                 "text": doc.get("text", ""),
                 "language": doc.get("language", ""),
-                "score": hit.get("_score", 0.0),
+                "score": 1.0 / (1 + rank),
                 "source": "quickwit_transcripts",
             })
         return results
