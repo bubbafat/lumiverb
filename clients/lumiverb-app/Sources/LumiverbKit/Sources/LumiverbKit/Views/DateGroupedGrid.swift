@@ -30,6 +30,13 @@ public struct DateGroupedGrid<Item: Identifiable>: View {
     /// result came back without tapping into every photo. Default nil
     /// keeps Photos / Collections / People / Favorites unaffected.
     public let caption: ((Item) -> String?)?
+    /// When true (default), items are grouped into date sections
+    /// sorted most-recent-first. When false, items render in their
+    /// insertion order with no section headers — used by search,
+    /// where the input is already in BM25 relevance order and date
+    /// grouping would silently re-sort it chronologically and undo
+    /// the server-side ranking.
+    public let groupByDate: Bool
 
     public init(
         browseState: BrowseState,
@@ -41,7 +48,8 @@ public struct DateGroupedGrid<Item: Identifiable>: View {
         isLoading: Bool = false,
         onTap: @escaping (Item) -> Void,
         onLastItemAppear: @escaping (Item) -> Void = { _ in },
-        caption: ((Item) -> String?)? = nil
+        caption: ((Item) -> String?)? = nil,
+        groupByDate: Bool = true
     ) {
         self.browseState = browseState
         self.items = items
@@ -53,6 +61,7 @@ public struct DateGroupedGrid<Item: Identifiable>: View {
         self.onTap = onTap
         self.onLastItemAppear = onLastItemAppear
         self.caption = caption
+        self.groupByDate = groupByDate
     }
 
     private static var columns: [GridItem] {
@@ -63,58 +72,35 @@ public struct DateGroupedGrid<Item: Identifiable>: View {
     }
 
     public var body: some View {
-        let buckets = bucketByDate(items, dateString: dateString, assetId: assetId)
         let lastId = items.last.map(assetId)
         ScrollView {
             LazyVGrid(
                 columns: Self.columns,
                 spacing: MediaGridLayoutConstants.spacing
             ) {
-                ForEach(buckets) { bucket in
-                    Section {
-                        ForEach(bucket.items) { item in
-                            let id = assetId(item)
-                            let selected = browseState.selectedAssetIds.contains(id)
-                            VStack(alignment: .leading, spacing: 4) {
-                                AssetGridCell(
-                                    assetId: id,
-                                    isVideo: isVideo(item),
-                                    isSelected: selected,
-                                    client: client,
-                                    onToggleSelect: {
-                                        browseState.toggleSelection(assetId: id)
-                                    }
-                                )
-                                if let captionText = caption?(item), !captionText.isEmpty {
-                                    Text(captionText)
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                        .lineLimit(2)
-                                        .truncationMode(.tail)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .padding(.horizontal, 2)
-                                }
+                if groupByDate {
+                    let buckets = bucketByDate(items, dateString: dateString, assetId: assetId)
+                    ForEach(buckets) { bucket in
+                        Section {
+                            ForEach(bucket.items) { item in
+                                cell(item, lastId: lastId)
                             }
-                            .onTapGesture {
-                                if browseState.isSelecting {
-                                    browseState.toggleSelection(assetId: id)
-                                } else {
-                                    onTap(item)
-                                }
-                            }
-                            .onAppear {
-                                if id == lastId {
-                                    onLastItemAppear(item)
-                                }
-                            }
+                        } header: {
+                            DateBucketHeader(
+                                label: bucket.label,
+                                assetIds: bucket.assetIds,
+                                dateISO: bucket.dateISO,
+                                browseState: browseState
+                            )
                         }
-                    } header: {
-                        DateBucketHeader(
-                            label: bucket.label,
-                            assetIds: bucket.assetIds,
-                            dateISO: bucket.dateISO,
-                            browseState: browseState
-                        )
+                    }
+                } else {
+                    // Flat insertion-order render. Used by search,
+                    // where the input is already in BM25 relevance
+                    // order — bucketing would silently re-sort it
+                    // chronologically and undo the server ranking.
+                    ForEach(items) { item in
+                        cell(item, lastId: lastId)
                     }
                 }
 
@@ -128,6 +114,44 @@ public struct DateGroupedGrid<Item: Identifiable>: View {
             .padding(MediaGridLayoutConstants.spacing)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private func cell(_ item: Item, lastId: String?) -> some View {
+        let id = assetId(item)
+        let selected = browseState.selectedAssetIds.contains(id)
+        VStack(alignment: .leading, spacing: 4) {
+            AssetGridCell(
+                assetId: id,
+                isVideo: isVideo(item),
+                isSelected: selected,
+                client: client,
+                onToggleSelect: {
+                    browseState.toggleSelection(assetId: id)
+                }
+            )
+            if let captionText = caption?(item), !captionText.isEmpty {
+                Text(captionText)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 2)
+            }
+        }
+        .onTapGesture {
+            if browseState.isSelecting {
+                browseState.toggleSelection(assetId: id)
+            } else {
+                onTap(item)
+            }
+        }
+        .onAppear {
+            if id == lastId {
+                onLastItemAppear(item)
+            }
+        }
     }
 }
 

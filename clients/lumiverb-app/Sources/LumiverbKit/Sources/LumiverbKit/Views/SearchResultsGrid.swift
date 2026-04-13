@@ -37,6 +37,12 @@ public struct SearchResultsGrid<ScrollIntrospector: View>: View {
     /// tapping into every photo. Empty descriptions fall through to
     /// no caption — happens for results matched on tags / OCR / path
     /// where there's nothing helpful to surface inline.
+    ///
+    /// `groupByDate: false` is *critical* here. Search results arrive
+    /// from the server in BM25 relevance order. The default
+    /// date-bucketing path would silently re-sort everything
+    /// chronologically and undo the server-side ranking — exactly the
+    /// "I searched for card and the results don't match" symptom.
     @ViewBuilder
     private var iosBody: some View {
         DateGroupedGrid(
@@ -69,7 +75,8 @@ public struct SearchResultsGrid<ScrollIntrospector: View>: View {
                     return hit.tags.prefix(4).joined(separator: " · ")
                 }
                 return nil
-            }
+            },
+            groupByDate: false
         )
     }
     #endif
