@@ -25,6 +25,11 @@ public struct DateGroupedGrid<Item: Identifiable>: View {
     public let onTap: (Item) -> Void
     public let onLastItemAppear: (Item) -> Void
     public let isLoading: Bool
+    /// Optional caption rendered below each cell. Used by search to
+    /// surface the matched AI description so users can see *why* a
+    /// result came back without tapping into every photo. Default nil
+    /// keeps Photos / Collections / People / Favorites unaffected.
+    public let caption: ((Item) -> String?)?
 
     public init(
         browseState: BrowseState,
@@ -35,7 +40,8 @@ public struct DateGroupedGrid<Item: Identifiable>: View {
         isVideo: @escaping (Item) -> Bool = { _ in false },
         isLoading: Bool = false,
         onTap: @escaping (Item) -> Void,
-        onLastItemAppear: @escaping (Item) -> Void = { _ in }
+        onLastItemAppear: @escaping (Item) -> Void = { _ in },
+        caption: ((Item) -> String?)? = nil
     ) {
         self.browseState = browseState
         self.items = items
@@ -46,6 +52,7 @@ public struct DateGroupedGrid<Item: Identifiable>: View {
         self.isLoading = isLoading
         self.onTap = onTap
         self.onLastItemAppear = onLastItemAppear
+        self.caption = caption
     }
 
     private static var columns: [GridItem] {
@@ -68,15 +75,26 @@ public struct DateGroupedGrid<Item: Identifiable>: View {
                         ForEach(bucket.items) { item in
                             let id = assetId(item)
                             let selected = browseState.selectedAssetIds.contains(id)
-                            AssetGridCell(
-                                assetId: id,
-                                isVideo: isVideo(item),
-                                isSelected: selected,
-                                client: client,
-                                onToggleSelect: {
-                                    browseState.toggleSelection(assetId: id)
+                            VStack(alignment: .leading, spacing: 4) {
+                                AssetGridCell(
+                                    assetId: id,
+                                    isVideo: isVideo(item),
+                                    isSelected: selected,
+                                    client: client,
+                                    onToggleSelect: {
+                                        browseState.toggleSelection(assetId: id)
+                                    }
+                                )
+                                if let captionText = caption?(item), !captionText.isEmpty {
+                                    Text(captionText)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                        .lineLimit(2)
+                                        .truncationMode(.tail)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.horizontal, 2)
                                 }
-                            )
+                            }
                             .onTapGesture {
                                 if browseState.isSelecting {
                                     browseState.toggleSelection(assetId: id)

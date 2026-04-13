@@ -22,6 +22,60 @@ public struct SearchResultsGrid<ScrollIntrospector: View>: View {
     }
 
     public var body: some View {
+        #if os(iOS)
+        iosBody
+        #else
+        macBody
+        #endif
+    }
+
+    #if os(iOS)
+    /// iOS body: shared `DateGroupedGrid` so search results match the
+    /// 2-wide layout used by Photos / Collections / People / Favorites.
+    /// Each cell gets a caption showing the AI description (truncated
+    /// to 2 lines) so users can see WHY the result matched without
+    /// tapping into every photo. Empty descriptions fall through to
+    /// no caption — happens for results matched on tags / OCR / path
+    /// where there's nothing helpful to surface inline.
+    @ViewBuilder
+    private var iosBody: some View {
+        DateGroupedGrid(
+            browseState: browseState,
+            items: browseState.searchResults,
+            client: client,
+            dateString: { $0.takenAt },
+            assetId: { $0.assetId },
+            isVideo: { $0.mediaType == "video" },
+            isLoading: false,
+            onTap: { hit in
+                if let idx = browseState.searchResults.firstIndex(where: { $0.id == hit.id }) {
+                    browseState.focusedIndex = idx
+                }
+                Task { await browseState.loadAssetDetail(assetId: hit.assetId) }
+            },
+            caption: { hit in
+                // Prefer the matched snippet (server-side scene/transcript
+                // hit context) over the generic AI description — when
+                // search matched on a transcript line, that line is far
+                // more informative than a tag dump. Falls back to the
+                // description for plain image hits.
+                if let snippet = hit.snippet, !snippet.isEmpty {
+                    return snippet
+                }
+                if !hit.description.isEmpty {
+                    return hit.description
+                }
+                if !hit.tags.isEmpty {
+                    return hit.tags.prefix(4).joined(separator: " · ")
+                }
+                return nil
+            }
+        )
+    }
+    #endif
+
+    @ViewBuilder
+    private var macBody: some View {
         GeometryReader { geo in
             let layout = MediaLayout.compute(
                 aspectRatios: browseState.searchResults.map { $0.aspectRatio },
