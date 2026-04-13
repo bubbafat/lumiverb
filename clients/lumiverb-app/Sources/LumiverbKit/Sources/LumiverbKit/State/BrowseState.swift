@@ -827,9 +827,20 @@ public class BrowseState: ObservableObject {
             // Use unified /v1/query with all filters + search query.
             // The filter algebra sends ALL structured filters alongside
             // the text search, eliminating the old search/browse gap.
+            //
+            // Search is intentionally NOT scoped to selectedLibraryId.
+            // When a user types "Cards" they want to find their card
+            // photos, not "Cards in whichever library happens to be
+            // selected right now." Limiting search to the active
+            // library was the source of "I searched for Card and got
+            // nothing useful" — they were sitting on Empty Besters
+            // when the Cards live in Photos. Cross-library search is
+            // the only intuitive default. selectedPath is also
+            // dropped because path filters only make sense inside one
+            // library.
             let items = filters.queryItems(
-                libraryId: selectedLibraryId,
-                pathPrefix: selectedPath,
+                libraryId: nil,
+                pathPrefix: nil,
                 searchQuery: query,
                 limit: 500
             )
