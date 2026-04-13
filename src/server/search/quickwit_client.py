@@ -189,16 +189,16 @@ class QuickwitClient:
 
     # Down-weight applied to scene and transcript scores so an asset
     # match always outranks an equivalent-rank scene/transcript match.
-    # A 2.5-second scene with "small blue card" in its description was
-    # outranking actual card photos because both got rank-0 scores of
-    # 1.0. Asset-level matches are far higher signal than incidental
-    # scene/transcript snippets, so we apply a 0.5x multiplier to
-    # subordinate scenes/transcripts at equal rank. High-rank
-    # scene/transcript matches can still surface above low-rank asset
-    # matches (e.g. searching "tiki bar" should return scene matches),
-    # but at equivalent ranks the asset wins.
-    SCENE_RANK_PENALTY = 0.5
-    TRANSCRIPT_RANK_PENALTY = 0.5
+    # First pass at 0.5 wasn't aggressive enough — a scene at rank 0
+    # (score 0.5 after penalty) tied with asset rank 1 (1/(1+1) = 0.5)
+    # and landed at #2. With 0.1 the scene rank-0 score becomes 0.1
+    # which ties with asset rank 9 (1/(1+9) = 0.1), so a single scene
+    # hit lands around position 10 — present, but firmly subordinate
+    # to the photo matches at the top. A genuinely strong scene match
+    # (rank 0 with no competing asset hits) still surfaces because
+    # the asset score floor at deeper ranks decays naturally.
+    SCENE_RANK_PENALTY = 0.1
+    TRANSCRIPT_RANK_PENALTY = 0.1
 
     def search_tenant(
         self,
