@@ -33,6 +33,7 @@ by whole-word presence so the fallback path doesn't undo the gains.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 # Per-index field profiles. Quickwit's three indexes (asset / scene /
 # transcript) have *different* schemas, and a query that names a field
@@ -73,12 +74,68 @@ PHRASE_FIELDS: list[str] = ASSET_PHRASE_FIELDS
 # stores in the index anyway.
 _TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9-]*")
 
+# A quoted span. Only matches balanced `"..."` pairs; an unmatched
+# trailing `"` is left to the free-token pass which strips it.
+_QUOTED_RE = re.compile(r'"([^"]*)"')
+
 
 def tokenize(query: str) -> list[str]:
     """Lowercase + extract tokens. Mirrors what Quickwit's `default`
     tokenizer would do at index time, so the tokens we send for matching
-    line up with what's actually stored."""
+    line up with what's actually stored. Ignores quotes — use
+    `parse_query` when you need to preserve phrase structure."""
     return _TOKEN_RE.findall(query.lower())
+
+
+@dataclass(frozen=True)
+class QueryTerm:
+    """One parsed unit of a user query: either a free token or a
+    quoted phrase. `tokens` are always lowercased and whitespace-
+    stripped — a phrase's `text` is `" ".join(tokens)`."""
+
+    tokens: tuple[str, ...]
+    is_phrase: bool
+
+    @property
+    def text(self) -> str:
+        return " ".join(self.tokens)
+
+
+def parse_query(raw: str) -> list[QueryTerm]:
+    """Split raw user input into terms. Text inside balanced double
+    quotes becomes a phrase term (tokens must match in order, adjacent);
+    everything outside becomes individual free-token terms. A
+    single-token "phrase" collapses to a free token since a one-word
+    phrase is identical to a one-word token match.
+
+    Examples:
+        parse_query('negative space') →
+            [QueryTerm(('negative',), False), QueryTerm(('space',), False)]
+        parse_query('"negative space"') →
+            [QueryTerm(('negative', 'space'), True)]
+        parse_query('"negative space" beach') →
+            [QueryTerm(('negative', 'space'), True),
+             QueryTerm(('beach',), False)]
+
+    Unmatched trailing `"` is treated as a literal — the content after
+    the last unmatched quote falls through the regex and its tokens
+    are extracted as free tokens.
+    """
+    lowered = raw.lower()
+    terms: list[QueryTerm] = []
+    last = 0
+    for m in _QUOTED_RE.finditer(lowered):
+        for tok in _TOKEN_RE.findall(lowered[last : m.start()]):
+            terms.append(QueryTerm((tok,), is_phrase=False))
+        phrase_tokens = tuple(_TOKEN_RE.findall(m.group(1)))
+        if phrase_tokens:
+            terms.append(
+                QueryTerm(phrase_tokens, is_phrase=len(phrase_tokens) > 1)
+            )
+        last = m.end()
+    for tok in _TOKEN_RE.findall(lowered[last:]):
+        terms.append(QueryTerm((tok,), is_phrase=False))
+    return terms
 
 
 def build_quickwit_query(
@@ -95,6 +152,13 @@ def build_quickwit_query(
     support it). Ranking comes from BM25 over the explicit field set
     plus phrase clauses for multi-token queries.
 
+    **Quoted phrases**: text wrapped in `"..."` is required — the
+    phrase must match (across any searchable field) as a contiguous
+    sequence. A mix like `"negative space" beach` becomes
+    `( phrase-across-fields ) AND ( beach-or-clause )`. Without any
+    quotes the output is a flat OR across per-token and phrase
+    clauses, preserving the loose ranking behavior.
+
     `fields` and `phrase_fields` default to the asset-index profile
     so existing callers keep working. Pass index-specific lists when
     targeting the scene or transcript index — naming a field the
@@ -105,29 +169,52 @@ def build_quickwit_query(
     caller should treat that as "no text search" and skip the engine
     entirely rather than sending a malformed query.
     """
-    tokens = tokenize(raw)
-    if not tokens:
+    terms = parse_query(raw)
+    if not terms:
         return ""
 
     use_fields = fields if fields is not None else QUERY_FIELDS
     use_phrase_fields = phrase_fields if phrase_fields is not None else PHRASE_FIELDS
 
-    parts: list[str] = []
+    quoted = [t for t in terms if t.is_phrase]
+    free_tokens = [t.tokens[0] for t in terms if not t.is_phrase]
 
-    # 1. Phrase clauses — multi-token queries get exact-phrase matches
-    # in high-signal fields. Phrases are rarer than tokens so BM25
-    # naturally ranks them higher via IDF, no boost needed.
-    if len(tokens) > 1:
-        phrase = " ".join(tokens)
-        for field in use_phrase_fields:
-            parts.append(f'{field}:"{phrase}"')
+    def _free_or_group() -> str:
+        parts: list[str] = []
+        # Multi-token free runs still get an automatic phrase clause
+        # on the high-signal fields so an unquoted "greeting card"
+        # keeps ranking the whole phrase above incidental token hits.
+        if len(free_tokens) > 1:
+            phrase = " ".join(free_tokens)
+            for field in use_phrase_fields:
+                parts.append(f'{field}:"{phrase}"')
+        for token in free_tokens:
+            for field in use_fields:
+                parts.append(f"{field}:{token}")
+        return " OR ".join(parts)
 
-    # 2. Per-token, per-field exact clauses.
-    for token in tokens:
-        for field in use_fields:
-            parts.append(f"{field}:{token}")
+    # No required phrases → preserve the flat OR shape so existing
+    # behavior is unchanged when the user doesn't use quotes.
+    if not quoted:
+        return _free_or_group()
 
-    return " OR ".join(parts)
+    # Each quoted phrase is REQUIRED: it must match in at least one
+    # searchable field. The phrase clause spans ALL use_fields, not
+    # just phrase_fields, because the user's explicit quoting means
+    # they want exactness wherever the phrase appears.
+    required_clauses: list[str] = []
+    for phrase_term in quoted:
+        phrase = phrase_term.text
+        phrase_parts = [f'{field}:"{phrase}"' for field in use_fields]
+        required_clauses.append("(" + " OR ".join(phrase_parts) + ")")
+
+    # Free tokens mixed with quoted phrases are also required —
+    # conventional search UX treats `"foo bar" baz` as "must have
+    # the phrase AND must have baz".
+    if free_tokens:
+        required_clauses.append("(" + _free_or_group() + ")")
+
+    return " AND ".join(required_clauses)
 
 
 # Minimum token length for prefix expansion. `a*` would match almost
@@ -152,17 +239,23 @@ def build_quickwit_prefix_query(
     and a penalty on the prefix list — see `_run_quickwit_search`.
 
     Skips path_tokens because directory-component prefixes are noisy.
-    Skips tokens shorter than `PREFIX_MIN_LENGTH`.
+    Skips tokens shorter than `PREFIX_MIN_LENGTH`. Tokens inside a
+    quoted phrase are treated as exact — no prefix expansion — so a
+    pure quoted-phrase query returns "" and the caller skips the
+    prefix pass entirely.
     """
-    tokens = tokenize(raw)
-    if not tokens:
+    terms = parse_query(raw)
+    if not terms:
         return ""
 
     use_fields = fields if fields is not None else QUERY_FIELDS
     prefix_fields = [f for f in use_fields if f != "path_tokens"]
 
+    # Only free (unquoted) tokens get prefix expansion.
+    free_tokens = [t.tokens[0] for t in terms if not t.is_phrase]
+
     parts: list[str] = []
-    for token in tokens:
+    for token in free_tokens:
         if len(token) < PREFIX_MIN_LENGTH:
             continue
         for field in prefix_fields:
@@ -190,20 +283,36 @@ def postgres_rank_clauses(query: str) -> tuple[str, dict[str, str]]:
     the expression — the caller must merge them into the query params
     dict.
     """
-    tokens = tokenize(query)
-    if not tokens:
+    terms = parse_query(query)
+    if not terms:
         # Stable identity ordering — caller's downstream pagination is
         # asset_id based anyway.
         return "0", {}
 
-    # Build a regex word-boundary pattern that matches the FULL phrase
-    # as whole words. PostgreSQL ~* with \m / \M anchors. Escape regex
-    # metachars in tokens since users might type them.
-    phrase_pattern = r"\m" + r"\s+".join(re.escape(t) for t in tokens) + r"\M"
+    all_tokens = [tok for t in terms for tok in t.tokens]
+    if not all_tokens:
+        return "0", {}
+
+    # Phrase pattern: if the user explicitly quoted phrases, rank docs
+    # that contain any of those phrases as whole words. Otherwise fall
+    # back to ranking the full free-token sequence as a contiguous
+    # phrase (preserving the pre-quoting behavior). Escape regex metas
+    # so user input can't inject pattern syntax.
+    quoted = [t for t in terms if t.is_phrase]
+    if quoted:
+        phrase_alts = [
+            r"\m" + r"\s+".join(re.escape(tok) for tok in t.tokens) + r"\M"
+            for t in quoted
+        ]
+        phrase_pattern = "(" + "|".join(phrase_alts) + ")"
+    else:
+        phrase_pattern = (
+            r"\m" + r"\s+".join(re.escape(t) for t in all_tokens) + r"\M"
+        )
 
     # Per-token whole-word: matches if any token appears as a whole word
     # anywhere in the corpus. Used as the second-tier rank floor.
-    token_alt = "|".join(re.escape(t) for t in tokens)
+    token_alt = "|".join(re.escape(t) for t in all_tokens)
     token_pattern = r"\m(" + token_alt + r")\M"
 
     # Concatenate the searchable text fields once so the regex is cheap

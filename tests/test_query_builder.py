@@ -8,6 +8,7 @@ import pytest
 from src.server.search.query_builder import (
     build_quickwit_prefix_query,
     build_quickwit_query,
+    parse_query,
     postgres_rank_clauses,
     tokenize,
 )
@@ -142,6 +143,97 @@ class TestBuildQuickwitPrefixQuery:
 
 
 @pytest.mark.fast
+class TestParseQuery:
+    def test_empty(self) -> None:
+        assert parse_query("") == []
+        assert parse_query("   ") == []
+
+    def test_free_tokens(self) -> None:
+        terms = parse_query("Negative Space")
+        assert len(terms) == 2
+        assert all(not t.is_phrase for t in terms)
+        assert [t.text for t in terms] == ["negative", "space"]
+
+    def test_quoted_phrase(self) -> None:
+        terms = parse_query('"negative space"')
+        assert len(terms) == 1
+        assert terms[0].is_phrase
+        assert terms[0].text == "negative space"
+        assert terms[0].tokens == ("negative", "space")
+
+    def test_mixed_phrase_and_tokens(self) -> None:
+        terms = parse_query('"negative space" beach sunset')
+        assert len(terms) == 3
+        assert terms[0].is_phrase and terms[0].text == "negative space"
+        assert not terms[1].is_phrase and terms[1].text == "beach"
+        assert not terms[2].is_phrase and terms[2].text == "sunset"
+
+    def test_single_token_phrase_collapses_to_token(self) -> None:
+        # A one-word phrase is identical to a free token match, so it
+        # should not be marked is_phrase=True.
+        terms = parse_query('"beach"')
+        assert len(terms) == 1
+        assert not terms[0].is_phrase
+        assert terms[0].text == "beach"
+
+    def test_unmatched_trailing_quote(self) -> None:
+        # An unmatched trailing `"` falls through as a literal — the
+        # regex only matches balanced pairs, so content after the last
+        # unmatched quote is parsed as free tokens.
+        terms = parse_query('beach "sunset')
+        assert [t.text for t in terms] == ["beach", "sunset"]
+        assert all(not t.is_phrase for t in terms)
+
+
+@pytest.mark.fast
+class TestQuickwitQueryQuotedPhrases:
+    def test_quoted_phrase_produces_required_phrase_clause(self) -> None:
+        q = build_quickwit_query('"negative space"')
+        # Phrase clauses span ALL searchable fields (not just the
+        # high-signal subset) because the user's explicit quoting
+        # asks for exact match wherever the phrase appears.
+        assert 'description:"negative space"' in q
+        assert 'tags:"negative space"' in q
+        assert 'note:"negative space"' in q
+        assert 'ocr_text:"negative space"' in q
+        assert 'transcript_text:"negative space"' in q
+        assert 'path_tokens:"negative space"' in q
+        # No per-token OR clauses — the phrase is exact, not loose
+        assert "description:negative " not in q + " "
+        assert "description:space " not in q + " "
+
+    def test_quoted_phrase_has_no_prefix_expansion(self) -> None:
+        q = build_quickwit_prefix_query('"negative space"')
+        # Prefix expansion is skipped entirely for quoted phrases
+        assert q == ""
+
+    def test_mixed_phrase_and_token_anded(self) -> None:
+        q = build_quickwit_query('"negative space" beach')
+        # Required phrase group AND required free-token group
+        assert " AND " in q
+        assert 'description:"negative space"' in q
+        assert "description:beach" in q
+
+    def test_mixed_phrase_and_token_prefix_only_expands_free(self) -> None:
+        q = build_quickwit_prefix_query('"negative space" beach')
+        # beach is long enough to expand; negative/space are inside
+        # the phrase so they're skipped
+        assert "description:beach*" in q
+        assert "negative" not in q
+        assert "space" not in q
+
+    def test_unquoted_matches_both_words(self) -> None:
+        # Regression: the pre-quoting behavior for unquoted multi-word
+        # queries must be preserved — flat OR across fields with an
+        # automatic phrase clause on high-signal fields.
+        q = build_quickwit_query("negative space")
+        assert " AND " not in q
+        assert 'description:"negative space"' in q
+        assert "description:negative" in q
+        assert "description:space" in q
+
+
+@pytest.mark.fast
 class TestPostgresRankClauses:
     def test_empty_query(self) -> None:
         expr, params = postgres_rank_clauses("")
@@ -167,6 +259,15 @@ class TestPostgresRankClauses:
         assert "greeting" in params["rank_token"]
         assert "card" in params["rank_token"]
         assert "|" in params["rank_token"]
+
+    def test_quoted_phrase_ranks_phrase_pattern(self) -> None:
+        _, params = postgres_rank_clauses('"negative space" beach')
+        # Phrase pattern anchors on the quoted phrase, not the free
+        # token. Token pattern still lists all words so "beach" alone
+        # can still hit the mid-tier rank.
+        assert r"negative\s+space" in params["rank_phrase"]
+        assert "beach" not in params["rank_phrase"]
+        assert "beach" in params["rank_token"]
 
     def test_regex_metacharacters_escaped(self) -> None:
         # Tokens shouldn't be able to inject regex syntax. Tokenize

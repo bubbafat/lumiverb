@@ -29,11 +29,57 @@ def search_assets(
     dicts with asset_id, rel_path, thumbnail_key, proxy_key, description,
     tags, score=0.0 (no BM25 in the fallback).
     """
-    from src.server.search.query_builder import postgres_rank_clauses
+    from src.server.search.query_builder import parse_query, postgres_rank_clauses
 
-    like = f"%{query}%"
     lib_condition = "a.library_id = :library_id AND" if library_id else ""
     rank_expr, rank_params = postgres_rank_clauses(query)
+
+    # Build one ILIKE group per parsed term and AND them together so
+    # a quoted phrase acts as a literal substring constraint instead
+    # of being passed through with its quote characters intact. Free
+    # tokens outside quotes become their own required group each,
+    # which is a tightening vs. the old "single substring anywhere"
+    # behavior — but that old behavior was already matching on the
+    # full raw string, so multi-word unquoted queries also only
+    # matched when the words appeared contiguously. Per-term groups
+    # actually loosen that for unquoted input.
+    terms = parse_query(query)
+    term_patterns: list[tuple[str, str]] = []  # (bind_name, ilike_value)
+    for i, term in enumerate(terms):
+        term_patterns.append((f"like_{i}", f"%{term.text}%"))
+
+    if term_patterns:
+        groups = " AND ".join(
+            f"""(
+                  a.asset_id       ILIKE :{name}
+               OR a.rel_path       ILIKE :{name}
+               OR a.camera_make    ILIKE :{name}
+               OR a.camera_model   ILIKE :{name}
+               OR m.data->>'description' ILIKE :{name}
+               OR CAST(m.data->'tags' AS TEXT) ILIKE :{name}
+               OR m.data->>'ocr_text' ILIKE :{name}
+               OR a.note ILIKE :{name}
+               OR a.transcript_text ILIKE :{name}
+              )"""
+            for name, _ in term_patterns
+        )
+    else:
+        # No parseable terms — degrade to the old raw-substring filter
+        # so callers that pass opaque text (e.g. exact asset IDs) still
+        # work.
+        groups = """(
+              a.asset_id       ILIKE :like_0
+           OR a.rel_path       ILIKE :like_0
+           OR a.camera_make    ILIKE :like_0
+           OR a.camera_model   ILIKE :like_0
+           OR m.data->>'description' ILIKE :like_0
+           OR CAST(m.data->'tags' AS TEXT) ILIKE :like_0
+           OR m.data->>'ocr_text' ILIKE :like_0
+           OR a.note ILIKE :like_0
+           OR a.transcript_text ILIKE :like_0
+          )"""
+        term_patterns = [("like_0", f"%{query}%")]
+
     sql = text(
         f"""
         SELECT DISTINCT
@@ -57,22 +103,14 @@ def search_assets(
         ) m ON true
         WHERE {lib_condition}
               a.availability = 'online'
-          AND (
-              a.asset_id       ILIKE :like
-           OR a.rel_path       ILIKE :like
-           OR a.camera_make    ILIKE :like
-           OR a.camera_model   ILIKE :like
-           OR m.data->>'description' ILIKE :like
-           OR CAST(m.data->'tags' AS TEXT) ILIKE :like
-           OR m.data->>'ocr_text' ILIKE :like
-           OR a.note ILIKE :like
-           OR a.transcript_text ILIKE :like
-          )
+          AND {groups}
         ORDER BY rank ASC, a.asset_id
         LIMIT :limit OFFSET :offset
     """
     )
-    params: dict = {"like": like, "limit": limit, "offset": offset, **rank_params}
+    params: dict = {"limit": limit, "offset": offset, **rank_params}
+    for name, value in term_patterns:
+        params[name] = value
     if library_id:
         params["library_id"] = library_id
     rows = session.execute(sql, params).fetchall()
