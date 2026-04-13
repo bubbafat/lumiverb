@@ -117,7 +117,7 @@ fi
 
 apt-get install -y -qq \
   postgresql-16 postgresql-16-pgvector \
-  git build-essential ufw
+  git build-essential python3-dev ufw
 
 ok "System packages installed"
 
