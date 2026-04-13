@@ -86,24 +86,24 @@ def build_quickwit_query(
     fields: list[str] | None = None,
     phrase_fields: list[str] | None = None,
 ) -> str:
-    """Build a field-restricted Quickwit query from raw user input.
-
-    Returns an empty string when the input has no usable tokens — the
-    caller should treat that as "no text search" and skip the engine
-    entirely rather than sending a malformed query.
+    """Build a field-restricted Quickwit EXACT query from raw user
+    input. Includes per-token clauses and (for multi-token queries)
+    phrase clauses, but NO prefix wildcards — see
+    `build_quickwit_prefix_query` for that.
 
     Uses no boost syntax (Quickwit's REST parser doesn't reliably
     support it). Ranking comes from BM25 over the explicit field set
-    plus phrase clauses for multi-token queries, plus prefix clauses
-    so a query for "disney" also surfaces "disneyland" / "disneyworld"
-    / "disney+" type matches that whole-word tokenization alone
-    would miss.
+    plus phrase clauses for multi-token queries.
 
     `fields` and `phrase_fields` default to the asset-index profile
     so existing callers keep working. Pass index-specific lists when
     targeting the scene or transcript index — naming a field the
     target index doesn't define will make Quickwit return 400 and
     drop the entire search into the Postgres fallback.
+
+    Returns an empty string when the input has no usable tokens — the
+    caller should treat that as "no text search" and skip the engine
+    entirely rather than sending a malformed query.
     """
     tokens = tokenize(raw)
     if not tokens:
@@ -122,30 +122,50 @@ def build_quickwit_query(
         for field in use_phrase_fields:
             parts.append(f'{field}:"{phrase}"')
 
-    # 2. Per-token, per-field exact clauses. Listing description / tags
-    # / note before ocr_text / path_tokens doesn't change BM25 scoring
-    # on its own — Quickwit ORs them all — but it keeps the query
-    # readable and makes the recall set explicit.
+    # 2. Per-token, per-field exact clauses.
     for token in tokens:
         for field in use_fields:
             parts.append(f"{field}:{token}")
 
-    # 3. Per-token, per-field PREFIX clauses (`token*`). Catches the
-    # "Disney → Disneyland" family of misses where the user types a
-    # short proper noun and expects to find the longer compound form.
-    # A doc that matches both the exact and prefix clauses contributes
-    # to BM25 twice via the OR'd should clauses, so exact whole-word
-    # matches naturally rank above pure-prefix matches without any
-    # explicit boost. Prefix is only useful on tokens of length ≥ 3 —
-    # `a*` would match almost everything and explode the candidate
-    # set. We also skip prefix on the path_tokens field where prefix
-    # matching against directory components is more noise than signal.
-    PREFIX_MIN_LENGTH = 3
-    PREFIX_FIELDS = [f for f in use_fields if f != "path_tokens"]
+    return " OR ".join(parts)
+
+
+# Minimum token length for prefix expansion. `a*` would match almost
+# everything in the corpus and explode the candidate set.
+PREFIX_MIN_LENGTH = 3
+
+
+def build_quickwit_prefix_query(
+    raw: str,
+    fields: list[str] | None = None,
+) -> str:
+    """Build a Quickwit PREFIX-ONLY query so a search for "disney"
+    surfaces "disneyland" / "disneyworld" / "disney+" via wildcard
+    expansion. Issued as a SEPARATE Quickwit call from the exact
+    query (not OR'd into one query string) because Quickwit's
+    wildcard queries get constant scoring rather than BM25 — when
+    OR'd together, exact matches always dominate prefix-only matches
+    by a huge margin and the prefix-only docs end up buried (we saw
+    Disneyland landing at result #103 of an OR'd query for "disney").
+
+    The caller fuses the two result lists with a position-based score
+    and a penalty on the prefix list — see `_run_quickwit_search`.
+
+    Skips path_tokens because directory-component prefixes are noisy.
+    Skips tokens shorter than `PREFIX_MIN_LENGTH`.
+    """
+    tokens = tokenize(raw)
+    if not tokens:
+        return ""
+
+    use_fields = fields if fields is not None else QUERY_FIELDS
+    prefix_fields = [f for f in use_fields if f != "path_tokens"]
+
+    parts: list[str] = []
     for token in tokens:
         if len(token) < PREFIX_MIN_LENGTH:
             continue
-        for field in PREFIX_FIELDS:
+        for field in prefix_fields:
             parts.append(f"{field}:{token}*")
 
     return " OR ".join(parts)

@@ -124,6 +124,7 @@ def _run_quickwit_search(
         SCENE_PHRASE_FIELDS,
         TRANSCRIPT_FIELDS,
         TRANSCRIPT_PHRASE_FIELDS,
+        build_quickwit_prefix_query,
         build_quickwit_query,
     )
 
@@ -142,15 +143,29 @@ def _run_quickwit_search(
             return ""
         return " AND ".join(f"({q})" for q in per_term)
 
+    def _build_prefix(fields: list[str]) -> str:
+        per_term = [
+            build_quickwit_prefix_query(st.q, fields=fields)
+            for st in search_terms if st.q
+        ]
+        per_term = [q for q in per_term if q]
+        if not per_term:
+            return ""
+        return " AND ".join(f"({q})" for q in per_term)
+
     asset_query = _build(ASSET_FIELDS, ASSET_PHRASE_FIELDS)
     scene_query = _build(SCENE_FIELDS, SCENE_PHRASE_FIELDS)
     transcript_query = _build(TRANSCRIPT_FIELDS, TRANSCRIPT_PHRASE_FIELDS)
+    asset_prefix_query = _build_prefix(ASSET_FIELDS)
+    scene_prefix_query = _build_prefix(SCENE_FIELDS)
 
     if not asset_query:
         return {}, {}, "none"
     if diag is not None:
         diag["asset_query"] = asset_query
+        diag["asset_prefix_query"] = asset_prefix_query
         diag["scene_query"] = scene_query
+        diag["scene_prefix_query"] = scene_prefix_query
         diag["transcript_query"] = transcript_query
         diag["library_ids"] = library_ids
 
@@ -179,7 +194,16 @@ def _run_quickwit_search(
         # Postgres fallback. Previously a 400 from the transcript
         # index would discard 1142 perfectly good asset hits.
 
-        # Asset index
+        # Asset index — issue the EXACT query first, then the PREFIX
+        # query separately. They MUST be separate Quickwit calls
+        # because Quickwit's wildcard queries get constant scoring
+        # rather than BM25; OR'ing them into a single query lets
+        # exact matches dominate so completely that prefix-only
+        # results (e.g. "Disney" → "Disneyland") get buried at
+        # rank 100+. By scoring the prefix list independently with
+        # position scoring and a penalty multiplier, prefix rank 0
+        # ties with exact rank 1 and prefix-only matches surface
+        # near the top of the results.
         try:
             asset_hits = qw.search_tenant(
                 tenant_id=tenant_id,
@@ -202,6 +226,35 @@ def _run_quickwit_search(
             if diag is not None:
                 diag["asset_exception"] = repr(exc)
             logger.warning("Quickwit asset search failed: %r", exc, exc_info=True)
+
+        # Asset prefix expansion — separate call so prefix-only
+        # matches get their own position-based scoring and aren't
+        # buried by Quickwit's constant-scoring of wildcards.
+        if asset_prefix_query:
+            try:
+                prefix_hits = qw.search_tenant(
+                    tenant_id=tenant_id,
+                    query=asset_prefix_query,
+                    library_ids=library_ids,
+                    max_hits=limit,
+                )
+                if diag is not None:
+                    diag["asset_prefix_hits"] = len(prefix_hits)
+                # Apply prefix penalty so a prefix rank-0 ties with
+                # exact rank-1 (1/(1+1)=0.5). High-rank prefix matches
+                # still surface above low-rank exact matches.
+                PREFIX_PENALTY = 0.5
+                for hit in prefix_hits:
+                    aid = hit["asset_id"]
+                    raw_score = hit.get("score", 0.0)
+                    score = raw_score * PREFIX_PENALTY
+                    if aid not in scores or score > scores[aid]:
+                        scores[aid] = score
+                        contexts[aid] = SearchContext(score=score, hit_type="asset")
+            except Exception as exc:
+                if diag is not None:
+                    diag["asset_prefix_exception"] = repr(exc)
+                logger.warning("Quickwit asset prefix search failed: %r", exc, exc_info=True)
 
         # Scene index — uses scene-restricted query (description, tags only)
         try:
@@ -243,6 +296,39 @@ def _run_quickwit_search(
             if diag is not None:
                 diag["scene_exception"] = repr(exc)
             logger.warning("Quickwit scene search failed: %r", exc, exc_info=True)
+
+        # Scene prefix expansion — same pattern as the asset prefix
+        # expansion above. Separate call so prefix matches get
+        # position-based scoring and a penalty.
+        if scene_prefix_query:
+            try:
+                scene_prefix_hits = qw.search_tenant_scenes(
+                    tenant_id=tenant_id,
+                    query=scene_prefix_query,
+                    library_ids=library_ids,
+                    max_hits=limit,
+                )
+                if diag is not None:
+                    diag["scene_prefix_hits"] = len(scene_prefix_hits)
+                PREFIX_PENALTY = 0.5
+                for hit in scene_prefix_hits:
+                    aid = hit["asset_id"]
+                    raw_score = hit.get("score", 0.0)
+                    score = raw_score * PREFIX_PENALTY
+                    ctx = SearchContext(
+                        score=score,
+                        hit_type="scene",
+                        snippet=hit.get("description"),
+                        start_ms=hit.get("start_ms"),
+                        end_ms=hit.get("end_ms"),
+                    )
+                    if aid not in scores or score > scores[aid]:
+                        scores[aid] = score
+                        contexts[aid] = ctx
+            except Exception as exc:
+                if diag is not None:
+                    diag["scene_prefix_exception"] = repr(exc)
+                logger.warning("Quickwit scene prefix search failed: %r", exc, exc_info=True)
 
         # Transcript index — uses transcript-restricted query (text only).
         # The transcript index is created lazily on first transcript

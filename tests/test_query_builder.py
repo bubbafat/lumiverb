@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 
 from src.server.search.query_builder import (
+    build_quickwit_prefix_query,
     build_quickwit_query,
     postgres_rank_clauses,
     tokenize,
@@ -58,27 +59,52 @@ class TestBuildQuickwitQuery:
         # Definitely no boost syntax leaking in
         assert "^" not in q
 
-    def test_prefix_clauses_added_for_long_tokens(self) -> None:
-        # Tokens of length ≥ 3 get prefix matches so "disney" finds
-        # "disneyland" via Quickwit's wildcard syntax. path_tokens is
-        # excluded because directory-component prefixes are noisy.
+    def test_exact_query_has_no_prefix_clauses(self) -> None:
+        # build_quickwit_query is now exact-only. Prefix expansion
+        # lives in build_quickwit_prefix_query and is issued as a
+        # separate Quickwit call so it can be position-scored
+        # independently with a penalty.
         q = build_quickwit_query("disney")
+        assert "description:disney" in q
+        assert "*" not in q
+
+
+@pytest.mark.fast
+class TestBuildQuickwitPrefixQuery:
+    def test_empty_returns_empty(self) -> None:
+        assert build_quickwit_prefix_query("") == ""
+        assert build_quickwit_prefix_query("???") == ""
+
+    def test_single_token_emits_prefix_clauses(self) -> None:
+        q = build_quickwit_prefix_query("disney")
+        # Long-enough token gets prefix expansion across high-signal
+        # fields. path_tokens is deliberately excluded — directory
+        # component prefixes are noise.
         assert "description:disney*" in q
         assert "tags:disney*" in q
         assert "note:disney*" in q
-        # path_tokens deliberately NOT prefixed
         assert "path_tokens:disney*" not in q
-        # Exact whole-word match still present — BM25 will score it
-        # higher than the prefix variant because exact tokens have
-        # higher IDF (rarer than the prefix term family).
-        assert "description:disney" in q
+        # No exact term clauses — that's the exact builder's job
+        assert "description:disney " not in q + " "
+        # No phrase clauses
+        assert '"' not in q
 
-    def test_short_tokens_skip_prefix(self) -> None:
-        # 1-2 character tokens are too noisy for prefix matches —
-        # `a*` would match almost everything.
-        q = build_quickwit_query("ab")
-        assert "description:ab" in q  # exact still works
-        assert "ab*" not in q  # no prefix variant
+    def test_short_tokens_skipped(self) -> None:
+        # `a*` would match almost the entire corpus
+        q = build_quickwit_prefix_query("a")
+        assert q == ""
+        q = build_quickwit_prefix_query("ab")
+        assert q == ""
+
+    def test_multi_token_each_token_prefixed(self) -> None:
+        q = build_quickwit_prefix_query("disney parks")
+        assert "description:disney*" in q
+        assert "description:parks*" in q
+
+    def test_uppercase_normalized(self) -> None:
+        q = build_quickwit_prefix_query("DISNEY")
+        assert "description:disney*" in q
+        assert "DISNEY" not in q
 
     def test_multi_token_phrase_clauses(self) -> None:
         q = build_quickwit_query("greeting card")
