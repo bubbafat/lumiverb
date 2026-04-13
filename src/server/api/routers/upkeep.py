@@ -330,20 +330,25 @@ class RecreateSearchIndexesResult(BaseModel):
 
 @router.post("/recreate-search-indexes", response_model=RecreateSearchIndexesResult)
 def recreate_search_indexes(
-    _admin: Annotated[None, Depends(require_admin)],
+    authorization: Annotated[str | None, Header()] = None,
 ) -> RecreateSearchIndexesResult:
-    """Wipe and recreate Quickwit indexes for all tenants. Used to
-    clean up duplicate documents accumulated by repeated force-resyncs
-    (Quickwit doesn't upsert, so each force-resync used to leave
-    another copy of every doc until the dedupe gate landed). After
-    calling this, the caller MUST also call POST /v1/upkeep/search-sync
-    to repopulate the empty indexes.
+    """Wipe and recreate Quickwit indexes. Used to clean up duplicate
+    documents accumulated by repeated force-resyncs (Quickwit doesn't
+    upsert, so each force-resync used to leave another copy of every
+    doc until the dedupe gate landed). After calling this, the caller
+    MUST also call POST /v1/upkeep/search-sync to repopulate the empty
+    indexes.
 
-    Admin-only. Destructive — no undo, but the data can be rebuilt
-    from Postgres via the search-sync sweep so it's safe.
+    Auth model mirrors POST /v1/upkeep/search-sync — admin key wipes
+    all tenants, tenant API key wipes only that tenant. Destructive,
+    no undo, but the data can be rebuilt from Postgres via the
+    search-sync sweep so it's safe.
     """
-    from src.server.database import get_control_session
-    from src.server.repository.control_plane import TenantRepository
+    from src.server.database import get_control_session, get_tenant_session
+    from src.server.repository.control_plane import (
+        ApiKeyRepository,
+        TenantRepository,
+    )
     from src.server.search.quickwit_client import QuickwitClient
 
     qw = QuickwitClient()
@@ -352,30 +357,45 @@ def recreate_search_indexes(
             tenants_processed=0, errors=["Quickwit disabled"],
         )
 
+    # Resolve which tenants to process based on auth.
+    if _is_admin_key(authorization):
+        with get_control_session() as ctrl:
+            tenants = TenantRepository(ctrl).list_all()
+        tenant_ids = [t.tenant_id for t in tenants]
+    else:
+        if not authorization or not authorization.startswith("Bearer "):
+            return RecreateSearchIndexesResult(
+                tenants_processed=0, errors=["Unauthorized"],
+            )
+        token = authorization[7:].strip()
+        with get_control_session() as ctrl:
+            api_key = ApiKeyRepository(ctrl).get_by_plaintext(token)
+            if api_key is None:
+                return RecreateSearchIndexesResult(
+                    tenants_processed=0, errors=["Unauthorized"],
+                )
+            tenant_ids = [api_key.tenant_id]
+
     errors: list[str] = []
     processed = 0
-    with get_control_session() as ctrl:
-        tenants = TenantRepository(ctrl).list_all()
-
-    for tenant in tenants:
+    for tenant_id in tenant_ids:
         try:
-            qw.recreate_tenant_indexes(tenant.tenant_id)
+            qw.recreate_tenant_indexes(tenant_id)
             processed += 1
         except Exception as exc:
-            errors.append(f"{tenant.tenant_id}: {exc}")
-            logger.warning("Recreate Quickwit indexes failed for %s: %s", tenant.tenant_id, exc)
+            errors.append(f"{tenant_id}: {exc}")
+            logger.warning("Recreate Quickwit indexes failed for %s: %s", tenant_id, exc)
 
-    # Reset every search_synced_at across every tenant so the next
-    # search-sync sweep actually does the work.
-    from src.server.database import get_tenant_session
-    for tenant in tenants:
+    # Reset every search_synced_at so the next search-sync sweep
+    # actually does the work.
+    for tenant_id in tenant_ids:
         try:
-            with get_tenant_session(tenant.tenant_id) as tsession:
+            with get_tenant_session(tenant_id) as tsession:
                 tsession.execute(text("UPDATE assets SET search_synced_at = NULL"))
                 tsession.execute(text("UPDATE video_scenes SET search_synced_at = NULL"))
                 tsession.commit()
         except Exception as exc:
-            logger.warning("Failed to reset search_synced_at for tenant %s: %s", tenant.tenant_id, exc)
+            logger.warning("Failed to reset search_synced_at for tenant %s: %s", tenant_id, exc)
 
     return RecreateSearchIndexesResult(tenants_processed=processed, errors=errors)
 
