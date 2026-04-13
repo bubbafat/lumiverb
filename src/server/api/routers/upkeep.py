@@ -17,6 +17,8 @@ from fastapi import APIRouter, Depends, Header, Query, Request
 from pydantic import BaseModel
 from sqlmodel import Session
 
+from sqlalchemy import text
+
 from src.server.api.dependencies import require_admin
 from src.server.config import get_settings
 
@@ -319,6 +321,63 @@ def run_recluster(
             logger.warning("Recluster failed for tenant %s: %s", tenant.tenant_id, exc)
 
     return ReclusterResult(**totals)
+
+
+class RecreateSearchIndexesResult(BaseModel):
+    tenants_processed: int = 0
+    errors: list[str] = []
+
+
+@router.post("/recreate-search-indexes", response_model=RecreateSearchIndexesResult)
+def recreate_search_indexes(
+    _admin: Annotated[None, Depends(require_admin)],
+) -> RecreateSearchIndexesResult:
+    """Wipe and recreate Quickwit indexes for all tenants. Used to
+    clean up duplicate documents accumulated by repeated force-resyncs
+    (Quickwit doesn't upsert, so each force-resync used to leave
+    another copy of every doc until the dedupe gate landed). After
+    calling this, the caller MUST also call POST /v1/upkeep/search-sync
+    to repopulate the empty indexes.
+
+    Admin-only. Destructive — no undo, but the data can be rebuilt
+    from Postgres via the search-sync sweep so it's safe.
+    """
+    from src.server.database import get_control_session
+    from src.server.repository.control_plane import TenantRepository
+    from src.server.search.quickwit_client import QuickwitClient
+
+    qw = QuickwitClient()
+    if not qw.enabled:
+        return RecreateSearchIndexesResult(
+            tenants_processed=0, errors=["Quickwit disabled"],
+        )
+
+    errors: list[str] = []
+    processed = 0
+    with get_control_session() as ctrl:
+        tenants = TenantRepository(ctrl).list_all()
+
+    for tenant in tenants:
+        try:
+            qw.recreate_tenant_indexes(tenant.tenant_id)
+            processed += 1
+        except Exception as exc:
+            errors.append(f"{tenant.tenant_id}: {exc}")
+            logger.warning("Recreate Quickwit indexes failed for %s: %s", tenant.tenant_id, exc)
+
+    # Reset every search_synced_at across every tenant so the next
+    # search-sync sweep actually does the work.
+    from src.server.database import get_tenant_session
+    for tenant in tenants:
+        try:
+            with get_tenant_session(tenant.tenant_id) as tsession:
+                tsession.execute(text("UPDATE assets SET search_synced_at = NULL"))
+                tsession.execute(text("UPDATE video_scenes SET search_synced_at = NULL"))
+                tsession.commit()
+        except Exception as exc:
+            logger.warning("Failed to reset search_synced_at for tenant %s: %s", tenant.tenant_id, exc)
+
+    return RecreateSearchIndexesResult(tenants_processed=processed, errors=errors)
 
 
 @router.post("/cleanup-dismissed", response_model=CleanupDismissedResult)

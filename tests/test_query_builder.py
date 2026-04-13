@@ -58,6 +58,28 @@ class TestBuildQuickwitQuery:
         # Definitely no boost syntax leaking in
         assert "^" not in q
 
+    def test_prefix_clauses_added_for_long_tokens(self) -> None:
+        # Tokens of length ≥ 3 get prefix matches so "disney" finds
+        # "disneyland" via Quickwit's wildcard syntax. path_tokens is
+        # excluded because directory-component prefixes are noisy.
+        q = build_quickwit_query("disney")
+        assert "description:disney*" in q
+        assert "tags:disney*" in q
+        assert "note:disney*" in q
+        # path_tokens deliberately NOT prefixed
+        assert "path_tokens:disney*" not in q
+        # Exact whole-word match still present — BM25 will score it
+        # higher than the prefix variant because exact tokens have
+        # higher IDF (rarer than the prefix term family).
+        assert "description:disney" in q
+
+    def test_short_tokens_skip_prefix(self) -> None:
+        # 1-2 character tokens are too noisy for prefix matches —
+        # `a*` would match almost everything.
+        q = build_quickwit_query("ab")
+        assert "description:ab" in q  # exact still works
+        assert "ab*" not in q  # no prefix variant
+
     def test_multi_token_phrase_clauses(self) -> None:
         q = build_quickwit_query("greeting card")
         # Phrase clauses on the high-signal fields

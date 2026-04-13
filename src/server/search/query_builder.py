@@ -94,7 +94,10 @@ def build_quickwit_query(
 
     Uses no boost syntax (Quickwit's REST parser doesn't reliably
     support it). Ranking comes from BM25 over the explicit field set
-    plus phrase clauses for multi-token queries.
+    plus phrase clauses for multi-token queries, plus prefix clauses
+    so a query for "disney" also surfaces "disneyland" / "disneyworld"
+    / "disney+" type matches that whole-word tokenization alone
+    would miss.
 
     `fields` and `phrase_fields` default to the asset-index profile
     so existing callers keep working. Pass index-specific lists when
@@ -119,16 +122,31 @@ def build_quickwit_query(
         for field in use_phrase_fields:
             parts.append(f'{field}:"{phrase}"')
 
-    # 2. Per-token, per-field clauses. Listing description/tags/note
-    # before ocr_text/path_tokens doesn't change BM25 scoring on its
-    # own — Quickwit ORs them all — but it keeps the query readable
-    # and makes the recall set explicit. Whole-word matches in any
-    # listed field are kept; substring "card" → "cardboard" no longer
-    # leaks in via the Postgres ILIKE fallback because Quickwit
-    # actually returns hits now.
+    # 2. Per-token, per-field exact clauses. Listing description / tags
+    # / note before ocr_text / path_tokens doesn't change BM25 scoring
+    # on its own — Quickwit ORs them all — but it keeps the query
+    # readable and makes the recall set explicit.
     for token in tokens:
         for field in use_fields:
             parts.append(f"{field}:{token}")
+
+    # 3. Per-token, per-field PREFIX clauses (`token*`). Catches the
+    # "Disney → Disneyland" family of misses where the user types a
+    # short proper noun and expects to find the longer compound form.
+    # A doc that matches both the exact and prefix clauses contributes
+    # to BM25 twice via the OR'd should clauses, so exact whole-word
+    # matches naturally rank above pure-prefix matches without any
+    # explicit boost. Prefix is only useful on tokens of length ≥ 3 —
+    # `a*` would match almost everything and explode the candidate
+    # set. We also skip prefix on the path_tokens field where prefix
+    # matching against directory components is more noise than signal.
+    PREFIX_MIN_LENGTH = 3
+    PREFIX_FIELDS = [f for f in use_fields if f != "path_tokens"]
+    for token in tokens:
+        if len(token) < PREFIX_MIN_LENGTH:
+            continue
+        for field in PREFIX_FIELDS:
+            parts.append(f"{field}:{token}*")
 
     return " OR ".join(parts)
 

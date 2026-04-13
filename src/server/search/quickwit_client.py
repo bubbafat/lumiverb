@@ -347,6 +347,82 @@ class QuickwitClient:
             except requests.RequestException as exc:
                 logger.warning("Quickwit delete-tasks request failed for %s asset_id=%s: %s", index_id, asset_id, exc)
 
+    def delete_asset_index_documents_by_asset_ids(
+        self, tenant_id: str, asset_ids: list[str]
+    ) -> None:
+        """Bulk-delete asset-index docs for a list of asset_ids in one
+        request. Used by the search-sync sweep to wipe stale duplicates
+        before re-ingesting — Quickwit's HTTP ingest does NOT upsert
+        (you can't update a doc by primary key), so without an
+        explicit delete each re-sync pass would accumulate another
+        copy of every doc. This is the dedupe gate.
+
+        Issued as a single OR'd delete-by-query rather than N
+        per-asset deletes for throughput. Async at the Quickwit side
+        (delete-tasks); the new docs ingested immediately after may
+        briefly coexist with the old docs until the deletion task
+        runs, but the per-asset_id merge in `_run_quickwit_search`
+        collapses any temporary duplicates anyway.
+        """
+        if not self._enabled or not asset_ids:
+            return
+        # Quickwit query language: `asset_id:"id1" OR asset_id:"id2"`.
+        # Cap at ~500 ids per request to keep query string size sane;
+        # callers needing more should batch.
+        BATCH = 500
+        index_id = self.tenant_index_id(tenant_id)
+        for i in range(0, len(asset_ids), BATCH):
+            batch = asset_ids[i : i + BATCH]
+            clauses = [f'asset_id:"{aid}"' for aid in batch]
+            query = " OR ".join(clauses)
+            try:
+                resp = requests.post(
+                    f"{self._base_url}/api/v1/{index_id}/delete-tasks",
+                    json={"query": query},
+                    timeout=30,
+                )
+                if resp.status_code not in (200, 201, 202):
+                    logger.warning(
+                        "Quickwit bulk delete failed for %s (%d ids): %s %s",
+                        index_id, len(batch), resp.status_code, resp.text,
+                    )
+            except requests.RequestException as exc:
+                logger.warning(
+                    "Quickwit bulk delete request failed for %s (%d ids): %s",
+                    index_id, len(batch), exc,
+                )
+
+    def delete_scene_index_documents_by_asset_ids(
+        self, tenant_id: str, asset_ids: list[str]
+    ) -> None:
+        """Bulk-delete scene-index docs for a list of asset_ids. Mirror
+        of `delete_asset_index_documents_by_asset_ids` for the scene
+        index — used by the sync sweep before scene ingest."""
+        if not self._enabled or not asset_ids:
+            return
+        BATCH = 500
+        index_id = self.tenant_scene_index_id(tenant_id)
+        for i in range(0, len(asset_ids), BATCH):
+            batch = asset_ids[i : i + BATCH]
+            clauses = [f'asset_id:"{aid}"' for aid in batch]
+            query = " OR ".join(clauses)
+            try:
+                resp = requests.post(
+                    f"{self._base_url}/api/v1/{index_id}/delete-tasks",
+                    json={"query": query},
+                    timeout=30,
+                )
+                if resp.status_code not in (200, 201, 202):
+                    logger.warning(
+                        "Quickwit bulk scene delete failed for %s (%d ids): %s %s",
+                        index_id, len(batch), resp.status_code, resp.text,
+                    )
+            except requests.RequestException as exc:
+                logger.warning(
+                    "Quickwit bulk scene delete request failed for %s (%d ids): %s",
+                    index_id, len(batch), exc,
+                )
+
     def delete_tenant_documents_by_library_id(self, tenant_id: str, library_id: str) -> None:
         """Best-effort delete all documents for a library from both tenant indexes."""
         if not self._enabled:

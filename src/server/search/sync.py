@@ -238,6 +238,11 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
 
     if all_docs:
         try:
+            # Delete-then-insert: Quickwit doesn't upsert, so without
+            # an explicit delete the same asset's doc piles up on every
+            # re-sync. We were seeing 3x duplication after a few force
+            # re-syncs, which broke the position-based ranking math.
+            qw.delete_asset_index_documents_by_asset_ids(tenant_id, all_asset_ids)
             qw.ingest_tenant_documents(tenant_id, all_docs)
             now = utcnow()
             session.execute(
@@ -296,6 +301,15 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
 
     if all_scene_docs:
         try:
+            # Same delete-then-insert dedupe gate as the asset path.
+            # We delete by asset_id (not scene_id) because all scenes
+            # for an asset are re-synced as a unit when the asset's
+            # video gets re-analyzed.
+            asset_ids_for_scenes = sorted({
+                session.get(VideoScene, sid).asset_id  # type: ignore[union-attr]
+                for sid in all_scene_ids
+            })
+            qw.delete_scene_index_documents_by_asset_ids(tenant_id, asset_ids_for_scenes)
             qw.ingest_tenant_scene_documents(tenant_id, all_scene_docs)
             now = utcnow()
             session.execute(
