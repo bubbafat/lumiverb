@@ -24,7 +24,7 @@ public struct FilterChicletBar: View {
                 HStack(spacing: 6) {
                     // Search query chiclet
                     if hasSearch {
-                        FilterChiclet(label: "Search: \"\(browseState.committedSearchQuery)\"") {
+                        FilterChiclet(label: "Search: \(browseState.committedSearchQuery)") {
                             browseState.clearSearch()
                         }
                     }

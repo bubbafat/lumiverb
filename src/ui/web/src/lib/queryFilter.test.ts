@@ -141,7 +141,12 @@ describe("clearFilters", () => {
 
 describe("filterLabel", () => {
   it("formats search query", () => {
-    expect(filterLabel({ type: "query", value: "sunset" })).toBe('Search: "sunset"');
+    expect(filterLabel({ type: "query", value: "sunset" })).toBe("Search: sunset");
+    // Literal quoted input is preserved as-is — decorative outer
+    // quotes would render as `""negative space""`.
+    expect(filterLabel({ type: "query", value: '"negative space"' })).toBe(
+      'Search: "negative space"',
+    );
   });
 
   it("formats media type", () => {

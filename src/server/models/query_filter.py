@@ -224,7 +224,10 @@ class SearchTerm(LeafFilter):
         return "Search"
 
     def label(self) -> str:
-        return f'"{self.q}"'
+        # No wrapping quotes — users can type literal `"phrase"` for
+        # exact-match and the decorative outer quotes would collide
+        # with the input, rendering as `""phrase""`.
+        return self.q
 
     def to_sql(self, params: dict, counter: list[int]) -> str:
         # SearchTerm is handled by Quickwit, not SQL.

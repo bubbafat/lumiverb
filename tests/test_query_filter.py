@@ -86,7 +86,10 @@ def _roundtrip_json(leaf: LeafFilter) -> LeafFilter:
 
 class TestSearchTerm:
     def test_label(self):
-        assert SearchTerm(q="Disney").label() == '"Disney"'
+        assert SearchTerm(q="Disney").label() == "Disney"
+        # Literal quoted input is preserved as-is — no decorative
+        # outer wrapping, so quoted-phrase queries don't double up.
+        assert SearchTerm(q='"negative space"').label() == '"negative space"'
 
     def test_to_sql_is_ilike_fallback(self):
         frag, params = _sql(SearchTerm(q="castle"))

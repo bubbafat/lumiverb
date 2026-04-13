@@ -159,7 +159,7 @@ describe("saved query display helpers", () => {
         { type: "color", value: "orange" },
       ],
     });
-    expect(labels).toContain('Search: "sunset"');
+    expect(labels).toContain("Search: sunset");
     expect(labels).toContain("Color: orange");
   });
 });

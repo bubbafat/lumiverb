@@ -147,7 +147,7 @@ public struct CollectionDetailView: View {
     static func formatSavedQuery(_ sq: SavedQuery) -> [String] {
         var labels: [String] = []
         if let q = sq.q, !q.isEmpty {
-            labels.append("Search: \"\(q)\"")
+            labels.append("Search: \(q)")
         }
         for (key, wrapped) in sq.filters {
             let val = wrapped.value

@@ -125,7 +125,10 @@ export function filterLabel(
 
   switch (filter.type) {
     case "query":
-      return `Search: "${filter.value}"`;
+      // No wrapping quotes — users can type literal `"phrase"` for
+      // exact-match and the decorative outer quotes would collide
+      // with the input, rendering as `""phrase""`.
+      return `Search: ${filter.value}`;
     case "media":
       return filter.value === "image" ? "Photos" : filter.value === "video" ? "Videos" : `Media: ${filter.value}`;
     case "favorite":
