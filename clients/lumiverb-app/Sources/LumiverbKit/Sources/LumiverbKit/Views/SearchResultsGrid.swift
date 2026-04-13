@@ -45,6 +45,9 @@ public struct SearchResultsGrid<ScrollIntrospector: View>: View {
     /// "I searched for card and the results don't match" symptom.
     @ViewBuilder
     private var iosBody: some View {
+        // Tokenize the committed query once per render so cell captions
+        // can highlight the same words the server-side BM25 fired on.
+        let terms = tokenizeSearchQuery(browseState.committedSearchQuery)
         DateGroupedGrid(
             browseState: browseState,
             items: browseState.searchResults,
@@ -65,16 +68,18 @@ public struct SearchResultsGrid<ScrollIntrospector: View>: View {
                 // search matched on a transcript line, that line is far
                 // more informative than a tag dump. Falls back to the
                 // description for plain image hits.
+                let raw: String?
                 if let snippet = hit.snippet, !snippet.isEmpty {
-                    return snippet
+                    raw = snippet
+                } else if !hit.description.isEmpty {
+                    raw = hit.description
+                } else if !hit.tags.isEmpty {
+                    raw = hit.tags.prefix(4).joined(separator: " · ")
+                } else {
+                    raw = nil
                 }
-                if !hit.description.isEmpty {
-                    return hit.description
-                }
-                if !hit.tags.isEmpty {
-                    return hit.tags.prefix(4).joined(separator: " · ")
-                }
-                return nil
+                guard let raw else { return nil }
+                return highlightSearchTerms(in: raw, terms: terms)
             },
             groupByDate: false
         )

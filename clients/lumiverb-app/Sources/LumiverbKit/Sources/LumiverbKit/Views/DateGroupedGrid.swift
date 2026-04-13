@@ -29,7 +29,9 @@ public struct DateGroupedGrid<Item: Identifiable>: View {
     /// surface the matched AI description so users can see *why* a
     /// result came back without tapping into every photo. Default nil
     /// keeps Photos / Collections / People / Favorites unaffected.
-    public let caption: ((Item) -> String?)?
+    /// Returns `AttributedString` so the search grid can highlight
+    /// matched terms inside the caption.
+    public let caption: ((Item) -> AttributedString?)?
     /// When true (default), items are grouped into date sections
     /// sorted most-recent-first. When false, items render in their
     /// insertion order with no section headers — used by search,
@@ -48,7 +50,7 @@ public struct DateGroupedGrid<Item: Identifiable>: View {
         isLoading: Bool = false,
         onTap: @escaping (Item) -> Void,
         onLastItemAppear: @escaping (Item) -> Void = { _ in },
-        caption: ((Item) -> String?)? = nil,
+        caption: ((Item) -> AttributedString?)? = nil,
         groupByDate: Bool = true
     ) {
         self.browseState = browseState
@@ -130,7 +132,8 @@ public struct DateGroupedGrid<Item: Identifiable>: View {
                     browseState.toggleSelection(assetId: id)
                 }
             )
-            if let captionText = caption?(item), !captionText.isEmpty {
+            if let captionText = caption?(item),
+               !String(captionText.characters).isEmpty {
                 Text(captionText)
                     .font(.caption2)
                     .foregroundColor(.secondary)

@@ -242,10 +242,45 @@ struct iOSLightboxView: View {
 
     // MARK: - Details sheet (pull-up)
 
+    /// Find the matched search snippet for the currently-open asset.
+    /// When the user opens the lightbox from a search result, this
+    /// returns the BM25-matched description fragment that surfaced
+    /// under the cell — the literal "why did this come back?" line.
+    /// Empty when not in search mode or when the matched hit had no
+    /// snippet (asset hits don't get one server-side today).
+    private var currentSearchSnippet: String? {
+        guard case .search = browseState.mode else { return nil }
+        guard let assetId = browseState.selectedAssetId else { return nil }
+        guard let hit = browseState.searchResults.first(where: { $0.assetId == assetId }) else {
+            return nil
+        }
+        if let s = hit.snippet, !s.isEmpty { return s }
+        if !hit.description.isEmpty { return hit.description }
+        return nil
+    }
+
     private var detailsSheet: some View {
         NavigationStack {
             List {
                 if let detail = browseState.assetDetail {
+                    // When opened from a search result, show the matched
+                    // snippet at the very top so the "what did this match?"
+                    // question has the same answer in the cell caption and
+                    // in the details. Especially important for videos,
+                    // where detail.aiDescription is empty (video AI runs
+                    // per-scene, not per-asset) and the only useful
+                    // description IS the matched scene's snippet. The
+                    // matched terms are highlighted so the user can see
+                    // *which* word fired the BM25 hit.
+                    if let snippet = currentSearchSnippet {
+                        let terms = tokenizeSearchQuery(browseState.committedSearchQuery)
+                        Section("Match") {
+                            Text(highlightSearchTerms(in: snippet, terms: terms))
+                                .font(.subheadline)
+                                .foregroundColor(.primary)
+                        }
+                    }
+
                     Section {
                         if let takenAt = detail.takenAt {
                             Label(formatFullDateTime(takenAt), systemImage: "calendar")

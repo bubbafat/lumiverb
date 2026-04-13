@@ -187,6 +187,19 @@ class QuickwitClient:
         lib_clause = " OR ".join(f'library_id:"{lid}"' for lid in library_ids)
         return f"({lib_clause}) AND ({query})"
 
+    # Down-weight applied to scene and transcript scores so an asset
+    # match always outranks an equivalent-rank scene/transcript match.
+    # A 2.5-second scene with "small blue card" in its description was
+    # outranking actual card photos because both got rank-0 scores of
+    # 1.0. Asset-level matches are far higher signal than incidental
+    # scene/transcript snippets, so we apply a 0.5x multiplier to
+    # subordinate scenes/transcripts at equal rank. High-rank
+    # scene/transcript matches can still surface above low-rank asset
+    # matches (e.g. searching "tiki bar" should return scene matches),
+    # but at equivalent ranks the asset wins.
+    SCENE_RANK_PENALTY = 0.5
+    TRANSCRIPT_RANK_PENALTY = 0.5
+
     def search_tenant(
         self,
         tenant_id: str,
@@ -257,7 +270,7 @@ class QuickwitClient:
                 "duration_sec": doc.get("duration_sec"),
                 "description": doc.get("description", ""),
                 "tags": doc.get("tags", []),
-                "score": 1.0 / (1 + rank),
+                "score": (1.0 / (1 + rank)) * self.SCENE_RANK_PENALTY,
                 "source": "quickwit_scenes",
             })
         return results
@@ -288,7 +301,7 @@ class QuickwitClient:
                 "end_ms": doc.get("end_ms"),
                 "text": doc.get("text", ""),
                 "language": doc.get("language", ""),
-                "score": 1.0 / (1 + rank),
+                "score": (1.0 / (1 + rank)) * self.TRANSCRIPT_RANK_PENALTY,
                 "source": "quickwit_transcripts",
             })
         return results
