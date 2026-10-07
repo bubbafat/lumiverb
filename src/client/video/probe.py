@@ -7,6 +7,7 @@ tested without media; probe_video() runs ffprobe on a file.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from dataclasses import asdict, dataclass
 from fractions import Fraction
@@ -15,6 +16,9 @@ from pathlib import Path
 # Nominal rates above this are container timebases (e.g. 90000/1 from
 # some variable-frame-rate files), not frame rates.
 MAX_PLAUSIBLE_FPS = 240
+
+# HH:MM:SS:FF, or HH:MM:SS;FF for drop-frame. Anything else is ignored.
+TIMECODE = re.compile(r"^\d{2}:[0-5]\d:[0-5]\d[:;]\d{2}$")
 
 
 @dataclass(frozen=True)
@@ -88,8 +92,9 @@ def _timecode(data: dict, video: dict | None) -> str | None:
     ]
     candidates.append(data.get("format", {}).get("tags") or {})
     for tags in candidates:
-        if tags.get("timecode"):
-            return str(tags["timecode"])
+        tc = str(tags.get("timecode") or "")
+        if TIMECODE.match(tc):
+            return tc
     return None
 
 

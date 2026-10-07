@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from sqlmodel import Session
 
 from src.shared.io_utils import normalize_rel_path
@@ -41,21 +41,26 @@ class UpsertAssetResponse(BaseModel):
 
 
 class VideoFacetModel(BaseModel):
-    """One ffprobe pass over a video (see src/client/video/probe.py)."""
+    """One ffprobe pass over a video (see src/client/video/probe.py).
 
-    duration_sec: float | None = None
+    Validated on the way in: a malformed value would break every export of
+    every project that holds the clip.
+    """
+
+    duration_sec: float | None = Field(default=None, ge=0)
     container: str | None = None
     video_codec: str | None = None
-    width: int | None = None  # display width: rotation applied
-    height: int | None = None
-    rotation: int = 0  # degrees clockwise to display upright
-    frame_rate_num: int | None = None
-    frame_rate_den: int | None = None
-    start_timecode: str | None = None  # "HH:MM:SS:FF", or ";FF" for drop-frame
+    width: int | None = Field(default=None, gt=0)  # display width: rotation applied
+    height: int | None = Field(default=None, gt=0)
+    rotation: Literal[0, 90, 180, 270] = 0  # degrees clockwise to display upright
+    frame_rate_num: int | None = Field(default=None, gt=0)
+    frame_rate_den: int | None = Field(default=None, gt=0)
+    # "HH:MM:SS:FF", or "HH:MM:SS;FF" for drop-frame
+    start_timecode: str | None = Field(default=None, pattern=r"^\d{2}:[0-5]\d:[0-5]\d[:;]\d{2}$")
     drop_frame: bool | None = None
     audio_codec: str | None = None
-    audio_channels: int | None = None
-    audio_sample_rate: int | None = None
+    audio_channels: int | None = Field(default=None, ge=0)
+    audio_sample_rate: int | None = Field(default=None, gt=0)
 
 
 class AssetResponse(BaseModel):

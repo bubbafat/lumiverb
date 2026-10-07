@@ -117,7 +117,11 @@ def _probe_one(client: LumiverbClient, lib_root: "Path", asset: dict) -> str:
     except Exception as exc:  # noqa: BLE001 — any ffprobe failure
         logger.warning("Probe failed for %s: %s", asset["rel_path"], exc)
         return "failed"
-    client.put(f"/v1/assets/{asset['asset_id']}/video-facet", json=facet.to_dict())
+    try:
+        client.put(f"/v1/assets/{asset['asset_id']}/video-facet", json=facet.to_dict())
+    except Exception as exc:  # noqa: BLE001 — e.g. the asset was trashed mid-run
+        logger.warning("Storing probe failed for %s: %s", asset["rel_path"], exc)
+        return "failed"
     return "ok"
 
 

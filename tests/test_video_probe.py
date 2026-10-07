@@ -208,3 +208,12 @@ def test_scan_ingests_even_when_probe_fails(tmp_path: Path) -> None:
 
     assert "video_facet" not in data
     assert data["media_type"] == "video"
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("tag", ["01:00:00:00.5", "garbage", "25:00"])
+def test_malformed_timecode_tag_is_dropped(tag: str) -> None:
+    facet = parse_ffprobe(_probe(_video(tags={"timecode": tag})))
+
+    assert facet.start_timecode is None
+    assert facet.drop_frame is None

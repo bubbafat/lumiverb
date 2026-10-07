@@ -644,3 +644,23 @@ def test_probe_is_an_enrich_type() -> None:
 
     assert "probe" in REPAIR_TYPES
     assert "probe" in ENRICH_TYPES
+
+
+def test_probe_one_api_failure_is_a_failed_clip(tmp_path: Path) -> None:
+    """An asset trashed mid-run (404 on PUT) fails that clip, not the run."""
+    from src.client.cli.client import LumiverbAPIError
+    from src.client.cli.repair import _probe_one
+    from src.client.video.probe import VideoFacet
+
+    (tmp_path / "a.mov").write_bytes(b"x")
+    facet = VideoFacet(
+        duration_sec=2.0, container="mov", video_codec="h264", width=640, height=360,
+        rotation=0, frame_rate_num=25, frame_rate_den=1, start_timecode=None,
+        drop_frame=None, audio_codec=None, audio_channels=None, audio_sample_rate=None,
+    )
+    client = MagicMock()
+    client.put.side_effect = LumiverbAPIError("not_found", "Asset not found", 404)
+    with patch("src.client.cli.repair.probe_video", return_value=facet):
+        result = _probe_one(client, tmp_path, {"asset_id": "ast_1", "rel_path": "a.mov"})
+
+    assert result == "failed"

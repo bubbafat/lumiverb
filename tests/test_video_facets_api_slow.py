@@ -199,3 +199,33 @@ def test_emptying_trash_removes_facet(env) -> None:
 
     assert r.status_code == 200, r.text
     assert r.json()["deleted"] == 1
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"start_timecode": "01:00:00:00.5"},
+        {"start_timecode": "one hour"},
+        {"frame_rate_num": 0, "frame_rate_den": 1},
+        {"frame_rate_num": 30, "frame_rate_den": -1},
+        {"rotation": 45},
+        {"audio_channels": -2},
+    ],
+)
+def test_invalid_facets_are_rejected(env, bad) -> None:
+    """A malformed facet would break every export of every project holding
+    the clip, so it's refused at the door."""
+    client, headers, library_id = env
+    asset_id = _ingest(client, headers, library_id, f"v/bad-{abs(hash(str(bad)))}.mov", "video")
+
+    r = client.put(f"/v1/assets/{asset_id}/video-facet", json=dict(FACET, **bad), headers=headers)
+    assert r.status_code == 422, r.text
+
+    r = client.post(
+        "/v1/ingest", headers=headers,
+        files={"proxy": ("p.jpg", io.BytesIO(_jpeg()), "image/jpeg")},
+        data={"library_id": library_id, "rel_path": f"v/bad-ingest-{abs(hash(str(bad)))}.mov",
+              "file_size": "5000", "media_type": "video", "video_facet": json.dumps(dict(FACET, **bad))},
+    )
+    assert r.status_code == 400, r.text
