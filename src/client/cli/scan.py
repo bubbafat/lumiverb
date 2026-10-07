@@ -46,6 +46,7 @@ from src.client.cli.ingest import (
 )
 from src.client.proxy.proxy_cache import ProxyCache
 from src.client.workers.exif_extract import compute_sha256
+from src.client.video.probe import probe_video
 from src.shared.io_utils import resolve_source_path
 
 logger = logging.getLogger(__name__)
@@ -454,6 +455,13 @@ def _scan_one_video(
         }
         if f.get("file_mtime") is not None:
             data["file_mtime"] = f["file_mtime"].isoformat()
+        # Frame rate, timecode, audio layout for editor exports. A failed
+        # probe doesn't block ingest; `lumiverb enrich --job-type probe`
+        # backfills it.
+        try:
+            data["video_facet"] = json.dumps(probe_video(source_path).to_dict())
+        except Exception as exc:  # noqa: BLE001 — any ffprobe failure
+            logger.warning("Probe failed for %s: %s", rel_path, exc)
 
         resp = client.post("/v1/ingest", files=files, data=data)
         asset_id = resp.json().get("asset_id")

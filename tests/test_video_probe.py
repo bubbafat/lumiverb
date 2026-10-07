@@ -151,3 +151,60 @@ def test_probe_real_fixture() -> None:
     assert facet.audio_channels == 2
     assert facet.audio_sample_rate == 48000
     assert facet.duration_sec == pytest.approx(7.07, abs=0.01)
+
+
+# ---------------------------------------------------------------------------
+# Scan sends the probe with ingest
+# ---------------------------------------------------------------------------
+
+
+def _scan_video(tmp_path: Path, probe) -> dict:
+    """Run _scan_one_video with media work mocked; return the /v1/ingest form data."""
+    import threading
+    from unittest.mock import MagicMock, patch
+
+    from src.client.cli import scan
+
+    (tmp_path / "clip.mov").write_bytes(b"not really a movie")
+    client = MagicMock()
+    client.post.return_value.json.return_value = {"asset_id": "ast_1"}
+    stats = MagicMock(lock=threading.Lock(), failed=0, new=0)
+    with (
+        patch.object(scan, "_extract_video_poster", return_value=(b"jpg", 1920, 1080)),
+        patch.object(scan, "_build_exif_payload", return_value={}),
+        patch.object(scan, "_generate_video_preview", return_value=None),
+        patch.object(scan, "_jpeg_to_webp", return_value=b"webp"),
+        patch.object(scan, "probe_video", side_effect=probe),
+    ):
+        scan._scan_one_video(
+            client=client, library_id="lib_1", root_path=tmp_path,
+            f={"rel_path": "clip.mov", "file_size": 18, "file_mtime": None},
+            proxy_cache=MagicMock(), stats=stats, progress=MagicMock(), task_id=None,
+            counter_field="new",
+        )
+    [ingest] = [c for c in client.post.call_args_list if c[0][0] == "/v1/ingest"]
+    return ingest[1]["data"]
+
+
+@pytest.mark.fast
+def test_scan_sends_video_facet(tmp_path: Path) -> None:
+    import json
+
+    facet = parse_ffprobe(_probe(_audio(), _video()))
+
+    data = _scan_video(tmp_path, lambda path: facet)
+
+    assert json.loads(data["video_facet"]) == facet.to_dict()
+
+
+@pytest.mark.fast
+def test_scan_ingests_even_when_probe_fails(tmp_path: Path) -> None:
+    import subprocess
+
+    def fail(path):
+        raise subprocess.CalledProcessError(1, "ffprobe")
+
+    data = _scan_video(tmp_path, fail)
+
+    assert "video_facet" not in data
+    assert data["media_type"] == "video"
