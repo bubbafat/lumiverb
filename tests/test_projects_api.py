@@ -832,3 +832,54 @@ def test_shared_smart_project_uses_owner_ratings(projects_env):
     as_viewer = _all_pages(client, viewer_key, project_id, limit=50)
 
     assert as_owner == as_viewer == [favorite]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("direction", ["desc", "asc"])
+def test_paging_with_undated_clips_returns_each_clip_once(projects_env, direction):
+    """Clips without a capture time sort last; paging across the boundary
+    between dated and undated clips must neither drop nor repeat any."""
+    client, api_key, _ = projects_env
+    lib = client.post(
+        "/v1/libraries", json={"name": f"Mixed-{direction}", "root_path": f"/mixed-{direction}"},
+        headers=_headers(api_key),
+    ).json()["library_id"]
+    dated = [
+        _ingest_taken(client, api_key, lib, f"m/d{i}.jpg", f"2024-0{i + 1}-01T10:00:00+00:00")
+        for i in range(3)
+    ]
+    undated = [_ingest_taken(client, api_key, lib, f"m/u{i}.jpg", None) for i in range(3)]
+    expected = sorted(dated + undated)
+
+    def pages(path: str, params: dict) -> list[str]:
+        ids, cursor = [], None
+        for _ in range(20):
+            p = dict(params, limit=2)
+            if cursor:
+                p["after"] = cursor
+            r = client.get(path, params=p, headers=_headers(api_key))
+            assert r.status_code == 200, r.text
+            ids += [a["asset_id"] for a in r.json()["items"]]
+            cursor = r.json()["next_cursor"]
+            if not cursor:
+                return ids
+        raise AssertionError("pagination did not end")
+
+    # Smart project (the export path)
+    project_id = client.post(
+        "/v1/projects",
+        json={"name": f"Mixed {direction}", "type": "smart",
+              "saved_query": {"filters": [{"type": "library", "value": lib}],
+                              "sort": "taken_at", "direction": direction}},
+        headers=_headers(api_key),
+    ).json()["project_id"]
+    smart = _all_pages(client, api_key, project_id, limit=2)
+    assert sorted(smart) == expected
+    # Unified query and the asset page endpoint share the cursor logic
+    query = pages("/v1/query", {"f": f"library:{lib}", "sort": "taken_at", "dir": direction})
+    assert sorted(query) == expected
+    page = pages("/v1/assets/page", {"library_id": lib, "sort": "taken_at", "dir": direction})
+    assert sorted(page) == expected
+    # Every advertised sort column pages too (exposure: all NULL here)
+    exposure = pages("/v1/query", {"f": f"library:{lib}", "sort": "exposure_time_us", "dir": direction})
+    assert sorted(exposure) == expected

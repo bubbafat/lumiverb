@@ -471,7 +471,7 @@ class AssetRepository:
     # Columns allowed for sorting.
     SORTABLE_COLUMNS = {
         "asset_id", "taken_at", "created_at", "file_size",
-        "iso", "aperture", "focal_length", "rel_path",
+        "iso", "exposure_time_us", "aperture", "focal_length", "rel_path",
     }
 
     def page_by_library(
@@ -574,12 +574,14 @@ class AssetRepository:
                 # Row-value comparison for composite cursor.
                 # NULLs sort last: rows with NULL sort_col come after non-NULL rows.
                 conditions.append(f"""(
+                    -- Rows are ordered NULLS LAST: after an undated cursor only
+                    -- undated rows follow; after a dated one, later dated rows
+                    -- and every undated row.
                     CASE
                         WHEN :cursor_value IS NULL THEN
-                            a.{sort_col} IS NOT NULL
-                            OR (a.{sort_col} IS NULL AND a.asset_id {cmp_op} :cursor_id)
+                            a.{sort_col} IS NULL AND a.asset_id {cmp_op} :cursor_id
                         WHEN a.{sort_col} IS NULL THEN
-                            FALSE
+                            TRUE
                         ELSE
                             (a.{sort_col}, a.asset_id) {cmp_op} (:cursor_value, :cursor_id)
                     END
@@ -2280,7 +2282,7 @@ class UnifiedBrowseRepository:
 
     SORTABLE_COLUMNS = {
         "asset_id", "taken_at", "created_at", "file_size",
-        "iso", "aperture", "focal_length", "rel_path",
+        "iso", "exposure_time_us", "aperture", "focal_length", "rel_path",
     }
 
     def __init__(self, session: Session) -> None:
@@ -2340,12 +2342,14 @@ class UnifiedBrowseRepository:
                 params["cursor_id"] = cursor_id
             else:
                 conditions.append(f"""(
+                    -- Rows are ordered NULLS LAST: after an undated cursor only
+                    -- undated rows follow; after a dated one, later dated rows
+                    -- and every undated row.
                     CASE
                         WHEN :cursor_value IS NULL THEN
-                            a.{sort_col} IS NOT NULL
-                            OR (a.{sort_col} IS NULL AND a.asset_id {cmp_op} :cursor_id)
+                            a.{sort_col} IS NULL AND a.asset_id {cmp_op} :cursor_id
                         WHEN a.{sort_col} IS NULL THEN
-                            FALSE
+                            TRUE
                         ELSE
                             (a.{sort_col}, a.asset_id) {cmp_op} (:cursor_value, :cursor_id)
                     END
@@ -2485,12 +2489,14 @@ class UnifiedBrowseRepository:
                 params["cursor_id"] = cursor_id
             else:
                 conditions.append(f"""(
+                    -- Rows are ordered NULLS LAST: after an undated cursor only
+                    -- undated rows follow; after a dated one, later dated rows
+                    -- and every undated row.
                     CASE
                         WHEN :cursor_value IS NULL THEN
-                            a.{sort_col} IS NOT NULL
-                            OR (a.{sort_col} IS NULL AND a.asset_id {cmp_op} :cursor_id)
+                            a.{sort_col} IS NULL AND a.asset_id {cmp_op} :cursor_id
                         WHEN a.{sort_col} IS NULL THEN
-                            FALSE
+                            TRUE
                         ELSE
                             (a.{sort_col}, a.asset_id) {cmp_op} (:cursor_value, :cursor_id)
                     END
