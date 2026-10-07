@@ -7,6 +7,7 @@ alwaysApply: true
 # Lumiverb — Architecture Rules
 
 ## Source of Truth
+- Direction: @docs/adr/016-operating-model.md — where it disagrees with the docs below, it wins and they are out of date.
 - System design: @docs/architecture.md
 - API rules: @docs/cursor-api.md
 - CLI rules: @docs/cursor-cli.md
@@ -27,13 +28,12 @@ alwaysApply: true
 - Error envelope: `{"error": {"code": "...", "message": "...", "details": {...}}}`
 - File uploads via multipart. Files served via signed URLs — never raw object storage URLs.
 
-## Phase 1 Scope — Do Not Build
-- No user authentication or session management (Phase 5)
-- No webhooks
-- Do not populate or query `embedding_vector`, `faces`, `people`, or `face_person_matches`
-  (Phase 2 — columns exist, are nullable, must stay untouched in Phase 1)
-- No cross-tenant or multi-library search
-- No rate limiting
+## Operating Model (ADR-016)
+- Originals are read-only: never written, moved, renamed or uploaded.
+- Human data (names, corrections, trash, projects, filters, settings) is never overwritten automatically by derived data.
+- Derived data is a rebuildable cache; one producer per artifact kind.
+- What the code calls "collections" are projects (transient, many-to-many). "Collection" is reserved for a long-lived container.
+- No webhooks. No cross-tenant search.
 
 ## Documentation
 - When adding API endpoints, CLI commands, or schema changes, update the relevant file under `docs/`.

@@ -2,7 +2,7 @@
 *Feed this to Cursor when working on the CLI.*
 
 ## Purpose
-The CLI is a local agent that runs on the machine where source files live.
+The CLI is a local agent that runs on a machine that can read the source files: the machine that holds them, or the brain through a read-only mount ([ADR-016](adr/016-operating-model.md)).
 It never touches the tenant DB, Quickwit, or object storage directly — it is an API client only.
 
 See docs/architecture.md for the full design.
@@ -97,4 +97,4 @@ The CLI is an API client and never queries the DB directly, so it is not subject
 
 The API server enforces these rules (see `docs/cursor-api.md` for the full contract):
 - All asset reads go through the `active_assets` view (`deleted_at IS NULL`).
-- Ingesting a file that was previously trashed **restores** it (same `asset_id`, `deleted_at` cleared). It does not create a new record and does not leave a zombie.
+- Ingesting a file that was previously trashed **restores** it (same `asset_id`, `deleted_at` cleared). It does not create a new record and does not leave a zombie. ADR-016 phase 0 changes this: a user's trash survives a rescan.

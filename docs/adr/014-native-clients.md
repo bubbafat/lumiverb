@@ -4,6 +4,8 @@
 
 Accepted — in progress (Phases 0–4 complete; 6 partial; 5 not started)
 
+> **Partly superseded by [ADR-016](016-operating-model.md) (2026-10-07).** The brain schedules all processing and reads storage read-only. The macOS app's built-in AI from Phase 4 (Apple Vision faces and OCR, CoreML ArcFace, FeaturePrint, whisper.cpp) retires in ADR-016 phase 2, and scanning moves to the brain, with the macOS app reporting the file changes it sees. Browsing (Phases 2, 5 and 6) stands.
+
 ## Progress
 
 | Phase | Description | Status |
@@ -543,7 +545,7 @@ Face tagging UI shared between macOS and iOS, adapted for each platform's input 
 
 - **Windows client** — future ADR when there's demand. The API contract and provider patterns established here will inform the approach.
 - **Android client** — no current plan.
-- **Server-side processing** — inference stays client-side (privacy-first architecture). The server stores results, not source files.
+- ~~**Server-side processing** — inference stays client-side (privacy-first architecture). The server stores results, not source files.~~ Superseded by ADR-016: the brain schedules all processing, and inference runs at named endpoints. Source files are still never uploaded.
 - **Python CLI deprecation** — the CLI remains for scripting, batch operations, and platforms without native clients.
 - **Real-time sync** — the native app polls/watches locally and pushes to the server. No WebSocket push from server to client. If another client modifies data, the native app sees it on next API fetch.
 - **P2P sync between clients** — all sync goes through the server API.

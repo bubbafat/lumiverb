@@ -11,8 +11,11 @@ Python 3.12 (FastAPI + SQLModel + Postgres 16 + Quickwit), React 18 +
 Vite + TanStack web UI, Swift 5.9 / SwiftUI / CoreML / Vision for native
 macOS + iOS (shared `LumiverbKit` package, XcodeGen project).
 
-FastAPI is the only persistent service. CLI + macOS run local enrichment
-and POST results back; iOS is browse-only. Quickwit sidecar with a
+Today FastAPI is the only persistent service. CLI + macOS run local
+enrichment and POST results back; iOS is browse-only. Direction is
+ADR-016: a Linux "brain" schedules all processing against read-only
+storage, human data is never overwritten by derived data, and today's
+"collections" become projects. Quickwit sidecar with a
 Postgres fallback. Auth: JWT (web) + API keys (CLI), both
 `Authorization: Bearer <token>`; roles `admin` / `editor` / `viewer`.
 
@@ -119,6 +122,7 @@ Standard incantations work (`uvicorn src.server.api.main:app --reload`,
 
 ## Key docs
 
+- `docs/adr/016-operating-model.md` — **direction**. Wins over other docs on conflict.
 - `docs/cursor-api.md` — **authoritative** API reference. Do not relitigate.
 - `docs/architecture.md` — full system design.
 - Everything else: `ls docs/` and `ls docs/adr/`.
