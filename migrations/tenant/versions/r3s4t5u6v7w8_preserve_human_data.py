@@ -90,13 +90,41 @@ def upgrade() -> None:
         " SET confirmed = true, confirmed_at = COALESCE(confirmed_at, created_at)"
         " WHERE confirmed = false AND confidence IS NULL"
     ))
-    op.execute(sa.text(
-        "UPDATE assets a SET rel_path = normalize(a.rel_path, NFC)"
-        " WHERE a.rel_path IS NOT NFC NORMALIZED"
-        "   AND (SELECT COUNT(*) FROM assets c"
-        "        WHERE c.library_id = a.library_id"
-        "          AND normalize(c.rel_path, NFC) = normalize(a.rel_path, NFC)) = 1"
-    ))
+    # One pass over the non-NFC rows (set-based, not per row). A row is
+    # renamed only if no other row in its library has the same NFC path;
+    # renamed rows are re-indexed (Quickwit holds the old path).
+    renamed = op.get_bind().execute(sa.text(
+        """
+        WITH candidates AS (
+            SELECT asset_id, library_id, normalize(rel_path, NFC) AS nfc
+            FROM assets WHERE rel_path IS NOT NFC NORMALIZED
+        ),
+        taken AS (
+            SELECT a.library_id, normalize(a.rel_path, NFC) AS nfc
+            FROM assets a
+            JOIN (SELECT DISTINCT library_id, nfc FROM candidates) c
+              ON c.library_id = a.library_id AND c.nfc = normalize(a.rel_path, NFC)
+            GROUP BY a.library_id, normalize(a.rel_path, NFC)
+            HAVING COUNT(*) = 1
+        )
+        UPDATE assets a
+        SET rel_path = c.nfc, search_synced_at = NULL
+        FROM candidates c
+        JOIN taken t ON t.library_id = c.library_id AND t.nfc = c.nfc
+        WHERE a.asset_id = c.asset_id
+        """
+    )).rowcount
+    left = op.get_bind().execute(sa.text(
+        "SELECT COUNT(*) FROM assets WHERE rel_path IS NOT NFC NORMALIZED"
+    )).scalar()
+    if renamed or left:
+        import logging
+
+        logging.getLogger("alembic.runtime.migration").warning(
+            "rel_path NFC: %d renamed; %d left as they are because another file "
+            "in the library has the same name in NFC form",
+            renamed, left,
+        )
     op.execute(sa.text(
         "UPDATE people p SET confirmation_count = ("
         "  SELECT COUNT(*) FROM face_person_matches m"

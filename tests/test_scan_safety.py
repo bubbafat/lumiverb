@@ -201,3 +201,10 @@ def test_scan_skips_trashed_paths(tmp_path: Path) -> None:
 
     scanned = {f["rel_path"] for f in split.call_args[0][0]}
     assert scanned == {"f1.jpg", "f2.jpg", "f4.jpg"}
+
+
+@pytest.mark.fast
+def test_path_prefix_is_nfc() -> None:
+    from src.shared.io_utils import normalize_path_prefix
+
+    assert normalize_path_prefix("/" + unicodedata.normalize("NFD", "Café/") ) == unicodedata.normalize("NFC", "Café")

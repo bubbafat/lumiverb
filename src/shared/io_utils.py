@@ -18,11 +18,12 @@ def normalize_path_prefix(path: str | None) -> str | None:
     Normalize a path prefix for consistent DB filtering.
     - Converts backslashes to forward slashes
     - Strips leading/trailing slashes and whitespace
+    - Unicode NFC, like stored rel_paths (macOS tab completion gives NFD)
     - Returns None if the result is empty
     """
     if not path:
         return None
-    normalized = path.replace("\\", "/").strip().strip("/")
+    normalized = unicodedata.normalize("NFC", path.replace("\\", "/").strip().strip("/"))
     return normalized or None
 
 

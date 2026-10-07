@@ -896,8 +896,8 @@ def test_preserve_human_data_migration_backfills_existing_rows() -> None:
             for aid, rp in (("a_nfd", nfd), ("a_clash_nfc", clash_nfc), ("a_clash_nfd", clash_nfd)):
                 conn.execute(text(
                     "INSERT INTO assets (asset_id, library_id, rel_path, file_size, media_type,"
-                    " availability, status, created_at, updated_at)"
-                    " VALUES (:a, 'lib_1', :rp, 1, 'video', 'online', 'discovered', now(), now())"
+                    " availability, status, created_at, updated_at, search_synced_at)"
+                    " VALUES (:a, 'lib_1', :rp, 1, 'video', 'online', 'discovered', now(), now(), now())"
                 ), {"a": aid, "rp": rp})
             conn.execute(text(
                 "INSERT INTO people (person_id, display_name, created_by_user, dismissed,"
@@ -925,9 +925,14 @@ def test_preserve_human_data_migration_backfills_existing_rows() -> None:
                 "SELECT confirmation_count FROM people WHERE person_id = 'p1'"
             )).scalar()
             paths = dict(conn.execute(text("SELECT asset_id, rel_path FROM assets")).fetchall())
+            unsynced = {row[0] for row in conn.execute(text(
+                "SELECT asset_id FROM assets WHERE search_synced_at IS NULL"
+            ))}
         assert confirmed == {"f_named": True, "f_auto": False}
         assert count == 1
         assert paths["a_nfd"] == nfc
         # Normalizing would collide with the NFC row: both left as they were.
         assert paths["a_clash_nfc"] == clash_nfc
         assert paths["a_clash_nfd"] == clash_nfd
+        # Only the renamed row is re-indexed (Quickwit still has the old path).
+        assert unsynced == {"a_nfd"}
