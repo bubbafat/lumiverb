@@ -3,15 +3,15 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
-  getCollection,
-  listCollectionAssets,
-  updateCollection,
-  deleteCollection,
-  removeAssetsFromCollection,
+  getProject,
+  listProjectAssets,
+  updateProject,
+  deleteProject,
+  removeAssetsFromProject,
   ApiError,
 } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
-import { CollectionPicker } from "../components/CollectionPicker";
+import { ProjectPicker } from "../components/ProjectPicker";
 import { Lightbox } from "../components/Lightbox";
 import { SelectionToolbar } from "../components/SelectionToolbar";
 import { ZoomControl } from "../components/ZoomControl";
@@ -39,17 +39,17 @@ const ZOOM_LEVELS = [
 
 const CELL_ASPECT_RATIO = 1.0;
 
-export default function CollectionDetailPage() {
-  const { collectionId } = useParams<{ collectionId: string }>();
+export default function ProjectDetailPage() {
+  const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const parentEl = useScrollContainer();
 
-  // Collection metadata
-  const { data: collection, isLoading: isCollectionLoading } = useQuery({
-    queryKey: ["collection", collectionId],
-    queryFn: () => getCollection(collectionId!),
-    enabled: !!collectionId,
+  // Project metadata
+  const { data: project, isLoading: isProjectLoading } = useQuery({
+    queryKey: ["project", projectId],
+    queryFn: () => getProject(projectId!),
+    enabled: !!projectId,
   });
 
   // Settings state
@@ -69,7 +69,7 @@ export default function CollectionDetailPage() {
   const gridRef = useRef<HTMLDivElement>(null);
   const [lightboxAsset, setLightboxAsset] = useState<AssetPageItem | null>(null);
 
-  // Fetch collection assets with infinite query
+  // Fetch project assets with infinite query
   const {
     data,
     fetchNextPage,
@@ -77,12 +77,12 @@ export default function CollectionDetailPage() {
     isFetchingNextPage,
     isLoading: isAssetsLoading,
   } = useInfiniteQuery({
-    queryKey: ["collection-assets", collectionId],
+    queryKey: ["project-assets", projectId],
     queryFn: ({ pageParam }) =>
-      listCollectionAssets(collectionId!, pageParam, PAGE_SIZE),
+      listProjectAssets(projectId!, pageParam, PAGE_SIZE),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage?.next_cursor ?? undefined,
-    enabled: !!collectionId,
+    enabled: !!projectId,
   });
 
   // Flatten pages into ordered asset list, adapted to AssetPageItem shape
@@ -197,39 +197,39 @@ export default function CollectionDetailPage() {
 
   // Settings mutations
   const updateMutation = useMutation({
-    mutationFn: (body: Parameters<typeof updateCollection>[1]) =>
-      updateCollection(collectionId!, body),
+    mutationFn: (body: Parameters<typeof updateProject>[1]) =>
+      updateProject(projectId!, body),
     onSuccess: () => {
       setSettingsOpen(false);
       setSettingsError("");
-      queryClient.invalidateQueries({ queryKey: ["collection", collectionId] });
-      queryClient.invalidateQueries({ queryKey: ["collections"] });
+      queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
     },
     onError: (err: ApiError) => setSettingsError(err.message),
   });
 
   const deleteMutation = useMutation({
-    mutationFn: () => deleteCollection(collectionId!),
-    onSuccess: () => navigate("/collections"),
+    mutationFn: () => deleteProject(projectId!),
+    onSuccess: () => navigate("/projects"),
   });
 
   const removeMutation = useMutation({
     mutationFn: () =>
-      removeAssetsFromCollection(collectionId!, selection.toArray()),
+      removeAssetsFromProject(projectId!, selection.toArray()),
     onSuccess: () => {
       selection.clear();
-      queryClient.invalidateQueries({ queryKey: ["collection-assets", collectionId] });
-      queryClient.invalidateQueries({ queryKey: ["collection", collectionId] });
-      queryClient.invalidateQueries({ queryKey: ["collections"] });
+      queryClient.invalidateQueries({ queryKey: ["project-assets", projectId] });
+      queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
     },
   });
 
   const openSettings = () => {
-    if (collection) {
-      setEditName(collection.name);
-      setEditDesc(collection.description ?? "");
-      setEditSort(collection.sort_order);
-      setEditVisibility(collection.visibility);
+    if (project) {
+      setEditName(project.name);
+      setEditDesc(project.description ?? "");
+      setEditSort(project.sort_order);
+      setEditVisibility(project.visibility);
       setSettingsError("");
     }
     setSettingsOpen(true);
@@ -245,7 +245,7 @@ export default function CollectionDetailPage() {
     });
   };
 
-  if (isCollectionLoading) {
+  if (isProjectLoading) {
     return (
       <div className="flex h-full items-center justify-center text-gray-500">
         Loading...
@@ -253,12 +253,12 @@ export default function CollectionDetailPage() {
     );
   }
 
-  if (!collection) {
+  if (!project) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 text-gray-500">
-        <p>Collection not found</p>
-        <Link to="/collections" className="text-indigo-400 hover:text-indigo-300">
-          Back to collections
+        <p>Project not found</p>
+        <Link to="/projects" className="text-indigo-400 hover:text-indigo-300">
+          Back to projects
         </Link>
       </div>
     );
@@ -270,27 +270,27 @@ export default function CollectionDetailPage() {
       <div className="flex shrink-0 items-center justify-between border-b border-gray-800 px-4 py-3">
         <div className="flex items-center gap-3 min-w-0">
           <Link
-            to="/collections"
+            to="/projects"
             className="text-sm text-gray-500 hover:text-gray-300"
           >
-            Collections
+            Projects
           </Link>
           <span className="text-gray-600">/</span>
           <h1 className="truncate text-lg font-semibold text-gray-100">
-            {collection.name}
+            {project.name}
           </h1>
-          {collection.type === "smart" && (
+          {project.type === "smart" && (
             <span className="shrink-0 rounded bg-indigo-900/60 px-1.5 py-0.5 text-[10px] text-indigo-300">
               Smart
             </span>
           )}
           <span className="shrink-0 text-sm text-gray-500">
-            {collection.asset_count} {collection.asset_count === 1 ? "item" : "items"}
+            {project.asset_count} {project.asset_count === 1 ? "item" : "items"}
           </span>
         </div>
-        {collection.type === "smart" && collection.saved_query && (
+        {project.type === "smart" && project.saved_query && (
           <div className="flex flex-wrap gap-1.5">
-            {savedQueryLabels(collection.saved_query as SavedQueryV2).map((label: string) => (
+            {savedQueryLabels(project.saved_query as SavedQueryV2).map((label: string) => (
               <span
                 key={label}
                 className="rounded-full bg-indigo-900/40 px-2.5 py-0.5 text-xs text-indigo-300"
@@ -313,9 +313,9 @@ export default function CollectionDetailPage() {
       </div>
 
       {/* Description */}
-      {collection.description && (
+      {project.description && (
         <div className="shrink-0 border-b border-gray-800/50 px-4 py-2">
-          <p className="text-sm text-gray-400">{collection.description}</p>
+          <p className="text-sm text-gray-400">{project.description}</p>
         </div>
       )}
 
@@ -327,7 +327,7 @@ export default function CollectionDetailPage() {
           </div>
         ) : orderedAssets.length === 0 ? (
           <div className="flex h-32 items-center justify-center text-gray-500">
-            This collection is empty.
+            This project is empty.
           </div>
         ) : (
           <div
@@ -427,7 +427,7 @@ export default function CollectionDetailPage() {
           hasMore={hasNextPage}
           onClose={handleLightboxClose}
           onNavigate={handleLightboxNavigate}
-          onAddToCollection={(assetId) => setPickerAssetIds([assetId])}
+          onAddToProject={(assetId) => setPickerAssetIds([assetId])}
           onSimilarClick={(similarAsset) => setLightboxAsset(similarAsset)}
         />
       )}
@@ -439,23 +439,23 @@ export default function CollectionDetailPage() {
           onClick={() => setPickerAssetIds(selection.toArray())}
           className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-indigo-500"
         >
-          Add to collection
+          Add to project
         </button>
-        {collection?.type !== "smart" && (
+        {project?.type !== "smart" && (
           <button
             type="button"
             onClick={() => removeMutation.mutate()}
             disabled={removeMutation.isPending}
             className="rounded-lg border border-red-700/50 px-3 py-1.5 text-sm font-medium text-red-400 transition-colors hover:bg-red-900/30 disabled:opacity-50"
           >
-            {removeMutation.isPending ? "Removing..." : "Remove from collection"}
+            {removeMutation.isPending ? "Removing..." : "Remove from project"}
           </button>
         )}
       </SelectionToolbar>
 
-      {/* Collection picker */}
+      {/* Project picker */}
       {pickerAssetIds && (
-        <CollectionPicker
+        <ProjectPicker
           assetIds={pickerAssetIds}
           onClose={() => setPickerAssetIds(null)}
           onDone={selection.clear}
@@ -473,7 +473,7 @@ export default function CollectionDetailPage() {
             onClick={(e) => e.stopPropagation()}
           >
             <h2 className="mb-4 text-lg font-semibold text-gray-100">
-              Collection settings
+              Project settings
             </h2>
             <form onSubmit={handleSettingsSave} className="space-y-4">
               {settingsError && (
@@ -537,7 +537,7 @@ export default function CollectionDetailPage() {
                 </select>
                 {editVisibility === "public" && (
                   <p className="mt-1 text-xs text-amber-400">
-                    Anyone with the link can view this collection without signing in.
+                    Anyone with the link can view this project without signing in.
                   </p>
                 )}
               </div>
@@ -547,7 +547,7 @@ export default function CollectionDetailPage() {
                   onClick={() => setDeleteConfirm(true)}
                   className="text-sm text-red-400 hover:text-red-300"
                 >
-                  Delete collection
+                  Delete project
                 </button>
                 <div className="flex gap-2">
                   <button
@@ -571,7 +571,7 @@ export default function CollectionDetailPage() {
             {deleteConfirm && (
               <div className="mt-4 rounded-lg border border-red-800/50 bg-red-900/20 p-4">
                 <p className="mb-3 text-sm text-red-400">
-                  Delete &quot;{collection.name}&quot;? Source assets will not be affected.
+                  Delete &quot;{project.name}&quot;? Source assets will not be affected.
                 </p>
                 <div className="flex justify-end gap-2">
                   <button

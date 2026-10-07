@@ -16,10 +16,10 @@ import {
 } from "../api/client";
 import type { QueryItem } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
-import { CollectionPicker } from "../components/CollectionPicker";
+import { ProjectPicker } from "../components/ProjectPicker";
 import { Lightbox } from "../components/Lightbox";
 import { FilterBar } from "../components/FilterBar";
-import { SaveSmartCollectionModal } from "../components/SaveSmartCollectionModal";
+import { SaveSmartProjectModal } from "../components/SaveSmartProjectModal";
 import { SelectionToolbar } from "../components/SelectionToolbar";
 import { ZoomControl } from "../components/ZoomControl";
 import { DrawerOverlay } from "../components/DrawerOverlay";
@@ -707,11 +707,11 @@ export default function BrowsePage() {
         onSetSort={handleSetSort}
         onClearAll={handleClearAll}
         facets={facets}
-        onSaveSmartCollection={() => setShowSmartColModal(true)}
+        onSaveSmartProject={() => setShowSmartColModal(true)}
       />
 
       {showSmartColModal && (
-        <SaveSmartCollectionModal
+        <SaveSmartProjectModal
           savedQuery={buildSavedQuery(filtersWithPath, browseSort, browseDir)}
           onClose={() => setShowSmartColModal(false)}
         />
@@ -950,7 +950,7 @@ export default function BrowsePage() {
             setParam("path", path);
           }}
           onDateClick={handleLightboxDateClick}
-          onAddToCollection={(assetId) => setPickerAssetIds([assetId])}
+          onAddToProject={(assetId) => setPickerAssetIds([assetId])}
           rating={lightboxAsset ? ratingsMap[lightboxAsset.asset_id] : undefined}
           onRatingChange={handleRatingChange}
           libraryId={libraryId}
@@ -1010,13 +1010,13 @@ export default function BrowsePage() {
           onClick={() => setPickerAssetIds(selection.toArray())}
           className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-indigo-500"
         >
-          Add to collection
+          Add to project
         </button>
       </SelectionToolbar>
 
-      {/* Collection picker */}
+      {/* Project picker */}
       {pickerAssetIds && (
-        <CollectionPicker
+        <ProjectPicker
           assetIds={pickerAssetIds}
           onClose={() => setPickerAssetIds(null)}
           onDone={selection.clear}

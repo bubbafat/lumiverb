@@ -1,17 +1,17 @@
 import { describe, it, expect } from "vitest";
-import type { CollectionItem } from "./types";
+import type { ProjectItem } from "./types";
 import type { LeafFilter, SavedQueryV2 } from "../lib/queryFilter";
 import { savedQueryLabels, buildSavedQuery } from "../lib/queryFilter";
 
 /**
- * Tests for smart collection type fields and saved query serialization.
+ * Tests for smart project type fields and saved query serialization.
  * Updated for the filter algebra format.
  */
 
-describe("CollectionItem type", () => {
+describe("ProjectItem type", () => {
   it("includes type field defaulting to static", () => {
-    const item: CollectionItem = {
-      collection_id: "col_123",
+    const item: ProjectItem = {
+      project_id: "col_123",
       name: "Test",
       description: null,
       cover_asset_id: null,
@@ -30,8 +30,8 @@ describe("CollectionItem type", () => {
   });
 
   it("supports smart type with saved_query using filter algebra", () => {
-    const item: CollectionItem = {
-      collection_id: "col_456",
+    const item: ProjectItem = {
+      project_id: "col_456",
       name: "Canon Favorites",
       description: null,
       cover_asset_id: null,
@@ -61,8 +61,8 @@ describe("CollectionItem type", () => {
   });
 
   it("supports smart type with search query filter", () => {
-    const item: CollectionItem = {
-      collection_id: "col_789",
+    const item: ProjectItem = {
+      project_id: "col_789",
       name: "Sunset Search",
       description: null,
       cover_asset_id: null,
