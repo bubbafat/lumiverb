@@ -139,15 +139,6 @@ def _seed_face_vec(tenant_url: str, asset_id: str, box: dict, emb: list[float]) 
     return face_id
 
 
-def _drifted(i: int) -> list[float]:
-    """The same face as _unit(i) from a different angle: close enough to pair
-    on re-detection (distance ~0.47 < 0.6), too far to auto-assign (>= 0.45)."""
-    v = _unit(i)
-    v[(i + 1) % 512] = 1.6
-    norm = sum(x * x for x in v) ** 0.5
-    return [x / norm for x in v]
-
-
 def _near(i: int) -> list[float]:
     """The same face as _unit(i), seen again (cosine distance ~0.005)."""
     v = _unit(i)
@@ -548,33 +539,100 @@ def test_merge_keeps_target_confirmation_over_source_rejection(env) -> None:
         ).scalar() == 0
 
 
+def _rejected(tenant_url: str, face_id: str) -> set[str]:
+    with _db(tenant_url) as s:
+        return {
+            row[0] for row in s.execute(
+                text("SELECT person_id FROM face_person_rejections WHERE face_id = :f"),
+                {"f": face_id},
+            )
+        }
+
+
+def _person_of(tenant_url: str, face_id: str) -> str | None:
+    with _db(tenant_url) as s:
+        return s.execute(
+            text("SELECT person_id FROM faces WHERE face_id = :f"), {"f": face_id}
+        ).scalar()
+
+
 @pytest.mark.slow
-def test_merge_respects_target_rejection(env) -> None:
-    """Merging A into B doesn't override "this face is not B": the face is
-    left unassigned (a bulk action never beats a per-face decision)."""
+def test_merge_keeps_rejection_over_machine_match(env) -> None:
+    """F was removed from S ("not S"); auto-assign later put F on T. S and T
+    are the same person, so merging must not lose the user's "not S"."""
     client, headers, library_id, tenant_url = env
     asset_id = _seed_asset(tenant_url, library_id)
-    source = _seed_person(tenant_url, emb=28)
-    target = _seed_person(tenant_url, emb=29)
-    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=28)
-    _seed_match(tenant_url, face_id, target, confirmed=True, confidence=None)
-    assert client.delete(f"/v1/faces/{face_id}/assign", headers=headers).status_code == 204
+    source = _seed_person(tenant_url, emb=46)
+    target = _seed_person(tenant_url, emb=47)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=46)
     _seed_match(tenant_url, face_id, source, confirmed=True, confidence=None)
+    assert client.delete(f"/v1/faces/{face_id}/assign", headers=headers).status_code == 204
+    _seed_match(tenant_url, face_id, target, confirmed=False, confidence=0.7)
 
     r = client.post(f"/v1/people/{target}/merge", json={"source_person_id": source}, headers=headers)
     assert r.status_code == 200, r.text
 
     assert _match(tenant_url, face_id) is None
+    assert _person_of(tenant_url, face_id) is None
+    assert _rejected(tenant_url, face_id) == {target}
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("into", ["first", "second"])
+def test_merge_latest_decision_wins_either_way(env, into) -> None:
+    """F was removed from P1, then (later) confirmed as P2. Whichever way
+    the two are merged, the later decision stands: F is the merged person."""
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    p1, p2 = _seed_person(tenant_url, emb=48), _seed_person(tenant_url, emb=49)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=48)
+    _seed_match(tenant_url, face_id, p1, confirmed=True, confidence=None)
+    assert client.delete(f"/v1/faces/{face_id}/assign", headers=headers).status_code == 204
+    r = client.post(f"/v1/faces/{face_id}/assign", json={"person_id": p2}, headers=headers)
+    assert r.status_code == 200, r.text
+    target, source = (p1, p2) if into == "first" else (p2, p1)
+
+    r = client.post(f"/v1/people/{target}/merge", json={"source_person_id": source}, headers=headers)
+    assert r.status_code == 200, r.text
+
+    assert _match(tenant_url, face_id) == (target, True)
+    assert _person_of(tenant_url, face_id) == target
+    assert _rejected(tenant_url, face_id) == set()
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("into", ["first", "second"])
+def test_merge_later_rejection_wins_either_way(env, into) -> None:
+    """F was confirmed as P1, then (later) removed from P2: after merging,
+    the later "not this person" stands and F is unassigned."""
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    p1, p2 = _seed_person(tenant_url, emb=50), _seed_person(tenant_url, emb=51)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=50)
+    other = _seed_face(tenant_url, asset_id, _box(0.60, 0.10), emb=50)
+    # F on P2 first, removed (rejection "not P2", recorded now)...
+    _seed_match(tenant_url, face_id, p2, confirmed=True, confidence=None)
+    assert client.delete(f"/v1/faces/{face_id}/assign", headers=headers).status_code == 204
+    # ...but that rejection must be LATER than F's confirmation as P1:
     with _db(tenant_url) as s:
-        assert s.execute(
-            text("SELECT person_id FROM faces WHERE face_id = :f"), {"f": face_id}
-        ).scalar() is None
-        rejected = {
-            row[0] for row in s.execute(
-                text("SELECT person_id FROM face_person_rejections WHERE face_id = :f"), {"f": face_id}
-            )
-        }
-    assert rejected == {target}
+        s.execute(
+            text("INSERT INTO face_person_matches (match_id, face_id, person_id, confirmed,"
+                 " confirmed_at, created_at) VALUES (:m, :f, :p, true,"
+                 " now() - interval '1 day', now() - interval '1 day')"),
+            {"m": "fpm_" + uuid.uuid4().hex[:16], "f": face_id, "p": p1},
+        )
+        s.execute(text("UPDATE faces SET person_id = :p WHERE face_id = :f"), {"p": p1, "f": face_id})
+        s.commit()
+    _seed_match(tenant_url, other, p1, confirmed=True, confidence=None)
+    target, source = (p1, p2) if into == "first" else (p2, p1)
+
+    r = client.post(f"/v1/people/{target}/merge", json={"source_person_id": source}, headers=headers)
+    assert r.status_code == 200, r.text
+
+    assert _match(tenant_url, face_id) is None
+    assert _person_of(tenant_url, face_id) is None
+    assert _rejected(tenant_url, face_id) == {target}
+    assert _match(tenant_url, other) == (target, True)
 
 
 @pytest.mark.slow

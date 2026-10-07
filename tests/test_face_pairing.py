@@ -60,3 +60,25 @@ def test_unrelated_face_in_the_same_place_is_new() -> None:
     new = [{"bounding_box": _box(0.30), "embedding": _vec((9, 1.0))}]
 
     assert FaceRepository._pair_redetected_faces(old, new) == {}
+
+
+def test_no_embedding_pairs_rank_after_embedding_pairs() -> None:
+    """An old face without an embedding overlaps both new detections more
+    than the old face with one does; the embedding pair is decided first."""
+    old = [Row("plain", _box(0.30), None, True), Row("known", _box(0.34), _text(PEOPLE[0]), True)]
+    new = [{"bounding_box": _box(0.32), "embedding": _seen_again(PEOPLE[0])}]
+
+    assert FaceRepository._pair_redetected_faces(old, new) == {0: "known"}
+
+
+@pytest.mark.parametrize(("distance", "paired"), [(0.35, True), (0.42, False)])
+def test_one_gate_for_overlap_and_embedding_alone(distance: float, paired: bool) -> None:
+    """The same 0.4 gate applies whether or not the boxes overlap."""
+    import math
+
+    angle = math.acos(1 - distance)
+    seen = _vec((0, math.cos(angle)), (7, math.sin(angle)))
+    for new_box in (_box(0.32), _box(0.75)):  # overlapping, then far away
+        old = [Row("f0", _box(0.30), _text(PEOPLE[0]), True)]
+        new = [{"bounding_box": new_box, "embedding": seen}]
+        assert (FaceRepository._pair_redetected_faces(old, new) == {0: "f0"}) is paired

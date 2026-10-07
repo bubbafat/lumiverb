@@ -2812,7 +2812,9 @@ class FaceRepository:
     # closer than 0.4; siblings are usually further. With both embeddings a
     # small overlap is enough (a tight Apple Vision box inside a loose
     # InsightFace one); without them, the floor is higher. Anything left
-    # can still pair by embedding alone.
+    # can still pair by embedding alone, under the same gate. Lookalikes
+    # closer than 0.4 (identical twins) can still pair; the same face more
+    # than 0.4 apart becomes a second face (nothing is lost).
     REDETECT_MIN_IOU = 0.1
     REDETECT_MIN_IOU_NO_EMBEDDING = 0.3
     REDETECT_MAX_EMBEDDING_DISTANCE = 0.4
@@ -3015,8 +3017,8 @@ class FaceRepository:
         (distance < REDETECT_MAX_EMBEDDING_DISTANCE), closest embedding
         first and overlap as the tie-break; boxes without embeddings pair on
         overlap alone (IoU >= REDETECT_MIN_IOU_NO_EMBEDDING), after those.
-        Then embedding distance alone (< AUTO_ASSIGN_THRESHOLD) for whatever
-        is left. Returns {index into faces: old face_id}.
+        Then embedding distance alone, with the same gate, for whatever is
+        left. Returns {index into faces: old face_id}.
         """
         import numpy as np
 
@@ -3068,7 +3070,7 @@ class FaceRepository:
                 if ni in pairs:
                     continue
                 dist = distance(oi, ni)
-                if dist is not None and dist < cls.AUTO_ASSIGN_THRESHOLD:
+                if dist is not None and dist < cls.REDETECT_MAX_EMBEDDING_DISTANCE:
                     close.append((dist, oi, ni))
         take(sorted(close))
         return pairs
@@ -3871,36 +3873,18 @@ class PersonRepository:
         if target is None:
             return None
 
-        # Faces moving over from the source. A face the target already
-        # rejected stays rejected: the merge is a bulk action and doesn't
-        # override a per-face decision, so that face is left unassigned.
-        moving = [
-            row[0]
-            for row in self._session.execute(
-                text("SELECT face_id FROM face_person_matches WHERE person_id = :sid"),
-                {"sid": source_person_id},
-            ).fetchall()
-        ]
-        contradicted = [
-            row[0]
-            for row in self._session.execute(
-                text(
-                    "SELECT face_id FROM face_person_rejections"
-                    " WHERE person_id = :tid AND face_id = ANY(:fids)"
-                ),
-                {"tid": target_person_id, "fids": moving},
-            ).fetchall()
-        ] if moving else []
-        if contradicted:
-            self._session.execute(
-                text("DELETE FROM face_person_matches WHERE face_id = ANY(:fids)"),
-                {"fids": contradicted},
-            )
-            self._session.execute(
-                text("UPDATE faces SET person_id = NULL WHERE face_id = ANY(:fids)"),
-                {"fids": contradicted},
-            )
-
+        # S and T are one person, so "not S" means "not T". When both people
+        # carry a rejection for a face, keep the later one.
+        self._session.execute(
+            text(
+                "INSERT INTO face_person_rejections (face_id, person_id, created_at)"
+                " SELECT face_id, :tid, created_at FROM face_person_rejections"
+                " WHERE person_id = :sid"
+                " ON CONFLICT (face_id, person_id) DO UPDATE"
+                " SET created_at = GREATEST(face_person_rejections.created_at, EXCLUDED.created_at)"
+            ),
+            {"tid": target_person_id, "sid": source_person_id},
+        )
         # Reassign face_person_matches from source to target
         self._session.execute(
             text("UPDATE face_person_matches SET person_id = :tid WHERE person_id = :sid"),
@@ -3911,19 +3895,34 @@ class PersonRepository:
             text("UPDATE faces SET person_id = :tid WHERE person_id = :sid"),
             {"tid": target_person_id, "sid": source_person_id},
         )
-        # "Not the source" now means "not the target", except for faces the
-        # user has since put on the target: that later, specific decision
-        # stands. The source's own rows go with it (ON DELETE CASCADE).
+        # A face now both matched to and rejected for the merged person: a
+        # machine match always loses to the user's "not this person"; between
+        # a confirmation and a rejection, the later decision wins. This is
+        # the same whichever way the two people are merged.
+        unassigned = [
+            row[0]
+            for row in self._session.execute(
+                text(
+                    "DELETE FROM face_person_matches m USING face_person_rejections r"
+                    " WHERE m.person_id = :tid AND r.person_id = :tid AND r.face_id = m.face_id"
+                    "   AND (NOT m.confirmed"
+                    "        OR COALESCE(m.confirmed_at, m.created_at) < r.created_at)"
+                    " RETURNING m.face_id"
+                ),
+                {"tid": target_person_id},
+            ).fetchall()
+        ]
+        if unassigned:
+            self._session.execute(
+                text("UPDATE faces SET person_id = NULL WHERE face_id = ANY(:fids)"),
+                {"fids": unassigned},
+            )
         self._session.execute(
             text(
-                "INSERT INTO face_person_rejections (face_id, person_id, created_at)"
-                " SELECT r.face_id, :tid, r.created_at FROM face_person_rejections r"
-                " WHERE r.person_id = :sid"
-                "   AND NOT EXISTS (SELECT 1 FROM face_person_matches m"
-                "                   WHERE m.face_id = r.face_id AND m.person_id = :tid)"
-                " ON CONFLICT DO NOTHING"
+                "DELETE FROM face_person_rejections r USING face_person_matches m"
+                " WHERE r.person_id = :tid AND m.person_id = :tid AND m.face_id = r.face_id"
             ),
-            {"tid": target_person_id, "sid": source_person_id},
+            {"tid": target_person_id},
         )
 
         # Recompute centroid on target
