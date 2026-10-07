@@ -59,9 +59,18 @@ embeddings = [
 # extra, search-by-image falls back to scene-only ranking. Workers
 # already pull insightface in via the worker bundle, so this extra is
 # only needed by the server-only install path.
+#
+# onnxruntime vs onnxruntime-gpu: both install the same `onnxruntime`
+# module, so exactly one is selected per platform (here and in workers).
+# The GPU build still ships the CPU provider, so CPU-only Linux hosts
+# keep working — InsightFaceProvider only requests CUDA when a GPU is
+# actually present. <1.27 because 1.27+ links CUDA 13, while torch's
+# default PyPI wheels ship the CUDA 12 libs that ORT loads at runtime;
+# raise the cap only together with a torch CUDA 13 build.
 face_recognition = [
     "insightface>=0.7.3",
-    "onnxruntime>=1.17.0",
+    "onnxruntime>=1.17.0; sys_platform != 'linux' or platform_machine != 'x86_64'",
+    "onnxruntime-gpu>=1.21.0,<1.27; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "opencv-python-headless>=4.8.0",
 ]
 # Workers: image/video processing and AI (runs on the client machine).
@@ -74,7 +83,8 @@ workers = [
     "opencv-python-headless>=4.8.0",
     "pyexiftool>=0.5",
     "insightface>=0.7.3",
-    "onnxruntime>=1.17.0",
+    "onnxruntime>=1.17.0; sys_platform != 'linux' or platform_machine != 'x86_64'",
+    "onnxruntime-gpu>=1.21.0,<1.27; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "faster-whisper>=1.0.0",
 ]
 # All extras: CLI + workers (for local development and client installs)
@@ -95,6 +105,17 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["src*"]
+
+# =============================================================================
+# uv
+# =============================================================================
+[tool.uv]
+# faster-whisper depends on plain `onnxruntime` (Silero VAD). On Linux x86_64
+# that would install it alongside onnxruntime-gpu, and the two overwrite each
+# other's `onnxruntime` module. Drop it there; onnxruntime-gpu provides it.
+override-dependencies = [
+    "onnxruntime>=1.17.0; sys_platform != 'linux' or platform_machine != 'x86_64'",
+]
 
 # =============================================================================
 # pytest

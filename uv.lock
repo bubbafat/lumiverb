@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14' and platform_machine != 's390x'",
@@ -9,6 +9,9 @@ resolution-markers = [
     "python_full_version < '3.13' and platform_machine != 's390x'",
     "python_full_version < '3.13' and platform_machine == 's390x'",
 ]
+
+[manifest]
+overrides = [{ name = "onnxruntime", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'", specifier = ">=1.17.0" }]
 
 [[package]]
 name = "albucore"
@@ -424,7 +427,7 @@ name = "cuda-bindings"
 version = "12.9.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cuda-pathfinder", marker = "platform_machine != 's390x'" },
+    { name = "cuda-pathfinder" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a9/c1/dabe88f52c3e3760d861401bb994df08f672ec893b8f7592dc91626adcf3/cuda_bindings-12.9.4-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:fda147a344e8eaeca0c6ff113d2851ffca8f7dfc0a6c932374ee5c47caa649c8", size = 12151019, upload-time = "2025-10-21T14:51:43.167Z" },
@@ -669,7 +672,7 @@ dependencies = [
     { name = "av" },
     { name = "ctranslate2" },
     { name = "huggingface-hub" },
-    { name = "onnxruntime" },
+    { name = "onnxruntime", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
     { name = "tokenizers" },
     { name = "tqdm" },
 ]
@@ -1173,7 +1176,8 @@ all = [
     { name = "httpx" },
     { name = "imagehash" },
     { name = "insightface" },
-    { name = "onnxruntime" },
+    { name = "onnxruntime", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
+    { name = "onnxruntime-gpu", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "open-clip-torch" },
     { name = "opencv-python-headless" },
     { name = "pyexiftool" },
@@ -1194,7 +1198,8 @@ dev = [
     { name = "imagehash" },
     { name = "insightface" },
     { name = "mypy" },
-    { name = "onnxruntime" },
+    { name = "onnxruntime", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
+    { name = "onnxruntime-gpu", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "open-clip-torch" },
     { name = "opencv-python-headless" },
     { name = "pyexiftool" },
@@ -1215,14 +1220,16 @@ embeddings = [
 ]
 face-recognition = [
     { name = "insightface" },
-    { name = "onnxruntime" },
+    { name = "onnxruntime", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
+    { name = "onnxruntime-gpu", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "opencv-python-headless" },
 ]
 workers = [
     { name = "faster-whisper" },
     { name = "imagehash" },
     { name = "insightface" },
-    { name = "onnxruntime" },
+    { name = "onnxruntime", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
+    { name = "onnxruntime-gpu", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "open-clip-torch" },
     { name = "opencv-python-headless" },
     { name = "pyexiftool" },
@@ -1246,8 +1253,10 @@ requires-dist = [
     { name = "lumiverb", extras = ["embeddings"], marker = "extra == 'workers'" },
     { name = "lumiverb", extras = ["workers"], marker = "extra == 'all'" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8" },
-    { name = "onnxruntime", marker = "extra == 'face-recognition'", specifier = ">=1.17.0" },
-    { name = "onnxruntime", marker = "extra == 'workers'", specifier = ">=1.17.0" },
+    { name = "onnxruntime", marker = "(platform_machine != 'x86_64' and extra == 'face-recognition') or (sys_platform != 'linux' and extra == 'face-recognition')", specifier = ">=1.17.0" },
+    { name = "onnxruntime", marker = "(platform_machine != 'x86_64' and extra == 'workers') or (sys_platform != 'linux' and extra == 'workers')", specifier = ">=1.17.0" },
+    { name = "onnxruntime-gpu", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'face-recognition'", specifier = ">=1.21.0,<1.27" },
+    { name = "onnxruntime-gpu", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'workers'", specifier = ">=1.21.0,<1.27" },
     { name = "open-clip-torch", marker = "extra == 'embeddings'", specifier = ">=3.3.0" },
     { name = "opencv-python-headless", marker = "extra == 'face-recognition'", specifier = ">=4.8.0" },
     { name = "opencv-python-headless", marker = "extra == 'workers'", specifier = ">=4.8.0" },
@@ -1621,7 +1630,7 @@ name = "nvidia-cudnn-cu12"
 version = "9.10.2.21"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12", marker = "platform_machine != 's390x'" },
+    { name = "nvidia-cublas-cu12" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ba/51/e123d997aa098c61d029f76663dedbfb9bc8dcf8c60cbd6adbe42f76d049/nvidia_cudnn_cu12-9.10.2.21-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:949452be657fa16687d0930933f032835951ef0892b37d2d53824d1a84dc97a8", size = 706758467, upload-time = "2025-06-06T21:54:08.597Z" },
@@ -1632,7 +1641,7 @@ name = "nvidia-cufft-cu12"
 version = "11.3.3.83"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12", marker = "platform_machine != 's390x'" },
+    { name = "nvidia-nvjitlink-cu12" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1f/13/ee4e00f30e676b66ae65b4f08cb5bcbb8392c03f54f2d5413ea99a5d1c80/nvidia_cufft_cu12-11.3.3.83-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:4d2dd21ec0b88cf61b62e6b43564355e5222e4a3fb394cac0db101f2dd0d4f74", size = 193118695, upload-time = "2025-03-07T01:45:27.821Z" },
@@ -1659,9 +1668,9 @@ name = "nvidia-cusolver-cu12"
 version = "11.7.3.90"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12", marker = "platform_machine != 's390x'" },
-    { name = "nvidia-cusparse-cu12", marker = "platform_machine != 's390x'" },
-    { name = "nvidia-nvjitlink-cu12", marker = "platform_machine != 's390x'" },
+    { name = "nvidia-cublas-cu12" },
+    { name = "nvidia-cusparse-cu12" },
+    { name = "nvidia-nvjitlink-cu12" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/85/48/9a13d2975803e8cf2777d5ed57b87a0b6ca2cc795f9a4f59796a910bfb80/nvidia_cusolver_cu12-11.7.3.90-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:4376c11ad263152bd50ea295c05370360776f8c3427b30991df774f9fb26c450", size = 267506905, upload-time = "2025-03-07T01:47:16.273Z" },
@@ -1672,7 +1681,7 @@ name = "nvidia-cusparse-cu12"
 version = "12.5.8.93"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12", marker = "platform_machine != 's390x'" },
+    { name = "nvidia-nvjitlink-cu12" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c2/f5/e1854cb2f2bcd4280c44736c93550cc300ff4b8c95ebe370d0aa7d2b473d/nvidia_cusparse_cu12-12.5.8.93-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:1ec05d76bbbd8b61b06a80e1eaf8cf4959c3d4ce8e711b65ebd0443bb0ebb13b", size = 288216466, upload-time = "2025-03-07T01:48:13.779Z" },
@@ -1779,6 +1788,24 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/7f/6f/60e2c0acea1e1ac09b3e794b5a19c166eebf91c0b860b3e6db8e74983fda/onnxruntime-1.24.4-cp314-cp314-win_arm64.whl", hash = "sha256:3f0b910e86b759a4732663ec61fd57ac42ee1b0066f68299de164220b660546d", size = 12594365, upload-time = "2026-03-17T22:05:35.795Z" },
     { url = "https://files.pythonhosted.org/packages/cf/68/0c05d10f8f6c40fe0912ebec0d5a33884aaa2af2053507e864dab0883208/onnxruntime-1.24.4-cp314-cp314t-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:aa12ddc54c9c4594073abcaa265cd9681e95fb89dae982a6f508a794ca42e661", size = 15176889, upload-time = "2026-03-17T22:03:48.021Z" },
     { url = "https://files.pythonhosted.org/packages/6c/1d/1666dc64e78d8587d168fec4e3b7922b92eb286a2ddeebcf6acb55c7dc82/onnxruntime-1.24.4-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:e1cc6a518255f012134bc791975a6294806be9a3b20c4a54cca25194c90cf731", size = 17247021, upload-time = "2026-03-17T22:04:52.377Z" },
+]
+
+[[package]]
+name = "onnxruntime-gpu"
+version = "1.26.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "flatbuffers" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "protobuf" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/94/fd/59bee7cffaa435da44fefdeb63e29c61de4dbfa4b279852f59cd02c042ae/onnxruntime_gpu-1.26.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:3c01119ed4d9449d60367fa8ccffcd02bd3fe736754284e4b198d131f54edad6", size = 276971796, upload-time = "2026-05-08T19:15:46.192Z" },
+    { url = "https://files.pythonhosted.org/packages/dd/97/fe8979f44b9275654b42f7bb556e30789b71a1b22998c83b540df2b1b774/onnxruntime_gpu-1.26.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:cfda2fad535595bfc3e570eb588092717711dcb2957656d814695e0c9ceb1508", size = 276974871, upload-time = "2026-05-08T19:15:58.052Z" },
+    { url = "https://files.pythonhosted.org/packages/89/96/360328e3c463f7ea08e853c4239c397e83363dd0204de71a710dc1a544bd/onnxruntime_gpu-1.26.0-cp313-cp313t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:bcf6f347cad9f88a9a625c2b352cf9de927528aedb627ebbc089a201f1990b94", size = 276992052, upload-time = "2026-05-08T19:16:09.892Z" },
+    { url = "https://files.pythonhosted.org/packages/fd/c8/aa2dc0e79bba577f37d5448bcb32fea79977e07506684d8138c19a0f1077/onnxruntime_gpu-1.26.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:9e6e4fb1ec9ae1cf456534d9115f106ab2a1ae96fa513b4ed0f4795302b4a2c6", size = 276978254, upload-time = "2026-05-08T19:16:22.096Z" },
+    { url = "https://files.pythonhosted.org/packages/97/91/93ffe5431d154989f5e04864a25a97eea480997d771232bcbbc538188241/onnxruntime_gpu-1.26.0-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:56dc7b73954ff4bdc71f5b8ab306b6f61be5d007881b6ef423a609e2b9cd088b", size = 276991545, upload-time = "2026-05-08T19:16:33.347Z" },
 ]
 
 [[package]]

@@ -19,6 +19,25 @@ MIN_RELATIVE_SIZE = 0.15        # must be ≥ 15% area of the largest face
 MIN_LAPLACIAN_VARIANCE = 15.0   # sharpness floor (tune from logged values)
 
 
+def _cuda_device_available() -> bool:
+    """True if an NVIDIA driver with at least one GPU is present.
+
+    onnxruntime-gpu reports CUDAExecutionProvider as available whenever it was
+    built with it, including on GPU-less Linux hosts (the VPS). Requesting it
+    there just logs an error and falls back to CPU, so check the driver first.
+    """
+    import ctypes
+
+    try:
+        libcuda = ctypes.CDLL("libcuda.so.1")
+    except OSError:
+        return False
+    count = ctypes.c_int(0)
+    if libcuda.cuInit(0) != 0 or libcuda.cuDeviceGetCount(ctypes.byref(count)) != 0:
+        return False
+    return count.value > 0
+
+
 @dataclass
 class FaceDetection:
     """Single detected face with bounding box, confidence, and embedding."""
@@ -33,7 +52,8 @@ class InsightFaceProvider:
     """
     Detects faces and generates 512-dim ArcFace embeddings using InsightFace buffalo_l.
 
-    Lazy-loads model on first call (thread-safe). Runs on CPU via onnxruntime.
+    Lazy-loads model on first call (thread-safe). Runs via onnxruntime on CUDA
+    (Linux + NVIDIA GPU), CoreML (macOS), or CPU.
     """
 
     def __init__(self) -> None:
@@ -63,7 +83,10 @@ class InsightFaceProvider:
 
                     # Build provider list with options for GPU/ANE acceleration
                     providers: list = []
-                    if "CUDAExecutionProvider" in available:
+                    if "CUDAExecutionProvider" in available and _cuda_device_available():
+                        # cuDNN/cuBLAS come from the nvidia-* wheels torch installs;
+                        # ORT only finds them once preloaded, else it silently uses CPU.
+                        ort.preload_dlls()
                         providers.append("CUDAExecutionProvider")
                     if "CoreMLExecutionProvider" in available:
                         # MLComputeUnits=ALL enables GPU + ANE, not just CPU
@@ -76,7 +99,8 @@ class InsightFaceProvider:
                     )
                     app.prepare(ctx_id=0, det_size=(640, 640))
                     self._app = app
-                    active = providers[0] if providers else "unknown"
+                    # What the session actually got — ORT falls back to CPU silently.
+                    active = app.det_model.session.get_providers()[0]
                     logger.info("Loaded InsightFace model %s (%s)", MODEL_VERSION, active)
         return self._app
 
