@@ -111,6 +111,34 @@ def _vec(i: int) -> str:
     return "[" + ",".join(str(x) for x in _unit(i)) + "]"
 
 
+def _mix(i: int, j: int, w: float) -> list[float]:
+    """normalize(_unit(i) + w * _unit(j)): a face that looks partly like j."""
+    v = _unit(i)
+    v[j % 512] = w
+    norm = sum(x * x for x in v) ** 0.5
+    return [x / norm for x in v]
+
+
+def _vec_of(values: list[float]) -> str:
+    return "[" + ",".join(str(x) for x in values) + "]"
+
+
+def _seed_face_vec(tenant_url: str, asset_id: str, box: dict, emb: list[float]) -> str:
+    face_id = "face_" + uuid.uuid4().hex[:20]
+    with _db(tenant_url) as s:
+        s.execute(
+            text(
+                "INSERT INTO faces (face_id, asset_id, bounding_box_json, detection_confidence,"
+                " detection_model, detection_model_version, embedding_vector, created_at)"
+                " VALUES (:fid, :aid, CAST(:box AS jsonb), 0.95, 'insightface', 'buffalo_l',"
+                "         CAST(:v AS vector), NOW())"
+            ),
+            {"fid": face_id, "aid": asset_id, "box": _json(box), "v": _vec_of(emb)},
+        )
+        s.commit()
+    return face_id
+
+
 def _drifted(i: int) -> list[float]:
     """The same face as _unit(i) from a different angle: close enough to pair
     on re-detection (distance ~0.47 < 0.6), too far to auto-assign (>= 0.45)."""
@@ -314,12 +342,12 @@ def test_redetect_drops_machine_made_data(env) -> None:
     asset_id = _seed_asset(tenant_url, library_id)
     person_id = _seed_person(tenant_url, emb=5)
     gone = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=5)
-    refound = _seed_face(tenant_url, asset_id, _box(0.50, 0.50), emb=5)
+    refound = _seed_face_vec(tenant_url, asset_id, _box(0.50, 0.50), _mix(5, 6, 1.6))
     _seed_match(tenant_url, gone, person_id, confirmed=False, confidence=0.9)
     _seed_match(tenant_url, refound, person_id, confirmed=False, confidence=0.9)
 
-    # The re-found face now looks less like P: its auto match isn't re-made.
-    result = _redetect(client, headers, asset_id, [(_box(0.50, 0.50), _drifted(5))])
+    # The re-found face now looks a little less like P: no longer auto-matched.
+    result = _redetect(client, headers, asset_id, [(_box(0.50, 0.50), _mix(5, 6, 1.7))])
 
     assert result["face_ids"] == [refound]
     assert not _face_exists(tenant_url, gone)
@@ -362,6 +390,54 @@ def test_mirrored_photo_keeps_names_with_their_faces(env) -> None:
     assert result["face_ids"] == [bob_face, alice_face]
     assert _match(tenant_url, alice_face) == (alice, True)
     assert _match(tenant_url, bob_face) == (bob, True)
+
+
+@pytest.mark.slow
+def test_siblings_side_by_side_keep_their_names(env) -> None:
+    """Two similar-looking people (embedding distance 0.5), both boxes
+    shifted a little: each keeps their own name, not the neighbour's."""
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    a_emb = _unit(40)
+    b_emb = [0.0] * 512
+    b_emb[40], b_emb[41] = 0.5, 0.75 ** 0.5  # cosine 0.5 with a_emb
+    a_person, b_person = _seed_person(tenant_url, emb=40), _seed_person(tenant_url, emb=41)
+    a_face = _seed_face_vec(tenant_url, asset_id, _box(0.30, 0.10), a_emb)
+    b_face = _seed_face_vec(tenant_url, asset_id, _box(0.40, 0.10), b_emb)
+    _seed_match(tenant_url, a_face, a_person, confirmed=True, confidence=None)
+    _seed_match(tenant_url, b_face, b_person, confirmed=True, confidence=None)
+
+    def near(v: list[float]) -> list[float]:
+        w = list(v)
+        w[200] = 0.05
+        n = sum(x * x for x in w) ** 0.5
+        return [x / n for x in w]
+
+    result = _redetect(
+        client, headers, asset_id, [(_box(0.36, 0.10), near(a_emb)), (_box(0.46, 0.10), near(b_emb))]
+    )
+
+    assert result["face_ids"] == [a_face, b_face]
+    assert _match(tenant_url, a_face) == (a_person, True)
+    assert _match(tenant_url, b_face) == (b_person, True)
+
+
+@pytest.mark.slow
+def test_lookalike_next_to_a_lost_face_does_not_inherit_it(env) -> None:
+    """Alice isn't found this time; her lookalike (distance 0.5) overlaps her
+    old box. The lookalike is a new face, not Alice."""
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    alice = _seed_person(tenant_url, emb=42)
+    alice_face = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=42)
+    _seed_match(tenant_url, alice_face, alice, confirmed=True, confidence=None)
+    lookalike = [0.0] * 512
+    lookalike[42], lookalike[43] = 0.5, 0.75 ** 0.5
+
+    result = _redetect(client, headers, asset_id, [(_box(0.22, 0.10), lookalike)])
+
+    assert result["face_ids"] != [alice_face]
+    assert _match(tenant_url, alice_face) == (alice, True)
 
 
 @pytest.mark.slow
@@ -408,7 +484,7 @@ def test_redetect_clears_person_when_machine_match_is_dropped(env) -> None:
     asset_id = _seed_asset(tenant_url, library_id)
     other_asset = _seed_asset(tenant_url, library_id)
     person_id = _seed_person(tenant_url, emb=25)
-    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=25)
+    face_id = _seed_face_vec(tenant_url, asset_id, _box(0.10, 0.10), _mix(25, 26, 1.6))
     backup = _seed_face(tenant_url, other_asset, _box(0.10, 0.10), emb=25)
     _seed_match(tenant_url, face_id, person_id, confirmed=False, confidence=0.9)
     _seed_match(tenant_url, backup, person_id, confirmed=False, confidence=0.9)
@@ -419,8 +495,8 @@ def test_redetect_clears_person_when_machine_match_is_dropped(env) -> None:
         )
         s.commit()
 
-    # Same box; the new embedding is close enough to pair but far from P.
-    result = _redetect(client, headers, asset_id, [(_box(0.10, 0.10), _drifted(25))])
+    # Same face, same box; the new embedding is a little further from P.
+    result = _redetect(client, headers, asset_id, [(_box(0.10, 0.10), _mix(25, 26, 1.7))])
 
     assert result["face_ids"] == [face_id]
     assert _match(tenant_url, face_id) is None
@@ -446,6 +522,30 @@ def test_rejection_survives_redetect_with_a_different_box(env) -> None:
 
     assert result["face_ids"] == [face_id]
     assert _match(tenant_url, face_id) is None
+
+
+@pytest.mark.slow
+def test_merge_keeps_target_confirmation_over_source_rejection(env) -> None:
+    """F was removed from S, then confirmed as T. Merging S into T must not
+    turn "not S" into "not T" and drop T's confirmed face."""
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    source = _seed_person(tenant_url, emb=44)
+    target = _seed_person(tenant_url, emb=45)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=45)
+    _seed_match(tenant_url, face_id, source, confirmed=True, confidence=None)
+    assert client.delete(f"/v1/faces/{face_id}/assign", headers=headers).status_code == 204
+    r = client.post(f"/v1/faces/{face_id}/assign", json={"person_id": target}, headers=headers)
+    assert r.status_code == 200, r.text
+
+    r = client.post(f"/v1/people/{target}/merge", json={"source_person_id": source}, headers=headers)
+    assert r.status_code == 200, r.text
+
+    assert _match(tenant_url, face_id) == (target, True)
+    with _db(tenant_url) as s:
+        assert s.execute(
+            text("SELECT COUNT(*) FROM face_person_rejections WHERE face_id = :f"), {"f": face_id}
+        ).scalar() == 0
 
 
 @pytest.mark.slow
@@ -657,6 +757,28 @@ def test_empty_trash_without_ids_spares_missing_files(env) -> None:
     back = _ingest(client, headers, library_id, "trash/spare-missing.jpg")
     assert back.status_code == 200
     assert back.json()["asset_id"] == missing  # the same asset, restored
+
+
+@pytest.mark.slow
+def test_trash_matching_filter_is_user_trash(env) -> None:
+    """Adding an exclude filter with "trash matching" is the user trashing
+    those assets: they stay trashed when the filter is removed."""
+    client, headers, library_id, _ = env
+    rel_path = "filtered/junk.jpg"
+    asset_id = _ingest(client, headers, library_id, rel_path).json()["asset_id"]
+
+    r = client.post(
+        f"/v1/libraries/{library_id}/filters",
+        json={"type": "exclude", "pattern": "filtered/**", "trash_matching": True},
+        headers=headers,
+    )
+    assert r.status_code == 201, r.text
+    filter_id = r.json()["filter_id"]
+    assert client.get(f"/v1/assets/{asset_id}", headers=headers).status_code == 404
+    client.delete(f"/v1/libraries/{library_id}/filters/{filter_id}", headers=headers)
+
+    assert _ignored(client, headers, library_id).get(rel_path) == "trashed"
+    assert _ingest(client, headers, library_id, rel_path).status_code == 409
 
 
 @pytest.mark.slow

@@ -2805,14 +2805,17 @@ class FaceRepository:
     # Re-detection pairs each new detection with the old face it re-finds, so
     # the face keeps its face_id and everything a person attached to it
     # (confirmed assignment, dismissal, "not this person"). Overlapping boxes
-    # pair only if the embeddings agree: the person standing next to (or, in
-    # a mirrored photo, in place of) a named face must not inherit its name.
-    # With both embeddings, a small overlap is enough (a tight Apple Vision
-    # box inside a loose InsightFace one); without them, the floor is higher.
-    # Anything left can still pair by embedding alone.
+    # pair only if the embeddings say it's the same face, and the closest
+    # embedding wins: the person standing next to (or, in a mirrored photo,
+    # in place of) a named face, even a lookalike sibling, must not inherit
+    # its name. The same face seen by two detectors in the same photo is far
+    # closer than 0.4; siblings are usually further. With both embeddings a
+    # small overlap is enough (a tight Apple Vision box inside a loose
+    # InsightFace one); without them, the floor is higher. Anything left
+    # can still pair by embedding alone.
     REDETECT_MIN_IOU = 0.1
     REDETECT_MIN_IOU_NO_EMBEDDING = 0.3
-    REDETECT_MAX_EMBEDDING_DISTANCE = 0.6
+    REDETECT_MAX_EMBEDDING_DISTANCE = 0.4
 
     def submit_faces(
         self,
@@ -3008,10 +3011,11 @@ class FaceRepository:
     def _pair_redetected_faces(cls, old_rows: list, faces: list[dict]) -> dict[int, str]:
         """Pair new detections with the old faces they re-find.
 
-        Greedy one-to-one. First by box overlap, but only where the
-        embeddings agree (distance < REDETECT_MAX_EMBEDDING_DISTANCE) or
-        aren't available (then IoU >= REDETECT_MIN_IOU_NO_EMBEDDING); then
-        by embedding distance alone (< AUTO_ASSIGN_THRESHOLD) for whatever
+        Greedy one-to-one. First overlapping boxes whose embeddings agree
+        (distance < REDETECT_MAX_EMBEDDING_DISTANCE), closest embedding
+        first and overlap as the tie-break; boxes without embeddings pair on
+        overlap alone (IoU >= REDETECT_MIN_IOU_NO_EMBEDDING), after those.
+        Then embedding distance alone (< AUTO_ASSIGN_THRESHOLD) for whatever
         is left. Returns {index into faces: old face_id}.
         """
         import numpy as np
@@ -3052,8 +3056,9 @@ class FaceRepository:
                 else:
                     ok = iou >= cls.REDETECT_MIN_IOU and dist < cls.REDETECT_MAX_EMBEDDING_DISTANCE
                 if ok:
-                    overlaps.append((iou, oi, ni))
-        take(sorted(overlaps, reverse=True))
+                    rank = dist if dist is not None else cls.REDETECT_MAX_EMBEDDING_DISTANCE
+                    overlaps.append((rank, -iou, oi, ni))
+        take([(rank, oi, ni) for rank, _, oi, ni in sorted(overlaps)])
 
         close = []
         for oi in range(len(old_rows)):
@@ -3866,6 +3871,36 @@ class PersonRepository:
         if target is None:
             return None
 
+        # Faces moving over from the source. A face the target already
+        # rejected stays rejected: the merge is a bulk action and doesn't
+        # override a per-face decision, so that face is left unassigned.
+        moving = [
+            row[0]
+            for row in self._session.execute(
+                text("SELECT face_id FROM face_person_matches WHERE person_id = :sid"),
+                {"sid": source_person_id},
+            ).fetchall()
+        ]
+        contradicted = [
+            row[0]
+            for row in self._session.execute(
+                text(
+                    "SELECT face_id FROM face_person_rejections"
+                    " WHERE person_id = :tid AND face_id = ANY(:fids)"
+                ),
+                {"tid": target_person_id, "fids": moving},
+            ).fetchall()
+        ] if moving else []
+        if contradicted:
+            self._session.execute(
+                text("DELETE FROM face_person_matches WHERE face_id = ANY(:fids)"),
+                {"fids": contradicted},
+            )
+            self._session.execute(
+                text("UPDATE faces SET person_id = NULL WHERE face_id = ANY(:fids)"),
+                {"fids": contradicted},
+            )
+
         # Reassign face_person_matches from source to target
         self._session.execute(
             text("UPDATE face_person_matches SET person_id = :tid WHERE person_id = :sid"),
@@ -3876,35 +3911,20 @@ class PersonRepository:
             text("UPDATE faces SET person_id = :tid WHERE person_id = :sid"),
             {"tid": target_person_id, "sid": source_person_id},
         )
-        # "Not the source" now means "not the target". The source's own rows
-        # go with it (ON DELETE CASCADE). A face the target already rejected
-        # stays rejected: the merge is a bulk action and doesn't override a
-        # per-face decision, so that face is left unassigned.
+        # "Not the source" now means "not the target", except for faces the
+        # user has since put on the target: that later, specific decision
+        # stands. The source's own rows go with it (ON DELETE CASCADE).
         self._session.execute(
             text(
                 "INSERT INTO face_person_rejections (face_id, person_id, created_at)"
-                " SELECT face_id, :tid, created_at FROM face_person_rejections"
-                " WHERE person_id = :sid ON CONFLICT DO NOTHING"
+                " SELECT r.face_id, :tid, r.created_at FROM face_person_rejections r"
+                " WHERE r.person_id = :sid"
+                "   AND NOT EXISTS (SELECT 1 FROM face_person_matches m"
+                "                   WHERE m.face_id = r.face_id AND m.person_id = :tid)"
+                " ON CONFLICT DO NOTHING"
             ),
             {"tid": target_person_id, "sid": source_person_id},
         )
-        contradicted = [
-            row[0]
-            for row in self._session.execute(
-                text(
-                    "DELETE FROM face_person_matches m USING face_person_rejections r"
-                    " WHERE r.face_id = m.face_id AND r.person_id = m.person_id"
-                    " AND m.person_id = :tid"
-                    " RETURNING m.face_id"
-                ),
-                {"tid": target_person_id},
-            ).fetchall()
-        ]
-        if contradicted:
-            self._session.execute(
-                text("UPDATE faces SET person_id = NULL WHERE face_id = ANY(:fids)"),
-                {"fids": contradicted},
-            )
 
         # Recompute centroid on target
         self._recompute_centroid(target_person_id)
