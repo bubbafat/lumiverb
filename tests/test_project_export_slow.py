@@ -36,7 +36,7 @@ FACET = {
 
 @pytest.fixture(scope="module")
 def env(tmp_path_factory):
-    """Yields (client, headers, library_id); the library root is /Volumes/DAS."""
+    """Yields (client, headers, library_id, tenant_url); the library root is /Volumes/DAS."""
     storage = LocalStorage(str(tmp_path_factory.mktemp("export_storage")))
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -83,7 +83,7 @@ def env(tmp_path_factory):
                     headers=headers,
                 )
                 assert r.status_code == 200, r.text
-                yield client, headers, r.json()["library_id"]
+                yield client, headers, r.json()["library_id"], tenant_url
 
     _engines.clear()
 
@@ -120,7 +120,7 @@ def _export(client, headers, project_id, **params):
 @pytest.fixture(scope="module")
 def job(env):
     """A project with two videos (one unprobed) and a still."""
-    client, headers, library_id = env
+    client, headers, library_id, _ = env
     probed = _ingest(client, headers, library_id, "shoot/A001 take.mov", "video", FACET)
     unprobed = _ingest(client, headers, library_id, "shoot/A002.mov", "video")
     still = _ingest(client, headers, library_id, "shoot/still.jpg", "image")
@@ -129,7 +129,7 @@ def job(env):
 
 @pytest.mark.slow
 def test_formats_endpoint(env) -> None:
-    client, headers, _ = env
+    client, headers, _, _ = env
 
     r = client.get("/v1/export/formats", headers=headers)
 
@@ -142,7 +142,7 @@ def test_formats_endpoint(env) -> None:
 
 @pytest.mark.slow
 def test_fcp7_export_points_at_originals(env, job) -> None:
-    client, headers, _ = env
+    client, headers, _, _ = env
 
     r = _export(client, headers, job, format="fcp7")
 
@@ -164,7 +164,7 @@ def test_fcp7_export_points_at_originals(env, job) -> None:
 
 @pytest.mark.slow
 def test_prefix_replaces_library_root(env, job) -> None:
-    client, headers, _ = env
+    client, headers, _, _ = env
 
     r = _export(client, headers, job, format="fcp7", prefix="/Volumes/Travel SSD/")
 
@@ -174,7 +174,7 @@ def test_prefix_replaces_library_root(env, job) -> None:
 
 @pytest.mark.slow
 def test_fcpxml_export(env, job) -> None:
-    client, headers, _ = env
+    client, headers, _, _ = env
 
     r = _export(client, headers, job, format="fcpxml")
 
@@ -187,14 +187,14 @@ def test_fcpxml_export(env, job) -> None:
 
 @pytest.mark.slow
 def test_unknown_format_is_400(env, job) -> None:
-    client, headers, _ = env
+    client, headers, _, _ = env
 
     assert _export(client, headers, job, format="edl").status_code == 400
 
 
 @pytest.mark.slow
 def test_archived_project_still_exports(env) -> None:
-    client, headers, library_id = env
+    client, headers, library_id, _ = env
     asset = _ingest(client, headers, library_id, "archive/clip.mov", "video", FACET)
     project_id = _project(client, headers, "Done job", [asset])
     client.patch(f"/v1/projects/{project_id}", json={"status": "archived"}, headers=headers)
@@ -207,7 +207,7 @@ def test_archived_project_still_exports(env) -> None:
 
 @pytest.mark.slow
 def test_trashed_clips_are_left_out(env) -> None:
-    client, headers, library_id = env
+    client, headers, library_id, _ = env
     keep = _ingest(client, headers, library_id, "trash/keep.mov", "video", FACET)
     gone = _ingest(client, headers, library_id, "trash/gone.mov", "video", FACET)
     project_id = _project(client, headers, "With trash", [keep, gone])
@@ -221,7 +221,7 @@ def test_trashed_clips_are_left_out(env) -> None:
 
 @pytest.mark.slow
 def test_filename_is_sanitized(env) -> None:
-    client, headers, library_id = env
+    client, headers, library_id, _ = env
     asset = _ingest(client, headers, library_id, "names/clip.mov", "video", FACET)
     project_id = _project(client, headers, 'Job: "A/B" test', [asset])
 
@@ -232,6 +232,38 @@ def test_filename_is_sanitized(env) -> None:
 
 @pytest.mark.slow
 def test_unknown_project_is_404(env) -> None:
-    client, headers, _ = env
+    client, headers, _, _ = env
 
     assert _export(client, headers, "prj_nope", format="fcp7").status_code == 404
+
+
+@pytest.mark.slow
+def test_smart_project_over_1000_clips_exports_whole(env) -> None:
+    """The phase 1 gate: no 1,000-clip cap anywhere between the project and the file."""
+    from sqlalchemy import create_engine, text
+
+    client, headers, _, tenant_url = env
+    r = client.post("/v1/libraries", json={"name": "Big", "root_path": "/Volumes/Big"}, headers=headers)
+    big = r.json()["library_id"]
+    engine = create_engine(tenant_url)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO assets (asset_id, library_id, rel_path, file_size, media_type,"
+            " availability, status, duration_sec, created_at, updated_at)"
+            " SELECT 'ast_big_' || n, :lib, 'clips/' || lpad(n::text, 5, '0') || '.mov', 1000,"
+            "        'video', 'online', 'proxy_ready', 2.0, now(), now()"
+            " FROM generate_series(1, 1050) AS n"
+        ), {"lib": big})
+    engine.dispose()
+    project_id = client.post(
+        "/v1/projects",
+        json={"name": "Everything", "type": "smart",
+              "saved_query": {"filters": [{"type": "library", "value": big}]}},
+        headers=headers,
+    ).json()["project_id"]
+
+    r = _export(client, headers, project_id, format="fcp7")
+
+    assert r.status_code == 200, r.text
+    names = [c.findtext("name") for c in ET.fromstring(r.content).iter("clip")]
+    assert len(names) == len(set(names)) == 1050
