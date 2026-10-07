@@ -609,6 +609,57 @@ def test_missing_file_is_restored_when_it_reappears(env, reason) -> None:
 
 
 @pytest.mark.slow
+def test_user_can_trash_a_missing_asset(env) -> None:
+    """A file the scanner marked missing can still be trashed by the user,
+    and then it stays trashed when the drive comes back."""
+    client, headers, library_id, _ = env
+    rel_path = "trash/missing-then-trashed.jpg"
+    asset_id = _ingest(client, headers, library_id, rel_path).json()["asset_id"]
+    client.request("DELETE", "/v1/assets", json={"asset_ids": [asset_id], "reason": "missing"},
+                   headers=headers)
+
+    assert client.delete(f"/v1/assets/{asset_id}", headers=headers).status_code == 204
+
+    assert _ignored(client, headers, library_id).get(rel_path) == "trashed"
+    assert _ingest(client, headers, library_id, rel_path).status_code == 409
+
+
+@pytest.mark.slow
+def test_batch_user_trash_upgrades_missing(env) -> None:
+    client, headers, library_id, _ = env
+    rel_path = "trash/batch-upgrade.jpg"
+    asset_id = _ingest(client, headers, library_id, rel_path).json()["asset_id"]
+    client.request("DELETE", "/v1/assets", json={"asset_ids": [asset_id], "reason": "missing"},
+                   headers=headers)
+
+    r = client.request("DELETE", "/v1/assets", json={"asset_ids": [asset_id], "reason": "user"},
+                       headers=headers)
+
+    assert r.json()["trashed"] == [asset_id]
+    assert _ignored(client, headers, library_id).get(rel_path) == "trashed"
+
+
+@pytest.mark.slow
+def test_empty_trash_without_ids_spares_missing_files(env) -> None:
+    """Emptying the trash purges what the user trashed, never files that are
+    only missing (an unplugged drive): those keep their human data."""
+    client, headers, library_id, _ = env
+    missing = _ingest(client, headers, library_id, "trash/spare-missing.jpg").json()["asset_id"]
+    trashed = _ingest(client, headers, library_id, "trash/spare-trashed.jpg").json()["asset_id"]
+    client.request("DELETE", "/v1/assets", json={"asset_ids": [missing], "reason": "missing"},
+                   headers=headers)
+    client.delete(f"/v1/assets/{trashed}", headers=headers)
+
+    r = client.request("DELETE", "/v1/trash/empty", json={}, headers=headers)
+
+    assert r.status_code == 200, r.text
+    assert _ignored(client, headers, library_id).get("trash/spare-trashed.jpg") == "emptied"
+    back = _ingest(client, headers, library_id, "trash/spare-missing.jpg")
+    assert back.status_code == 200
+    assert back.json()["asset_id"] == missing  # the same asset, restored
+
+
+@pytest.mark.slow
 def test_emptied_trash_is_remembered_until_unignored(env) -> None:
     client, headers, library_id, _ = env
     rel_path = "trash/emptied.jpg"

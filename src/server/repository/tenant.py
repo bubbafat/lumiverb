@@ -789,9 +789,15 @@ class AssetRepository:
         the file wasn't found and ingest restores it if it reappears.
         """
         asset = self._session.get(Asset, asset_id)
-        if asset is None or asset.deleted_at is not None:
+        if asset is None:
             return False
-        asset.deleted_at = utcnow()
+        if asset.deleted_at is not None:
+            # Only the user's trash can be laid over a missing file (so it
+            # stays trashed when the drive comes back); anything else is a no-op.
+            if reason != "user" or asset.deleted_reason == "user":
+                return False
+        else:
+            asset.deleted_at = utcnow()
         asset.deleted_reason = reason
         self._session.add(asset)
         self._session.commit()
@@ -807,8 +813,14 @@ class AssetRepository:
         result = self._session.execute(
             text(
                 """
-                UPDATE assets SET deleted_at = :now, deleted_reason = :reason
-                WHERE asset_id = ANY(:ids) AND deleted_at IS NULL
+                UPDATE assets
+                SET deleted_at = COALESCE(deleted_at, :now), deleted_reason = :reason
+                WHERE asset_id = ANY(:ids)
+                  AND (
+                    deleted_at IS NULL
+                    -- the user's trash can be laid over a missing file
+                    OR (CAST(:reason AS text) = 'user' AND deleted_reason IS DISTINCT FROM 'user')
+                  )
                 RETURNING asset_id
                 """
             ),
@@ -881,10 +893,17 @@ class AssetRepository:
         asset_ids: list[str] | None = None,
         trashed_before: datetime | None = None,
     ) -> list[Asset]:
-        """Return trashed assets matching the given filters."""
+        """Return trashed assets matching the given filters.
+
+        Without explicit asset_ids, only the user's trash: assets that are
+        merely missing on disk (an unplugged drive) keep their human data
+        until someone purges them by id.
+        """
         stmt = select(Asset).where(Asset.deleted_at.isnot(None))
         if asset_ids is not None:
             stmt = stmt.where(Asset.asset_id.in_(asset_ids))
+        else:
+            stmt = stmt.where(Asset.deleted_reason == "user")
         if trashed_before is not None:
             stmt = stmt.where(Asset.deleted_at < trashed_before)
         return list(self._session.exec(stmt).all())
