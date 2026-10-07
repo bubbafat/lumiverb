@@ -94,11 +94,13 @@ def _jpeg() -> bytes:
     return buf.getvalue()
 
 
-def _ingest(client, headers, library_id, rel_path, media_type, facet=None) -> str:
+def _ingest(client, headers, library_id, rel_path, media_type, facet=None, exif=None) -> str:
     data = {"library_id": library_id, "rel_path": rel_path, "file_size": "5000",
             "media_type": media_type}
     if facet:
         data["video_facet"] = json.dumps(facet)
+    if exif:
+        data["exif"] = json.dumps(exif)
     r = client.post(
         "/v1/ingest", headers=headers,
         files={"proxy": ("p.jpg", io.BytesIO(_jpeg()), "image/jpeg")}, data=data,
@@ -122,7 +124,9 @@ def job(env):
     """A project with two videos (one unprobed) and a still."""
     client, headers, library_id, _ = env
     probed = _ingest(client, headers, library_id, "shoot/A001 take.mov", "video", FACET)
-    unprobed = _ingest(client, headers, library_id, "shoot/A002.mov", "video")
+    # Not probed, but its EXIF gives a duration: exported at the 30 fps fallback.
+    unprobed = _ingest(client, headers, library_id, "shoot/A002.mov", "video",
+                       exif={"duration_sec": 2.0})
     still = _ingest(client, headers, library_id, "shoot/still.jpg", "image")
     return _project(client, headers, "Customer Video 123", [probed, unprobed, still])
 
@@ -152,12 +156,12 @@ def test_fcp7_export_points_at_originals(env, job) -> None:
     assert r.headers["x-lumiverb-skipped-stills"] == "1"
     root = ET.fromstring(r.content)
     assert root.findtext("bin/name") == "Customer Video 123"
-    urls = sorted(f.findtext("pathurl") for f in root.iter("file"))
+    urls = sorted(f.findtext("pathurl") for f in root.iter("file") if f.find("pathurl") is not None)
     assert urls == [
         "file://localhost/Volumes/DAS/shoot/A001%20take.mov",
         "file://localhost/Volumes/DAS/shoot/A002.mov",
     ]
-    probed = next(c for c in root.iter("clip") if c.findtext("name") == "A001 take.mov")
+    probed = next(c for c in root.findall("bin/children/clip") if c.findtext("name") == "A001 take.mov")
     assert probed.findtext("duration") == "212"
     assert probed.findtext("rate/ntsc") == "TRUE"
 
@@ -168,7 +172,8 @@ def test_prefix_replaces_library_root(env, job) -> None:
 
     r = _export(client, headers, job, format="fcp7", prefix="/Volumes/Travel SSD/")
 
-    urls = sorted(f.findtext("pathurl") for f in ET.fromstring(r.content).iter("file"))
+    urls = sorted(f.findtext("pathurl") for f in ET.fromstring(r.content).iter("file")
+                  if f.find("pathurl") is not None)
     assert urls[0] == "file://localhost/Volumes/Travel%20SSD/shoot/A001%20take.mov"
 
 
@@ -202,7 +207,7 @@ def test_archived_project_still_exports(env) -> None:
     r = _export(client, headers, project_id, format="fcp7")
 
     assert r.status_code == 200, r.text
-    assert len(list(ET.fromstring(r.content).iter("clip"))) == 1
+    assert len(ET.fromstring(r.content).findall("bin/children/clip")) == 1
 
 
 @pytest.mark.slow
@@ -215,7 +220,7 @@ def test_trashed_clips_are_left_out(env) -> None:
 
     r = _export(client, headers, project_id, format="fcp7")
 
-    names = [c.findtext("name") for c in ET.fromstring(r.content).iter("clip")]
+    names = [c.findtext("name") for c in ET.fromstring(r.content).findall("bin/children/clip")]
     assert names == ["keep.mov"]
 
 
@@ -265,5 +270,80 @@ def test_smart_project_over_1000_clips_exports_whole(env) -> None:
     r = _export(client, headers, project_id, format="fcp7")
 
     assert r.status_code == 200, r.text
-    names = [c.findtext("name") for c in ET.fromstring(r.content).iter("clip")]
+    names = [c.findtext("name") for c in ET.fromstring(r.content).findall("bin/children/clip")]
     assert len(names) == len(set(names)) == 1050
+
+
+# ---------------------------------------------------------------------------
+# Hardening from the phase 1 validation review
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_names_outside_latin1_export(env) -> None:
+    client, headers, library_id, _ = env
+    asset = _ingest(client, headers, library_id, "names/u.mov", "video", FACET)
+    name = "Mike’s wedding — 東京"
+    project_id = _project(client, headers, name, [asset])
+
+    r = _export(client, headers, project_id, format="fcp7")
+
+    assert r.status_code == 200, r.text
+    disposition = r.headers["content-disposition"]
+    assert disposition.isascii()
+    from urllib.parse import unquote
+    assert unquote(disposition.split("filename*=UTF-8''", 1)[1]) == name + ".xml"
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("prefix", ["Footage", "~/Footage", "D:\\\\Footage", "../up"])
+def test_media_location_must_be_an_absolute_path(env, job, prefix) -> None:
+    client, headers, _, _ = env
+
+    r = _export(client, headers, job, format="fcp7", prefix=prefix)
+
+    assert r.status_code == 400, r.text
+
+
+@pytest.mark.slow
+def test_media_location_keeps_each_library_folder(env) -> None:
+    """Libraries at /mnt/das/2024 and /mnt/das/2025, media location
+    /Volumes/DAS: the location replaces their common parent, so each clip
+    keeps its year folder."""
+    client, headers, _, _ = env
+    libs = [
+        client.post("/v1/libraries", json={"name": f"Y{y}", "root_path": f"/mnt/das/{y}"},
+                    headers=headers).json()["library_id"]
+        for y in (2024, 2025)
+    ]
+    assets = [_ingest(client, headers, lib, "a/clip.mov", "video", FACET) for lib in libs]
+    project_id = _project(client, headers, "Two years", assets)
+
+    r = _export(client, headers, project_id, format="fcp7", prefix="/Volumes/DAS")
+
+    urls = sorted(f.findtext("pathurl") for f in ET.fromstring(r.content).iter("file")
+                  if f.find("pathurl") is not None)
+    assert urls == [
+        "file://localhost/Volumes/DAS/2024/a/clip.mov",
+        "file://localhost/Volumes/DAS/2025/a/clip.mov",
+    ]
+
+
+@pytest.mark.slow
+def test_unprobed_and_durationless_clips_are_reported(env) -> None:
+    """An unprobed clip still exports (the editor reads the real rate); a
+    clip with no known duration at all is left out, and both are counted."""
+    client, headers, library_id, _ = env
+    probed = _ingest(client, headers, library_id, "report/probed.mov", "video", FACET)
+    unprobed = _ingest(client, headers, library_id, "report/unprobed.mov", "video",
+                       exif={"duration_sec": 3.0})
+    no_length = _ingest(client, headers, library_id, "report/no-length.mov", "video")
+    project_id = _project(client, headers, "Report", [probed, unprobed, no_length])
+
+    r = _export(client, headers, project_id, format="fcpxml")
+
+    assert r.status_code == 200, r.text
+    assert r.headers["x-lumiverb-unprobed"] == "1"
+    assert r.headers["x-lumiverb-skipped-no-duration"] == "1"
+    names = sorted(c.get("name") for c in ET.fromstring(r.content).iter("asset-clip"))
+    assert names == ["probed.mov", "unprobed.mov"]

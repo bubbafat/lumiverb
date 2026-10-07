@@ -607,6 +607,53 @@ def _export_filename(name: str, extension: str) -> str:
     return (_UNSAFE_FILENAME_CHARS.sub("_", name).strip() or "project") + extension
 
 
+def _content_disposition(filename: str) -> str:
+    """attachment; ASCII filename for old clients, the real one in filename*.
+
+    HTTP headers are Latin-1: a raw "Mike’s wedding" or "東京" would fail.
+    """
+    import unicodedata
+    from urllib.parse import quote
+
+    ascii_name = unicodedata.normalize("NFKD", filename).encode("ascii", "ignore").decode()
+    ascii_name = ascii_name.replace('"', "_").replace("\\", "_").strip() or "project-export"
+    return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(filename)}'
+
+
+def _media_bases(roots: dict[str, str], prefix: str | None) -> dict[str, str]:
+    """Where each library's files are, as the editing machine sees them.
+
+    Without a prefix, each library's root. With one, the prefix replaces
+    the libraries' common parent folder, so a project spanning
+    /mnt/das/2024 and /mnt/das/2025 exported to /Volumes/DAS points at
+    /Volumes/DAS/2024/... and /Volumes/DAS/2025/... (one library: the
+    prefix replaces its root).
+    """
+    import posixpath
+
+    if not prefix:
+        return dict(roots)
+    if not roots:
+        return {}
+    clean = {lid: posixpath.normpath(root) for lid, root in roots.items()}
+    common = posixpath.commonpath(list(clean.values())) if len(set(clean.values())) > 1 else next(iter(clean.values()))
+    base = posixpath.normpath(prefix)
+    return {
+        lid: posixpath.join(base, posixpath.relpath(root, common)) if root != common else base
+        for lid, root in clean.items()
+    }
+
+
+def _validate_prefix(prefix: str | None) -> None:
+    if prefix is None or prefix == "":
+        return
+    if not prefix.startswith("/") or "\\" in prefix or ".." in prefix.split("/"):
+        raise HTTPException(
+            status_code=400,
+            detail="Media location must be an absolute path on the editing machine, e.g. /Volumes/DAS",
+        )
+
+
 @router.get("/{project_id}/export")
 def export_project(
     project_id: str,
@@ -614,19 +661,21 @@ def export_project(
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
     user_id: Annotated[str, Depends(get_current_user_id)],
-    format: str = Query(..., description="Export provider id: fcp7 or fcpxml"),
+    format: str = Query(..., description="Export provider id: fcp7 or fcpxml"),  # noqa: A002
     prefix: str | None = Query(
         None, description="Path the originals live under on the editing machine; default: each library's root"
     ),
 ) -> Response:
     """Export a project as a bin of master clips for an editor.
 
-    Clips point at the originals: `prefix` (or the library's ingest root)
-    plus rel_path. Video only for now; the number of stills left out is in
-    the X-Lumiverb-Skipped-Stills header. Archived projects export too.
+    Clips point at the originals: each library's ingest root, or `prefix`
+    in place of the libraries' common parent folder, plus rel_path. Video
+    only for now. Headers count what needs the user's attention:
+    X-Lumiverb-Skipped-Stills (photos left out), X-Lumiverb-Skipped-No-Duration
+    (videos with no known length, left out) and X-Lumiverb-Unprobed (videos
+    exported at a fallback frame rate). Archived projects export too.
     """
     import posixpath
-    from urllib.parse import quote
 
     from src.server.export import EXPORT_PROVIDERS, ExportBin, ExportClip
     from src.server.models.tenant import Library, VideoFacetRow
@@ -637,6 +686,7 @@ def export_project(
             status_code=400,
             detail=f"Unknown format. Must be one of: {', '.join(EXPORT_PROVIDERS)}",
         )
+    _validate_prefix(prefix)
     repo = ProjectRepository(session)
     col = _get_project_or_404(repo, project_id)
     if not _can_view(col, user_id):
@@ -659,15 +709,24 @@ def export_project(
         ).all()
     } if videos else {}
 
+    bases = _media_bases(roots, prefix)
     clips = []
+    skipped_no_duration = 0
+    unprobed = 0
     for a in videos:
-        base = prefix if prefix else roots.get(a.library_id, "")
         f = facets.get(a.asset_id)
+        duration = f.duration_sec if f and f.duration_sec is not None else a.duration_sec
+        if not duration:
+            # A zero-length clip makes Final Cut reject the file.
+            skipped_no_duration += 1
+            continue
+        if f is None:
+            unprobed += 1
         clips.append(ExportClip(
             asset_id=a.asset_id,
             name=posixpath.basename(a.rel_path),
-            path=posixpath.join(base.rstrip("/") or "/", a.rel_path),
-            duration_sec=(f.duration_sec if f and f.duration_sec is not None else a.duration_sec),
+            path=posixpath.join(bases.get(a.library_id, "/"), a.rel_path.lstrip("/")),
+            duration_sec=duration,
             frame_rate_num=f.frame_rate_num if f else None,
             frame_rate_den=f.frame_rate_den if f else None,
             width=f.width if f else a.width,
@@ -684,10 +743,13 @@ def export_project(
         content=body,
         media_type=provider.content_type,
         headers={
-            "Content-Disposition": (
-                f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quote(filename)}'
-            ),
+            "Content-Disposition": _content_disposition(filename),
             "X-Lumiverb-Skipped-Stills": str(skipped_stills),
-            "Access-Control-Expose-Headers": "Content-Disposition, X-Lumiverb-Skipped-Stills",
+            "X-Lumiverb-Skipped-No-Duration": str(skipped_no_duration),
+            "X-Lumiverb-Unprobed": str(unprobed),
+            "Access-Control-Expose-Headers": (
+                "Content-Disposition, X-Lumiverb-Skipped-Stills, "
+                "X-Lumiverb-Skipped-No-Duration, X-Lumiverb-Unprobed"
+            ),
         },
     )
