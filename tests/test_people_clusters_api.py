@@ -335,11 +335,19 @@ def test_name_cluster_validation_errors(clusters_client) -> None:
 
 @pytest.mark.slow
 def test_dismiss_then_list_then_undismiss_cluster(clusters_client) -> None:
-    auth_client, _ = clusters_client
+    auth_client, library_id = clusters_client
 
-    clusters = auth_client.get("/v1/faces/clusters").json()["clusters"]
-    assert clusters, "need clusters to dismiss"
-    cluster_index = clusters[-1]["cluster_index"]
+    # Seed a cluster of our own: earlier tests may have named or dismissed
+    # every cluster the fixture created.
+    _, face_ids = _create_asset_with_faces(
+        auth_client, library_id, "dismiss_flow", "dismiss_flow", n_faces=3
+    )
+    clusters = auth_client.get(
+        "/v1/faces/clusters", params={"limit": 50, "faces_per_cluster": 20}
+    ).json()["clusters"]
+    mine = [c for c in clusters if {f["face_id"] for f in c["faces"]} & set(face_ids)]
+    assert mine, "the seeded faces should form a cluster"
+    cluster_index = mine[0]["cluster_index"]
 
     r = auth_client.post(f"/v1/faces/clusters/{cluster_index}/dismiss", json={})
     assert r.status_code == 200
