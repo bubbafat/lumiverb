@@ -46,6 +46,7 @@ from src.client.cli.ingest import (
 )
 from src.client.proxy.proxy_cache import ProxyCache
 from src.client.workers.exif_extract import compute_sha256
+from src.shared.io_utils import resolve_source_path
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +117,22 @@ def _fetch_ignored_paths(client: LumiverbClient, library_id: str) -> set[str]:
         cursor = data.get("next_cursor")
         if not cursor:
             return paths
+
+
+# Same threshold as the macOS scanner (ScanPipeline.swift): a scan that
+# would delete more than 50 files AND more than 5% of the library's assets
+# skips deletions. A half-mounted volume looks exactly like that.
+MASS_DELETE_MIN_FILES = 50
+MASS_DELETE_MIN_FRACTION = 0.05
+
+
+def _deletion_guard_trips(deleting: int, on_server: int) -> bool:
+    """True when deleting this many of the server's assets looks like a mount problem."""
+    return (
+        deleting > MASS_DELETE_MIN_FILES
+        and on_server > 0
+        and deleting / on_server > MASS_DELETE_MIN_FRACTION
+    )
 
 
 def _split_files(
@@ -249,7 +266,7 @@ def _detect_moves(
 
     try:
         for f in candidates:
-            source_path = root_path / f["rel_path"]
+            source_path = resolve_source_path(root_path, f["rel_path"])
             source_sha = compute_sha256(source_path)
             f["source_sha256"] = source_sha
 
@@ -325,7 +342,7 @@ def _scan_one(
     Works for both new and changed files.
     """
     rel_path = f["rel_path"]
-    source_path = (root_path / rel_path).resolve()
+    source_path = resolve_source_path(root_path, rel_path).resolve()
     if not source_path.is_relative_to(root_path):
         logger.warning("Skipping %s: escapes library root", rel_path)
         with stats.lock:
@@ -399,7 +416,7 @@ def _scan_one_video(
 ) -> None:
     """Scan a single video: poster frame + EXIF + 10-sec preview → upload → cache."""
     rel_path = f["rel_path"]
-    source_path = (root_path / rel_path).resolve()
+    source_path = resolve_source_path(root_path, rel_path).resolve()
     if not source_path.is_relative_to(root_path):
         logger.warning("Skipping %s: escapes library root", rel_path)
         with stats.lock:
@@ -578,6 +595,7 @@ def run_scan(
     allow_moves: bool = False,
     skip_moves: bool = False,
     thorough: bool = False,
+    allow_mass_delete: bool = False,
     console: Console,
 ) -> ScanStats:
     """Discover files, compute SHA, extract EXIF, generate proxies, upload.
@@ -690,6 +708,20 @@ def run_scan(
         console.print(f"[dim]Skipping {len(deleted_ids):,} deletions (--skip-moves)[/dim]")
         deleted_ids = []
 
+    if (
+        deleted_ids
+        and not allow_mass_delete
+        and _deletion_guard_trips(len(deleted_ids), len(existing))
+    ):
+        pct = 100 * len(deleted_ids) / len(existing)
+        console.print(
+            f"[yellow]Skipping {len(deleted_ids):,} deletions: {pct:.0f}% of the "
+            f"library's {len(existing):,} assets aren't on disk, which usually means "
+            "the volume isn't fully mounted. If the files really are gone, re-run "
+            "with --allow-mass-delete.[/yellow]"
+        )
+        deleted_ids = []
+
     # For skipped moves (via prompt choice): moved files don't participate.
     # New paths already removed from new_files by _detect_moves.
     # Old paths already removed from deleted_ids above.
@@ -710,7 +742,7 @@ def run_scan(
                 tid = hash_progress.add_task("Hashing", total=len(needs_hash))
                 for f in needs_hash:
                     server = f.pop("_server")
-                    source_sha = compute_sha256(root_path / f["rel_path"])
+                    source_sha = compute_sha256(resolve_source_path(root_path, f["rel_path"]))
                     if force or (source_sha and server.sha256 != source_sha):
                         changed_files.append(f)
                     else:
@@ -798,7 +830,7 @@ def run_scan(
         # Unchanged files skip scanning (advance progress bar only).
         for f in needs_hash:
             server = f.pop("_server")
-            source_sha = compute_sha256(root_path / f["rel_path"])
+            source_sha = compute_sha256(resolve_source_path(root_path, f["rel_path"]))
             f["source_sha256"] = source_sha
 
             if force or (source_sha and server.sha256 != source_sha):

@@ -1,5 +1,7 @@
 """IO utilities shared across the codebase."""
 
+import os
+import unicodedata
 from pathlib import Path
 
 
@@ -23,3 +25,35 @@ def normalize_path_prefix(path: str | None) -> str | None:
     normalized = path.replace("\\", "/").strip().strip("/")
     return normalized or None
 
+
+
+def resolve_source_path(root: Path, rel_path: str) -> Path:
+    """Where a library file lives on this machine's disk.
+
+    rel_path is stored in Unicode NFC. Filesystems that don't normalize
+    names (ext4, or NFS/SMB mounts on Linux) may hold the same name in NFD,
+    which is how macOS often writes it, so fall back to the NFD form and
+    then to matching each path component by its NFC form. Returns
+    root / rel_path when nothing matches.
+    """
+    direct = root / rel_path
+    if direct.exists():
+        return direct
+    nfd = root / unicodedata.normalize("NFD", rel_path)
+    if nfd.exists():
+        return nfd
+    current = root
+    for part in Path(rel_path).parts:
+        candidate = current / part
+        if not candidate.exists():
+            want = unicodedata.normalize("NFC", part)
+            try:
+                names = os.listdir(current)
+            except OSError:
+                return direct
+            match = next((n for n in names if unicodedata.normalize("NFC", n) == want), None)
+            if match is None:
+                return direct
+            candidate = current / match
+        current = candidate
+    return current
