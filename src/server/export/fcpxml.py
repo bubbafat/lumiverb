@@ -73,7 +73,7 @@ class FcpxmlProvider:
                 start=start,
                 duration=duration,
                 format=formats[key],
-                tcFormat="DF" if clip.drop_frame else "NDF",
+                tcFormat="DF" if clip.is_drop_frame else "NDF",
             )
 
         ET.indent(root)

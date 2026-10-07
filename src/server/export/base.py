@@ -2,13 +2,26 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from fractions import Fraction
 from typing import Protocol
 from urllib.parse import quote
 
 # Used when a clip hasn't been probed. Editors read the file's real rate
 # on import; the XML only needs a consistent one.
 FALLBACK_RATE = (30, 1)
+
+# Rates editors expect. A variable-frame-rate phone clip can average 29.92
+# fps; within 1% of a standard rate, the standard one is used.
+STANDARD_RATES = [
+    Fraction(24000, 1001), Fraction(24), Fraction(25), Fraction(30000, 1001), Fraction(30),
+    Fraction(48000, 1001), Fraction(48), Fraction(50), Fraction(60000, 1001), Fraction(60),
+    Fraction(100), Fraction(120000, 1001), Fraction(120),
+]
+SNAP_TOLERANCE = 0.01
+
+TIMECODE = re.compile(r"^\d{2}:[0-5]\d:[0-5]\d[:;]\d{2}$")
 
 
 @dataclass(frozen=True)
@@ -28,10 +41,14 @@ class ExportClip:
 
     @property
     def rate(self) -> tuple[int, int]:
-        """(num, den) frames per second."""
-        if self.frame_rate_num and self.frame_rate_den:
-            return self.frame_rate_num, self.frame_rate_den
-        return FALLBACK_RATE
+        """(num, den) frames per second, snapped to a standard rate when close."""
+        if not (self.frame_rate_num and self.frame_rate_den):
+            return FALLBACK_RATE
+        raw = Fraction(self.frame_rate_num, self.frame_rate_den)
+        nearest = min(STANDARD_RATES, key=lambda std: abs(raw - std))
+        if abs(raw - nearest) / nearest <= SNAP_TOLERANCE:
+            raw = nearest
+        return raw.numerator, raw.denominator
 
     @property
     def timebase(self) -> int:
@@ -49,10 +66,20 @@ class ExportClip:
         return round((self.duration_sec or 0.0) * num / den)
 
     @property
+    def timecode(self) -> str | None:
+        """The start timecode if it's well formed; a bad one never breaks an export."""
+        tc = self.start_timecode
+        return tc if tc and TIMECODE.match(tc) else None
+
+    @property
+    def is_drop_frame(self) -> bool:
+        return bool(self.timecode and self.drop_frame)
+
+    @property
     def start_frames(self) -> int:
-        if not self.start_timecode:
+        if not self.timecode:
             return 0
-        return timecode_to_frames(self.start_timecode, self.timebase, bool(self.drop_frame))
+        return timecode_to_frames(self.timecode, self.timebase, self.is_drop_frame)
 
     @property
     def file_url(self) -> str:

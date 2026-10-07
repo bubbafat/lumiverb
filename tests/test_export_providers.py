@@ -129,11 +129,15 @@ def test_fcp7_unprobed_clip_falls_back_to_30fps() -> None:
     assert clip.find(".//file/timecode/frame").text == "0"
 
 
-def test_fcp7_file_ids_are_unique() -> None:
+def test_fcp7_files_defined_once_and_referenced_by_id() -> None:
+    """xmeml defines each file once (with its pathurl); later uses are bare
+    references to that id."""
     root = _render("fcp7")
-    ids = [f.get("id") for f in root.iter("file")]
+    defined = [f.get("id") for f in root.iter("file") if f.find("pathurl") is not None]
+    referenced = {f.get("id") for f in root.iter("file") if f.find("pathurl") is None}
 
-    assert len(ids) == len(set(ids)) == 2
+    assert len(defined) == len(set(defined)) == 2
+    assert referenced <= set(defined)
 
 
 # ---------------------------------------------------------------------------
@@ -198,3 +202,77 @@ def test_empty_bin_is_valid(provider_id: str) -> None:
     root = _render(provider_id, ExportBin(name="Empty", clips=[]))
 
     assert root is not None
+
+
+# ---------------------------------------------------------------------------
+# Hardening from the phase 1 validation review
+# ---------------------------------------------------------------------------
+
+
+def test_fcp7_includes_a_timeline_of_all_clips_in_order() -> None:
+    """Resolve imports FCP7 XML as timelines: the bin alone may bring in
+    nothing. The sequence lays every clip end to end, in bin order."""
+    root = _render("fcp7")
+    sequence = root.find("bin/children/sequence")
+
+    assert sequence is not None
+    assert sequence.findtext("name") == "Customer Video <123>"
+    items = sequence.findall("media/video/track/clipitem")
+    assert [i.findtext("name") for i in items] == ["My Clip & Co.mov", "pal.mxf"]
+    # end to end on a 30-count timeline: 212 frames, then PAL's 100 at 25 -> 120 at 30
+    assert [(i.findtext("start"), i.findtext("end")) for i in items] == [("0", "212"), ("212", "332")]
+    # each item points at its master clip's file
+    master_files = {c.findtext("name"): c.find(".//file").get("id") for c in root.findall("bin/children/clip")}
+    assert [i.find("file").get("id") for i in items] == [master_files["My Clip & Co.mov"], master_files["pal.mxf"]]
+
+
+def test_fcp7_master_clip_carries_audio() -> None:
+    clips = _render("fcp7").findall("bin/children/clip")
+    with_audio, without = clips[0], clips[1]
+
+    audio_items = with_audio.findall("media/audio/track/clipitem")
+    assert len(audio_items) == 1
+    assert audio_items[0].find("file").get("id") == with_audio.find("media/video/track/clipitem/file").get("id")
+    assert audio_items[0].findtext("sourcetrack/mediatype") == "audio"
+    assert without.find("media/audio") is None
+
+
+@pytest.mark.parametrize(("num", "den"), [(10351, 346), (2997, 100), (29970, 1000)])
+def test_odd_rates_snap_to_standard(num: int, den: int) -> None:
+    """A variable-frame-rate phone clip can average 29.92 fps; editors want
+    a standard rate (29.97 here)."""
+    clip = ExportClip(**{**IPHONE.__dict__, "frame_rate_num": num, "frame_rate_den": den})
+
+    assert clip.rate == (30000, 1001)
+    root = _render("fcpxml", ExportBin(name="x", clips=[clip]))
+    assert root.find("resources/format").get("frameDuration") == "1001/30000s"
+
+
+def test_unusual_but_real_rate_is_kept() -> None:
+    clip = ExportClip(**{**PAL.__dict__, "frame_rate_num": 15, "frame_rate_den": 1})
+
+    assert clip.rate == (15, 1)
+
+
+@pytest.mark.parametrize("tc", ["garbage", "01:00:00:00.5", "99:99"])
+def test_bad_timecode_never_breaks_an_export(tc: str) -> None:
+    clip = ExportClip(**{**PAL.__dict__, "start_timecode": tc})
+
+    for provider_id in ("fcp7", "fcpxml"):
+        _render(provider_id, ExportBin(name="x", clips=[clip]))
+    file_ = _render("fcp7", ExportBin(name="x", clips=[clip])).find(".//file")
+    assert file_.findtext("timecode/string") == "00:00:00:00"
+    assert file_.findtext("timecode/frame") == "0"
+
+
+@pytest.mark.parametrize(
+    ("num", "den", "timebase", "ntsc"),
+    [(24000, 1001, "24", "TRUE"), (50, 1, "50", "FALSE"), (60000, 1001, "60", "TRUE"), (24, 1, "24", "FALSE")],
+)
+def test_common_rates(num: int, den: int, timebase: str, ntsc: str) -> None:
+    clip = ExportClip(**{**PAL.__dict__, "frame_rate_num": num, "frame_rate_den": den, "start_timecode": None})
+    master = _render("fcp7", ExportBin(name="x", clips=[clip])).find("bin/children/clip")
+
+    assert (master.findtext("rate/timebase"), master.findtext("rate/ntsc")) == (timebase, ntsc)
+    fmt = _render("fcpxml", ExportBin(name="x", clips=[clip])).find("resources/format")
+    assert fmt.get("frameDuration") == f"{den}/{num}s"

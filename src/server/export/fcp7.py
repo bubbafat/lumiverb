@@ -46,9 +46,9 @@ def _clip(children: ET.Element, clip: ExportClip, index: int) -> None:
     _sub(file_, "duration", clip.duration_frames)
     tc = _sub(file_, "timecode")
     _rate(tc, clip)
-    _sub(tc, "string", clip.start_timecode or "00:00:00:00")
+    _sub(tc, "string", clip.timecode or "00:00:00:00")
     _sub(tc, "frame", clip.start_frames)
-    _sub(tc, "displayformat", "DF" if clip.drop_frame else "NDF")
+    _sub(tc, "displayformat", "DF" if clip.is_drop_frame else "NDF")
 
     media = _sub(file_, "media")
     video = _sub(media, "video")
@@ -64,6 +64,56 @@ def _clip(children: ET.Element, clip: ExportClip, index: int) -> None:
         _sub(achars, "samplerate", clip.audio_sample_rate or 48000)
         _sub(audio, "channelcount", clip.audio_channels)
 
+        # The master clip's audio, so it doesn't import as video only.
+        atrack = _sub(_sub(el.find("media"), "audio"), "track")
+        aitem = _sub(atrack, "clipitem", id=f"clipitem-{index}-audio")
+        _sub(aitem, "masterclipid", master_id)
+        _sub(aitem, "name", clip.name)
+        _sub(aitem, "duration", clip.duration_frames)
+        _rate(aitem, clip)
+        _sub(aitem, "in", 0)
+        _sub(aitem, "out", clip.duration_frames)
+        _sub(aitem, "file", id=f"file-{index}")
+        source = _sub(aitem, "sourcetrack")
+        _sub(source, "mediatype", "audio")
+        _sub(source, "trackindex", 1)
+
+
+def _sequence(children: ET.Element, bin_: ExportBin) -> None:
+    """Every clip end to end, in bin order: Resolve imports FCP7 XML as
+    timelines, so a bin alone may bring in nothing. Not an edit; the
+    editor owns order and trims (ADR-016)."""
+    lead = bin_.clips[0]
+    num, den = lead.rate
+    fps = num / den
+    seq = _sub(children, "sequence", id="sequence-1")
+    _sub(seq, "name", bin_.name)
+    _rate(seq, lead)
+    video = _sub(_sub(seq, "media"), "video")
+    vtrack = _sub(video, "track")
+    atrack = _sub(_sub(seq.find("media"), "audio"), "track")
+    position = 0
+    for index, clip in enumerate(bin_.clips, start=1):
+        length = round((clip.duration_sec or 0.0) * fps)
+        for track, kind in ((vtrack, "video"), (atrack, "audio")):
+            if kind == "audio" and not clip.audio_channels:
+                continue
+            item = _sub(track, "clipitem", id=f"seq-clipitem-{index}-{kind}")
+            _sub(item, "masterclipid", f"masterclip-{index}")
+            _sub(item, "name", clip.name)
+            _rate(item, lead)
+            _sub(item, "start", position)
+            _sub(item, "end", position + length)
+            _sub(item, "in", 0)
+            _sub(item, "out", length)
+            _sub(item, "file", id=f"file-{index}")
+            if kind == "audio":
+                source = _sub(item, "sourcetrack")
+                _sub(source, "mediatype", "audio")
+                _sub(source, "trackindex", 1)
+        position += length
+    _sub(seq, "duration", position)
+
 
 class Fcp7XmlProvider:
     id = "fcp7"
@@ -78,6 +128,8 @@ class Fcp7XmlProvider:
         children = _sub(bin_el, "children")
         for index, clip in enumerate(bin_.clips, start=1):
             _clip(children, clip, index)
+        if bin_.clips:
+            _sequence(children, bin_)
         ET.indent(root)
         body = ET.tostring(root, encoding="unicode")
         return ('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE xmeml>\n' + body + "\n").encode()
