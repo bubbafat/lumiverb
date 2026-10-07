@@ -2,23 +2,22 @@ import pytest
 
 
 @pytest.mark.fast
-def test_search_response_model() -> None:
-    """SearchResponse and SearchHit validate correctly."""
-    from src.server.api.routers.search import SearchHit, SearchResponse
+def test_query_response_model() -> None:
+    """QueryResponse carries search hits with their SearchContext."""
+    from src.server.api.routers.query import QueryItem, QueryResponse, SearchContext
 
-    hit = SearchHit(
+    item = QueryItem(
         asset_id="ast_001",
+        library_id="lib_001",
+        library_name="Photos",
         rel_path="photos/test.jpg",
-        thumbnail_key="t/l/thumbnails/00/ast_001.jpg",
-        proxy_key=None,
-        description="A sunset.",
-        tags=["sunset"],
-        score=1.5,
-        source="quickwit",
+        file_size=1000,
+        media_type="image",
+        search_context=SearchContext(score=1.5, hit_type="asset", snippet="A sunset."),
     )
-    resp = SearchResponse(query="sunset", hits=[hit], total=1, source="quickwit")
-    assert resp.total == 1
-    assert resp.hits[0].score == 1.5
+    resp = QueryResponse(items=[item], total_estimate=1, search_source="quickwit")
+    assert resp.total_estimate == 1
+    assert resp.items[0].search_context.score == 1.5
 
 
 @pytest.mark.fast

@@ -265,49 +265,21 @@ Collections are virtual groupings of assets across libraries. See ADR-006 for fu
 - **GET /v1/public/collections/{id}/assets** — Query: `after` (cursor), `limit`. Returns privacy-stripped asset list: `{ "items": [{ "asset_id", "media_type", "width", "height", "taken_at", "duration_sec" }], "next_cursor" }`. No rel_path, no camera info, no GPS.
 - Asset thumbnails/proxies served via existing `/v1/assets/{id}/proxy?public_collection_id={id}` — verifies asset membership in the public collection.
 
-## Unified Browse API
+## Unified Query API
 
-Cross-library browse endpoint. Queries across all libraries the user has access to, with the same filters as `GET /v1/assets/page` plus library selection. Response items include `library_id` and `library_name`.
+One endpoint for browsing and searching, across all libraries the caller can see. `/v1/browse` and `/v1/search` were removed in its favor.
 
-- **GET /v1/browse** — Query: `after` (cursor), `limit` (default 500, max 500), `library_id` (optional; comma-separated for multiple), `path_prefix` (requires `library_id`; 400 otherwise), `sort`, `dir`, `person_id` (optional, filters to assets with a face matched to this person), plus all filter params from `/v1/assets/page` (media_type, camera_make, camera_model, lens_model, iso_min, iso_max, exposure_min_us, exposure_max_us, aperture_min, aperture_max, focal_length_min, focal_length_max, has_exposure, has_gps, near_lat, near_lon, near_radius_km, tag). Rating filters: `favorite`, `star_min`, `star_max`, `color`, `has_rating`. Returns: `{ "items": [BrowseItem], "next_cursor" }`.
+- **GET /v1/query** — Filters are repeated `f=prefix:value` params, ANDed together. Prefixes: `query` (text search), `library` (comma-separated ids), `path` (rel_path prefix), `media` (`image`|`video`), `camera_make`, `camera_model`, `lens`, `iso`, `aperture`, `focal_length`, `exposure`, `has_exposure`, `has_gps`, `near`, `date` (`YYYY-MM-DD,YYYY-MM-DD`, either side optional), `favorite` (`yes`), `stars` (`4`, `4+`, `2-4`, `-3`), `color` (comma-separated), `has_color`, `has_rating`, `has_faces` (`yes`|`no`), `person`, `tag`. Unknown prefixes are ignored; `GET /v1/filters/capabilities` lists every filter for generic client rendering. Other params: `sort` (`taken_at` default, `created_at`, `file_size`, `iso`, `exposure_time_us`, `aperture`, `focal_length`, `rel_path`, `asset_id`), `dir`, `after` (cursor), `limit` (1–500, default 200). With a `query:` filter, Quickwit BM25 (or the Postgres ILIKE fallback) produces up to 5,000 candidates, the other filters apply in Postgres, and results are ordered by relevance; each item carries `search_context` `{ "score", "hit_type": "asset"|"scene"|"transcript", "snippet", "start_ms", "end_ms" }`. Rating filters join the caller's own ratings. Returns `{ "items": [QueryItem], "next_cursor", "total_estimate", "search_source": "quickwit"|"postgres_fallback"|null }`.
 
-**BrowseItem**: Same fields as `AssetPageItem` plus `library_id` and `library_name`.
-
-### Quickwit Index Architecture
-
-Quickwit indexes are **per-tenant** (not per-library). Two indexes per tenant:
-- `lumiverb_tenant_{tenant_id}` — asset documents (description, tags, path tokens, camera, GPS)
-- `lumiverb_tenant_{tenant_id}_scenes` — video scene documents (description, tags, scene metadata)
-
-Every document includes a `library_id` field (indexed, fast, raw tokenizer) for per-library filtering. Cross-library search omits the library_id filter. Per-library search prepends `library_id:"{id}" AND` to the Quickwit query.
-
-After deploying, run `POST /v1/upkeep/search-sync` to populate the new tenant indexes from existing asset metadata.
-
-## Saved Views API
-
-Named filter presets that navigate to `/browse?{query_params}`. User-scoped — each user only sees their own views.
-
-- **POST /v1/views** — Body: `{ "name", "query_params", "icon" (optional) }`. Creates a saved view. Returns 201 with `ViewItem`. 422 if name is blank.
-- **GET /v1/views** — List saved views for the current user, ordered by position. Returns: `{ "items": [ViewItem] }`.
-- **PATCH /v1/views/reorder** — Body: `{ "view_ids": [...] }`. Reorder views by setting positions from list order. Returns `{ "ok": true }`.
-- **PATCH /v1/views/{id}** — Body: `{ "name", "query_params", "icon" }` (all optional). Update a saved view. Owner only (404 for others). Returns `ViewItem`.
-- **DELETE /v1/views/{id}** — Delete a saved view. Owner only (404 for others). Returns 204.
-
-**ViewItem**: `{ "view_id", "name", "query_params", "icon", "position", "created_at", "updated_at" }`
-
-Ownership: when a user is deleted via `DELETE /v1/users/{user_id}`, all their saved views are removed from the tenant DB.
+**QueryItem**: asset fields (`asset_id`, `rel_path`, `file_size`, `media_type`, dimensions, `taken_at`, `duration_sec`, camera and exposure fields, GPS, `face_count`, `thumbnail_key`, `proxy_key`, `created_at`) plus `library_id`, `library_name` and `search_context`.
 
 ## Ratings API
 
 User-scoped asset ratings: favorites (heart), stars (1-5), color labels. Each user has independent ratings per asset. Ratings are private — never visible to other users. All endpoints require auth; user identity comes from JWT `sub` or API key `key:{key_id}`.
 
-Rating filters are available on both browse and search endpoints:
+Rating filters are available on `GET /v1/assets/page` (`?favorite=true`, `?star_min=3`, `?star_max=5`, `?color=red` (comma-separated for multiple), `?has_rating=true`) and on `GET /v1/query` (`f=favorite:yes`, `f=stars:3+`, `f=color:red`, `f=has_rating:yes`). They LEFT JOIN `asset_ratings` for the current user; without rating filters, no JOIN is added (zero cost).
 
-**Browse** (`GET /v1/assets/page`): `?favorite=true`, `?star_min=3`, `?star_max=5`, `?color=red` (comma-separated for multiple), `?has_rating=true`. LEFT JOINs `asset_ratings` for the current user. Without rating filters, no JOIN is added (zero cost).
-
-**Search** (`GET /v1/search`): Same params. Applied as post-filters after Quickwit/Postgres results are enriched.
-
-**Face filter** (`has_faces`): Available on `GET /v1/assets/page`, `GET /v1/browse`, and `GET /v1/search`. `?has_faces=true` returns only assets with `face_count > 0`. `?has_faces=false` returns assets with no detected faces (face_count=0 or NULL). On search, applied as post-filter; on browse/page, applied in SQL.
+**Face filter**: `?has_faces=true|false` on `GET /v1/assets/page`, `f=has_faces:yes|no` on `GET /v1/query`. `yes` returns only assets with `face_count > 0`; `no` returns assets with no detected faces (face_count=0 or NULL). Applied in SQL.
 
 - **GET /v1/assets/favorites** — List favorited assets across all libraries for the current user, newest first. Query: `after` (cursor), `limit`. Returns: `{ "items": [{ "asset_id", "library_id", "library_name", "rel_path", ... }], "next_cursor" }`. Paginated by `updated_at DESC`.
 
@@ -341,8 +313,7 @@ Search is BM25 via Quickwit. The API queries Quickwit then enriches results with
 
 **Query syntax**: unquoted input is loose — `negative space` matches any document containing either word, with a soft ranking boost when both appear as an adjacent phrase. Wrapping input in double quotes requires the exact contiguous phrase — `"negative space"` only matches documents where those two words appear adjacent. Mixed input like `"negative space" beach` is treated as "must contain the phrase AND must contain beach". Quoted phrases are not prefix-expanded (`"disney"` will not match "disneyland"). Unmatched trailing quotes are ignored. Applies to both the Quickwit path and the Postgres fallback.
 
-- **GET /v1/search** — Query: `library_id` (optional — omit for cross-library search), `q` (up to 500 chars), `limit` (default 20, max 500), `offset` (default 0, max 10000), `media_type` (optional: `all`|`image`|`video`), `path_prefix` (optional), `tag` (optional), `date_from`/`date_to` (optional), `person_id` (optional, post-filters results to assets with a face matched to this person). Requires `q` or `date_from`/`date_to`. Asset-level BM25 search via per-tenant Quickwit index; falls back to Postgres when Quickwit disabled/errors and fallback enabled (per-library only). SearchHit includes `library_id` and `library_name`. Returns `{ "query", "hits", "total", "source" }`.
-- **GET /v1/search/scenes** — Query: `library_id` (required), `q` (required, 1–500 chars), `limit` (default 20, max 100), `offset` (default 0). Scene-level BM25 search via Quickwit. Returns `{ "query", "hits": [ { "scene_id", "asset_id", "rel_path", "start_ms", "end_ms", "rep_frame_ms", "thumbnail_key", "duration_sec", "description", "tags", "score", "source" } ], "total", "source" }`. No Postgres fallback. Returns empty hits if Quickwit is disabled.
+Text search runs through `GET /v1/query` with an `f=query:...` filter (see Unified Query API). Asset, scene and transcript hits are merged per asset; `search_context.hit_type` says which matched.
 
 **Similarity:**
 

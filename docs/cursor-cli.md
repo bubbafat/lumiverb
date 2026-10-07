@@ -28,7 +28,7 @@ Entry point: `lumiverb = "src.client.cli:main"` (setuptools); `main()` invokes t
 - `lumiverb enrich [--library <name>] [--job-type embed|vision|faces|redetect-faces|ocr|transcribe|video-scenes|scene-vision|search-sync|all] [--dry-run] [--concurrency N] [--force]` — Run enrichment on assets with missing pipeline outputs. Reads proxies from the local cache (populated by scan) and runs inference: CLIP embeddings, vision AI, OCR, face detection, video transcription, search sync. On cache miss, downloads the proxy from the server. `redetect-faces` re-runs face detection on ALL images with quality gates. `transcribe` uses faster-whisper to transcribe video audio (requires source files, not proxy cache). Omit `--library` to enrich all libraries.
 
 #### Search
-- `lumiverb search --library <name> --query <query> [--output table|json|text] [--media-type all|image|video] [--limit N] [--offset N]` — Search assets in a library by natural language query. `--limit 0` fetches all results (paginated).
+- `lumiverb search --library <name> --query <query> [--output table|json|text] [--media-type all|image|video] [--limit N]` — Search assets in a library by natural language query via `GET /v1/query` (`f=library:`, `f=query:`, `f=media:`), ranked by relevance. `--limit 0` fetches all results (cursor-paginated). The table shows the match snippet, and the time range for scene hits.
 
 #### Similar
 - `lumiverb similar --library <name> [--asset-id <id> | --path <rel_path> | --image <file>] [--limit N] [--offset N] [--output table|json|text] [--from-ts N] [--to-ts N] [--asset-types image,video] [--camera-make X] [--camera-model X]` — Find visually similar assets by vector similarity. Supply one of: `--asset-id` (existing asset), `--path` (relative path in library), or `--image` (local image file).
@@ -43,7 +43,7 @@ Entry point: `lumiverb = "src.client.cli:main"` (setuptools); `main()` invokes t
 - `lumiverb config show` — Show current config.
 
 #### Library
-- `lumiverb library create <name> <path>` — Create a library.
+- `lumiverb library create --name <name> --path <path>` — Create a library.
 - `lumiverb library list` — List libraries.
 - `lumiverb library update <name> [--name <new>] [--root-path <path>]` — Update library.
 - `lumiverb library delete <name>` — Soft delete (trash).

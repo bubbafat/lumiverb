@@ -126,29 +126,34 @@ uv run uvicorn src.server.api.main:app --reload --port 8000
 ### 6. Provision a tenant and get an API key
 
 ```bash
-uv run lumiverb admin tenant create --name "My Library" --email me@example.com
+curl -X POST http://localhost:8000/v1/admin/tenants \
+  -H "Authorization: Bearer <ADMIN_KEY from .env>" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "My Library", "plan": "free"}'
 # Returns: tenant_id, api_key
 ```
 
-### 7. Create a library and ingest
+### 7. Create a library, scan and enrich
 
 ```bash
 uv run lumiverb config set --api-url http://localhost:8000 --api-key <your-key>
-uv run lumiverb library create "My Photos" /path/to/photos
-uv run lumiverb ingest --library "My Photos"
+uv run lumiverb library create --name "My Photos" --path /path/to/photos
+uv run lumiverb scan --library "My Photos"
+uv run lumiverb enrich --library "My Photos"
 ```
 
-The `ingest` command scans the filesystem, generates proxies/thumbnails, extracts EXIF, runs vision AI, generates embeddings, and uploads everything atomically via the API. All processing happens client-side.
+`scan` discovers files, extracts EXIF, generates proxies and uploads them. `enrich` runs AI over the proxies: CLIP embeddings, faces, vision descriptions and OCR, and video transcription.
 
-> **Note:** Vision AI requires [Moondream Station](https://moondream.ai) running locally.
-> Start it with `moondream-station` before ingesting.
+> **Note:** Vision descriptions and OCR need an OpenAI-compatible endpoint:
+> `uv run lumiverb config set --vision-api-url <url> --vision-model-id <model>`.
 
 ### 8. Search
 
 ```bash
-uv run lumiverb search "golden hour portraits"
+uv run lumiverb search --library "My Photos" --query "golden hour portraits"
 # or via API:
-curl "http://localhost:8000/v1/search?q=golden+hour+portraits" \
+curl -G http://localhost:8000/v1/query \
+  --data-urlencode "f=query:golden hour portraits" \
   -H "Authorization: Bearer <your-key>"
 ```
 
