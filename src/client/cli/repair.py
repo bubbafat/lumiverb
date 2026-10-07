@@ -15,7 +15,9 @@ from rich.progress import Progress, BarColumn, TextColumn, MofNCompleteColumn, T
 from rich.table import Table
 
 from src.client.cli.client import LumiverbClient
+from src.client.video.probe import probe_video
 from src.client.workers.faces.insightface_provider import InsightFaceProvider
+from src.shared.io_utils import resolve_source_path
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +38,8 @@ def _drain(inflight: set[Future]) -> set[Future]:
     return inflight
 
 
-REPAIR_TYPES = ("embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all")
-RepairType = Literal["embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all"]
+REPAIR_TYPES = ("probe", "embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all")
+RepairType = Literal["probe", "embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all"]
 
 
 class _RepairStats:
@@ -102,6 +104,21 @@ def _ocr_one(
     except Exception as e:
         logger.exception("Failed OCR for %s: %s", rel_path, e)
         return None
+
+
+def _probe_one(client: LumiverbClient, lib_root: "Path", asset: dict) -> str:
+    """Probe one video's source file and store the facet. Returns "ok", "missing" or "failed"."""
+    source = resolve_source_path(lib_root, asset["rel_path"])
+    if not source.is_file():
+        logger.warning("Source file not found for %s: %s", asset["asset_id"], asset["rel_path"])
+        return "missing"
+    try:
+        facet = probe_video(source)
+    except Exception as exc:  # noqa: BLE001 — any ffprobe failure
+        logger.warning("Probe failed for %s: %s", asset["rel_path"], exc)
+        return "failed"
+    client.put(f"/v1/assets/{asset['asset_id']}/video-facet", json=facet.to_dict())
+    return "ok"
 
 
 def _transcribe_one(
@@ -234,6 +251,7 @@ def _page_missing(
     missing_ocr: bool = False,
     missing_scene_vision: bool = False,
     missing_transcription: bool = False,
+    missing_probe: bool = False,
 ) -> list[dict]:
     """Page through assets matching the given missing filter."""
     results: list[dict] = []
@@ -259,6 +277,8 @@ def _page_missing(
             params["missing_scene_vision"] = "true"
         if missing_transcription:
             params["missing_transcription"] = "true"
+        if missing_probe:
+            params["missing_probe"] = "true"
         if cursor:
             params["after"] = cursor
         resp = client.get("/v1/assets/page", params=params)
@@ -760,6 +780,9 @@ def run_repair(
 
     # Build repair plan
     plan: list[tuple[str, int, str]] = []  # (type, count, description)
+    # Probe first: its duration makes videos eligible for transcription and scenes.
+    if job_type in ("probe", "all") and summary.get("missing_probe", 0) > 0:
+        plan.append(("probe", summary["missing_probe"], "missing video probe"))
 
     if job_type in ("embed", "all") and summary.get("missing_embeddings", 0) > 0:
         plan.append(("embed", summary["missing_embeddings"], "missing CLIP embeddings"))
@@ -801,6 +824,7 @@ def run_repair(
     table.add_row("Total assets", str(total), "")
 
     for label, key, needs_repair in [
+        ("Video probe", "missing_probe", job_type in ("probe", "all")),
         ("Proxy", "missing_proxy", job_type in ("proxy", "all")),
         ("EXIF", "missing_exif", job_type in ("exif", "all")),
         ("Embeddings", "missing_embeddings", job_type in ("embed", "all")),
@@ -1082,6 +1106,38 @@ def run_repair(
                     console.print(f"[dim]Cleaned up {deleted} empty dismissed people.[/dim]")
             except Exception as e:
                 logger.warning("cleanup-dismissed failed: %s", e)
+
+        elif repair_type == "probe":
+            console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
+
+            assets = _filter(_page_missing(client, library_id, missing_probe=True))
+            if not assets:
+                console.print("No assets found (already probed?).")
+                continue
+
+            # Probing reads source files, not proxies
+            from pathlib import Path as _Path
+            root_path_str = library.get("root_path")
+            lib_root = _Path(root_path_str).resolve() if root_path_str else None
+            if lib_root is None or not lib_root.is_dir():
+                console.print(f"[yellow]Library root not accessible: {lib_root}[/yellow]")
+                console.print("[yellow]Probing requires source video files. Skipping.[/yellow]")
+                continue
+
+            progress = _make_progress(console)
+            with progress:
+                tid = progress.add_task("Probe", total=len(assets), ok=0, fail=0)
+                for a in assets:
+                    outcome = _probe_one(client, lib_root, a)
+                    with stats.lock:
+                        if outcome == "ok":
+                            stats.processed += 1
+                        elif outcome == "missing":
+                            stats.skipped += 1
+                        else:
+                            stats.failed += 1
+                    progress.advance(tid, 1)
+                    progress.update(tid, ok=stats.processed, fail=stats.failed)
 
         elif repair_type == "transcribe":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")

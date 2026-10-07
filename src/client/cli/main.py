@@ -880,7 +880,7 @@ def scan(
             raise typer.Exit(1)
 
 
-ENRICH_TYPES = ("embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all")
+ENRICH_TYPES = ("probe", "embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all")
 
 
 @app.command("enrich")

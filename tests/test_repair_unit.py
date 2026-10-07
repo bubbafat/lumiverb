@@ -112,6 +112,7 @@ def test_page_missing_single_page_each_filter() -> None:
         ("missing_ocr", "missing_ocr"),
         ("missing_scene_vision", "missing_scene_vision"),
         ("missing_transcription", "missing_transcription"),
+        ("missing_probe", "missing_probe"),
     ],
 )
 def test_page_missing_forwards_each_flag(kwarg, expected_param) -> None:
@@ -585,3 +586,61 @@ def test_run_repair_redetect_faces_dry_run_pages_all_images(tmp_path: Path) -> N
     assert "--dry-run" in out
     assert "Nothing to repair" not in out
     client.post.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# probe: backfill video facets from source files
+# ---------------------------------------------------------------------------
+
+
+def test_probe_one_puts_facet(tmp_path: Path) -> None:
+    from src.client.cli.repair import _probe_one
+    from src.client.video.probe import VideoFacet
+
+    (tmp_path / "a.mov").write_bytes(b"x")
+    facet = VideoFacet(
+        duration_sec=2.0, container="mov", video_codec="h264", width=640, height=360,
+        rotation=0, frame_rate_num=25, frame_rate_den=1, start_timecode=None,
+        drop_frame=None, audio_codec=None, audio_channels=None, audio_sample_rate=None,
+    )
+    client = MagicMock()
+    with patch("src.client.cli.repair.probe_video", return_value=facet):
+        result = _probe_one(client, tmp_path, {"asset_id": "ast_1", "rel_path": "a.mov"})
+
+    assert result == "ok"
+    client.put.assert_called_once_with("/v1/assets/ast_1/video-facet", json=facet.to_dict())
+
+
+def test_probe_one_missing_source(tmp_path: Path) -> None:
+    from src.client.cli.repair import _probe_one
+
+    client = MagicMock()
+    result = _probe_one(client, tmp_path, {"asset_id": "ast_1", "rel_path": "gone.mov"})
+
+    assert result == "missing"
+    client.put.assert_not_called()
+
+
+def test_probe_one_ffprobe_failure(tmp_path: Path) -> None:
+    import subprocess
+
+    from src.client.cli.repair import _probe_one
+
+    (tmp_path / "bad.mov").write_bytes(b"x")
+    client = MagicMock()
+    with patch(
+        "src.client.cli.repair.probe_video",
+        side_effect=subprocess.CalledProcessError(1, "ffprobe"),
+    ):
+        result = _probe_one(client, tmp_path, {"asset_id": "ast_1", "rel_path": "bad.mov"})
+
+    assert result == "failed"
+    client.put.assert_not_called()
+
+
+def test_probe_is_an_enrich_type() -> None:
+    from src.client.cli.main import ENRICH_TYPES
+    from src.client.cli.repair import REPAIR_TYPES
+
+    assert "probe" in REPAIR_TYPES
+    assert "probe" in ENRICH_TYPES
