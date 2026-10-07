@@ -48,6 +48,7 @@ from src.server.api.routers.upgrade import router as upgrade_router
 from src.server.api.routers.facets import router as facets_router
 from src.server.api.routers.similarity import router as similarity_router
 from src.server.api.routers.public_projects import router as public_projects_router
+from src.server.api.routers.export import router as export_router
 from src.server.api.routers.ratings import router as ratings_router
 from src.server.api.routers.query import router as query_router
 from src.server.api.routers.filters import router as filters_router
@@ -105,6 +106,7 @@ app.include_router(projects.router, prefix="/v1/collections", deprecated=True, i
 app.include_router(
     public_projects_router, prefix="/v1/public/collections", deprecated=True, include_in_schema=False
 )
+app.include_router(export_router)
 app.include_router(video.router)
 app.include_router(keys.router)
 app.include_router(me.router)
