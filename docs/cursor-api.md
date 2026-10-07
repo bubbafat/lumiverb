@@ -265,6 +265,13 @@ Projects are transient, many-to-many sets of clips for one job (ADR-016), across
 
 **Key behaviors**: Projects are user-owned (`owner_user_id`). Visibility: `private` (owner only), `shared` (all tenant users can view), `public` (anyone with link). Mutations (add/remove/reorder/delete) require ownership. Asset count is computed at query time (no denormalized column). Cover image uses lazy self-healing — if `cover_asset_id` points to a deleted/removed asset, falls back to first-by-position and nulls the stale value. Trashing an asset hides it from projects but preserves the `project_assets` row; restoring the asset restores project membership and position. Hard-deleting (empty trash) removes `project_assets` rows via ON DELETE CASCADE.
 
+**Send to editor (ADR-016 v1):**
+
+- **GET /v1/projects/{id}/export** — Query: `format` (`fcp7` = DaVinci Resolve / Premiere Pro, xmeml v5; `fcpxml` = Final Cut Pro, FCPXML 1.10), `prefix` (optional). Returns the file as an attachment (`Content-Disposition` filename = the project name, unsafe characters replaced). A bin (FCP7) or event (FCPXML) of master clips pointing at the originals: `file://{prefix or the library's root}/{rel_path}`, with duration in frames, nominal frame rate, start timecode (drop-frame aware), display size and audio layout from the video facet; unprobed clips fall back to 30 fps. Pages through every clip (no 1,000 cap). Video only for now: `X-Lumiverb-Skipped-Stills` counts the photos left out. Archived projects export too. 400 unknown format, 404 not found or not visible.
+- **GET /v1/export/formats** — `{ "items": [{ "id", "label", "file_extension" }] }` for the format chooser.
+
+**Paging**: `GET /v1/projects/{id}/assets` returns `next_cursor` for smart projects too (text-search smart projects return their relevance-ordered candidate set, up to 5,000, without a cursor). Static projects sorted by `taken_at` page by capture time, `COALESCE(taken_at, file_mtime, created_at)`. A smart project's rating filters read its owner's ratings, so a shared "favorites" project shows every viewer the same clips.
+
 **Public project endpoints (no auth required):**
 
 - **GET /v1/public/projects/{id}** — Returns privacy-stripped project metadata: `{ "project_id", "name", "description", "cover_asset_id", "asset_count" }`. 404 if project not found or not public. Resolved via `public_projects` control plane table.
