@@ -154,9 +154,9 @@ def test_search_date_from_only(search_env):
         exif_data={"taken_at": "2024-08-20T14:30:00+00:00"},
     )
 
-    r = client.get("/v1/search?date_from=2024-01-01", headers=_headers(api_key))
+    r = client.get("/v1/query?f=date:2024-01-01,", headers=_headers(api_key))
     assert r.status_code == 200
-    ids = [h["asset_id"] for h in r.json()["hits"]]
+    ids = [h["asset_id"] for h in r.json()["items"]]
     assert a_new in ids
     assert a_old not in ids
 
@@ -175,9 +175,9 @@ def test_search_date_to_only(search_env):
         exif_data={"taken_at": "2024-08-20T14:30:00+00:00"},
     )
 
-    r = client.get("/v1/search?date_to=2023-12-31", headers=_headers(api_key))
+    r = client.get("/v1/query?f=date:,2023-12-31", headers=_headers(api_key))
     assert r.status_code == 200
-    ids = [h["asset_id"] for h in r.json()["hits"]]
+    ids = [h["asset_id"] for h in r.json()["items"]]
     assert a_old in ids
     assert a_new not in ids
 
@@ -201,11 +201,11 @@ def test_search_date_range(search_env):
     )
 
     r = client.get(
-        "/v1/search?date_from=2023-06-01&date_to=2023-12-31",
+        "/v1/query?f=date:2023-06-01,2023-12-31",
         headers=_headers(api_key),
     )
     assert r.status_code == 200
-    ids = [h["asset_id"] for h in r.json()["hits"]]
+    ids = [h["asset_id"] for h in r.json()["items"]]
     assert a_in in ids
     assert a_before not in ids
     assert a_after not in ids
@@ -234,11 +234,11 @@ def test_search_favorite_filter(search_env):
 
     # Date-only search to avoid BM25 dependency
     r = client.get(
-        "/v1/search?date_from=2024-06-01&date_to=2024-06-30&favorite=true",
+        "/v1/query?f=date:2024-06-01,2024-06-30&f=favorite:yes",
         headers=_headers(api_key),
     )
     assert r.status_code == 200
-    ids = [h["asset_id"] for h in r.json()["hits"]]
+    ids = [h["asset_id"] for h in r.json()["items"]]
     assert a_fav in ids
     assert a_nofav not in ids
 
@@ -262,11 +262,11 @@ def test_search_star_filter(search_env):
     client.put(f"/v1/assets/{a_low}/rating", json={"stars": 1}, headers=_headers(api_key))
 
     r = client.get(
-        "/v1/search?date_from=2024-01-01&date_to=2024-01-31&star_min=4",
+        "/v1/query?f=date:2024-01-01,2024-01-31&f=stars:4%2B",
         headers=_headers(api_key),
     )
     assert r.status_code == 200
-    ids = [h["asset_id"] for h in r.json()["hits"]]
+    ids = [h["asset_id"] for h in r.json()["items"]]
     assert a_high in ids
     assert a_low not in ids
 
@@ -290,11 +290,11 @@ def test_search_color_filter(search_env):
     client.put(f"/v1/assets/{a_blue}/rating", json={"color": "blue"}, headers=_headers(api_key))
 
     r = client.get(
-        "/v1/search?date_from=2024-02-01&date_to=2024-02-28&color=red",
+        "/v1/query?f=date:2024-02-01,2024-02-28&f=color:red",
         headers=_headers(api_key),
     )
     assert r.status_code == 200
-    ids = [h["asset_id"] for h in r.json()["hits"]]
+    ids = [h["asset_id"] for h in r.json()["items"]]
     assert a_red in ids
     assert a_blue not in ids
 
@@ -317,11 +317,11 @@ def test_search_has_color_true(search_env):
     client.put(f"/v1/assets/{a_colored}/rating", json={"color": "green"}, headers=_headers(api_key))
 
     r = client.get(
-        "/v1/search?date_from=2024-03-01&date_to=2024-03-31&has_color=true",
+        "/v1/query?f=date:2024-03-01,2024-03-31&f=has_color:yes",
         headers=_headers(api_key),
     )
     assert r.status_code == 200
-    ids = [h["asset_id"] for h in r.json()["hits"]]
+    ids = [h["asset_id"] for h in r.json()["items"]]
     assert a_colored in ids
     assert a_plain not in ids
 
@@ -339,11 +339,11 @@ def test_search_has_color_false(search_env):
     client.put(f"/v1/assets/{a_colored}/rating", json={"color": "purple"}, headers=_headers(api_key))
 
     r = client.get(
-        "/v1/search?date_from=2024-04-01&date_to=2024-04-30&has_color=false",
+        "/v1/query?f=date:2024-04-01,2024-04-30&f=has_color:no",
         headers=_headers(api_key),
     )
     assert r.status_code == 200
-    ids = [h["asset_id"] for h in r.json()["hits"]]
+    ids = [h["asset_id"] for h in r.json()["items"]]
     assert a_plain in ids
     assert a_colored not in ids
 
@@ -366,10 +366,10 @@ def test_search_has_rating_with_date(search_env):
     client.put(f"/v1/assets/{a_rated}/rating", json={"stars": 3}, headers=_headers(api_key))
 
     r = client.get(
-        "/v1/search?date_from=2024-05-01&date_to=2024-05-31&has_rating=true",
+        "/v1/query?f=date:2024-05-01,2024-05-31&f=has_rating:yes",
         headers=_headers(api_key),
     )
     assert r.status_code == 200
-    ids = [h["asset_id"] for h in r.json()["hits"]]
+    ids = [h["asset_id"] for h in r.json()["items"]]
     assert a_rated in ids
     assert a_unrated not in ids

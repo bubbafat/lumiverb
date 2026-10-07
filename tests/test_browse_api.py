@@ -134,7 +134,7 @@ def test_browse_returns_assets_from_all_libraries(browse_env):
     a1 = _ingest_asset(client, api_key, lib1_id, "alpha1.jpg")
     a2 = _ingest_asset(client, api_key, lib2_id, "beta1.jpg")
 
-    r = client.get("/v1/browse", headers=_headers(api_key))
+    r = client.get("/v1/query", headers=_headers(api_key))
     assert r.status_code == 200
     data = r.json()
     ids = [i["asset_id"] for i in data["items"]]
@@ -155,7 +155,7 @@ def test_browse_filter_by_library_id(browse_env):
     a1 = _ingest_asset(client, api_key, lib1_id, "alpha_filt1.jpg")
     _ingest_asset(client, api_key, lib2_id, "beta_filt1.jpg")
 
-    r = client.get(f"/v1/browse?library_id={lib1_id}", headers=_headers(api_key))
+    r = client.get(f"/v1/query?f=library:{lib1_id}", headers=_headers(api_key))
     assert r.status_code == 200
     ids = [i["asset_id"] for i in r.json()["items"]]
     assert a1 in ids
@@ -165,21 +165,13 @@ def test_browse_filter_by_library_id(browse_env):
 
 
 @pytest.mark.slow
-def test_browse_path_prefix_without_library_id_rejected(browse_env):
-    client, api_key, _, _ = browse_env
-    r = client.get("/v1/browse?path_prefix=photos", headers=_headers(api_key))
-    assert r.status_code == 400
-    assert "library_id" in r.json()["detail"].lower()
-
-
-@pytest.mark.slow
 def test_browse_path_prefix_with_library_id(browse_env):
     client, api_key, lib1_id, _ = browse_env
     a1 = _ingest_asset(client, api_key, lib1_id, "subdir/nested.jpg")
     a2 = _ingest_asset(client, api_key, lib1_id, "other/file.jpg")
 
     r = client.get(
-        f"/v1/browse?library_id={lib1_id}&path_prefix=subdir",
+        f"/v1/query?f=library:{lib1_id}&f=path:subdir",
         headers=_headers(api_key),
     )
     assert r.status_code == 200
@@ -201,7 +193,7 @@ def test_browse_filter_favorite(browse_env):
 
     client.put(f"/v1/assets/{a1}/rating", json={"favorite": True}, headers=_headers(api_key))
 
-    r = client.get("/v1/browse?favorite=true", headers=_headers(api_key))
+    r = client.get("/v1/query?f=favorite:yes", headers=_headers(api_key))
     assert r.status_code == 200
     ids = [i["asset_id"] for i in r.json()["items"]]
     assert a1 in ids
@@ -217,7 +209,7 @@ def test_browse_filter_star_min(browse_env):
     client.put(f"/v1/assets/{a1}/rating", json={"stars": 5}, headers=_headers(api_key))
     client.put(f"/v1/assets/{a2}/rating", json={"stars": 2}, headers=_headers(api_key))
 
-    r = client.get("/v1/browse?star_min=4", headers=_headers(api_key))
+    r = client.get("/v1/query?f=stars:4%2B", headers=_headers(api_key))
     assert r.status_code == 200
     ids = [i["asset_id"] for i in r.json()["items"]]
     assert a1 in ids
@@ -233,7 +225,7 @@ def test_browse_filter_color(browse_env):
     client.put(f"/v1/assets/{a1}/rating", json={"color": "green"}, headers=_headers(api_key))
     client.put(f"/v1/assets/{a2}/rating", json={"color": "blue"}, headers=_headers(api_key))
 
-    r = client.get("/v1/browse?color=green", headers=_headers(api_key))
+    r = client.get("/v1/query?f=color:green", headers=_headers(api_key))
     assert r.status_code == 200
     ids = [i["asset_id"] for i in r.json()["items"]]
     assert a1 in ids
@@ -255,7 +247,7 @@ def test_browse_pagination(browse_env):
         assets.append(_ingest_asset(client, api_key, lib1_id, f"page_{i}.jpg"))
 
     # Page with limit=2
-    r = client.get("/v1/browse?limit=2&sort=asset_id&dir=asc", headers=_headers(api_key))
+    r = client.get("/v1/query?limit=2&sort=rel_path&dir=asc", headers=_headers(api_key))
     assert r.status_code == 200
     data = r.json()
     assert len(data["items"]) == 2
@@ -263,7 +255,7 @@ def test_browse_pagination(browse_env):
 
     # Second page
     r2 = client.get(
-        f"/v1/browse?limit=2&sort=asset_id&dir=asc&after={data['next_cursor']}",
+        f"/v1/query?limit=2&sort=rel_path&dir=asc&after={data['next_cursor']}",
         headers=_headers(api_key),
     )
     assert r2.status_code == 200
@@ -284,12 +276,12 @@ def test_browse_media_type_filter(browse_env):
     client, api_key, lib1_id, _ = browse_env
     a1 = _ingest_asset(client, api_key, lib1_id, "br_mt1.jpg")
 
-    r = client.get("/v1/browse?media_type=image", headers=_headers(api_key))
+    r = client.get("/v1/query?f=media:image", headers=_headers(api_key))
     assert r.status_code == 200
     ids = [i["asset_id"] for i in r.json()["items"]]
     assert a1 in ids
 
-    r2 = client.get("/v1/browse?media_type=video", headers=_headers(api_key))
+    r2 = client.get("/v1/query?f=media:video", headers=_headers(api_key))
     assert r2.status_code == 200
     # a1 is an image, shouldn't appear in video-only filter
     # (other tests may have created images too, just verify no error)
@@ -301,5 +293,5 @@ def test_browse_media_type_filter(browse_env):
 def test_browse_no_auth_fails(browse_env):
     """Browse requires authentication."""
     client, _, _, _ = browse_env
-    r = client.get("/v1/browse")
+    r = client.get("/v1/query")
     assert r.status_code in (401, 403)

@@ -68,10 +68,10 @@ def test_video_scenes_no_auth(auth_rejection_client: TestClient) -> None:
 
 @pytest.mark.slow
 def test_search_no_auth(auth_rejection_client: TestClient) -> None:
-    """GET /v1/search without auth returns 401."""
+    """GET /v1/query with a text filter, without auth, returns 401."""
     r = auth_rejection_client.get(
-        "/v1/search",
-        params={"library_id": "lib_foo", "q": "sunset"},
+        "/v1/query",
+        params={"f": ["library:lib_foo", "query:sunset"]},
     )
     assert r.status_code == 401
 

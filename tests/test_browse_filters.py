@@ -152,7 +152,7 @@ def test_browse_has_rating_true(filter_env):
     # Rate one asset
     client.put(f"/v1/assets/{a_rated}/rating", json={"stars": 3}, headers=_headers(api_key))
 
-    r = client.get("/v1/browse?has_rating=true", headers=_headers(api_key))
+    r = client.get("/v1/query?f=has_rating:yes", headers=_headers(api_key))
     assert r.status_code == 200
     ids = [i["asset_id"] for i in r.json()["items"]]
     assert a_rated in ids
@@ -168,7 +168,7 @@ def test_browse_has_rating_false(filter_env):
 
     client.put(f"/v1/assets/{a_rated}/rating", json={"favorite": True}, headers=_headers(api_key))
 
-    r = client.get("/v1/browse?has_rating=false", headers=_headers(api_key))
+    r = client.get("/v1/query?f=has_rating:no", headers=_headers(api_key))
     assert r.status_code == 200
     ids = [i["asset_id"] for i in r.json()["items"]]
     assert a_unrated in ids
@@ -192,7 +192,7 @@ def test_browse_multi_color(filter_env):
     client.put(f"/v1/assets/{a_blue}/rating", json={"color": "blue"}, headers=_headers(api_key))
     client.put(f"/v1/assets/{a_green}/rating", json={"color": "green"}, headers=_headers(api_key))
 
-    r = client.get("/v1/browse?color=red,blue", headers=_headers(api_key))
+    r = client.get("/v1/query?f=color:red,blue", headers=_headers(api_key))
     assert r.status_code == 200
     ids = [i["asset_id"] for i in r.json()["items"]]
     assert a_red in ids
@@ -217,7 +217,7 @@ def test_browse_star_range(filter_env):
     client.put(f"/v1/assets/{a3}/rating", json={"stars": 3}, headers=_headers(api_key))
     client.put(f"/v1/assets/{a5}/rating", json={"stars": 5}, headers=_headers(api_key))
 
-    r = client.get("/v1/browse?star_min=2&star_max=4", headers=_headers(api_key))
+    r = client.get("/v1/query?f=stars:2-4", headers=_headers(api_key))
     assert r.status_code == 200
     ids = [i["asset_id"] for i in r.json()["items"]]
     assert a3 in ids
@@ -240,7 +240,7 @@ def test_browse_has_faces(filter_env):
     # has_faces works via face_count on the asset. For testing, just verify the
     # parameter is accepted and returns 200 (face_count is set during enrichment,
     # not during ingest, so we can't easily create assets with faces in tests).
-    r = client.get("/v1/browse?has_faces=true", headers=_headers(api_key))
+    r = client.get("/v1/query?f=has_faces:yes", headers=_headers(api_key))
     assert r.status_code == 200
     # All returned items should have face_count > 0 (or the list is empty for test data)
 
@@ -266,7 +266,7 @@ def test_browse_date_from(filter_env):
         exif_data={"taken_at": "2024-03-20T14:30:00+00:00"},
     )
 
-    r = client.get("/v1/browse?date_from=2024-01-01", headers=_headers(api_key))
+    r = client.get("/v1/query?f=date:2024-01-01,", headers=_headers(api_key))
     assert r.status_code == 200
     ids = [i["asset_id"] for i in r.json()["items"]]
     assert a_new in ids
@@ -287,7 +287,7 @@ def test_browse_date_to(filter_env):
         exif_data={"taken_at": "2024-03-20T14:30:00+00:00"},
     )
 
-    r = client.get("/v1/browse?date_to=2023-12-31", headers=_headers(api_key))
+    r = client.get("/v1/query?f=date:,2023-12-31", headers=_headers(api_key))
     assert r.status_code == 200
     ids = [i["asset_id"] for i in r.json()["items"]]
     assert a_old in ids
@@ -313,7 +313,7 @@ def test_browse_date_range(filter_env):
     )
 
     r = client.get(
-        "/v1/browse?date_from=2023-06-01&date_to=2023-12-31",
+        "/v1/query?f=date:2023-06-01,2023-12-31",
         headers=_headers(api_key),
     )
     assert r.status_code == 200
@@ -338,7 +338,7 @@ def test_browse_has_color_true(filter_env):
     client.put(f"/v1/assets/{a_colored}/rating", json={"color": "red"}, headers=_headers(api_key))
     # a_plain has no rating at all
 
-    r = client.get("/v1/browse?has_color=true", headers=_headers(api_key))
+    r = client.get("/v1/query?f=has_color:yes", headers=_headers(api_key))
     assert r.status_code == 200
     ids = [i["asset_id"] for i in r.json()["items"]]
     assert a_colored in ids
@@ -354,7 +354,7 @@ def test_browse_has_color_false(filter_env):
 
     client.put(f"/v1/assets/{a_colored}/rating", json={"color": "blue"}, headers=_headers(api_key))
 
-    r = client.get("/v1/browse?has_color=false", headers=_headers(api_key))
+    r = client.get("/v1/query?f=has_color:no", headers=_headers(api_key))
     assert r.status_code == 200
     ids = [i["asset_id"] for i in r.json()["items"]]
     assert a_plain in ids
@@ -398,7 +398,7 @@ def test_browse_stacked_filters(filter_env):
     client.put(f"/v1/assets/{a_wrong_date}/rating", json={"stars": 4, "color": "green"}, headers=_headers(api_key))
 
     r = client.get(
-        "/v1/browse?date_from=2024-01-01&camera_make=Canon&star_min=3&color=green",
+        "/v1/query?f=date:2024-01-01,&f=camera_make:Canon&f=stars:3%2B&f=color:green",
         headers=_headers(api_key),
     )
     assert r.status_code == 200
@@ -421,7 +421,7 @@ def test_browse_favorite_plus_has_color(filter_env):
     client.put(f"/v1/assets/{a_fav_only}/rating", json={"favorite": True}, headers=_headers(api_key))
     client.put(f"/v1/assets/{a_color_only}/rating", json={"color": "blue"}, headers=_headers(api_key))
 
-    r = client.get("/v1/browse?favorite=true&has_color=true", headers=_headers(api_key))
+    r = client.get("/v1/query?f=favorite:yes&f=has_color:yes", headers=_headers(api_key))
     assert r.status_code == 200
     ids = [i["asset_id"] for i in r.json()["items"]]
     assert a_fav_color in ids

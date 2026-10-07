@@ -331,7 +331,7 @@ def test_has_faces_filter_on_page(face_client: Tuple[_AuthClient, str, str]) -> 
 
 @pytest.mark.slow
 def test_has_faces_filter_on_browse(face_client: Tuple[_AuthClient, str, str]) -> None:
-    """GET /v1/browse?has_faces=true filters via SQL in UnifiedBrowseRepository."""
+    """GET /v1/query?f=has_faces:yes filters via SQL in UnifiedBrowseRepository."""
     auth_client, library_id, _ = face_client
 
     # Asset with faces
@@ -346,7 +346,7 @@ def test_has_faces_filter_on_browse(face_client: Tuple[_AuthClient, str, str]) -
     auth_client.post(f"/v1/assets/{asset_zero}/faces", json={"faces": []})
 
     # has_faces=true -> only asset_with
-    r = auth_client.get("/v1/browse?has_faces=true")
+    r = auth_client.get("/v1/query?f=has_faces:yes")
     assert r.status_code == 200
     ids = [i["asset_id"] for i in r.json()["items"]]
     assert asset_with in ids
@@ -355,7 +355,7 @@ def test_has_faces_filter_on_browse(face_client: Tuple[_AuthClient, str, str]) -
 
 @pytest.mark.slow
 def test_has_faces_filter_on_search(face_client: Tuple[_AuthClient, str, str]) -> None:
-    """GET /v1/search?has_faces=true post-filters search results correctly."""
+    """GET /v1/query?f=query:…&f=has_faces:yes filters text search results."""
     auth_client, library_id, tenant_url = face_client
 
     import json as _json
@@ -392,10 +392,10 @@ def test_has_faces_filter_on_search(face_client: Tuple[_AuthClient, str, str]) -
     os.environ["QUICKWIT_FALLBACK_TO_POSTGRES"] = "true"
     get_settings.cache_clear()
 
-    r = auth_client.get("/v1/search", params={"q": "sunset", "has_faces": "true"})
+    r = auth_client.get("/v1/query", params={"f": ["query:sunset", "has_faces:yes"]})
     assert r.status_code == 200
     data = r.json()
-    hit_ids = [h["asset_id"] for h in data["hits"]]
+    hit_ids = [h["asset_id"] for h in data["items"]]
     assert asset_with in hit_ids
     assert asset_no not in hit_ids
 

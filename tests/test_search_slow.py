@@ -1,4 +1,4 @@
-"""Slow tests for the /v1/search endpoint using Postgres fallback."""
+"""Slow tests for text search through GET /v1/query using the Postgres fallback."""
 
 import os
 import secrets
@@ -138,7 +138,7 @@ def _insert_asset_with_metadata(tenant_url: str, library_id: str, description: s
 
 @pytest.mark.slow
 def test_search_postgres_fallback(search_client: Tuple[_AuthClient, str, str]) -> None:
-    """With quickwit_enabled=False, /v1/search should return Postgres ILIKE results."""
+    """With quickwit_enabled=False, /v1/query should return Postgres ILIKE results."""
     auth_client, library_id, tenant_url = search_client
 
     # Force Quickwit disabled and allow fallback.
@@ -147,17 +147,17 @@ def test_search_postgres_fallback(search_client: Tuple[_AuthClient, str, str]) -
     get_settings.cache_clear()
 
     description = "A golden sunset over the mountains."
-    _insert_asset_with_metadata(tenant_url, library_id, description, "sunset")
+    asset_id = _insert_asset_with_metadata(tenant_url, library_id, description, "sunset")
 
     r = auth_client.get(
-        "/v1/search",
-        params={"library_id": library_id, "q": "sunset"},
+        "/v1/query",
+        params={"f": [f"library:{library_id}", "query:sunset"]},
     )
     assert r.status_code == 200, (r.status_code, r.text)
     data = r.json()
-    assert data["source"] == "postgres"
-    assert data["total"] >= 1
-    assert any("sunset" in hit["description"] for hit in data["hits"])
+    assert data["search_source"] == "postgres_fallback"
+    assert data["total_estimate"] >= 1
+    assert asset_id in {hit["asset_id"] for hit in data["items"]}
 
 
 @pytest.mark.slow
@@ -170,13 +170,12 @@ def test_search_no_results(search_client: Tuple[_AuthClient, str, str]) -> None:
     get_settings.cache_clear()
 
     r = auth_client.get(
-        "/v1/search",
-        params={"library_id": library_id, "q": "term_that_does_not_exist_12345"},
+        "/v1/query",
+        params={"f": [f"library:{library_id}", "query:term_that_does_not_exist_12345"]},
     )
     assert r.status_code == 200, (r.status_code, r.text)
     data = r.json()
-    assert data["total"] == 0
-    assert data["hits"] == []
+    assert data["items"] == []
 
 
 @pytest.mark.slow
@@ -192,20 +191,20 @@ def test_search_quickwit_fallback_on_error(search_client: Tuple[_AuthClient, str
     get_settings.cache_clear()
 
     description = "A quiet forest path at dawn."
-    _insert_asset_with_metadata(tenant_url, library_id, description, "forest")
+    asset_id = _insert_asset_with_metadata(tenant_url, library_id, description, "forest")
 
     # Make QuickwitClient.search_tenant raise to trigger fallback path.
     with patch("src.server.search.quickwit_client.QuickwitClient.search_tenant") as mock_search:
         mock_search.side_effect = ConnectionError("Quickwit unavailable")
 
         r = auth_client.get(
-            "/v1/search",
-            params={"library_id": library_id, "q": "forest"},
+            "/v1/query",
+            params={"f": [f"library:{library_id}", "query:forest"]},
         )
 
     assert r.status_code == 200, (r.status_code, r.text)
     data = r.json()
-    assert data["source"] == "postgres"
-    assert data["total"] >= 1
-    assert any("forest" in hit["description"] for hit in data["hits"])
+    assert data["search_source"] == "postgres_fallback"
+    assert data["total_estimate"] >= 1
+    assert asset_id in {hit["asset_id"] for hit in data["items"]}
 
