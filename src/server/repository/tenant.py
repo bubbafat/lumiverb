@@ -1827,8 +1827,8 @@ class ProjectRepository:
             select(Project).where(Project.project_id == project_id)
         ).first()
 
-    def list_for_user(self, user_id: str) -> list[Project]:
-        """Return projects owned by user + shared projects."""
+    def list_for_user(self, user_id: str, *, statuses: tuple[str, ...] = ("active",)) -> list[Project]:
+        """Return projects owned by user + shared projects, in the given lifecycle states."""
         return list(
             self._session.exec(
                 select(Project)
@@ -1837,7 +1837,8 @@ class ProjectRepository:
                         Project.owner_user_id == user_id,
                         Project.owner_user_id.is_(None),  # type: ignore[union-attr]
                         Project.visibility.in_(["shared", "public"]),  # type: ignore[union-attr]
-                    )
+                    ),
+                    Project.status.in_(statuses),  # type: ignore[attr-defined]
                 )
                 .order_by(Project.created_at.desc())  # type: ignore[attr-defined]
             ).all()
@@ -1853,10 +1854,14 @@ class ProjectRepository:
         sort_order: str | None = None,
         cover_asset_id: str | None = _SENTINEL,
         saved_query: dict | None = _SENTINEL,
+        status: str | None = None,
     ) -> Project | None:
         col = self.get_by_id(project_id)
         if col is None:
             return None
+        if status is not None and status != col.status:
+            col.status = status
+            col.archived_at = utcnow() if status == "archived" else None
         if name is not None:
             col.name = name
         if description is not _SENTINEL:

@@ -754,9 +754,26 @@ export async function revokeApiKey(keyId: string): Promise<void> {
 // Projects
 // ---------------------------------------------------------------------------
 
-export async function listProjects(): Promise<ProjectItem[]> {
-  const res = await apiFetch<ProjectListResponse>("/projects");
+export type ProjectStatus = "active" | "archived";
+
+/** Active projects by default; archived ones leave the sidebar and pickers. */
+export async function listProjects(
+  status: ProjectStatus | "all" = "active",
+): Promise<ProjectItem[]> {
+  const qs = status === "active" ? "" : `?status=${status}`;
+  const res = await apiFetch<ProjectListResponse>(`/projects${qs}`);
   return res.items;
+}
+
+/** Archive (or restore) a project. Archived projects keep their clips. */
+export async function setProjectStatus(
+  projectId: string,
+  status: ProjectStatus,
+): Promise<ProjectItem> {
+  return apiFetch<ProjectItem>(`/projects/${projectId}`, {
+    method: "PATCH",
+    body: { status },
+  });
 }
 
 export async function getProject(

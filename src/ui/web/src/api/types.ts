@@ -240,6 +240,8 @@ export interface ProjectItem {
   asset_count: number;
   created_at: string;
   updated_at: string;
+  status?: "active" | "archived";
+  archived_at?: string | null;
 }
 
 export interface ProjectListResponse {

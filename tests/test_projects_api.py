@@ -664,3 +664,64 @@ def test_public_project_readable_without_auth(projects_env, prefix):
     assets = client.get(f"{prefix}/{project_id}/assets")
     assert assets.status_code == 200, assets.text
     assert [a["asset_id"] for a in assets.json()["items"]] == [asset_id]
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle: active -> archived -> active
+# ---------------------------------------------------------------------------
+
+
+def _ids(client, api_key, **params) -> set[str]:
+    r = client.get("/v1/projects", params=params, headers=_headers(api_key))
+    assert r.status_code == 200, r.text
+    return {p["project_id"] for p in r.json()["items"]}
+
+
+@pytest.mark.slow
+def test_archive_hides_project_but_keeps_its_clips(projects_env):
+    client, api_key, library_id = projects_env
+    asset_id = _ingest_asset(client, api_key, library_id, "lifecycle/clip.jpg")
+    project_id = client.post(
+        "/v1/projects", json={"name": "Customer Video 123", "asset_ids": [asset_id]},
+        headers=_headers(api_key),
+    ).json()["project_id"]
+    assert client.get(f"/v1/projects/{project_id}", headers=_headers(api_key)).json()["status"] == "active"
+
+    r = client.patch(
+        f"/v1/projects/{project_id}", json={"status": "archived"}, headers=_headers(api_key)
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "archived"
+    assert r.json()["archived_at"] is not None
+
+    assert project_id not in _ids(client, api_key)
+    assert project_id in _ids(client, api_key, status="archived")
+    assert project_id in _ids(client, api_key, status="all")
+    assert project_id not in _ids(client, api_key, status="active")
+    detail = client.get(f"/v1/projects/{project_id}", headers=_headers(api_key))
+    assert detail.status_code == 200
+    assert detail.json()["asset_count"] == 1
+    assets = client.get(f"/v1/projects/{project_id}/assets", headers=_headers(api_key))
+    assert [a["asset_id"] for a in assets.json()["items"]] == [asset_id]
+
+    r = client.patch(
+        f"/v1/projects/{project_id}", json={"status": "active"}, headers=_headers(api_key)
+    )
+    assert r.json()["status"] == "active"
+    assert r.json()["archived_at"] is None
+    assert project_id in _ids(client, api_key)
+
+
+@pytest.mark.slow
+def test_invalid_status_rejected(projects_env):
+    client, api_key, _ = projects_env
+    project_id = client.post(
+        "/v1/projects", json={"name": "Bad status"}, headers=_headers(api_key)
+    ).json()["project_id"]
+
+    r = client.patch(
+        f"/v1/projects/{project_id}", json={"status": "deleted"}, headers=_headers(api_key)
+    )
+    assert r.status_code in (400, 422)
+    r = client.get("/v1/projects", params={"status": "nope"}, headers=_headers(api_key))
+    assert r.status_code in (400, 422)

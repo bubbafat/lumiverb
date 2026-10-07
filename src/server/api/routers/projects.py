@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, model_validator, Field
@@ -43,6 +43,9 @@ class UpdateProjectRequest(BaseModel):
     sort_order: str | None = None
     cover_asset_id: str | None = None
     saved_query: dict | None = None
+    # Lifecycle: archived projects leave the default list (sidebar, pickers)
+    # but keep their clips and stay readable and exportable.
+    status: Literal["active", "archived"] | None = None
 
 
 class ProjectItem(BaseModel):
@@ -59,6 +62,8 @@ class ProjectItem(BaseModel):
     asset_count: int
     created_at: str
     updated_at: str
+    status: str = "active"  # active | archived
+    archived_at: str | None = None
     # Pre-rename name of project_id, for macOS/iOS builds that still read it.
     collection_id: str | None = None
 
@@ -156,6 +161,8 @@ def _project_to_item(
         asset_count=count,
         created_at=col.created_at.isoformat(),
         updated_at=col.updated_at.isoformat(),
+        status=col.status,
+        archived_at=col.archived_at.isoformat() if col.archived_at else None,
     )
 
 
@@ -241,10 +248,12 @@ def list_projects(
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
     user_id: Annotated[str, Depends(get_current_user_id)],
+    status: Literal["active", "archived", "all"] = "active",
 ) -> ProjectListResponse:
-    """List projects owned by user + shared projects."""
+    """List projects owned by user + shared projects. Active only unless status says otherwise."""
     repo = ProjectRepository(session)
-    projects = repo.list_for_user(user_id)
+    statuses = ("active", "archived") if status == "all" else (status,)
+    projects = repo.list_for_user(user_id, statuses=statuses)
     return ProjectListResponse(
         items=[_project_to_item(c, repo, user_id, session=session) for c in projects]
     )
@@ -305,6 +314,8 @@ def update_project(
         kwargs["cover_asset_id"] = _SENTINEL
     if "saved_query" in raw:
         kwargs["saved_query"] = body.saved_query
+    if body.status is not None:
+        kwargs["status"] = body.status
 
     col = repo.update(project_id, **kwargs)
 

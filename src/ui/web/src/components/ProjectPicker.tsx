@@ -22,7 +22,7 @@ export function ProjectPicker({ assetIds, onClose, onDone }: ProjectPickerProps)
 
   const { data: projects } = useQuery({
     queryKey: ["projects"],
-    queryFn: listProjects,
+    queryFn: () => listProjects(),
   });
 
   const filtered = useMemo(() => {

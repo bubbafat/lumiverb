@@ -17,10 +17,18 @@ projects_app = typer.Typer(help="Manage projects.")
 @projects_app.command("list")
 def project_list(
     json: Annotated[bool, typer.Option("--json", help="Output raw JSON.")] = False,
+    archived: Annotated[bool, typer.Option("--archived", help="List archived projects instead.")] = False,
+    all_: Annotated[bool, typer.Option("--all", help="List active and archived projects.")] = False,
 ) -> None:
-    """List all projects you own or that are shared with you."""
+    """List projects you own or that are shared with you (active ones unless asked)."""
+    if archived and all_:
+        console.print("[red]--archived and --all are mutually exclusive.[/red]")
+        raise typer.Exit(1)
     client = LumiverbClient()
-    resp = client.get("/v1/projects")
+    if archived or all_:
+        resp = client.get("/v1/projects", params={"status": "archived" if archived else "all"})
+    else:
+        resp = client.get("/v1/projects")
     data = resp.json()
     items = data.get("items", [])
 
@@ -35,6 +43,7 @@ def project_list(
     table.add_column("Assets", justify="right")
     table.add_column("Visibility")
     table.add_column("Ownership")
+    table.add_column("Status")
     for col in items:
         table.add_row(
             col.get("project_id", ""),
@@ -42,6 +51,7 @@ def project_list(
             str(col.get("asset_count", 0)),
             col.get("visibility", ""),
             col.get("ownership", ""),
+            col.get("status", "active"),
         )
     console.print(table)
 
@@ -171,3 +181,26 @@ def project_delete(
         console.print(f"[green]Deleted {project_id}[/green]")
         return
     client._handle_response(resp)  # type: ignore[attr-defined]
+
+
+def _set_status(project_id: str, status: str) -> None:
+    client = LumiverbClient()
+    data = client.patch(f"/v1/projects/{project_id}", json={"status": status}).json()
+    verb = "archived" if status == "archived" else "restored"
+    console.print(f"[green]Project {verb}: {data.get('name', project_id)} ({project_id})[/green]")
+
+
+@projects_app.command("archive")
+def project_archive(
+    project_id: Annotated[str, typer.Option("--id", help="Project ID.")],
+) -> None:
+    """Archive a project: it leaves the sidebar and pickers but keeps its clips."""
+    _set_status(project_id, "archived")
+
+
+@projects_app.command("restore")
+def project_restore(
+    project_id: Annotated[str, typer.Option("--id", help="Project ID.")],
+) -> None:
+    """Restore an archived project."""
+    _set_status(project_id, "active")

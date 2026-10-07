@@ -5,7 +5,9 @@ import {
   listProjects,
   createProject,
   deleteProject,
+  setProjectStatus,
   ApiError,
+  type ProjectStatus,
 } from "../api/client";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 import { Modal } from "../components/Modal";
@@ -15,16 +17,19 @@ import type { ProjectItem } from "../api/types";
 function ProjectCard({
   project,
   onDelete,
+  onToggleArchive,
   deleteConfirmId,
   setDeleteConfirmId,
   isDeleting,
 }: {
   project: ProjectItem;
   onDelete: (id: string) => void;
+  onToggleArchive: (project: ProjectItem) => void;
   deleteConfirmId: string | null;
   setDeleteConfirmId: (id: string | null) => void;
   isDeleting: boolean;
 }) {
+  const archived = project.status === "archived";
   const { url: coverUrl } = useAuthenticatedImage(
     project.cover_asset_id ?? "",
     "thumbnail",
@@ -109,13 +114,22 @@ function ProjectCard({
                 </button>
               </div>
             ) : (
-              <button
-                type="button"
-                onClick={() => setDeleteConfirmId(project.project_id)}
-                className="rounded px-2 py-1 text-xs text-gray-500 opacity-0 transition-opacity group-hover:opacity-100 hover:text-red-400"
-              >
-                Delete
-              </button>
+              <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                <button
+                  type="button"
+                  onClick={() => onToggleArchive(project)}
+                  className="rounded px-2 py-1 text-xs text-gray-500 hover:text-gray-200"
+                >
+                  {archived ? "Restore" : "Archive"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeleteConfirmId(project.project_id)}
+                  className="rounded px-2 py-1 text-xs text-gray-500 hover:text-red-400"
+                >
+                  Delete
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -131,11 +145,22 @@ export default function ProjectsPage() {
   const [createDesc, setCreateDesc] = useState("");
   const [createError, setCreateError] = useState("");
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [view, setView] = useState<ProjectStatus>("active");
 
   const { data: projects, isLoading, error } = useQuery({
-    queryKey: ["projects"],
-    queryFn: listProjects,
+    queryKey: ["projects", view],
+    queryFn: () => listProjects(view),
     refetchInterval: 10_000,
+  });
+
+  const archiveMutation = useMutation({
+    mutationFn: (project: ProjectItem) =>
+      setProjectStatus(
+        project.project_id,
+        project.status === "archived" ? "active" : "archived",
+      ),
+    // Prefix match: refreshes this page, the sidebar and pickers.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["projects"] }),
   });
 
   const createMutation = useMutation({
@@ -172,7 +197,24 @@ export default function ProjectsPage() {
     <div className="mx-auto max-w-4xl px-6 py-6">
       <div className="space-y-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <h1 className="text-2xl font-semibold">Projects</h1>
+          <div className="flex items-center gap-4">
+            <h1 className="text-2xl font-semibold">Projects</h1>
+            <div className="flex rounded-lg border border-gray-700/50 p-0.5 text-sm">
+              {(["active", "archived"] as const).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => setView(v)}
+                  aria-pressed={view === v}
+                  className={`rounded-md px-3 py-1 capitalize transition-colors duration-150 ${
+                    view === v ? "bg-gray-700 text-gray-100" : "text-gray-400 hover:text-gray-200"
+                  }`}
+                >
+                  {v}
+                </button>
+              ))}
+            </div>
+          </div>
           <button
             type="button"
             onClick={() => setCreateOpen(true)}
@@ -195,7 +237,9 @@ export default function ProjectsPage() {
           </div>
         ) : projects?.length === 0 ? (
           <div className="rounded-lg border border-gray-700/50 bg-gray-900/50 p-8 text-center text-gray-400">
-            No projects yet. Create one to start curating.
+            {view === "archived"
+              ? "No archived projects."
+              : "No projects yet. Create one to start curating."}
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
@@ -204,6 +248,7 @@ export default function ProjectsPage() {
                 key={col.project_id}
                 project={col}
                 onDelete={(id) => deleteMutation.mutate(id)}
+                onToggleArchive={(p) => archiveMutation.mutate(p)}
                 deleteConfirmId={deleteConfirmId}
                 setDeleteConfirmId={setDeleteConfirmId}
                 isDeleting={deleteMutation.isPending}
