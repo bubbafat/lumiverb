@@ -97,4 +97,5 @@ The CLI is an API client and never queries the DB directly, so it is not subject
 
 The API server enforces these rules (see `docs/cursor-api.md` for the full contract):
 - All asset reads go through the `active_assets` view (`deleted_at IS NULL`).
-- Ingesting a file that was previously trashed **restores** it (same `asset_id`, `deleted_at` cleared). It does not create a new record and does not leave a zombie. ADR-016 phase 0 changes this: a user's trash survives a rescan.
+- Ingesting a file the scanner marked missing (`deleted_reason` `missing` or unset) **restores** it (same `asset_id`, `deleted_at` cleared). It does not create a new record and does not leave a zombie.
+- A file the user trashed (`deleted_reason = "user"`), or emptied from the trash, is **not** restored: ingest returns 409 and the scan skips it via `GET /v1/libraries/{id}/ignored-paths` (ADR-016).
