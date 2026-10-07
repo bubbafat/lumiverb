@@ -53,3 +53,56 @@ def test_archive_and_restore(command: str, status: str) -> None:
 
     assert result.exit_code == 0, result.output
     client.patch.assert_called_once_with("/v1/projects/prj_1", json={"status": status})
+
+
+def _export_client(skipped: str = "0") -> MagicMock:
+    client = _client()
+    client.get.return_value.content = b"<xmeml/>"
+    client.get.return_value.headers = {
+        "content-disposition": 'attachment; filename="Customer Video 123.xml"',
+        "x-lumiverb-skipped-stills": skipped,
+    }
+    return client
+
+
+def test_export_writes_the_file(tmp_path) -> None:
+    import os
+
+    client = _export_client()
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        result = _run(client, "export", "--id", "prj_1", "--format", "fcp7")
+    finally:
+        os.chdir(cwd)
+
+    assert result.exit_code == 0, result.output
+    client.get.assert_called_once_with("/v1/projects/prj_1/export", params={"format": "fcp7"})
+    assert (tmp_path / "Customer Video 123.xml").read_bytes() == b"<xmeml/>"
+
+
+def test_export_with_prefix_and_output(tmp_path) -> None:
+    client = _export_client(skipped="2")
+    out = tmp_path / "bin.fcpxml"
+
+    result = _run(
+        client, "export", "--id", "prj_1", "--format", "fcpxml",
+        "--prefix", "/Volumes/Travel SSD", "--output", str(out),
+    )
+
+    assert result.exit_code == 0, result.output
+    client.get.assert_called_once_with(
+        "/v1/projects/prj_1/export",
+        params={"format": "fcpxml", "prefix": "/Volumes/Travel SSD"},
+    )
+    assert out.read_bytes() == b"<xmeml/>"
+    assert "2 photos" in result.output
+
+
+def test_export_rejects_unknown_format() -> None:
+    client = _export_client()
+
+    result = _run(client, "export", "--id", "prj_1", "--format", "edl")
+
+    assert result.exit_code != 0
+    client.get.assert_not_called()

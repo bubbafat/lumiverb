@@ -204,3 +204,39 @@ def project_restore(
 ) -> None:
     """Restore an archived project."""
     _set_status(project_id, "active")
+
+
+_EXPORT_FORMATS = ("fcp7", "fcpxml")
+
+
+@projects_app.command("export")
+def project_export(
+    project_id: Annotated[str, typer.Option("--id", help="Project ID.")],
+    format: Annotated[str, typer.Option("--format", "-f", help="fcp7 (DaVinci Resolve / Premiere Pro) or fcpxml (Final Cut Pro).")],
+    prefix: Annotated[str | None, typer.Option("--prefix", help="Where the originals live on the editing machine (default: each library's root).")] = None,
+    output: Annotated[str | None, typer.Option("--output", "-o", help="File to write (default: the project name, in the current directory).")] = None,
+) -> None:
+    """Export a project as a bin of master clips for an editor."""
+    import re
+    from pathlib import Path
+
+    if format not in _EXPORT_FORMATS:
+        console.print(f"[red]--format must be one of: {', '.join(_EXPORT_FORMATS)}[/red]")
+        raise typer.Exit(1)
+
+    params = {"format": format}
+    if prefix:
+        params["prefix"] = prefix
+    client = LumiverbClient()
+    resp = client.get(f"/v1/projects/{project_id}/export", params=params)
+
+    if output is None:
+        match = re.search(r'filename="([^"]+)"', resp.headers.get("content-disposition", ""))
+        output = match.group(1) if match else f"{project_id}.{'xml' if format == 'fcp7' else 'fcpxml'}"
+    path = Path(output)
+    path.write_bytes(resp.content)
+    console.print(f"[green]Exported to {path}[/green]")
+
+    skipped = int(resp.headers.get("x-lumiverb-skipped-stills", "0") or 0)
+    if skipped:
+        console.print(f"[yellow]{skipped} photos weren't included: exports are video only for now.[/yellow]")
