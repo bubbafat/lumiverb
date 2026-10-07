@@ -91,3 +91,39 @@ def test_cleanup_without_valid_key_is_401(env, headers) -> None:
     r = client.post("/v1/upkeep/cleanup", headers=headers)
 
     assert r.status_code == 401, r.text
+
+
+def _new_key(client, api_key: str, role: str) -> tuple[str, str]:
+    r = client.post(
+        "/v1/keys", json={"label": f"{role}-key", "role": role},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()["key_id"], r.json()["plaintext"]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("role", ["viewer", "editor"])
+def test_cleanup_needs_an_admin_key(env, role) -> None:
+    """Cleanup deletes files: a viewer or editor key can't run it."""
+    client, api_key = env
+    _, key = _new_key(client, api_key, role)
+
+    r = client.post(
+        "/v1/upkeep/cleanup", params={"dry_run": "false"},
+        headers={"Authorization": f"Bearer {key}"},
+    )
+
+    assert r.status_code == 403, r.text
+
+
+@pytest.mark.slow
+def test_cleanup_with_revoked_key_is_401(env) -> None:
+    client, api_key = env
+    key_id, key = _new_key(client, api_key, "admin")
+    r = client.delete(f"/v1/keys/{key_id}", headers={"Authorization": f"Bearer {api_key}"})
+    assert r.status_code in (200, 204), r.text
+
+    r = client.post("/v1/upkeep/cleanup", headers={"Authorization": f"Bearer {key}"})
+
+    assert r.status_code == 401, r.text

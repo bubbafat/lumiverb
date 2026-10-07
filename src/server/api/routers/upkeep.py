@@ -74,8 +74,8 @@ def _is_admin_key(authorization: str | None) -> bool:
     return bool(settings.admin_key and hmac.compare_digest(token, settings.admin_key))
 
 
-def _tenant_for_key(authorization: str | None) -> tuple[str, str] | None:
-    """(tenant_id, connection_string) for a tenant API key, or None.
+def _tenant_for_key(authorization: str | None) -> tuple[str, str, str] | None:
+    """(tenant_id, connection_string, role) for a live tenant API key, or None.
 
     Upkeep routes skip the tenant middleware, so handlers resolve the
     tenant from the key themselves.
@@ -93,7 +93,7 @@ def _tenant_for_key(authorization: str | None) -> tuple[str, str] | None:
         routing = TenantDbRoutingRepository(ctrl).get_by_tenant_id(api_key.tenant_id)
         if routing is None:
             return None
-        return api_key.tenant_id, routing.connection_string
+        return api_key.tenant_id, routing.connection_string, api_key.role
 
 
 def _propagate_faces_all_tenants() -> dict:
@@ -128,7 +128,7 @@ def _propagate_faces_single_tenant(authorization: str | None) -> dict:
     tenant = _tenant_for_key(authorization)
     if tenant is None:
         return {"assigned": 0, "scanned": 0}
-    _, connection_string = tenant
+    _, connection_string, _ = tenant
     with TenantSession(get_engine_for_url(connection_string)) as session:
         return FaceRepository(session).propagate_assignments()
 
@@ -176,7 +176,7 @@ def _run_sweep_single_tenant(authorization: str | None, force: bool = False) -> 
     tenant = _tenant_for_key(authorization)
     if tenant is None:
         return {"synced": 0, "failed": 0, "scenes_synced": 0, "scenes_failed": 0}
-    tenant_id, connection_string = tenant
+    tenant_id, connection_string, _ = tenant
     with TenantSession(get_engine_for_url(connection_string)) as session:
         if force:
             _reset_search_synced_at(session)
@@ -261,7 +261,10 @@ def run_cleanup(
         tenant = _tenant_for_key(authorization)
         if tenant is None:
             raise HTTPException(status_code=401, detail="Admin key or tenant API key required")
-        tenant_id, connection_string = tenant
+        tenant_id, connection_string, role = tenant
+        # Cleanup deletes files (and lists them on a dry run): admins only.
+        if role != "admin":
+            raise HTTPException(status_code=403, detail="Admin API key required")
         with TenantSession(get_engine_for_url(connection_string)) as session:
             result = run_cleanup_single_tenant(tenant_id, session, dry_run=dry_run)
 
