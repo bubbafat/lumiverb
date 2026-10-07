@@ -5,7 +5,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -133,6 +133,11 @@ def _encode_cursor(sort_col: str, sort_value: object, asset_id: str) -> str:
 
 class BatchTrashRequest(BaseModel):
     asset_ids: list[str]
+    # "user": trashed by a person; survives rescans. "missing": the scanner
+    # no longer finds the file; restored if it reappears. Omitted = "missing"
+    # behavior (what scanners sent before reasons existed).
+    reason: Literal["user", "missing"] | None = None
+
 
 
 class BatchTrashResponse(BaseModel):
@@ -712,7 +717,7 @@ def batch_trash_assets(
 ) -> BatchTrashResponse:
     """Soft-delete multiple assets. Returns trashed and not_found lists. Quickwit delete is best-effort."""
     asset_repo = AssetRepository(session)
-    trashed_ids, not_found_ids = asset_repo.trash_many(body.asset_ids)
+    trashed_ids, not_found_ids = asset_repo.trash_many(body.asset_ids, reason=body.reason)
     if trashed_ids:
         try:
             from src.server.search.quickwit_client import QuickwitClient
@@ -768,9 +773,12 @@ def trash_asset(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> None:
-    """Soft-delete a single asset. 404 if not found or already trashed. Quickwit delete is best-effort."""
+    """Trash a single asset for the user; it stays trashed through rescans.
+
+    404 if not found or already trashed. Quickwit delete is best-effort.
+    """
     asset_repo = AssetRepository(session)
-    ok = asset_repo.trash(asset_id)
+    ok = asset_repo.trash(asset_id, reason="user")
     if not ok:
         raise HTTPException(status_code=404, detail="Asset not found or already trashed")
     tenant_id = getattr(request.state, "tenant_id", None)
@@ -1004,6 +1012,8 @@ def submit_batch_vision(
 class TranscriptSubmitRequest(BaseModel):
     srt: str
     language: str | None = None
+    # "manual" for a person's transcript; a provider id (e.g. "whisper") for
+    # machine output, which never replaces a manual one.
     source: str = "manual"
 
 
@@ -1029,11 +1039,16 @@ def submit_transcript(
     if asset.media_type != "video":
         raise HTTPException(status_code=400, detail="Transcripts are only supported for video assets")
 
+    # A person's transcript is human data: machine output never replaces it.
+    if body.source != "manual" and asset.transcript_source == "manual":
+        return TranscriptSubmitResponse(asset_id=asset_id, status="kept_manual")
+
     # Empty SRT = "checked, no speech" (e.g., silent video processed by Whisper)
     if not body.srt or not body.srt.strip():
         asset.transcript_srt = None
         asset.transcript_text = None
         asset.transcript_language = body.language
+        asset.transcript_source = body.source
         asset.transcribed_at = utcnow()
         asset.has_transcript = False
         asset.updated_at = utcnow()
@@ -1049,6 +1064,7 @@ def submit_transcript(
     asset.transcript_srt = body.srt
     asset.transcript_text = plain_text
     asset.transcript_language = body.language
+    asset.transcript_source = body.source
     asset.transcribed_at = utcnow()
     asset.has_transcript = bool(plain_text.strip())
     asset.updated_at = utcnow()
@@ -1112,6 +1128,7 @@ def delete_transcript(
     asset.transcript_srt = None
     asset.transcript_text = None
     asset.transcript_language = None
+    asset.transcript_source = None
     asset.transcribed_at = None
     asset.has_transcript = False
     asset.updated_at = utcnow()
@@ -1643,7 +1660,11 @@ def submit_faces(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> FaceSubmitResponse:
-    """Submit face detections for an asset. Replaces existing faces for the same model."""
+    """Submit face detections for an asset.
+
+    Faces the new detections re-find keep their ids and confirmed assignments;
+    confirmed faces that aren't re-found are kept. See FaceRepository.submit_faces.
+    """
     from src.server.repository.tenant import FaceRepository
 
     asset = AssetRepository(session).get_by_id(asset_id)
@@ -1674,7 +1695,8 @@ def submit_faces(
     # Bump library revision so UI reflects face_count changes
     LibraryRepository(session).bump_revision(asset.library_id)
 
-    return FaceSubmitResponse(face_count=len(face_ids), face_ids=face_ids)
+    session.refresh(asset)
+    return FaceSubmitResponse(face_count=asset.face_count or 0, face_ids=face_ids)
 
 
 @router.get("/{asset_id}/faces", response_model=FaceListResponse)

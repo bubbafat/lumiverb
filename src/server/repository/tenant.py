@@ -25,6 +25,7 @@ from src.server.models.tenant import (
     CollectionAsset,
     Face,
     FacePersonMatch,
+    IgnoredFile,
     Library,
     Person,
     LibraryPathFilter,
@@ -781,30 +782,37 @@ class AssetRepository:
         stmt = select(Asset).where(Asset.deleted_at.is_(None))
         return list(self._session.exec(stmt).all())
 
-    def trash(self, asset_id: str) -> bool:
-        """Set deleted_at = now(). Returns False if not found or already trashed."""
+    def trash(self, asset_id: str, *, reason: str | None = None) -> bool:
+        """Set deleted_at = now(). Returns False if not found or already trashed.
+
+        reason "user" makes the trash survive rescans; "missing" or None means
+        the file wasn't found and ingest restores it if it reappears.
+        """
         asset = self._session.get(Asset, asset_id)
         if asset is None or asset.deleted_at is not None:
             return False
         asset.deleted_at = utcnow()
+        asset.deleted_reason = reason
         self._session.add(asset)
         self._session.commit()
         return True
 
-    def trash_many(self, asset_ids: list[str]) -> tuple[list[str], list[str]]:
-        """Bulk trash. Returns (trashed_ids, not_found_ids)."""
+    def trash_many(
+        self, asset_ids: list[str], *, reason: str | None = None
+    ) -> tuple[list[str], list[str]]:
+        """Bulk trash. Returns (trashed_ids, not_found_ids). See trash() for reason."""
         if not asset_ids:
             return [], []
         now = utcnow()
         result = self._session.execute(
             text(
                 """
-                UPDATE assets SET deleted_at = :now
+                UPDATE assets SET deleted_at = :now, deleted_reason = :reason
                 WHERE asset_id = ANY(:ids) AND deleted_at IS NULL
                 RETURNING asset_id
                 """
             ),
-            {"now": now, "ids": asset_ids},
+            {"now": now, "reason": reason, "ids": asset_ids},
         )
         trashed = [row[0] for row in result.fetchall()]
         not_found = [aid for aid in asset_ids if aid not in trashed]
@@ -817,9 +825,56 @@ class AssetRepository:
         if asset is None or asset.deleted_at is None:
             return False
         asset.deleted_at = None
+        asset.deleted_reason = None
         self._session.add(asset)
         self._session.commit()
         return True
+
+    def page_ignored_paths(
+        self, library_id: str, *, after: str | None = None, limit: int = 500
+    ) -> list[tuple[str, str]]:
+        """Paths scanners must skip, by rel_path: (rel_path, "trashed" | "emptied").
+
+        "trashed" = in the trash by the user's choice; "emptied" = the user
+        emptied its trash (ignored_files).
+        """
+        rows = self._session.execute(
+            text(
+                """
+                SELECT rel_path, kind FROM (
+                    SELECT rel_path, 'trashed' AS kind FROM assets
+                    WHERE library_id = :lib AND deleted_at IS NOT NULL
+                      AND deleted_reason = 'user'
+                    UNION ALL
+                    SELECT rel_path, 'emptied' AS kind FROM ignored_files
+                    WHERE library_id = :lib
+                ) p
+                WHERE (CAST(:after AS text) IS NULL OR rel_path > :after)
+                ORDER BY rel_path
+                LIMIT :limit
+                """
+            ),
+            {"lib": library_id, "after": after, "limit": limit},
+        ).all()
+        return [(r[0], r[1]) for r in rows]
+
+    def is_ignored(self, library_id: str, rel_path: str) -> bool:
+        """True if the user emptied this file's trash (see ignored_files)."""
+        return self._session.get(IgnoredFile, (library_id, rel_path)) is not None
+
+    def unignore(self, library_id: str, rel_paths: list[str]) -> int:
+        """Forget emptied-trash records so the next scan picks the files up again."""
+        if not rel_paths:
+            return 0
+        result = self._session.execute(
+            text(
+                "DELETE FROM ignored_files"
+                " WHERE library_id = :lib AND rel_path = ANY(:paths)"
+            ),
+            {"lib": library_id, "paths": rel_paths},
+        )
+        self._session.commit()
+        return result.rowcount  # type: ignore[union-attr]
 
     def list_trashed(
         self,
@@ -861,6 +916,18 @@ class AssetRepository:
         if not asset_ids:
             return 0
         params = {"asset_ids": asset_ids}
+        # Lumiverb never deletes originals, so a file the user trashed may
+        # still be on disk. Remember it, or the next scan would bring it back.
+        self._session.execute(
+            text(
+                "INSERT INTO ignored_files (library_id, rel_path, sha256, created_at)"
+                " SELECT library_id, rel_path, sha256, :now FROM assets"
+                " WHERE asset_id = ANY(:asset_ids)"
+                "   AND deleted_at IS NOT NULL AND deleted_reason = 'user'"
+                " ON CONFLICT (library_id, rel_path) DO NOTHING"
+            ),
+            {**params, "now": utcnow()},
+        )
         self._session.execute(
             text("DELETE FROM asset_metadata WHERE asset_id = ANY(:asset_ids)"),
             params,
@@ -2640,6 +2707,31 @@ def _cluster_face_embeddings(
     return clusters
 
 
+def _bbox_corners(box: dict | None) -> tuple[float, float, float, float] | None:
+    """Normalized face box as (x1, y1, x2, y2); accepts {x, y, w, h} or corners."""
+    if not box:
+        return None
+    if "x1" in box:
+        return box["x1"], box["y1"], box["x2"], box["y2"]
+    if "x" in box:
+        return box["x"], box["y"], box["x"] + box["w"], box["y"] + box["h"]
+    return None
+
+
+def _bbox_iou(a: dict | None, b: dict | None) -> float:
+    """Intersection over union of two normalized face boxes (0.0 if either is missing)."""
+    ca, cb = _bbox_corners(a), _bbox_corners(b)
+    if ca is None or cb is None:
+        return 0.0
+    iw = min(ca[2], cb[2]) - max(ca[0], cb[0])
+    ih = min(ca[3], cb[3]) - max(ca[1], cb[1])
+    if iw <= 0 or ih <= 0:
+        return 0.0
+    inter = iw * ih
+    union = (ca[2] - ca[0]) * (ca[3] - ca[1]) + (cb[2] - cb[0]) * (cb[3] - cb[1]) - inter
+    return inter / union if union > 0 else 0.0
+
+
 class FaceRepository:
     """CRUD for detected faces. Operates within a tenant session."""
 
@@ -2691,6 +2783,13 @@ class FaceRepository:
         rows = self._session.execute(text(sql), params).fetchall()
         return [(r.asset_id, float(r.distance)) for r in rows]
 
+    # Re-detection pairs each new detection with the old face it re-finds, so
+    # the face keeps its face_id and everything a person attached to it
+    # (confirmed assignment, dismissal, "not this person"). Boxes from two
+    # different detectors overlap less than two runs of one detector, so the
+    # IoU floor is low; a pair below it can still match by embedding.
+    REDETECT_MIN_IOU = 0.3
+
     def submit_faces(
         self,
         asset_id: str,
@@ -2698,30 +2797,56 @@ class FaceRepository:
         detection_model_version: str,
         faces: list[dict],
     ) -> list[str]:
-        """Replace all faces for (asset_id, model, version) and update face_count.
+        """Store a fresh set of face detections for an asset and update face_count.
+
+        A detection that re-finds an existing face (by box overlap, else by
+        embedding) updates that face in place: it keeps its face_id, its
+        confirmed person assignment and its rejections, while machine-made
+        assignments are dropped and re-derived. Old faces that weren't
+        re-found are deleted, unless a person confirmed them; those are kept
+        as they are, since a re-run never drops human data. face_count is
+        the new detections plus kept faces.
 
         Args:
             faces: list of dicts with keys: bounding_box, detection_confidence, embedding (optional).
 
         Returns:
-            List of created face_ids.
+            One face_id per input detection, in input order.
         """
         from sqlalchemy import delete as sa_delete
 
-        # Delete ALL existing faces for this asset (regardless of model).
-        # An asset should only have one set of face detections active at a time,
-        # even if re-detected by a different provider (e.g. insightface → apple_vision).
-        old_face_ids = [
-            row[0]
-            for row in self._session.execute(
-                text("SELECT face_id FROM faces WHERE asset_id = :aid"),
-                {"aid": asset_id},
-            ).fetchall()
+        old_rows = self._session.execute(
+            text(
+                "SELECT f.face_id, f.bounding_box_json, f.embedding_vector::text AS emb,"
+                " EXISTS (SELECT 1 FROM face_person_matches m"
+                "         WHERE m.face_id = f.face_id AND m.confirmed) AS confirmed"
+                " FROM faces f WHERE f.asset_id = :aid"
+            ),
+            {"aid": asset_id},
+        ).all()
+
+        pairs = self._pair_redetected_faces(old_rows, faces)
+        reused_ids = set(pairs.values())
+        kept_ids = [r.face_id for r in old_rows if r.face_id not in reused_ids and r.confirmed]
+        dropped_ids = [
+            r.face_id for r in old_rows if r.face_id not in reused_ids and not r.confirmed
         ]
-        affected_person_ids: list[str] = []
-        if old_face_ids:
+
+        # Machine-made assignments on re-found faces are derived from the old
+        # embedding; drop them so auto-assign below re-derives them.
+        if reused_ids:
             self._session.execute(
-                sa_delete(FacePersonMatch).where(FacePersonMatch.face_id.in_(old_face_ids))
+                text(
+                    "DELETE FROM face_person_matches"
+                    " WHERE face_id = ANY(:fids) AND confirmed = false"
+                ),
+                {"fids": list(reused_ids)},
+            )
+
+        affected_person_ids: list[str] = []
+        if dropped_ids:
+            self._session.execute(
+                sa_delete(FacePersonMatch).where(FacePersonMatch.face_id.in_(dropped_ids))
             )
             # Capture the people whose representative is about to dangle
             # so we can re-pick a fresh face for each one after auto-
@@ -2737,7 +2862,7 @@ class FaceRepository:
                         "SELECT person_id FROM people"
                         " WHERE representative_face_id = ANY(:fids)"
                     ),
-                    {"fids": old_face_ids},
+                    {"fids": dropped_ids},
                 ).fetchall()
             ]
             # Null out representative_face_id on people pointing to these faces
@@ -2746,16 +2871,24 @@ class FaceRepository:
                     "UPDATE people SET representative_face_id = NULL"
                     " WHERE representative_face_id = ANY(:fids)"
                 ),
-                {"fids": old_face_ids},
+                {"fids": dropped_ids},
             )
-
-        # Delete all existing faces for this asset
-        self._session.execute(
-            sa_delete(Face).where(Face.asset_id == asset_id)
-        )
+            # Rejections on these faces go with them (ON DELETE CASCADE).
+            self._session.execute(sa_delete(Face).where(Face.face_id.in_(dropped_ids)))
 
         face_ids: list[str] = []
-        for f in faces:
+        for i, f in enumerate(faces):
+            old_id = pairs.get(i)
+            if old_id is not None:
+                face = self._session.get(Face, old_id)
+                face.bounding_box_json = f.get("bounding_box")
+                face.embedding_vector = f.get("embedding")
+                face.detection_confidence = f.get("detection_confidence")
+                face.detection_model = detection_model
+                face.detection_model_version = detection_model_version
+                self._session.add(face)
+                face_ids.append(old_id)
+                continue
             face_id = "face_" + str(ULID())
             face = Face(
                 face_id=face_id,
@@ -2768,15 +2901,26 @@ class FaceRepository:
             )
             self._session.add(face)
             face_ids.append(face_id)
+        self._session.flush()
 
         # Update face_count on the asset
         self._session.execute(
             text("UPDATE assets SET face_count = :count WHERE asset_id = :aid"),
-            {"count": len(faces), "aid": asset_id},
+            {"count": len(faces) + len(kept_ids), "aid": asset_id},
         )
 
-        # Auto-assign faces to known people by centroid proximity
-        self._auto_assign_by_centroid(face_ids, faces)
+        # Auto-assign the faces that don't carry a confirmed assignment.
+        assigned = {
+            row[0]
+            for row in self._session.execute(
+                text("SELECT face_id FROM face_person_matches WHERE face_id = ANY(:fids)"),
+                {"fids": face_ids},
+            ).fetchall()
+        }
+        unassigned = [(fid, f) for fid, f in zip(face_ids, faces) if fid not in assigned]
+        self._auto_assign_by_centroid(
+            [fid for fid, _ in unassigned], [f for _, f in unassigned]
+        )
 
         # Re-pick representative_face_id for any person whose previous
         # representative was deleted above. The auto-assign above will
@@ -2808,6 +2952,69 @@ class FaceRepository:
         self._session.commit()
         return face_ids
 
+    @classmethod
+    def _pair_redetected_faces(cls, old_rows: list, faces: list[dict]) -> dict[int, str]:
+        """Pair new detections with the old faces they re-find.
+
+        Greedy one-to-one: by box overlap first (IoU >= REDETECT_MIN_IOU),
+        then by embedding distance (< AUTO_ASSIGN_THRESHOLD) for whatever is
+        left. Returns {index into faces: old face_id}.
+        """
+        import numpy as np
+
+        pairs: dict[int, str] = {}
+        used_old: set[int] = set()
+
+        def take(candidates: list[tuple[float, int, int]]) -> None:
+            for _, oi, ni in candidates:
+                if oi in used_old or ni in pairs:
+                    continue
+                pairs[ni] = old_rows[oi].face_id
+                used_old.add(oi)
+
+        overlaps = []
+        for oi, row in enumerate(old_rows):
+            for ni, f in enumerate(faces):
+                iou = _bbox_iou(row.bounding_box_json, f.get("bounding_box"))
+                if iou >= cls.REDETECT_MIN_IOU:
+                    overlaps.append((iou, oi, ni))
+        take(sorted(overlaps, reverse=True))
+
+        def unit(values: list[float]) -> np.ndarray:
+            vec = np.asarray(values, dtype=np.float32)
+            norm = np.linalg.norm(vec)
+            return vec / norm if norm > 0 else vec
+
+        close = []
+        for oi, row in enumerate(old_rows):
+            if oi in used_old or not row.emb:
+                continue
+            old_vec = unit([float(x) for x in row.emb.strip("[]").split(",")])
+            for ni, f in enumerate(faces):
+                if ni in pairs or not f.get("embedding"):
+                    continue
+                dist = 1.0 - float(old_vec @ unit(f["embedding"]))
+                if dist < cls.AUTO_ASSIGN_THRESHOLD:
+                    close.append((dist, oi, ni))
+        take(sorted(close))
+        return pairs
+
+    def _rejections_for(self, face_ids: list[str]) -> dict[str, set[str]]:
+        """Return {face_id: person_ids the user said it is not}."""
+        if not face_ids:
+            return {}
+        rows = self._session.execute(
+            text(
+                "SELECT face_id, person_id FROM face_person_rejections"
+                " WHERE face_id = ANY(:fids)"
+            ),
+            {"fids": face_ids},
+        ).all()
+        result: dict[str, set[str]] = {}
+        for face_id, person_id in rows:
+            result.setdefault(face_id, set()).add(person_id)
+        return result
+
     # Auto-assign threshold — tighter than clustering (0.55) because centroids
     # are averaged over many confirmed faces and more stable.
     AUTO_ASSIGN_THRESHOLD = 0.45
@@ -2816,7 +3023,8 @@ class FaceRepository:
         """Auto-assign new faces to known people if embedding is close to a centroid.
 
         Only assigns faces that have embeddings. Uses cosine distance against
-        person centroid vectors. Assigned with confirmed=false so user can review.
+        person centroid vectors, skipping people the user rejected for that
+        face. Assigned with confirmed=false so user can review.
         """
         # Collect faces with embeddings
         faces_with_emb = [
@@ -2846,6 +3054,8 @@ class FaceRepository:
         norms = np.linalg.norm(centroids, axis=1, keepdims=True)
         norms[norms == 0] = 1.0
         centroids = centroids / norms
+        person_index = {pid: i for i, pid in enumerate(person_ids)}
+        rejections = self._rejections_for([fid for fid, _ in faces_with_emb])
 
         for face_id, embedding in faces_with_emb:
             vec = np.array(embedding, dtype=np.float32)
@@ -2855,6 +3065,9 @@ class FaceRepository:
 
             # Cosine distance to each centroid
             distances = 1.0 - (centroids @ vec)
+            for pid in rejections.get(face_id, ()):
+                if pid in person_index:  # people without a centroid aren't candidates
+                    distances[person_index[pid]] = np.inf
             best_idx = int(np.argmin(distances))
             best_dist = float(distances[best_idx])
 
@@ -2924,6 +3137,10 @@ class FaceRepository:
         if not rows:
             return {"assigned": 0, "scanned": 0}
 
+        # Never re-assign a face to a person the user removed it from.
+        person_index = {pid: i for i, pid in enumerate(person_ids)}
+        rejections = self._rejections_for([r[0] for r in rows])
+
         assigned = 0
         for face_id, emb_text in rows:
             vec = np.array([float(x) for x in emb_text.strip("[]").split(",")], dtype=np.float32)
@@ -2932,6 +3149,9 @@ class FaceRepository:
                 vec = vec / norm
 
             distances = 1.0 - (centroids @ vec)
+            for pid in rejections.get(face_id, ()):
+                if pid in person_index:  # people without a centroid aren't candidates
+                    distances[person_index[pid]] = np.inf
             best_idx = int(np.argmin(distances))
             best_dist = float(distances[best_idx])
 
@@ -3422,7 +3642,14 @@ class PersonRepository:
         return [faces_by_id[fid] for fid in face_ids if fid in faces_by_id]
 
     def assign_face(self, face_id: str, person_id: str, *, confidence: float | None = None, confirmed: bool = False) -> FacePersonMatch:
-        """Assign a face to a person. Raises if face is already assigned (unique constraint)."""
+        """Assign a face to a person. Raises if face is already assigned (unique constraint).
+
+        An explicit assignment overrides an earlier rejection of the same pair.
+        """
+        self._session.execute(
+            text("DELETE FROM face_person_rejections WHERE face_id = :fid AND person_id = :pid"),
+            {"fid": face_id, "pid": person_id},
+        )
         match_id = "fpm_" + str(ULID())
         match = FacePersonMatch(
             match_id=match_id,
@@ -3445,7 +3672,11 @@ class PersonRepository:
         return match
 
     def unassign_face(self, face_id: str) -> bool:
-        """Remove face-person assignment and clear denormalized faces.person_id."""
+        """Remove face-person assignment and clear denormalized faces.person_id.
+
+        Records a rejection ("this face is not this person") so neither
+        auto-assignment nor the upkeep sweep puts it back.
+        """
         # Get the person_id before deleting (for centroid recomputation)
         old_pid = self._session.execute(
             text("SELECT person_id FROM face_person_matches WHERE face_id = :fid"),
@@ -3461,6 +3692,14 @@ class PersonRepository:
                 {"fid": face_id},
             )
             if old_pid:
+                self._session.execute(
+                    text(
+                        "INSERT INTO face_person_rejections (face_id, person_id, created_at)"
+                        " VALUES (:fid, :pid, :now) ON CONFLICT DO NOTHING"
+                    ),
+                    {"fid": face_id, "pid": old_pid, "now": utcnow()},
+                )
+            if old_pid:
                 self._recompute_centroid(old_pid)
             _mark_clusters_dirty(self._session)
             self._session.commit()
@@ -3468,13 +3707,33 @@ class PersonRepository:
         return False
 
     def _assign_faces(self, person_id: str, face_ids: list[str]) -> None:
-        """Batch assign faces to a person (no commit)."""
+        """Batch assign faces to a person (no commit).
+
+        These come from a person's action (naming, dismissing or assigning a
+        cluster), so they're confirmed and survive re-detection. Faces the
+        user already rejected for this person are skipped: a bulk action
+        doesn't override a per-face decision.
+        """
+        rejected = {
+            row[0]
+            for row in self._session.execute(
+                text(
+                    "SELECT face_id FROM face_person_rejections"
+                    " WHERE person_id = :pid AND face_id = ANY(:fids)"
+                ),
+                {"pid": person_id, "fids": face_ids},
+            ).fetchall()
+        } if face_ids else set()
+        face_ids = [fid for fid in face_ids if fid not in rejected]
+        now = utcnow()
         for fid in face_ids:
             match_id = "fpm_" + str(ULID())
             self._session.add(FacePersonMatch(
                 match_id=match_id,
                 face_id=fid,
                 person_id=person_id,
+                confirmed=True,
+                confirmed_at=now,
             ))
         self._session.flush()
         # Sync denormalized faces.person_id
@@ -3547,6 +3806,25 @@ class PersonRepository:
         self._session.execute(
             text("UPDATE faces SET person_id = :tid WHERE person_id = :sid"),
             {"tid": target_person_id, "sid": source_person_id},
+        )
+        # "Not the source" now means "not the target". The source's own rows
+        # go with it (ON DELETE CASCADE). A rejection of the target for a face
+        # the source owned is overridden by the merge.
+        self._session.execute(
+            text(
+                "INSERT INTO face_person_rejections (face_id, person_id, created_at)"
+                " SELECT face_id, :tid, created_at FROM face_person_rejections"
+                " WHERE person_id = :sid ON CONFLICT DO NOTHING"
+            ),
+            {"tid": target_person_id, "sid": source_person_id},
+        )
+        self._session.execute(
+            text(
+                "DELETE FROM face_person_rejections r USING face_person_matches m"
+                " WHERE r.face_id = m.face_id AND r.person_id = m.person_id"
+                " AND m.person_id = :tid"
+            ),
+            {"tid": target_person_id},
         )
 
         # Recompute centroid on target

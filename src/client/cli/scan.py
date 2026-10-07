@@ -102,6 +102,22 @@ def _fetch_existing_assets_with_sha(
     return existing
 
 
+def _fetch_ignored_paths(client: LumiverbClient, library_id: str) -> set[str]:
+    """rel_paths the user trashed (or emptied from the trash). Scans skip them:
+    Lumiverb never deletes originals, so they may still be on disk."""
+    paths: set[str] = set()
+    cursor: str | None = None
+    while True:
+        params: dict[str, str] = {"limit": "1000"}
+        if cursor:
+            params["after"] = cursor
+        data = client.get(f"/v1/libraries/{library_id}/ignored-paths", params=params).json()
+        paths.update(item["rel_path"] for item in data.get("items", []))
+        cursor = data.get("next_cursor")
+        if not cursor:
+            return paths
+
+
 def _split_files(
     local_files: list[dict],
     existing: dict[str, _ServerAsset],
@@ -604,6 +620,13 @@ def run_scan(
     existing = _fetch_existing_assets_with_sha(client, library_id)
     console.print(f"Server has {len(existing):,} existing assets")
 
+    ignored = _fetch_ignored_paths(client, library_id)
+    if ignored:
+        before = len(local_files)
+        local_files = [f for f in local_files if f["rel_path"] not in ignored]
+        if before > len(local_files):
+            console.print(f"Skipping {before - len(local_files):,} file(s) you trashed")
+
     # Split files: new (not on server by path) vs existing (need SHA check)
     # Default (fast): mtime+size match skips hashing. --thorough forces SHA on all.
     new_files, needs_hash, fast_unchanged = _split_files(
@@ -715,7 +738,8 @@ def run_scan(
         console.print(f"Removing {len(deleted_ids):,} assets no longer on disk...")
         for batch_start in range(0, len(deleted_ids), 500):
             batch = deleted_ids[batch_start : batch_start + 500]
-            client.delete("/v1/assets", json={"asset_ids": batch})
+            # "missing", not the user's trash: restored if the file reappears.
+            client.delete("/v1/assets", json={"asset_ids": batch, "reason": "missing"})
         stats.deleted = len(deleted_ids)
 
     # Pipeline: scan new files immediately while hashing existing files
