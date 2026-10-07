@@ -3,9 +3,17 @@ import { useQuery } from "@tanstack/react-query";
 import {
   exportProject,
   getDefaultExportFormat,
+  getDefaultExportPrefix,
   listExportFormats,
   setDefaultExportFormat,
 } from "../api/client";
+
+// Long enough for any browser (Safari included) to start the download.
+const REVOKE_DOWNLOAD_URL_MS = 60_000;
+
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
 
 /**
  * Split Export button for a project (send to editor).
@@ -43,12 +51,24 @@ export function ExportButton({ projectId }: { projectId: string }) {
       document.body.appendChild(link);
       link.click();
       link.remove();
-      URL.revokeObjectURL(url);
+      setTimeout(() => URL.revokeObjectURL(url), REVOKE_DOWNLOAD_URL_MS);
+      const notes: string[] = [];
       if (file.skippedStills > 0) {
-        setMessage(
-          `${file.skippedStills} ${file.skippedStills === 1 ? "photo wasn't" : "photos weren't"} included: exports are video only for now.`,
+        notes.push(
+          `${plural(file.skippedStills, "photo wasn't", "photos weren't")} included: exports are video only for now.`,
         );
       }
+      if (file.skippedNoDuration > 0) {
+        notes.push(
+          `${plural(file.skippedNoDuration, "video with no known length wasn't", "videos with no known length weren't")} included.`,
+        );
+      }
+      if (file.unprobed > 0) {
+        notes.push(
+          `${plural(file.unprobed, "video hasn't", "videos haven't")} been probed and use a default frame rate; run lumiverb enrich --job-type probe.`,
+        );
+      }
+      if (notes.length) setMessage(notes.join(" "));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Export failed");
     } finally {
@@ -58,22 +78,24 @@ export function ExportButton({ projectId }: { projectId: string }) {
 
   function openChooser() {
     setFormat(getDefaultExportFormat() ?? formats?.[0]?.id ?? null);
+    setPrefix(getDefaultExportPrefix() ?? "");
     setMakeDefault(false);
     setChooserOpen(true);
   }
 
   function onExportClick() {
     const remembered = getDefaultExportFormat();
-    if (remembered) void run(remembered);
+    if (remembered) void run(remembered, getDefaultExportPrefix() ?? undefined);
     else openChooser();
   }
 
   async function onChooserSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!format) return;
-    if (makeDefault) setDefaultExportFormat(format);
+    const location = prefix.trim() || undefined;
+    if (makeDefault) setDefaultExportFormat(format, location);
     setChooserOpen(false);
-    await run(format, prefix.trim() || undefined);
+    await run(format, location);
   }
 
   return (

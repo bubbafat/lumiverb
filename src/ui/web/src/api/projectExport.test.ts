@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   exportProject,
   getDefaultExportFormat,
+  getDefaultExportPrefix,
   listExportFormats,
   setDefaultExportFormat,
 } from "./client";
@@ -35,6 +36,8 @@ describe("exportProject", () => {
       "Content-Type": "application/xml",
       "Content-Disposition": `attachment; filename="Customer Video 123.xml"; filename*=UTF-8''Customer%20Video%20123.xml`,
       "X-Lumiverb-Skipped-Stills": "2",
+      "X-Lumiverb-Skipped-No-Duration": "1",
+      "X-Lumiverb-Unprobed": "4",
     });
 
     const result = await exportProject("prj_1", "fcp7");
@@ -42,6 +45,8 @@ describe("exportProject", () => {
     expect(calls[0]).toBe("/v1/projects/prj_1/export?format=fcp7");
     expect(result.filename).toBe("Customer Video 123.xml");
     expect(result.skippedStills).toBe(2);
+    expect(result.skippedNoDuration).toBe(1);
+    expect(result.unprobed).toBe(4);
     expect(await result.blob.text()).toBe("<xmeml/>");
   });
 
@@ -80,5 +85,12 @@ describe("default export format", () => {
     expect(getDefaultExportFormat()).toBe("fcpxml");
     setDefaultExportFormat(null);
     expect(getDefaultExportFormat()).toBeNull();
+  });
+
+  it("remembers the media location with it", () => {
+    setDefaultExportFormat("fcp7", "/Volumes/DAS");
+    expect(getDefaultExportPrefix()).toBe("/Volumes/DAS");
+    setDefaultExportFormat("fcp7");
+    expect(getDefaultExportPrefix()).toBeNull();
   });
 });

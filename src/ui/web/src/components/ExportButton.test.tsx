@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   listExportFormats: vi.fn(),
   exportProject: vi.fn(),
   getDefaultExportFormat: vi.fn(),
+  getDefaultExportPrefix: vi.fn(),
   setDefaultExportFormat: vi.fn(),
 }));
 vi.mock("../api/client", () => api);
@@ -29,7 +30,10 @@ beforeEach(() => {
     blob: new Blob(["<x/>"]),
     filename: "Job.fcpxml",
     skippedStills: 0,
+    skippedNoDuration: 0,
+    unprobed: 0,
   });
+  api.getDefaultExportPrefix.mockReturnValue(null);
   URL.createObjectURL = vi.fn(() => "blob:fake");
   URL.revokeObjectURL = vi.fn();
 });
@@ -50,7 +54,7 @@ describe("ExportButton", () => {
     fireEvent.click(screen.getByRole("button", { name: "Export file" }));
 
     await waitFor(() => expect(api.exportProject).toHaveBeenCalledWith("prj_1", "fcpxml", undefined));
-    expect(api.setDefaultExportFormat).toHaveBeenCalledWith("fcpxml");
+    expect(api.setDefaultExportFormat).toHaveBeenCalledWith("fcpxml", undefined);
   });
 
   it("exports straight away with a default format", async () => {
@@ -81,11 +85,67 @@ describe("ExportButton", () => {
 
   it("says when photos were left out", async () => {
     api.getDefaultExportFormat.mockReturnValue("fcp7");
-    api.exportProject.mockResolvedValue({ blob: new Blob(["x"]), filename: "a.xml", skippedStills: 3 });
+    api.exportProject.mockResolvedValue({
+      blob: new Blob(["x"]), filename: "a.xml", skippedStills: 3, skippedNoDuration: 0, unprobed: 0,
+    });
     renderButton();
 
     fireEvent.click(screen.getByRole("button", { name: "Export" }));
 
     expect(await screen.findByText(/3 photos weren't included/)).toBeTruthy();
+  });
+});
+
+
+describe("ExportButton remembered location and reports", () => {
+  it("one click uses the remembered media location", async () => {
+    api.getDefaultExportFormat.mockReturnValue("fcpxml");
+    api.getDefaultExportPrefix.mockReturnValue("/Volumes/DAS");
+    renderButton();
+
+    fireEvent.click(screen.getByRole("button", { name: "Export" }));
+
+    await waitFor(() =>
+      expect(api.exportProject).toHaveBeenCalledWith("prj_1", "fcpxml", "/Volumes/DAS"),
+    );
+  });
+
+  it("make default saves the location too", async () => {
+    api.getDefaultExportFormat.mockReturnValue(null);
+    renderButton();
+
+    fireEvent.click(screen.getByRole("button", { name: "Export" }));
+    fireEvent.click(await screen.findByLabelText("Final Cut Pro"));
+    fireEvent.change(screen.getByLabelText("Media location"), { target: { value: "/Volumes/DAS" } });
+    fireEvent.click(screen.getByLabelText("Make default"));
+    fireEvent.click(screen.getByRole("button", { name: "Export file" }));
+
+    await waitFor(() => expect(api.setDefaultExportFormat).toHaveBeenCalledWith("fcpxml", "/Volumes/DAS"));
+  });
+
+  it("says when clips were left out or exported at a fallback rate", async () => {
+    api.getDefaultExportFormat.mockReturnValue("fcp7");
+    api.exportProject.mockResolvedValue({
+      blob: new Blob(["x"]), filename: "a.xml", skippedStills: 0, skippedNoDuration: 2, unprobed: 5,
+    });
+    renderButton();
+
+    fireEvent.click(screen.getByRole("button", { name: "Export" }));
+
+    expect(await screen.findByText(/2 videos with no known length weren't included/)).toBeTruthy();
+    expect(screen.getByText(/5 videos haven't been probed/)).toBeTruthy();
+  });
+
+  it("frees the download link only after the browser has it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    api.getDefaultExportFormat.mockReturnValue("fcp7");
+    renderButton();
+
+    fireEvent.click(screen.getByRole("button", { name: "Export" }));
+    await waitFor(() => expect(URL.createObjectURL).toHaveBeenCalled());
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(60_000);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:fake");
+    vi.useRealTimers();
   });
 });
