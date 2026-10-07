@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — Phase 0 in progress
+Accepted — Phase 1 in progress
 
 This ADR sets the direction for Lumiverb. Where another doc in this repo disagrees with it, this ADR wins and that doc is out of date. The working version, with discussion and the decision log, is the "Lumiverb Operating Model" doc (https://claude.ai/artifact/UuLm2upRoZKRbrvR59SvqM).
 
@@ -10,8 +10,8 @@ This ADR sets the direction for Lumiverb. Where another doc in this repo disagre
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 0 | Groundwork and safety: this ADR, doc updates, stop overwriting human data, safe scanning | In progress |
-| 1 | Projects and send to editor (v1) | Not started |
+| 0 | Groundwork and safety: this ADR, doc updates, stop overwriting human data, safe scanning | Built, in review |
+| 1 | Projects and send to editor (v1) | In progress: probe, rename, lifecycle built |
 | 2 | The brain: one machine schedules all processing and reads storage read-only | Not started |
 | 3 | Lineage and reconciliation | Not started |
 | 4 | Producers and endpoints | Not started |
@@ -161,7 +161,7 @@ Phase 0 targets, read from the repo on 2026-10-07:
 | No NFC normalization in Python | `src/client/cli/ingest.py` (file discovery, `rel_path`) | macOS normalizes in `ScanPipeline.swift` |
 | What runs today | `src/server/repository/tenant.py` `MISSING_CONDITIONS`; `src/client/cli/repair.py` | Replaced by the reconciler in phase 3 |
 | Closest model for reconciliation | `src/server/upgrade/` | Upgrade-step registry |
-| Projects (today "collections") | `src/server/api/routers/collections.py` | Smart evaluation caps at 1,000 assets with no `next_cursor` |
+| Projects (formerly "collections") | `src/server/api/routers/projects.py` | Smart evaluation caps at 1,000 assets with no `next_cursor` |
 
 ## Doc References
 

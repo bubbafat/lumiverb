@@ -9,7 +9,7 @@ See docs/architecture.md for the full design.
 
 ## Package layout
 - `src/cli/main.py` — Typer app entry point; command groups: `config`, `library`, `tenant`, `filter`, `keys`, `users`, `maintenance`, `admin`
-- `src/cli/commands/` — Subcommand modules: `collections.py`, `keys.py`, `users.py`, `maintenance.py`
+- `src/cli/commands/` — Subcommand modules: `projects.py`, `keys.py`, `users.py`, `maintenance.py`
 - `src/cli/config.py` — Local config in `~/.lumiverb/config.json` (`api_url`, `api_key`, `admin_key`, `vision_api_url`, `vision_api_key`, `vision_model_id`): `load_config`, `save_config`, `get_api_url`, `get_api_key`, `get_admin_key`
 - `src/cli/client.py` — `LumiverbClient`: thin httpx wrapper with persistent connection pool, reads config for base URL and `Authorization: Bearer <api_key>`; accepts `api_key_override` for admin commands; on non-2xx prints error envelope and raises `LumiverbAPIError`
 - `src/cli/ingest.py` — Per-asset ingest pipeline: discover files, generate proxies, call vision AI, upload atomically
@@ -49,13 +49,15 @@ Entry point: `lumiverb = "src.client.cli:main"` (setuptools); `main()` invokes t
 - `lumiverb library delete <name>` — Soft delete (trash).
 - `lumiverb library empty-trash` — Permanently delete trashed libraries.
 
-#### Collection
-- `lumiverb collection list [--json]` — List collections.
-- `lumiverb collection create --name <name> [--description <desc>] [--visibility private|shared|public]` — Create collection.
-- `lumiverb collection show --id <col_id> [--json]` — Show collection details.
-- `lumiverb collection add --id <col_id> --asset-id <id> [...]` — Add assets.
-- `lumiverb collection remove --id <col_id> --asset-id <id> [...]` — Remove assets.
-- `lumiverb collection delete --id <col_id>` — Delete collection.
+#### Project
+- `lumiverb project list [--json] [--archived | --all]` — List projects (active unless `--archived` or `--all`).
+- `lumiverb project create --name <name> [--description <desc>] [--visibility private|shared|public]` — Create project.
+- `lumiverb project show --id <project_id> [--json]` — Show project details.
+- `lumiverb project add --id <project_id> --asset-id <id> [...]` — Add assets.
+- `lumiverb project remove --id <project_id> --asset-id <id> [...]` — Remove assets.
+- `lumiverb project delete --id <project_id>` — Delete project.
+- `lumiverb project archive --id <project_id>` — Archive: it leaves the sidebar and pickers but keeps its clips.
+- `lumiverb project restore --id <project_id>` — Restore an archived project.
 
 #### User
 - `lumiverb user create --email <email> [--role admin|editor|viewer]` — Create user (prompts for password).

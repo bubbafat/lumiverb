@@ -14,8 +14,9 @@ macOS + iOS (shared `LumiverbKit` package, XcodeGen project).
 Today FastAPI is the only persistent service. CLI + macOS run local
 enrichment and POST results back; iOS is browse-only. Direction is
 ADR-016: a Linux "brain" schedules all processing against read-only
-storage, human data is never overwritten by derived data, and today's
-"collections" become projects. Quickwit sidecar with a
+storage, human data is never overwritten by derived data, and what used
+to be "collections" are projects (`/v1/projects`; `/v1/collections` is a
+deprecated alias for the Swift apps). Quickwit sidecar with a
 Postgres fallback. Auth: JWT (web) + API keys (CLI), both
 `Authorization: Bearer <token>`; roles `admin` / `editor` / `viewer`.
 
