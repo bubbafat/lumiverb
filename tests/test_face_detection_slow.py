@@ -509,15 +509,21 @@ def test_resubmit_faces_with_person_assignment(face_client: Tuple[_AuthClient, s
         },
     )
     assert r.status_code == 201, (r.status_code, r.text)
-    assert r.json()["face_count"] == 1
+    # The new detection doesn't re-find the confirmed face (no overlap, a
+    # different embedding), so that face is kept: re-detection never drops
+    # human data (ADR-016).
+    assert r.json()["face_count"] == 2
+    assert face_id not in r.json()["face_ids"]
+    r = auth_client.get(f"/v1/assets/{asset_id}/faces")
+    assert face_id in {f["face_id"] for f in r.json()["faces"]}
 
 
 @pytest.mark.slow
 def test_cleanup_empty_dismissed(face_client: Tuple[_AuthClient, str, str]) -> None:
     """Dismissed people with zero face matches are deleted by cleanup.
 
-    Simulates what happens after redetect-faces: a dismissed person's faces
-    are replaced, leaving the person record with no matches.
+    Re-detection no longer empties a dismissed person (its matches are
+    confirmed and survive), so the person is emptied by un-assigning.
     """
     import numpy as np
     from src.server.repository.tenant import PersonRepository
@@ -558,21 +564,9 @@ def test_cleanup_empty_dismissed(face_client: Tuple[_AuthClient, str, str]) -> N
         conn.execute(text("UPDATE people SET dismissed = true WHERE person_id = :pid"), {"pid": person_id})
     engine.dispose()
 
-    # Resubmit faces — old face_person_match is deleted, person is now empty
-    emb2 = (rng.standard_normal(512)).tolist()
-    r = auth_client.post(
-        f"/v1/assets/{asset_id}/faces",
-        json={
-            "faces": [
-                {
-                    "bounding_box": {"x": 0.2, "y": 0.2, "w": 0.3, "h": 0.3},
-                    "detection_confidence": 0.98,
-                    "embedding": emb2,
-                },
-            ],
-        },
-    )
-    assert r.status_code == 201
+    # Remove the person's only face, leaving the person empty
+    r = auth_client.delete(f"/v1/faces/{face_id}/assign")
+    assert r.status_code == 204
 
     # Run cleanup directly via repository (avoids multi-tenant routing issues in test)
     from sqlmodel import Session as SmSession
