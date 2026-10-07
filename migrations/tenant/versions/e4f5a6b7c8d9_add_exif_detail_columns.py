@@ -64,6 +64,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # active_assets is SELECT * FROM assets: it pins every column, so drop it
+    # around the column drops (as later migrations do) and recreate it after.
+    op.execute("DROP VIEW IF EXISTS active_assets")
     op.drop_index("ix_assets_library_taken_at", table_name="assets")
     op.drop_index("ix_assets_library_gps", table_name="assets")
     op.drop_index("ix_assets_lens_model", table_name="assets")
@@ -79,3 +82,4 @@ def downgrade() -> None:
     op.drop_column("assets", "aperture")
     op.drop_column("assets", "shutter_speed")
     op.drop_column("assets", "iso")
+    op.execute("CREATE VIEW active_assets AS SELECT * FROM assets WHERE deleted_at IS NULL")
