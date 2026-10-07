@@ -111,6 +111,23 @@ def _vec(i: int) -> str:
     return "[" + ",".join(str(x) for x in _unit(i)) + "]"
 
 
+def _drifted(i: int) -> list[float]:
+    """The same face as _unit(i) from a different angle: close enough to pair
+    on re-detection (distance ~0.47 < 0.6), too far to auto-assign (>= 0.45)."""
+    v = _unit(i)
+    v[(i + 1) % 512] = 1.6
+    norm = sum(x * x for x in v) ** 0.5
+    return [x / norm for x in v]
+
+
+def _near(i: int) -> list[float]:
+    """The same face as _unit(i), seen again (cosine distance ~0.005)."""
+    v = _unit(i)
+    v[(i + 100) % 512] = 0.1
+    norm = sum(x * x for x in v) ** 0.5
+    return [x / norm for x in v]
+
+
 def _box(x: float, y: float, w: float = 0.2, h: float = 0.2) -> dict:
     return {"x": x, "y": y, "w": w, "h": h}
 
@@ -130,7 +147,7 @@ def _seed_asset(tenant_url: str, library_id: str, media_type: str = "image") -> 
     return asset_id
 
 
-def _seed_face(tenant_url: str, asset_id: str, box: dict, emb: int) -> str:
+def _seed_face(tenant_url: str, asset_id: str, box: dict, emb: int | None) -> str:
     face_id = "face_" + uuid.uuid4().hex[:20]
     with _db(tenant_url) as s:
         s.execute(
@@ -140,7 +157,7 @@ def _seed_face(tenant_url: str, asset_id: str, box: dict, emb: int) -> str:
                 " VALUES (:fid, :aid, CAST(:box AS jsonb), 0.95, 'insightface', 'buffalo_l',"
                 "         CAST(:v AS vector), NOW())"
             ),
-            {"fid": face_id, "aid": asset_id, "box": _json(box), "v": _vec(emb)},
+            {"fid": face_id, "aid": asset_id, "box": _json(box), "v": _vec(emb) if emb is not None else None},
         )
         s.commit()
     return face_id
@@ -191,14 +208,19 @@ def _seed_match(
         s.commit()
 
 
-def _redetect(client, headers, asset_id: str, faces: list[tuple[dict, int]]) -> dict:
+def _redetect(client, headers, asset_id: str, faces: list[tuple[dict, object]]) -> dict:
+    """Submit detections; each embedding is a _unit index or an explicit vector."""
     r = client.post(
         f"/v1/assets/{asset_id}/faces",
         json={
             "detection_model": "apple_vision",
             "detection_model_version": "2",
             "faces": [
-                {"bounding_box": box, "detection_confidence": 0.9, "embedding": _unit(emb)}
+                {
+                    "bounding_box": box,
+                    "detection_confidence": 0.9,
+                    "embedding": _unit(emb) if isinstance(emb, int) else emb,
+                }
                 for box, emb in faces
             ],
         },
@@ -253,16 +275,15 @@ def _ignored(client, headers, library_id: str) -> dict[str, str]:
 
 @pytest.mark.slow
 def test_redetect_keeps_confirmed_assignment_on_refound_face(env) -> None:
-    """A different detector finds the same face with a shifted box and an
-    embedding far from the person's centroid: the face keeps its id and its
-    confirmed person."""
+    """A different detector finds the same face with a shifted box: the face
+    keeps its id and its confirmed person."""
     client, headers, library_id, tenant_url = env
     asset_id = _seed_asset(tenant_url, library_id)
     person_id = _seed_person(tenant_url, emb=1)
     face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=1)
     _seed_match(tenant_url, face_id, person_id, confirmed=True, confidence=None)
 
-    result = _redetect(client, headers, asset_id, [(_box(0.12, 0.11, 0.2, 0.22), 2)])
+    result = _redetect(client, headers, asset_id, [(_box(0.12, 0.11, 0.2, 0.22), _near(1))])
 
     assert result["face_ids"] == [face_id]
     assert result["face_count"] == 1
@@ -297,12 +318,163 @@ def test_redetect_drops_machine_made_data(env) -> None:
     _seed_match(tenant_url, gone, person_id, confirmed=False, confidence=0.9)
     _seed_match(tenant_url, refound, person_id, confirmed=False, confidence=0.9)
 
-    # The re-found face now looks like nobody we know.
-    result = _redetect(client, headers, asset_id, [(_box(0.50, 0.50), 6)])
+    # The re-found face now looks less like P: its auto match isn't re-made.
+    result = _redetect(client, headers, asset_id, [(_box(0.50, 0.50), _drifted(5))])
 
     assert result["face_ids"] == [refound]
     assert not _face_exists(tenant_url, gone)
     assert _match(tenant_url, refound) is None
+
+
+@pytest.mark.slow
+def test_redetect_never_gives_a_name_to_the_face_next_to_it(env) -> None:
+    """Only Bob, standing next to Alice, is found this time: his box overlaps
+    hers, but he must not inherit her confirmed name."""
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    alice = _seed_person(tenant_url, emb=20)
+    alice_face = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=20)
+    _seed_match(tenant_url, alice_face, alice, confirmed=True, confidence=None)
+
+    result = _redetect(client, headers, asset_id, [(_box(0.18, 0.10), 21)])
+
+    [bob_face] = result["face_ids"]
+    assert bob_face != alice_face
+    assert _match(tenant_url, bob_face) is None
+    assert _match(tenant_url, alice_face) == (alice, True)
+
+
+@pytest.mark.slow
+def test_mirrored_photo_keeps_names_with_their_faces(env) -> None:
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    alice, bob = _seed_person(tenant_url, emb=22), _seed_person(tenant_url, emb=23)
+    alice_face = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=22)
+    bob_face = _seed_face(tenant_url, asset_id, _box(0.60, 0.10), emb=23)
+    _seed_match(tenant_url, alice_face, alice, confirmed=True, confidence=None)
+    _seed_match(tenant_url, bob_face, bob, confirmed=True, confidence=None)
+
+    # Flipped: Bob now on the left, Alice on the right.
+    result = _redetect(
+        client, headers, asset_id, [(_box(0.10, 0.10), _near(23)), (_box(0.60, 0.10), _near(22))]
+    )
+
+    assert result["face_ids"] == [bob_face, alice_face]
+    assert _match(tenant_url, alice_face) == (alice, True)
+    assert _match(tenant_url, bob_face) == (bob, True)
+
+
+@pytest.mark.slow
+def test_tight_box_inside_loose_box_is_the_same_face(env) -> None:
+    """Apple Vision's tight box inside InsightFace's loose one overlaps
+    little (IoU ~0.16) but is the same face."""
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    person_id = _seed_person(tenant_url, emb=24)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10, 0.30, 0.30), emb=24)
+    _seed_match(tenant_url, face_id, person_id, confirmed=True, confidence=None)
+
+    result = _redetect(client, headers, asset_id, [(_box(0.19, 0.19, 0.12, 0.12), _near(24))])
+
+    assert result["face_ids"] == [face_id]
+    assert result["face_count"] == 1
+
+
+@pytest.mark.slow
+def test_faces_without_embeddings_pair_by_solid_overlap(env) -> None:
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    person_id = _seed_person(tenant_url, emb=30)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=None)
+    _seed_match(tenant_url, face_id, person_id, confirmed=True, confidence=None)
+
+    r = client.post(
+        f"/v1/assets/{asset_id}/faces",
+        json={"detection_model": "apple_vision", "detection_model_version": "2",
+              "faces": [{"bounding_box": _box(0.12, 0.12), "detection_confidence": 0.9}]},
+        headers=headers,
+    )
+
+    assert r.status_code == 201, r.text
+    assert r.json()["face_ids"] == [face_id]
+    assert _match(tenant_url, face_id) == (person_id, True)
+
+
+@pytest.mark.slow
+def test_redetect_clears_person_when_machine_match_is_dropped(env) -> None:
+    """The re-found face no longer looks like P: its auto match goes, and so
+    must faces.person_id and P's pointer to it as representative."""
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    other_asset = _seed_asset(tenant_url, library_id)
+    person_id = _seed_person(tenant_url, emb=25)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=25)
+    backup = _seed_face(tenant_url, other_asset, _box(0.10, 0.10), emb=25)
+    _seed_match(tenant_url, face_id, person_id, confirmed=False, confidence=0.9)
+    _seed_match(tenant_url, backup, person_id, confirmed=False, confidence=0.9)
+    with _db(tenant_url) as s:
+        s.execute(
+            text("UPDATE people SET representative_face_id = :f WHERE person_id = :p"),
+            {"f": face_id, "p": person_id},
+        )
+        s.commit()
+
+    # Same box; the new embedding is close enough to pair but far from P.
+    result = _redetect(client, headers, asset_id, [(_box(0.10, 0.10), _drifted(25))])
+
+    assert result["face_ids"] == [face_id]
+    assert _match(tenant_url, face_id) is None
+    with _db(tenant_url) as s:
+        assert s.execute(
+            text("SELECT person_id FROM faces WHERE face_id = :f"), {"f": face_id}
+        ).scalar() is None
+        assert s.execute(
+            text("SELECT representative_face_id FROM people WHERE person_id = :p"), {"p": person_id}
+        ).scalar() == backup
+
+
+@pytest.mark.slow
+def test_rejection_survives_redetect_with_a_different_box(env) -> None:
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    person_id = _seed_person(tenant_url, emb=27)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10, 0.30, 0.30), emb=27)
+    _seed_match(tenant_url, face_id, person_id, confirmed=True, confidence=None)
+    assert client.delete(f"/v1/faces/{face_id}/assign", headers=headers).status_code == 204
+
+    result = _redetect(client, headers, asset_id, [(_box(0.19, 0.19, 0.12, 0.12), _near(27))])
+
+    assert result["face_ids"] == [face_id]
+    assert _match(tenant_url, face_id) is None
+
+
+@pytest.mark.slow
+def test_merge_respects_target_rejection(env) -> None:
+    """Merging A into B doesn't override "this face is not B": the face is
+    left unassigned (a bulk action never beats a per-face decision)."""
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    source = _seed_person(tenant_url, emb=28)
+    target = _seed_person(tenant_url, emb=29)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=28)
+    _seed_match(tenant_url, face_id, target, confirmed=True, confidence=None)
+    assert client.delete(f"/v1/faces/{face_id}/assign", headers=headers).status_code == 204
+    _seed_match(tenant_url, face_id, source, confirmed=True, confidence=None)
+
+    r = client.post(f"/v1/people/{target}/merge", json={"source_person_id": source}, headers=headers)
+    assert r.status_code == 200, r.text
+
+    assert _match(tenant_url, face_id) is None
+    with _db(tenant_url) as s:
+        assert s.execute(
+            text("SELECT person_id FROM faces WHERE face_id = :f"), {"f": face_id}
+        ).scalar() is None
+        rejected = {
+            row[0] for row in s.execute(
+                text("SELECT person_id FROM face_person_rejections WHERE face_id = :f"), {"f": face_id}
+            )
+        }
+    assert rejected == {target}
 
 
 @pytest.mark.slow

@@ -2785,10 +2785,15 @@ class FaceRepository:
 
     # Re-detection pairs each new detection with the old face it re-finds, so
     # the face keeps its face_id and everything a person attached to it
-    # (confirmed assignment, dismissal, "not this person"). Boxes from two
-    # different detectors overlap less than two runs of one detector, so the
-    # IoU floor is low; a pair below it can still match by embedding.
-    REDETECT_MIN_IOU = 0.3
+    # (confirmed assignment, dismissal, "not this person"). Overlapping boxes
+    # pair only if the embeddings agree: the person standing next to (or, in
+    # a mirrored photo, in place of) a named face must not inherit its name.
+    # With both embeddings, a small overlap is enough (a tight Apple Vision
+    # box inside a loose InsightFace one); without them, the floor is higher.
+    # Anything left can still pair by embedding alone.
+    REDETECT_MIN_IOU = 0.1
+    REDETECT_MIN_IOU_NO_EMBEDDING = 0.3
+    REDETECT_MAX_EMBEDDING_DISTANCE = 0.6
 
     def submit_faces(
         self,
@@ -2833,15 +2838,26 @@ class FaceRepository:
         ]
 
         # Machine-made assignments on re-found faces are derived from the old
-        # embedding; drop them so auto-assign below re-derives them.
+        # embedding; drop them (and the denormalized faces.person_id) so
+        # auto-assign below re-derives them from the new one.
+        unmatched_reused: list[str] = []
         if reused_ids:
-            self._session.execute(
-                text(
-                    "DELETE FROM face_person_matches"
-                    " WHERE face_id = ANY(:fids) AND confirmed = false"
-                ),
-                {"fids": list(reused_ids)},
-            )
+            unmatched_reused = [
+                row[0]
+                for row in self._session.execute(
+                    text(
+                        "DELETE FROM face_person_matches"
+                        " WHERE face_id = ANY(:fids) AND confirmed = false"
+                        " RETURNING face_id"
+                    ),
+                    {"fids": list(reused_ids)},
+                ).fetchall()
+            ]
+            if unmatched_reused:
+                self._session.execute(
+                    text("UPDATE faces SET person_id = NULL WHERE face_id = ANY(:fids)"),
+                    {"fids": unmatched_reused},
+                )
 
         affected_person_ids: list[str] = []
         if dropped_ids:
@@ -2922,6 +2938,23 @@ class FaceRepository:
             [fid for fid, _ in unassigned], [f for _, f in unassigned]
         )
 
+        # A re-found face that lost its machine match and wasn't re-assigned
+        # to the same person can't stay that person's representative.
+        if unmatched_reused:
+            affected_person_ids += [
+                row[0]
+                for row in self._session.execute(
+                    text(
+                        "SELECT p.person_id FROM people p"
+                        " WHERE p.representative_face_id = ANY(:fids)"
+                        "   AND NOT EXISTS (SELECT 1 FROM face_person_matches m"
+                        "                   WHERE m.face_id = p.representative_face_id"
+                        "                     AND m.person_id = p.person_id)"
+                    ),
+                    {"fids": unmatched_reused},
+                ).fetchall()
+            ]
+
         # Re-pick representative_face_id for any person whose previous
         # representative was deleted above. The auto-assign above will
         # often have re-attached new faces from this very asset back to
@@ -2939,14 +2972,14 @@ class FaceRepository:
                 ),
                 {"pid": pid},
             ).scalar()
-            if new_rep:
-                self._session.execute(
-                    text(
-                        "UPDATE people SET representative_face_id = :fid"
-                        " WHERE person_id = :pid"
-                    ),
-                    {"fid": new_rep, "pid": pid},
-                )
+            # NULL when the person has no face left; list_people backfills lazily.
+            self._session.execute(
+                text(
+                    "UPDATE people SET representative_face_id = :fid"
+                    " WHERE person_id = :pid"
+                ),
+                {"fid": new_rep, "pid": pid},
+            )
 
         _mark_clusters_dirty(self._session)
         self._session.commit()
@@ -2956,11 +2989,29 @@ class FaceRepository:
     def _pair_redetected_faces(cls, old_rows: list, faces: list[dict]) -> dict[int, str]:
         """Pair new detections with the old faces they re-find.
 
-        Greedy one-to-one: by box overlap first (IoU >= REDETECT_MIN_IOU),
-        then by embedding distance (< AUTO_ASSIGN_THRESHOLD) for whatever is
-        left. Returns {index into faces: old face_id}.
+        Greedy one-to-one. First by box overlap, but only where the
+        embeddings agree (distance < REDETECT_MAX_EMBEDDING_DISTANCE) or
+        aren't available (then IoU >= REDETECT_MIN_IOU_NO_EMBEDDING); then
+        by embedding distance alone (< AUTO_ASSIGN_THRESHOLD) for whatever
+        is left. Returns {index into faces: old face_id}.
         """
         import numpy as np
+
+        def unit(values: list[float]) -> np.ndarray:
+            vec = np.asarray(values, dtype=np.float32)
+            norm = np.linalg.norm(vec)
+            return vec / norm if norm > 0 else vec
+
+        old_vecs = [
+            unit([float(x) for x in row.emb.strip("[]").split(",")]) if row.emb else None
+            for row in old_rows
+        ]
+        new_vecs = [unit(f["embedding"]) if f.get("embedding") else None for f in faces]
+
+        def distance(oi: int, ni: int) -> float | None:
+            if old_vecs[oi] is None or new_vecs[ni] is None:
+                return None
+            return 1.0 - float(old_vecs[oi] @ new_vecs[ni])
 
         pairs: dict[int, str] = {}
         used_old: set[int] = set()
@@ -2976,25 +3027,24 @@ class FaceRepository:
         for oi, row in enumerate(old_rows):
             for ni, f in enumerate(faces):
                 iou = _bbox_iou(row.bounding_box_json, f.get("bounding_box"))
-                if iou >= cls.REDETECT_MIN_IOU:
+                dist = distance(oi, ni)
+                if dist is None:
+                    ok = iou >= cls.REDETECT_MIN_IOU_NO_EMBEDDING
+                else:
+                    ok = iou >= cls.REDETECT_MIN_IOU and dist < cls.REDETECT_MAX_EMBEDDING_DISTANCE
+                if ok:
                     overlaps.append((iou, oi, ni))
         take(sorted(overlaps, reverse=True))
 
-        def unit(values: list[float]) -> np.ndarray:
-            vec = np.asarray(values, dtype=np.float32)
-            norm = np.linalg.norm(vec)
-            return vec / norm if norm > 0 else vec
-
         close = []
-        for oi, row in enumerate(old_rows):
-            if oi in used_old or not row.emb:
+        for oi in range(len(old_rows)):
+            if oi in used_old:
                 continue
-            old_vec = unit([float(x) for x in row.emb.strip("[]").split(",")])
-            for ni, f in enumerate(faces):
-                if ni in pairs or not f.get("embedding"):
+            for ni in range(len(faces)):
+                if ni in pairs:
                     continue
-                dist = 1.0 - float(old_vec @ unit(f["embedding"]))
-                if dist < cls.AUTO_ASSIGN_THRESHOLD:
+                dist = distance(oi, ni)
+                if dist is not None and dist < cls.AUTO_ASSIGN_THRESHOLD:
                     close.append((dist, oi, ni))
         take(sorted(close))
         return pairs
@@ -3808,8 +3858,9 @@ class PersonRepository:
             {"tid": target_person_id, "sid": source_person_id},
         )
         # "Not the source" now means "not the target". The source's own rows
-        # go with it (ON DELETE CASCADE). A rejection of the target for a face
-        # the source owned is overridden by the merge.
+        # go with it (ON DELETE CASCADE). A face the target already rejected
+        # stays rejected: the merge is a bulk action and doesn't override a
+        # per-face decision, so that face is left unassigned.
         self._session.execute(
             text(
                 "INSERT INTO face_person_rejections (face_id, person_id, created_at)"
@@ -3818,14 +3869,23 @@ class PersonRepository:
             ),
             {"tid": target_person_id, "sid": source_person_id},
         )
-        self._session.execute(
-            text(
-                "DELETE FROM face_person_rejections r USING face_person_matches m"
-                " WHERE r.face_id = m.face_id AND r.person_id = m.person_id"
-                " AND m.person_id = :tid"
-            ),
-            {"tid": target_person_id},
-        )
+        contradicted = [
+            row[0]
+            for row in self._session.execute(
+                text(
+                    "DELETE FROM face_person_matches m USING face_person_rejections r"
+                    " WHERE r.face_id = m.face_id AND r.person_id = m.person_id"
+                    " AND m.person_id = :tid"
+                    " RETURNING m.face_id"
+                ),
+                {"tid": target_person_id},
+            ).fetchall()
+        ]
+        if contradicted:
+            self._session.execute(
+                text("UPDATE faces SET person_id = NULL WHERE face_id = ANY(:fids)"),
+                {"fids": contradicted},
+            )
 
         # Recompute centroid on target
         self._recompute_centroid(target_person_id)
