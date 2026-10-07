@@ -70,6 +70,7 @@ class _ServerAsset:
     sha256: str | None
     file_size: int | None = None
     file_mtime: str | None = None  # ISO8601 string from server
+    media_type: str | None = None
 
 
 def _fetch_existing_assets_with_sha(
@@ -96,6 +97,7 @@ def _fetch_existing_assets_with_sha(
                 sha256=a.get("sha256"),
                 file_size=a.get("file_size"),
                 file_mtime=a.get("file_mtime"),
+                media_type=a.get("media_type"),
             )
         cursor = data.get("next_cursor")
         if not cursor:
@@ -652,8 +654,20 @@ def run_scan(
     )
     local_rel_paths = {f["rel_path"] for f in local_files}
 
+    # Deletions, and the mass-deletion guard, only consider what this scan
+    # covers: a `--media-type image` scan doesn't see videos on disk, so it
+    # must not count them as gone.
+    scope = existing
+    if media_type_filter != "all":
+        scope = {rp: sa for rp, sa in existing.items() if sa.media_type == media_type_filter}
+    if path_prefix:
+        prefix_dir = path_prefix.rstrip("/") + "/"
+        scope_size = sum(1 for rp in scope if rp.startswith(prefix_dir))
+    else:
+        scope_size = len(scope)
+
     # Detect deletions first (needed to scope move detection)
-    deleted_ids = _detect_deletions(local_files, existing, root_path, path_prefix)
+    deleted_ids = _detect_deletions(local_files, scope, root_path, path_prefix)
 
     # --- Move detection ---
     # Only check for moves when: there are new files, there are deletions
@@ -711,12 +725,12 @@ def run_scan(
     if (
         deleted_ids
         and not allow_mass_delete
-        and _deletion_guard_trips(len(deleted_ids), len(existing))
+        and _deletion_guard_trips(len(deleted_ids), scope_size)
     ):
-        pct = 100 * len(deleted_ids) / len(existing)
+        pct = 100 * len(deleted_ids) / scope_size
         console.print(
             f"[yellow]Skipping {len(deleted_ids):,} deletions: {pct:.0f}% of the "
-            f"library's {len(existing):,} assets aren't on disk, which usually means "
+            f"{scope_size:,} assets this scan covers aren't on disk, which usually means "
             "the volume isn't fully mounted. If the files really are gone, re-run "
             "with --allow-mass-delete.[/yellow]"
         )

@@ -83,25 +83,38 @@ def test_deletion_guard_matches_macos_threshold(deleting: int, on_server: int, t
     assert _deletion_guard_trips(deleting, on_server) is trips
 
 
-def _scan_with(tmp_path: Path, *, on_disk: int, on_server: int, **kwargs) -> MagicMock:
-    """run_scan with `on_server` assets on the server, of which `on_disk` are on disk unchanged."""
+def _scan_with(
+    tmp_path: Path,
+    *,
+    on_disk: int,
+    on_server: int,
+    extra_server: dict | None = None,
+    ignored: set[str] | None = None,
+    split: MagicMock | None = None,
+    local: list[dict] | None = None,
+    **kwargs,
+) -> MagicMock:
+    """run_scan with `on_server` images on the server, of which `on_disk` are on disk unchanged."""
     root = tmp_path / "lib"
-    root.mkdir()
-    local = [
-        {"rel_path": f"f{i}.jpg", "file_size": 4, "file_mtime": None, "media_type": "image", "ext": ".jpg"}
-        for i in range(on_disk)
-    ]
+    root.mkdir(exist_ok=True)
+    if local is None:
+        local = [
+            {"rel_path": f"f{i}.jpg", "file_size": 4, "file_mtime": None, "media_type": "image", "ext": ".jpg"}
+            for i in range(on_disk)
+        ]
     existing = {
-        f"f{i}.jpg": _ServerAsset(asset_id=f"ast_{i}", sha256="x", file_size=4) for i in range(on_server)
+        f"f{i}.jpg": _ServerAsset(asset_id=f"ast_{i}", sha256="x", file_size=4, media_type="image")
+        for i in range(on_server)
     }
+    existing.update(extra_server or {})
     client = MagicMock()
     with (
         patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
         patch("src.client.cli.scan._load_library_filters", return_value=[]),
         patch("src.client.cli.scan._walk_library", return_value=local),
         patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value=existing),
-        patch("src.client.cli.scan._fetch_ignored_paths", return_value=set()),
-        patch("src.client.cli.scan._split_files", return_value=([], [], local)),
+        patch("src.client.cli.scan._fetch_ignored_paths", return_value=ignored or set()),
+        patch("src.client.cli.scan._split_files", split or MagicMock(return_value=([], [], local))),
         patch("src.client.cli.scan._populate_cache_for_unchanged"),
     ):
         run_scan(
@@ -119,6 +132,8 @@ def _deleted_ids(client: MagicMock) -> list[str]:
     ids: list[str] = []
     for call in client.delete.call_args_list:
         if call.args and call.args[0] == "/v1/assets":
+            # The scanner's deletions are "missing", never the user's trash.
+            assert call.kwargs["json"]["reason"] == "missing"
             ids.extend(call.kwargs["json"]["asset_ids"])
     return ids
 
@@ -142,3 +157,47 @@ def test_scan_small_deletion_proceeds(tmp_path: Path) -> None:
     client = _scan_with(tmp_path, on_disk=95, on_server=100)
 
     assert len(_deleted_ids(client)) == 5
+
+
+@pytest.mark.fast
+def test_media_type_scan_never_deletes_other_types(tmp_path: Path) -> None:
+    """`scan --media-type image` doesn't see videos on disk; it must not
+    treat the library's videos as gone."""
+    videos = {
+        f"v{i}.mov": _ServerAsset(asset_id=f"vid_{i}", sha256="x", file_size=4, media_type="video")
+        for i in range(30)
+    }
+
+    client = _scan_with(tmp_path, on_disk=10, on_server=10, extra_server=videos, media_type_filter="image")
+
+    assert _deleted_ids(client) == []
+
+
+@pytest.mark.fast
+def test_guard_measures_the_scanned_prefix(tmp_path: Path) -> None:
+    """60 files under sub/, 59 of them gone: that's 98% of what this scan
+    covers, even though it's under 1% of a 10,000-asset library."""
+    inside = {
+        f"sub/g{i}.jpg": _ServerAsset(asset_id=f"sub_{i}", sha256="x", file_size=4, media_type="image")
+        for i in range(60)
+    }
+    still_there = [{"rel_path": "sub/g0.jpg", "file_size": 4, "file_mtime": None,
+                    "media_type": "image", "ext": ".jpg"}]
+    (tmp_path / "lib" / "sub").mkdir(parents=True)
+
+    client = _scan_with(
+        tmp_path, on_disk=0, on_server=10_000, extra_server=inside, path_prefix="sub",
+        local=still_there, split=MagicMock(return_value=([], [], still_there)),
+    )
+
+    assert _deleted_ids(client) == []
+
+
+@pytest.mark.fast
+def test_scan_skips_trashed_paths(tmp_path: Path) -> None:
+    split = MagicMock(return_value=([], [], []))
+
+    _scan_with(tmp_path, on_disk=5, on_server=5, ignored={"f0.jpg", "f3.jpg"}, split=split)
+
+    scanned = {f["rel_path"] for f in split.call_args[0][0]}
+    assert scanned == {"f1.jpg", "f2.jpg", "f4.jpg"}
