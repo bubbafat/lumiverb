@@ -27,6 +27,15 @@ def normalize_path_prefix(path: str | None) -> str | None:
 
 
 
+def normalize_rel_path(rel_path: str) -> str:
+    """A library-relative path in its one stored form: Unicode NFC.
+
+    macOS hands out decomposed (NFD) names; without this, the same file
+    scanned from macOS and Linux would be two assets.
+    """
+    return unicodedata.normalize("NFC", rel_path)
+
+
 def resolve_source_path(root: Path, rel_path: str) -> Path:
     """Where a library file lives on this machine's disk.
 

@@ -16,6 +16,9 @@ Create Date: 2026-10-07
 - Backfill: face matches with no confidence were made by a person (naming
   or dismissing a cluster, assigning a face), not by auto-assignment, so
   mark them confirmed. Re-detection keeps confirmed matches.
+- Backfill: rel_path becomes Unicode NFC (the server now stores only NFC),
+  except where that would collide with another row of the same library;
+  those pairs are left for a person to sort out.
 """
 
 from __future__ import annotations
@@ -86,6 +89,13 @@ def upgrade() -> None:
         "UPDATE face_person_matches"
         " SET confirmed = true, confirmed_at = COALESCE(confirmed_at, created_at)"
         " WHERE confirmed = false AND confidence IS NULL"
+    ))
+    op.execute(sa.text(
+        "UPDATE assets a SET rel_path = normalize(a.rel_path, NFC)"
+        " WHERE a.rel_path IS NOT NFC NORMALIZED"
+        "   AND (SELECT COUNT(*) FROM assets c"
+        "        WHERE c.library_id = a.library_id"
+        "          AND normalize(c.rel_path, NFC) = normalize(a.rel_path, NFC)) = 1"
     ))
     op.execute(sa.text(
         "UPDATE people p SET confirmation_count = ("

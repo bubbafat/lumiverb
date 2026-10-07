@@ -701,6 +701,26 @@ def test_emptied_missing_file_is_not_remembered(env) -> None:
     assert _ingest(client, headers, library_id, rel_path).status_code == 200
 
 
+@pytest.mark.slow
+def test_server_stores_nfc_paths(env) -> None:
+    """Whatever form a client sends, one file has one rel_path (NFC)."""
+    import unicodedata
+
+    client, headers, library_id, _ = env
+    nfc = unicodedata.normalize("NFC", "nfc/Café.jpg")
+    nfd = unicodedata.normalize("NFD", nfc)
+
+    created = _ingest(client, headers, library_id, nfd)
+    again = _ingest(client, headers, library_id, nfc)
+
+    assert created.status_code == again.status_code == 200
+    assert again.json()["asset_id"] == created.json()["asset_id"]
+    r = client.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": nfd},
+                   headers=headers)
+    assert r.status_code == 200
+    assert r.json()["rel_path"] == nfc
+
+
 # ---------------------------------------------------------------------------
 # Transcripts
 # ---------------------------------------------------------------------------

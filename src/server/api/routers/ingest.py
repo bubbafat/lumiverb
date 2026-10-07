@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from PIL import Image
 from sqlmodel import Session
 
+from src.shared.io_utils import normalize_rel_path
 from src.server.api.dependencies import get_tenant_session
 from src.shared import asset_status
 from src.shared.path_filter import PathFilter, is_path_included_merged
@@ -323,6 +324,7 @@ async def create_and_ingest(
         raise HTTPException(status_code=400, detail="Proxy file is empty")
 
     tenant_id: str = request.state.tenant_id
+    rel_path = normalize_rel_path(rel_path)
 
     # Validate library
     lib_repo = LibraryRepository(session)

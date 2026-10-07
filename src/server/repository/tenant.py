@@ -12,7 +12,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.sql import text as sa_text
 from sqlmodel import Session, select
 
-from src.shared.io_utils import normalize_path_prefix
+from src.shared.io_utils import normalize_path_prefix, normalize_rel_path
 from src.shared.utils import utcnow
 from src.shared import asset_status
 from src.server.models.similarity import SimilarityScope
@@ -872,7 +872,7 @@ class AssetRepository:
 
     def is_ignored(self, library_id: str, rel_path: str) -> bool:
         """True if the user emptied this file's trash (see ignored_files)."""
-        return self._session.get(IgnoredFile, (library_id, rel_path)) is not None
+        return self._session.get(IgnoredFile, (library_id, normalize_rel_path(rel_path))) is not None
 
     def unignore(self, library_id: str, rel_paths: list[str]) -> int:
         """Forget emptied-trash records so the next scan picks the files up again."""
@@ -883,7 +883,7 @@ class AssetRepository:
                 "DELETE FROM ignored_files"
                 " WHERE library_id = :lib AND rel_path = ANY(:paths)"
             ),
-            {"lib": library_id, "paths": rel_paths},
+            {"lib": library_id, "paths": [normalize_rel_path(p) for p in rel_paths]},
         )
         self._session.commit()
         return result.rowcount  # type: ignore[union-attr]

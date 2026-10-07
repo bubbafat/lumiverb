@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, field_validator
 from sqlmodel import Session
 
+from src.shared.io_utils import normalize_rel_path
 from src.server.api.dependencies import get_current_user_id, get_tenant_session
 from src.shared import asset_status
 from src.shared.io_utils import normalize_path_prefix
@@ -672,6 +673,7 @@ def get_asset_by_path(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> AssetResponse:
     """Return a single asset by library_id + rel_path. 404 if not found or trashed."""
+    rel_path = normalize_rel_path(rel_path)
     if getattr(request.state, "is_public_request", False):
         lib = LibraryRepository(session).get_by_id(library_id)
         if lib is None or not lib.is_public:
@@ -1333,7 +1335,7 @@ def submit_batch_moves(
         if asset is None or asset.deleted_at is not None:
             skipped += 1
             continue
-        asset.rel_path = item.rel_path
+        asset.rel_path = normalize_rel_path(item.rel_path)
         asset.search_synced_at = None
         asset.updated_at = utcnow()
         session.add(asset)
@@ -1428,12 +1430,13 @@ def upsert_asset(
             raise HTTPException(status_code=400, detail="Invalid file_mtime format")
 
     asset_repo = AssetRepository(session)
-    existing = asset_repo.get_by_library_and_rel_path(body.library_id, body.rel_path)
+    rel_path = normalize_rel_path(body.rel_path)
+    existing = asset_repo.get_by_library_and_rel_path(body.library_id, rel_path)
 
     if existing is None:
         asset_repo.create_asset(
             library_id=body.library_id,
-            rel_path=body.rel_path,
+            rel_path=rel_path,
             file_size=body.file_size,
             file_mtime=file_mtime_dt,
             media_type=body.media_type,
