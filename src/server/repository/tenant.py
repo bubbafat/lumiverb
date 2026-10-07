@@ -3775,12 +3775,36 @@ class PersonRepository:
                     ),
                     {"fid": face_id, "pid": old_pid, "now": utcnow()},
                 )
+                # The person's tile can't keep showing a face that isn't theirs.
+                rep_id = self._session.execute(
+                    text("SELECT representative_face_id FROM people WHERE person_id = :pid"),
+                    {"pid": old_pid},
+                ).scalar()
+                if rep_id == face_id:
+                    self._repick_representative(old_pid)
             if old_pid:
                 self._recompute_centroid(old_pid)
             _mark_clusters_dirty(self._session)
             self._session.commit()
             return True
         return False
+
+    def _repick_representative(self, person_id: str) -> None:
+        """Point the person's tile at their best remaining face, or NULL if none (no commit)."""
+        best = self._session.execute(
+            text(
+                "SELECT f.face_id FROM faces f "
+                "JOIN face_person_matches m ON m.face_id = f.face_id "
+                "WHERE m.person_id = :pid "
+                "ORDER BY f.detection_confidence DESC NULLS LAST "
+                "LIMIT 1"
+            ),
+            {"pid": person_id},
+        ).scalar()
+        self._session.execute(
+            text("UPDATE people SET representative_face_id = :fid WHERE person_id = :pid"),
+            {"fid": best, "pid": person_id},
+        )
 
     def _assign_faces(self, person_id: str, face_ids: list[str]) -> None:
         """Batch assign faces to a person (no commit).
@@ -3939,8 +3963,8 @@ class PersonRepository:
             ),
             {"pid": target_person_id},
         ).scalar()
-        if best_face_id:
-            target.representative_face_id = best_face_id
+        # NULL when the merge left the person with no faces.
+        target.representative_face_id = best_face_id
 
         # Delete source person
         self._session.execute(

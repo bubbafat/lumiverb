@@ -635,6 +635,56 @@ def test_merge_later_rejection_wins_either_way(env, into) -> None:
     assert _match(tenant_url, other) == (target, True)
 
 
+def _representative(tenant_url: str, person_id: str) -> str | None:
+    with _db(tenant_url) as s:
+        return s.execute(
+            text("SELECT representative_face_id FROM people WHERE person_id = :p"), {"p": person_id}
+        ).scalar()
+
+
+@pytest.mark.slow
+def test_unassigning_the_representative_picks_another_or_none(env) -> None:
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    person_id = _seed_person(tenant_url, emb=52)
+    first = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=52)
+    second = _seed_face(tenant_url, asset_id, _box(0.60, 0.10), emb=52)
+    _seed_match(tenant_url, first, person_id, confirmed=True, confidence=None)
+    _seed_match(tenant_url, second, person_id, confirmed=True, confidence=None)
+    with _db(tenant_url) as s:
+        s.execute(text("UPDATE people SET representative_face_id = :f WHERE person_id = :p"),
+                  {"f": first, "p": person_id})
+        s.commit()
+
+    assert client.delete(f"/v1/faces/{first}/assign", headers=headers).status_code == 204
+    assert _representative(tenant_url, person_id) == second
+
+    assert client.delete(f"/v1/faces/{second}/assign", headers=headers).status_code == 204
+    assert _representative(tenant_url, person_id) is None
+
+
+@pytest.mark.slow
+def test_merge_that_leaves_no_faces_clears_the_representative(env) -> None:
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    source = _seed_person(tenant_url, emb=53)
+    target = _seed_person(tenant_url, emb=54)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=54)
+    _seed_match(tenant_url, face_id, target, confirmed=False, confidence=0.8)
+    with _db(tenant_url) as s:
+        s.execute(text("UPDATE people SET representative_face_id = :f WHERE person_id = :p"),
+                  {"f": face_id, "p": target})
+        s.execute(text("INSERT INTO face_person_rejections (face_id, person_id, created_at)"
+                       " VALUES (:f, :p, now())"), {"f": face_id, "p": source})
+        s.commit()
+
+    r = client.post(f"/v1/people/{target}/merge", json={"source_person_id": source}, headers=headers)
+    assert r.status_code == 200, r.text
+
+    assert _match(tenant_url, face_id) is None
+    assert _representative(tenant_url, target) is None
+
+
 @pytest.mark.slow
 def test_unassign_is_remembered_by_upkeep_and_redetect(env) -> None:
     client, headers, library_id, tenant_url = env
