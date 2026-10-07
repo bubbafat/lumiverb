@@ -272,6 +272,23 @@ def _do_ingest(
 # ---------------------------------------------------------------------------
 
 
+def _parse_video_facet(raw: str | None, media_type: str) -> dict | None:
+    """Validate the optional video_facet form field (a probe result, see VideoFacetModel)."""
+    if raw is None:
+        return None
+    from pydantic import ValidationError
+
+    from src.server.api.routers.assets import VideoFacetModel
+
+    if media_type != "video":
+        raise HTTPException(status_code=400, detail="video_facet is only for video assets")
+    data = _parse_optional_json(raw, "video_facet")
+    try:
+        return VideoFacetModel(**(data or {})).model_dump()
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid video_facet: {exc}") from exc
+
+
 @router.post("/v1/ingest", response_model=IngestResponse)
 async def create_and_ingest(
     request: Request,
@@ -287,6 +304,7 @@ async def create_and_ingest(
     exif: str | None = Form(default=None),
     vision: str | None = Form(default=None),
     embeddings: str | None = Form(default=None),
+    video_facet: str | None = Form(default=None),
 ) -> IngestResponse:
     """Create an asset record and ingest proxy + metadata in one atomic request.
 
@@ -348,6 +366,7 @@ async def create_and_ingest(
     exif_data = _parse_optional_json(exif, "exif")
     vision_data = _parse_optional_json(vision, "vision")
     embeddings_data = _parse_optional_json_list(embeddings, "embeddings")
+    facet_data = _parse_video_facet(video_facet, media_type)
 
     # Parse mtime
     file_mtime_dt: datetime | None = None
@@ -412,6 +431,8 @@ async def create_and_ingest(
         embeddings_data=embeddings_data,
         session=session,
     )
+    if facet_data is not None:
+        asset_repo.upsert_video_facet(asset_id, facet_data)
     result.created = created
     return result
 

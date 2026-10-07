@@ -32,6 +32,7 @@ from src.server.models.tenant import (
     TenantPathFilterDefault,
     SavedView,
     VALID_COLORS,
+    VideoFacetRow,
     VideoIndexChunk,
     VideoScene,
 )
@@ -70,6 +71,10 @@ MISSING_CONDITIONS = {
         "a.has_transcript IS NULL"
         " AND a.media_type = 'video'"
         " AND a.duration_sec IS NOT NULL"
+    ),
+    "missing_probe": (
+        "a.media_type = 'video'"
+        " AND NOT EXISTS (SELECT 1 FROM video_facets vf WHERE vf.asset_id = a.asset_id)"
     ),
 }
 
@@ -484,6 +489,7 @@ class AssetRepository:
         missing_ocr: bool = False,
         missing_scene_vision: bool = False,
         missing_transcription: bool = False,
+        missing_probe: bool = False,
         has_faces: bool | None = None,
         person_id: str | None = None,
         *,
@@ -601,6 +607,8 @@ class AssetRepository:
             conditions.append(MISSING_CONDITIONS["missing_scene_vision"])
         if missing_transcription:
             conditions.append(MISSING_CONDITIONS["missing_transcription"])
+        if missing_probe:
+            conditions.append(MISSING_CONDITIONS["missing_probe"])
         if has_faces is True:
             conditions.append("a.face_count > 0")
         elif has_faces is False:
@@ -870,6 +878,40 @@ class AssetRepository:
         ).all()
         return [(r[0], r[1]) for r in rows]
 
+    VIDEO_FACET_FIELDS = (
+        "duration_sec", "container", "video_codec", "width", "height", "rotation",
+        "frame_rate_num", "frame_rate_den", "start_timecode", "drop_frame",
+        "audio_codec", "audio_channels", "audio_sample_rate",
+    )
+
+    def upsert_video_facet(self, asset_id: str, facet: dict) -> None:
+        """Store a video's probe result, replacing any earlier one.
+
+        The probe's duration becomes the asset's duration_sec: it's measured
+        from the stream, where the EXIF value may be missing (the macOS
+        scanner sends none) or rounded.
+        """
+        values = {k: facet.get(k) for k in self.VIDEO_FACET_FIELDS}
+        values["rotation"] = values["rotation"] or 0
+        stmt = pg_insert(VideoFacetRow).values(asset_id=asset_id, probed_at=utcnow(), **values)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["asset_id"],
+            set_={**values, "probed_at": stmt.excluded.probed_at},
+        )
+        self._session.execute(stmt)
+        if values["duration_sec"] is not None:
+            self._session.execute(
+                text("UPDATE assets SET duration_sec = :d, updated_at = :now WHERE asset_id = :aid"),
+                {"d": values["duration_sec"], "now": utcnow(), "aid": asset_id},
+            )
+        self._session.commit()
+
+    def get_video_facet(self, asset_id: str) -> dict | None:
+        row = self._session.get(VideoFacetRow, asset_id)
+        if row is None:
+            return None
+        return {k: getattr(row, k) for k in self.VIDEO_FACET_FIELDS}
+
     def is_ignored(self, library_id: str, rel_path: str) -> bool:
         """True if the user emptied this file's trash (see ignored_files)."""
         return self._session.get(IgnoredFile, (library_id, normalize_rel_path(rel_path))) is not None
@@ -929,6 +971,8 @@ class AssetRepository:
           block the face delete
         - ``collection_assets``     (membership rows)
         - ``asset_ratings``         (per-user)
+        - ``video_facets``, ``ignored_files``' sources: ``video_facets``
+          rows go with the asset via ON DELETE CASCADE
         - ``collections.cover_asset_id`` is nullable — set to NULL rather
           than deleting the collection itself
         """
