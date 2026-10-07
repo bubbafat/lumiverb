@@ -83,7 +83,7 @@ def project_create(
 
 @projects_app.command("show")
 def project_show(
-    project_id: Annotated[str, typer.Option("--id", help="Project ID (col_...).")],
+    project_id: Annotated[str, typer.Option("--id", help="Project ID (prj_..., or col_... from before the rename).")],
     json: Annotated[bool, typer.Option("--json", help="Output raw JSON.")] = False,
 ) -> None:
     """Show project details and its assets."""
@@ -135,7 +135,7 @@ def project_show(
 
 @projects_app.command("add")
 def project_add(
-    project_id: Annotated[str, typer.Option("--id", help="Project ID (col_...).")],
+    project_id: Annotated[str, typer.Option("--id", help="Project ID (prj_..., or col_... from before the rename).")],
     asset_id: Annotated[list[str], typer.Option("--asset-id", help="Asset ID(s) to add. Repeat for multiple.")],
 ) -> None:
     """Add assets to a project."""
@@ -151,7 +151,7 @@ def project_add(
 
 @projects_app.command("remove")
 def project_remove(
-    project_id: Annotated[str, typer.Option("--id", help="Project ID (col_...).")],
+    project_id: Annotated[str, typer.Option("--id", help="Project ID (prj_..., or col_... from before the rename).")],
     asset_id: Annotated[list[str], typer.Option("--asset-id", help="Asset ID(s) to remove. Repeat for multiple.")],
 ) -> None:
     """Remove assets from a project."""
@@ -167,7 +167,7 @@ def project_remove(
 
 @projects_app.command("delete")
 def project_delete(
-    project_id: Annotated[str, typer.Option("--id", help="Project ID (col_...).")],
+    project_id: Annotated[str, typer.Option("--id", help="Project ID (prj_..., or col_... from before the rename).")],
 ) -> None:
     """Delete a project. Source assets are not affected."""
     confirm = typer.confirm(f"Delete project {project_id}?", default=False)
