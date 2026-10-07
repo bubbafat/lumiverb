@@ -21,8 +21,8 @@ from src.server.models.tenant import (
     AssetEmbedding,
     AssetMetadata,
     AssetRating,
-    Collection,
-    CollectionAsset,
+    Project,
+    ProjectAsset,
     Face,
     FacePersonMatch,
     IgnoredFile,
@@ -969,12 +969,12 @@ class AssetRepository:
         - ``faces`` + transitive ``face_person_matches`` and a NULL on
           ``people.representative_face_id`` so the FK on Person doesn't
           block the face delete
-        - ``collection_assets``     (membership rows)
+        - ``project_assets``     (membership rows)
         - ``asset_ratings``         (per-user)
         - ``video_facets``, ``ignored_files``' sources: ``video_facets``
           rows go with the asset via ON DELETE CASCADE
-        - ``collections.cover_asset_id`` is nullable — set to NULL rather
-          than deleting the collection itself
+        - ``projects.cover_asset_id`` is nullable — set to NULL rather
+          than deleting the project itself
         """
         if not asset_ids:
             return 0
@@ -1034,9 +1034,9 @@ class AssetRepository:
             params,
         )
 
-        # Collection membership and ratings reference asset_id directly.
+        # Project membership and ratings reference asset_id directly.
         self._session.execute(
-            text("DELETE FROM collection_assets WHERE asset_id = ANY(:asset_ids)"),
+            text("DELETE FROM project_assets WHERE asset_id = ANY(:asset_ids)"),
             params,
         )
         self._session.execute(
@@ -1044,10 +1044,10 @@ class AssetRepository:
             params,
         )
         # Cover image is a nullable FK — null it out instead of cascading
-        # the whole collection.
+        # the whole project.
         self._session.execute(
             text(
-                "UPDATE collections SET cover_asset_id = NULL"
+                "UPDATE projects SET cover_asset_id = NULL"
                 " WHERE cover_asset_id = ANY(:asset_ids)"
             ),
             params,
@@ -1782,19 +1782,19 @@ class VideoIndexChunkRepository:
 
 
 # ---------------------------------------------------------------------------
-# Collections (ADR-006)
+# Projects (ADR-006)
 # ---------------------------------------------------------------------------
 
 _SENTINEL = object()  # distinguishes "not provided" from None
 
 
-class CollectionRepository:
-    """Repository for collections and collection_assets tables."""
+class ProjectRepository:
+    """Repository for projects and project_assets tables."""
 
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    # ---- Collection CRUD ----
+    # ---- Project CRUD ----
 
     def create(
         self,
@@ -1805,10 +1805,10 @@ class CollectionRepository:
         visibility: str = "private",
         type: str = "static",
         saved_query: dict | None = None,
-    ) -> Collection:
-        collection_id = "col_" + str(ULID())
-        collection = Collection(
-            collection_id=collection_id,
+    ) -> Project:
+        project_id = "prj_" + str(ULID())  # pre-rename ids start with "col_"
+        project = Project(
+            project_id=project_id,
             name=name,
             owner_user_id=owner_user_id,
             description=description,
@@ -1817,35 +1817,35 @@ class CollectionRepository:
             type=type,
             saved_query=saved_query,
         )
-        self._session.add(collection)
+        self._session.add(project)
         self._session.commit()
-        self._session.refresh(collection)
-        return collection
+        self._session.refresh(project)
+        return project
 
-    def get_by_id(self, collection_id: str) -> Collection | None:
+    def get_by_id(self, project_id: str) -> Project | None:
         return self._session.exec(
-            select(Collection).where(Collection.collection_id == collection_id)
+            select(Project).where(Project.project_id == project_id)
         ).first()
 
-    def list_for_user(self, user_id: str) -> list[Collection]:
-        """Return collections owned by user + shared collections."""
+    def list_for_user(self, user_id: str) -> list[Project]:
+        """Return projects owned by user + shared projects."""
         return list(
             self._session.exec(
-                select(Collection)
+                select(Project)
                 .where(
                     or_(
-                        Collection.owner_user_id == user_id,
-                        Collection.owner_user_id.is_(None),  # type: ignore[union-attr]
-                        Collection.visibility.in_(["shared", "public"]),  # type: ignore[union-attr]
+                        Project.owner_user_id == user_id,
+                        Project.owner_user_id.is_(None),  # type: ignore[union-attr]
+                        Project.visibility.in_(["shared", "public"]),  # type: ignore[union-attr]
                     )
                 )
-                .order_by(Collection.created_at.desc())  # type: ignore[attr-defined]
+                .order_by(Project.created_at.desc())  # type: ignore[attr-defined]
             ).all()
         )
 
     def update(
         self,
-        collection_id: str,
+        project_id: str,
         *,
         name: str | None = None,
         description: str | None = _SENTINEL,
@@ -1853,8 +1853,8 @@ class CollectionRepository:
         sort_order: str | None = None,
         cover_asset_id: str | None = _SENTINEL,
         saved_query: dict | None = _SENTINEL,
-    ) -> Collection | None:
-        col = self.get_by_id(collection_id)
+    ) -> Project | None:
+        col = self.get_by_id(project_id)
         if col is None:
             return None
         if name is not None:
@@ -1875,8 +1875,8 @@ class CollectionRepository:
         self._session.refresh(col)
         return col
 
-    def delete(self, collection_id: str) -> bool:
-        col = self.get_by_id(collection_id)
+    def delete(self, project_id: str) -> bool:
+        col = self.get_by_id(project_id)
         if col is None:
             return False
         self._session.delete(col)
@@ -1885,13 +1885,13 @@ class CollectionRepository:
 
     # ---- Asset count (no denormalized column) ----
 
-    def asset_count(self, collection_id: str) -> int:
+    def asset_count(self, project_id: str) -> int:
         result = self._session.execute(
             select(func.count())
-            .select_from(CollectionAsset)
-            .join(Asset, CollectionAsset.asset_id == Asset.asset_id)
+            .select_from(ProjectAsset)
+            .join(Asset, ProjectAsset.asset_id == Asset.asset_id)
             .where(
-                CollectionAsset.collection_id == collection_id,
+                ProjectAsset.project_id == project_id,
                 Asset.deleted_at.is_(None),  # type: ignore[union-attr]
             )
         )
@@ -1899,27 +1899,27 @@ class CollectionRepository:
 
     # ---- Batch add / remove ----
 
-    def add_assets(self, collection_id: str, asset_ids: list[str]) -> int:
-        """Add assets to collection. Returns count actually inserted (idempotent)."""
+    def add_assets(self, project_id: str, asset_ids: list[str]) -> int:
+        """Add assets to project. Returns count actually inserted (idempotent)."""
         if not asset_ids:
             return 0
 
         # Get current max position
         max_pos_result = self._session.execute(
-            select(func.max(CollectionAsset.position)).where(
-                CollectionAsset.collection_id == collection_id
+            select(func.max(ProjectAsset.position)).where(
+                ProjectAsset.project_id == project_id
             )
         )
         next_pos = (max_pos_result.scalar() or -1) + 1
 
         inserted = 0
         for asset_id in asset_ids:
-            stmt = pg_insert(CollectionAsset).values(
-                collection_id=collection_id,
+            stmt = pg_insert(ProjectAsset).values(
+                project_id=project_id,
                 asset_id=asset_id,
                 position=next_pos,
                 added_at=utcnow(),
-            ).on_conflict_do_nothing(index_elements=["collection_id", "asset_id"])
+            ).on_conflict_do_nothing(index_elements=["project_id", "asset_id"])
             result = self._session.execute(stmt)
             if result.rowcount:  # type: ignore[union-attr]
                 inserted += 1
@@ -1927,16 +1927,16 @@ class CollectionRepository:
         self._session.commit()
         return inserted
 
-    def remove_assets(self, collection_id: str, asset_ids: list[str]) -> int:
-        """Remove assets from collection. Returns count removed."""
+    def remove_assets(self, project_id: str, asset_ids: list[str]) -> int:
+        """Remove assets from project. Returns count removed."""
         if not asset_ids:
             return 0
         from sqlalchemy import delete as sa_delete
 
         result = self._session.execute(
-            sa_delete(CollectionAsset).where(
-                CollectionAsset.collection_id == collection_id,
-                CollectionAsset.asset_id.in_(asset_ids),  # type: ignore[attr-defined]
+            sa_delete(ProjectAsset).where(
+                ProjectAsset.project_id == project_id,
+                ProjectAsset.asset_id.in_(asset_ids),  # type: ignore[attr-defined]
             )
         )
         self._session.commit()
@@ -1946,12 +1946,12 @@ class CollectionRepository:
 
     def list_assets(
         self,
-        collection_id: str,
+        project_id: str,
         sort_order: str = "manual",
         after_cursor: str | None = None,
         limit: int = 200,
     ) -> tuple[list[Asset], str | None]:
-        """Return active assets in collection with cursor pagination.
+        """Return active assets in project with cursor pagination.
 
         Returns (assets, next_cursor). Cursor is the position/added_at/taken_at value
         of the last returned row, encoded as a string.
@@ -1959,20 +1959,20 @@ class CollectionRepository:
         import base64 as _b64
 
         query = (
-            select(Asset, CollectionAsset.position, CollectionAsset.added_at)
-            .join(CollectionAsset, CollectionAsset.asset_id == Asset.asset_id)
+            select(Asset, ProjectAsset.position, ProjectAsset.added_at)
+            .join(ProjectAsset, ProjectAsset.asset_id == Asset.asset_id)
             .where(
-                CollectionAsset.collection_id == collection_id,
+                ProjectAsset.project_id == project_id,
                 Asset.deleted_at.is_(None),  # type: ignore[union-attr]
             )
         )
 
         if sort_order == "added_at":
-            order_col = CollectionAsset.added_at
+            order_col = ProjectAsset.added_at
         elif sort_order == "taken_at":
             order_col = Asset.taken_at
         else:  # manual
-            order_col = CollectionAsset.position
+            order_col = ProjectAsset.position
 
         query = query.order_by(order_col.asc(), Asset.asset_id.asc())  # type: ignore[union-attr]
 
@@ -2012,17 +2012,17 @@ class CollectionRepository:
 
     # ---- Reorder ----
 
-    def reorder(self, collection_id: str, asset_ids: list[str]) -> bool:
-        """Reorder assets in collection. asset_ids must include ALL active assets.
+    def reorder(self, project_id: str, asset_ids: list[str]) -> bool:
+        """Reorder assets in project. asset_ids must include ALL active assets.
 
         Returns True on success. Raises ValueError if list is incomplete/has extras.
         """
-        # Get current active asset IDs in collection
+        # Get current active asset IDs in project
         rows = self._session.execute(
-            select(CollectionAsset.asset_id)
-            .join(Asset, CollectionAsset.asset_id == Asset.asset_id)
+            select(ProjectAsset.asset_id)
+            .join(Asset, ProjectAsset.asset_id == Asset.asset_id)
             .where(
-                CollectionAsset.collection_id == collection_id,
+                ProjectAsset.project_id == project_id,
                 Asset.deleted_at.is_(None),  # type: ignore[union-attr]
             )
         ).all()
@@ -2031,59 +2031,59 @@ class CollectionRepository:
 
         if current_ids != submitted_ids:
             raise ValueError(
-                f"Submitted {len(submitted_ids)} asset IDs but collection has {len(current_ids)} active assets. "
-                "Reorder must include all active assets in the collection."
+                f"Submitted {len(submitted_ids)} asset IDs but project has {len(current_ids)} active assets. "
+                "Reorder must include all active assets in the project."
             )
 
         for position, asset_id in enumerate(asset_ids):
             self._session.execute(
                 sa_text(
-                    "UPDATE collection_assets SET position = :pos "
-                    "WHERE collection_id = :cid AND asset_id = :aid"
+                    "UPDATE project_assets SET position = :pos "
+                    "WHERE project_id = :cid AND asset_id = :aid"
                 ),
-                {"pos": position, "cid": collection_id, "aid": asset_id},
+                {"pos": position, "cid": project_id, "aid": asset_id},
             )
         self._session.commit()
         return True
 
     # ---- Cover resolution ----
 
-    def resolve_cover(self, collection: Collection) -> str | None:
+    def resolve_cover(self, project: Project) -> str | None:
         """Return the effective cover asset_id, applying lazy self-healing.
 
-        If cover_asset_id is set and the asset is active and in the collection,
+        If cover_asset_id is set and the asset is active and in the project,
         return it. Otherwise fall back to first-by-position, and null out the
         stale cover_asset_id.
         """
-        if collection.cover_asset_id:
-            # Check if cover asset is still active and in collection
+        if project.cover_asset_id:
+            # Check if cover asset is still active and in project
             row = self._session.execute(
-                select(CollectionAsset.asset_id)
-                .join(Asset, CollectionAsset.asset_id == Asset.asset_id)
+                select(ProjectAsset.asset_id)
+                .join(Asset, ProjectAsset.asset_id == Asset.asset_id)
                 .where(
-                    CollectionAsset.collection_id == collection.collection_id,
-                    CollectionAsset.asset_id == collection.cover_asset_id,
+                    ProjectAsset.project_id == project.project_id,
+                    ProjectAsset.asset_id == project.cover_asset_id,
                     Asset.deleted_at.is_(None),  # type: ignore[union-attr]
                 )
             ).first()
             if row:
-                return collection.cover_asset_id
+                return project.cover_asset_id
 
             # Stale — null it out (lazy self-healing)
-            collection.cover_asset_id = None
-            collection.updated_at = utcnow()
-            self._session.add(collection)
+            project.cover_asset_id = None
+            project.updated_at = utcnow()
+            self._session.add(project)
             self._session.commit()
 
         # Fallback: first active asset by position
         row = self._session.execute(
-            select(CollectionAsset.asset_id)
-            .join(Asset, CollectionAsset.asset_id == Asset.asset_id)
+            select(ProjectAsset.asset_id)
+            .join(Asset, ProjectAsset.asset_id == Asset.asset_id)
             .where(
-                CollectionAsset.collection_id == collection.collection_id,
+                ProjectAsset.project_id == project.project_id,
                 Asset.deleted_at.is_(None),  # type: ignore[union-attr]
             )
-            .order_by(CollectionAsset.position.asc())  # type: ignore[union-attr]
+            .order_by(ProjectAsset.position.asc())  # type: ignore[union-attr]
             .limit(1)
         ).first()
         return row[0] if row else None

@@ -278,14 +278,14 @@ class AssetEmbedding(SQLModel, table=True):
 
 
 # ---------------------------------------------------------------------------
-# Collections (ADR-006)
+# Projects (ADR-006)
 # ---------------------------------------------------------------------------
 
 
-class Collection(SQLModel, table=True):
-    __tablename__ = "collections"
+class Project(SQLModel, table=True):
+    __tablename__ = "projects"
 
-    collection_id: str = Field(primary_key=True)
+    project_id: str = Field(primary_key=True)
     name: str = Field(nullable=False)
     description: str | None = Field(default=None, nullable=True)
     cover_asset_id: str | None = Field(
@@ -296,6 +296,11 @@ class Collection(SQLModel, table=True):
     sort_order: str = Field(default="manual", nullable=False)
     type: str = Field(default="static", nullable=False)  # static | smart
     saved_query: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    status: str = Field(default="active", nullable=False)  # active | archived
+    archived_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
@@ -306,11 +311,11 @@ class Collection(SQLModel, table=True):
     )
 
 
-class CollectionAsset(SQLModel, table=True):
-    __tablename__ = "collection_assets"
+class ProjectAsset(SQLModel, table=True):
+    __tablename__ = "project_assets"
 
-    collection_id: str = Field(
-        foreign_key="collections.collection_id", primary_key=True, nullable=False
+    project_id: str = Field(
+        foreign_key="projects.project_id", primary_key=True, nullable=False
     )
     asset_id: str = Field(
         foreign_key="assets.asset_id", primary_key=True, nullable=False

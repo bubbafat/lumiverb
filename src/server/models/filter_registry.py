@@ -122,7 +122,7 @@ def parse_f_params(
 # ---------------------------------------------------------------------------
 
 def from_json(data: dict) -> QuerySpec:
-    """Deserialize a smart collection saved_query JSON into a QuerySpec.
+    """Deserialize a smart project saved_query JSON into a QuerySpec.
 
     Expected format:
     {
@@ -138,7 +138,7 @@ def from_json(data: dict) -> QuerySpec:
     Defensive against bad data: anything that isn't a dict-shaped filter
     is logged and skipped instead of crashing the request. We've seen
     pre-V2 saved queries in the wild with strings or other shapes in
-    `filters` — the smart collection still loads, just with the bad
+    `filters` — the smart project still loads, just with the bad
     leaves dropped.
     """
     if not isinstance(data, dict):

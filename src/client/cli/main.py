@@ -13,7 +13,7 @@ from rich.table import Table
 
 from src.client.cli.client import LumiverbAPIError, LumiverbClient
 from src.client.cli.config import get_admin_key, load_config, save_config
-from src.client.cli.commands.collections import collections_app
+from src.client.cli.commands.projects import projects_app
 from src.client.cli.commands.keys import keys_app
 from src.client.cli.commands.maintenance import maintenance_app
 from src.client.cli.commands.users import user_app
@@ -27,7 +27,7 @@ config_app = typer.Typer(help="Manage API URL and API key.")
 app.add_typer(config_app, name="config")
 library_app = typer.Typer(help="Create and list libraries.")
 app.add_typer(library_app, name="library")
-app.add_typer(collections_app, name="collection")
+app.add_typer(projects_app, name="project")
 app.add_typer(keys_app, name="keys")
 app.add_typer(user_app, name="user")
 filter_app = typer.Typer(help="Manage path filters (include/exclude patterns).")

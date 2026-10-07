@@ -1,13 +1,13 @@
-"""Smart (dynamic) collections API tests.
+"""Smart (dynamic) projects API tests.
 
-Smart collections store a saved query as a filter algebra tree:
+Smart projects store a saved query as a filter algebra tree:
   {"filters": [{"type": "camera_make", "value": "Canon"}, ...], "sort": "taken_at", "direction": "desc"}
 
 When viewed, they return live results by executing the saved query via the
 unified query_page() code path. Text search filters use the candidate-set
 pattern (Quickwit → candidate IDs → SQL).
 
-Assets cannot be manually added to or removed from a smart collection.
+Assets cannot be manually added to or removed from a smart project.
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ def _headers(api_key: str) -> dict:
 
 @pytest.fixture(scope="module")
 def smart_env():
-    """Testcontainers env for smart collection tests."""
+    """Testcontainers env for smart project tests."""
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     with PostgresContainer("pgvector/pgvector:pg16") as control_postgres:
@@ -138,13 +138,13 @@ def smart_env():
 
 
 # ---------------------------------------------------------------------------
-# Create smart collection
+# Create smart project
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.slow
-def test_create_smart_collection(smart_env):
-    """Create a smart collection with a saved query using filter algebra."""
+def test_create_smart_project(smart_env):
+    """Create a smart project with a saved query using filter algebra."""
     client, api_key, library_id = smart_env
 
     saved_query = {
@@ -159,7 +159,7 @@ def test_create_smart_collection(smart_env):
     }
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={
             "name": "Best Canon Shots",
             "type": "smart",
@@ -176,8 +176,8 @@ def test_create_smart_collection(smart_env):
 
 
 @pytest.mark.slow
-def test_create_smart_collection_with_search_query(smart_env):
-    """Smart collection can include a text search query filter."""
+def test_create_smart_project_with_search_query(smart_env):
+    """Smart project can include a text search query filter."""
     client, api_key, library_id = smart_env
 
     saved_query = {
@@ -188,7 +188,7 @@ def test_create_smart_collection_with_search_query(smart_env):
     }
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={
             "name": "Orange Sunsets",
             "type": "smart",
@@ -205,12 +205,12 @@ def test_create_smart_collection_with_search_query(smart_env):
 
 
 @pytest.mark.slow
-def test_create_smart_collection_without_saved_query_rejected(smart_env):
-    """A smart collection must have a saved_query."""
+def test_create_smart_project_without_saved_query_rejected(smart_env):
+    """A smart project must have a saved_query."""
     client, api_key, _ = smart_env
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={
             "name": "Empty Smart",
             "type": "smart",
@@ -221,12 +221,12 @@ def test_create_smart_collection_without_saved_query_rejected(smart_env):
 
 
 @pytest.mark.slow
-def test_create_static_collection_with_saved_query_rejected(smart_env):
-    """A static collection must NOT have a saved_query."""
+def test_create_static_project_with_saved_query_rejected(smart_env):
+    """A static project must NOT have a saved_query."""
     client, api_key, _ = smart_env
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={
             "name": "Bad Static",
             "type": "static",
@@ -243,17 +243,17 @@ def test_create_static_collection_with_saved_query_rejected(smart_env):
 
 
 @pytest.mark.slow
-def test_list_collections_includes_type(smart_env):
-    """Collection list response includes the type field."""
+def test_list_projects_includes_type(smart_env):
+    """Project list response includes the type field."""
     client, api_key, library_id = smart_env
 
     client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "Static One"},
         headers=_headers(api_key),
     )
     client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={
             "name": "Smart One",
             "type": "smart",
@@ -262,7 +262,7 @@ def test_list_collections_includes_type(smart_env):
         headers=_headers(api_key),
     )
 
-    r = client.get("/v1/collections", headers=_headers(api_key))
+    r = client.get("/v1/projects", headers=_headers(api_key))
     assert r.status_code == 200
     items = r.json()["items"]
     types = {i["name"]: i["type"] for i in items if i["name"] in ("Static One", "Smart One")}
@@ -271,13 +271,13 @@ def test_list_collections_includes_type(smart_env):
 
 
 # ---------------------------------------------------------------------------
-# Get smart collection detail returns saved_query
+# Get smart project detail returns saved_query
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.slow
-def test_get_smart_collection_returns_saved_query(smart_env):
-    """GET /collections/{id} for a smart collection includes saved_query."""
+def test_get_smart_project_returns_saved_query(smart_env):
+    """GET /projects/{id} for a smart project includes saved_query."""
     client, api_key, library_id = smart_env
 
     saved_query = {
@@ -287,13 +287,13 @@ def test_get_smart_collection_returns_saved_query(smart_env):
         ],
     }
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "Geotagged Photos", "type": "smart", "saved_query": saved_query},
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
-    r2 = client.get(f"/v1/collections/{col_id}", headers=_headers(api_key))
+    r2 = client.get(f"/v1/projects/{col_id}", headers=_headers(api_key))
     assert r2.status_code == 200
     data = r2.json()
     assert data["type"] == "smart"
@@ -303,31 +303,31 @@ def test_get_smart_collection_returns_saved_query(smart_env):
 
 
 @pytest.mark.slow
-def test_get_static_collection_has_null_saved_query(smart_env):
-    """GET /collections/{id} for a static collection has saved_query=null."""
+def test_get_static_project_has_null_saved_query(smart_env):
+    """GET /projects/{id} for a static project has saved_query=null."""
     client, api_key, _ = smart_env
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "Plain Static"},
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
-    r2 = client.get(f"/v1/collections/{col_id}", headers=_headers(api_key))
+    r2 = client.get(f"/v1/projects/{col_id}", headers=_headers(api_key))
     assert r2.status_code == 200
     assert r2.json()["type"] == "static"
     assert r2.json()["saved_query"] is None
 
 
 # ---------------------------------------------------------------------------
-# Smart collection assets endpoint returns live results
+# Smart project assets endpoint returns live results
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.slow
-def test_smart_collection_assets_returns_live_results(smart_env):
-    """GET /collections/{id}/assets for a smart collection executes the saved query."""
+def test_smart_project_assets_returns_live_results(smart_env):
+    """GET /projects/{id}/assets for a smart project executes the saved query."""
     client, api_key, library_id = smart_env
 
     a_canon = _ingest_asset(
@@ -340,7 +340,7 @@ def test_smart_collection_assets_returns_live_results(smart_env):
     )
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={
             "name": "Canon Only",
             "type": "smart",
@@ -353,9 +353,9 @@ def test_smart_collection_assets_returns_live_results(smart_env):
         },
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
-    r2 = client.get(f"/v1/collections/{col_id}/assets", headers=_headers(api_key))
+    r2 = client.get(f"/v1/projects/{col_id}/assets", headers=_headers(api_key))
     assert r2.status_code == 200
     ids = [i["asset_id"] for i in r2.json()["items"]]
     assert a_canon in ids
@@ -363,12 +363,12 @@ def test_smart_collection_assets_returns_live_results(smart_env):
 
 
 @pytest.mark.slow
-def test_smart_collection_updates_automatically(smart_env):
-    """New assets matching the query appear in the smart collection automatically."""
+def test_smart_project_updates_automatically(smart_env):
+    """New assets matching the query appear in the smart project automatically."""
     client, api_key, library_id = smart_env
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={
             "name": "Auto-Update Test",
             "type": "smart",
@@ -381,9 +381,9 @@ def test_smart_collection_updates_automatically(smart_env):
         },
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
-    r2 = client.get(f"/v1/collections/{col_id}/assets", headers=_headers(api_key))
+    r2 = client.get(f"/v1/projects/{col_id}/assets", headers=_headers(api_key))
     assert r2.status_code == 200
     assert len(r2.json()["items"]) == 0
 
@@ -392,26 +392,26 @@ def test_smart_collection_updates_automatically(smart_env):
         exif_data={"camera_make": "Fujifilm", "taken_at": "2024-07-01T10:00:00+00:00"},
     )
 
-    r3 = client.get(f"/v1/collections/{col_id}/assets", headers=_headers(api_key))
+    r3 = client.get(f"/v1/projects/{col_id}/assets", headers=_headers(api_key))
     assert r3.status_code == 200
     ids = [i["asset_id"] for i in r3.json()["items"]]
     assert a_fuji in ids
 
 
 # ---------------------------------------------------------------------------
-# Smart collection: no manual add/remove
+# Smart project: no manual add/remove
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.slow
-def test_smart_collection_add_assets_rejected(smart_env):
-    """POST /collections/{id}/assets is rejected for smart collections."""
+def test_smart_project_add_assets_rejected(smart_env):
+    """POST /projects/{id}/assets is rejected for smart projects."""
     client, api_key, library_id = smart_env
 
     a1 = _ingest_asset(client, api_key, library_id, "smart_noadd.jpg")
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={
             "name": "No Add Test",
             "type": "smart",
@@ -419,10 +419,10 @@ def test_smart_collection_add_assets_rejected(smart_env):
         },
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
     r2 = client.post(
-        f"/v1/collections/{col_id}/assets",
+        f"/v1/projects/{col_id}/assets",
         json={"asset_ids": [a1]},
         headers=_headers(api_key),
     )
@@ -431,14 +431,14 @@ def test_smart_collection_add_assets_rejected(smart_env):
 
 
 @pytest.mark.slow
-def test_smart_collection_remove_assets_rejected(smart_env):
-    """DELETE /collections/{id}/assets is rejected for smart collections."""
+def test_smart_project_remove_assets_rejected(smart_env):
+    """DELETE /projects/{id}/assets is rejected for smart projects."""
     client, api_key, library_id = smart_env
 
     a1 = _ingest_asset(client, api_key, library_id, "smart_noremove.jpg")
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={
             "name": "No Remove Test",
             "type": "smart",
@@ -446,11 +446,11 @@ def test_smart_collection_remove_assets_rejected(smart_env):
         },
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
     r2 = client.request(
         "DELETE",
-        f"/v1/collections/{col_id}/assets",
+        f"/v1/projects/{col_id}/assets",
         json={"asset_ids": [a1]},
         headers=_headers(api_key),
     )
@@ -459,12 +459,12 @@ def test_smart_collection_remove_assets_rejected(smart_env):
 
 
 @pytest.mark.slow
-def test_smart_collection_reorder_rejected(smart_env):
-    """PATCH /collections/{id}/reorder is rejected for smart collections."""
+def test_smart_project_reorder_rejected(smart_env):
+    """PATCH /projects/{id}/reorder is rejected for smart projects."""
     client, api_key, _ = smart_env
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={
             "name": "No Reorder Test",
             "type": "smart",
@@ -472,10 +472,10 @@ def test_smart_collection_reorder_rejected(smart_env):
         },
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
     r2 = client.patch(
-        f"/v1/collections/{col_id}/reorder",
+        f"/v1/projects/{col_id}/reorder",
         json={"asset_ids": []},
         headers=_headers(api_key),
     )
@@ -484,17 +484,17 @@ def test_smart_collection_reorder_rejected(smart_env):
 
 
 # ---------------------------------------------------------------------------
-# Update smart collection saved_query
+# Update smart project saved_query
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.slow
-def test_update_smart_collection_saved_query(smart_env):
-    """PATCH can update the saved_query of a smart collection."""
+def test_update_smart_project_saved_query(smart_env):
+    """PATCH can update the saved_query of a smart project."""
     client, api_key, library_id = smart_env
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={
             "name": "Updatable Smart",
             "type": "smart",
@@ -502,10 +502,10 @@ def test_update_smart_collection_saved_query(smart_env):
         },
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
     r2 = client.patch(
-        f"/v1/collections/{col_id}",
+        f"/v1/projects/{col_id}",
         json={"saved_query": {"filters": [{"type": "camera_make", "value": "Sony"}]}},
         headers=_headers(api_key),
     )
@@ -515,17 +515,17 @@ def test_update_smart_collection_saved_query(smart_env):
 
 
 # ---------------------------------------------------------------------------
-# Smart collection asset_count reflects live count
+# Smart project asset_count reflects live count
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.slow
-def test_smart_collection_asset_count_is_live(smart_env):
-    """asset_count on a smart collection reflects the current matching count."""
+def test_smart_project_asset_count_is_live(smart_env):
+    """asset_count on a smart project reflects the current matching count."""
     client, api_key, library_id = smart_env
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={
             "name": "Count Test",
             "type": "smart",
@@ -538,9 +538,9 @@ def test_smart_collection_asset_count_is_live(smart_env):
         },
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
-    r2 = client.get(f"/v1/collections/{col_id}", headers=_headers(api_key))
+    r2 = client.get(f"/v1/projects/{col_id}", headers=_headers(api_key))
     assert r2.json()["asset_count"] == 0
 
     _ingest_asset(
@@ -548,7 +548,7 @@ def test_smart_collection_asset_count_is_live(smart_env):
         exif_data={"camera_make": "Leica", "taken_at": "2024-08-01T10:00:00+00:00"},
     )
 
-    r3 = client.get(f"/v1/collections/{col_id}", headers=_headers(api_key))
+    r3 = client.get(f"/v1/projects/{col_id}", headers=_headers(api_key))
     assert r3.json()["asset_count"] == 1
 
 
@@ -558,12 +558,12 @@ def test_smart_collection_asset_count_is_live(smart_env):
 
 
 @pytest.mark.slow
-def test_default_collection_type_is_static(smart_env):
-    """Collections created without type field default to static."""
+def test_default_project_type_is_static(smart_env):
+    """Projects created without type field default to static."""
     client, api_key, _ = smart_env
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "Default Type"},
         headers=_headers(api_key),
     )
@@ -572,18 +572,18 @@ def test_default_collection_type_is_static(smart_env):
 
 
 # ---------------------------------------------------------------------------
-# Smart collection with rating filters
+# Smart project with rating filters
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.slow
-def test_smart_collection_e2e_browse_then_create(smart_env):
-    """End-to-end: query with filters, confirm results, create smart collection, verify match.
+def test_smart_project_e2e_browse_then_create(smart_env):
+    """End-to-end: query with filters, confirm results, create smart project, verify match.
 
     1. Ingest assets with different cameras
     2. Query with camera_make:Nikon filter → get N results
-    3. Create smart collection from same filters
-    4. List collection assets → must return the same N results
+    3. Create smart project from same filters
+    4. List project assets → must return the same N results
     """
     client, api_key, library_id = smart_env
 
@@ -611,11 +611,11 @@ def test_smart_collection_e2e_browse_then_create(smart_env):
     assert a_nikon2 in query_ids
     assert a_canon not in query_ids
 
-    # Step 2: Create smart collection with the SAME filters
+    # Step 2: Create smart project with the SAME filters
     r_create = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={
-            "name": "E2E Nikon Collection",
+            "name": "E2E Nikon Project",
             "type": "smart",
             "saved_query": {
                 "filters": [
@@ -627,25 +627,25 @@ def test_smart_collection_e2e_browse_then_create(smart_env):
         headers=_headers(api_key),
     )
     assert r_create.status_code == 201
-    col_id = r_create.json()["collection_id"]
+    col_id = r_create.json()["project_id"]
 
-    # Step 3: List collection assets — must match query results
-    r_assets = client.get(f"/v1/collections/{col_id}/assets", headers=_headers(api_key))
+    # Step 3: List project assets — must match query results
+    r_assets = client.get(f"/v1/projects/{col_id}/assets", headers=_headers(api_key))
     assert r_assets.status_code == 200
     col_ids = [i["asset_id"] for i in r_assets.json()["items"]]
-    assert a_nikon1 in col_ids, f"Nikon1 missing from smart collection. Got: {col_ids}"
-    assert a_nikon2 in col_ids, f"Nikon2 missing from smart collection. Got: {col_ids}"
-    assert a_canon not in col_ids, "Canon should not be in Nikon smart collection"
+    assert a_nikon1 in col_ids, f"Nikon1 missing from smart project. Got: {col_ids}"
+    assert a_nikon2 in col_ids, f"Nikon2 missing from smart project. Got: {col_ids}"
+    assert a_canon not in col_ids, "Canon should not be in Nikon smart project"
 
-    # Step 4: asset_count on the collection detail must match
-    r_detail = client.get(f"/v1/collections/{col_id}", headers=_headers(api_key))
+    # Step 4: asset_count on the project detail must match
+    r_detail = client.get(f"/v1/projects/{col_id}", headers=_headers(api_key))
     assert r_detail.status_code == 200
     assert r_detail.json()["asset_count"] >= 2
 
 
 @pytest.mark.slow
-def test_smart_collection_e2e_queryparams_style_filters(smart_env):
-    """Filter algebra round-trip: create collection from filter tree, evaluate live."""
+def test_smart_project_e2e_queryparams_style_filters(smart_env):
+    """Filter algebra round-trip: create project from filter tree, evaluate live."""
     client, api_key, library_id = smart_env
 
     a1 = _ingest_asset(
@@ -659,7 +659,7 @@ def test_smart_collection_e2e_queryparams_style_filters(smart_env):
     client.put(f"/v1/assets/{a1}/rating", json={"favorite": True}, headers=_headers(api_key))
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={
             "name": "E2E Pentax Favorites",
             "type": "smart",
@@ -674,9 +674,9 @@ def test_smart_collection_e2e_queryparams_style_filters(smart_env):
         headers=_headers(api_key),
     )
     assert r.status_code == 201
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
-    r2 = client.get(f"/v1/collections/{col_id}/assets", headers=_headers(api_key))
+    r2 = client.get(f"/v1/projects/{col_id}/assets", headers=_headers(api_key))
     assert r2.status_code == 200
     ids = [i["asset_id"] for i in r2.json()["items"]]
     assert a1 in ids, f"Favorited Pentax asset missing. Got: {ids}"
@@ -684,12 +684,12 @@ def test_smart_collection_e2e_queryparams_style_filters(smart_env):
 
 
 @pytest.mark.slow
-def test_smart_collection_saved_query_is_visible(smart_env):
-    """GET collection detail returns saved_query so the UI can display filters."""
+def test_smart_project_saved_query_is_visible(smart_env):
+    """GET project detail returns saved_query so the UI can display filters."""
     client, api_key, _ = smart_env
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={
             "name": "Visible Filters",
             "type": "smart",
@@ -703,12 +703,12 @@ def test_smart_collection_saved_query_is_visible(smart_env):
         },
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
-    r2 = client.get(f"/v1/collections/{col_id}", headers=_headers(api_key))
+    r2 = client.get(f"/v1/projects/{col_id}", headers=_headers(api_key))
     assert r2.status_code == 200
     sq = r2.json()["saved_query"]
-    assert sq is not None, "saved_query must be returned in collection detail"
+    assert sq is not None, "saved_query must be returned in project detail"
     filter_types = {f["type"]: f["value"] for f in sq["filters"]}
     assert filter_types["camera_make"] == "Sony"
     assert filter_types["stars"] == "4+"
@@ -716,8 +716,8 @@ def test_smart_collection_saved_query_is_visible(smart_env):
 
 
 @pytest.mark.slow
-def test_smart_collection_rating_filters(smart_env):
-    """Smart collection with star + color filters returns matching assets."""
+def test_smart_project_rating_filters(smart_env):
+    """Smart project with star + color filters returns matching assets."""
     client, api_key, library_id = smart_env
 
     a_match = _ingest_asset(client, api_key, library_id, "smart_rated_match.jpg",
@@ -729,7 +729,7 @@ def test_smart_collection_rating_filters(smart_env):
     client.put(f"/v1/assets/{a_nomatch}/rating", json={"stars": 2}, headers=_headers(api_key))
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={
             "name": "Top Red Picks",
             "type": "smart",
@@ -743,9 +743,9 @@ def test_smart_collection_rating_filters(smart_env):
         },
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
-    r2 = client.get(f"/v1/collections/{col_id}/assets", headers=_headers(api_key))
+    r2 = client.get(f"/v1/projects/{col_id}/assets", headers=_headers(api_key))
     assert r2.status_code == 200
     ids = [i["asset_id"] for i in r2.json()["items"]]
     assert a_match in ids
@@ -753,16 +753,16 @@ def test_smart_collection_rating_filters(smart_env):
 
 
 # ---------------------------------------------------------------------------
-# Smart collection with text search (candidate-set pattern)
+# Smart project with text search (candidate-set pattern)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.slow
-def test_smart_collection_with_search_term_uses_candidate_set(smart_env):
-    """Smart collection with query filter uses Quickwit candidate-set pattern.
+def test_smart_project_with_search_term_uses_candidate_set(smart_env):
+    """Smart project with query filter uses Quickwit candidate-set pattern.
 
     This is the core bug fix: search "Disney" + camera_make:Canon → save as
-    smart collection → collection must show only Canon assets matching "Disney",
+    smart project → project must show only Canon assets matching "Disney",
     not all assets or only the search results.
 
     Mock Quickwit to return specific candidates, then verify the structured
@@ -781,11 +781,11 @@ def test_smart_collection_with_search_term_uses_candidate_set(smart_env):
         exif_data={"camera_make": "Sony", "taken_at": "2024-11-02T10:00:00+00:00"},
     )
 
-    # Create smart collection with search + structured filter
+    # Create smart project with search + structured filter
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={
-            "name": "Disney Canon Collection",
+            "name": "Disney Canon Project",
             "type": "smart",
             "saved_query": {
                 "filters": [
@@ -798,7 +798,7 @@ def test_smart_collection_with_search_term_uses_candidate_set(smart_env):
         headers=_headers(api_key),
     )
     assert r.status_code == 201
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
     # Mock Quickwit to return both assets as text search hits
     mock_qw = MagicMock()
@@ -811,17 +811,17 @@ def test_smart_collection_with_search_term_uses_candidate_set(smart_env):
     mock_qw.search_tenant_transcripts.return_value = []
 
     with patch("src.server.search.quickwit_client.QuickwitClient", return_value=mock_qw):
-        r2 = client.get(f"/v1/collections/{col_id}/assets", headers=_headers(api_key))
+        r2 = client.get(f"/v1/projects/{col_id}/assets", headers=_headers(api_key))
     assert r2.status_code == 200
     ids = [i["asset_id"] for i in r2.json()["items"]]
     # Only Canon survives: text search returned both, but camera_make:Canon filters Sony out
-    assert a_canon in ids, f"Canon asset missing from search+filter collection. Got: {ids}"
+    assert a_canon in ids, f"Canon asset missing from search+filter project. Got: {ids}"
     assert a_sony not in ids, "Sony should be excluded by camera_make:Canon filter"
 
 
 @pytest.mark.slow
-def test_smart_collection_search_term_no_results(smart_env):
-    """Smart collection with search term returns empty when Quickwit returns no hits."""
+def test_smart_project_search_term_no_results(smart_env):
+    """Smart project with search term returns empty when Quickwit returns no hits."""
     from unittest.mock import MagicMock, patch
 
     client, api_key, library_id = smart_env
@@ -832,9 +832,9 @@ def test_smart_collection_search_term_no_results(smart_env):
     )
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={
-            "name": "No Hits Collection",
+            "name": "No Hits Project",
             "type": "smart",
             "saved_query": {
                 "filters": [
@@ -846,7 +846,7 @@ def test_smart_collection_search_term_no_results(smart_env):
         headers=_headers(api_key),
     )
     assert r.status_code == 201
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
     mock_qw = MagicMock()
     mock_qw.enabled = True
@@ -855,6 +855,6 @@ def test_smart_collection_search_term_no_results(smart_env):
     mock_qw.search_tenant_transcripts.return_value = []
 
     with patch("src.server.search.quickwit_client.QuickwitClient", return_value=mock_qw):
-        r2 = client.get(f"/v1/collections/{col_id}/assets", headers=_headers(api_key))
+        r2 = client.get(f"/v1/projects/{col_id}/assets", headers=_headers(api_key))
     assert r2.status_code == 200
     assert r2.json()["items"] == []

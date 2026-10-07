@@ -19,7 +19,7 @@ os.environ.setdefault("SQLALCHEMY_NULLPOOL", "1")
 # pyvips imports libvips via cffi.dlopen, which on macOS only searches the
 # system dyld paths. uv's standalone Python builds do not have
 # /opt/homebrew/lib on that search list, so contributors who installed
-# libvips via Homebrew see ImportErrors at collection time. Pre-populating
+# libvips via Homebrew see ImportErrors at project time. Pre-populating
 # DYLD_FALLBACK_LIBRARY_PATH from the Homebrew prefix at the top of the
 # test session lets dlopen find the dylib without forcing every contributor
 # to export the variable in their shell.

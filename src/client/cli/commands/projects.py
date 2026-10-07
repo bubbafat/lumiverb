@@ -1,4 +1,4 @@
-"""CLI commands for managing collections."""
+"""CLI commands for managing projects."""
 
 from __future__ import annotations
 
@@ -11,16 +11,16 @@ from rich.table import Table
 from src.client.cli.client import LumiverbClient
 
 console = Console()
-collections_app = typer.Typer(help="Manage collections.")
+projects_app = typer.Typer(help="Manage projects.")
 
 
-@collections_app.command("list")
-def collection_list(
+@projects_app.command("list")
+def project_list(
     json: Annotated[bool, typer.Option("--json", help="Output raw JSON.")] = False,
 ) -> None:
-    """List all collections you own or that are shared with you."""
+    """List all projects you own or that are shared with you."""
     client = LumiverbClient()
-    resp = client.get("/v1/collections")
+    resp = client.get("/v1/projects")
     data = resp.json()
     items = data.get("items", [])
 
@@ -29,7 +29,7 @@ def collection_list(
         console.print(_json.dumps(items, indent=2))
         return
 
-    table = Table(title="Collections")
+    table = Table(title="Projects")
     table.add_column("ID", style="dim")
     table.add_column("Name")
     table.add_column("Assets", justify="right")
@@ -37,7 +37,7 @@ def collection_list(
     table.add_column("Ownership")
     for col in items:
         table.add_row(
-            col.get("collection_id", ""),
+            col.get("project_id", ""),
             col.get("name", ""),
             str(col.get("asset_count", 0)),
             col.get("visibility", ""),
@@ -46,13 +46,13 @@ def collection_list(
     console.print(table)
 
 
-@collections_app.command("create")
-def collection_create(
-    name: Annotated[str, typer.Option("--name", "-n", help="Collection name.")],
+@projects_app.command("create")
+def project_create(
+    name: Annotated[str, typer.Option("--name", "-n", help="Project name.")],
     description: Annotated[str | None, typer.Option("--description", "-d", help="Optional description.")] = None,
     visibility: Annotated[str, typer.Option("--visibility", help="private, shared, or public.")] = "private",
 ) -> None:
-    """Create a new collection."""
+    """Create a new project."""
     if visibility not in ("private", "shared", "public"):
         console.print("[red]Visibility must be 'private', 'shared', or 'public'.[/red]")
         raise typer.Exit(1)
@@ -62,48 +62,48 @@ def collection_create(
         body["description"] = description
 
     client = LumiverbClient()
-    resp = client.post("/v1/collections", json=body)
+    resp = client.post("/v1/projects", json=body)
     data = resp.json()
-    console.print(f"[green]Collection created: {data.get('collection_id', '')}[/green]")
+    console.print(f"[green]Project created: {data.get('project_id', '')}[/green]")
     console.print(f"  name: {data.get('name', name)}")
     if data.get("description"):
         console.print(f"  description: {data['description']}")
     console.print(f"  visibility: {data.get('visibility', visibility)}")
 
 
-@collections_app.command("show")
-def collection_show(
-    collection_id: Annotated[str, typer.Option("--id", help="Collection ID (col_...).")],
+@projects_app.command("show")
+def project_show(
+    project_id: Annotated[str, typer.Option("--id", help="Project ID (col_...).")],
     json: Annotated[bool, typer.Option("--json", help="Output raw JSON.")] = False,
 ) -> None:
-    """Show collection details and its assets."""
+    """Show project details and its assets."""
     client = LumiverbClient()
-    resp = client.get(f"/v1/collections/{collection_id}")
+    resp = client.get(f"/v1/projects/{project_id}")
     col = resp.json()
 
     if json:
         # Also fetch assets
-        assets_resp = client.get(f"/v1/collections/{collection_id}/assets?limit=1000")
+        assets_resp = client.get(f"/v1/projects/{project_id}/assets?limit=1000")
         assets_data = assets_resp.json()
         import json as _json
-        console.print(_json.dumps({"collection": col, "assets": assets_data}, indent=2))
+        console.print(_json.dumps({"project": col, "assets": assets_data}, indent=2))
         return
 
     console.print(f"[bold]{col.get('name', '')}[/bold]")
     if col.get("description"):
         console.print(f"  {col['description']}")
-    console.print(f"  ID: {col.get('collection_id', '')}")
+    console.print(f"  ID: {col.get('project_id', '')}")
     console.print(f"  Assets: {col.get('asset_count', 0)}")
     console.print(f"  Visibility: {col.get('visibility', '')}")
     console.print(f"  Sort: {col.get('sort_order', '')}")
     console.print()
 
     # List assets
-    assets_resp = client.get(f"/v1/collections/{collection_id}/assets?limit=50")
+    assets_resp = client.get(f"/v1/projects/{project_id}/assets?limit=50")
     assets_data = assets_resp.json()
     items = assets_data.get("items", [])
     if not items:
-        console.print("  [dim]No assets in this collection.[/dim]")
+        console.print("  [dim]No assets in this project.[/dim]")
         return
 
     table = Table(title="Assets")
@@ -123,51 +123,51 @@ def collection_show(
             console.print(f"  [dim]... and {remaining} more[/dim]")
 
 
-@collections_app.command("add")
-def collection_add(
-    collection_id: Annotated[str, typer.Option("--id", help="Collection ID (col_...).")],
+@projects_app.command("add")
+def project_add(
+    project_id: Annotated[str, typer.Option("--id", help="Project ID (col_...).")],
     asset_id: Annotated[list[str], typer.Option("--asset-id", help="Asset ID(s) to add. Repeat for multiple.")],
 ) -> None:
-    """Add assets to a collection."""
+    """Add assets to a project."""
     client = LumiverbClient()
     resp = client.post(
-        f"/v1/collections/{collection_id}/assets",
+        f"/v1/projects/{project_id}/assets",
         json={"asset_ids": asset_id},
     )
     data = resp.json()
     added = data.get("added", 0)
-    console.print(f"[green]Added {added} asset(s) to collection.[/green]")
+    console.print(f"[green]Added {added} asset(s) to project.[/green]")
 
 
-@collections_app.command("remove")
-def collection_remove(
-    collection_id: Annotated[str, typer.Option("--id", help="Collection ID (col_...).")],
+@projects_app.command("remove")
+def project_remove(
+    project_id: Annotated[str, typer.Option("--id", help="Project ID (col_...).")],
     asset_id: Annotated[list[str], typer.Option("--asset-id", help="Asset ID(s) to remove. Repeat for multiple.")],
 ) -> None:
-    """Remove assets from a collection."""
+    """Remove assets from a project."""
     client = LumiverbClient()
     resp = client.delete(
-        f"/v1/collections/{collection_id}/assets",
+        f"/v1/projects/{project_id}/assets",
         json={"asset_ids": asset_id},
     )
     data = resp.json()
     removed = data.get("removed", 0)
-    console.print(f"[green]Removed {removed} asset(s) from collection.[/green]")
+    console.print(f"[green]Removed {removed} asset(s) from project.[/green]")
 
 
-@collections_app.command("delete")
-def collection_delete(
-    collection_id: Annotated[str, typer.Option("--id", help="Collection ID (col_...).")],
+@projects_app.command("delete")
+def project_delete(
+    project_id: Annotated[str, typer.Option("--id", help="Project ID (col_...).")],
 ) -> None:
-    """Delete a collection. Source assets are not affected."""
-    confirm = typer.confirm(f"Delete collection {collection_id}?", default=False)
+    """Delete a project. Source assets are not affected."""
+    confirm = typer.confirm(f"Delete project {project_id}?", default=False)
     if not confirm:
         console.print("Aborted.")
         raise typer.Exit(0)
 
     client = LumiverbClient()
-    resp = client.raw("DELETE", f"/v1/collections/{collection_id}")
+    resp = client.raw("DELETE", f"/v1/projects/{project_id}")
     if resp.status_code == 204:
-        console.print(f"[green]Deleted {collection_id}[/green]")
+        console.print(f"[green]Deleted {project_id}[/green]")
         return
     client._handle_response(resp)  # type: ignore[attr-defined]

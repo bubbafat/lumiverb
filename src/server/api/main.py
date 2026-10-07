@@ -38,7 +38,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
-from src.server.api.routers import admin, assets, collections, keys, libraries, me, path_filters, tenant, trash, video
+from src.server.api.routers import admin, assets, projects, keys, libraries, me, path_filters, tenant, trash, video
 from src.server.api.routers.auth import router as auth_router
 from src.server.api.routers.users import router as users_router
 from src.server.api.routers.artifacts import router as artifacts_router
@@ -47,7 +47,7 @@ from src.server.api.routers.maintenance import router as maintenance_router
 from src.server.api.routers.upgrade import router as upgrade_router
 from src.server.api.routers.facets import router as facets_router
 from src.server.api.routers.similarity import router as similarity_router
-from src.server.api.routers.public_collections import router as public_collections_router
+from src.server.api.routers.public_projects import router as public_projects_router
 from src.server.api.routers.ratings import router as ratings_router
 from src.server.api.routers.query import router as query_router
 from src.server.api.routers.filters import router as filters_router
@@ -98,8 +98,13 @@ app.include_router(faces_router)
 app.include_router(filters_router)
 app.include_router(facets_router)
 app.include_router(assets.router)
-app.include_router(collections.router)
-app.include_router(public_collections_router)
+app.include_router(projects.router, prefix="/v1/projects", tags=["projects"])
+app.include_router(public_projects_router, prefix="/v1/public/projects", tags=["public_projects"])
+# Pre-rename paths, kept until the macOS/iOS apps use /v1/projects (ADR-016).
+app.include_router(projects.router, prefix="/v1/collections", deprecated=True, include_in_schema=False)
+app.include_router(
+    public_projects_router, prefix="/v1/public/collections", deprecated=True, include_in_schema=False
+)
 app.include_router(video.router)
 app.include_router(keys.router)
 app.include_router(me.router)

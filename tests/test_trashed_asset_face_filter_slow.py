@@ -80,7 +80,7 @@ def session(tenant_engine):
             "asset_embeddings",
             "video_scenes",
             "video_index_chunks",
-            "collection_assets",
+            "project_assets",
             "asset_ratings",
             "assets",
             "libraries",
