@@ -12,6 +12,7 @@ import {
 } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
 import { ProjectPicker } from "../components/ProjectPicker";
+import { ExportButton } from "../components/ExportButton";
 import { Lightbox } from "../components/Lightbox";
 import { SelectionToolbar } from "../components/SelectionToolbar";
 import { ZoomControl } from "../components/ZoomControl";
@@ -302,6 +303,7 @@ export default function ProjectDetailPage() {
         )}
         <div className="flex items-center gap-2">
           <ZoomControl value={zoomLevel} onChange={setZoomLevel} />
+          <ExportButton projectId={project.project_id} />
           <button
             type="button"
             onClick={openSettings}
