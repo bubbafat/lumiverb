@@ -217,3 +217,30 @@ def test_malformed_timecode_tag_is_dropped(tag: str) -> None:
 
     assert facet.start_timecode is None
     assert facet.drop_frame is None
+
+
+@pytest.mark.fast
+def test_probe_cleans_values_it_cannot_trust() -> None:
+    """Odd files report zero sizes or rates, odd rotations, or bad durations;
+    those become unknown (or the nearest right angle) instead of a facet the
+    server would refuse."""
+    data = _probe(
+        _video(width=0, height=0, side_data_list=[{"rotation": -88}]),
+        _audio(sample_rate="0", channels=0),
+        duration="-1",
+    )
+
+    facet = parse_ffprobe(data)
+
+    assert (facet.width, facet.height) == (None, None)
+    assert facet.rotation == 90
+    assert facet.audio_sample_rate is None
+    assert facet.audio_channels is None
+    assert facet.duration_sec == 7.07  # the stream's own duration
+
+
+@pytest.mark.fast
+def test_probe_ignores_non_finite_duration() -> None:
+    data = _probe(_video(duration="nan"), duration="inf")
+
+    assert parse_ffprobe(data).duration_sec is None

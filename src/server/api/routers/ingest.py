@@ -286,7 +286,10 @@ def _parse_video_facet(raw: str | None, media_type: str) -> dict | None:
     try:
         return VideoFacetModel(**(data or {})).model_dump()
     except ValidationError as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid video_facet: {exc}") from exc
+        # A probe value we can't accept never blocks ingest: keep the video,
+        # leave it unprobed (enrich --job-type probe can retry).
+        logger.warning("Ignoring invalid video_facet: %s", exc.errors()[:3])
+        return None
 
 
 @router.post("/v1/ingest", response_model=IngestResponse)

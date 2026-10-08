@@ -67,15 +67,23 @@ def _frame_rate(stream: dict) -> Fraction | None:
     return _rate(stream.get("avg_frame_rate"))
 
 
+def _right_angle(degrees: float) -> int:
+    """Nearest of 0, 90, 180, 270."""
+    return int(round(degrees / 90.0)) * 90 % 360
+
+
 def _rotation(stream: dict) -> int:
     for side in stream.get("side_data_list") or []:
         if "rotation" in side:
             # The display matrix gives counter-clockwise degrees.
-            return int(-float(side["rotation"])) % 360
+            try:
+                return _right_angle(-float(side["rotation"]))
+            except (TypeError, ValueError):
+                return 0
     rotate = (stream.get("tags") or {}).get("rotate")
     if rotate is not None:
         try:
-            return int(float(rotate)) % 360
+            return _right_angle(float(rotate))
         except ValueError:
             return 0
     return 0
@@ -99,17 +107,25 @@ def _timecode(data: dict, video: dict | None) -> str | None:
 
 
 def _float(value) -> float | None:
+    """A finite, non-negative number, else None (odd files report -1, inf, nan)."""
+    import math
+
     try:
-        return float(value) if value is not None else None
+        number = float(value) if value is not None else None
     except ValueError:
         return None
+    if number is None or not math.isfinite(number) or number < 0:
+        return None
+    return number
 
 
 def _int(value) -> int | None:
+    """A positive integer, else None (odd files report 0 for sizes and rates)."""
     try:
-        return int(value) if value is not None else None
+        number = int(value) if value is not None else None
     except ValueError:
         return None
+    return number if number and number > 0 else None
 
 
 def parse_ffprobe(data: dict) -> VideoFacet:

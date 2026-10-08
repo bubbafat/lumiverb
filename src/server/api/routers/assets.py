@@ -47,7 +47,7 @@ class VideoFacetModel(BaseModel):
     every project that holds the clip.
     """
 
-    duration_sec: float | None = Field(default=None, ge=0)
+    duration_sec: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     container: str | None = None
     video_codec: str | None = None
     width: int | None = Field(default=None, gt=0)  # display width: rotation applied
@@ -727,7 +727,8 @@ def get_asset_by_path(
     response.ai_tags = ai_tags
     response.ocr_text = ocr_text
     facet = AssetRepository(session).get_video_facet(asset.asset_id)
-    response.video_facet = VideoFacetModel(**facet) if facet else None
+    # Stored rows are returned as they are (validation is for writes).
+    response.video_facet = VideoFacetModel.model_construct(**facet) if facet else None
     return response
 
 
@@ -798,7 +799,8 @@ def get_asset(
     response.ai_tags = ai_tags
     response.ocr_text = ocr_text
     facet = AssetRepository(session).get_video_facet(asset.asset_id)
-    response.video_facet = VideoFacetModel(**facet) if facet else None
+    # Stored rows are returned as they are (validation is for writes).
+    response.video_facet = VideoFacetModel.model_construct(**facet) if facet else None
     return response
 
 

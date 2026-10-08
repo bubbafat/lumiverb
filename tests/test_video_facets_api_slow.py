@@ -222,10 +222,35 @@ def test_invalid_facets_are_rejected(env, bad) -> None:
     r = client.put(f"/v1/assets/{asset_id}/video-facet", json=dict(FACET, **bad), headers=headers)
     assert r.status_code == 422, r.text
 
+
+
+@pytest.mark.slow
+def test_ingest_keeps_the_video_when_its_facet_is_invalid(env) -> None:
+    """A probe value the server can't accept never blocks ingest: the video
+    is stored without a facet (enrich --job-type probe can retry)."""
+    client, headers, library_id = env
     r = client.post(
         "/v1/ingest", headers=headers,
         files={"proxy": ("p.jpg", io.BytesIO(_jpeg()), "image/jpeg")},
-        data={"library_id": library_id, "rel_path": f"v/bad-ingest-{abs(hash(str(bad)))}.mov",
-              "file_size": "5000", "media_type": "video", "video_facet": json.dumps(dict(FACET, **bad))},
+        data={"library_id": library_id, "rel_path": "v/odd-probe.mov", "file_size": "5000",
+              "media_type": "video", "video_facet": json.dumps(dict(FACET, width=0))},
     )
-    assert r.status_code == 400, r.text
+
+    assert r.status_code == 200, r.text
+    asset_id = r.json()["asset_id"]
+    assert client.get(f"/v1/assets/{asset_id}", headers=headers).json()["video_facet"] is None
+    assert asset_id in _missing_probe(client, headers, library_id)
+
+
+@pytest.mark.slow
+def test_infinite_duration_is_rejected(env) -> None:
+    client, headers, library_id = env
+    asset_id = _ingest(client, headers, library_id, "v/inf.mov", "video")
+
+    r = client.put(
+        f"/v1/assets/{asset_id}/video-facet",
+        content=json.dumps(dict(FACET, duration_sec=float("inf"))),
+        headers={**headers, "Content-Type": "application/json"},
+    )
+
+    assert r.status_code == 422, r.text
