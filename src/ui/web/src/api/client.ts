@@ -595,6 +595,36 @@ export async function getAsset(assetId: string, publicLibraryId?: string): Promi
   return apiFetch<AssetDetail>(`/assets/${assetId}${qs}`);
 }
 
+/** A signed link a <video> element can stream and seek (no auth header needed). */
+export interface Playback {
+  url: string;
+  expires_at: string;
+  /** The full-length analysis proxy, or the 10-second preview until it exists. */
+  source: "analysis_proxy" | "preview";
+  /** Seconds the link plays; null means the whole video. */
+  max_seconds: number | null;
+}
+
+export async function getPlayback(assetId: string, publicLibraryId?: string): Promise<Playback> {
+  const qs = publicLibraryId
+    ? `?public_library_id=${encodeURIComponent(publicLibraryId)}`
+    : "";
+  return apiFetch<Playback>(`/assets/${assetId}/playback${qs}`);
+}
+
+export interface TenantSettings {
+  /** Seconds of each video playback serves; null means the whole video. */
+  video_preview_max_seconds: number | null;
+}
+
+export async function getTenantSettings(): Promise<TenantSettings> {
+  return apiFetch<TenantSettings>("/tenant/settings");
+}
+
+export async function updateTenantSettings(update: Partial<TenantSettings>): Promise<TenantSettings> {
+  return apiFetch<TenantSettings>("/tenant/settings", { method: "PATCH", body: update });
+}
+
 export async function findSimilar(params: {
   assetId: string;
   libraryId: string;

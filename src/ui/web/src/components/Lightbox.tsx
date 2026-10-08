@@ -5,6 +5,7 @@ import { getAsset, findSimilar, listFaces, listPeople, getNearestPeopleForFace, 
 import TranscriptViewer from "./TranscriptViewer";
 import { useLocalStorage } from "../lib/useLocalStorage";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
+import { usePlayback } from "../api/usePlayback";
 import type { AssetPageItem, AssetRating, RatingColor, SimilarHit } from "../api/types";
 import { HeartButton, StarPicker, ColorPicker } from "./RatingControls";
 import { basename, formatFileSize, formatDate, formatExposure } from "../lib/format";
@@ -323,14 +324,25 @@ export function Lightbox({
   const isVideo =
     asset.media_type === "video" || asset.media_type.startsWith("video/");
 
-  const {
-    url: mediaUrl,
-    isLoading: mediaLoading,
-    generating,
-  } = useAuthenticatedImage(asset.asset_id, isVideo ? "video-preview" : "proxy", {
+  const image = useAuthenticatedImage(asset.asset_id, "proxy", {
+    enabled: !isVideo,
     isPublic,
     publicLibraryId,
   });
+  const playback = usePlayback(asset.asset_id, { enabled: isVideo, isPublic, publicLibraryId });
+  const mediaUrl = isVideo ? playback.src : image.url;
+  const mediaLoading = isVideo ? playback.isLoading : image.isLoading;
+  const generating = !isVideo && image.generating;
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const seekVideo =
+    isVideo && playback.source === "analysis_proxy"
+      ? (seconds: number) => {
+          const video = videoRef.current;
+          if (!video) return;
+          video.currentTime = seconds;
+          video.play().catch(() => {});
+        }
+      : undefined;
   const { data: detail, isLoading: detailLoading } = useQuery({
     queryKey: ["asset", asset.asset_id, publicLibraryId ?? null],
     queryFn: () => getAsset(asset.asset_id, isPublic ? publicLibraryId : undefined),
@@ -728,13 +740,27 @@ export function Lightbox({
                 <span className="text-sm">Preview generating…</span>
               </div>
             ) : mediaUrl && isVideo ? (
-              <video
-                key={asset.asset_id}
-                src={mediaUrl}
-                controls
-                playsInline
-                className="max-h-[calc(100vh-4rem)] max-w-full"
-              />
+              <div className="flex max-w-full flex-col items-center gap-2">
+                <video
+                  key={asset.asset_id}
+                  ref={videoRef}
+                  src={mediaUrl}
+                  controls
+                  playsInline
+                  preload="metadata"
+                  className="max-h-[calc(100vh-6rem)] max-w-full"
+                />
+                {playback.source === "preview" ? (
+                  <p className="text-xs text-gray-400">
+                    First {Math.min(10, playback.maxSeconds ?? 10)} seconds.{" "}
+                    {playback.maxSeconds == null || playback.maxSeconds > 10
+                      ? "The rest plays once the video is processed."
+                      : null}
+                  </p>
+                ) : playback.maxSeconds != null ? (
+                  <p className="text-xs text-gray-400">Plays the first {playback.maxSeconds} seconds.</p>
+                ) : null}
+              </div>
             ) : mediaUrl ? (
               <div className="relative inline-block">
                 <img
@@ -1264,7 +1290,7 @@ export function Lightbox({
                     {detailLoading ? (
                       <MetadataSkeleton />
                     ) : detail?.transcript_srt ? (
-                      <TranscriptViewer srt={detail.transcript_srt} />
+                      <TranscriptViewer srt={detail.transcript_srt} onSeek={seekVideo} />
                     ) : (
                       <label className="inline-flex cursor-pointer items-center gap-1.5 rounded bg-gray-700/60 px-3 py-1.5 text-xs text-gray-300 hover:bg-indigo-600/40 hover:text-indigo-200 transition-colors">
                         Upload SRT

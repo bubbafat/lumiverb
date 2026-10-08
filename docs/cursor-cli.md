@@ -49,6 +49,8 @@ Entry point: `lumiverb = "src.client.cli:main"` (setuptools); `main()` invokes t
 - `lumiverb config show` — Show current config, including root mappings.
 - `lumiverb config map-root <server-prefix> <local-prefix>` — Where a library root prefix is on this machine, e.g. `/Volumes/media-01 /mnt/media-01`. Libraries keep the editing machine's path (exports point editors there); scan and enrich use the mapped one. Whole folders, longest prefix wins, Unicode form and trailing slashes ignored. Saves even when the target isn't mounted, with a warning.
 - `lumiverb config unmap-root <server-prefix>` — Remove a mapping.
+- `lumiverb settings show` — Account-wide settings, e.g. `Video playback: whole video`.
+- `lumiverb settings video-preview full|<seconds>` — How much of each video plays, for everyone and on public pages (admins only; the web's Settings → Playback). `full` is the default; a number caps playback at that many seconds (1 to 86,400).
 
 #### Library
 - `lumiverb library create --name <name> --path <path>` — Create a library.

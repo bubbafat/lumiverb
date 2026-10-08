@@ -16,6 +16,7 @@ from src.client.cli.config import get_admin_key, load_config, save_config
 from src.client.cli.commands.projects import projects_app
 from src.client.cli.commands.keys import keys_app
 from src.client.cli.commands.maintenance import maintenance_app
+from src.client.cli.commands.settings import settings_app
 from src.client.cli.commands.users import user_app
 from src.shared.io_utils import normalize_path_prefix
 from src.shared.logging_config import configure_logging
@@ -30,6 +31,7 @@ app.add_typer(library_app, name="library")
 app.add_typer(projects_app, name="project")
 app.add_typer(keys_app, name="keys")
 app.add_typer(user_app, name="user")
+app.add_typer(settings_app, name="settings")
 filter_app = typer.Typer(help="Manage path filters (include/exclude patterns).")
 app.add_typer(filter_app, name="filter")
 app.add_typer(maintenance_app, name="maintenance")
