@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field, StrictBool, field_validator
 from sqlmodel import Session, select
 
 from src.server.api.dependencies import require_editor, require_signed_in, require_tenant_admin
-from src.server.api.errors import ConflictError, UpstreamError
+from src.server.api.errors import ConflictError, DecisionRequiredError, UpstreamError
 from src.server.models.control_plane import AiMachine, Tenant
 from src.shared.ai_jobs import JOBS
 from src.shared.utils import utcnow
@@ -226,6 +226,29 @@ def _check_jobs(tenant: Tenant, jobs: list[str], models: list[str]) -> None:
                                 {"job": job, "model": model, "models": models})
 
 
+def _ask_before_leaving_jobs(ctrl: Session, tenant_id: str, machine: AiMachine, leave_jobs: bool,
+                             remove: bool = False) -> None:
+    """409 job_left_without_machine when this change leaves a job that has a
+    model with no machine doing it (it would wait), unless leave_jobs says so."""
+    if leave_jobs:
+        return
+    tenant = ctrl.get(Tenant, tenant_id)
+    left = []
+    for job, label in JOBS.items():
+        model = _job_model(tenant, job) if tenant else ""
+        others = [m for m in _machines(ctrl, tenant_id)
+                  if m.machine_id != machine.machine_id and m.enabled and job in m.jobs]
+        still = not remove and machine.enabled and job in machine.jobs
+        if model and not others and not still:
+            left.append({"job": job, "label": label, "model": model})
+    if left:
+        what = " and ".join(j["label"].lower() for j in left)
+        raise DecisionRequiredError(
+            "job_left_without_machine",
+            f"No other machine does {what}: without this one it waits. Send leave_jobs=true to go ahead.",
+            {"jobs": left})
+
+
 def _name_free(ctrl: Session, tenant_id: str, name: str, machine_id: str | None = None) -> None:
     if any(m.name == name and m.machine_id != machine_id for m in _machines(ctrl, tenant_id)):
         raise ConflictError("name_taken", f"There's already a machine called {name}.", {"name": name})
@@ -280,10 +303,11 @@ def add_machine(body: MachineIn, request: Request) -> AiSettings:
 
 
 @router.patch("/machines/{machine_id}", response_model=AiSettings, dependencies=[Depends(require_tenant_admin)])
-def update_machine(machine_id: str, body: MachinePatch, request: Request) -> AiSettings:
+def update_machine(machine_id: str, body: MachinePatch, request: Request, leave_jobs: bool = False) -> AiSettings:
     """Change a machine: only the fields sent. When where it is, its key or
     jobs change, or it's turned back on, it's asked again (502, 409 as when
-    added)."""
+    added). Turning off the last machine doing a job, or taking the job from
+    it, asks first (409 job_left_without_machine) unless leave_jobs."""
     tenant_id = request.state.tenant_id
     fields = body.model_fields_set
     with _control() as ctrl:
@@ -301,6 +325,7 @@ def update_machine(machine_id: str, body: MachinePatch, request: Request) -> AiS
             machine.at_once = body.at_once
         if body.enabled is not None:
             machine.enabled = body.enabled
+        _ask_before_leaving_jobs(ctrl, tenant_id, machine, leave_jobs)
         if machine.enabled and fields & {"api_url", "api_key", "jobs", "enabled"}:
             models = _models_or_502(machine.api_url, machine.api_key)
             _check_jobs(ctrl.get(Tenant, tenant_id), machine.jobs, models)
@@ -311,9 +336,13 @@ def update_machine(machine_id: str, body: MachinePatch, request: Request) -> AiS
 
 
 @router.delete("/machines/{machine_id}", response_model=AiSettings, dependencies=[Depends(require_tenant_admin)])
-def remove_machine(machine_id: str, request: Request) -> AiSettings:
+def remove_machine(machine_id: str, request: Request, leave_jobs: bool = False) -> AiSettings:
+    """Remove a machine. The last machine doing a job asks first (409
+    job_left_without_machine) unless leave_jobs."""
     with _control() as ctrl:
-        ctrl.delete(_machine(ctrl, request, machine_id))
+        machine = _machine(ctrl, request, machine_id)
+        _ask_before_leaving_jobs(ctrl, request.state.tenant_id, machine, leave_jobs, remove=True)
+        ctrl.delete(machine)
         ctrl.commit()
         return _settings(ctrl, request.state.tenant_id)
 

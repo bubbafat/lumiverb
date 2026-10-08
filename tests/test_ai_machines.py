@@ -75,9 +75,9 @@ def _machine(ai: dict, name: str) -> dict:
 def none(env):
     """Each test starts with no machines and no vision model."""
     client, headers, *_ = env
+    assert _model(env, "vision", "").status_code == 200
     for m in _ai(env)["machines"]:
         assert client.delete(f"/v1/ai/machines/{m['machine_id']}", headers=headers).status_code == 200
-    assert _model(env, "vision", "").status_code == 200
     yield
 
 
@@ -299,6 +299,35 @@ def test_the_workers_check_shows_per_machine_until_fixed(env, none):
         r = client.patch(f"/v1/ai/machines/{studio}", json={"api_url": BRAIN + "/"}, headers=headers)
     assert r.status_code == 200, r.text
     assert _machine(r.json(), "Studio")["status"]["models"] == [QWEN]
+
+
+@pytest.mark.slow
+def test_leaving_a_job_without_a_machine_needs_saying_so(env, none):
+    client, headers, *_ = env
+    fake, _ = _machines({BRAIN: (QWEN,), STUDIO: (QWEN,)})
+    with fake:
+        _add(env, name="Brain")
+        _add(env, name="Studio", api_url=STUDIO)
+        _model(env, "vision", QWEN)
+    brain, studio = (m["machine_id"] for m in _ai(env)["machines"])
+    # One of two: no question.
+    assert client.patch(f"/v1/ai/machines/{studio}", json={"enabled": False}, headers=headers).status_code == 200
+    # The last one doing descriptions: the API asks, whichever way it would go.
+    for method, path, body in (("patch", f"/v1/ai/machines/{brain}", {"enabled": False}),
+                               ("patch", f"/v1/ai/machines/{brain}", {"jobs": []}),
+                               ("delete", f"/v1/ai/machines/{brain}", None)):
+        r = client.request(method.upper(), path, json=body, headers=headers)
+        assert r.status_code == 409, (method, body, r.text)
+        error = r.json()["error"]
+        assert error["code"] == "job_left_without_machine"
+        assert error["details"] == {"jobs": [{"job": "vision", "label": "Descriptions & text", "model": QWEN}]}
+    assert _job(_ai(env), "vision")["machines"] == 1
+    r = client.request("DELETE", f"/v1/ai/machines/{brain}", params={"leave_jobs": True}, headers=headers)
+    assert r.status_code == 200 and _job(r.json(), "vision")["machines"] == 0
+    # With the job off, nothing to ask.
+    with fake:
+        _model(env, "vision", "")
+    assert client.delete(f"/v1/ai/machines/{studio}", headers=headers).status_code == 200
 
 
 @pytest.mark.slow
