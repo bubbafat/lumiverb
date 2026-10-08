@@ -25,6 +25,9 @@ router = APIRouter(prefix="/v1/trash", tags=["trash"])
 class EmptyTrashRequest(BaseModel):
     asset_ids: list[str] | None = None
     trashed_before: str | None = None  # ISO8601
+    # Only this library's trash, and only under this folder: what a filtered view showed.
+    library_id: str | None = None
+    path: str | None = None
     # Required when any of the clips are in projects: deleting them for good
     # takes them out of those projects, and the user has to have said yes.
     remove_from_projects: bool = False
@@ -106,7 +109,8 @@ def empty_trash(
             trashed_before_dt = None
     if body.asset_ids is None and trashed_before_dt is None:
         trashed_before_dt = utcnow()
-    to_delete = asset_repo.list_trashed(asset_ids=body.asset_ids, trashed_before=trashed_before_dt)
+    to_delete = asset_repo.list_trashed(asset_ids=body.asset_ids, trashed_before=trashed_before_dt,
+                                        library_id=body.library_id, folder=body.path)
     if not to_delete:
         return EmptyTrashResponse(deleted=0)
     return EmptyTrashResponse(
@@ -161,7 +165,7 @@ def _hand_over(session: Session, request: Request, asset_id: str) -> str | None:
     repo = AssetRepository(session)
     archived = session.get(Asset, asset_id)  # get_by_id leaves out deleted assets
     if (archived is None or not repo.lock_for_restore(archived, archived.rel_path)
-            or archived.deleted_at is None or archived.deleted_reason not in (None, "missing")):
+            or archived.deleted_at is None or archived.deleted_reason != "missing"):
         session.rollback()
         return None
     # A person un-assigning a face or merging people locks in the other order
@@ -191,7 +195,8 @@ def _hand_over(session: Session, request: Request, asset_id: str) -> str | None:
                         {"a": asset_id, "c": copy_id})
     session.flush()
     # Deletes the copy for good and commits the move with it.
-    if purge_assets(session, getattr(request.state, "tenant_id", None), [copy], "", remove_from_projects=True) != 1:
+    if purge_assets(session, getattr(request.state, "tenant_id", None), [copy], "",
+                    remove_from_projects=True, reason="handed_over") != 1:
         session.rollback()  # nothing was deleted, so nothing committed
         return None
     logger.info("Asset %s moved to its copy at %s (copy %s removed)", asset_id, path, copy_id)
@@ -213,13 +218,17 @@ def purge_assets(
     user_id: str,
     *,
     remove_from_projects: bool,
+    reason: str = "user",
+    before: datetime | None = None,
 ) -> int:
     """Delete these trashed assets for good: rows, files, playback cuts and search
-    documents. 409 in_projects when any are in projects, unless remove_from_projects."""
+    documents. 409 in_projects when any are in projects, unless remove_from_projects.
+
+    Re-checked under a row lock: only those still deleted for `reason` (since
+    before `before`) go. One restored, archived or trashed again since it was
+    listed keeps its files and everything else."""
     asset_repo = AssetRepository(session)
-    # Lock what's still deleted; one a scan restored since it was listed keeps
-    # its files and everything else.
-    still = set(asset_repo.lock_still_deleted([a.asset_id for a in to_delete]))
+    still = set(asset_repo.lock_still_deleted([a.asset_id for a in to_delete], reason=reason, before=before))
     to_delete = [a for a in to_delete if a.asset_id in still]
     if not to_delete:
         return 0
@@ -293,11 +302,10 @@ def purge_expired_trash(session: Session, tenant_id: str, *, limit: int = 500) -
         return {"clips": 0, "libraries": 0, "projects": 0}
     cutoff = utcnow() - timedelta(days=days)
     clips = AssetRepository(session).list_trashed(trashed_before=cutoff, limit=limit)
+    n_clips = purge_assets(session, tenant_id, clips, "", remove_from_projects=True, before=cutoff) if clips else 0
     expired_libraries = [lib for lib in LibraryRepository(session).get_trashed()
                          if lib.trashed_at is not None and lib.trashed_at < cutoff]
-    return {
-        "clips": purge_assets(session, tenant_id, clips, "", remove_from_projects=True) if clips else 0,
-        "libraries": delete_libraries_for_good(session, tenant_id, expired_libraries),
-        "projects": delete_projects_for_good(session, ProjectRepository(session).list_trashed_before(cutoff)),
-    }
+    n_libraries = delete_libraries_for_good(session, tenant_id, expired_libraries, before=cutoff)
+    n_projects = delete_projects_for_good(session, ProjectRepository(session).list_trashed_before(cutoff), before=cutoff)
+    return {"clips": n_clips, "libraries": n_libraries, "projects": n_projects}
 

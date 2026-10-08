@@ -177,6 +177,9 @@ class Asset(SQLModel, table=True):
     #   "library"  = it went with its library, and comes back with it.
     # "handed_over" lives only inside a copy-then-delete handover.
     deleted_reason: str | None = Field(default=None, nullable=True)
+    # In a person's trash ("user"): what it was before, "archived" or
+    # "missing", so restoring puts it back in the archive; None = in sight.
+    trashed_from: str | None = Field(default=None, nullable=True)
     search_synced_at: datetime | None = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),

@@ -209,6 +209,8 @@ class RestoreResponse(BaseModel):
     restored: list[str]
     # Not in a person's trash (archived, missing, in sight, unknown), or their library is in the trash.
     skipped: list[str] = []
+    # Of the restored, those archived before they were trashed: back in the archive, not in sight.
+    to_archive: list[str] = []
 
 
 
@@ -1001,11 +1003,12 @@ def batch_trash_assets(
     there is one (follow moves).
     """
     reason = body.reason or "missing"
+    asset_repo = AssetRepository(session)
     if reason == "user":
         require_editor(request)
         if not body.remove_from_projects:
-            _ask_about_projects(session, request, body.asset_ids)
-    asset_repo = AssetRepository(session)
+            # Only about clips this would trash: one already in the trash needs no answer.
+            _ask_about_projects(session, request, asset_repo.trashable(body.asset_ids))
     trashed_ids, not_found_ids = asset_repo.trash_many(body.asset_ids, reason=reason)
     _out_of_search(background, request, trashed_ids)
     handed_over: list[str] = []
@@ -1091,9 +1094,12 @@ def trash_asset(
     404 if not found, already in the trash, or trashed with its library.
     409 in_projects as for DELETE /v1/assets.
     """
+    asset_repo = AssetRepository(session)
+    if not asset_repo.trashable([asset_id]):
+        raise HTTPException(status_code=404, detail="Asset not found or already trashed")
     if not remove_from_projects:
         _ask_about_projects(session, request, [asset_id])
-    if not AssetRepository(session).trash(asset_id, reason="user"):
+    if not asset_repo.trash(asset_id, reason="user"):
         raise HTTPException(status_code=404, detail="Asset not found or already trashed")
     _out_of_search(background, request, [asset_id])
     _refresh_grids(session, [asset_id])
@@ -1124,15 +1130,19 @@ def restore_asset(
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
 ) -> None:
-    """Take one clip out of the trash. 404 if not found or not deleted;
+    """Take one clip out of the trash, back to where it was (in sight, or the
+    archive if it was archived before). 404 if not found or not deleted;
     409 archived, file_missing or library_trashed for a clip that isn't in a
     person's trash."""
-    outcome = AssetRepository(session).restore(asset_id)
+    asset_repo = AssetRepository(session)
+    outcome = asset_repo.restore(asset_id)
     if outcome in _NOT_THE_TRASH:
         raise ConflictError(*_NOT_THE_TRASH[outcome])
     if outcome != "restored":
         raise HTTPException(status_code=404, detail="Asset not found or not trashed")
-    _back_in_search(background, request, session, [asset_id])
+    back = session.get(Asset, asset_id)
+    if back is not None and back.deleted_at is None:  # else it went back to the archive
+        _back_in_search(background, request, session, [asset_id])
     _refresh_grids(session, [asset_id])
 
 
@@ -1144,12 +1154,14 @@ def restore_assets(
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
 ) -> RestoreResponse:
-    """Take clips out of the trash. Anything else asked for is skipped:
-    archived or missing clips, clips in sight, and clips whose library is in the trash."""
-    restored, skipped = AssetRepository(session).restore_many(body.asset_ids)
-    _back_in_search(background, request, session, restored)
+    """Take clips out of the trash, back to where they were: in sight, or the
+    archive for those archived before they were trashed (to_archive).
+    Anything else asked for is skipped: archived or missing clips, clips in
+    sight, and clips whose library is in the trash."""
+    restored, skipped, to_archive = AssetRepository(session).restore_many(body.asset_ids)
+    _back_in_search(background, request, session, [a for a in restored if a not in set(to_archive)])
     _refresh_grids(session, restored)
-    return RestoreResponse(restored=restored, skipped=skipped)
+    return RestoreResponse(restored=restored, skipped=skipped, to_archive=to_archive)
 
 
 def _folder_library(session: Session, library_id: str) -> None:

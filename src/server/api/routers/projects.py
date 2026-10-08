@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -347,15 +348,23 @@ def empty_project_trash(
     return EmptyTrashResponse(deleted=delete_projects_for_good(session, doomed))
 
 
-def delete_projects_for_good(session: Session, projects: list) -> int:
-    """Delete trashed projects and their public pages. The clips stay in their libraries."""
+def delete_projects_for_good(session: Session, projects: list, *, before: datetime | None = None) -> int:
+    """Delete trashed projects and their public pages. The clips stay in their
+    libraries. Returns how many. Each is re-checked under a row lock (still in
+    the trash, since before `before`): one restored since it was listed stays."""
     repo = ProjectRepository(session)
-    for col in projects:
-        if col.visibility == "public":
+    deleted = 0
+    # Read before anything commits or rolls back (both expire the objects).
+    for project_id, was_public in [(col.project_id, col.visibility == "public") for col in projects]:
+        if not repo.lock_trashed(project_id, before):
+            session.rollback()
+            continue
+        repo.delete(project_id)  # commits, releasing the lock
+        deleted += 1
+        if was_public:
             with get_control_session() as ctrl_session:
-                PublicProjectRepository(ctrl_session).delete(col.project_id)
-        repo.delete(col.project_id)
-    return len(projects)
+                PublicProjectRepository(ctrl_session).delete(project_id)
+    return deleted
 
 
 @router.get("/{project_id}", response_model=ProjectItem)
@@ -477,7 +486,9 @@ def restore_project(
             f"{'it' if trashed == 1 else 'them'}.",
             {"trashed_clips": trashed, "missing_clips": missing},
         )
-    repo.restore(project_id)
+    if not repo.restore(project_id):
+        # Deleted for good while this waited for the purge holding it.
+        raise HTTPException(status_code=404, detail="Project not in the trash")
     if col.visibility == "public":
         _sync_public_index(request, project_id, public=True)
     restored = _restore_trashed_clips(request, session, repo, project_id) if with_clips and trashed else 0
@@ -491,8 +502,10 @@ def _restore_trashed_clips(request: Request, session: Session, repo: ProjectRepo
     from src.server.api.routers.assets import reindex_restored_asset
 
     asset_repo = AssetRepository(session)
-    restored, _ = asset_repo.restore_many(repo.trashed_asset_ids(project_id))
+    restored, _, to_archive = asset_repo.restore_many(repo.trashed_asset_ids(project_id))
     for asset_id in restored:
+        if asset_id in to_archive:
+            continue  # back in the archive: not in search
         asset = asset_repo.get_by_id(asset_id)
         if asset is not None:
             reindex_restored_asset(request, asset)

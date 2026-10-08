@@ -37,7 +37,11 @@ def _db(env):
 
 
 def _settings(env, **body) -> dict:
+    """Change settings, saying yes to deleting what fewer trash days would
+    (the question itself is tested in test_archive_trash_safety)."""
     client, headers, *_ = env
+    if "trash_days" in body:
+        body = {"confirm_purge": True, **body}
     r = client.patch("/v1/tenant/settings", json=body, headers=headers)
     assert r.status_code == 200, r.text
     return r.json()

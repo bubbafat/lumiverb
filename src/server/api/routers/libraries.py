@@ -1,5 +1,6 @@
 """Libraries API: create and list libraries. All routes require tenant auth (middleware)."""
 
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -231,17 +232,29 @@ def empty_trash(
     return EmptyTrashResponse(deleted=delete_libraries_for_good(session, tenant_id, trashed))
 
 
-def delete_libraries_for_good(session: Session, tenant_id: str | None, libraries: list) -> int:
+def delete_libraries_for_good(
+    session: Session, tenant_id: str | None, libraries: list, *, before: datetime | None = None,
+) -> int:
     """Delete trashed libraries with everything in them: rows, search documents
-    and public pages. Their files go with the daily cleanup."""
+    and public pages. Their files go with the daily cleanup. Returns how many.
+
+    Each is re-checked under a row lock (still in the trash, since before
+    `before`): one restored since it was listed is never deleted, and a
+    restore arriving meanwhile waits, then finds it gone."""
     repo = LibraryRepository(session)
-    for lib in libraries:
-        purge_library_from_quickwit(lib.library_id, tenant_id=tenant_id)
-        if lib.is_public:
+    deleted = 0
+    # Read before anything commits or rolls back (both expire the objects).
+    for library_id, was_public in [(lib.library_id, lib.is_public) for lib in libraries]:
+        if not repo.lock_trashed(library_id, before):
+            session.rollback()
+            continue
+        repo.hard_delete(library_id)  # commits, releasing the lock
+        deleted += 1
+        purge_library_from_quickwit(library_id, tenant_id=tenant_id)
+        if was_public:
             with get_control_session() as ctrl_session:
-                PublicLibraryRepository(ctrl_session).delete(lib.library_id)
-        repo.hard_delete(lib.library_id)
-    return len(libraries)
+                PublicLibraryRepository(ctrl_session).delete(library_id)
+    return deleted
 
 
 @router.get("/{library_id}", response_model=LibraryResponse)
@@ -379,8 +392,13 @@ def restore_library(
         raise HTTPException(status_code=404, detail="Library not found")
     if library.status != "trashed":
         raise ConflictError("not_trashed", "This library isn't in the trash.")
-    library.is_public = False
-    library = repo.restore(library_id)
+    try:
+        library = repo.restore(library_id)
+    except ValueError as e:
+        # Deleted for good (or restored) while this waited for the purge holding it.
+        if repo.get_by_id(library_id) is None:
+            raise HTTPException(status_code=404, detail="Library not found") from e
+        raise ConflictError("not_trashed", "This library isn't in the trash.") from e
     repo.bump_revision(library_id)
     return LibraryResponse(library_id=library.library_id, name=library.name,
                            root_path=library.root_path, is_public=library.is_public)
