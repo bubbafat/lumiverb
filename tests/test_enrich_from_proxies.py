@@ -530,7 +530,8 @@ def test_the_encoder_and_decoder_are_this_machines_and_dont_make_a_proxy_stale(h
     from src.shared import producers as P
 
     cfg = CLIConfig.model_validate_json((home / ".lumiverb" / "config.json").read_text())
-    save_config(cfg.model_copy(update={"analysis_proxy_encoder": "h264_nvenc", "analysis_proxy_decoder": "cuda"}))
+    save_config(cfg.model_copy(update={"analysis_proxy_encoder": "h264_nvenc", "analysis_proxy_decoder": "cuda",
+                                       "gpu_decodes": 2}))
     client = _with_producers()
     used = []
 
@@ -542,7 +543,7 @@ def test_the_encoder_and_decoder_are_this_machines_and_dont_make_a_proxy_stale(h
     with patch("src.client.cli.repair.render_analysis_proxy", side_effect=fake_render):
         _run(client, library, "render", {"missing_analysis_proxy": 1}, pages)
 
-    assert (used[0].encoder, used[0].decoder) == ("h264_nvenc", "cuda")
+    assert (used[0].encoder, used[0].decoder, used[0].gpu_decodes) == ("h264_nvenc", "cuda", 2)
     [call] = _sent(client, "/artifacts/analysis_proxy")
     assert json.loads(call.kwargs["data"]["lineage"])["settings_hash"] == P.settings_hash(
         P.effective_settings("analysis_proxy"))

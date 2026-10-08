@@ -1110,10 +1110,12 @@ def run_repair(
         # The account's settings, so what's recorded as current is what's
         # rendered; the encoder and decoder are this machine's.
         settings = AnalysisProxySettings.for_producer(producers.settings("analysis_proxy"),
-                                                      _cfg.analysis_proxy_encoder, _cfg.analysis_proxy_decoder)
-        hwaccel = gpu_decoder(settings.decoder)
+                                                      _cfg.analysis_proxy_encoder, _cfg.analysis_proxy_decoder,
+                                                      _cfg.gpu_decodes)
+        hwaccel = gpu_decoder(settings.decoder) if settings.gpu_decodes > 0 else None
         if hwaccel:
-            console.print(f"Decoding on the GPU ({hwaccel}); the CPU takes what it can't.")
+            console.print(f"Decoding on the GPU ({hwaccel}), {settings.gpu_decodes} at a time while it has room; "
+                          "the CPU takes the rest.")
         # Several at once: one render of a 4K HEVC original decodes on a few
         # cores and leaves the rest idle.
         render_conc = _cfg.render_concurrency or default_render_concurrency()
