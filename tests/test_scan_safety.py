@@ -22,6 +22,7 @@ from rich.console import Console
 from src.client.cli.ingest import _walk_library
 from src.client.cli.scan import _ServerAsset, _deletion_guard_trips, run_scan
 from src.shared.io_utils import resolve_source_path
+from src.shared.path_filter import PathFilter
 
 NFC = unicodedata.normalize("NFC", "Café/résumé.jpg")
 NFD = unicodedata.normalize("NFD", NFC)
@@ -305,12 +306,13 @@ def test_scan_names_the_files_that_failed(tmp_path: Path) -> None:
 ZURICH = unicodedata.normalize("NFC", "Zürich")
 
 
-def _scan_disk(root: Path, existing: dict[str, _ServerAsset], **kwargs) -> MagicMock:
+def _scan_disk(root: Path, existing: dict[str, _ServerAsset], *, library_filters: list | None = None,
+               **kwargs) -> MagicMock:
     """run_scan over real files under root, with every file on disk unchanged."""
     client = MagicMock()
     with (
         patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
-        patch("src.client.cli.scan._load_library_filters", return_value=[]),
+        patch("src.client.cli.scan._load_library_filters", return_value=library_filters or []),
         patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value=existing),
         patch("src.client.cli.scan._fetch_ignored_paths", return_value=set()),
         patch("src.client.cli.scan._split_files", side_effect=lambda files, existing, thorough: ([], [], files)),
@@ -549,3 +551,43 @@ def test_a_folder_that_cannot_be_checked_is_not_taken_for_gone(tmp_path: Path, m
     client = _scan_disk(root, _assets("Shoots/Day 1/a.jpg", "Shoots/Day 1/b.jpg"), path_prefix="Shoots/Day 1")
     assert _deleted_ids(client) == []
     assert client.stats.unlisted == ["Shoots/Day 1"]
+
+
+@pytest.fixture
+def junk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> Path:
+    """A library with media beside files that can't be stat'ed: a .DS_Store and an excluded .jpg."""
+    root = tmp_path / "lib"
+    _write(root, "Day/a.jpg")
+    _write(root, "Day/.DS_Store")
+    _write(root, "Day/Exports/x.jpg")
+    real_stat = os.stat
+
+    def stat(path, *args, **kwargs):
+        if Path(os.fspath(path)).name in (".DS_Store", "x.jpg"):
+            raise OSError(request.param, os.strerror(request.param), os.fspath(path))
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", stat)
+    return root
+
+
+EXPORTS = [PathFilter(type="exclude", pattern="**/Exports/**")]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("junk", UNCHECKABLE, indirect=True)
+def test_files_the_scan_would_skip_are_never_checked(junk: Path) -> None:
+    # A .DS_Store that can't be stat'ed made its folder "unlisted", which
+    # blocked every deletion in the library on every scan.
+    unlisted: list[str] = []
+    files = _walk_library(junk, library_filters=EXPORTS, unlisted=unlisted)
+    assert [f["rel_path"] for f in files] == ["Day/a.jpg"]
+    assert unlisted == []
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("junk", UNCHECKABLE, indirect=True)
+def test_a_junk_file_that_cannot_be_checked_doesnt_block_deletions(junk: Path) -> None:
+    client = _scan_disk(junk, _assets("Day/a.jpg", "Day/gone.jpg"), library_filters=EXPORTS)
+    assert _deleted_ids(client) == ["ast_Day/gone.jpg"]
+    assert client.stats.unlisted == []

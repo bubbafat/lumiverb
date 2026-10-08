@@ -433,7 +433,7 @@ def _walk_library(
     Each entry: {rel_path, file_size, file_mtime, media_type, ext}.
     Files that don't pass the merged tenant + library filters are silently skipped.
     Hidden files are listed; linked folders aren't followed. Folders that
-    can't be listed, or that hold a file that can't be checked, go in
+    can't be listed, or that hold a media file that can't be checked, go in
     `unlisted` as rel paths ("" is the library root), so the caller doesn't
     take their files for deleted.
     """
@@ -460,13 +460,8 @@ def _walk_library(
 
     results = []
     for p in sorted(found):
-        try:
-            stat = stat_if_present(p)
-        except OSError as exc:
-            _unreadable(exc, str(p.parent))
-            continue
-        if stat is None or not S_ISREG(stat.st_mode):
-            continue
+        # Only files the scan would take are stat'ed: one that can't be
+        # checked holds back deletions in its folder.
         ext = p.suffix.lower()
         if ext not in SUPPORTED_EXTENSIONS:
             continue
@@ -476,6 +471,14 @@ def _walk_library(
         rel_path = unicodedata.normalize("NFC", str(p.relative_to(root_path)))
 
         if has_filters and not is_path_included_merged(rel_path, t_filters, l_filters):
+            continue
+
+        try:
+            stat = stat_if_present(p)
+        except OSError as exc:
+            _unreadable(exc, str(p.parent))
+            continue
+        if stat is None or not S_ISREG(stat.st_mode):
             continue
 
         if stat.st_size == 0:
