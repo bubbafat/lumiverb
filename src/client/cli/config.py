@@ -21,12 +21,16 @@ class CLIConfig(BaseModel):
     ocr_concurrency: int = 1
     proxy_max_edge: int = 1280
     ocr_batch_size: int = 25
+    # Superseded by the account's producer settings (GET /v1/producers): a
+    # different value here is logged and ignored.
     whisper_model: str = "small"
     transcribe_concurrency: int = 1
     # Library roots as stored on the server -> where they are on this
     # machine, by path prefix (src/client/cli/roots.py).
     root_map: dict[str, str] = {}
     # Analysis proxies (src/client/video/analysis_proxy.py) and their cache.
+    # The size is the account's producer setting now (logged and ignored
+    # here); the encoder is this machine's.
     analysis_proxy_max_edge: int = 960
     analysis_proxy_encoder: str = "libx264"
     analysis_cache_gb: float = 50.0

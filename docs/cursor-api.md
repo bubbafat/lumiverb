@@ -151,6 +151,20 @@ All under `/v1/upkeep`. Periodic server-side maintenance tasks. Search sync uses
 - **POST /v1/upkeep/recluster** — Force recompute face clusters for all tenants. Stores result in materialized cache. Returns `{ "clusters", "total_faces" }`.
 - **POST /v1/upkeep/face-crops** — Backfill face crop thumbnails for faces missing `crop_key`. Query: `batch_size` (default 500). Returns `{ "generated", "skipped", "failed" }`.
 
+## Producers API
+
+ADR-016 phase 3. Each derived artifact kind has one producer (`src/shared/producers.py`): probe, proxy (with its thumbnail), video_preview, analysis_proxy, scenes, scene_vision, vision, ocr, clip, faces, transcript. Every write of an artifact records its **lineage** (table `artifact_lineage`, one row per clip and artifact): the producer, its version, the hash of the settings that affect its output, the SHA-256 of the source file it was made from, and whether it came out `ok`, `empty` or `failed`. An artifact is **current** when all four match what the producer makes now, **stale** when any differs, **missing** when there is none (scene descriptions: until every scene has one).
+
+- Settings live on the server: the registry's defaults, then the account's vision model (`system_metadata` `vision_model`, else the tenant's `vision_model_id`), then per-artifact overrides (`system_metadata` `producer.<artifact>`, JSON). The worker reads them here and makes artifacts with them, so what it records is current.
+- A write without `lineage` (an older client, the macOS app today) is recorded as producer `unknown`: stale, so the brain makes it again. A producer that can't make that kind is recorded the same way.
+- A transcript a person wrote or deleted is producer `person`: current whatever the settings, never regenerated over.
+- A failed try keeps its error and is tried again after 5 minutes, doubling up to a day; an artifact made earlier stays what it was.
+
+Writes carry `lineage` as `{ "producer", "version", "settings_hash", "source_sha256" }` (all strings; `source_sha256` defaults to the clip's file now): a JSON field on `PUT /v1/assets/{id}/video-facet`, `POST /v1/assets/{id}/vision|ocr|embeddings|faces|transcript`, the `batch-vision|batch-ocr|batch-embeddings|batch-faces` bodies (each item may carry its own `source_sha256`), `POST /v1/video/chunks/{id}/complete` (recorded for `scenes` when the last chunk completes) and `PATCH /v1/video/scenes/{id}` (`scene_vision`); a JSON form field on artifact uploads (`POST /v1/assets/{id}/artifacts/{type}`; the batch upload takes one object keyed by kind) and on `POST /v1/ingest` (keyed by kind: `proxy`, `probe`, `vision`, `clip`).
+
+- **GET /v1/producers** — Signed in. Query: `library_id` (counts in one library), `counts` (default `true`; the worker sends `false`). Returns `{ "producers": [{ "artifact", "producer", "version", "title", "media", "uniform", "settings", "settings_hash", "counts": { "applicable", "current", "stale", "missing", "failing" } | null }] }` over clips in sight. `uniform`: its output must come from one model across the library (CLIP, faces).
+- **POST /v1/producers/vision-model** — Admin. Body: `{ "model" }`. Records the vision model the worker is configured with when the account has none yet, so descriptions, OCR and scene descriptions are current against it. 409 `vision_model_set` (`details.model`) if another is set: changing it is a settings change, which makes them stale. Returns the producers list without counts.
+
 ## Video chunk API
 
 All under `/v1/video`; require tenant auth. Used by the CLI (`lumiverb ingest`) to process video assets in 30-second chunks. The server owns chunk allocation policy (lease expiration, retry on failure). No video bytes reach the server — only scene rep frame keys and metadata. The CLI generates a unique `worker_id` per session for chunk ownership verification.

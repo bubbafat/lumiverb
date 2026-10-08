@@ -130,6 +130,19 @@ def _ocr_one(
         return None
 
 
+_SUPERSEDED_SAID: set[str] = set()
+
+
+def _superseded(key: str, local: object, account: object) -> None:
+    """A local config value the account's producer settings now decide: say
+    so once, when it was changed from its default and differs."""
+    from src.client.cli.config import CLIConfig
+
+    if key not in _SUPERSEDED_SAID and local != getattr(CLIConfig(), key) and local != account:
+        _SUPERSEDED_SAID.add(key)
+        logger.warning("config %s=%s is ignored: the account's producer settings say %s", key, local, account)
+
+
 def _probe_one(client: LumiverbClient, lib_root: "Path", asset: dict,
                producers: "ProducerSettings | None" = None) -> str:
     """Probe one video's source file and store the facet. Returns "ok", "missing" or "failed"."""
@@ -174,9 +187,7 @@ def _render_one(
         render_analysis_proxy(source, work, settings, timeout=render_timeout(asset.get("duration_sec")))
         data = {}
         if producers is not None:
-            from dataclasses import asdict
-
-            data["lineage"] = json.dumps(producers.lineage("analysis_proxy", asset.get("sha256"), used=asdict(settings)))
+            data["lineage"] = json.dumps(producers.lineage("analysis_proxy", asset.get("sha256"), used=settings.output()))
         with open(work, "rb") as f:
             client.post(
                 f"/v1/assets/{asset['asset_id']}/artifacts/analysis_proxy",
@@ -1337,8 +1348,11 @@ def run_repair(
                 continue
             assets = _due("render", assets)
 
-            # The server's settings: what it records as current is what's rendered.
-            settings = AnalysisProxySettings(**producers.settings("analysis_proxy"))
+            # The account's settings, so what's recorded as current is what's
+            # rendered; the encoder is this machine's.
+            server = producers.settings("analysis_proxy")
+            _superseded("analysis_proxy_max_edge", _cfg.analysis_proxy_max_edge, server["max_edge"])
+            settings = AnalysisProxySettings.for_producer(server, _cfg.analysis_proxy_encoder)
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Render", total=len(assets), ok=0, fail=0)
@@ -1386,6 +1400,7 @@ def run_repair(
                         continue
 
                     whisper = producers.settings("transcript")
+                    _superseded("whisper_model", _cfg.whisper_model, whisper["model"])
                     result = _transcribe_one(source_path, whisper["model"], whisper["vad_min_silence_ms"])
 
                     if result is None:

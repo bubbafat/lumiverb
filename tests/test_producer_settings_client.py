@@ -16,7 +16,6 @@ pytestmark = pytest.mark.fast
 
 def test_the_workers_constants_are_the_registrys_settings():
     import inspect
-    from dataclasses import asdict
 
     from src.client.cli import config as cli_config
     from src.client.proxy import proxy_gen
@@ -27,7 +26,7 @@ def test_the_workers_constants_are_the_registrys_settings():
 
     proxy = P.PRODUCERS["proxy"].defaults
     assert (proxy_gen.PROXY_LONG_EDGE, proxy_gen.PROXY_JPEG_QUALITY) == (proxy["long_edge"], proxy["jpeg_quality"])
-    assert asdict(AnalysisProxySettings()) == dict(P.PRODUCERS["analysis_proxy"].defaults)
+    assert AnalysisProxySettings().output() == dict(P.PRODUCERS["analysis_proxy"].defaults)
     scenes = P.PRODUCERS["scenes"].defaults
     assert video_scanner.OUT_WIDTH == scenes["frame_width"]
     assert (scene_segmenter.PHASH_THRESHOLD, scene_segmenter.PHASH_HASH_SIZE) == (

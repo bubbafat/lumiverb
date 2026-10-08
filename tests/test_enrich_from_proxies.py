@@ -497,6 +497,55 @@ def test_render_uses_the_servers_settings_and_says_so(home: Path, library: dict)
 
 
 @pytest.mark.fast
+def test_the_encoder_is_this_machines_and_doesnt_make_a_proxy_stale(home: Path, library: dict) -> None:
+    import json
+
+    from src.shared import producers as P
+
+    cfg = CLIConfig.model_validate_json((home / ".lumiverb" / "config.json").read_text())
+    save_config(cfg.model_copy(update={"analysis_proxy_encoder": "h264_nvenc"}))
+    client = _with_producers()
+    used = []
+
+    def fake_render(source: Path, dest: Path, settings=None, *, timeout=None) -> None:
+        used.append(settings)
+        dest.write_bytes(b"proxy")
+
+    pages = {"missing_analysis_proxy": [{"asset_id": "ast_a", "rel_path": "a.mov", "duration_sec": 4.0, "sha256": SHA}]}
+    with patch("src.client.cli.repair.render_analysis_proxy", side_effect=fake_render):
+        _run(client, library, "render", {"missing_analysis_proxy": 1}, pages)
+
+    assert used[0].encoder == "h264_nvenc"
+    [call] = _sent(client, "/artifacts/analysis_proxy")
+    assert json.loads(call.kwargs["data"]["lineage"])["settings_hash"] == P.settings_hash(
+        P.effective_settings("analysis_proxy"))
+
+
+@pytest.mark.fast
+def test_a_local_setting_the_account_now_decides_is_said_once_and_ignored(
+        home: Path, library: dict, caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    from src.client.cli import repair
+
+    repair._SUPERSEDED_SAID.clear()
+    cfg = CLIConfig.model_validate_json((home / ".lumiverb" / "config.json").read_text())
+    save_config(cfg.model_copy(update={"whisper_model": "large-v3"}))
+    _cached(home, "ast_a")
+    _cached(home, "ast_b")
+    client = _with_producers()
+    pages = {"missing_transcription": [{"asset_id": x, "rel_path": f"{x}.mov", "duration_sec": 4.0,
+                                        "has_analysis_proxy": True} for x in ("ast_a", "ast_b")]}
+    with caplog.at_level(logging.WARNING, logger="src.client.cli.repair"), \
+            patch("src.client.cli.repair._transcribe_one", return_value=("", "")) as tr:
+        _run(client, library, "transcribe", {"missing_transcription": 2}, pages)
+
+    assert {c.args[1] for c in tr.call_args_list} == {"small"}
+    assert [r.getMessage() for r in caplog.records if "whisper_model" in r.getMessage()] == [
+        "config whisper_model=large-v3 is ignored: the account's producer settings say small"]
+
+
+@pytest.mark.fast
 def test_probe_says_how_it_was_made(library: dict, tmp_path: Path) -> None:
     from src.client.cli.repair import _probe_one
     from src.client.cli.producer_settings import ProducerSettings

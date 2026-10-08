@@ -38,7 +38,7 @@ V1 = {
     "probe": ("ffprobe", "44136fa355b3678a"),
     "proxy": ("proxy", "8baa5eb52e86ea80"),
     "video_preview": ("preview", "4f627804650c7f23"),
-    "analysis_proxy": ("analysis-proxy", "172962a68536b54f"),
+    "analysis_proxy": ("analysis-proxy", "b63de287be1aa99f"),
     "scenes": ("scene-detect", "27e5da9cd68d56d9"),
     "clip": ("clip", "c34fd145303f354e"),
     "faces": ("insightface", "8a9e204f61973fa2"),
