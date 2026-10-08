@@ -58,8 +58,10 @@ async function fetchPublicAssets(
 
 export default function PublicProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const gridRef = useRef<HTMLDivElement>(null);
+  // State, not refs: both mount only after the project loads, and
+  // measuring and scroll handling have to start then.
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
+  const [gridEl, setGridEl] = useState<HTMLDivElement | null>(null);
   const [containerWidth, setContainerWidth] = useState(0);
   const [lightboxAsset, setLightboxAsset] = useState<AssetPageItem | null>(null);
 
@@ -120,14 +122,13 @@ export default function PublicProjectPage() {
   );
 
   useLayoutEffect(() => {
-    const el = gridRef.current;
-    if (!el) return;
+    if (!gridEl) return;
     const ro = new ResizeObserver((entries) => {
       setContainerWidth(entries[0]?.contentRect.width ?? 0);
     });
-    ro.observe(el);
+    ro.observe(gridEl);
     return () => ro.disconnect();
-  }, []);
+  }, [gridEl]);
 
   const virtualRows: VirtualRowKind[] = useMemo(() => {
     if (containerWidth <= 0) return [];
@@ -142,7 +143,7 @@ export default function PublicProjectPage() {
 
   const rowVirtualizer = useVirtualizer({
     count: virtualRows.length,
-    getScrollElement: () => scrollRef.current,
+    getScrollElement: () => scrollEl,
     estimateSize: (i) => virtualRows[i]?.height ?? TARGET_ROW_HEIGHT,
     overscan: 3,
     gap: ROW_GAP,
@@ -155,7 +156,7 @@ export default function PublicProjectPage() {
   isFetchingNextPageRef.current = isFetchingNextPage;
 
   useEffect(() => {
-    const el = scrollRef.current;
+    const el = scrollEl;
     if (!el) return;
     const handleScroll = () => {
       const { scrollHeight, scrollTop, clientHeight } = el;
@@ -165,7 +166,7 @@ export default function PublicProjectPage() {
     };
     el.addEventListener("scroll", handleScroll, { passive: true });
     return () => el.removeEventListener("scroll", handleScroll);
-  }, [fetchNextPage]);
+  }, [scrollEl, fetchNextPage]);
 
   const handleAssetClick = useCallback((asset: AssetPageItem) => {
     setLightboxAsset(asset);
@@ -212,8 +213,8 @@ export default function PublicProjectPage() {
       </div>
 
       {/* Grid */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto">
-        <div ref={gridRef} className="px-2 py-2">
+      <div ref={setScrollEl} className="flex-1 overflow-y-auto">
+        <div ref={setGridEl} className="px-2 py-2">
           {isAssetsLoading ? (
             <div className="flex h-32 items-center justify-center text-gray-500">
               Loading...

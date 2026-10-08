@@ -64,7 +64,7 @@ function ProjectCard({
         </div>
       </Link>
       <div className="p-3">
-        <div className="flex items-start justify-between gap-2">
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-2">
           <div className="min-w-0">
             <Link
               to={`/projects/${project.project_id}`}
@@ -94,7 +94,7 @@ function ProjectCard({
               )}
             </div>
           </div>
-          <div className="shrink-0">
+          <div className="-ml-2 shrink-0 sm:ml-0">
             {deleteConfirmId === project.project_id ? (
               <div className="flex items-center gap-1">
                 <button
@@ -114,7 +114,7 @@ function ProjectCard({
                 </button>
               </div>
             ) : (
-              <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+              <div className="flex items-center gap-1 transition-opacity focus-within:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100">
                 <button
                   type="button"
                   onClick={() => onToggleArchive(project)}
