@@ -61,7 +61,7 @@ Lumiverb is then at http://192.168.86.166 and http://100.94.35.123.
 ### 4. Create your user
 
 ```bash
-sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb user create --email robert.horvick@gmail.com --role admin
+sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb user create --email you@example.com --role admin
 ```
 
 ### 5. Create libraries with the Mac's paths
