@@ -207,7 +207,7 @@ def test_full_length_is_the_default_and_public_pages_get_10_seconds(env):
     client, admin, *_ = env
     r = client.get("/v1/tenant/settings", headers=admin)
     assert r.status_code == 200
-    assert r.json() == {"video_preview_max_seconds": None, "public_video_preview_max_seconds": 10}
+    assert r.json() == {"video_preview_max_seconds": None, "public_video_preview_max_seconds": 10, "follow_moves": True}
 
 
 @pytest.mark.slow

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import io
 import json
+import contextlib
 import logging
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -219,6 +220,16 @@ def _record_file_stat(client: LumiverbClient, library_id: str, f: dict) -> None:
         client.post("/v1/assets/upsert", json=data)
     except Exception as exc:  # noqa: BLE001 — never stops a scan
         logger.warning("Couldn't record the new mtime of %s: %s", f["rel_path"], exc)
+
+
+def _fetch_follow_moves(client: LumiverbClient) -> bool | None:
+    """The account's "follow moves and renames" setting: on when the server is
+    too old to say, None when it can't be read."""
+    try:
+        settings = client.get("/v1/tenant/settings").json()
+        return settings.get("follow_moves", True) is not False
+    except Exception:  # noqa: BLE001 — unread: the caller looks for no moves
+        return None
 
 
 @dataclass
@@ -683,6 +694,16 @@ def run_scan(
 
     stats = ScanStats()
 
+    # The account may not follow moves (the path is the identity): then a
+    # file at a new path is new, and its old path is simply gone.
+    # Unread, look for none: the old path is archived and the new one ingested,
+    # and a server that follows moves restores the asset there by content.
+    follow_moves = _fetch_follow_moves(client)
+    if follow_moves is None:
+        console.print("[dim]Couldn't read the account's settings: this scan looks for no moves.[/dim]")
+    elif not follow_moves:
+        console.print("[dim]This account doesn't follow moves and renames: files at new paths are new assets.[/dim]")
+
     # Load path filters
     tenant_filters = _load_tenant_filters(client)
     library_filters = _load_library_filters(client, library_id)
@@ -790,7 +811,7 @@ def run_scan(
     # (a move requires an old path to disappear), and --force is not set.
     # Pre-filters by file_size before expensive SHA computation.
     moves: list[_MoveCandidate] = []
-    if new_files and deleted_ids and not force and not skip_moves:
+    if new_files and deleted_ids and not force and not skip_moves and follow_moves is True:
         moves, new_files = _detect_moves(
             new_files, existing, root_path, local_rel_paths,
             deleted_ids=deleted_ids, console=console,
@@ -838,7 +859,7 @@ def run_scan(
         console.print(f"[yellow]Skipping {len(deleted_ids):,} deletions: some folders couldn't be listed[/yellow]")
         deleted_ids = []
 
-    if skip_moves and deleted_ids:
+    if skip_moves and follow_moves is not False and deleted_ids:
         console.print(f"[dim]Skipping {len(deleted_ids):,} deletions (--skip-moves)[/dim]")
         deleted_ids = []
 
@@ -911,11 +932,16 @@ def run_scan(
     # Soft-delete missing assets (after moves, so moved assets are not deleted)
     if deleted_ids:
         console.print(f"Removing {len(deleted_ids):,} assets no longer on disk...")
+        handed_over = 0
         for batch_start in range(0, len(deleted_ids), 500):
             batch = deleted_ids[batch_start : batch_start + 500]
             # "missing", not the user's trash: restored if the file reappears.
-            client.delete("/v1/assets", json={"asset_ids": batch, "reason": "missing"})
-        stats.deleted = len(deleted_ids)
+            resp = client.delete("/v1/assets", json={"asset_ids": batch, "reason": "missing"})
+            # Some may have moved to an empty copy of their file instead (copy, then delete).
+            with contextlib.suppress(AttributeError, TypeError, ValueError):
+                handed_over += len(resp.json().get("handed_over") or [])
+        stats.deleted = len(deleted_ids) - handed_over
+        stats.moved += handed_over
 
     # Pipeline: scan new files immediately while hashing existing files
     # in the background. Changed files feed into the same scan pool as

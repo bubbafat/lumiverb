@@ -952,6 +952,70 @@ class AssetRepository:
         )
         return self._session.exec(stmt).first()
 
+    def find_empty_newer_copy(self, asset: Asset) -> Asset | None:
+        """For copy-then-delete: an active asset in the same library with the same
+        content, made after this one, that no person has worked on. The first
+        made, locked with its faces until the transaction ends.
+
+        Lock first, then check: a rating, a confirmed person or a note that
+        commits while we wait for the lock is seen by the check, and one that
+        comes after waits for us (its asset or face is then gone, so it fails
+        rather than vanishing)."""
+        for copy_id in self.newer_copy_candidates(asset):
+            copy = self.lock_copy(copy_id)
+            if copy is not None and copy.sha256 == asset.sha256 and not self.has_human_data(copy_id):
+                return copy
+        return None
+
+    def newer_copy_candidates(self, asset: Asset) -> list[str]:
+        """Active assets in the same library with the same content, made after this one, first made first."""
+        if not asset.sha256:
+            return []
+        rows = self._session.execute(
+            text(
+                "SELECT asset_id FROM assets"
+                " WHERE library_id = :library_id AND sha256 = :sha256 AND deleted_at IS NULL"
+                "   AND asset_id <> :asset_id AND created_at > :created_at"
+                " ORDER BY created_at, asset_id"
+            ),
+            {"library_id": asset.library_id, "sha256": asset.sha256, "asset_id": asset.asset_id,
+             "created_at": asset.created_at},
+        )
+        return [r[0] for r in rows]
+
+    def lock_copy(self, asset_id: str) -> Asset | None:
+        """Lock an active asset and its faces (a confirmation or rejection of a
+        person writes against the face). None if it's no longer active."""
+        row = self._session.execute(
+            text("SELECT asset_id FROM assets WHERE asset_id = :a AND deleted_at IS NULL FOR UPDATE"),
+            {"a": asset_id},
+        ).first()
+        if row is None:
+            return None
+        self._session.execute(text("SELECT face_id FROM faces WHERE asset_id = :a ORDER BY face_id FOR UPDATE"),
+                              {"a": asset_id})
+        copy = self._session.get(Asset, asset_id)
+        if copy is not None:
+            self._session.refresh(copy)
+        return copy
+
+    def has_human_data(self, asset_id: str) -> bool:
+        """Whether a person has worked on this asset: a note, a transcript they
+        wrote or pasted, a rating, a project, a confirmed or rejected person."""
+        return bool(self._session.execute(
+            text(
+                "SELECT EXISTS (SELECT 1 FROM assets WHERE asset_id = :a"
+                "               AND (note IS NOT NULL OR transcript_source = 'manual'))"
+                " OR EXISTS (SELECT 1 FROM asset_ratings WHERE asset_id = :a)"
+                " OR EXISTS (SELECT 1 FROM project_assets WHERE asset_id = :a)"
+                " OR EXISTS (SELECT 1 FROM faces f JOIN face_person_matches m ON m.face_id = f.face_id"
+                "            WHERE f.asset_id = :a AND m.confirmed)"
+                " OR EXISTS (SELECT 1 FROM faces f JOIN face_person_rejections x ON x.face_id = f.face_id"
+                "            WHERE f.asset_id = :a)"
+            ),
+            {"a": asset_id},
+        ).scalar())
+
     def lock_for_restore(self, asset: Asset, rel_path: str) -> bool:
         """Lock an archived asset found at rel_path before restoring it there.
         False when, meanwhile, another ingest restored it at another path (a

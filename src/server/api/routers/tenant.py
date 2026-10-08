@@ -7,13 +7,15 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_tenant_session, require_editor, require_tenant_admin
 from src.server.tenant_settings import (
+    get_follow_moves,
     get_public_video_preview_max_seconds,
     get_video_preview_max_seconds,
+    set_follow_moves,
     set_public_video_preview_max_seconds,
     set_video_preview_max_seconds,
 )
@@ -38,6 +40,9 @@ class TenantSettingsResponse(BaseModel):
     video_preview_max_seconds: int | None = None
     # The same on public pages (never more than the above); 10 until set.
     public_video_preview_max_seconds: int | None = 10
+    # The same content is the same asset: moves, renames, copy then delete.
+    # Off, the path is the only identity.
+    follow_moves: bool = True
 
 
 class TenantSettingsUpdate(BaseModel):
@@ -45,6 +50,7 @@ class TenantSettingsUpdate(BaseModel):
 
     video_preview_max_seconds: _Seconds | None = None
     public_video_preview_max_seconds: _Seconds | None = None
+    follow_moves: StrictBool = True
 
 
 class TenantFilterDefaultItem(BaseModel):
@@ -82,6 +88,7 @@ def _settings(session: Session) -> TenantSettingsResponse:
     return TenantSettingsResponse(
         video_preview_max_seconds=get_video_preview_max_seconds(session),
         public_video_preview_max_seconds=get_public_video_preview_max_seconds(session),
+        follow_moves=get_follow_moves(session),
     )
 
 
@@ -103,8 +110,11 @@ def update_tenant_settings(
         set_video_preview_max_seconds(session, body.video_preview_max_seconds)
     if "public_video_preview_max_seconds" in body.model_fields_set:
         set_public_video_preview_max_seconds(session, body.public_video_preview_max_seconds)
+    if "follow_moves" in body.model_fields_set:
+        set_follow_moves(session, body.follow_moves)
     after = _settings(session)
-    if after != before:
+    caps = ("video_preview_max_seconds", "public_video_preview_max_seconds")
+    if any(getattr(after, c) != getattr(before, c) for c in caps):
         clear_cuts(request.state.tenant_id)
     return after
 

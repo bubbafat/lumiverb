@@ -1,4 +1,4 @@
-"""`lumiverb settings`: account-wide settings (the web's Settings → Playback)."""
+"""`lumiverb settings`: account-wide settings (the web's Settings → Playback and Files)."""
 
 from __future__ import annotations
 
@@ -45,6 +45,11 @@ def show() -> None:
     console.print(f"Video playback: {_describe(settings.get('video_preview_max_seconds'))}")
     public = _public(settings.get("video_preview_max_seconds"), settings.get("public_video_preview_max_seconds"))
     console.print(f"On public pages: {_describe(public)}")
+    console.print(f"Follow moves and renames: {_on_off(settings.get('follow_moves', True))}")
+
+
+def _on_off(value: object) -> str:
+    return "off" if value is False else "on"
 
 
 @settings_app.command("video-preview")
@@ -63,3 +68,18 @@ def public_preview(length: Annotated[str, typer.Argument(help=_LENGTH_HELP)]) ->
         "/v1/tenant/settings", json={"public_video_preview_max_seconds": value},
     ).json()
     console.print(f"On public pages: {_describe(settings.get('public_video_preview_max_seconds'))}")
+
+
+@settings_app.command("follow-moves")
+def follow_moves(state: Annotated[str, typer.Argument(help="'on' or 'off'")]) -> None:
+    """Whether the same content is the same asset (admins only). On: a moved or
+    renamed file keeps its notes, ratings and projects, and so does the copy left
+    when the original is deleted. Off: a file at a new path is a new asset."""
+    choice = state.strip().lower()
+    if choice not in ("on", "off"):
+        console.print("[red]Give 'on' or 'off'.[/red]")
+        raise typer.Exit(2)
+    settings = LumiverbClient().patch("/v1/tenant/settings", json={"follow_moves": choice == "on"}).json()
+    console.print(f"Follow moves and renames: {_on_off(settings.get('follow_moves', True))}")
+    if settings.get("follow_moves") is False:
+        console.print("A file at a new path is now a new asset; nothing is matched by content.")
