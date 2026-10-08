@@ -17,7 +17,7 @@ from rich.table import Table
 
 from src.client.cli.client import LumiverbClient
 from src.client.video.analysis_proxy import AnalysisProxySettings, RenderError, render_analysis_proxy, render_timeout
-from src.client.video.audio import audio_channels, speech_wav_command
+from src.client.video.audio import audio_tracks, speech_wav_command
 from src.client.video.probe import probe_video
 from src.client.workers.faces.insightface_provider import InsightFaceProvider
 from src.shared.io_utils import resolve_source_path
@@ -197,11 +197,11 @@ def _transcribe_one(
     from pathlib import Path
 
     try:
-        channels = audio_channels(source_path)
+        tracks = audio_tracks(source_path)
     except (subprocess.SubprocessError, OSError, ValueError) as exc:
         logger.warning("Couldn't read the audio tracks of %s; trying again later: %s", source_path, exc)
         return None
-    if not channels:
+    if not tracks:
         logger.info("No audio track in %s", source_path)
         return ("", "")
 
@@ -210,7 +210,7 @@ def _transcribe_one(
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             wav_path = tmp.name
 
-        cmd = speech_wav_command(source_path, Path(wav_path), channels)
+        cmd = speech_wav_command(source_path, Path(wav_path), tracks)
         result = subprocess.run(cmd, capture_output=True, timeout=1800)
         if result.returncode != 0:
             stderr = result.stderr.decode(errors="replace") if result.stderr else ""

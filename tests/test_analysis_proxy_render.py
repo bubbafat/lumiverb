@@ -1,7 +1,9 @@
 """Rendering analysis proxies with ffmpeg, and the local cache (ADR-016 phase 2).
 
 An analysis proxy is a full-length, low-resolution copy of a video with all
-its audio tracks, each at most stereo and at a low bitrate. Transcription, scenes and vision read it instead of the
+its audio tracks, each at most stereo and at a low bitrate. With several
+tracks, a mix of them comes first: browsers play only the first track, and a
+lav may be on any of them. Transcription, scenes and vision read it instead of the
 original. These tests render real files made with ffmpeg's test sources.
 """
 
@@ -21,6 +23,7 @@ from src.client.video.analysis_proxy import (
     build_command,
     render_analysis_proxy,
 )
+from src.client.video.audio import MIX_HANDLER, audio_tracks, speech_wav_command
 
 
 def _make(path: Path, *, size: str = "1280x720", rate: int = 30, seconds: float = 2.0,
@@ -105,13 +108,48 @@ def test_video_without_audio_has_no_audio_track(tmp_path: Path) -> None:
     assert _audio(_probe(out)) == []
 
 
+def _handlers(info: dict) -> list[str]:
+    return [a.get("tags", {}).get("handler_name", "") for a in _audio(info)]
+
+
+def _mean_volume(path: Path, track: int) -> float:
+    out = subprocess.run(["ffmpeg", "-hide_banner", "-nostdin", "-i", str(path), "-map", f"0:a:{track}",
+                          "-af", "volumedetect", "-f", "null", "-"], capture_output=True, text=True).stderr
+    return float(out.split("mean_volume:")[1].split("dB")[0])
+
+
 @pytest.mark.fast
-def test_every_audio_track_is_kept_in_order_at_most_stereo(tmp_path: Path) -> None:
-    # Pro cameras put a lav on its own track; it must reach transcription.
+def test_one_track_stays_as_it_is(tmp_path: Path) -> None:
+    src = _make(tmp_path / "one.mov", layouts=["stereo"])
+    out = tmp_path / "out.mp4"
+    render_analysis_proxy(src, out)
+    info = _probe(out)
+    assert [a["channels"] for a in _audio(info)] == [2]
+    assert MIX_HANDLER not in _handlers(info)
+
+
+@pytest.mark.fast
+def test_several_tracks_get_a_mix_first_then_every_track_in_order(tmp_path: Path) -> None:
+    # Pro cameras put a lav on its own track; browsers play only the first.
     src = _make(tmp_path / "three.mov", layouts=["mono", "stereo", "5.1"])
     out = tmp_path / "out.mp4"
     render_analysis_proxy(src, out)
-    assert [a["channels"] for a in _audio(_probe(out))] == [1, 2, 2]
+    info = _probe(out)
+    assert [a["channels"] for a in _audio(info)] == [2, 1, 2, 2]
+    assert _handlers(info)[0] == MIX_HANDLER
+    assert MIX_HANDLER not in _handlers(info)[1:]
+
+
+@pytest.mark.fast
+def test_the_mix_keeps_a_lone_voice_as_loud_as_it_was(tmp_path: Path) -> None:
+    # amix's default divides by the number of tracks: one live track of eight
+    # would come out 18 dB down.
+    src = _make(tmp_path / "eight.mov", layouts=["mono"] * 8, silent=(0, 1, 2, 3, 5, 6, 7), seconds=3)
+    out = tmp_path / "out.mp4"
+    render_analysis_proxy(src, out)
+    live = _mean_volume(src, 4)
+    mix = _mean_volume(out, 0)
+    assert abs(mix - live) < 4, (live, mix)
 
 
 @pytest.mark.fast
@@ -120,11 +158,50 @@ def test_audio_is_low_bitrate_at_48k(tmp_path: Path) -> None:
                 extra=["-c:a", "pcm_s32le"])
     out = tmp_path / "out.mp4"
     render_analysis_proxy(src, out)
-    mono, stereo = _audio(_probe(out))
-    assert mono["codec_name"] == stereo["codec_name"] == "aac"
-    assert mono["sample_rate"] == stereo["sample_rate"] == "48000"
+    mix, mono, stereo = _audio(_probe(out))
+    assert {t["codec_name"] for t in (mix, mono, stereo)} == {"aac"}
+    assert {t["sample_rate"] for t in (mix, mono, stereo)} == {"48000"}
     assert int(mono["bit_rate"]) <= 60_000
     assert int(stereo["bit_rate"]) <= 110_000
+    assert int(mix["bit_rate"]) <= 110_000
+
+
+def _with_undecodable_second_track(path: Path) -> Path:
+    """Two tracks, the second relabelled with a codec no ffmpeg decodes (as iPhone spatial audio's apac)."""
+    _make(path, layouts=["mono", "mono"], extra=["-c:a:0", "aac", "-c:a:1", "pcm_s16le"])
+    data = path.read_bytes()
+    assert data.count(b"sowt") == 1
+    path.write_bytes(data.replace(b"sowt", b"zzzz"))
+    return path
+
+
+@pytest.mark.fast
+def test_an_undecodable_track_is_left_out_not_fatal(tmp_path: Path) -> None:
+    src = _with_undecodable_second_track(tmp_path / "apac.mov")
+    assert [t.index for t in audio_tracks(src)] == [0]
+    out = tmp_path / "out.mp4"
+    render_analysis_proxy(src, out)
+    assert [a["channels"] for a in _audio(_probe(out))] == [1]
+
+
+@pytest.mark.fast
+def test_a_render_that_fails_on_several_tracks_retries_with_the_first(tmp_path: Path, monkeypatch) -> None:
+    from src.client.video import analysis_proxy
+
+    src = _make(tmp_path / "two.mov", layouts=["mono", "mono"])
+    real = analysis_proxy.build_command
+    tried: list[int] = []
+
+    def flaky(source, dest, settings=None, tracks=()):
+        tried.append(len(tracks))
+        cmd = real(source, dest, settings, tracks)
+        return cmd if len(tracks) == 1 else [*cmd[:-1], "-c:a", "no_such_encoder", cmd[-1]]
+
+    monkeypatch.setattr(analysis_proxy, "build_command", flaky)
+    out = tmp_path / "out.mp4"
+    render_analysis_proxy(src, out)
+    assert tried == [2, 1]
+    assert len(_audio(_probe(out))) == 1
 
 
 @pytest.mark.fast
@@ -296,7 +373,6 @@ def test_the_newest_file_survives_even_when_alone_too_big(tmp_path: Path) -> Non
 # Audio for transcription
 # ---------------------------------------------------------------------------
 
-from src.client.video.audio import audio_channels, speech_wav_command  # noqa: E402
 
 
 def _peak(wav: Path) -> int:
@@ -309,17 +385,18 @@ def _peak(wav: Path) -> int:
 
 
 @pytest.mark.fast
-def test_audio_channels_lists_each_track_in_order(tmp_path: Path) -> None:
-    assert audio_channels(_make(tmp_path / "a.mov", layouts=["mono", "stereo", "5.1"])) == [1, 2, 6]
-    assert audio_channels(_make(tmp_path / "s.mov", audio=0)) == []
+def test_audio_tracks_lists_each_track_in_order(tmp_path: Path) -> None:
+    tracks = audio_tracks(_make(tmp_path / "a.mov", layouts=["mono", "stereo", "5.1"]))
+    assert [(t.index, t.channels) for t in tracks] == [(0, 1), (1, 2), (2, 6)]
+    assert audio_tracks(_make(tmp_path / "s.mov", audio=0)) == []
 
 
 @pytest.mark.fast
-def test_audio_channels_of_an_unreadable_file_raises(tmp_path: Path) -> None:
+def test_audio_tracks_of_an_unreadable_file_raises(tmp_path: Path) -> None:
     bad = tmp_path / "bad.mov"
     bad.write_bytes(b"nope")
     with pytest.raises(subprocess.CalledProcessError):
-        audio_channels(bad)
+        audio_tracks(bad)
 
 
 @pytest.mark.fast
@@ -331,9 +408,30 @@ def test_audio_channels_of_an_unreadable_file_raises(tmp_path: Path) -> None:
 def test_speech_audio_hears_every_track(tmp_path: Path, layouts: list[str], silent: tuple[int, ...]) -> None:
     src = _make(tmp_path / "clip.mov", layouts=layouts, silent=silent)
     wav = tmp_path / "speech.wav"
-    subprocess.run(speech_wav_command(src, wav, audio_channels(src)), check=True)
+    subprocess.run(speech_wav_command(src, wav, audio_tracks(src)), check=True)
     import wave
 
     with wave.open(str(wav)) as w:
         assert (w.getframerate(), w.getnchannels()) == (16000, 1)
     assert _peak(wav) > 1000
+
+
+@pytest.mark.fast
+def test_speech_from_a_proxy_uses_its_mix(tmp_path: Path) -> None:
+    src = _make(tmp_path / "clip.mov", layouts=["stereo", "mono"], silent=(0,))
+    proxy = tmp_path / "proxy.mp4"
+    render_analysis_proxy(src, proxy)
+    tracks = audio_tracks(proxy)
+    assert tracks[0].handler == MIX_HANDLER
+    cmd = speech_wav_command(proxy, tmp_path / "s.wav", tracks)
+    assert "-filter_complex" not in cmd and cmd[cmd.index("-map") + 1] == "0:a:0"
+    subprocess.run(cmd, check=True)
+    assert _peak(tmp_path / "s.wav") > 1000
+
+
+@pytest.mark.fast
+def test_speech_mixing_doesnt_quieten_a_lone_voice(tmp_path: Path) -> None:
+    src = _make(tmp_path / "eight.mov", layouts=["mono"] * 8, silent=(0, 1, 2, 3, 5, 6, 7), seconds=3)
+    wav = tmp_path / "s.wav"
+    subprocess.run(speech_wav_command(src, wav, audio_tracks(src)), check=True)
+    assert abs(_mean_volume(wav, 0) - _mean_volume(src, 4)) < 4
