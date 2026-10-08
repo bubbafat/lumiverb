@@ -11,7 +11,7 @@ This ADR sets the direction for Lumiverb. Where another doc in this repo disagre
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 0 | Groundwork and safety: this ADR, doc updates, stop overwriting human data, safe scanning | Built, in review |
-| 1 | Projects and send to editor (v1) | Built, in review. Left: real editor imports on a Mac; the macOS and iOS rename |
+| 1 | Projects and send to editor (v1) | Built, in review, with project trash. Left: real editor imports on a Mac; the macOS and iOS rename |
 | 2 | The brain: one machine schedules all processing and reads storage read-only | Not started |
 | 3 | Lineage and reconciliation | Not started |
 | 4 | Producers and endpoints | Not started |
@@ -213,7 +213,7 @@ A project becomes a bin in Resolve, Premiere or Final Cut, with media online.
 
 **Done when:** one project mixing two cameras and frame rates imports into Resolve, Premiere and Final Cut with every clip online at the right duration; a smart project over 1,000 clips exports whole; an archived project can still be exported.
 
-**Where it stands:** built, and the full suite passes with every marker. Tests show a smart project over 1,000 clips exporting whole and an archived project exporting. Both export files are read back by OpenTimelineIO's FCP7 and FCPXML adapters with every clip finding its media, but the real imports into Resolve, Premiere and Final Cut still need a check on a Mac. The macOS and iOS apps aren't renamed yet (they can't be built here); the API keeps `/v1/collections` and a legacy `collection_id` for them until they are.
+**Where it stands:** built, and the full suite passes with every marker. Tests show a smart project over 1,000 clips exporting whole and an archived project exporting. Both export files are read back by OpenTimelineIO's FCP7 and FCPXML adapters with every clip finding its media, but the real imports into Resolve, Premiere and Final Cut still need a check on a Mac. The macOS and iOS apps aren't renamed yet (they can't be built here); the API keeps `/v1/collections` and a legacy `collection_id` for them until they are. Browsing the result on a phone led to fixes for phone layouts and to project trash (principles 9 and 10): delete, trash, restore or delete forever, with the API requiring the user's say before surprising deletes and restores.
 
 ### Phase 2 — The brain
 
