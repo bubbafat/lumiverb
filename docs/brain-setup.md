@@ -81,13 +81,22 @@ sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb library list
 
 `library list` shows a **Here** column with the mapped path. Within a minute the worker starts the first full scan. That is the fresh ingest of the DAS: probe, poster and preview, then analysis proxies, transcripts and scenes.
 
-### 6. Vision AI
+### 6. AI machines
 
-Descriptions, OCR and scene descriptions need a vision model; until one is chosen, those steps wait rather than fail. For now the brain uses `qwen3-vl:8b` in the Ollama container of the ResourceSpace stack (`~/dam-stack/resourcespace`), on the RTX 3080, reached at its internal address. In the web app, as an admin: **Settings → AI**, enter `http://172.18.0.6:11434/v1`, press **Connect**, pick `qwen3-vl:8b`, **Save**. That is the one place the endpoint and model live: the worker reads them from the server and keeps none of its own (a `vision_*` key left in an older worker config is ignored).
+Descriptions, OCR and scene descriptions run on the account's **AI machines** (Settings → AI): GPU boxes, each an OpenAI-compatible endpoint such as Ollama, with the jobs it does and how many requests it takes at once. The job's one model, `qwen3-vl:8b`, must be on every machine doing it; until a model is chosen and a machine offers it, those steps wait rather than fail. The worker reads all of this from the server and keeps none of its own (a `vision_*` key left in an older worker config is ignored).
 
-Before each round of vision work the worker asks the endpoint whether it still offers the model. When it doesn't (the container was recreated at another address, the model was removed), vision work waits, no clip is charged a failure, and Settings → AI shows the problem in red, with a red dot on AI in the Settings menu, until it's fixed.
+On Oct 8 there are two:
 
-That address changes if the container is recreated, and the endpoint goes with ResourceSpace: give Lumiverb its own Ollama before switching ResourceSpace off.
+| Machine | URL | At once |
+|---|---|---|
+| Brain 3080 (the Ollama container from `~/dam-stack/resourcespace`) | `http://172.18.0.6:11434/v1` | 2 |
+| Mac Studio (Ollama, over the direct 10 Gb link; the brain is 10.10.10.2) | `http://10.10.10.1:11434/v1` | 4 |
+
+To add one, as an admin: **Settings → AI → Add machine**, a name, the URL, **Connect** (it lists the models the machine offers), tick **Descriptions & text**, how many at once, **Add**. "At once" is how many images it works on together: more needs more GPU memory.
+
+Before each round of vision work the worker checks every machine, and sends work only to those online and offering the model, spread by how many each takes. One that stops answering (asleep, out of memory, the model gone) is skipped and its work goes to the others; it's checked again a minute later. Settings → AI shows each machine's state, offline ones in red, with a red dot on AI in the Settings menu. Only when no machine is left does vision work wait, and no clip is charged a failure.
+
+The brain's Ollama address changes if its container is recreated.
 
 ### 7. The Mac app
 
