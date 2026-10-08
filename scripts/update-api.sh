@@ -159,9 +159,12 @@ if [[ -f "$WORKER_UNIT" ]]; then
   grep -q "^Environment=HOME=" "$WORKER_UNIT" || sed -i "/^Environment=PYTHONUNBUFFERED=1$/a Environment=HOME=${SVC_HOME}" "$WORKER_UNIT"
   sed -i "s|^ReadWritePaths=\([^ ]*\)$|ReadWritePaths=\1 ${SVC_HOME}|" "$WORKER_UNIT"
   # Proxy caches on the data disk, not the root disk with Postgres.
-  DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2-)"
-  grep -q "^Environment=XDG_CACHE_HOME=" "$WORKER_UNIT" \
-    || sed -i "/^Environment=HOME=/a Environment=XDG_CACHE_HOME=${DATA_DIR}/cache" "$WORKER_UNIT"
+  DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2- || true)"
+  if [[ -z "$DATA_DIR" ]]; then
+    warn "No DATA_DIR in ${ENV_FILE}; the worker's caches stay in its home"
+  elif ! grep -q "^Environment=XDG_CACHE_HOME=" "$WORKER_UNIT"; then
+    sed -i "/^Environment=HOME=/a Environment=XDG_CACHE_HOME=${DATA_DIR}/cache" "$WORKER_UNIT"
+  fi
   systemctl daemon-reload
   ok "$(grep '^ExecStart=' "$WORKER_UNIT")"
 fi

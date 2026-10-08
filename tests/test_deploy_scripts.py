@@ -184,6 +184,53 @@ def test_update_makes_the_api_tmpdir():
     assert 'chown -R "$SVC_USER":"$SVC_USER" "$DATA_DIR"' in data_step
 
 
+WORKER_UNIT = """\
+[Service]
+EnvironmentFile=/etc/lumiverb/env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/lumiverb/.venv/bin/lumiverb worker
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/mnt/ssd2/lumiverb
+"""
+
+
+def _update_worker_unit(tmp_path: Path, unit: Path, env_text: str) -> str:
+    """Run update-api.sh's worker-unit step against `unit`; returns its output."""
+    env = tmp_path / "env"
+    env.write_text(env_text)
+    text = UPDATE_API.read_text()
+    block = text.split('step "Updating the worker unit"', 1)[1].split("# ----", 1)[0]
+    script = (
+        'step() { :; }; ok() { :; }; warn() { echo "warn: $1"; }; systemctl() { :; }\n'
+        f'ENV_FILE="{env}"; APP_DIR=/opt/lumiverb; SVC_HOME=/var/lib/lumiverb\n'
+        + block.replace("/etc/systemd/system/lumiverb-worker.service", str(unit))
+    )
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stdout + out.stderr
+    return out.stdout
+
+
+def test_update_puts_the_worker_s_caches_on_the_data_disk(tmp_path):
+    unit = tmp_path / "lumiverb-worker.service"
+    unit.write_text(WORKER_UNIT)
+    _update_worker_unit(tmp_path, unit, "DATA_DIR=/mnt/ssd2/lumiverb\n")
+    _update_worker_unit(tmp_path, unit, "DATA_DIR=/mnt/ssd2/lumiverb\n")  # reruns change nothing
+    lines = unit.read_text().splitlines()
+    assert lines.count("Environment=XDG_CACHE_HOME=/mnt/ssd2/lumiverb/cache") == 1
+    assert lines.count("ReadWritePaths=/mnt/ssd2/lumiverb /var/lib/lumiverb") == 1
+
+
+def test_update_without_a_data_dir_leaves_the_worker_s_caches_alone(tmp_path):
+    # XDG_CACHE_HOME=/cache would be read-only under ProtectSystem=strict:
+    # the worker couldn't make its lock, and wouldn't start.
+    unit = tmp_path / "lumiverb-worker.service"
+    unit.write_text(WORKER_UNIT)
+    out = _update_worker_unit(tmp_path, unit, "API_PORT=8100\n")
+    assert "XDG_CACHE_HOME" not in unit.read_text()
+    assert "No DATA_DIR" in out
+
+
 def test_a_manual_worker_run_finds_the_service_s_lock():
     # `sudo -u lumiverb -H lumiverb worker --once` gets neither the unit's
     # XDG_CACHE_HOME nor the env file (root only); the CLI config carries it.
