@@ -432,6 +432,31 @@ def test_a_failed_cycle_does_not_stop_the_worker(home: Path, monkeypatch: pytest
 
 
 @pytest.mark.fast
+def test_an_api_not_answering_yet_is_one_line_and_tried_again_soon(
+    home: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An update restarts the API and the worker together: a refused connection
+    is expected, not a failure worth a traceback, and the API is back in seconds."""
+    import logging
+
+    import httpx
+
+    from src.client.cli import worker
+
+    cycles = MagicMock(side_effect=[httpx.ConnectError("Connection refused"), None])
+    monkeypatch.setattr(worker, "run_cycle", cycles)
+    monkeypatch.setattr(worker, "LumiverbClient", MagicMock())
+    sleeps: list[float] = []
+    with caplog.at_level(logging.INFO, logger="src.client.cli.worker"):
+        worker.run_forever(poll=60, sleep=sleeps.append, stop=lambda: len(sleeps) >= 2, console=Console(quiet=True))
+    assert cycles.call_count == 2
+    assert sleeps == [10, 60]
+    [record] = [r for r in caplog.records if "answering" in r.getMessage()]
+    assert record.levelno == logging.WARNING and record.exc_info is None
+    assert "trying again in 10s" in record.getMessage()
+
+
+@pytest.mark.fast
 def test_worker_start_clears_proxies_cut_off_by_a_kill(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # A SIGKILL mid-render or mid-download leaves these; eviction only
     # counts finished proxies, so nothing else would remove them.
