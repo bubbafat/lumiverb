@@ -6,7 +6,7 @@ import re
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from pydantic import BaseModel, model_validator, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlmodel import Session, select
 
 from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor
@@ -565,7 +565,7 @@ def reorder_project(
     try:
         repo.reorder(project_id, body.asset_ids)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
     return {"ok": True}
 
@@ -575,7 +575,7 @@ def reorder_project(
 # ---------------------------------------------------------------------------
 
 _EXPORT_PAGE = 500
-_UNSAFE_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+_UNSAFE_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f\x7f]')
 
 
 def _all_project_assets(col, request: Request, session: Session, user_id: str) -> list:

@@ -51,16 +51,18 @@ def env(tmp_path_factory):
         get_settings.cache_clear()
         _engines.clear()
 
-        with patch("src.server.api.routers.admin.provision_tenant_database"):
-            with TestClient(app) as bootstrap:
-                r = bootstrap.post(
-                    "/v1/admin/tenants",
-                    json={"name": "ExportTenant", "plan": "free"},
-                    headers={"Authorization": "Bearer test-admin-secret"},
-                )
-                assert r.status_code == 200, r.text
-                tenant_id = r.json()["tenant_id"]
-                api_key = r.json()["api_key"]
+        with (
+            patch("src.server.api.routers.admin.provision_tenant_database"),
+            TestClient(app) as bootstrap,
+        ):
+            r = bootstrap.post(
+                "/v1/admin/tenants",
+                json={"name": "ExportTenant", "plan": "free"},
+                headers={"Authorization": "Bearer test-admin-secret"},
+            )
+            assert r.status_code == 200, r.text
+            tenant_id = r.json()["tenant_id"]
+            api_key = r.json()["api_key"]
 
         with PostgresContainer("pgvector/pgvector:pg16") as tenant_pg:
             tenant_url = _ensure_psycopg2(tenant_pg.get_connection_url())

@@ -228,8 +228,9 @@ def test_fcp7_includes_a_timeline_of_all_clips_in_order() -> None:
     assert sequence.findtext("name") == "Customer Video <123>"
     items = sequence.findall("media/video/track/clipitem")
     assert [i.findtext("name") for i in items] == ["My Clip & Co.mov", "pal.mxf"]
-    # end to end on a 30-count timeline: 212 frames, then PAL's 100 at 25 -> 120 at 30
-    assert [(i.findtext("start"), i.findtext("end")) for i in items] == [("0", "212"), ("212", "332")]
+    # end to end on the lead's 29.97 grid: 212 frames, then PAL's 4.0 s -> 119.88,
+    # rounded down so the item never runs past the end of PAL's media
+    assert [(i.findtext("start"), i.findtext("end")) for i in items] == [("0", "212"), ("212", "331")]
     # each item points at its master clip's file
     master_files = {c.findtext("name"): c.find(".//file").get("id") for c in root.findall("bin/children/clip")}
     assert [i.find("file").get("id") for i in items] == [master_files["My Clip & Co.mov"], master_files["pal.mxf"]]
@@ -312,8 +313,9 @@ def test_independent_reader_finds_every_clip_online(provider_id: str) -> None:
     """Resolve imports these formats as timelines and resolves each clip's
     file as it reads. If a reader built the same way finds a clip with no
     media, that clip would import offline."""
-    import opentimelineio as otio
     from urllib.parse import unquote
+
+    import opentimelineio as otio
 
     clips = _otio_clips(provider_id)
 
@@ -342,3 +344,33 @@ def test_media_bases_tolerate_a_relative_library_root() -> None:
 
     assert bases["a"].startswith("/Volumes/DAS")
     assert bases["b"].startswith("/Volumes/DAS")
+
+
+def test_timeline_never_runs_past_a_clips_media() -> None:
+    """A 30 fps clip of 7.2 s on a 23.976 timeline: 172 frames (7.17 s),
+    never 173 (7.22 s, past the end of the file)."""
+    lead = ExportClip(**{**PAL.__dict__, "frame_rate_num": 24000, "frame_rate_den": 1001,
+                         "start_timecode": None})
+    other = ExportClip(**{**PAL.__dict__, "asset_id": "ast_9", "name": "thirty.mov",
+                          "path": "/Volumes/DAS/thirty.mov", "duration_sec": 7.2,
+                          "frame_rate_num": 30, "frame_rate_den": 1, "start_timecode": None})
+    bin_ = ExportBin(name="x", clips=[lead, other])
+
+    item = _render("fcp7", bin_).findall("bin/children/sequence/media/video/track/clipitem")[1]
+    assert int(item.findtext("end")) - int(item.findtext("start")) == 172
+    spine = _render("fcpxml", bin_).findall("library/event/project/sequence/spine/asset-clip")
+    assert spine[1].get("duration") == f"{172 * 1001}/24000s"
+
+
+def test_timeline_takes_its_frame_size_from_a_probed_clip() -> None:
+    root = _render("fcpxml", ExportBin(name="x", clips=[UNPROBED, IPHONE]))
+    sequence = root.find("library/event/project/sequence")
+    fmt = root.find(f"resources/format[@id='{sequence.get('format')}']")
+
+    assert (fmt.get("width"), fmt.get("height")) == ("640", "360")
+
+
+def test_export_filename_drops_control_characters() -> None:
+    from src.server.api.routers.projects import _export_filename
+
+    assert _export_filename("a\x7fb\x01c", ".xml") == "a_b_c.xml"

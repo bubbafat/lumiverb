@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 
-from src.server.export.base import ExportBin, ExportClip
+from src.server.export.base import ExportBin, ExportClip, timeline_frames, timeline_lead
 
 
 def _sub(parent: ET.Element, tag: str, text: object | None = None, **attrs: str) -> ET.Element:
@@ -67,9 +67,7 @@ def _sourcetrack(item: ET.Element) -> None:
 
 
 def _sequence(children: ET.Element, bin_: ExportBin) -> None:
-    lead = bin_.clips[0]
-    num, den = lead.rate
-    fps = num / den
+    lead = timeline_lead(bin_.clips)
     seq = _sub(children, "sequence", id="sequence-1")
     _sub(seq, "name", bin_.name)
     duration = _sub(seq, "duration")
@@ -80,7 +78,7 @@ def _sequence(children: ET.Element, bin_: ExportBin) -> None:
     position = 0
     for index, clip in enumerate(bin_.clips, start=1):
         # Lengths on the sequence's own (lead clip's) frame grid.
-        length = round((clip.duration_sec or 0.0) * fps)
+        length = timeline_frames(clip, lead)
         for track, kind in ((vtrack, "video"), (atrack, "audio")):
             if kind == "audio" and not clip.audio_channels:
                 continue

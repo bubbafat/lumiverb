@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 
-from src.server.export.base import ExportBin, ExportClip
+from src.server.export.base import ExportBin, ExportClip, timeline_frames, timeline_lead
 
 
 def _seconds(frames: int, clip: ExportClip) -> str:
@@ -51,7 +51,7 @@ class FcpxmlProvider:
             next_id += 1
             duration = _seconds(clip.duration_frames, clip)
             start = _seconds(clip.start_frames, clip)
-            asset = ET.SubElement(
+            ET.SubElement(
                 resources,
                 "asset",
                 {
@@ -87,7 +87,8 @@ class FcpxmlProvider:
             assets.append((clip, asset_id, formats[key]))
 
         if assets:
-            lead, _, lead_format = assets[0]
+            lead = timeline_lead([clip for clip, _, _ in assets])
+            lead_format = next(f for clip, _, f in assets if clip is lead)
             num, den = lead.rate
             project = ET.SubElement(event, "project", name=bin_.name)
             sequence = ET.SubElement(
@@ -96,7 +97,7 @@ class FcpxmlProvider:
             spine = ET.SubElement(sequence, "spine")
             position = 0
             for clip, asset_id, format_id in assets:
-                length = round((clip.duration_sec or 0.0) * num / den)
+                length = timeline_frames(clip, lead)
                 ET.SubElement(
                     spine,
                     "asset-clip",

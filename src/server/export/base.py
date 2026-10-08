@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from fractions import Fraction
@@ -116,3 +117,18 @@ def timecode_to_frames(tc: str, timebase: int, drop_frame: bool) -> int:
         minutes = h * 60 + m
         frames -= dropped_per_minute * (minutes - minutes // 10)
     return frames
+
+
+def timeline_lead(clips: list[ExportClip]) -> ExportClip:
+    """The clip whose rate and size the timeline takes: the first one with
+    a known frame size (an unprobed clip has none), else the first."""
+    return next((c for c in clips if c.width and c.height), clips[0])
+
+
+def timeline_frames(clip: ExportClip, lead: ExportClip) -> int:
+    """The clip's length on the lead's frame grid. At another rate, round
+    down, so the timeline never runs past the end of the clip's media."""
+    if clip.rate == lead.rate:
+        return clip.duration_frames
+    num, den = lead.rate
+    return math.floor((clip.duration_sec or 0.0) * num / den)
