@@ -18,6 +18,7 @@ from sqlmodel import Session
 
 from src.shared.utils import utcnow
 
+
 def tags_join(alias: str = "m") -> str:
     """The tags a clip shows, as `{alias}.tags` (a jsonb array): its latest
     description's tags, less the ones a person removed, plus the ones they
