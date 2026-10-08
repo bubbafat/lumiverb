@@ -437,6 +437,34 @@ class Person(SQLModel, table=True):
     )
 
 
+class VideoFacetRow(SQLModel, table=True):
+    """One ffprobe pass per video: what an editor export needs (ADR-016).
+
+    Derived data; re-probing replaces the row.
+    """
+
+    __tablename__ = "video_facets"
+
+    asset_id: str = Field(foreign_key="assets.asset_id", primary_key=True)
+    duration_sec: float | None = Field(default=None, nullable=True)
+    container: str | None = Field(default=None, nullable=True)
+    video_codec: str | None = Field(default=None, nullable=True)
+    width: int | None = Field(default=None, nullable=True)  # display width, rotation applied
+    height: int | None = Field(default=None, nullable=True)
+    rotation: int = Field(default=0, nullable=False)
+    frame_rate_num: int | None = Field(default=None, nullable=True)
+    frame_rate_den: int | None = Field(default=None, nullable=True)
+    start_timecode: str | None = Field(default=None, nullable=True)
+    drop_frame: bool | None = Field(default=None, nullable=True)
+    audio_codec: str | None = Field(default=None, nullable=True)
+    audio_channels: int | None = Field(default=None, nullable=True)
+    audio_sample_rate: int | None = Field(default=None, nullable=True)
+    probed_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
 class IgnoredFile(SQLModel, table=True):
     """A file whose trash the user emptied. Its asset row is gone, but scans
     and ingest keep skipping the path while the file is still on disk."""

@@ -102,6 +102,11 @@ class LumiverbClient:
         response = self._client.post(self._url(path), **kwargs)
         return self._handle_response(response)
 
+    def put(self, path: str, **kwargs: object) -> httpx.Response:
+        """PUT request; on non-2xx prints error envelope and raises LumiverbAPIError."""
+        response = self._client.put(self._url(path), **kwargs)
+        return self._handle_response(response)
+
     def patch(self, path: str, **kwargs: object) -> httpx.Response:
         """PATCH request; on non-2xx prints error envelope and raises LumiverbAPIError."""
         response = self._client.patch(self._url(path), **kwargs)

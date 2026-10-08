@@ -1,9 +1,13 @@
 """FastAPI application entry point."""
 
+import math
 import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -59,6 +63,23 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Lumiverb API", version="0.1.0", lifespan=lifespan)
+
+
+@app.exception_handler(RequestValidationError)
+async def _request_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """FastAPI's default 422, except that it can echo any input: the default
+    crashes when the rejected input holds inf or NaN (not valid JSON)."""
+
+    def finite(value):
+        if isinstance(value, float) and not math.isfinite(value):
+            return str(value)
+        if isinstance(value, dict):
+            return {k: finite(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [finite(v) for v in value]
+        return value
+
+    return JSONResponse(status_code=422, content={"detail": finite(jsonable_encoder(exc.errors()))})
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(TenantResolutionMiddleware)
 app.include_router(auth_router)

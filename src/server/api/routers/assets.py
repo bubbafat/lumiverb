@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from sqlmodel import Session
 
 from src.shared.io_utils import normalize_rel_path
@@ -38,6 +38,29 @@ class UpsertAssetRequest(BaseModel):
 
 class UpsertAssetResponse(BaseModel):
     action: str  # added | updated | skipped
+
+
+class VideoFacetModel(BaseModel):
+    """One ffprobe pass over a video (see src/client/video/probe.py).
+
+    Validated on the way in: a malformed value would break every export of
+    every project that holds the clip.
+    """
+
+    duration_sec: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    container: str | None = None
+    video_codec: str | None = None
+    width: int | None = Field(default=None, gt=0)  # display width: rotation applied
+    height: int | None = Field(default=None, gt=0)
+    rotation: Literal[0, 90, 180, 270] = 0  # degrees clockwise to display upright
+    frame_rate_num: int | None = Field(default=None, gt=0)
+    frame_rate_den: int | None = Field(default=None, gt=0)
+    # "HH:MM:SS:FF", or "HH:MM:SS;FF" for drop-frame
+    start_timecode: str | None = Field(default=None, pattern=r"^\d{2}:[0-5]\d:[0-5]\d[:;]\d{2}$")
+    drop_frame: bool | None = None
+    audio_codec: str | None = None
+    audio_channels: int | None = Field(default=None, ge=0)
+    audio_sample_rate: int | None = Field(default=None, gt=0)
 
 
 class AssetResponse(BaseModel):
@@ -85,6 +108,7 @@ class AssetResponse(BaseModel):
     note: str | None = None
     note_author: str | None = None
     note_updated_at: str | None = None
+    video_facet: VideoFacetModel | None = None
 
 
 class AssetPageItem(BaseModel):
@@ -199,6 +223,7 @@ def page_assets(
     missing_ocr: bool = False,
     missing_scene_vision: bool = False,
     missing_transcription: bool = False,
+    missing_probe: bool = False,
     has_faces: bool | None = None,
     person_id: str | None = None,
     sort: str = "taken_at",
@@ -285,6 +310,7 @@ def page_assets(
         missing_ocr=missing_ocr,
         missing_scene_vision=missing_scene_vision,
         missing_transcription=missing_transcription,
+        missing_probe=missing_probe,
         has_faces=has_faces,
         person_id=person_id,
         sort=sort_col,
@@ -366,6 +392,7 @@ class RepairSummary(BaseModel):
     missing_video_scenes: int = 0
     missing_scene_vision: int = 0
     missing_transcription: int = 0
+    missing_probe: int = 0
     stale_search_sync: int = 0
 
 
@@ -394,6 +421,7 @@ def repair_summary(
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_video_scenes"]}) AS missing_video_scenes,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_scene_vision"]}) AS missing_scene_vision,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_transcription"]}) AS missing_transcription,
+                COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_probe"]}) AS missing_probe,
                 COUNT(*) FILTER (
                     WHERE EXISTS (
                         SELECT 1 FROM asset_metadata am
@@ -424,6 +452,7 @@ def repair_summary(
         missing_video_scenes=row.missing_video_scenes,
         missing_scene_vision=row.missing_scene_vision,
         missing_transcription=row.missing_transcription,
+        missing_probe=row.missing_probe,
         stale_search_sync=row.stale_search_sync,
     )
 
@@ -697,6 +726,9 @@ def get_asset_by_path(
     response.ai_description = ai_description
     response.ai_tags = ai_tags
     response.ocr_text = ocr_text
+    facet = AssetRepository(session).get_video_facet(asset.asset_id)
+    # Stored rows are returned as they are (validation is for writes).
+    response.video_facet = VideoFacetModel.model_construct(**facet) if facet else None
     return response
 
 
@@ -766,7 +798,28 @@ def get_asset(
     response.ai_description = ai_description
     response.ai_tags = ai_tags
     response.ocr_text = ocr_text
+    facet = AssetRepository(session).get_video_facet(asset.asset_id)
+    # Stored rows are returned as they are (validation is for writes).
+    response.video_facet = VideoFacetModel.model_construct(**facet) if facet else None
     return response
+
+
+@router.put("/{asset_id}/video-facet", response_model=VideoFacetModel)
+def put_video_facet(
+    asset_id: str,
+    body: VideoFacetModel,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> VideoFacetModel:
+    """Store a video's probe result (replaces any earlier one). Sets duration_sec."""
+    asset_repo = AssetRepository(session)
+    asset = asset_repo.get_by_id(asset_id)
+    if asset is None or asset.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    if asset.media_type != "video":
+        raise HTTPException(status_code=400, detail="Video facets are only for video assets")
+    asset_repo.upsert_video_facet(asset_id, body.model_dump())
+    LibraryRepository(session).bump_revision(asset.library_id)
+    return body
 
 
 @router.delete("/{asset_id}", status_code=204)
