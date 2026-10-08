@@ -95,7 +95,7 @@ fi
 HAVE_PY="$(sed -n 's/^version_info *= *\([0-9]*\.[0-9]*\).*/\1/p' "$APP_DIR/.venv/pyvenv.cfg" 2>/dev/null || true)"
 WANT_PY="$(grep -oE '[0-9]+\.[0-9]+' "$APP_DIR/.python-version" 2>/dev/null | head -1 || true)"
 # From here a failure may leave Lumiverb stopped (now, or by an earlier run): say so.
-trap 'rc=$?; if [[ $rc -ne 0 ]] && ! systemctl is-active --quiet lumiverb-api; then echo -e "${RED}  ✗ Lumiverb isn'"'"'t running. Fix the error above, then run update-api.sh again: it carries on from here.${NC}" >&2; fi' EXIT
+trap 'rc=$?; if [[ $rc -ne 0 ]] && ! systemctl is-active --quiet lumiverb-api; then echo -e "${RED}  ✗ Lumiverb isn'"'"'t running. Fix the error above, then run the update again (update.sh): it carries on from here.${NC}" >&2; fi' EXIT
 if [[ -n "$HAVE_PY" && -n "$WANT_PY" && "$HAVE_PY" != "$WANT_PY" ]]; then
   warn "Python changes from ${HAVE_PY} to ${WANT_PY}: building the new environment (a few GB) while Lumiverb keeps running"
   sudo -u "$SVC_USER" "$UV_BIN" python install "$WANT_PY"

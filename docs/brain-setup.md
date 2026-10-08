@@ -151,15 +151,24 @@ sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb library report-changes /mnt
 
 ## Updating
 
-```bash
-sudo bash /opt/lumiverb/scripts/update-api.sh
-```
+One command:
 
 ```bash
-sudo bash /opt/lumiverb/scripts/update-web.sh
+sudo bash /opt/lumiverb/scripts/update.sh
 ```
 
-`update-api.sh` keeps the worker's packages and restarts it. `update-web.sh` brings the nginx site up to date: playback streams go straight through, unbuffered, and their links (good for hours) stay out of the access logs, nginx's and the API's.
+It pulls the install's branch, then runs `update-api.sh` (packages, migrations, units, restarts; it keeps the worker's packages) and `update-web.sh` (the web build and the nginx site: playback streams go straight through, unbuffered, and their links, good for hours, stay out of the access logs, nginx's and the API's). It ends with a summary: the commits that came in, each service's state and the API's health.
+
+- **Another branch:** `--branch NAME` moves the install there and remembers it (in `/etc/lumiverb/env`, for the next update and for `deploy-api.sh`).
+- **The log:** everything also goes to `/var/log/lumiverb/update-<time>.log`, which belongs to whoever ran sudo, so it reads without sudo; `update-latest.log` is the newest. The last line says `Result: OK` or `Result: FAILED`. The last 20 are kept.
+- **A failure** stops the update where it happened and says where. Fix that and run it again.
+- **Never merges on the server:** a checkout with commits of its own stops at the pull.
+
+The first time, the install is still on `feat/brain`, which has no `update.sh`; move it to `main` and run it:
+
+```bash
+sudo -u lumiverb git -C /opt/lumiverb fetch origin && sudo -u lumiverb git -C /opt/lumiverb checkout main && sudo bash /opt/lumiverb/scripts/update.sh
+```
 
 The repo pins Python 3.12 (`.python-version`), the version the tests run on; this box's own Python is 3.14. The first update after the pin moves `/opt/lumiverb/.venv` to 3.12, which uv downloads for the `lumiverb` user along with a few GB of packages (torch, CUDA). It downloads everything into a side environment while Lumiverb keeps running, then stops the API and worker for the swap (seconds from the warm cache) and the rest of the update (migrations, units), typically under a minute, and starts them again. Every update ends by clearing uv's cache, which frees the old Python's packages. If anything fails while they're stopped, it says so: fix the error and run the update again, and it carries on.
 
