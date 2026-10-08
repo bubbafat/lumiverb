@@ -7,9 +7,14 @@ import type { AiMachine, AiSettings } from "../../api/client";
 const BRAIN = "http://172.18.0.6:11434/v1";
 const STUDIO = "http://10.10.10.1:11434/v1";
 const QWEN = "qwen3-vl:8b";
+const SPEACHES = "http://10.10.10.2:8000/v1";
+// What the built-in Whisper offers (faster-whisper's models).
+const WHISPERS = ["large-v3", "medium", "small"];
 const fetchMock = vi.fn();
 let role = "admin";
 let model = QWEN;
+// The transcripts job's model; off unless a test says.
+let whisper = "";
 let machines: AiMachine[] = [];
 // What each URL offers when asked; missing: unreachable.
 let offers: Record<string, string[]> = {};
@@ -18,16 +23,29 @@ const sent: { method: string; url: string; body: unknown }[] = [];
 function machine(over: Partial<AiMachine>): AiMachine {
   return {
     machine_id: `aim_${over.name}`, name: "Brain", api_url: BRAIN, has_key: false, jobs: ["vision"], at_once: 2,
-    enabled: true, status: { online: true, error: "", models: [QWEN], checked_at: new Date().toISOString() }, ...over,
+    enabled: true, built_in: false,
+    status: { online: true, error: "", models: [QWEN], checked_at: new Date().toISOString() }, ...over,
   };
 }
 
+function builtIn(over: Partial<AiMachine> = {}): AiMachine {
+  return machine({ machine_id: "aim_self", name: "Built in", api_url: "", jobs: ["transcripts"], at_once: 1,
+                   built_in: true, status: { online: true, error: "", models: WHISPERS, checked_at: new Date().toISOString() },
+                   ...over });
+}
+
+function job(name: string, label: string, chosen: string, builtInCan: boolean) {
+  const doing = machines.filter((m) => m.enabled && m.jobs.includes(name));
+  const offers = (m: AiMachine) => (m.built_in ? WHISPERS : m.status?.models ?? []);
+  return { job: name, label, model: chosen, machines: doing.length,
+           offering: doing.filter((m) => m.status?.online && offers(m).includes(chosen)).length,
+           choices: [...new Set(doing.flatMap(offers))].sort(), built_in: builtInCan };
+}
+
 function settings(): AiSettings {
-  const doing = machines.filter((m) => m.enabled && m.jobs.includes("vision"));
   return {
     machines,
-    jobs: [{ job: "vision", label: "Descriptions & text", model, machines: doing.length,
-             offering: doing.filter((m) => m.status?.online && m.status.models.includes(model)).length }],
+    jobs: [job("vision", "Descriptions & text", model, false), job("transcripts", "Transcripts", whisper, true)],
   };
 }
 
@@ -62,11 +80,16 @@ beforeEach(() => {
     if (m) {
       const target = machines.find((x) => x.machine_id === m[1])!;
       const after = method === "DELETE" ? null : { ...target, ...body };
-      const others = machines.filter((x) => x !== target && x.enabled && x.jobs.includes("vision"));
-      const stillDoes = after && after.enabled && after.jobs.includes("vision");
-      if (model && !others.length && !stillDoes && !leave) {
-        return err(409, "job_left_without_machine", "No other machine does descriptions & text.",
-                   { jobs: [{ job: "vision", label: "Descriptions & text", model }] });
+      if (target.built_in && (body?.api_url !== undefined || body?.api_key !== undefined)) {
+        return err(409, "built_in_machine", "The built-in machine is the worker's own computer: it has no URL or key.");
+      }
+      for (const [j, label, chosen] of [["vision", "Descriptions & text", model], ["transcripts", "Transcripts", whisper]]) {
+        const others = machines.filter((x) => x !== target && x.enabled && x.jobs.includes(j));
+        const stillDoes = after && after.enabled && after.jobs.includes(j);
+        if (chosen && !others.length && !stillDoes && !leave) {
+          return err(409, "job_left_without_machine", `No other machine does ${label.toLowerCase()}.`,
+                     { jobs: [{ job: j, label, model: chosen }] });
+        }
       }
       machines = after ? machines.map((x) => (x === target ? { ...after, has_key: body.api_key === undefined ? x.has_key : !!body.api_key } : x))
                        : machines.filter((x) => x !== target);
@@ -90,6 +113,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   role = "admin";
   model = QWEN;
+  whisper = "";
   machines = [];
   offers = {};
   sent.length = 0;
@@ -178,11 +202,88 @@ describe("AiSection", () => {
 
     fireEvent.change(within(form).getByLabelText("Endpoint URL"), { target: { value: STUDIO } });
     fireEvent.click(within(form).getByRole("button", { name: "Connect" }));
-    expect((await within(form).findByRole("alert")).textContent).toContain(`It doesn't offer ${QWEN}`);
+    await within(form).findByText(/Connected: offers llava:13b/);
+    const vision = within(form).getByRole("checkbox", { name: /Descriptions & text/ }) as HTMLInputElement;
+    expect(vision.checked).toBe(false); // it doesn't offer the model, so it isn't given the job
     const add = within(form).getByRole("button", { name: "Add" }) as HTMLButtonElement;
-    expect(add.disabled).toBe(true);
-    fireEvent.click(within(form).getByRole("checkbox", { name: /Descriptions & text/ }));
     expect(add.disabled).toBe(false); // it can join without the job
+    fireEvent.click(vision);
+    expect(within(form).getByRole("alert").textContent).toContain(`It doesn't offer ${QWEN}`);
+    expect(add.disabled).toBe(true);
+  });
+
+  it("Connect gives a new machine the jobs whose model it offers", async () => {
+    whisper = "small";
+    machines = [builtIn(), machine({ name: "Brain" })];
+    offers = { [SPEACHES]: ["small", "speaches-ai/Kokoro-82M-v1.0-ONNX"] };
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Add machine" }));
+    const form = screen.getByRole("form", { name: "Add a machine" });
+    const vision = within(form).getByRole("checkbox", { name: /Descriptions & text/ }) as HTMLInputElement;
+    const transcripts = within(form).getByRole("checkbox", { name: /Transcripts/ }) as HTMLInputElement;
+    expect([vision.checked, transcripts.checked]).toEqual([false, false]); // until it's checked
+    fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Speaches" } });
+    fireEvent.change(within(form).getByLabelText("Endpoint URL"), { target: { value: SPEACHES } });
+    fireEvent.click(within(form).getByRole("button", { name: "Connect" }));
+    await within(form).findByText(/Connected: offers small/);
+    expect([vision.checked, transcripts.checked]).toEqual([false, true]);
+    fireEvent.click(within(form).getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(screen.queryByRole("form", { name: "Add a machine" })).toBeNull());
+    expect((lastSent("POST", "/ai/machines")!.body as { jobs: string[] }).jobs).toEqual(["transcripts"]);
+  });
+
+  it("shows the built-in Whisper as this computer's, and it can't be removed", async () => {
+    whisper = "small";
+    machines = [builtIn(), machine({ name: "Brain" })];
+    renderSection();
+    const row = (await screen.findByText("Built in")).closest("li")!;
+    expect(within(row).getByText("Whisper on the worker's own computer")).toBeTruthy();
+    expect(within(row).getByText("Does: Transcripts · 1 at once")).toBeTruthy();
+    expect(within(row).queryByRole("button", { name: "Remove Built in" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Remove Brain" })).toBeTruthy();
+    expect(screen.getByText(/Transcripts:/, { selector: "span" }).closest("p")!.textContent).toContain("small");
+  });
+
+  it("edits the built-in Whisper: no URL, key or Connect; only the jobs it can do", async () => {
+    whisper = "small";
+    machines = [builtIn(), machine({ name: "Brain" })];
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Edit Built in" }));
+    const form = screen.getByRole("form", { name: "Edit Built in" });
+    expect(within(form).queryByLabelText("Endpoint URL")).toBeNull();
+    expect(within(form).queryByLabelText("API key")).toBeNull();
+    expect(within(form).queryByRole("button", { name: "Connect" })).toBeNull();
+    expect(within(form).getAllByRole("checkbox").map((c) => c.closest("label")!.textContent)).toEqual([
+      expect.stringContaining("Transcripts"), "Use this machine"]);
+    fireEvent.change(within(form).getByLabelText("Requests at once"), { target: { value: "2" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("form", { name: "Edit Built in" })).toBeNull());
+    expect(lastSent("PATCH", "/ai/machines/aim_self")!.body).toEqual({ name: "Built in", jobs: ["transcripts"], at_once: 2, enabled: true });
+    expect(await screen.findByText("Does: Transcripts · 2 at once")).toBeTruthy();
+  });
+
+  it("turning off the built-in Whisper when nothing else transcribes asks first", async () => {
+    whisper = "small";
+    machines = [builtIn(), machine({ name: "Brain" })];
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Edit Built in" }));
+    const form = screen.getByRole("form", { name: "Edit Built in" });
+    fireEvent.click(within(form).getByRole("checkbox", { name: "Use this machine" }));
+    fireEvent.click(within(form).getByRole("button", { name: "Save" }));
+    expect((await within(form).findByText(/No other machine does transcripts/)).textContent).toContain("it waits");
+    fireEvent.click(within(form).getByRole("button", { name: "Save anyway" }));
+    expect(await screen.findByText("Transcripts: paused")).toBeTruthy();
+    expect(lastSent("PATCH", "/ai/machines/aim_self")!.url).toContain("leave_jobs=true");
+  });
+
+  it("picks the transcripts model from what the machines doing them offer", async () => {
+    whisper = "small";
+    machines = [builtIn(), machine({ name: "Speaches", api_url: SPEACHES, jobs: ["transcripts"],
+                                     status: { online: true, error: "", models: ["small", "deepdml/faster-whisper-large-v3-turbo-ct2"], checked_at: null } })];
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Change the model for Transcripts" }));
+    const options = [...(screen.getByLabelText("Model for Transcripts") as HTMLSelectElement).options].map((o) => o.value);
+    expect(options).toEqual(["", "deepdml/faster-whisper-large-v3-turbo-ct2", "large-v3", "medium", "small"]);
   });
 
   it("edits a machine: a rename needs no Connect, and the saved key stays unless changed", async () => {
@@ -245,7 +346,7 @@ describe("AiSection", () => {
 });
 
 describe("aiHasProblem", () => {
-  const ok = { machines: [machine({})], jobs: [{ job: "vision", label: "Descriptions & text", model: QWEN, machines: 1, offering: 1 }] };
+  const ok = { machines: [machine({})], jobs: [{ job: "vision", label: "Descriptions & text", model: QWEN, machines: 1, offering: 1, choices: [QWEN], built_in: false }] };
   it("flags a job that can't run, or an offline machine doing one", () => {
     expect(aiHasProblem(ok)).toBe(false);
     expect(aiHasProblem({ ...ok, jobs: [{ ...ok.jobs[0], machines: 0, offering: 0 }], machines: [] })).toBe(true);

@@ -162,7 +162,8 @@ def test_machines_each_with_their_jobs_and_how_many_at_once(env, none):
     # What Connect found is what's known of it until the worker checks.
     assert studio["status"]["online"] is True and studio["status"]["models"] == [LLAVA, QWEN]
     assert _job(ai, "vision") == {"job": "vision", "label": "Descriptions & text", "model": "",
-                                  "machines": 2, "offering": 0, "choices": [LLAVA, QWEN]}
+                                  "machines": 2, "offering": 0, "choices": [LLAVA, QWEN],
+                                  "built_in": False}
     assert not brain["built_in"] and not studio["built_in"]
 
 
@@ -224,7 +225,8 @@ def test_a_jobs_model_must_be_offered_by_a_machine_doing_it(env, none):
     assert r.status_code == 200, r.text
     ai = r.json()
     assert _job(ai, "vision") == {"job": "vision", "label": "Descriptions & text", "model": QWEN,
-                                  "machines": 2, "offering": 1, "choices": [LLAVA, QWEN]}
+                                  "machines": 2, "offering": 1, "choices": [LLAVA, QWEN],
+                                  "built_in": False}
     # What saving found is each machine's status until the worker checks.
     assert _machine(ai, "Brain")["status"]["online"] is True
     studio = _machine(ai, "Studio")["status"]
@@ -490,7 +492,8 @@ def test_every_account_starts_with_the_built_in_whisper_doing_transcripts(env, n
         "name": "Built in", "api_url": "", "has_key": False, "jobs": ["transcripts"], "at_once": 1,
         "enabled": True, "status": None}
     assert _job(ai, "transcripts") == {"job": "transcripts", "label": "Transcripts", "model": "small",
-                                       "machines": 1, "offering": 0, "choices": BUILT_IN_MODELS}
+                                       "machines": 1, "offering": 0, "choices": BUILT_IN_MODELS,
+                                       "built_in": True}
 
 
 @pytest.mark.slow

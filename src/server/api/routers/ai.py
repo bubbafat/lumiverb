@@ -70,6 +70,8 @@ class JobOut(BaseModel):
     offering: int
     # The models those machines offer, to pick the job's from.
     choices: list[str] = []
+    # The built-in machine (the worker's own computer) can do it.
+    built_in: bool = False
 
 
 class AiSettings(BaseModel):
@@ -207,7 +209,7 @@ def _settings(ctrl: Session, tenant_id: str) -> AiSettings:
         offering = sum(1 for m in doing if m.online and model and model in _offers(m))
         choices = sorted({x for m in doing for x in _offers(m)})
         jobs.append(JobOut(job=job, label=label, model=model, machines=len(doing), offering=offering,
-                           choices=choices))
+                           choices=choices, built_in=job in BUILT_IN_JOBS))
     return AiSettings(
         machines=[MachineOut(machine_id=m.machine_id, name=m.name, api_url=m.api_url, has_key=bool(m.api_key),
                              jobs=list(m.jobs), at_once=m.at_once, enabled=m.enabled, built_in=m.built_in,
