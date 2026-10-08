@@ -26,6 +26,7 @@ A library is skipped, never failed: the next cycle tries again.
 from __future__ import annotations
 
 import fcntl
+import json
 import logging
 import os
 import time
@@ -112,13 +113,33 @@ class Retry:
 
 @dataclass
 class WorkerState:
-    """What the worker remembers between cycles (in memory only)."""
+    """What the worker remembers between cycles. Only full-scan times outlive
+    the process (save_full_scans), so a restart doesn't rescan everything."""
 
     last_full_scan: dict[str, float] = field(default_factory=dict)
     # library_id -> (what the library looked like after the last enrich, when).
     # None: enrichment was cut short, so it goes on next cycle.
     last_enrich: dict[str, tuple[tuple | None, float]] = field(default_factory=dict)
     retries: dict[str, Retry] = field(default_factory=dict)
+
+
+def load_full_scans(path: Path) -> dict[str, float]:
+    """When each library was last scanned in full, as an earlier run saved it; {} if unreadable."""
+    try:
+        saved = json.loads(path.read_text())["last_full_scan"]
+        return {str(library_id): float(when) for library_id, when in saved.items()}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return {}
+
+
+def save_full_scans(path: Path, scans: dict[str, float]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        part = path.with_name(path.name + ".part")
+        part.write_text(json.dumps({"last_full_scan": scans}))
+        part.replace(path)
+    except OSError as exc:
+        logger.warning("worker: couldn't save full-scan times to %s: %s", path, exc)
 
 
 class WorkerLock:
@@ -365,13 +386,19 @@ def run_forever(
     console = console or Console(force_terminal=False, width=120)
     if removed := clear_leftovers():
         logger.info("worker: removed %d half-made analysis proxies left by an earlier run", removed)
-    state = WorkerState()
+    # Beside the worker lock.
+    state_path = cache_dir("worker-state.json")
+    state = WorkerState(last_full_scan=load_full_scans(state_path))
+    saved = dict(state.last_full_scan)
     client = LumiverbClient()
     while True:
         try:
             run_cycle(client, state=state, console=console, full_scan_every=full_scan_every, only=only)
         except Exception:  # noqa: BLE001 — e.g. the API is restarting
             logger.exception("worker: cycle failed; trying again in %.0fs", poll)
+        if state.last_full_scan != saved:
+            save_full_scans(state_path, state.last_full_scan)
+            saved = dict(state.last_full_scan)
         if once or stop():
             return
         sleep(poll)

@@ -424,6 +424,38 @@ def test_worker_start_clears_proxies_cut_off_by_a_kill(home: Path, monkeypatch: 
 
 
 @pytest.mark.fast
+def test_full_scan_times_survive_a_restart(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Otherwise every deploy scans every library in full.
+    from src.client.cli import worker
+
+    def scanned(client, *, state, **kw):
+        state.last_full_scan["lib_1"] = 123.0
+
+    seen: list[dict] = []
+    monkeypatch.setattr(worker, "LumiverbClient", MagicMock())
+    monkeypatch.setattr(worker, "run_cycle", scanned)
+    worker.run_forever(once=True, console=Console(quiet=True))
+    monkeypatch.setattr(worker, "run_cycle", lambda client, *, state, **kw: seen.append(dict(state.last_full_scan)))
+    worker.run_forever(once=True, console=Console(quiet=True))
+    assert seen == [{"lib_1": 123.0}]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("content", ["not json", '["a list"]', '{"last_full_scan": {"lib_1": "soon"}}'])
+def test_an_unreadable_state_file_means_full_scans(home: Path, monkeypatch: pytest.MonkeyPatch, content: str) -> None:
+    from src.client.cli import worker
+
+    path = home / ".cache" / "lumiverb" / "worker-state.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(content)
+    seen: list[dict] = []
+    monkeypatch.setattr(worker, "LumiverbClient", MagicMock())
+    monkeypatch.setattr(worker, "run_cycle", lambda client, *, state, **kw: seen.append(dict(state.last_full_scan)))
+    worker.run_forever(once=True, console=Console(quiet=True))
+    assert seen == [{}]
+
+
+@pytest.mark.fast
 def test_clearing_leftovers_without_a_cache_is_fine(tmp_path: Path) -> None:
     from src.client.proxy.analysis_cache import clear_leftovers
 
