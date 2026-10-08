@@ -85,6 +85,8 @@ def install(tmp_path: Path):
         "LUMIVERB_NGINX_SITE": str(site),
         "SUDO_USER": "robert",
         "CALLS": str(calls),
+        "LUMIVERB_UPDATE_LOCK": str(tmp_path / "update.lock"),
+        "LUMIVERB_UPDATE_SETTLE": "0",
     }
     for leftover in ("LUMIVERB_UPDATE_LOG", "LUMIVERB_UPDATE_BEFORE", "LUMIVERB_UPDATE_BRANCH"):
         env.pop(leftover, None)
@@ -130,7 +132,7 @@ def test_the_log_is_the_invoking_user_s_and_latest_points_at_it(install):
     logs = sorted((install["tmp"] / "log").glob("update-2*.log"))
     assert len(logs) == 1
     assert (install["tmp"] / "log" / "update-latest.log").resolve() == logs[0].resolve()
-    assert f"chown robert {logs[0]}" in install["calls"].read_text()
+    assert f"chown -h robert {logs[0]}" in install["calls"].read_text()
     assert oct(logs[0].stat().st_mode & 0o777) == "0o640"
 
 
@@ -190,7 +192,8 @@ def test_an_api_that_doesn_t_answer_fails_the_update(install):
     out = _run(install, API_DOWN="1")
     assert out.returncode != 0
     assert "Result: FAILED" in _log(install)
-    assert "127.0.0.1:8100/health" in install["calls"].read_text()
+    calls = install["calls"].read_text()
+    assert "127.0.0.1:8100/health" in calls and "--max-time" in calls
 
 
 def test_no_nginx_site_skips_the_web_ui(install):
@@ -241,3 +244,121 @@ def test_without_sudo_it_says_so(install):
         pytest.skip("running as root")
     assert out.returncode != 0
     assert "sudo" in out.stdout + out.stderr
+
+
+def _lines(install) -> list[str]:
+    import re
+
+    return [re.sub(r"\x1b\[[0-9;]*m", "", line) for line in _log(install).splitlines()]
+
+
+def test_the_result_is_a_plain_line(install):
+    assert _run(install).returncode == 0
+    assert "Result: OK" in _lines(install)
+
+
+def test_ctrl_c_during_the_update_says_it_failed(install):
+    # Ctrl-C reaches the script while update-api.sh runs: it must not end "OK".
+    _push(install, "scripts/update-api.sh", 'kill -INT "$PPID"; sleep 0.3; echo "api end"\n', branch="feat/brain")
+    out = _run(install)
+    assert out.returncode != 0
+    lines = _lines(install)
+    assert "Result: FAILED" in lines and "Result: OK" not in lines
+    assert "update-web ran" not in _log(install)
+
+
+def test_a_terminated_update_still_logs_its_result(install):
+    # SIGTERM (or a hangup) to the whole process group, tee included.
+    _push(install, "scripts/update-api.sh", "kill -TERM 0; sleep 1\n", branch="feat/brain")
+    out = subprocess.run(["bash", str(install["app"] / "scripts" / "update.sh")], capture_output=True, text=True,
+                         timeout=60, env=install["env"], start_new_session=True)
+    assert out.returncode != 0
+    assert "Result: FAILED" in _lines(install)
+
+
+def test_a_branch_without_update_sh_changes_nothing(install):
+    seed = install["seed"]
+    _git(seed, "checkout", "-q", "-b", "old", "main")
+    _git(seed, "rm", "-q", "scripts/update.sh")
+    _git(seed, "commit", "-qm", "before update.sh")
+    _git(seed, "push", "-q", str(install["tmp"] / "origin.git"), "old")
+    out = _run(install, "--branch", "old")
+    assert out.returncode != 0
+    assert "update.sh" in out.stdout + out.stderr
+    assert _git(install["app"], "branch", "--show-current") == "feat/brain"
+    assert "BRANCH=feat/brain" in (install["conf"] / "env").read_text()
+    assert "update-api ran" not in _log(install)
+    assert "Result: FAILED" in _lines(install)
+
+
+def test_two_updates_cant_run_at_once(install):
+    import fcntl
+
+    with open(install["env"]["LUMIVERB_UPDATE_LOCK"], "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        out = _run(install)
+    assert out.returncode != 0
+    assert "already running" in out.stdout + out.stderr
+    assert not list((install["tmp"] / "log").glob("update-2*.log"))  # the running one's log stays the latest
+
+
+def test_without_sudo_the_log_is_root_s_alone(install):
+    env = {k: v for k, v in install["env"].items() if k != "SUDO_USER"}
+    out = subprocess.run(["bash", str(install["app"] / "scripts" / "update.sh")], capture_output=True, text=True,
+                         timeout=60, env=env)
+    assert out.returncode == 0, out.stdout + out.stderr
+    [log] = (install["tmp"] / "log").glob("update-2*.log")
+    assert oct(log.stat().st_mode & 0o777) == "0o600"
+
+
+def test_a_branch_name_git_allows_is_remembered_exactly(install):
+    seed = install["seed"]
+    _git(seed, "checkout", "-q", "-b", "fix&co|1", "main")
+    _git(seed, "push", "-q", str(install["tmp"] / "origin.git"), "fix&co|1")
+    out = _run(install, "--branch", "fix&co|1")
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert "BRANCH=fix&co|1\n" in (install["conf"] / "env").read_text()
+
+
+def test_a_name_that_isnt_a_branch_changes_nothing(install):
+    out = _run(install, "--branch", "no such branch")
+    assert out.returncode != 0
+    assert _git(install["app"], "branch", "--show-current") == "feat/brain"
+
+
+def test_moving_to_an_older_commit_says_so(install):
+    _push(install, "README", "newer\n", branch="feat/brain")
+    assert _run(install).returncode == 0
+    out = _run(install, "--branch", "main")  # main is behind feat/brain now
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert any("No new commits: moved to an older one, 1 back" in line for line in _lines(install))
+
+
+def test_the_first_run_can_come_from_the_new_branch_itself(install):
+    """The bootstrap: the install's branch predates update.sh, so the script
+    is read from the branch it's moving to (`git show ... | bash -s`)."""
+    app, seed = install["app"], install["seed"]
+    _git(seed, "checkout", "-q", "-b", "legacy", "main")
+    _git(seed, "rm", "-q", "scripts/update.sh")
+    _git(seed, "commit", "-qm", "legacy tip")
+    _git(seed, "push", "-q", str(install["tmp"] / "origin.git"), "legacy")
+    _git(app, "fetch", "-q", "origin")
+    _git(app, "checkout", "-q", "-b", "legacy", "origin/legacy")
+    out = subprocess.run(["bash", "-s", "--", "--branch", "main"], input=UPDATE.read_text(), capture_output=True,
+                         text=True, timeout=60, env=install["env"])
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert _git(app, "branch", "--show-current") == "main"
+    lines = _lines(install)
+    assert any(line.strip().startswith("Before:") and "legacy tip" in line for line in lines)
+    assert "Result: OK" in lines
+
+
+def test_ctrl_c_in_the_terminal_still_logs_that_it_failed(install):
+    # A terminal's Ctrl-C reaches every process in the group: the script,
+    # update-api.sh and tee alike.
+    _push(install, "scripts/update-api.sh", "kill -INT 0; sleep 1\n", branch="feat/brain")
+    out = subprocess.run(["bash", str(install["app"] / "scripts" / "update.sh")], capture_output=True, text=True,
+                         timeout=60, env=install["env"], start_new_session=True)
+    assert out.returncode != 0
+    lines = _lines(install)
+    assert "Result: FAILED" in lines and "Result: OK" not in lines
