@@ -44,6 +44,22 @@ class Library(SQLModel, table=True):
     )
 
 
+class LibraryChange(SQLModel, table=True):
+    """A path the storage's own machine saw change, waiting to be scanned."""
+
+    __tablename__ = "library_changes"
+    __table_args__ = (UniqueConstraint("library_id", "rel_path", name="uq_library_changes_library_path"),)
+
+    change_id: str = Field(primary_key=True)
+    library_id: str = Field(foreign_key="libraries.library_id", nullable=False, index=True)
+    rel_path: str = Field(nullable=False)
+    reported_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+    version: int = Field(sa_column=Column(BigInteger, nullable=False))
+
+
 class LibraryPathFilter(SQLModel, table=True):
     __tablename__ = "library_path_filters"
 
@@ -127,6 +143,13 @@ class Asset(SQLModel, table=True):
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
+    # Full-length low-resolution copy with audio, for analysis only.
+    analysis_proxy_key: str | None = Field(default=None, nullable=True)
+    analysis_proxy_sha256: str | None = Field(default=None, nullable=True)
+    analysis_proxy_generated_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
     error_message: str | None = Field(default=None, nullable=True)
     created_at: datetime = Field(
         default_factory=utcnow,
@@ -140,6 +163,10 @@ class Asset(SQLModel, table=True):
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
+    # Why deleted_at is set: "user" (trashed by the user; survives rescans)
+    # or "missing" / None (file not found by the scanner; restored when it
+    # reappears).
+    deleted_reason: str | None = Field(default=None, nullable=True)
     search_synced_at: datetime | None = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
@@ -149,6 +176,9 @@ class Asset(SQLModel, table=True):
     transcript_srt: str | None = Field(default=None, nullable=True)
     transcript_text: str | None = Field(default=None, nullable=True)
     transcript_language: str | None = Field(default=None, nullable=True)
+    # "manual" or a provider id (e.g. "whisper"). Machine output never
+    # replaces a manual transcript.
+    transcript_source: str | None = Field(default=None, nullable=True)
     transcribed_at: datetime | None = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
@@ -271,14 +301,14 @@ class AssetEmbedding(SQLModel, table=True):
 
 
 # ---------------------------------------------------------------------------
-# Collections (ADR-006)
+# Projects (ADR-006)
 # ---------------------------------------------------------------------------
 
 
-class Collection(SQLModel, table=True):
-    __tablename__ = "collections"
+class Project(SQLModel, table=True):
+    __tablename__ = "projects"
 
-    collection_id: str = Field(primary_key=True)
+    project_id: str = Field(primary_key=True)
     name: str = Field(nullable=False)
     description: str | None = Field(default=None, nullable=True)
     cover_asset_id: str | None = Field(
@@ -289,6 +319,17 @@ class Collection(SQLModel, table=True):
     sort_order: str = Field(default="manual", nullable=False)
     type: str = Field(default="static", nullable=False)  # static | smart
     saved_query: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    status: str = Field(default="active", nullable=False)  # active | archived
+    archived_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+    # In the trash when set; separate from status, so restore puts it back
+    # active or archived as it was.
+    deleted_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
@@ -299,11 +340,11 @@ class Collection(SQLModel, table=True):
     )
 
 
-class CollectionAsset(SQLModel, table=True):
-    __tablename__ = "collection_assets"
+class ProjectAsset(SQLModel, table=True):
+    __tablename__ = "project_assets"
 
-    collection_id: str = Field(
-        foreign_key="collections.collection_id", primary_key=True, nullable=False
+    project_id: str = Field(
+        foreign_key="projects.project_id", primary_key=True, nullable=False
     )
     asset_id: str = Field(
         foreign_key="assets.asset_id", primary_key=True, nullable=False
@@ -424,6 +465,63 @@ class Person(SQLModel, table=True):
     representative_face_id: str | None = Field(
         default=None, foreign_key="faces.face_id", nullable=True
     )
+    created_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
+class VideoFacetRow(SQLModel, table=True):
+    """One ffprobe pass per video: what an editor export needs (ADR-016).
+
+    Derived data; re-probing replaces the row.
+    """
+
+    __tablename__ = "video_facets"
+
+    asset_id: str = Field(foreign_key="assets.asset_id", primary_key=True)
+    duration_sec: float | None = Field(default=None, nullable=True)
+    container: str | None = Field(default=None, nullable=True)
+    video_codec: str | None = Field(default=None, nullable=True)
+    width: int | None = Field(default=None, nullable=True)  # display width, rotation applied
+    height: int | None = Field(default=None, nullable=True)
+    rotation: int = Field(default=0, nullable=False)
+    frame_rate_num: int | None = Field(default=None, nullable=True)
+    frame_rate_den: int | None = Field(default=None, nullable=True)
+    start_timecode: str | None = Field(default=None, nullable=True)
+    drop_frame: bool | None = Field(default=None, nullable=True)
+    audio_codec: str | None = Field(default=None, nullable=True)
+    audio_channels: int | None = Field(default=None, nullable=True)
+    audio_sample_rate: int | None = Field(default=None, nullable=True)
+    probed_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
+class IgnoredFile(SQLModel, table=True):
+    """A file whose trash the user emptied. Its asset row is gone, but scans
+    and ingest keep skipping the path while the file is still on disk."""
+
+    __tablename__ = "ignored_files"
+
+    library_id: str = Field(foreign_key="libraries.library_id", primary_key=True)
+    rel_path: str = Field(primary_key=True)
+    sha256: str | None = Field(default=None, nullable=True)
+    created_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
+class FacePersonRejection(SQLModel, table=True):
+    """"This face is not this person" — recorded when a user un-assigns a
+    face, so auto-assignment never puts it back."""
+
+    __tablename__ = "face_person_rejections"
+
+    face_id: str = Field(foreign_key="faces.face_id", primary_key=True)
+    person_id: str = Field(foreign_key="people.person_id", primary_key=True)
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),

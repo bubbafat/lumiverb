@@ -19,7 +19,7 @@ os.environ.setdefault("SQLALCHEMY_NULLPOOL", "1")
 # pyvips imports libvips via cffi.dlopen, which on macOS only searches the
 # system dyld paths. uv's standalone Python builds do not have
 # /opt/homebrew/lib on that search list, so contributors who installed
-# libvips via Homebrew see ImportErrors at collection time. Pre-populating
+# libvips via Homebrew see ImportErrors at project time. Pre-populating
 # DYLD_FALLBACK_LIBRARY_PATH from the Homebrew prefix at the top of the
 # test session lets dlopen find the dylib without forcing every contributor
 # to export the variable in their shell.
@@ -35,6 +35,10 @@ if sys.platform == "darwin":
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
+
+# The Postgres image tests run against. Keep it the version production runs
+# (scripts/deploy-api.sh); LUMIVERB_TEST_PG_IMAGE overrides it to try another.
+PG_IMAGE = os.environ.get("LUMIVERB_TEST_PG_IMAGE", "pgvector/pgvector:pg18")
 
 
 def _ensure_psycopg2(url: str) -> str:
@@ -91,3 +95,8 @@ class _AuthClient:
         kwargs.setdefault("headers", {})
         kwargs["headers"].update(self._headers)
         return self._client.post(path, **kwargs)
+
+    def delete(self, path: str, **kwargs: object) -> object:
+        kwargs.setdefault("headers", {})
+        kwargs["headers"].update(self._headers)
+        return self._client.request("DELETE", path, **kwargs)

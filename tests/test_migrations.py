@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from testcontainers.postgres import PostgresContainer
 from uuid import uuid4
+from tests.conftest import PG_IMAGE
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +91,7 @@ def test_tenant_migration_down_revisions_exist() -> None:
 def test_control_plane_migrations_upgrade_and_downgrade() -> None:
     """Run control plane migrations up and down on a fresh Postgres with pgvector."""
     # pgvector image so we can enable the extension (control plane may not use it; tenant DB does)
-    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
+    with PostgresContainer(PG_IMAGE) as postgres:
         url = postgres.get_connection_url()
         # Ensure psycopg2 driver for Alembic
         if url.startswith("postgresql://"):
@@ -158,7 +159,7 @@ def test_api_keys_role_replaces_is_admin() -> None:
     Control plane: migration c8d9e0f1a2b3 adds role, backfills from is_admin, drops is_admin.
     Existing is_admin=TRUE rows get role='admin' after upgrade.
     """
-    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
+    with PostgresContainer(PG_IMAGE) as postgres:
         url = postgres.get_connection_url()
         if url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
@@ -242,7 +243,7 @@ def test_phase5_users_schema_and_api_keys_role_backfill() -> None:
     prev_rev = "d9e0f1a2b3c4"
     target_rev = "e1f2a3b4c5d6"
 
-    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
+    with PostgresContainer(PG_IMAGE) as postgres:
         url = postgres.get_connection_url()
         if url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
@@ -352,13 +353,14 @@ TENANT_TABLES = [
     "faces",
     "people",
     "face_person_matches",
+    "library_changes",
 ]
 
 
 @pytest.mark.migration
 def test_tenant_schema_upgrade_and_downgrade() -> None:
     """Run tenant migrations up and down on a fresh Postgres with pgvector."""
-    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
+    with PostgresContainer(PG_IMAGE) as postgres:
         url = postgres.get_connection_url()
         if url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
@@ -388,7 +390,7 @@ def test_tenant_schema_upgrade_and_downgrade() -> None:
                     "('libraries', 'library_path_filters', 'tenant_path_filter_defaults', "
                     "'scans', 'assets', 'video_scenes', 'video_index_chunks', "
                     "'asset_metadata', 'worker_jobs', 'system_metadata', "
-                    "'faces', 'people', 'face_person_matches', 'pipeline_locks')"
+                    "'faces', 'people', 'face_person_matches', 'pipeline_locks', 'library_changes')"
                 )
             )
             tables = {row[0] for row in r}
@@ -454,7 +456,7 @@ def test_tenant_schema_upgrade_and_downgrade() -> None:
                     "('libraries', 'library_path_filters', 'tenant_path_filter_defaults', "
                     "'scans', 'assets', 'video_scenes', 'video_index_chunks', "
                     "'asset_metadata', 'worker_jobs', 'system_metadata', "
-                    "'faces', 'people', 'face_person_matches', 'pipeline_locks')"
+                    "'faces', 'people', 'face_person_matches', 'pipeline_locks', 'library_changes')"
                 )
             )
             tables = {row[0] for row in r}
@@ -467,7 +469,7 @@ def test_face_detection_migration_columns_and_indexes() -> None:
     prev_rev = "e5f6g7h8i9j0"
     target_rev = "f6g7h8i9j0k1"
 
-    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
+    with PostgresContainer(PG_IMAGE) as postgres:
         url = postgres.get_connection_url()
         if url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
@@ -597,7 +599,7 @@ def test_faces_person_id_denormalized_migration() -> None:
     prev_rev = "g7h8i9j0k1l3"
     target_rev = "h8i9j0k1l2m4"
 
-    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
+    with PostgresContainer(PG_IMAGE) as postgres:
         url = postgres.get_connection_url()
         if url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
@@ -729,7 +731,7 @@ def test_migration_marks_invalid_ai_vision_missing_proxy_failed() -> None:
     target_rev = "x1y2z3a4b5c6"
     err = "Invalid ai_vision job: missing proxy_key (video proxy deferred or proxy not ready)"
 
-    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
+    with PostgresContainer(PG_IMAGE) as postgres:
         url = postgres.get_connection_url()
         if url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
@@ -855,3 +857,84 @@ def test_migration_marks_invalid_ai_vision_missing_proxy_failed() -> None:
 
             assert by_id[good_img_job][1] == "pending"
             assert by_id[good_img_job][2] is None
+
+
+@pytest.mark.migration
+def test_preserve_human_data_migration_backfills_existing_rows() -> None:
+    """r3s4t5u6v7w8 on a tenant with data: person-made face matches become
+    confirmed, machine matches don't, confirmation_count follows, and NFD
+    rel_paths become NFC unless that would collide with another row."""
+    import unicodedata
+
+    before_rev, target_rev = "q2r3s4t5u6v7", "r3s4t5u6v7w8"
+    nfc = unicodedata.normalize("NFC", "Café.mov")
+    nfd = unicodedata.normalize("NFD", nfc)
+    clash_nfc = unicodedata.normalize("NFC", "Pâté.mov")
+    clash_nfd = unicodedata.normalize("NFD", clash_nfc)
+
+    with PostgresContainer(PG_IMAGE) as postgres:
+        url = postgres.get_connection_url().replace("postgresql://", "postgresql+psycopg2://", 1)
+        engine = create_engine(url)
+        with engine.connect() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            conn.commit()
+        env = os.environ.copy()
+        env["ALEMBIC_TENANT_URL"] = url
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+        def alembic(*args: str) -> None:
+            result = subprocess.run(
+                [sys.executable, "-m", "alembic", "-c", "alembic-tenant.ini", *args],
+                cwd=project_root, env=env, capture_output=True, text=True,
+            )
+            assert result.returncode == 0, (result.stdout, result.stderr)
+
+        alembic("upgrade", before_rev)
+        with engine.connect() as conn:
+            conn.execute(text(
+                "INSERT INTO libraries (library_id, name, root_path, status, revision, created_at, updated_at)"
+                " VALUES ('lib_1', 'L', '/x', 'active', 0, now(), now())"
+            ))
+            for aid, rp in (("a_nfd", nfd), ("a_clash_nfc", clash_nfc), ("a_clash_nfd", clash_nfd)):
+                conn.execute(text(
+                    "INSERT INTO assets (asset_id, library_id, rel_path, file_size, media_type,"
+                    " availability, status, created_at, updated_at, search_synced_at)"
+                    " VALUES (:a, 'lib_1', :rp, 1, 'video', 'online', 'discovered', now(), now(), now())"
+                ), {"a": aid, "rp": rp})
+            conn.execute(text(
+                "INSERT INTO people (person_id, display_name, created_by_user, dismissed,"
+                " confirmation_count, created_at) VALUES ('p1', 'Pat', true, false, 0, now())"
+            ))
+            for fid in ("f_named", "f_auto"):
+                conn.execute(text(
+                    "INSERT INTO faces (face_id, asset_id, detection_model, detection_model_version,"
+                    " created_at) VALUES (:f, 'a_nfd', 'insightface', 'buffalo_l', now())"
+                ), {"f": fid})
+            conn.execute(text(
+                "INSERT INTO face_person_matches (match_id, face_id, person_id, confidence, confirmed,"
+                " created_at) VALUES ('m1', 'f_named', 'p1', NULL, false, now()),"
+                " ('m2', 'f_auto', 'p1', 0.8, false, now())"
+            ))
+            conn.commit()
+
+        alembic("upgrade", target_rev)
+
+        with engine.connect() as conn:
+            confirmed = dict(conn.execute(text(
+                "SELECT face_id, confirmed FROM face_person_matches"
+            )).fetchall())
+            count = conn.execute(text(
+                "SELECT confirmation_count FROM people WHERE person_id = 'p1'"
+            )).scalar()
+            paths = dict(conn.execute(text("SELECT asset_id, rel_path FROM assets")).fetchall())
+            unsynced = {row[0] for row in conn.execute(text(
+                "SELECT asset_id FROM assets WHERE search_synced_at IS NULL"
+            ))}
+        assert confirmed == {"f_named": True, "f_auto": False}
+        assert count == 1
+        assert paths["a_nfd"] == nfc
+        # Normalizing would collide with the NFC row: both left as they were.
+        assert paths["a_clash_nfc"] == clash_nfc
+        assert paths["a_clash_nfd"] == clash_nfd
+        # Only the renamed row is re-indexed (Quickwit still has the old path).
+        assert unsynced == {"a_nfd"}

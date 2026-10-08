@@ -26,7 +26,7 @@ from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
 
-from tests.conftest import _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
+from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 
 # ---- fixture --------------------------------------------------------------
@@ -40,7 +40,7 @@ def submission_client() -> Iterator[tuple[TestClient, dict[str, str], str, list[
     iterate over, plus one video asset for transcript tests.
     """
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    with PostgresContainer("pgvector/pgvector:pg16") as control_postgres:
+    with PostgresContainer(PG_IMAGE) as control_postgres:
         control_url = _ensure_psycopg2(control_postgres.get_connection_url())
         engine = create_engine(control_url)
         with engine.connect() as conn:
@@ -68,7 +68,7 @@ def submission_client() -> Iterator[tuple[TestClient, dict[str, str], str, list[
                 api_key = r.json()["api_key"]
                 tenant_id = r.json()["tenant_id"]
 
-        with PostgresContainer("pgvector/pgvector:pg16") as tenant_postgres:
+        with PostgresContainer(PG_IMAGE) as tenant_postgres:
             tenant_url = _ensure_psycopg2(tenant_postgres.get_connection_url())
             _provision_tenant_db(tenant_url, project_root)
 

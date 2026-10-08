@@ -2,15 +2,15 @@ import { StrictMode } from "react";
 import type { ReactElement } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import AppShell from "./components/AppShell";
 import AdminPage from "./pages/AdminPage";
 import AdminUsersPage from "./pages/AdminUsersPage";
 import BrowsePage from "./pages/BrowsePage";
-import CollectionsPage from "./pages/CollectionsPage";
+import ProjectsPage from "./pages/ProjectsPage";
 import UnifiedBrowsePage from "./pages/UnifiedBrowsePage";
-import CollectionDetailPage from "./pages/CollectionDetailPage";
-import PublicCollectionPage from "./pages/PublicCollectionPage";
+import ProjectDetailPage from "./pages/ProjectDetailPage";
+import PublicProjectPage from "./pages/PublicProjectPage";
 import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 import LibrariesPage from "./pages/LibrariesPage";
 import LibrarySettingsPage from "./pages/LibrarySettingsPage";
@@ -22,6 +22,7 @@ import PersonDetailPage from "./pages/PersonDetailPage";
 import SettingsPage from "./pages/SettingsPage";
 import AccountSection from "./pages/settings/AccountSection";
 import PreferencesSection from "./pages/settings/PreferencesSection";
+import PlaybackSection from "./pages/settings/PlaybackSection";
 import SecuritySection from "./pages/settings/SecuritySection";
 import ApiKeysSection from "./pages/settings/ApiKeysSection";
 import { getApiKey } from "./api/client";
@@ -52,12 +53,23 @@ function RequireAuth({ children }: { children: ReactElement }) {
   return children;
 }
 
+/** Pre-rename URLs (/collections, /public/collections) — keep old links working. */
+function LegacyProjectRedirect({ base }: { base: string }) {
+  const { projectId } = useParams();
+  const location = useLocation();
+  return <Navigate to={`${base}${projectId ? `/${projectId}` : ""}${location.search}`} replace />;
+}
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <Routes>
-          <Route path="/public/collections/:collectionId" element={<PublicCollectionPage />} />
+          <Route path="/public/projects/:projectId" element={<PublicProjectPage />} />
+          <Route
+            path="/public/collections/:projectId"
+            element={<LegacyProjectRedirect base="/public/projects" />}
+          />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
@@ -88,20 +100,25 @@ createRoot(document.getElementById("root")!).render(
               element={<Navigate to="/browse?favorite=true" replace />}
             />
             <Route
-              path="collections"
+              path="projects"
               element={
                 <RequireAuth>
-                  {<CollectionsPage />}
+                  {<ProjectsPage />}
                 </RequireAuth>
               }
             />
             <Route
-              path="collections/:collectionId"
+              path="projects/:projectId"
               element={
                 <RequireAuth>
-                  {<CollectionDetailPage />}
+                  {<ProjectDetailPage />}
                 </RequireAuth>
               }
+            />
+            <Route path="collections" element={<LegacyProjectRedirect base="/projects" />} />
+            <Route
+              path="collections/:projectId"
+              element={<LegacyProjectRedirect base="/projects" />}
             />
             <Route
               path="people"
@@ -154,6 +171,7 @@ createRoot(document.getElementById("root")!).render(
               <Route index element={<Navigate to="/settings/account" replace />} />
               <Route path="account" element={<AccountSection />} />
               <Route path="preferences" element={<PreferencesSection />} />
+              <Route path="playback" element={<PlaybackSection />} />
               <Route path="security" element={<SecuritySection />} />
               <Route path="keys" element={<ApiKeysSection />} />
             </Route>

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getApiKey, handleUnauthorized } from "./client";
+import { getApiKey, handleUnauthorized, publicQuery } from "./client";
 
 type MediaType = "thumbnail" | "proxy" | "video-preview";
 
@@ -27,7 +27,8 @@ export function useAuthenticatedImage(
     enabled = true,
     isPublic = false,
     publicLibraryId,
-  }: { enabled?: boolean; isPublic?: boolean; publicLibraryId?: string } = {},
+    publicProjectId,
+  }: { enabled?: boolean; isPublic?: boolean; publicLibraryId?: string; publicProjectId?: string } = {},
 ): { url: string | null; isLoading: boolean; error: Error | null; generating: boolean } {
   const [url, setUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(enabled);
@@ -46,11 +47,8 @@ export function useAuthenticatedImage(
     let objectUrl: string | null = null;
     let cancelled = false;
 
-    const publicQuery =
-      isPublic && publicLibraryId
-        ? `?public_library_id=${encodeURIComponent(publicLibraryId)}`
-        : "";
-    const fetchUrl = `/v1${path}${publicQuery}`;
+    const qs = isPublic ? publicQuery(publicLibraryId, publicProjectId) : "";
+    const fetchUrl = `/v1${path}${qs}`;
     const headers = isPublic ? {} : authHeaders();
 
     fetch(fetchUrl, { headers })
@@ -82,7 +80,7 @@ export function useAuthenticatedImage(
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       setUrl(null);
     };
-  }, [assetId, type, enabled, isPublic, publicLibraryId]);
+  }, [assetId, type, enabled, isPublic, publicLibraryId, publicProjectId]);
 
   return { url, isLoading, error, generating };
 }

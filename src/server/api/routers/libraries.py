@@ -5,7 +5,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlmodel import Session
-from src.server.api.dependencies import get_tenant_session, require_editor
+from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor, require_signed_in
+from src.server.api.errors import DecisionRequiredError
 from src.server.database import get_control_session
 from src.shared.io_utils import normalize_path_prefix
 from src.shared.utils import utcnow
@@ -47,6 +48,32 @@ class LibraryListItem(BaseModel):
 
 class EmptyTrashResponse(BaseModel):
     deleted: int
+
+
+class EmptyLibraryTrashRequest(BaseModel):
+    # Required when clips in the trashed libraries are in projects: deleting
+    # them for good takes them out of those projects.
+    remove_from_projects: bool = False
+
+
+class IgnoredPathItem(BaseModel):
+    rel_path: str
+    # "trashed": in the trash by the user's choice. "emptied": the user
+    # emptied its trash; the file may still be on disk.
+    reason: str
+
+
+class IgnoredPathPage(BaseModel):
+    items: list[IgnoredPathItem]
+    next_cursor: str | None
+
+
+class UnignoreRequest(BaseModel):
+    rel_paths: list[str]
+
+
+class UnignoreResponse(BaseModel):
+    removed: int
 
 
 class DirectoryItem(BaseModel):
@@ -112,7 +139,7 @@ class LibraryHealthItem(BaseModel):
     pending: int
 
 
-@router.get("/health", response_model=list[LibraryHealthItem])
+@router.get("/health", response_model=list[LibraryHealthItem], dependencies=[Depends(require_signed_in)])
 def list_library_health(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> list[LibraryHealthItem]:
@@ -165,11 +192,28 @@ def empty_trash(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
+    body: EmptyLibraryTrashRequest | None = None,
 ) -> EmptyTrashResponse:
-    """Hard delete all trashed libraries for this tenant. Returns count of libraries deleted."""
+    """Hard delete all trashed libraries for this tenant. Returns count of
+    libraries deleted. 409 in_projects, with the projects in details, when
+    their clips are in projects and remove_from_projects isn't set."""
     tenant_id = getattr(request.state, "tenant_id", None)
     repo = LibraryRepository(session)
     trashed = repo.get_trashed()
+    if trashed and not (body and body.remove_from_projects):
+        from src.server.api.routers.assets import project_usage_summary
+
+        usage = project_usage_summary(session, user_id, library_ids=[lib.library_id for lib in trashed])
+        if usage.assets_in_projects:
+            n = usage.assets_in_projects
+            raise DecisionRequiredError(
+                "in_projects",
+                f"{n} {'clip' if n == 1 else 'clips'} from the trashed libraries "
+                f"{'is' if n == 1 else 'are'} in projects; deleting them for good removes them from "
+                "those projects. Send remove_from_projects: true to go ahead.",
+                usage.model_dump(),
+            )
     deleted = 0
     for lib in trashed:
         purge_library_from_quickwit(lib.library_id, tenant_id=tenant_id)
@@ -192,12 +236,14 @@ def get_library(
     library = repo.get_by_id(library_id)
     if library is None:
         raise HTTPException(status_code=404, detail="Library not found")
-    if getattr(request.state, "is_public_request", False) and not library.is_public:
+    is_public_request = getattr(request.state, "is_public_request", False)
+    if is_public_request and not library.is_public:
         raise HTTPException(status_code=404, detail="Not found")
     return LibraryResponse(
         library_id=library.library_id,
         name=library.name,
-        root_path=library.root_path,
+        # Where the files are on the server isn't a visitor's business.
+        root_path="" if is_public_request else library.root_path,
         is_public=library.is_public,
         cover_asset_id=repo.resolve_cover(library),
     )
@@ -268,6 +314,43 @@ def delete_library(
     if was_public:
         with get_control_session() as ctrl_session:
             PublicLibraryRepository(ctrl_session).delete(library_id)
+
+
+@router.get("/{library_id}/ignored-paths", response_model=IgnoredPathPage, dependencies=[Depends(require_signed_in)])
+def page_ignored_paths(
+    library_id: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    after: str | None = None,
+    limit: int = 500,
+) -> IgnoredPathPage:
+    """Paths a scan must skip because the user trashed them, by rel_path.
+
+    Lumiverb never deletes originals, so these files may still be on disk.
+    Ingest refuses them with 409.
+    """
+    if LibraryRepository(session).get_by_id(library_id) is None:
+        raise HTTPException(status_code=404, detail="Library not found")
+    limit = max(1, min(limit, 1000))
+    rows = AssetRepository(session).page_ignored_paths(library_id, after=after, limit=limit)
+    return IgnoredPathPage(
+        items=[IgnoredPathItem(rel_path=p, reason=k) for p, k in rows],
+        next_cursor=rows[-1][0] if len(rows) == limit else None,
+    )
+
+
+@router.delete("/{library_id}/ignored-paths", response_model=UnignoreResponse)
+def unignore_paths(
+    library_id: str,
+    body: UnignoreRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
+) -> UnignoreResponse:
+    """Forget emptied-trash records so the next scan ingests those files again.
+
+    Assets still in the trash are restored with POST /v1/assets/{id}/restore instead.
+    """
+    removed = AssetRepository(session).unignore(library_id, body.rel_paths)
+    return UnignoreResponse(removed=removed)
 
 
 @router.get("/{library_id}/directories", response_model=list[DirectoryItem])
@@ -343,6 +426,7 @@ class LibraryRevisionResponse(BaseModel):
 @router.get("/{library_id}/revision", response_model=LibraryRevisionResponse)
 def get_library_revision(
     library_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> LibraryRevisionResponse:
     """Lightweight endpoint for UI polling. Returns the library revision counter
@@ -350,7 +434,7 @@ def get_library_revision(
     re-fetching full asset pages."""
     lib_repo = LibraryRepository(session)
     library = lib_repo.get_by_id(library_id)
-    if library is None:
+    if library is None or (getattr(request.state, "is_public_request", False) and not library.is_public):
         raise HTTPException(status_code=404, detail="Library not found")
     asset_count = AssetRepository(session).count_by_library(library_id)
     return LibraryRevisionResponse(

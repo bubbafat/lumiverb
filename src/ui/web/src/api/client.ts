@@ -5,9 +5,9 @@ import type {
   AssetPageItem,
   BatchAddResponse,
   BatchRemoveResponse,
-  CollectionAssetsResponse,
-  CollectionItem,
-  CollectionListResponse,
+  ProjectAssetsResponse,
+  ProjectItem,
+  ProjectListResponse,
   CurrentUser,
   DirectoryNode,
   EmptyTrashResponse,
@@ -28,6 +28,10 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    /** The envelope's error code, e.g. "in_projects" for a 409 that needs the user's say. */
+    public code?: string,
+    /** The facts behind the code, e.g. which projects would lose clips. */
+    public details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "ApiError";
@@ -172,13 +176,19 @@ async function apiFetch<T>(
       handleUnauthorized();
     }
     let message = res.statusText;
+    let code: string | undefined;
+    let details: Record<string, unknown> | undefined;
     try {
-      const json = (await res.json()) as { error?: { message?: string } };
+      const json = (await res.json()) as {
+        error?: { code?: string; message?: string; details?: Record<string, unknown> };
+      };
       message = json?.error?.message ?? message;
+      code = json?.error?.code;
+      details = json?.error?.details;
     } catch {
       // ignore
     }
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, code, details);
   }
   if (res.status === 204) {
     return null as T;
@@ -238,10 +248,21 @@ export async function updateLibraryVisibility(
   });
 }
 
-export async function emptyTrash(): Promise<EmptyTrashResponse> {
+/** Delete trashed libraries for good. If their clips are in projects, the
+ * server refuses (409 in_projects, with the projects) unless
+ * removeFromProjects says the user agreed. */
+export async function emptyTrash(removeFromProjects = false): Promise<EmptyTrashResponse> {
   return apiFetch<EmptyTrashResponse>("/libraries/empty-trash", {
     method: "POST",
+    body: { remove_from_projects: removeFromProjects },
   });
+}
+
+/** What deleting clips for good would take them out of (a 409 in_projects's details). */
+export interface ProjectUsage {
+  assets_in_projects: number;
+  projects: { project_id: string; name: string; status: string; in_trash: boolean; clips: number }[];
+  other_projects: number;
 }
 
 export async function listDirectories(
@@ -567,11 +588,44 @@ export async function mergePerson(targetPersonId: string, sourcePersonId: string
   });
 }
 
-export async function getAsset(assetId: string, publicLibraryId?: string): Promise<AssetDetail> {
-  const qs = publicLibraryId
-    ? `?public_library_id=${encodeURIComponent(publicLibraryId)}`
-    : "";
-  return apiFetch<AssetDetail>(`/assets/${assetId}${qs}`);
+/** The query string a public page adds: its library, or its project. */
+export function publicQuery(publicLibraryId?: string, publicProjectId?: string): string {
+  if (publicProjectId) return `?public_project_id=${encodeURIComponent(publicProjectId)}`;
+  if (publicLibraryId) return `?public_library_id=${encodeURIComponent(publicLibraryId)}`;
+  return "";
+}
+
+export async function getAsset(assetId: string, publicLibraryId?: string, publicProjectId?: string): Promise<AssetDetail> {
+  return apiFetch<AssetDetail>(`/assets/${assetId}${publicQuery(publicLibraryId, publicProjectId)}`);
+}
+
+/** A signed link a <video> element can stream and seek (no auth header needed). */
+export interface Playback {
+  url: string;
+  expires_at: string;
+  /** The full-length analysis proxy, or the 10-second preview until it exists. */
+  source: "analysis_proxy" | "preview";
+  /** Seconds the link plays; null means the whole video. */
+  max_seconds: number | null;
+}
+
+export async function getPlayback(assetId: string, publicLibraryId?: string, publicProjectId?: string): Promise<Playback> {
+  return apiFetch<Playback>(`/assets/${assetId}/playback${publicQuery(publicLibraryId, publicProjectId)}`);
+}
+
+export interface TenantSettings {
+  /** Seconds of each video playback serves signed in; null means the whole video. */
+  video_preview_max_seconds: number | null;
+  /** The same on public pages, never more than the above; 10 until set. */
+  public_video_preview_max_seconds: number | null;
+}
+
+export async function getTenantSettings(): Promise<TenantSettings> {
+  return apiFetch<TenantSettings>("/tenant/settings");
+}
+
+export async function updateTenantSettings(update: Partial<TenantSettings>): Promise<TenantSettings> {
+  return apiFetch<TenantSettings>("/tenant/settings", { method: "PATCH", body: update });
 }
 
 export async function findSimilar(params: {
@@ -751,21 +805,41 @@ export async function revokeApiKey(keyId: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Collections
+// Projects
 // ---------------------------------------------------------------------------
 
-export async function listCollections(): Promise<CollectionItem[]> {
-  const res = await apiFetch<CollectionListResponse>("/collections");
+export type ProjectStatus = "active" | "archived";
+/** "all" is active and archived; "trashed" is your own trash. */
+export type ProjectView = ProjectStatus | "all" | "trashed";
+
+/** Active projects by default; archived ones leave the sidebar and pickers,
+ * and trashed ones appear only in the trash. */
+export async function listProjects(
+  status: ProjectView = "active",
+): Promise<ProjectItem[]> {
+  const qs = status === "active" ? "" : `?status=${status}`;
+  const res = await apiFetch<ProjectListResponse>(`/projects${qs}`);
   return res.items;
 }
 
-export async function getCollection(
-  collectionId: string,
-): Promise<CollectionItem> {
-  return apiFetch<CollectionItem>(`/collections/${collectionId}`);
+/** Archive (or restore) a project. Archived projects keep their clips. */
+export async function setProjectStatus(
+  projectId: string,
+  status: ProjectStatus,
+): Promise<ProjectItem> {
+  return apiFetch<ProjectItem>(`/projects/${projectId}`, {
+    method: "PATCH",
+    body: { status },
+  });
 }
 
-export async function createCollection(
+export async function getProject(
+  projectId: string,
+): Promise<ProjectItem> {
+  return apiFetch<ProjectItem>(`/projects/${projectId}`);
+}
+
+export async function createProject(
   name: string,
   opts?: {
     description?: string;
@@ -775,15 +849,15 @@ export async function createCollection(
     type?: string;
     saved_query?: Record<string, unknown>;
   },
-): Promise<CollectionItem> {
-  return apiFetch<CollectionItem>("/collections", {
+): Promise<ProjectItem> {
+  return apiFetch<ProjectItem>("/projects", {
     method: "POST",
     body: { name, ...opts },
   });
 }
 
-export async function updateCollection(
-  collectionId: string,
+export async function updateProject(
+  projectId: string,
   body: {
     name?: string;
     description?: string | null;
@@ -792,57 +866,88 @@ export async function updateCollection(
     cover_asset_id?: string | null;
     saved_query?: { q?: string; filters: Record<string, unknown>; library_id?: string } | null;
   },
-): Promise<CollectionItem> {
-  return apiFetch<CollectionItem>(`/collections/${collectionId}`, {
+): Promise<ProjectItem> {
+  return apiFetch<ProjectItem>(`/projects/${projectId}`, {
     method: "PATCH",
     body,
   });
 }
 
-export async function deleteCollection(
-  collectionId: string,
-): Promise<void> {
-  return apiFetch<void>(`/collections/${collectionId}`, { method: "DELETE" });
+/** Move a project to the trash. Restore brings it back as it was. */
+export async function trashProject(projectId: string): Promise<void> {
+  return apiFetch<void>(`/projects/${projectId}`, { method: "DELETE" });
 }
 
-export async function listCollectionAssets(
-  collectionId: string,
+/** Take a project out of the trash, back to active or archived as it was.
+ * withClips says what to do with its clips in the trash; the server refuses
+ * (409 clips_in_trash) without it when there are some. */
+export async function restoreProject(
+  projectId: string,
+  withClips?: boolean,
+): Promise<{ restored_clips: number; trashed_clips: number; missing_clips: number }> {
+  return apiFetch<{ restored_clips: number; trashed_clips: number; missing_clips: number }>(`/projects/${projectId}/restore`, {
+    method: "POST",
+    body: withClips === undefined ? {} : { with_clips: withClips },
+  });
+}
+
+/** Delete trashed projects for good: these ones, or the whole trash. Their
+ * clips stay in the library. */
+export async function emptyProjectTrash(projectIds?: string[]): Promise<{ deleted: number }> {
+  return apiFetch<{ deleted: number }>("/projects/empty-trash", {
+    method: "POST",
+    body: projectIds ? { project_ids: projectIds } : {},
+  });
+}
+
+/** Restore the clips in a project that someone trashed. They come back
+ * everywhere; clips whose files went missing are only counted. */
+export async function restoreProjectClips(
+  projectId: string,
+): Promise<{ restored: number; missing: number }> {
+  return apiFetch<{ restored: number; missing: number }>(`/projects/${projectId}/restore-clips`, {
+    method: "POST",
+  });
+}
+
+export async function listProjectAssets(
+  projectId: string,
   after?: string,
   limit = 200,
-): Promise<CollectionAssetsResponse> {
+): Promise<ProjectAssetsResponse> {
   const qs = new URLSearchParams();
   if (after) qs.set("after", after);
   qs.set("limit", String(limit));
-  return apiFetch<CollectionAssetsResponse>(
-    `/collections/${collectionId}/assets?${qs.toString()}`,
+  return apiFetch<ProjectAssetsResponse>(
+    `/projects/${projectId}/assets?${qs.toString()}`,
   );
 }
 
-export async function addAssetsToCollection(
-  collectionId: string,
+export async function addAssetsToProject(
+  projectId: string,
   assetIds: string[],
 ): Promise<BatchAddResponse> {
-  return apiFetch<BatchAddResponse>(`/collections/${collectionId}/assets`, {
+  return apiFetch<BatchAddResponse>(`/projects/${projectId}/assets`, {
     method: "POST",
     body: { asset_ids: assetIds },
   });
 }
 
-export async function removeAssetsFromCollection(
-  collectionId: string,
+export async function removeAssetsFromProject(
+  projectId: string,
   assetIds: string[],
 ): Promise<BatchRemoveResponse> {
-  return apiFetch<BatchRemoveResponse>(`/collections/${collectionId}/assets`, {
+  return apiFetch<BatchRemoveResponse>(`/projects/${projectId}/assets`, {
     method: "DELETE",
     body: { asset_ids: assetIds },
   });
 }
 
-export async function reorderCollection(
-  collectionId: string,
+export async function reorderProject(
+  projectId: string,
   assetIds: string[],
 ): Promise<void> {
-  return apiFetch<void>(`/collections/${collectionId}/reorder`, {
+  return apiFetch<void>(`/projects/${projectId}/reorder`, {
     method: "PATCH",
     body: { asset_ids: assetIds },
   });
@@ -968,3 +1073,117 @@ export async function deleteNote(assetId: string): Promise<void> {
   await apiFetch<void>(`/assets/${assetId}/note`, { method: "DELETE" });
 }
 
+
+// ---------------------------------------------------------------------------
+// Send to editor
+// ---------------------------------------------------------------------------
+
+export interface ExportFormat {
+  id: string;
+  label: string;
+  file_extension: string;
+}
+
+export async function listExportFormats(): Promise<ExportFormat[]> {
+  const res = await apiFetch<{ items: ExportFormat[] }>("/export/formats");
+  return res.items;
+}
+
+export interface ProjectExportFile {
+  blob: Blob;
+  filename: string;
+  /** Photos in the project that the export left out (video only for now). */
+  skippedStills: number;
+  /** Videos with no known length, left out (a zero-length clip breaks Final Cut). */
+  skippedNoDuration: number;
+  /** Videos exported at a fallback frame rate because they haven't been probed. */
+  unprobed: number;
+  /** Clips someone trashed, left out until restored. */
+  skippedTrashed: number;
+  /** Clips whose files went missing, left out until they're back. */
+  skippedMissing: number;
+  /** Clips whose library is in the trash, left out. */
+  skippedLibraryTrashed: number;
+}
+
+function filenameFromDisposition(header: string | null): string | null {
+  if (!header) return null;
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(header);
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded[1]);
+    } catch {
+      /* fall through to the plain form */
+    }
+  }
+  const plain = /filename="([^"]+)"/i.exec(header);
+  return plain ? plain[1] : null;
+}
+
+/** Export a project as a bin of master clips for an editor. */
+export async function exportProject(
+  projectId: string,
+  format: string,
+  prefix?: string,
+): Promise<ProjectExportFile> {
+  const qs = new URLSearchParams({ format });
+  if (prefix) qs.set("prefix", prefix);
+  const url = `/v1/projects/${projectId}/export?${qs.toString()}`;
+  let res = await fetch(url, { headers: authHeaders() });
+  if (res.status === 401 && (await tryRefresh())) {
+    res = await fetch(url, { headers: authHeaders() });
+  }
+  if (!res.ok) {
+    let message = `Export failed (${res.status})`;
+    try {
+      const body = await res.json();
+      message = body?.error?.message ?? body?.detail ?? message;
+    } catch {
+      /* not JSON */
+    }
+    throw new ApiError(res.status, message);
+  }
+  return {
+    blob: await res.blob(),
+    filename: filenameFromDisposition(res.headers.get("Content-Disposition")) ?? "project-export",
+    skippedStills: Number(res.headers.get("X-Lumiverb-Skipped-Stills") ?? 0) || 0,
+    skippedNoDuration: Number(res.headers.get("X-Lumiverb-Skipped-No-Duration") ?? 0) || 0,
+    unprobed: Number(res.headers.get("X-Lumiverb-Unprobed") ?? 0) || 0,
+    skippedTrashed: Number(res.headers.get("X-Lumiverb-Skipped-Trashed") ?? 0) || 0,
+    skippedMissing: Number(res.headers.get("X-Lumiverb-Skipped-Missing") ?? 0) || 0,
+    skippedLibraryTrashed: Number(res.headers.get("X-Lumiverb-Skipped-Library-Trashed") ?? 0) || 0,
+  };
+}
+
+const DEFAULT_EXPORT_FORMAT_KEY = "lumiverb.defaultExportFormat";
+const DEFAULT_EXPORT_PREFIX_KEY = "lumiverb.defaultExportPrefix";
+
+/** The format the Export button uses without asking; null until the user picks one. */
+export function getDefaultExportFormat(): string | null {
+  try {
+    return localStorage.getItem(DEFAULT_EXPORT_FORMAT_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** The media location saved with the default format, if any. */
+export function getDefaultExportPrefix(): string | null {
+  try {
+    return localStorage.getItem(DEFAULT_EXPORT_PREFIX_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Remember a format (and the media location to use with it) for one-click Export. */
+export function setDefaultExportFormat(format: string | null, prefix?: string): void {
+  try {
+    if (format) localStorage.setItem(DEFAULT_EXPORT_FORMAT_KEY, format);
+    else localStorage.removeItem(DEFAULT_EXPORT_FORMAT_KEY);
+    if (format && prefix) localStorage.setItem(DEFAULT_EXPORT_PREFIX_KEY, prefix);
+    else localStorage.removeItem(DEFAULT_EXPORT_PREFIX_KEY);
+  } catch {
+    /* storage unavailable: the chooser just opens each time */
+  }
+}

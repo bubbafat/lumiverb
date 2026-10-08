@@ -1,14 +1,23 @@
 """FastAPI application entry point."""
 
+import math
 import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
+from src.server.api.errors import DecisionRequiredError, decision_required_handler
 from src.server.api.middleware import TenantResolutionMiddleware
+from src.shared.logging_config import hide_stream_links
+
+# uvicorn has set up its loggers by the time it imports the app.
+hide_stream_links()
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -34,16 +43,18 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
-from src.server.api.routers import admin, assets, collections, keys, libraries, me, path_filters, tenant, trash, video
+from src.server.api.routers import admin, assets, changes, projects, keys, libraries, me, path_filters, tenant, trash, video
 from src.server.api.routers.auth import router as auth_router
 from src.server.api.routers.users import router as users_router
 from src.server.api.routers.artifacts import router as artifacts_router
+from src.server.api.routers.playback import router as playback_router
 from src.server.api.routers.ingest import router as ingest_router
 from src.server.api.routers.maintenance import router as maintenance_router
 from src.server.api.routers.upgrade import router as upgrade_router
 from src.server.api.routers.facets import router as facets_router
 from src.server.api.routers.similarity import router as similarity_router
-from src.server.api.routers.public_collections import router as public_collections_router
+from src.server.api.routers.public_projects import router as public_projects_router
+from src.server.api.routers.export import router as export_router
 from src.server.api.routers.ratings import router as ratings_router
 from src.server.api.routers.query import router as query_router
 from src.server.api.routers.filters import router as filters_router
@@ -59,6 +70,26 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Lumiverb API", version="0.1.0", lifespan=lifespan)
+
+
+app.add_exception_handler(DecisionRequiredError, decision_required_handler)
+
+
+@app.exception_handler(RequestValidationError)
+async def _request_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """FastAPI's default 422, except that it can echo any input: the default
+    crashes when the rejected input holds inf or NaN (not valid JSON)."""
+
+    def finite(value):
+        if isinstance(value, float) and not math.isfinite(value):
+            return str(value)
+        if isinstance(value, dict):
+            return {k: finite(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [finite(v) for v in value]
+        return value
+
+    return JSONResponse(status_code=422, content={"detail": finite(jsonable_encoder(exc.errors()))})
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(TenantResolutionMiddleware)
 app.include_router(auth_router)
@@ -67,6 +98,7 @@ app.include_router(admin.router)
 app.include_router(tenant.router)
 app.include_router(path_filters.router)
 app.include_router(libraries.router)
+app.include_router(changes.router)
 app.include_router(artifacts_router)
 app.include_router(ingest_router)
 app.include_router(ratings_router)
@@ -76,9 +108,16 @@ app.include_router(people_router)
 app.include_router(faces_router)
 app.include_router(filters_router)
 app.include_router(facets_router)
+app.include_router(playback_router)
 app.include_router(assets.router)
-app.include_router(collections.router)
-app.include_router(public_collections_router)
+app.include_router(projects.router, prefix="/v1/projects", tags=["projects"])
+app.include_router(public_projects_router, prefix="/v1/public/projects", tags=["public_projects"])
+# Pre-rename paths, kept until the macOS/iOS apps use /v1/projects (ADR-016).
+app.include_router(projects.router, prefix="/v1/collections", deprecated=True, include_in_schema=False)
+app.include_router(
+    public_projects_router, prefix="/v1/public/collections", deprecated=True, include_in_schema=False
+)
+app.include_router(export_router)
 app.include_router(video.router)
 app.include_router(keys.router)
 app.include_router(me.router)

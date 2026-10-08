@@ -26,7 +26,7 @@ from src.server.upgrade.steps.backfill_artifact_sha256 import (
     BackfillSceneRepSha256Step,
     BackfillThumbnailSha256Step,
 )
-from tests.conftest import _ensure_psycopg2, _provision_tenant_db
+from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +195,7 @@ def test_proxy_run_writes_hash_for_existing_file(tmp_path: Path) -> None:
 def backfill_db():
     """Provision a bare tenant DB; yield (engine, session_factory)."""
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    with PostgresContainer("pgvector/pgvector:pg16") as pg:
+    with PostgresContainer(PG_IMAGE) as pg:
         url = _ensure_psycopg2(pg.get_connection_url())
         _provision_tenant_db(url, project_root)
         engine = create_engine(url)

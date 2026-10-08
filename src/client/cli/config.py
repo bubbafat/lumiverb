@@ -23,6 +23,18 @@ class CLIConfig(BaseModel):
     ocr_batch_size: int = 25
     whisper_model: str = "small"
     transcribe_concurrency: int = 1
+    # Library roots as stored on the server -> where they are on this
+    # machine, by path prefix (src/client/cli/roots.py).
+    root_map: dict[str, str] = {}
+    # Analysis proxies (src/client/video/analysis_proxy.py) and their cache.
+    analysis_proxy_max_edge: int = 960
+    analysis_proxy_encoder: str = "libx264"
+    analysis_cache_gb: float = 50.0
+    # Where caches, and the worker's lock and state, go instead of ~/.cache,
+    # when XDG_CACHE_HOME isn't set (src/client/cache_dir.py). The brain's
+    # install sets it to the data disk, so a manual `worker --once` finds the
+    # service's lock.
+    cache_home: str = ""
 
 
 def _config_path() -> Path:

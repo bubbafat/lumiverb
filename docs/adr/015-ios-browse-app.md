@@ -1,5 +1,7 @@
 # ADR-015: iOS Browse App + Ratings & Collections
 
+> **Note (2026-10-07):** ADR-016 renamed collections to projects on the server and web (`/v1/projects`, `/v1/public/projects`, `project_id`). The Swift code below still uses `/v1/collections` and `collection_id`, which the server keeps serving as a deprecated alias until the apps are updated.
+
 ## Status
 
 Proposed

@@ -7,15 +7,16 @@ ownership live here; logic, schemas, and thresholds do not — read the code.
 
 ## Stack & topology
 
-Python 3.12 (FastAPI + SQLModel + Postgres 16 + Quickwit), React 18 +
+Python 3.12 (FastAPI + SQLModel + Postgres 18 + Quickwit), React 18 +
 Vite + TanStack web UI, Swift 5.9 / SwiftUI / CoreML / Vision for native
 macOS + iOS (shared `LumiverbKit` package, XcodeGen project).
 
 Today FastAPI is the only persistent service. CLI + macOS run local
 enrichment and POST results back; iOS is browse-only. Direction is
 ADR-016: a Linux "brain" schedules all processing against read-only
-storage, human data is never overwritten by derived data, and today's
-"collections" become projects. Quickwit sidecar with a
+storage, human data is never overwritten by derived data, and what used
+to be "collections" are projects (`/v1/projects`; `/v1/collections` is a
+deprecated alias for the Swift apps). Quickwit sidecar with a
 Postgres fallback. Auth: JWT (web) + API keys (CLI), both
 `Authorization: Bearer <token>`; roles `admin` / `editor` / `viewer`.
 
@@ -57,7 +58,9 @@ quickwit/     Quickwit index schemas
 | Token persistence (Swift clients) | `LumiverbKit/Auth/{AuthManager,KeychainHelper,FileTokenStore}.swift`. `TokenStore` protocol with two implementations: `KeychainHelper` (Security framework `kSecClassGenericPassword`) and `FileTokenStore` (`~/Library/Application Support/io.lumiverb.app/credentials.json`, mode 0600). **macOS defaults to `FileTokenStore`** because the legacy macOS keychain prompts the user per-access for ad-hoc dev builds (rebuilds rotate binary identity, busting any "Always Allow" ACL). **iOS uses `KeychainHelper`** explicitly — iOS keychain is data-protection by default and never prompts. `AuthManager` caches the token in memory after first read so refresh calls don't re-hit the store. |
 | DDL migrations | `migrations/control/versions/`, `migrations/tenant/versions/`. Run via `scripts/migrate.sh` |
 | Online data backfills | `src/server/upgrade/` (`steps/`, `registry.py`, `runner.py`). For long-running migrations that can't run in one Alembic txn |
-| Video transcription | Client: `src/client/cli/repair.py` (ffmpeg → faster-whisper). Server: `api/routers/assets.py`, `server/srt.py`. Index `lumiverb_{tenant}_transcripts` |
+| Video transcription | Client: `src/client/cli/repair.py` (ffmpeg → faster-whisper, reading the analysis proxy). Server: `api/routers/assets.py`, `server/srt.py`. Index `lumiverb_{tenant}_transcripts` |
+| The brain (scan + enrich service) | `src/client/cli/worker.py` (`lumiverb worker`), `roots.py` (library roots mapped to this machine), `routers/changes.py` (change reports from the Mac). Setup and ports: `docs/brain-setup.md` |
+| Analysis proxies | Render: `src/client/video/analysis_proxy.py`. Cache: `src/client/proxy/analysis_cache.py`. Stored as the `analysis_proxy` artifact (`routers/artifacts.py`) |
 | Filter algebra | `src/server/models/query_filter.py` (23 leaf types), `filter_registry.py` (parsing + capabilities). Web: `src/ui/web/src/lib/queryFilter.ts`. Swift: `LumiverbKit/Models/QueryFilter.swift` |
 | Unified query endpoint | `src/server/api/routers/query.py` — single `GET /v1/query?f=prefix:value` replaces old `/v1/browse` + `/v1/search`. Candidate-set pattern for text search (Quickwit → Postgres filters) |
 | Filter capabilities | `src/server/api/routers/filters.py` — `GET /v1/filters/capabilities` returns all filter types for generic client rendering |
@@ -92,9 +95,9 @@ Standard incantations work (`uvicorn src.server.api.main:app --reload`,
 
 ## Tests
 
-- Python: `uv run pytest -m fast` (no DB/AI), `-m slow` (testcontainers Postgres), `ai` (real inference, opt-in). Bare `pytest` runs fast + slow.
+- Python: `uv run pytest -m fast` (no DB/AI), `-m slow` (testcontainers Postgres 18, `PG_IMAGE` in `tests/conftest.py`), `ai` (real inference, opt-in). Bare `pytest` runs fast + slow.
 - Swift: XCTest in `LumiverbKit`. **No macOS-target test bundle** — testable code must live in LumiverbKit.
-- Web UI: no component render tests yet.
+- Web UI: `npx vitest run` in `src/ui/web` (Testing Library component tests sit beside their components), plus `npx tsc --noEmit -p .`.
 
 ---
 
@@ -106,6 +109,8 @@ Standard incantations work (`uvicorn src.server.api.main:app --reload`,
 - Errors: `{"error": {"code", "message", "details"}}`.
 - Multipart uploads. No webhooks, no source serving, no rate limiting.
 - Routes match in **definition order** — static before parameterized.
+- **The API requires the user's say** for surprising outcomes: the request carries the choice (e.g. `remove_from_projects`, `with_clips`) or gets a 409 in the error envelope with the facts, so every client must ask (`api/errors.py` `DecisionRequiredError`; cursor-api.md "Decisions the API requires").
+- Deleting goes delete → trash → restore | delete forever, for assets and projects (libraries have a trash, no restore yet).
 
 ---
 

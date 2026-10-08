@@ -5,17 +5,19 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from sqlmodel import Session
 
-from src.server.api.dependencies import get_current_user_id, get_tenant_session
+from src.shared.io_utils import normalize_rel_path
+from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor, require_signed_in
 from src.shared import asset_status
 from src.shared.io_utils import normalize_path_prefix
 from src.server.repository.tenant import AssetMetadataRepository, AssetRepository, LibraryRepository
+from src.server.models.tenant import Asset
 from src.server.storage.local import get_storage
 from src.shared.utils import utcnow
 
@@ -37,6 +39,29 @@ class UpsertAssetRequest(BaseModel):
 
 class UpsertAssetResponse(BaseModel):
     action: str  # added | updated | skipped
+
+
+class VideoFacetModel(BaseModel):
+    """One ffprobe pass over a video (see src/client/video/probe.py).
+
+    Validated on the way in: a malformed value would break every export of
+    every project that holds the clip.
+    """
+
+    duration_sec: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    container: str | None = None
+    video_codec: str | None = None
+    width: int | None = Field(default=None, gt=0)  # display width: rotation applied
+    height: int | None = Field(default=None, gt=0)
+    rotation: Literal[0, 90, 180, 270] = 0  # degrees clockwise to display upright
+    frame_rate_num: int | None = Field(default=None, gt=0)
+    frame_rate_den: int | None = Field(default=None, gt=0)
+    # "HH:MM:SS:FF", or "HH:MM:SS;FF" for drop-frame
+    start_timecode: str | None = Field(default=None, pattern=r"^\d{2}:[0-5]\d:[0-5]\d[:;]\d{2}$")
+    drop_frame: bool | None = None
+    audio_codec: str | None = None
+    audio_channels: int | None = Field(default=None, ge=0)
+    audio_sample_rate: int | None = Field(default=None, gt=0)
 
 
 class AssetResponse(BaseModel):
@@ -84,6 +109,7 @@ class AssetResponse(BaseModel):
     note: str | None = None
     note_author: str | None = None
     note_updated_at: str | None = None
+    video_facet: VideoFacetModel | None = None
 
 
 class AssetPageItem(BaseModel):
@@ -112,6 +138,7 @@ class AssetPageItem(BaseModel):
     gps_lon: float | None = None
     face_count: int | None = None
     created_at: str | None = None  # ISO8601
+    has_analysis_proxy: bool = False
 
 
 class AssetPageResponse(BaseModel):
@@ -133,6 +160,11 @@ def _encode_cursor(sort_col: str, sort_value: object, asset_id: str) -> str:
 
 class BatchTrashRequest(BaseModel):
     asset_ids: list[str]
+    # "user": trashed by a person; survives rescans. "missing": the scanner
+    # no longer finds the file; restored if it reappears. Omitted = "missing"
+    # behavior (what scanners sent before reasons existed).
+    reason: Literal["user", "missing"] | None = None
+
 
 
 class BatchTrashResponse(BaseModel):
@@ -193,6 +225,8 @@ def page_assets(
     missing_ocr: bool = False,
     missing_scene_vision: bool = False,
     missing_transcription: bool = False,
+    missing_probe: bool = False,
+    missing_analysis_proxy: bool = False,
     has_faces: bool | None = None,
     person_id: str | None = None,
     sort: str = "taken_at",
@@ -233,6 +267,9 @@ def page_assets(
         library = lib_repo.get_by_id(library_id)
         if library is None or not library.is_public:
             raise HTTPException(status_code=404, detail="Not found")
+        # Ratings are a signed-in person's; who's in a photo isn't for visitors to probe.
+        if person_id or any(v is not None for v in (favorite, star_min, star_max, color, has_rating)):
+            raise HTTPException(status_code=403, detail="That filter isn't available on public pages")
 
     sort_col = sort if sort in SORT_COLUMNS else "taken_at"
     direction = dir if dir in ("asc", "desc") else "desc"
@@ -279,6 +316,8 @@ def page_assets(
         missing_ocr=missing_ocr,
         missing_scene_vision=missing_scene_vision,
         missing_transcription=missing_transcription,
+        missing_probe=missing_probe,
+        missing_analysis_proxy=missing_analysis_proxy,
         has_faces=has_faces,
         person_id=person_id,
         sort=sort_col,
@@ -333,6 +372,7 @@ def page_assets(
             gps_lon=a.gps_lon,
             face_count=a.face_count,
             created_at=a.created_at.isoformat() if a.created_at else None,
+            has_analysis_proxy=a.analysis_proxy_key is not None,
         )
         for a in assets
     ]
@@ -360,10 +400,12 @@ class RepairSummary(BaseModel):
     missing_video_scenes: int = 0
     missing_scene_vision: int = 0
     missing_transcription: int = 0
+    missing_probe: int = 0
+    missing_analysis_proxy: int = 0
     stale_search_sync: int = 0
 
 
-@router.get("/repair-summary", response_model=RepairSummary)
+@router.get("/repair-summary", response_model=RepairSummary, dependencies=[Depends(require_signed_in)])
 def repair_summary(
     session: Annotated[Session, Depends(get_tenant_session)],
     library_id: str,
@@ -388,6 +430,8 @@ def repair_summary(
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_video_scenes"]}) AS missing_video_scenes,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_scene_vision"]}) AS missing_scene_vision,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_transcription"]}) AS missing_transcription,
+                COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_probe"]}) AS missing_probe,
+                COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_analysis_proxy"]}) AS missing_analysis_proxy,
                 COUNT(*) FILTER (
                     WHERE EXISTS (
                         SELECT 1 FROM asset_metadata am
@@ -418,6 +462,8 @@ def repair_summary(
         missing_video_scenes=row.missing_video_scenes,
         missing_scene_vision=row.missing_scene_vision,
         missing_transcription=row.missing_transcription,
+        missing_probe=row.missing_probe,
+        missing_analysis_proxy=row.missing_analysis_proxy,
         stale_search_sync=row.stale_search_sync,
     )
 
@@ -457,32 +503,34 @@ def _stream_asset_file(
         raise HTTPException(status_code=404, detail="Asset not found")
     if getattr(request.state, "is_public_request", False):
         public_library_id = request.query_params.get("public_library_id")
-        public_collection_id = request.query_params.get("public_collection_id")
+        public_project_id = request.query_params.get("public_project_id") or request.query_params.get(
+            "public_collection_id"  # pre-rename name
+        )
         if public_library_id:
             if asset.library_id != public_library_id:
                 raise HTTPException(status_code=403, detail="Asset does not belong to the requested public library")
             lib = LibraryRepository(session).get_by_id(public_library_id)
             if lib is None or not lib.is_public:
                 raise HTTPException(status_code=404, detail="Not found")
-        elif public_collection_id:
-            from src.server.repository.tenant import CollectionRepository, CollectionAsset
-            from src.server.models.tenant import Collection
-            col_repo = CollectionRepository(session)
-            col = col_repo.get_by_id(public_collection_id)
+        elif public_project_id:
+            from src.server.repository.tenant import ProjectRepository, ProjectAsset
+            from src.server.models.tenant import Project
+            col_repo = ProjectRepository(session)
+            col = col_repo.get_by_id(public_project_id)
             if col is None or col.visibility != "public":
                 raise HTTPException(status_code=404, detail="Not found")
-            # Verify asset is in this collection
+            # Verify asset is in this project
             from sqlmodel import select
             membership = session.exec(
-                select(CollectionAsset).where(
-                    CollectionAsset.collection_id == public_collection_id,
-                    CollectionAsset.asset_id == asset_id,
+                select(ProjectAsset).where(
+                    ProjectAsset.project_id == public_project_id,
+                    ProjectAsset.asset_id == asset_id,
                 )
             ).first()
             if membership is None:
-                raise HTTPException(status_code=403, detail="Asset not in collection")
+                raise HTTPException(status_code=403, detail="Asset not in project")
         else:
-            raise HTTPException(status_code=403, detail="Public access requires library or collection context")
+            raise HTTPException(status_code=403, detail="Public access requires library or project context")
 
     key = asset.proxy_key if size == "proxy" else asset.thumbnail_key
     if not key:
@@ -540,33 +588,47 @@ def _stream_file_with_range(
     path: Path,
     request: Request,
     media_type: str,
+    etag: str | None = None,
 ) -> StreamingResponse:
+    """Stream `path`, honoring a single Range: `bytes=a-b`, `bytes=a-` or `bytes=-n`.
+
+    A range starting past the end is a 416; a malformed one gets the whole
+    file, and so does one whose If-Range names another version (`etag`).
+    """
     file_size = path.stat().st_size
     range_header = request.headers.get("range")
     start = 0
     end = file_size - 1
     status_code = 200
     headers: dict[str, str] = {"Accept-Ranges": "bytes"}
+    if etag:
+        headers["ETag"] = etag
 
+    if_range = request.headers.get("if-range")
+    if range_header and if_range and etag and if_range.strip() != etag:
+        range_header = None  # the client holds another version: send this one whole
     if range_header:
-        # Format: bytes=start-end
+        units, _, range_spec = range_header.partition("=")
+        start_str, _, end_str = range_spec.split(",")[0].strip().partition("-")
         try:
-            units, _, range_spec = range_header.partition("=")
-            if units.strip().lower() == "bytes":
-                start_str, _, end_str = range_spec.partition("-")
-                if start_str:
-                    start = int(start_str)
+            if units.strip().lower() != "bytes":
+                raise ValueError(units)
+            if start_str:
+                start = int(start_str)
                 if end_str:
-                    end = int(end_str)
-                if end >= file_size:
-                    end = file_size - 1
-                if start > end:
-                    start = 0
-                    end = file_size - 1
-                status_code = 206
-        except Exception:
-            start = 0
-            end = file_size - 1
+                    end = min(int(end_str), file_size - 1)
+            else:  # the last n bytes
+                start = max(file_size - int(end_str), 0)
+            if start >= file_size:
+                return StreamingResponse(
+                    iter(()), status_code=416,
+                    headers={**headers, "Content-Range": f"bytes */{file_size}"},
+                )
+            if start > end:
+                raise ValueError(range_header)
+            status_code = 206
+        except ValueError:
+            start, end, status_code = 0, file_size - 1, 200
 
     content_length = end - start + 1
     headers["Content-Length"] = str(content_length)
@@ -592,6 +654,57 @@ def _stream_file_with_range(
         status_code=status_code,
         headers=headers,
     )
+
+
+def _check_public_request(request: Request, session: Session, asset) -> None:
+    """For a public page's request, raise unless its library or project shows this asset."""
+    if not getattr(request.state, "is_public_request", False):
+        return
+    from src.server.api.routers.playback import _check_public
+
+    q = request.query_params
+    _check_public(session, asset, q.get("public_library_id"),
+                  q.get("public_project_id") or q.get("public_collection_id"))
+
+
+def _project_visitor_view(response: AssetResponse) -> AssetResponse:
+    """What a public project's page may show of a clip: what its clip list gives
+    (shape, time, length) and what's seen or heard in it. Not where it lives,
+    where it was shot, what shot it, or the team's notes."""
+    return AssetResponse(
+        asset_id=response.asset_id,
+        library_id="",
+        rel_path="",
+        media_type=response.media_type,
+        status=response.status,
+        proxy_key=None,
+        thumbnail_key=None,
+        width=response.width,
+        height=response.height,
+        taken_at=response.taken_at,
+        duration_sec=response.duration_sec,
+        ai_description=response.ai_description,
+        ai_tags=response.ai_tags,
+        ocr_text=response.ocr_text,
+        transcript_srt=response.transcript_srt,
+        transcript_language=response.transcript_language,
+        video_facet=response.video_facet,
+    )
+
+
+def _trim_public_transcript(request: Request, session: Session, response: AssetResponse) -> None:
+    """A public page's transcript stops where its playback does, and doesn't say who wrote the note."""
+    if not getattr(request.state, "is_public_request", False):
+        return
+    response.note_author = None
+    if not response.transcript_srt:
+        return
+    from src.server.api.routers.playback import srt_before
+    from src.server.tenant_settings import playback_cap
+
+    cap = playback_cap(session, public=True)
+    if cap is not None:
+        response.transcript_srt = srt_before(response.transcript_srt, cap)
 
 
 def _to_asset_response(asset) -> AssetResponse:
@@ -667,6 +780,7 @@ def get_asset_by_path(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> AssetResponse:
     """Return a single asset by library_id + rel_path. 404 if not found or trashed."""
+    rel_path = normalize_rel_path(rel_path)
     if getattr(request.state, "is_public_request", False):
         lib = LibraryRepository(session).get_by_id(library_id)
         if lib is None or not lib.is_public:
@@ -690,6 +804,10 @@ def get_asset_by_path(
     response.ai_description = ai_description
     response.ai_tags = ai_tags
     response.ocr_text = ocr_text
+    facet = AssetRepository(session).get_video_facet(asset.asset_id)
+    # Stored rows are returned as they are (validation is for writes).
+    response.video_facet = VideoFacetModel.model_construct(**facet) if facet else None
+    _trim_public_transcript(request, session, response)
     return response
 
 
@@ -704,15 +822,77 @@ def list_assets(
     return [_to_asset_response(a) for a in assets]
 
 
+class ProjectUsageRequest(BaseModel):
+    asset_ids: list[str] = []
+    # Every clip in these libraries, e.g. before emptying the library trash.
+    library_ids: list[str] = []
+
+
+class ProjectUsageItem(BaseModel):
+    project_id: str
+    name: str
+    status: str  # active | archived
+    in_trash: bool
+    clips: int  # how many of the asked-about clips it holds
+
+
+class ProjectUsageResponse(BaseModel):
+    assets_in_projects: int  # how many of the clips are in any project
+    projects: list[ProjectUsageItem]  # the ones the caller can see
+    other_projects: int  # the rest: counted, not named
+
+
+@router.post("/project-usage", response_model=ProjectUsageResponse)
+def project_usage(
+    body: ProjectUsageRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> ProjectUsageResponse:
+    """Which projects hold these clips, or any clip in these libraries: what
+    deleting them for good would take them out of. Every project counts,
+    archived, trashed and other people's included; names only for those the
+    caller can see."""
+    return project_usage_summary(session, user_id, asset_ids=body.asset_ids, library_ids=body.library_ids)
+
+
+def project_usage_summary(
+    session: Session, user_id: str | None, *, asset_ids: list[str] = (), library_ids: list[str] = ()  # type: ignore[assignment]
+) -> ProjectUsageResponse:
+    """See project_usage. Also what a permanent delete refuses with until
+    the request says remove_from_projects."""
+    from src.server.repository.tenant import ProjectRepository
+
+    rows, in_any = ProjectRepository(session).usage(list(asset_ids), list(library_ids))
+    visible: list[ProjectUsageItem] = []
+    other = 0
+    for project, clips in rows:
+        mine = project.owner_user_id in (None, user_id)
+        shown = mine or (project.deleted_at is None and project.visibility in ("shared", "public"))
+        if not shown:
+            other += 1
+            continue
+        visible.append(ProjectUsageItem(
+            project_id=project.project_id, name=project.name, status=project.status,
+            in_trash=project.deleted_at is not None, clips=clips,
+        ))
+    return ProjectUsageResponse(assets_in_projects=in_any, projects=visible, other_projects=other)
+
+
 @router.delete("", response_model=BatchTrashResponse)
 def batch_trash_assets(
     body: BatchTrashRequest,
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> BatchTrashResponse:
-    """Soft-delete multiple assets. Returns trashed and not_found lists. Quickwit delete is best-effort."""
+    """Soft-delete multiple assets. Returns trashed and not_found lists. Quickwit delete is best-effort.
+
+    A person's trash ("user") needs an editor. Marking files the scanner no
+    longer finds ("missing", or no reason) stays open to whoever can scan.
+    """
+    if body.reason == "user":
+        require_editor(request)
     asset_repo = AssetRepository(session)
-    trashed_ids, not_found_ids = asset_repo.trash_many(body.asset_ids)
+    trashed_ids, not_found_ids = asset_repo.trash_many(body.asset_ids, reason=body.reason)
     if trashed_ids:
         try:
             from src.server.search.quickwit_client import QuickwitClient
@@ -738,12 +918,10 @@ def get_asset(
     asset = asset_repo.get_by_id(asset_id)
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
-    if getattr(request.state, "is_public_request", False):
-        if not public_library_id or asset.library_id != public_library_id:
-            raise HTTPException(status_code=403, detail="Asset does not belong to the requested public library")
-        lib = LibraryRepository(session).get_by_id(public_library_id)
-        if lib is None or not lib.is_public:
-            raise HTTPException(status_code=404, detail="Not found")
+    _check_public_request(request, session, asset)
+    via_project = getattr(request.state, "is_public_request", False) and bool(
+        request.query_params.get("public_project_id") or request.query_params.get("public_collection_id")
+    )
     response = _to_asset_response(asset)
     ai_description: str | None = None
     ai_tags: list[str] = []
@@ -759,7 +937,29 @@ def get_asset(
     response.ai_description = ai_description
     response.ai_tags = ai_tags
     response.ocr_text = ocr_text
-    return response
+    facet = AssetRepository(session).get_video_facet(asset.asset_id)
+    # Stored rows are returned as they are (validation is for writes).
+    response.video_facet = VideoFacetModel.model_construct(**facet) if facet else None
+    _trim_public_transcript(request, session, response)
+    return _project_visitor_view(response) if via_project else response
+
+
+@router.put("/{asset_id}/video-facet", response_model=VideoFacetModel)
+def put_video_facet(
+    asset_id: str,
+    body: VideoFacetModel,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> VideoFacetModel:
+    """Store a video's probe result (replaces any earlier one). Sets duration_sec."""
+    asset_repo = AssetRepository(session)
+    asset = asset_repo.get_by_id(asset_id)
+    if asset is None or asset.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    if asset.media_type != "video":
+        raise HTTPException(status_code=400, detail="Video facets are only for video assets")
+    asset_repo.upsert_video_facet(asset_id, body.model_dump())
+    LibraryRepository(session).bump_revision(asset.library_id)
+    return body
 
 
 @router.delete("/{asset_id}", status_code=204)
@@ -767,10 +967,14 @@ def trash_asset(
     asset_id: str,
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
 ) -> None:
-    """Soft-delete a single asset. 404 if not found or already trashed. Quickwit delete is best-effort."""
+    """Trash a single asset for the user; it stays trashed through rescans.
+
+    404 if not found or already trashed. Quickwit delete is best-effort.
+    """
     asset_repo = AssetRepository(session)
-    ok = asset_repo.trash(asset_id)
+    ok = asset_repo.trash(asset_id, reason="user")
     if not ok:
         raise HTTPException(status_code=404, detail="Asset not found or already trashed")
     tenant_id = getattr(request.state, "tenant_id", None)
@@ -782,16 +986,31 @@ def trash_asset(
             logger.warning("Quickwit delete after trash failed for %s: %s", asset_id, e)
 
 
+def reindex_restored_asset(request: Request, asset: Asset) -> None:
+    """Put a restored asset's transcript segments back in search; the sync
+    sweep re-indexes the asset and its scenes (restore queued them)."""
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if tenant_id and asset.transcript_srt:
+        from src.server.search.sync import index_transcript_segments
+
+        index_transcript_segments(tenant_id, asset)
+
+
 @router.post("/{asset_id}/restore", status_code=204)
 def restore_asset(
     asset_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
 ) -> None:
     """Restore a single trashed asset. 404 if not found or not trashed."""
     asset_repo = AssetRepository(session)
     ok = asset_repo.restore(asset_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Asset not found or not trashed")
+    asset = asset_repo.get_by_id(asset_id)
+    if asset is not None:
+        reindex_restored_asset(request, asset)
 
 
 @router.post("/{asset_id}/vision", response_model=VisionSubmitResponse)
@@ -1004,6 +1223,8 @@ def submit_batch_vision(
 class TranscriptSubmitRequest(BaseModel):
     srt: str
     language: str | None = None
+    # "manual" for a person's transcript; a provider id (e.g. "whisper") for
+    # machine output, which never replaces a manual one.
     source: str = "manual"
 
 
@@ -1029,11 +1250,16 @@ def submit_transcript(
     if asset.media_type != "video":
         raise HTTPException(status_code=400, detail="Transcripts are only supported for video assets")
 
+    # A person's transcript is human data: machine output never replaces it.
+    if body.source != "manual" and asset.transcript_source == "manual":
+        return TranscriptSubmitResponse(asset_id=asset_id, status="kept_manual")
+
     # Empty SRT = "checked, no speech" (e.g., silent video processed by Whisper)
     if not body.srt or not body.srt.strip():
         asset.transcript_srt = None
         asset.transcript_text = None
         asset.transcript_language = body.language
+        asset.transcript_source = body.source
         asset.transcribed_at = utcnow()
         asset.has_transcript = False
         asset.updated_at = utcnow()
@@ -1049,6 +1275,7 @@ def submit_transcript(
     asset.transcript_srt = body.srt
     asset.transcript_text = plain_text
     asset.transcript_language = body.language
+    asset.transcript_source = body.source
     asset.transcribed_at = utcnow()
     asset.has_transcript = bool(plain_text.strip())
     asset.updated_at = utcnow()
@@ -1060,37 +1287,11 @@ def submit_transcript(
     meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
     try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
 
-    # Index transcript segments into Quickwit
     _tid = getattr(request.state, "tenant_id", None)
     if _tid:
-        try:
-            from src.server.srt import parse_srt_segments
-            from src.server.search.quickwit_client import QuickwitClient
-            from src.shared.utils import utcnow as _utcnow
+        from src.server.search.sync import index_transcript_segments
 
-            qw = QuickwitClient()
-            qw.ensure_tenant_transcript_index(_tid)
-            qw.delete_tenant_transcript_documents(_tid, asset_id)
-            segments = parse_srt_segments(body.srt)
-            if segments:
-                docs = [
-                    {
-                        "id": f"{asset_id}_{seg.start_ms}_{seg.end_ms}",
-                        "asset_id": asset_id,
-                        "library_id": asset.library_id,
-                        "rel_path": asset.rel_path,
-                        "media_type": asset.media_type,
-                        "start_ms": seg.start_ms,
-                        "end_ms": seg.end_ms,
-                        "text": seg.text,
-                        "language": asset.transcript_language or "",
-                        "indexed_at": int(_utcnow().timestamp()),
-                    }
-                    for seg in segments
-                ]
-                qw.ingest_tenant_transcript_documents(_tid, docs)
-        except Exception as exc:
-            logger.warning("Transcript segment indexing failed for %s: %s", asset_id, exc)
+        index_transcript_segments(_tid, asset, body.srt)
 
     LibraryRepository(session).bump_revision(asset.library_id)
 
@@ -1112,6 +1313,7 @@ def delete_transcript(
     asset.transcript_srt = None
     asset.transcript_text = None
     asset.transcript_language = None
+    asset.transcript_source = None
     asset.transcribed_at = None
     asset.has_transcript = False
     asset.updated_at = utcnow()
@@ -1316,7 +1518,7 @@ def submit_batch_moves(
         if asset is None or asset.deleted_at is not None:
             skipped += 1
             continue
-        asset.rel_path = item.rel_path
+        asset.rel_path = normalize_rel_path(item.rel_path)
         asset.search_synced_at = None
         asset.updated_at = utcnow()
         session.add(asset)
@@ -1342,13 +1544,7 @@ def stream_or_enqueue_preview(
     asset = asset_repo.get_by_id(asset_id)
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
-    if getattr(request.state, "is_public_request", False):
-        public_library_id = request.query_params.get("public_library_id")
-        if not public_library_id or asset.library_id != public_library_id:
-            raise HTTPException(status_code=403, detail="Asset does not belong to the requested public library")
-        lib = LibraryRepository(session).get_by_id(public_library_id)
-        if lib is None or not lib.is_public:
-            raise HTTPException(status_code=404, detail="Not found")
+    _check_public_request(request, session, asset)
 
     if not asset.media_type.startswith("video"):
         raise HTTPException(status_code=422, detail="Preview only supported for video assets")
@@ -1364,6 +1560,15 @@ def stream_or_enqueue_preview(
                 asset.video_preview_last_accessed_at = now
                 session.add(asset)
                 session.commit()
+            from src.server.api.routers.playback import capped
+            from src.server.tenant_settings import playback_cap
+
+            path = capped(
+                path, playback_cap(session, public=getattr(request.state, "is_public_request", False)),
+                storage=storage, tenant_id=request.state.tenant_id, asset_id=asset_id, source="preview",
+                version=f"{int(path.stat().st_mtime)}-{path.stat().st_size}",
+                strip=getattr(request.state, "is_public_request", False),
+            )
             return _stream_file_with_range(path, request, media_type="video/mp4")
 
         # File is missing on disk – clear key.
@@ -1411,12 +1616,13 @@ def upsert_asset(
             raise HTTPException(status_code=400, detail="Invalid file_mtime format")
 
     asset_repo = AssetRepository(session)
-    existing = asset_repo.get_by_library_and_rel_path(body.library_id, body.rel_path)
+    rel_path = normalize_rel_path(body.rel_path)
+    existing = asset_repo.get_by_library_and_rel_path(body.library_id, rel_path)
 
     if existing is None:
         asset_repo.create_asset(
             library_id=body.library_id,
-            rel_path=body.rel_path,
+            rel_path=rel_path,
             file_size=body.file_size,
             file_mtime=file_mtime_dt,
             media_type=body.media_type,
@@ -1643,7 +1849,11 @@ def submit_faces(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> FaceSubmitResponse:
-    """Submit face detections for an asset. Replaces existing faces for the same model."""
+    """Submit face detections for an asset.
+
+    Faces the new detections re-find keep their ids and confirmed assignments;
+    confirmed faces that aren't re-found are kept. See FaceRepository.submit_faces.
+    """
     from src.server.repository.tenant import FaceRepository
 
     asset = AssetRepository(session).get_by_id(asset_id)
@@ -1674,10 +1884,11 @@ def submit_faces(
     # Bump library revision so UI reflects face_count changes
     LibraryRepository(session).bump_revision(asset.library_id)
 
-    return FaceSubmitResponse(face_count=len(face_ids), face_ids=face_ids)
+    session.refresh(asset)
+    return FaceSubmitResponse(face_count=asset.face_count or 0, face_ids=face_ids)
 
 
-@router.get("/{asset_id}/faces", response_model=FaceListResponse)
+@router.get("/{asset_id}/faces", response_model=FaceListResponse, dependencies=[Depends(require_signed_in)])
 def list_faces(
     asset_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],

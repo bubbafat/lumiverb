@@ -96,8 +96,10 @@ interface FilterBarProps {
   onClearAll: () => void;
   /** Facets for populating dropdowns. */
   facets: FacetsResponse | null;
-  /** Called when user clicks "Save as Smart Collection". */
-  onSaveSmartCollection?: () => void;
+  /** Called when user clicks "Save as Smart Project". */
+  onSaveSmartProject?: () => void;
+  /** A public page's visitor: no rating or people filters (those are signed-in people's). */
+  isPublic?: boolean;
 }
 
 function PersonChiclet({ personId, onClear }: { personId: string; onClear: () => void }) {
@@ -192,7 +194,8 @@ export function FilterBar({
   onSetSort,
   onClearAll,
   facets,
-  onSaveSmartCollection,
+  onSaveSmartProject,
+  isPublic = false,
 }: FilterBarProps) {
   // --- Read individual values from filter array ---
   const q = getFilterValue(filters, "query") ?? null;
@@ -246,7 +249,7 @@ export function FilterBar({
   }, [dateVal.from, dateVal.to]);
 
   // Person suggestions in main search bar
-  const showPersonSuggestions = searchFocused && inputValue.trim().length >= 2 && !personId;
+  const showPersonSuggestions = !isPublic && searchFocused && inputValue.trim().length >= 2 && !personId;
   const { data: searchPeopleData } = useQuery({
     queryKey: ["people-search-bar", inputValue.trim()],
     queryFn: () => searchPeople(inputValue.trim(), 5),
@@ -565,13 +568,13 @@ export function FilterBar({
               >
                 Clear filters
               </button>
-              {onSaveSmartCollection && (
+              {onSaveSmartProject && !isPublic && (
                 <button
                   type="button"
-                  onClick={onSaveSmartCollection}
+                  onClick={onSaveSmartProject}
                   className="text-xs text-indigo-400 hover:text-indigo-300 whitespace-nowrap"
                 >
-                  Save collection
+                  Save project
                 </button>
               )}
             </>
@@ -761,10 +764,12 @@ export function FilterBar({
           )}
 
           {/* Person filter */}
-          <PersonFilterDropdown
-            personId={personId}
-            onSelect={(pid) => onSetFilter("person", pid)}
-          />
+          {!isPublic && (
+            <PersonFilterDropdown
+              personId={personId}
+              onSelect={(pid) => onSetFilter("person", pid)}
+            />
+          )}
 
           {/* Geo-proximity radius selector (only when near filter is set) */}
           {nearVal && (
@@ -785,6 +790,7 @@ export function FilterBar({
           )}
 
           {/* Rating filters */}
+          {!isPublic && (
           <div className="flex flex-wrap items-center gap-3">
             <span className="text-xs font-medium text-gray-400">Rating</span>
             <button
@@ -859,11 +865,12 @@ export function FilterBar({
               ))}
             </div>
           </div>
+          )}
 
           {hasActiveFilters && (
             <FilterMenu
               onClearAll={onClearAll}
-              onSaveSmartCollection={onSaveSmartCollection}
+              onSaveSmartProject={isPublic ? undefined : onSaveSmartProject}
             />
           )}
         </div>
@@ -874,10 +881,10 @@ export function FilterBar({
 
 function FilterMenu({
   onClearAll,
-  onSaveSmartCollection,
+  onSaveSmartProject,
 }: {
   onClearAll: () => void;
-  onSaveSmartCollection?: () => void;
+  onSaveSmartProject?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -913,16 +920,16 @@ function FilterMenu({
             </svg>
             Clear all filters
           </button>
-          {onSaveSmartCollection && (
+          {onSaveSmartProject && (
             <button
               type="button"
-              onClick={() => { onSaveSmartCollection(); setOpen(false); }}
+              onClick={() => { onSaveSmartProject(); setOpen(false); }}
               className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-300 hover:bg-gray-700"
             >
               <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
                 <path d="M12 5v14M5 12h14" />
               </svg>
-              Save as Smart Collection
+              Save as Smart Project
             </button>
           )}
         </div>

@@ -58,7 +58,7 @@ users             — user_id, tenant_id, email, password_hash, role,
                     created_at, last_login_at
 password_reset_tokens — token_hash, user_id, expires_at, used_at
 public_libraries  — library_id, tenant_id, connection_string, created_at
-public_collections — collection_id, tenant_id, connection_string, created_at
+public_projects   — project_id, tenant_id, connection_string, created_at
 revoked_tokens    — jti (PK), revoked_at. Server-side JWT revocation.
 tenant_db_routing — tenant_id, connection_string, region
 ```
@@ -289,7 +289,7 @@ Client calls GET /v1/similar?asset_id=...&library_id=...
 | Layer | Technology | Rationale |
 |---|---|---|
 | API server | Python 3.12, FastAPI, SQLModel | Familiar, Cursor-optimised, proven in PoC |
-| Database | PostgreSQL 16 + pgvector | Per-tenant isolation, JSONB for metadata, vector similarity (phase 2) |
+| Database | PostgreSQL 18 + pgvector | Per-tenant isolation, JSONB for metadata, vector similarity (phase 2) |
 | Migrations | Alembic | Standard, works with SQLModel |
 | Search | Quickwit | Columnar BM25, Docker-friendly, proven in PoC |
 | Object storage | Abstracted (GCS / S3 / B2 / MinIO) | Deployment-mode flexibility |
@@ -458,7 +458,7 @@ GCS standard tier provides 11 nines durability with built-in multi-AZ replicatio
 
 `docker-compose.yml` includes:
 - `api` — FastAPI server
-- `postgres` — PostgreSQL 16
+- `postgres` — PostgreSQL 18
 - `quickwit` — Search engine
 - `minio` — Object storage (optional, can point at S3/B2)
 

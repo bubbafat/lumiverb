@@ -196,7 +196,7 @@ describe("filterLabel", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Smart collection serialization
+// Smart project serialization
 // ---------------------------------------------------------------------------
 
 describe("buildSavedQuery", () => {

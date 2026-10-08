@@ -473,3 +473,24 @@ def test_missing_recursive_nested_files(tmp_path):
     missing = sorted(aid for rp, aid in server.items() if rp not in local_rel_paths)
 
     assert missing == ["ast_gone_deep", "ast_gone_other_tree", "ast_gone_shallow"]
+
+
+@pytest.mark.fast
+@_skip_no_ffprobe
+def test_video_preview_drops_where_it_was_shot(tmp_path):
+    # Phones and drones write GPS into the file; previews reach public pages.
+    import json
+    import subprocess
+
+    from src.client.cli.ingest import _generate_video_preview
+
+    src = tmp_path / "gps.mov"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc2=size=320x180:duration=2", "-f", "lavfi", "-i", "sine=duration=2",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
+                    "-metadata", "location=+40.7000-074.0000/", str(src)], check=True)
+    out = tmp_path / "preview.mp4"
+    out.write_bytes(_generate_video_preview(src))
+    tags = json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format_tags:stream_tags",
+                                      "-of", "json", str(out)], capture_output=True, text=True, check=True).stdout)
+    assert "location" not in json.dumps(tags).lower()

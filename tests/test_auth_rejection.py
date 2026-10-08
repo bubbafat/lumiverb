@@ -12,7 +12,7 @@ from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
 
-from tests.conftest import _ensure_psycopg2, _run_control_migrations
+from tests.conftest import PG_IMAGE, _ensure_psycopg2, _run_control_migrations
 
 
 @pytest.fixture(scope="module")
@@ -22,7 +22,7 @@ def auth_rejection_client() -> TestClient:
     valid Authorization get 401. Used to test that all major endpoints reject no-auth.
     """
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    with PostgresContainer("pgvector/pgvector:pg16") as control_postgres:
+    with PostgresContainer(PG_IMAGE) as control_postgres:
         control_url = _ensure_psycopg2(control_postgres.get_connection_url())
         engine = create_engine(control_url)
         with engine.connect() as conn:

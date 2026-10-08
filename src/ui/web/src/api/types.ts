@@ -226,8 +226,8 @@ export interface SavedQuery {
   direction?: string;
 }
 
-export interface CollectionItem {
-  collection_id: string;
+export interface ProjectItem {
+  project_id: string;
   name: string;
   description: string | null;
   cover_asset_id: string | null;
@@ -240,13 +240,23 @@ export interface CollectionItem {
   asset_count: number;
   created_at: string;
   updated_at: string;
+  status?: "active" | "archived";
+  archived_at?: string | null;
+  /** Set while the project is in the trash. */
+  deleted_at?: string | null;
+  /** Clips someone trashed: hidden and not exported until restored. */
+  trashed_asset_count?: number;
+  /** Clips whose files went missing: back when the files are. */
+  missing_asset_count?: number;
+  /** Clips whose library is in the trash: libraries have no restore. */
+  library_trashed_asset_count?: number;
 }
 
-export interface CollectionListResponse {
-  items: CollectionItem[];
+export interface ProjectListResponse {
+  items: ProjectItem[];
 }
 
-export interface CollectionAssetItem {
+export interface ProjectAssetItem {
   asset_id: string;
   rel_path: string;
   file_size: number;
@@ -260,8 +270,8 @@ export interface CollectionAssetItem {
   camera_model: string | null;
 }
 
-export interface CollectionAssetsResponse {
-  items: CollectionAssetItem[];
+export interface ProjectAssetsResponse {
+  items: ProjectAssetItem[];
   next_cursor: string | null;
 }
 

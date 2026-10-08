@@ -16,10 +16,10 @@ import {
 } from "../api/client";
 import type { QueryItem } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
-import { CollectionPicker } from "../components/CollectionPicker";
+import { ProjectPicker } from "../components/ProjectPicker";
 import { Lightbox } from "../components/Lightbox";
 import { FilterBar } from "../components/FilterBar";
-import { SaveSmartCollectionModal } from "../components/SaveSmartCollectionModal";
+import { SaveSmartProjectModal } from "../components/SaveSmartProjectModal";
 import { SelectionToolbar } from "../components/SelectionToolbar";
 import { ZoomControl } from "../components/ZoomControl";
 import { DrawerOverlay } from "../components/DrawerOverlay";
@@ -35,6 +35,7 @@ import { buildVirtualRows, buildFixedGridRows } from "../lib/virtualRows";
 import { useLocalStorage } from "../lib/useLocalStorage";
 // parseSearchQuery available for future prefix query support
 import type { VirtualRowKind } from "../lib/virtualRows";
+import { mediaCount } from "../lib/format";
 
 const PAGE_SIZE = 100;
 const ROW_GAP = 4;
@@ -57,6 +58,10 @@ export default function BrowsePage() {
   const isFetchingNextPageRef = useRef(false);
   const hasNextPageRef = useRef(false);
   const [containerWidth, setContainerWidth] = useState(0);
+  // The grid's own box, not the scroll container: the page pads the grid,
+  // so the scroll container is wider than the rows can be. State, not a
+  // ref, because the grid mounts only once there are assets.
+  const [gridEl, setGridEl] = useState<HTMLDivElement | null>(null);
   const [lightboxAsset, setLightboxAsset] = useState<AssetPageItem | null>(null);
   const [errorDismissed, setErrorDismissed] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -163,6 +168,9 @@ export default function BrowsePage() {
     if (hasLib || !libraryId) return urlFilters;
     return [...urlFilters, { type: "library", value: libraryId }];
   }, [urlFilters, libraryId]);
+
+  // Photos, videos or both: names what the count is counting.
+  const mediaFilter = urlFilters.find((f) => f.type === "media")?.value ?? null;
 
   // Legacy compat: read path from URL for directory tree
   const pathPrefix = searchParams.get("path") ?? undefined;
@@ -419,7 +427,8 @@ export default function BrowsePage() {
   const ratingsQuery = useQuery({
     queryKey: ["ratings", orderedAssetIds.slice(0, 500)],
     queryFn: () => lookupRatings(orderedAssetIds.slice(0, 500)),
-    enabled: orderedAssetIds.length > 0,
+    // Ratings are a signed-in person's; a public page's visitor has none.
+    enabled: orderedAssetIds.length > 0 && !isPublicMode,
     staleTime: 30_000,
   });
   const ratingsMap: Record<string, AssetRating> = ratingsQuery.data?.ratings ?? {};
@@ -492,13 +501,13 @@ export default function BrowsePage() {
   });
 
   useEffect(() => {
-    if (!parentEl) return;
+    if (!gridEl) return;
     const ro = new ResizeObserver((entries) => {
       setContainerWidth(entries[0]?.contentRect.width ?? 0);
     });
-    ro.observe(parentEl);
+    ro.observe(gridEl);
     return () => ro.disconnect();
-  }, [parentEl]);
+  }, [gridEl]);
 
   useLayoutEffect(() => {
     isFetchingNextPageRef.current = isFetchingNextPage;
@@ -707,11 +716,12 @@ export default function BrowsePage() {
         onSetSort={handleSetSort}
         onClearAll={handleClearAll}
         facets={facets}
-        onSaveSmartCollection={() => setShowSmartColModal(true)}
+        onSaveSmartProject={() => setShowSmartColModal(true)}
+        isPublic={isPublicMode}
       />
 
       {showSmartColModal && (
-        <SaveSmartCollectionModal
+        <SaveSmartProjectModal
           savedQuery={buildSavedQuery(filtersWithPath, browseSort, browseDir)}
           onClose={() => setShowSmartColModal(false)}
         />
@@ -720,7 +730,7 @@ export default function BrowsePage() {
       {/* Toolbar: status line */}
       {!isLoading && browseCount > 0 && (
         <p className="text-xs text-gray-500">
-          {browseCount.toLocaleString()}{currentDirTotal != null ? ` of ${currentDirTotal.toLocaleString()}` : ""} photo{browseCount === 1 ? "" : "s"}
+          {mediaCount(browseCount, mediaFilter, currentDirTotal)}
         </p>
       )}
 
@@ -750,7 +760,7 @@ export default function BrowsePage() {
                 <line x1="7" y1="12" x2="17" y2="12" />
                 <line x1="10" y1="18" x2="14" y2="18" />
               </svg>
-              <p className="text-sm text-gray-400 mb-2">No photos match your filters</p>
+              <p className="text-sm text-gray-400 mb-2">Nothing matches your filters</p>
               <button
                 type="button"
                 onClick={handleClearAll}
@@ -761,7 +771,7 @@ export default function BrowsePage() {
             </>
           ) : pathPrefix ? (
             // Browse mode, path filter active, empty folder
-            <p className="text-sm text-gray-400">No photos in this folder</p>
+            <p className="text-sm text-gray-400">Nothing in this folder</p>
           ) : (
             <>
               <svg
@@ -776,19 +786,15 @@ export default function BrowsePage() {
                 <circle cx="8.5" cy="10.5" r="1.5" />
                 <path d="M21 15l-5-5L5 19" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
-              <p className="text-sm text-gray-400">No photos yet</p>
+              <p className="text-sm text-gray-400">Nothing here yet</p>
               <p className="mt-1 text-xs text-gray-600">
-                Run{" "}
-                <code className="rounded bg-gray-800 px-1 py-0.5 text-gray-400">
-                  lumiverb ingest
-                </code>{" "}
-                to add photos
+                Photos and videos appear once the library is scanned.
               </p>
             </>
           )}
         </div>
       ) : (
-        <div style={{ width: "100%" }}>
+        <div ref={setGridEl} style={{ width: "100%" }}>
           <div
             style={{
               height: `${rowVirtualizer.getTotalSize()}px`,
@@ -950,7 +956,7 @@ export default function BrowsePage() {
             setParam("path", path);
           }}
           onDateClick={handleLightboxDateClick}
-          onAddToCollection={(assetId) => setPickerAssetIds([assetId])}
+          onAddToProject={(assetId) => setPickerAssetIds([assetId])}
           rating={lightboxAsset ? ratingsMap[lightboxAsset.asset_id] : undefined}
           onRatingChange={handleRatingChange}
           libraryId={libraryId}
@@ -1010,13 +1016,13 @@ export default function BrowsePage() {
           onClick={() => setPickerAssetIds(selection.toArray())}
           className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-indigo-500"
         >
-          Add to collection
+          Add to project
         </button>
       </SelectionToolbar>
 
-      {/* Collection picker */}
+      {/* Project picker */}
       {pickerAssetIds && (
-        <CollectionPicker
+        <ProjectPicker
           assetIds={pickerAssetIds}
           onClose={() => setPickerAssetIds(null)}
           onDone={selection.clear}

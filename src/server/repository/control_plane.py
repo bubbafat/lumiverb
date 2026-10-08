@@ -408,29 +408,29 @@ class PublicLibraryRepository:
             self._session.commit()
 
 
-class PublicCollectionRepository:
-    """Repository for public_collections control plane table."""
+class PublicProjectRepository:
+    """Repository for public_projects control plane table."""
 
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def get(self, collection_id: str) -> "PublicCollection | None":
-        from src.server.models.control_plane import PublicCollection
-        return self._session.get(PublicCollection, collection_id)
+    def get(self, project_id: str) -> "PublicProject | None":
+        from src.server.models.control_plane import PublicProject
+        return self._session.get(PublicProject, project_id)
 
-    def upsert(self, collection_id: str, tenant_id: str, connection_string: str) -> None:
-        from src.server.models.control_plane import PublicCollection
-        row = PublicCollection(
-            collection_id=collection_id,
+    def upsert(self, project_id: str, tenant_id: str, connection_string: str) -> None:
+        from src.server.models.control_plane import PublicProject
+        row = PublicProject(
+            project_id=project_id,
             tenant_id=tenant_id,
             connection_string=connection_string,
         )
         self._session.merge(row)
         self._session.commit()
 
-    def delete(self, collection_id: str) -> None:
-        from src.server.models.control_plane import PublicCollection
-        row = self._session.get(PublicCollection, collection_id)
+    def delete(self, project_id: str) -> None:
+        from src.server.models.control_plane import PublicProject
+        row = self._session.get(PublicProject, project_id)
         if row:
             self._session.delete(row)
             self._session.commit()

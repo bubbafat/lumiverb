@@ -10,7 +10,7 @@ from starlette.responses import JSONResponse
 
 from src.server.config import get_settings
 from src.server.database import get_control_session
-from src.server.repository.control_plane import ApiKeyRepository, PublicCollectionRepository, PublicLibraryRepository, RevokedTokenRepository, TenantDbRoutingRepository
+from src.server.repository.control_plane import ApiKeyRepository, PublicProjectRepository, PublicLibraryRepository, RevokedTokenRepository, TenantDbRoutingRepository
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,8 @@ def _skip_tenant_middleware(path: str) -> bool:
         return True
     if path.startswith("/v1/filters/"):
         return True
+    if path.startswith("/v1/stream/"):
+        return True  # signed playback links resolve their own tenant
     if path in ("/docs", "/redoc", "/openapi.json"):
         return True
     return False
@@ -136,7 +138,7 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # --- Unauthenticated path: attempt public library resolution ---
-        # Only GET requests on eligible routes may reach public libraries/collections.
+        # Only GET requests on eligible routes may reach public libraries/projects.
         if request.method == "GET" and _PUBLIC_ELIGIBLE_PATH.match(request.url.path):
             library_id = (
                 _extract_library_id_from_path(request.url.path)
@@ -155,35 +157,41 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
                     request.state.is_public_request = True
                     return await call_next(request)
 
-            # Also try public_collection_id for asset proxy/thumbnail
-            collection_id = request.query_params.get("public_collection_id")
-            if collection_id:
+            # Also try public_project_id for asset proxy/thumbnail
+            # (public_collection_id: the pre-rename name, still sent by
+            # macOS/iOS builds and old share links).
+            project_id = request.query_params.get("public_project_id") or request.query_params.get(
+                "public_collection_id"
+            )
+            if project_id:
                 with get_control_session() as session:
-                    pub = PublicCollectionRepository(session).get(collection_id)
+                    pub = PublicProjectRepository(session).get(project_id)
                 if pub is not None:
                     request.state.tenant_id = pub.tenant_id
                     request.state.connection_string = pub.connection_string
                     request.state.key_id = None
                     request.state.role = "public"
                     request.state.is_public_request = True
-                    request.state.public_collection_id = collection_id
+                    request.state.public_project_id = project_id
                     return await call_next(request)
 
-        # --- Unauthenticated path: attempt public collection resolution ---
-        if request.method == "GET" and request.url.path.startswith("/v1/public/collections/"):
+        # --- Unauthenticated path: attempt public project resolution ---
+        if request.method == "GET" and request.url.path.startswith(
+            ("/v1/public/projects/", "/v1/public/collections/")
+        ):
             parts = request.url.path.split("/")
-            # /v1/public/collections/{collection_id}[/assets]
-            collection_id = parts[4] if len(parts) > 4 else None
-            if collection_id:
+            # /v1/public/projects/{project_id}[/assets] (or the legacy /collections/ path)
+            project_id = parts[4] if len(parts) > 4 else None
+            if project_id:
                 with get_control_session() as session:
-                    pub = PublicCollectionRepository(session).get(collection_id)
+                    pub = PublicProjectRepository(session).get(project_id)
                 if pub is not None:
                     request.state.tenant_id = pub.tenant_id
                     request.state.connection_string = pub.connection_string
                     request.state.key_id = None
                     request.state.role = "public"
                     request.state.is_public_request = True
-                    request.state.public_collection_id = collection_id
+                    request.state.public_project_id = project_id
                     return await call_next(request)
 
         return _error_response(401, "unauthorized", "Missing or invalid Authorization header")

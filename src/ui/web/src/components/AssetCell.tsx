@@ -9,6 +9,7 @@ interface AssetCellProps {
   aspectRatio?: number;
   isPublic?: boolean;
   publicLibraryId?: string;
+  publicProjectId?: string;
   selected?: boolean;
   onSelect?: (e: React.MouseEvent) => void;
   selectionActive?: boolean;
@@ -37,6 +38,7 @@ function AssetCellInner({
   aspectRatio,
   isPublic,
   publicLibraryId,
+  publicProjectId,
   selected,
   onSelect,
   selectionActive,
@@ -47,7 +49,7 @@ function AssetCellInner({
   const { url, isLoading, error } = useAuthenticatedImage(
     asset.asset_id,
     "thumbnail",
-    { isPublic, publicLibraryId },
+    { isPublic, publicLibraryId, publicProjectId },
   );
   const [hovered, setHovered] = useState(false);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -59,7 +61,7 @@ function AssetCellInner({
   const { url: videoUrl } = useAuthenticatedImage(
     asset.asset_id,
     "video-preview",
-    { enabled: isVideo && hovered, isPublic, publicLibraryId },
+    { enabled: isVideo && hovered, isPublic, publicLibraryId, publicProjectId },
   );
 
   return (

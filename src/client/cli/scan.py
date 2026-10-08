@@ -18,8 +18,9 @@ import logging
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import datetime, timedelta, timezone
+from pathlib import Path, PurePosixPath
+from stat import S_ISDIR
 
 from rich.console import Console
 from rich.progress import (
@@ -32,6 +33,7 @@ from rich.progress import (
 )
 
 from src.client.cli.client import LumiverbClient
+from src.client.cli.roots import local_library_root, reachable_root
 from src.client.cli.ingest import (
     SUPPORTED_EXTENSIONS,
     _build_exif_payload,
@@ -46,8 +48,18 @@ from src.client.cli.ingest import (
 )
 from src.client.proxy.proxy_cache import ProxyCache
 from src.client.workers.exif_extract import compute_sha256
+from src.client.video.probe import probe_video
+from src.shared.io_utils import is_within, resolve_source_path, stat_if_present
 
 logger = logging.getLogger(__name__)
+
+
+# The macOS scanner's quarantine: a file modified this recently may still be
+# copying.
+SETTLE_SEC = 30
+# A file stamped further ahead than this came from a camera whose clock runs
+# ahead, not from a copy in progress.
+FUTURE_MTIME_SEC = 300
 
 
 @dataclass
@@ -60,7 +72,15 @@ class ScanStats:
     moved: int = 0
     cache_populated: int = 0
     failed: int = 0
+    failed_paths: list[str] = field(default_factory=list)
     scanned_asset_ids: list[str] = field(default_factory=list)
+    # The library's root couldn't be read, so nothing was scanned.
+    root_unreachable: bool = False
+    # Files written too recently to trust: left for a later scan.
+    settling: int = 0
+    settling_paths: list[str] = field(default_factory=list)
+    # Folders that couldn't be listed, so nothing was taken for deleted.
+    unlisted: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -69,6 +89,7 @@ class _ServerAsset:
     sha256: str | None
     file_size: int | None = None
     file_mtime: str | None = None  # ISO8601 string from server
+    media_type: str | None = None
 
 
 def _fetch_existing_assets_with_sha(
@@ -95,11 +116,44 @@ def _fetch_existing_assets_with_sha(
                 sha256=a.get("sha256"),
                 file_size=a.get("file_size"),
                 file_mtime=a.get("file_mtime"),
+                media_type=a.get("media_type"),
             )
         cursor = data.get("next_cursor")
         if not cursor:
             break
     return existing
+
+
+def _fetch_ignored_paths(client: LumiverbClient, library_id: str) -> set[str]:
+    """rel_paths the user trashed (or emptied from the trash). Scans skip them:
+    Lumiverb never deletes originals, so they may still be on disk."""
+    paths: set[str] = set()
+    cursor: str | None = None
+    while True:
+        params: dict[str, str] = {"limit": "1000"}
+        if cursor:
+            params["after"] = cursor
+        data = client.get(f"/v1/libraries/{library_id}/ignored-paths", params=params).json()
+        paths.update(item["rel_path"] for item in data.get("items", []))
+        cursor = data.get("next_cursor")
+        if not cursor:
+            return paths
+
+
+# Same threshold as the macOS scanner (ScanPipeline.swift): a scan that
+# would delete more than 50 files AND more than 5% of the library's assets
+# skips deletions. A half-mounted volume looks exactly like that.
+MASS_DELETE_MIN_FILES = 50
+MASS_DELETE_MIN_FRACTION = 0.05
+
+
+def _deletion_guard_trips(deleting: int, on_server: int) -> bool:
+    """True when deleting this many of the server's assets looks like a mount problem."""
+    return (
+        deleting > MASS_DELETE_MIN_FILES
+        and on_server > 0
+        and deleting / on_server > MASS_DELETE_MIN_FRACTION
+    )
 
 
 def _split_files(
@@ -233,7 +287,7 @@ def _detect_moves(
 
     try:
         for f in candidates:
-            source_path = root_path / f["rel_path"]
+            source_path = resolve_source_path(root_path, f["rel_path"])
             source_sha = compute_sha256(source_path)
             f["source_sha256"] = source_sha
 
@@ -275,6 +329,19 @@ def _detect_moves(
     return moves, remaining
 
 
+def _existing_folder(root: Path, rel: str) -> str | None:
+    """The deepest folder on the way to rel that's on disk, its name in either
+    Unicode form. None is the library root. Raises OSError when a folder
+    can't be checked: it may well be there."""
+    parts = PurePosixPath(rel).parts
+    while parts:
+        st = stat_if_present(resolve_source_path(root, "/".join(parts)))
+        if st is not None and S_ISDIR(st.st_mode):
+            return "/".join(parts)
+        parts = parts[:-1]
+    return None
+
+
 def _detect_deletions(
     local_files: list[dict],
     existing: dict[str, _ServerAsset],
@@ -309,11 +376,12 @@ def _scan_one(
     Works for both new and changed files.
     """
     rel_path = f["rel_path"]
-    source_path = (root_path / rel_path).resolve()
+    source_path = resolve_source_path(root_path, rel_path).resolve()
     if not source_path.is_relative_to(root_path):
         logger.warning("Skipping %s: escapes library root", rel_path)
         with stats.lock:
             stats.failed += 1
+            stats.failed_paths.append(rel_path)
         return
 
     try:
@@ -365,6 +433,7 @@ def _scan_one(
         logger.exception("Failed to scan %s: %s", rel_path, e)
         with stats.lock:
             stats.failed += 1
+            stats.failed_paths.append(rel_path)
         progress.console.print(f"[red]scan \u2717[/red] {rel_path}: {e}")
         progress.advance(task_id)
 
@@ -383,11 +452,12 @@ def _scan_one_video(
 ) -> None:
     """Scan a single video: poster frame + EXIF + 10-sec preview → upload → cache."""
     rel_path = f["rel_path"]
-    source_path = (root_path / rel_path).resolve()
+    source_path = resolve_source_path(root_path, rel_path).resolve()
     if not source_path.is_relative_to(root_path):
         logger.warning("Skipping %s: escapes library root", rel_path)
         with stats.lock:
             stats.failed += 1
+            stats.failed_paths.append(rel_path)
         return
 
     try:
@@ -419,6 +489,13 @@ def _scan_one_video(
         }
         if f.get("file_mtime") is not None:
             data["file_mtime"] = f["file_mtime"].isoformat()
+        # Frame rate, timecode, audio layout for editor exports. A failed
+        # probe doesn't block ingest; `lumiverb enrich --job-type probe`
+        # backfills it.
+        try:
+            data["video_facet"] = json.dumps(probe_video(source_path).to_dict())
+        except Exception as exc:  # noqa: BLE001 — any ffprobe failure
+            logger.warning("Probe failed for %s: %s", rel_path, exc)
 
         resp = client.post("/v1/ingest", files=files, data=data)
         asset_id = resp.json().get("asset_id")
@@ -448,6 +525,7 @@ def _scan_one_video(
         logger.exception("Failed to scan video %s: %s", rel_path, e)
         with stats.lock:
             stats.failed += 1
+            stats.failed_paths.append(rel_path)
         progress.console.print(f"[red]scan \u2717[/red] {rel_path}: {e}")
         progress.advance(task_id)
 
@@ -518,6 +596,7 @@ def _apply_moves(
             logger.warning("Batch move failed: %s", e)
             # Fallback: skip these moves rather than crash
             stats.failed += len(batch)
+            stats.failed_paths.extend(m.new_rel_path for m in batch)
             continue
         stats.moved += len(batch)
 
@@ -562,6 +641,7 @@ def run_scan(
     allow_moves: bool = False,
     skip_moves: bool = False,
     thorough: bool = False,
+    allow_mass_delete: bool = False,
     console: Console,
 ) -> ScanStats:
     """Discover files, compute SHA, extract EXIF, generate proxies, upload.
@@ -570,12 +650,17 @@ def run_scan(
     enrich (Phase 2) operates on the proxy cache only.
     """
     library_id = library["library_id"]
-    root_path = Path(library["root_path"]).resolve()
+    root_path = reachable_root(library)
 
-    if not root_path.is_dir():
-        console.print(f"[red]Library root not accessible: {root_path}[/red]")
-        console.print("Is the volume mounted?")
-        return ScanStats()
+    if root_path is None:
+        here = local_library_root(library)
+        console.print(f"[red]Library root not accessible: {here}[/red]")
+        if here is not None and str(here) == library.get("root_path"):
+            console.print("Is the volume mounted? If it's mounted elsewhere on this machine, "
+                          "run `lumiverb config map-root`.")
+        else:
+            console.print("Is the volume mounted?")
+        return ScanStats(root_unreachable=True)
 
     stats = ScanStats()
 
@@ -586,9 +671,29 @@ def run_scan(
     if total_filters:
         console.print(f"Loaded {len(tenant_filters)} tenant + {len(library_filters)} library filter(s)")
 
+    # A folder that's gone is scanned from the nearest folder still there,
+    # which sees what was in it as deleted.
+    if path_prefix:
+        try:
+            found = _existing_folder(root_path, path_prefix)
+        except OSError as exc:
+            console.print(f"[yellow]Can't check {path_prefix} ({exc}), so this scan doesn't remove anything[/yellow]")
+            stats.unlisted.append(path_prefix)
+            return stats
+        if found != path_prefix:
+            console.print(f"{path_prefix} isn't on disk; scanning {found or 'the whole library'}")
+            path_prefix = found
+    if not path_prefix and not root_path.is_dir():
+        console.print(f"[red]Library root went away: {root_path}[/red]")
+        return ScanStats(root_unreachable=True)
+
     # Discover files
     console.print("[bold]Discovering files...[/bold]")
-    local_files = _walk_library(root_path, path_prefix, tenant_filters=tenant_filters, library_filters=library_filters)
+    local_files = _walk_library(root_path, path_prefix, tenant_filters=tenant_filters, library_filters=library_filters,
+                                unlisted=stats.unlisted)
+    if stats.unlisted:
+        console.print(f"[yellow]Couldn't list {len(stats.unlisted):,} folder(s), so this scan "
+                      "doesn't remove anything: {}[/yellow]".format(", ".join(stats.unlisted[:5]) or "/"))
 
     # Filter by media type
     if media_type_filter != "all":
@@ -596,7 +701,9 @@ def run_scan(
 
     console.print(f"Found {len(local_files):,} media files")
 
-    if not local_files and not force:
+    # An empty library is more likely an unmounted volume than a deleted
+    # one. An empty folder within it is just empty: its files are gone.
+    if not local_files and not force and not path_prefix:
         return stats
 
     # Fetch existing assets with SHA for change detection
@@ -604,15 +711,55 @@ def run_scan(
     existing = _fetch_existing_assets_with_sha(client, library_id)
     console.print(f"Server has {len(existing):,} existing assets")
 
+    ignored = _fetch_ignored_paths(client, library_id)
+    if ignored:
+        before = len(local_files)
+        local_files = [f for f in local_files if f["rel_path"] not in ignored]
+        if before > len(local_files):
+            console.print(f"Skipping {before - len(local_files):,} file(s) you trashed")
+
+    # Files written in the last SETTLE_SEC may still be copying, so they wait
+    # for a later scan, as on the Mac. They still count as on disk, so they
+    # are never taken for deleted.
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(seconds=SETTLE_SEC)
+    ahead = now + timedelta(seconds=FUTURE_MTIME_SEC)
+    settled: list[dict] = []
+    for f in local_files:
+        if f.get("file_mtime") and cutoff < f["file_mtime"] <= ahead:
+            stats.settling_paths.append(f["rel_path"])
+        else:
+            settled.append(f)
+    stats.settling = len(stats.settling_paths)
+    if stats.settling:
+        console.print(f"{stats.settling:,} file(s) still being written; a later scan picks them up")
+
     # Split files: new (not on server by path) vs existing (need SHA check)
     # Default (fast): mtime+size match skips hashing. --thorough forces SHA on all.
     new_files, needs_hash, fast_unchanged = _split_files(
-        local_files, existing, thorough=thorough or force,
+        settled, existing, thorough=thorough or force,
     )
     local_rel_paths = {f["rel_path"] for f in local_files}
 
+    # Deletions, and the mass-deletion guard, only consider what this scan
+    # covers: a `--media-type image` scan doesn't see videos on disk, so it
+    # must not count them as gone.
+    scope = existing
+    if media_type_filter != "all":
+        scope = {rp: sa for rp, sa in existing.items() if sa.media_type == media_type_filter}
+    if path_prefix:
+        prefix_dir = path_prefix.rstrip("/") + "/"
+        scope_size = sum(1 for rp in scope if rp.startswith(prefix_dir))
+    else:
+        scope_size = len(scope)
+
     # Detect deletions first (needed to scope move detection)
-    deleted_ids = _detect_deletions(local_files, existing, root_path, path_prefix)
+    deleted_ids = _detect_deletions(local_files, scope, root_path, path_prefix)
+    if stats.unlisted:
+        # Files in a folder that couldn't be listed may well be there, so
+        # they're neither deleted nor the old half of a move.
+        unseen = {sa.asset_id for rp, sa in scope.items() if any(is_within(rp, u) for u in stats.unlisted)}
+        deleted_ids = [aid for aid in deleted_ids if aid not in unseen]
 
     # --- Move detection ---
     # Only check for moves when: there are new files, there are deletions
@@ -663,8 +810,26 @@ def run_scan(
 
     # --skip-moves suppresses deletions too: without move detection we can't
     # distinguish real deletes from the "old path" half of a move.
+    if stats.unlisted and deleted_ids:
+        console.print(f"[yellow]Skipping {len(deleted_ids):,} deletions: some folders couldn't be listed[/yellow]")
+        deleted_ids = []
+
     if skip_moves and deleted_ids:
         console.print(f"[dim]Skipping {len(deleted_ids):,} deletions (--skip-moves)[/dim]")
+        deleted_ids = []
+
+    if (
+        deleted_ids
+        and not allow_mass_delete
+        and _deletion_guard_trips(len(deleted_ids), scope_size)
+    ):
+        pct = 100 * len(deleted_ids) / scope_size
+        console.print(
+            f"[yellow]Skipping {len(deleted_ids):,} deletions: {pct:.0f}% of the "
+            f"{scope_size:,} assets this scan covers aren't on disk, which usually means "
+            "the volume isn't fully mounted. If the files really are gone, re-run "
+            "with --allow-mass-delete.[/yellow]"
+        )
         deleted_ids = []
 
     # For skipped moves (via prompt choice): moved files don't participate.
@@ -687,7 +852,7 @@ def run_scan(
                 tid = hash_progress.add_task("Hashing", total=len(needs_hash))
                 for f in needs_hash:
                     server = f.pop("_server")
-                    source_sha = compute_sha256(root_path / f["rel_path"])
+                    source_sha = compute_sha256(resolve_source_path(root_path, f["rel_path"]))
                     if force or (source_sha and server.sha256 != source_sha):
                         changed_files.append(f)
                     else:
@@ -715,7 +880,8 @@ def run_scan(
         console.print(f"Removing {len(deleted_ids):,} assets no longer on disk...")
         for batch_start in range(0, len(deleted_ids), 500):
             batch = deleted_ids[batch_start : batch_start + 500]
-            client.delete("/v1/assets", json={"asset_ids": batch})
+            # "missing", not the user's trash: restored if the file reappears.
+            client.delete("/v1/assets", json={"asset_ids": batch, "reason": "missing"})
         stats.deleted = len(deleted_ids)
 
     # Pipeline: scan new files immediately while hashing existing files
@@ -774,7 +940,7 @@ def run_scan(
         # Unchanged files skip scanning (advance progress bar only).
         for f in needs_hash:
             server = f.pop("_server")
-            source_sha = compute_sha256(root_path / f["rel_path"])
+            source_sha = compute_sha256(resolve_source_path(root_path, f["rel_path"]))
             f["source_sha256"] = source_sha
 
             if force or (source_sha and server.sha256 != source_sha):

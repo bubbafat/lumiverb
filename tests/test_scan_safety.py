@@ -1,0 +1,593 @@
+"""Scanning is safe from a network mount (ADR-016 phase 0).
+
+- rel_path is Unicode NFC, as the macOS scanner stores it, so the same file
+  has one identity whichever machine scans it.
+- Source files are found on disk even when their names are stored in
+  another normalization form (macOS-created NFD names on a Linux mount).
+- A scan that would delete a large share of the library skips deletions,
+  as the macOS scanner does: the root is probably half-mounted.
+"""
+
+from __future__ import annotations
+
+import errno
+import os
+import unicodedata
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+from rich.console import Console
+
+from src.client.cli.ingest import _walk_library
+from src.client.cli.scan import _ServerAsset, _deletion_guard_trips, run_scan
+from src.shared.io_utils import resolve_source_path
+from src.shared.path_filter import PathFilter
+
+NFC = unicodedata.normalize("NFC", "Café/résumé.jpg")
+NFD = unicodedata.normalize("NFD", NFC)
+
+
+def _write(root: Path, rel: str, data: bytes = b"jpeg") -> Path:
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return path
+
+
+@pytest.mark.fast
+def test_walk_library_stores_nfc_rel_path(tmp_path: Path) -> None:
+    _write(tmp_path, NFD)
+
+    [entry] = _walk_library(tmp_path)
+
+    assert entry["rel_path"] == NFC
+    assert entry["rel_path"] != NFD
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(
+    "on_disk",
+    [
+        NFD,
+        unicodedata.normalize("NFC", "Café") + "/" + unicodedata.normalize("NFD", "résumé.jpg"),
+        unicodedata.normalize("NFD", "Café") + "/" + unicodedata.normalize("NFC", "résumé.jpg"),
+    ],
+)
+def test_resolve_source_path_finds_other_normalization(tmp_path: Path, on_disk: str) -> None:
+    _write(tmp_path, on_disk, b"original bytes")
+
+    path = resolve_source_path(tmp_path, NFC)
+
+    assert path.read_bytes() == b"original bytes"
+
+
+@pytest.mark.fast
+def test_resolve_source_path_plain_hit_and_miss(tmp_path: Path) -> None:
+    _write(tmp_path, "a/b.jpg")
+
+    assert resolve_source_path(tmp_path, "a/b.jpg") == tmp_path / "a/b.jpg"
+    assert resolve_source_path(tmp_path, "a/missing.jpg") == tmp_path / "a/missing.jpg"
+    assert resolve_source_path(tmp_path, "nope/x.jpg") == tmp_path / "nope/x.jpg"
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(
+    ("deleting", "on_server", "trips"),
+    [
+        (50, 100, False),  # 50 or fewer files always proceed
+        (60, 10_000, False),  # 0.6% of the library
+        (60, 100, True),
+        (600, 10_000, True),
+        (0, 0, False),
+    ],
+)
+def test_deletion_guard_matches_macos_threshold(deleting: int, on_server: int, trips: bool) -> None:
+    assert _deletion_guard_trips(deleting, on_server) is trips
+
+
+def _scan_with(
+    tmp_path: Path,
+    *,
+    on_disk: int,
+    on_server: int,
+    extra_server: dict | None = None,
+    ignored: set[str] | None = None,
+    split: MagicMock | None = None,
+    local: list[dict] | None = None,
+    **kwargs,
+) -> MagicMock:
+    """run_scan with `on_server` images on the server, of which `on_disk` are on disk unchanged."""
+    root = tmp_path / "lib"
+    root.mkdir(exist_ok=True)
+    if local is None:
+        local = [
+            {"rel_path": f"f{i}.jpg", "file_size": 4, "file_mtime": None, "media_type": "image", "ext": ".jpg"}
+            for i in range(on_disk)
+        ]
+    existing = {
+        f"f{i}.jpg": _ServerAsset(asset_id=f"ast_{i}", sha256="x", file_size=4, media_type="image")
+        for i in range(on_server)
+    }
+    existing.update(extra_server or {})
+    client = MagicMock()
+    with (
+        patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
+        patch("src.client.cli.scan._load_library_filters", return_value=[]),
+        patch("src.client.cli.scan._walk_library", return_value=local),
+        patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value=existing),
+        patch("src.client.cli.scan._fetch_ignored_paths", return_value=ignored or set()),
+        patch("src.client.cli.scan._split_files", split or MagicMock(return_value=([], [], local))),
+        patch("src.client.cli.scan._populate_cache_for_unchanged"),
+    ):
+        run_scan(
+            client,
+            {"library_id": "lib_1", "root_path": str(root)},
+            console=Console(quiet=True),
+            skip_moves=False,
+            allow_moves=True,
+            **kwargs,
+        )
+    return client
+
+
+def _deleted_ids(client: MagicMock) -> list[str]:
+    ids: list[str] = []
+    for call in client.delete.call_args_list:
+        if call.args and call.args[0] == "/v1/assets":
+            # The scanner's deletions are "missing", never the user's trash.
+            assert call.kwargs["json"]["reason"] == "missing"
+            ids.extend(call.kwargs["json"]["asset_ids"])
+    return ids
+
+
+@pytest.mark.fast
+def test_scan_skips_mass_deletion(tmp_path: Path) -> None:
+    client = _scan_with(tmp_path, on_disk=10, on_server=100)
+
+    assert _deleted_ids(client) == []
+
+
+@pytest.mark.fast
+def test_scan_mass_deletion_can_be_allowed(tmp_path: Path) -> None:
+    client = _scan_with(tmp_path, on_disk=10, on_server=100, allow_mass_delete=True)
+
+    assert len(_deleted_ids(client)) == 90
+
+
+@pytest.mark.fast
+def test_scan_small_deletion_proceeds(tmp_path: Path) -> None:
+    client = _scan_with(tmp_path, on_disk=95, on_server=100)
+
+    assert len(_deleted_ids(client)) == 5
+
+
+@pytest.mark.fast
+def test_media_type_scan_never_deletes_other_types(tmp_path: Path) -> None:
+    """`scan --media-type image` doesn't see videos on disk; it must not
+    treat the library's videos as gone."""
+    videos = {
+        f"v{i}.mov": _ServerAsset(asset_id=f"vid_{i}", sha256="x", file_size=4, media_type="video")
+        for i in range(30)
+    }
+
+    client = _scan_with(tmp_path, on_disk=10, on_server=10, extra_server=videos, media_type_filter="image")
+
+    assert _deleted_ids(client) == []
+
+
+@pytest.mark.fast
+def test_guard_measures_the_scanned_prefix(tmp_path: Path) -> None:
+    """60 files under sub/, 59 of them gone: that's 98% of what this scan
+    covers, even though it's under 1% of a 10,000-asset library."""
+    inside = {
+        f"sub/g{i}.jpg": _ServerAsset(asset_id=f"sub_{i}", sha256="x", file_size=4, media_type="image")
+        for i in range(60)
+    }
+    still_there = [{"rel_path": "sub/g0.jpg", "file_size": 4, "file_mtime": None,
+                    "media_type": "image", "ext": ".jpg"}]
+    (tmp_path / "lib" / "sub").mkdir(parents=True)
+
+    client = _scan_with(
+        tmp_path, on_disk=0, on_server=10_000, extra_server=inside, path_prefix="sub",
+        local=still_there, split=MagicMock(return_value=([], [], still_there)),
+    )
+
+    assert _deleted_ids(client) == []
+
+
+@pytest.mark.fast
+def test_scan_skips_trashed_paths(tmp_path: Path) -> None:
+    split = MagicMock(return_value=([], [], []))
+
+    _scan_with(tmp_path, on_disk=5, on_server=5, ignored={"f0.jpg", "f3.jpg"}, split=split)
+
+    scanned = {f["rel_path"] for f in split.call_args[0][0]}
+    assert scanned == {"f1.jpg", "f2.jpg", "f4.jpg"}
+
+
+@pytest.mark.fast
+def test_path_prefix_is_nfc() -> None:
+    from src.shared.io_utils import normalize_path_prefix
+
+    assert normalize_path_prefix("/" + unicodedata.normalize("NFD", "Café/") ) == unicodedata.normalize("NFC", "Café")
+
+
+# ---------------------------------------------------------------------------
+# Files still being written (ADR-016 phase 2): the brain scans as soon as the
+# Mac reports a copy, so a file still growing waits for a later scan, as the
+# macOS scanner's 30-second quarantine does.
+# ---------------------------------------------------------------------------
+
+
+def _local(rel: str, age_sec: float) -> dict:
+    from datetime import datetime, timedelta, timezone
+
+    return {"rel_path": rel, "file_size": 4, "media_type": "image", "ext": ".jpg",
+            "file_mtime": datetime.now(timezone.utc) - timedelta(seconds=age_sec)}
+
+
+@pytest.mark.fast
+def test_files_still_being_written_wait_for_a_later_scan(tmp_path: Path) -> None:
+    local = [_local("done.jpg", 600), _local("copying.jpg", 2)]
+    split = MagicMock(return_value=([], [], []))
+    _scan_with(tmp_path, on_disk=0, on_server=0, local=local, split=split)
+    passed = [f["rel_path"] for f in split.call_args.args[0]]
+    assert passed == ["done.jpg"]
+
+
+@pytest.mark.fast
+def test_a_file_being_rewritten_is_not_deleted(tmp_path: Path) -> None:
+    # It's on the server and on disk, just changing: never "missing".
+    local = [_local(f"f{i}.jpg", 600) for i in range(9)] + [_local("f9.jpg", 1)]
+    client = _scan_with(tmp_path, on_disk=0, on_server=10, local=local,
+                        split=MagicMock(return_value=([], [], [])))
+    assert _deleted_ids(client) == []
+
+
+@pytest.mark.fast
+def test_scan_counts_files_still_being_written(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    root.mkdir()
+    local = [_local("done.jpg", 600), _local("copying.jpg", 2)]
+    with (
+        patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
+        patch("src.client.cli.scan._load_library_filters", return_value=[]),
+        patch("src.client.cli.scan._walk_library", return_value=local),
+        patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value={}),
+        patch("src.client.cli.scan._fetch_ignored_paths", return_value=set()),
+        patch("src.client.cli.scan._split_files", MagicMock(return_value=([], [], []))),
+        patch("src.client.cli.scan._populate_cache_for_unchanged"),
+    ):
+        stats = run_scan(MagicMock(), {"library_id": "lib_1", "root_path": str(root)},
+                         console=Console(quiet=True), skip_moves=True)
+    assert stats.settling == 1
+    assert stats.settling_paths == ["copying.jpg"]
+
+
+@pytest.mark.fast
+def test_a_camera_clock_far_ahead_is_not_taken_for_a_copy(tmp_path: Path) -> None:
+    # Stamped an hour in the future, it would otherwise wait an hour.
+    local = [_local("ahead.jpg", -3600), _local("copying.jpg", -60)]
+    split = MagicMock(return_value=([], [], []))
+    _scan_with(tmp_path, on_disk=0, on_server=0, local=local, split=split)
+    passed = [f["rel_path"] for f in split.call_args.args[0]]
+    assert passed == ["ahead.jpg"]
+
+
+@pytest.mark.fast
+def test_scan_names_the_files_that_failed(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    root.mkdir()
+    (root / "bad.jpg").write_bytes(b"jpeg")
+    new = [{"rel_path": "bad.jpg", "file_size": 4, "file_mtime": None, "media_type": "image", "ext": ".jpg"}]
+    with (
+        patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
+        patch("src.client.cli.scan._load_library_filters", return_value=[]),
+        patch("src.client.cli.scan._walk_library", return_value=new),
+        patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value={}),
+        patch("src.client.cli.scan._fetch_ignored_paths", return_value=set()),
+        patch("src.client.cli.scan._generate_proxy_bytes", side_effect=RuntimeError("not a JPEG")),
+        patch("src.client.cli.scan.ProxyCache"),
+        patch("src.client.cli.scan._populate_cache_for_unchanged"),
+    ):
+        stats = run_scan(MagicMock(), {"library_id": "lib_1", "root_path": str(root)},
+                         console=Console(quiet=True), skip_moves=True)
+    assert stats.failed == 1
+    assert stats.failed_paths == ["bad.jpg"]
+
+
+# ---------------------------------------------------------------------------
+# A scan sees the folder it was given (ADR-016 phase 2): the worker
+# acknowledges reports after the scan, so a walk that quietly finds nothing
+# would drop them.
+# ---------------------------------------------------------------------------
+
+ZURICH = unicodedata.normalize("NFC", "Zürich")
+
+
+def _scan_disk(root: Path, existing: dict[str, _ServerAsset], *, library_filters: list | None = None,
+               **kwargs) -> MagicMock:
+    """run_scan over real files under root, with every file on disk unchanged."""
+    client = MagicMock()
+    with (
+        patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
+        patch("src.client.cli.scan._load_library_filters", return_value=library_filters or []),
+        patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value=existing),
+        patch("src.client.cli.scan._fetch_ignored_paths", return_value=set()),
+        patch("src.client.cli.scan._split_files", side_effect=lambda files, existing, thorough: ([], [], files)),
+        patch("src.client.cli.scan.ProxyCache"),
+        patch("src.client.cli.scan._populate_cache_for_unchanged"),
+    ):
+        client.stats = run_scan(client, {"library_id": "lib_1", "root_path": str(root)},
+                                console=Console(quiet=True), allow_moves=True, **kwargs)
+    return client
+
+
+def _assets(*rel_paths: str) -> dict[str, _ServerAsset]:
+    return {rel: _ServerAsset(asset_id=f"ast_{rel}", sha256="x", file_size=4, media_type="image")
+            for rel in rel_paths}
+
+
+@pytest.mark.fast
+def test_walk_finds_a_folder_named_in_nfd(tmp_path: Path) -> None:
+    _write(tmp_path, unicodedata.normalize("NFD", ZURICH) + "/A001.jpg")
+    [entry] = _walk_library(tmp_path, ZURICH)
+    assert entry["rel_path"] == f"{ZURICH}/A001.jpg"
+
+
+@pytest.mark.fast
+def test_scanning_a_folder_named_in_nfd_keeps_its_files(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    _write(root, unicodedata.normalize("NFD", ZURICH) + "/A001.jpg")
+    client = _scan_disk(root, _assets(f"{ZURICH}/A001.jpg", f"{ZURICH}/gone.jpg"), path_prefix=ZURICH)
+    assert _deleted_ids(client) == [f"ast_{ZURICH}/gone.jpg"]
+
+
+@pytest.mark.fast
+def test_a_deleted_folder_is_seen_from_its_parent(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    _write(root, "Shoots/keep.jpg")
+    client = _scan_disk(root, _assets("Shoots/keep.jpg", "Shoots/Gone/a.jpg", "Other/b.jpg"),
+                        path_prefix="Shoots/Gone")
+    assert _deleted_ids(client) == ["ast_Shoots/Gone/a.jpg"]
+
+
+@pytest.mark.fast
+def test_an_emptied_folder_sees_its_deletions(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    (root / "Shoots" / "Day 1").mkdir(parents=True)
+    _write(root, "Other/b.jpg")
+    client = _scan_disk(root, _assets("Shoots/Day 1/a.jpg", "Other/b.jpg"), path_prefix="Shoots/Day 1")
+    assert _deleted_ids(client) == ["ast_Shoots/Day 1/a.jpg"]
+
+
+@pytest.mark.fast
+def test_walk_lists_hidden_files_and_linked_files_but_not_linked_folders(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    for rel in ("a/f.jpg", ".h.jpg", ".hid/g.jpg", "notes.txt"):
+        _write(root, rel)
+    _write(tmp_path, "other/o.jpg")
+    (root / "linked").symlink_to(tmp_path / "other")
+    (root / "link.jpg").symlink_to(tmp_path / "other" / "o.jpg")
+    (root / "broken.jpg").symlink_to(tmp_path / "nowhere.jpg")
+    assert [f["rel_path"] for f in _walk_library(root)] == [".h.jpg", ".hid/g.jpg", "a/f.jpg", "link.jpg"]
+
+
+# ---------------------------------------------------------------------------
+# A folder that can't be listed (no permission, or a CIFS soft mount timing
+# out mid-walk) must not look deleted.
+# ---------------------------------------------------------------------------
+
+needs_permissions = pytest.mark.skipif(os.geteuid() == 0, reason="root reads any folder")
+
+
+@pytest.fixture
+def locked(tmp_path: Path):
+    """A library with a folder nobody can list."""
+    root = tmp_path / "lib"
+    _write(root, "open/a.jpg")
+    _write(root, "Locked/b.jpg")
+    (root / "Locked").chmod(0)
+    yield root
+    (root / "Locked").chmod(0o755)
+
+
+@pytest.mark.fast
+@needs_permissions
+def test_walk_reports_folders_it_could_not_list(locked: Path) -> None:
+    unlisted: list[str] = []
+    files = _walk_library(locked, unlisted=unlisted)
+    assert [f["rel_path"] for f in files] == ["open/a.jpg"]
+    assert unlisted == ["Locked"]
+
+
+@pytest.mark.fast
+@needs_permissions
+def test_a_folder_that_cannot_be_listed_deletes_nothing(locked: Path) -> None:
+    client = _scan_disk(locked, _assets("open/a.jpg", "Locked/b.jpg", "gone.jpg"))
+    assert _deleted_ids(client) == []
+
+
+@pytest.mark.fast
+@needs_permissions
+def test_a_scan_says_which_folders_it_could_not_list(locked: Path) -> None:
+    with (
+        patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
+        patch("src.client.cli.scan._load_library_filters", return_value=[]),
+        patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value=_assets("open/a.jpg")),
+        patch("src.client.cli.scan._fetch_ignored_paths", return_value=set()),
+        patch("src.client.cli.scan._split_files", side_effect=lambda files, existing, thorough: ([], [], files)),
+        patch("src.client.cli.scan.ProxyCache"),
+        patch("src.client.cli.scan._populate_cache_for_unchanged"),
+    ):
+        stats = run_scan(MagicMock(), {"library_id": "lib_1", "root_path": str(locked)}, console=Console(quiet=True))
+    assert stats.unlisted == ["Locked"]
+
+
+@pytest.mark.fast
+@needs_permissions
+def test_moves_outside_a_folder_that_cannot_be_listed_still_apply(locked: Path) -> None:
+    from src.client.workers.exif_extract import compute_sha256
+
+    moved = _write(locked, "open/moved.jpg", b"moved bytes")
+    for f in (moved, locked / "open" / "a.jpg"):
+        os.utime(f, (1e9, 1e9))  # long settled
+    sha = compute_sha256(moved)
+    existing = {
+        "Locked/b.jpg": _ServerAsset(asset_id="ast_b", sha256=sha, file_size=11, media_type="image"),
+        "was/moved.jpg": _ServerAsset(asset_id="ast_moved", sha256=sha, file_size=11, media_type="image"),
+    }
+    client = MagicMock()
+    with (
+        patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
+        patch("src.client.cli.scan._load_library_filters", return_value=[]),
+        patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value=existing),
+        patch("src.client.cli.scan._fetch_ignored_paths", return_value=set()),
+        patch("src.client.cli.scan._scan_one"),
+        patch("src.client.cli.scan.ProxyCache"),
+        patch("src.client.cli.scan._populate_cache_for_unchanged"),
+    ):
+        run_scan(client, {"library_id": "lib_1", "root_path": str(locked)}, path_prefix=None,
+                 console=Console(quiet=True), allow_moves=True)
+    moves = [c.kwargs["json"]["items"] for c in client.post.call_args_list if c.args[0] == "/v1/assets/batch-moves"]
+    # Never the asset in the folder that couldn't be listed: it may still be there.
+    assert moves == [[{"asset_id": "ast_moved", "rel_path": "open/moved.jpg"}]]
+    assert _deleted_ids(client) == []
+
+
+@pytest.mark.fast
+def test_a_root_gone_mid_scan_is_reported_unreachable(tmp_path: Path) -> None:
+    # Checked reachable, then unmounted: nothing was scanned, so the worker
+    # must keep the reports.
+    with (
+        patch("src.client.cli.scan.reachable_root", return_value=tmp_path / "gone"),
+        patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
+        patch("src.client.cli.scan._load_library_filters", return_value=[]),
+    ):
+        stats = run_scan(MagicMock(), {"library_id": "lib_1", "root_path": "/x"}, path_prefix="Day 1",
+                         console=Console(quiet=True))
+    assert stats.root_unreachable
+
+
+# ---------------------------------------------------------------------------
+# A file that lists but can't be checked (no permission, or the share going
+# away between listing and stat) isn't gone. Python 3.14's Path.is_file()
+# says False for any error, which made a whole folder look deleted.
+# ---------------------------------------------------------------------------
+
+UNCHECKABLE = [errno.EACCES, errno.EIO]
+
+
+@pytest.fixture
+def flaky(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> Path:
+    """A library whose Flaky/ folder lists, but whose files can't be stat'ed."""
+    root = tmp_path / "lib"
+    _write(root, "open/a.jpg")
+    _write(root, "Flaky/b.jpg")
+    _write(root, "Flaky/c.jpg")
+    real_stat = os.stat
+
+    def stat(path, *args, **kwargs):
+        if Path(os.fspath(path)).parent.name == "Flaky":
+            raise OSError(request.param, os.strerror(request.param), os.fspath(path))
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", stat)
+    return root
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("flaky", UNCHECKABLE, indirect=True)
+def test_walk_reports_a_folder_whose_files_cannot_be_checked(flaky: Path) -> None:
+    unlisted: list[str] = []
+    files = _walk_library(flaky, unlisted=unlisted)
+    assert [f["rel_path"] for f in files] == ["open/a.jpg"]
+    assert unlisted == ["Flaky"]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("flaky", UNCHECKABLE, indirect=True)
+def test_files_that_cannot_be_checked_are_not_deleted(flaky: Path) -> None:
+    client = _scan_disk(flaky, _assets("Flaky/b.jpg", "Flaky/c.jpg"), path_prefix="Flaky")
+    assert _deleted_ids(client) == []
+    assert client.stats.unlisted == ["Flaky"]
+
+
+@pytest.mark.fast
+def test_a_file_gone_between_listing_and_stat_is_just_gone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "lib"
+    _write(root, "Day/a.jpg")
+    _write(root, "Day/b.jpg")
+    real_stat = os.stat
+
+    def stat(path, *args, **kwargs):
+        if os.fspath(path).endswith("b.jpg"):
+            raise FileNotFoundError(errno.ENOENT, "gone", os.fspath(path))
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", stat)
+    unlisted: list[str] = []
+    assert [f["rel_path"] for f in _walk_library(root, unlisted=unlisted)] == ["Day/a.jpg"]
+    assert unlisted == []
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("err", UNCHECKABLE)
+def test_a_folder_that_cannot_be_checked_is_not_taken_for_gone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                               err: int) -> None:
+    # Taken for gone, its parent would be scanned instead, and what's in it
+    # deleted if the parent's walk then missed it.
+    root = tmp_path / "lib"
+    _write(root, "Shoots/Day 1/a.jpg")
+    real_stat = os.stat
+
+    def stat(path, *args, **kwargs):
+        if Path(os.fspath(path)).name == "Day 1":
+            raise OSError(err, os.strerror(err), os.fspath(path))
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", stat)
+    client = _scan_disk(root, _assets("Shoots/Day 1/a.jpg", "Shoots/Day 1/b.jpg"), path_prefix="Shoots/Day 1")
+    assert _deleted_ids(client) == []
+    assert client.stats.unlisted == ["Shoots/Day 1"]
+
+
+@pytest.fixture
+def junk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> Path:
+    """A library with media beside files that can't be stat'ed: a .DS_Store and an excluded .jpg."""
+    root = tmp_path / "lib"
+    _write(root, "Day/a.jpg")
+    _write(root, "Day/.DS_Store")
+    _write(root, "Day/Exports/x.jpg")
+    real_stat = os.stat
+
+    def stat(path, *args, **kwargs):
+        if Path(os.fspath(path)).name in (".DS_Store", "x.jpg"):
+            raise OSError(request.param, os.strerror(request.param), os.fspath(path))
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", stat)
+    return root
+
+
+EXPORTS = [PathFilter(type="exclude", pattern="**/Exports/**")]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("junk", UNCHECKABLE, indirect=True)
+def test_files_the_scan_would_skip_are_never_checked(junk: Path) -> None:
+    # A .DS_Store that can't be stat'ed made its folder "unlisted", which
+    # blocked every deletion in the library on every scan.
+    unlisted: list[str] = []
+    files = _walk_library(junk, library_filters=EXPORTS, unlisted=unlisted)
+    assert [f["rel_path"] for f in files] == ["Day/a.jpg"]
+    assert unlisted == []
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("junk", UNCHECKABLE, indirect=True)
+def test_a_junk_file_that_cannot_be_checked_doesnt_block_deletions(junk: Path) -> None:
+    client = _scan_disk(junk, _assets("Day/a.jpg", "Day/gone.jpg"), library_filters=EXPORTS)
+    assert _deleted_ids(client) == ["ast_Day/gone.jpg"]
+    assert client.stats.unlisted == []

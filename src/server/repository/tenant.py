@@ -12,7 +12,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.sql import text as sa_text
 from sqlmodel import Session, select
 
-from src.shared.io_utils import normalize_path_prefix
+from src.shared.io_utils import normalize_path_prefix, normalize_rel_path
 from src.shared.utils import utcnow
 from src.shared import asset_status
 from src.server.models.similarity import SimilarityScope
@@ -21,16 +21,18 @@ from src.server.models.tenant import (
     AssetEmbedding,
     AssetMetadata,
     AssetRating,
-    Collection,
-    CollectionAsset,
+    Project,
+    ProjectAsset,
     Face,
     FacePersonMatch,
+    IgnoredFile,
     Library,
     Person,
     LibraryPathFilter,
     TenantPathFilterDefault,
     SavedView,
     VALID_COLORS,
+    VideoFacetRow,
     VideoIndexChunk,
     VideoScene,
 )
@@ -70,6 +72,11 @@ MISSING_CONDITIONS = {
         " AND a.media_type = 'video'"
         " AND a.duration_sec IS NOT NULL"
     ),
+    "missing_probe": (
+        "a.media_type = 'video'"
+        " AND NOT EXISTS (SELECT 1 FROM video_facets vf WHERE vf.asset_id = a.asset_id)"
+    ),
+    "missing_analysis_proxy": "a.media_type = 'video' AND a.analysis_proxy_key IS NULL",
 }
 
 
@@ -85,6 +92,63 @@ def _active_assets_subquery():
         .subquery("active_a")
     )
 
+
+
+class LibraryChangeRepository:
+    """Paths reported changed on storage, waiting for the brain to scan them."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def record(self, library_id: str, rel_paths: list[str]) -> None:
+        """Add paths, or bump the version and time of ones already pending."""
+        for rel_path in dict.fromkeys(rel_paths):
+            self._session.execute(
+                sa_text(
+                    "INSERT INTO library_changes (change_id, library_id, rel_path, reported_at)"
+                    " VALUES (:change_id, :library_id, :rel_path, clock_timestamp())"
+                    " ON CONFLICT (library_id, rel_path) DO UPDATE"
+                    " SET reported_at = clock_timestamp(),"
+                    "     version = nextval('library_changes_version_seq')"
+                ),
+                {"change_id": "chg_" + str(ULID()), "library_id": library_id, "rel_path": rel_path},
+            )
+        self._session.commit()
+
+    def pending(self, library_id: str, limit: int) -> tuple[list[dict], bool]:
+        """Oldest first. Returns (changes, truncated)."""
+        rows = self._session.execute(
+            sa_text(
+                "SELECT change_id, rel_path, reported_at, version FROM library_changes"
+                " WHERE library_id = :library_id ORDER BY reported_at, change_id LIMIT :limit"
+            ),
+            {"library_id": library_id, "limit": limit + 1},
+        ).all()
+        return [dict(r._mapping) for r in rows[:limit]], len(rows) > limit
+
+    def acknowledge(self, library_id: str, seen: list[tuple[str, int]]) -> int:
+        """Remove changes whose version is the one the scan saw. Returns how many."""
+        removed = 0
+        for change_id, version in seen:
+            result = self._session.execute(
+                sa_text(
+                    "DELETE FROM library_changes"
+                    " WHERE library_id = :library_id AND change_id = :change_id AND version <= :version"
+                ),
+                {"library_id": library_id, "change_id": change_id, "version": version},
+            )
+            removed += result.rowcount or 0
+        self._session.commit()
+        return removed
+
+    def summary(self) -> list[dict]:
+        rows = self._session.execute(
+            sa_text(
+                "SELECT library_id, COUNT(*) AS pending, MIN(reported_at) AS oldest_reported_at"
+                " FROM library_changes GROUP BY library_id ORDER BY library_id"
+            )
+        ).all()
+        return [dict(r._mapping) for r in rows]
 
 
 class LibraryRepository:
@@ -152,10 +216,12 @@ class LibraryRepository:
             raise ValueError(f"Library not found: {library_id}")
         if library.status == "trashed":
             raise ValueError(f"Library already trashed: {library_id}")
-        # Soft-delete all assets in this library
+        # Soft-delete all assets in this library. The reason says the clip
+        # went with its library, not that its file went missing.
         self._session.execute(
             text(
-                "UPDATE assets SET deleted_at = :now WHERE library_id = :library_id AND deleted_at IS NULL"
+                "UPDATE assets SET deleted_at = :now, deleted_reason = 'library'"
+                " WHERE library_id = :library_id AND deleted_at IS NULL"
             ),
             {"library_id": library_id, "now": utcnow()},
         )
@@ -465,7 +531,7 @@ class AssetRepository:
     # Columns allowed for sorting.
     SORTABLE_COLUMNS = {
         "asset_id", "taken_at", "created_at", "file_size",
-        "iso", "aperture", "focal_length", "rel_path",
+        "iso", "exposure_time_us", "aperture", "focal_length", "rel_path",
     }
 
     def page_by_library(
@@ -483,9 +549,11 @@ class AssetRepository:
         missing_ocr: bool = False,
         missing_scene_vision: bool = False,
         missing_transcription: bool = False,
+        missing_probe: bool = False,
         has_faces: bool | None = None,
         person_id: str | None = None,
         *,
+        missing_analysis_proxy: bool = False,
         sort: str = "taken_at",
         direction: str = "desc",
         media_types: list[str] | None = None,
@@ -567,12 +635,14 @@ class AssetRepository:
                 # Row-value comparison for composite cursor.
                 # NULLs sort last: rows with NULL sort_col come after non-NULL rows.
                 conditions.append(f"""(
+                    -- Rows are ordered NULLS LAST: after an undated cursor only
+                    -- undated rows follow; after a dated one, later dated rows
+                    -- and every undated row.
                     CASE
                         WHEN :cursor_value IS NULL THEN
-                            a.{sort_col} IS NOT NULL
-                            OR (a.{sort_col} IS NULL AND a.asset_id {cmp_op} :cursor_id)
+                            a.{sort_col} IS NULL AND a.asset_id {cmp_op} :cursor_id
                         WHEN a.{sort_col} IS NULL THEN
-                            FALSE
+                            TRUE
                         ELSE
                             (a.{sort_col}, a.asset_id) {cmp_op} (:cursor_value, :cursor_id)
                     END
@@ -600,6 +670,10 @@ class AssetRepository:
             conditions.append(MISSING_CONDITIONS["missing_scene_vision"])
         if missing_transcription:
             conditions.append(MISSING_CONDITIONS["missing_transcription"])
+        if missing_probe:
+            conditions.append(MISSING_CONDITIONS["missing_probe"])
+        if missing_analysis_proxy:
+            conditions.append(MISSING_CONDITIONS["missing_analysis_proxy"])
         if has_faces is True:
             conditions.append("a.face_count > 0")
         elif has_faces is False:
@@ -781,30 +855,49 @@ class AssetRepository:
         stmt = select(Asset).where(Asset.deleted_at.is_(None))
         return list(self._session.exec(stmt).all())
 
-    def trash(self, asset_id: str) -> bool:
-        """Set deleted_at = now(). Returns False if not found or already trashed."""
+    def trash(self, asset_id: str, *, reason: str | None = None) -> bool:
+        """Set deleted_at = now(). Returns False if not found or already trashed.
+
+        reason "user" makes the trash survive rescans; "missing" or None means
+        the file wasn't found and ingest restores it if it reappears.
+        """
         asset = self._session.get(Asset, asset_id)
-        if asset is None or asset.deleted_at is not None:
+        if asset is None:
             return False
-        asset.deleted_at = utcnow()
+        if asset.deleted_at is not None:
+            # Only the user's trash can be laid over a missing file (so it
+            # stays trashed when the drive comes back); anything else is a no-op.
+            if reason != "user" or asset.deleted_reason == "user":
+                return False
+        else:
+            asset.deleted_at = utcnow()
+        asset.deleted_reason = reason
         self._session.add(asset)
         self._session.commit()
         return True
 
-    def trash_many(self, asset_ids: list[str]) -> tuple[list[str], list[str]]:
-        """Bulk trash. Returns (trashed_ids, not_found_ids)."""
+    def trash_many(
+        self, asset_ids: list[str], *, reason: str | None = None
+    ) -> tuple[list[str], list[str]]:
+        """Bulk trash. Returns (trashed_ids, not_found_ids). See trash() for reason."""
         if not asset_ids:
             return [], []
         now = utcnow()
         result = self._session.execute(
             text(
                 """
-                UPDATE assets SET deleted_at = :now
-                WHERE asset_id = ANY(:ids) AND deleted_at IS NULL
+                UPDATE assets
+                SET deleted_at = COALESCE(deleted_at, :now), deleted_reason = :reason
+                WHERE asset_id = ANY(:ids)
+                  AND (
+                    deleted_at IS NULL
+                    -- the user's trash can be laid over a missing file
+                    OR (CAST(:reason AS text) = 'user' AND deleted_reason IS DISTINCT FROM 'user')
+                  )
                 RETURNING asset_id
                 """
             ),
-            {"now": now, "ids": asset_ids},
+            {"now": now, "reason": reason, "ids": asset_ids},
         )
         trashed = [row[0] for row in result.fetchall()]
         not_found = [aid for aid in asset_ids if aid not in trashed]
@@ -812,24 +905,128 @@ class AssetRepository:
         return (trashed, not_found)
 
     def restore(self, asset_id: str) -> bool:
-        """Clear deleted_at. Returns False if not found or not trashed."""
+        """Clear deleted_at. Returns False if not found or not trashed.
+
+        Trashing deleted the asset's search documents, so the asset and its
+        scenes go back in the queue for the next search sync. Transcript
+        segments aren't swept; callers re-index them (reindex_restored_asset).
+        """
         asset = self._session.get(Asset, asset_id)
         if asset is None or asset.deleted_at is None:
             return False
-        asset.deleted_at = None
-        self._session.add(asset)
+        self.clear_trash(asset)
         self._session.commit()
         return True
+
+    def clear_trash(self, asset: Asset) -> None:
+        """Take an asset out of the trash and queue it and its scenes for the
+        next search sync (trashing deleted their search documents). No
+        commit. Transcript segments aren't swept: callers re-index them."""
+        asset.deleted_at = None
+        asset.deleted_reason = None
+        asset.search_synced_at = None
+        self._session.add(asset)
+        self._session.execute(
+            text("UPDATE video_scenes SET search_synced_at = NULL WHERE asset_id = :a"),
+            {"a": asset.asset_id},
+        )
+
+    def page_ignored_paths(
+        self, library_id: str, *, after: str | None = None, limit: int = 500
+    ) -> list[tuple[str, str]]:
+        """Paths scanners must skip, by rel_path: (rel_path, "trashed" | "emptied").
+
+        "trashed" = in the trash by the user's choice; "emptied" = the user
+        emptied its trash (ignored_files).
+        """
+        rows = self._session.execute(
+            text(
+                """
+                SELECT rel_path, kind FROM (
+                    SELECT rel_path, 'trashed' AS kind FROM assets
+                    WHERE library_id = :lib AND deleted_at IS NOT NULL
+                      AND deleted_reason = 'user'
+                    UNION ALL
+                    SELECT rel_path, 'emptied' AS kind FROM ignored_files
+                    WHERE library_id = :lib
+                ) p
+                WHERE (CAST(:after AS text) IS NULL OR rel_path > :after)
+                ORDER BY rel_path
+                LIMIT :limit
+                """
+            ),
+            {"lib": library_id, "after": after, "limit": limit},
+        ).all()
+        return [(r[0], r[1]) for r in rows]
+
+    VIDEO_FACET_FIELDS = (
+        "duration_sec", "container", "video_codec", "width", "height", "rotation",
+        "frame_rate_num", "frame_rate_den", "start_timecode", "drop_frame",
+        "audio_codec", "audio_channels", "audio_sample_rate",
+    )
+
+    def upsert_video_facet(self, asset_id: str, facet: dict) -> None:
+        """Store a video's probe result, replacing any earlier one.
+
+        The probe's duration becomes the asset's duration_sec: it's measured
+        from the stream, where the EXIF value may be missing (the macOS
+        scanner sends none) or rounded.
+        """
+        values = {k: facet.get(k) for k in self.VIDEO_FACET_FIELDS}
+        values["rotation"] = values["rotation"] or 0
+        stmt = pg_insert(VideoFacetRow).values(asset_id=asset_id, probed_at=utcnow(), **values)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["asset_id"],
+            set_={**values, "probed_at": stmt.excluded.probed_at},
+        )
+        self._session.execute(stmt)
+        if values["duration_sec"] is not None:
+            self._session.execute(
+                text("UPDATE assets SET duration_sec = :d, updated_at = :now WHERE asset_id = :aid"),
+                {"d": values["duration_sec"], "now": utcnow(), "aid": asset_id},
+            )
+        self._session.commit()
+
+    def get_video_facet(self, asset_id: str) -> dict | None:
+        row = self._session.get(VideoFacetRow, asset_id)
+        if row is None:
+            return None
+        return {k: getattr(row, k) for k in self.VIDEO_FACET_FIELDS}
+
+    def is_ignored(self, library_id: str, rel_path: str) -> bool:
+        """True if the user emptied this file's trash (see ignored_files)."""
+        return self._session.get(IgnoredFile, (library_id, normalize_rel_path(rel_path))) is not None
+
+    def unignore(self, library_id: str, rel_paths: list[str]) -> int:
+        """Forget emptied-trash records so the next scan picks the files up again."""
+        if not rel_paths:
+            return 0
+        result = self._session.execute(
+            text(
+                "DELETE FROM ignored_files"
+                " WHERE library_id = :lib AND rel_path = ANY(:paths)"
+            ),
+            {"lib": library_id, "paths": [normalize_rel_path(p) for p in rel_paths]},
+        )
+        self._session.commit()
+        return result.rowcount  # type: ignore[union-attr]
 
     def list_trashed(
         self,
         asset_ids: list[str] | None = None,
         trashed_before: datetime | None = None,
     ) -> list[Asset]:
-        """Return trashed assets matching the given filters."""
+        """Return trashed assets matching the given filters.
+
+        Without explicit asset_ids, only the user's trash: assets that are
+        merely missing on disk (an unplugged drive) keep their human data
+        until someone purges them by id.
+        """
         stmt = select(Asset).where(Asset.deleted_at.isnot(None))
         if asset_ids is not None:
             stmt = stmt.where(Asset.asset_id.in_(asset_ids))
+        else:
+            stmt = stmt.where(Asset.deleted_reason == "user")
         if trashed_before is not None:
             stmt = stmt.where(Asset.deleted_at < trashed_before)
         return list(self._session.exec(stmt).all())
@@ -853,14 +1050,28 @@ class AssetRepository:
         - ``faces`` + transitive ``face_person_matches`` and a NULL on
           ``people.representative_face_id`` so the FK on Person doesn't
           block the face delete
-        - ``collection_assets``     (membership rows)
+        - ``project_assets``     (membership rows)
         - ``asset_ratings``         (per-user)
-        - ``collections.cover_asset_id`` is nullable — set to NULL rather
-          than deleting the collection itself
+        - ``video_facets``, ``ignored_files``' sources: ``video_facets``
+          rows go with the asset via ON DELETE CASCADE
+        - ``projects.cover_asset_id`` is nullable — set to NULL rather
+          than deleting the project itself
         """
         if not asset_ids:
             return 0
         params = {"asset_ids": asset_ids}
+        # Lumiverb never deletes originals, so a file the user trashed may
+        # still be on disk. Remember it, or the next scan would bring it back.
+        self._session.execute(
+            text(
+                "INSERT INTO ignored_files (library_id, rel_path, sha256, created_at)"
+                " SELECT library_id, rel_path, sha256, :now FROM assets"
+                " WHERE asset_id = ANY(:asset_ids)"
+                "   AND deleted_at IS NOT NULL AND deleted_reason = 'user'"
+                " ON CONFLICT (library_id, rel_path) DO NOTHING"
+            ),
+            {**params, "now": utcnow()},
+        )
         self._session.execute(
             text("DELETE FROM asset_metadata WHERE asset_id = ANY(:asset_ids)"),
             params,
@@ -904,9 +1115,9 @@ class AssetRepository:
             params,
         )
 
-        # Collection membership and ratings reference asset_id directly.
+        # Project membership and ratings reference asset_id directly.
         self._session.execute(
-            text("DELETE FROM collection_assets WHERE asset_id = ANY(:asset_ids)"),
+            text("DELETE FROM project_assets WHERE asset_id = ANY(:asset_ids)"),
             params,
         )
         self._session.execute(
@@ -914,10 +1125,10 @@ class AssetRepository:
             params,
         )
         # Cover image is a nullable FK — null it out instead of cascading
-        # the whole collection.
+        # the whole project.
         self._session.execute(
             text(
-                "UPDATE collections SET cover_asset_id = NULL"
+                "UPDATE projects SET cover_asset_id = NULL"
                 " WHERE cover_asset_id = ANY(:asset_ids)"
             ),
             params,
@@ -996,6 +1207,17 @@ class AssetRepository:
             raise ValueError(f"Asset not found: {asset_id}")
         asset.video_preview_key = video_preview_key
         asset.video_preview_generated_at = utcnow()
+        self._session.add(asset)
+        self._session.commit()
+
+    def set_analysis_proxy(self, asset_id: str, key: str, sha256: str) -> None:
+        """Record a video's analysis proxy."""
+        asset = self._session.get(Asset, asset_id)
+        if asset is None:
+            raise ValueError(f"Asset not found: {asset_id}")
+        asset.analysis_proxy_key = key
+        asset.analysis_proxy_sha256 = sha256
+        asset.analysis_proxy_generated_at = utcnow()
         self._session.add(asset)
         self._session.commit()
 
@@ -1652,19 +1874,19 @@ class VideoIndexChunkRepository:
 
 
 # ---------------------------------------------------------------------------
-# Collections (ADR-006)
+# Projects (ADR-006)
 # ---------------------------------------------------------------------------
 
 _SENTINEL = object()  # distinguishes "not provided" from None
 
 
-class CollectionRepository:
-    """Repository for collections and collection_assets tables."""
+class ProjectRepository:
+    """Repository for projects and project_assets tables."""
 
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    # ---- Collection CRUD ----
+    # ---- Project CRUD ----
 
     def create(
         self,
@@ -1675,10 +1897,10 @@ class CollectionRepository:
         visibility: str = "private",
         type: str = "static",
         saved_query: dict | None = None,
-    ) -> Collection:
-        collection_id = "col_" + str(ULID())
-        collection = Collection(
-            collection_id=collection_id,
+    ) -> Project:
+        project_id = "prj_" + str(ULID())  # pre-rename ids start with "col_"
+        project = Project(
+            project_id=project_id,
             name=name,
             owner_user_id=owner_user_id,
             description=description,
@@ -1687,35 +1909,77 @@ class CollectionRepository:
             type=type,
             saved_query=saved_query,
         )
-        self._session.add(collection)
+        self._session.add(project)
         self._session.commit()
-        self._session.refresh(collection)
-        return collection
+        self._session.refresh(project)
+        return project
 
-    def get_by_id(self, collection_id: str) -> Collection | None:
-        return self._session.exec(
-            select(Collection).where(Collection.collection_id == collection_id)
-        ).first()
+    def get_by_id(self, project_id: str, *, include_trashed: bool = False) -> Project | None:
+        """A project by id. A trashed one counts as gone unless include_trashed."""
+        stmt = select(Project).where(Project.project_id == project_id)
+        if not include_trashed:
+            stmt = stmt.where(Project.deleted_at.is_(None))  # type: ignore[union-attr]
+        return self._session.exec(stmt).first()
 
-    def list_for_user(self, user_id: str) -> list[Collection]:
-        """Return collections owned by user + shared collections."""
+    def list_for_user(self, user_id: str, *, statuses: tuple[str, ...] = ("active",)) -> list[Project]:
+        """Return projects owned by user + shared projects, in the given lifecycle states."""
         return list(
             self._session.exec(
-                select(Collection)
+                select(Project)
                 .where(
                     or_(
-                        Collection.owner_user_id == user_id,
-                        Collection.owner_user_id.is_(None),  # type: ignore[union-attr]
-                        Collection.visibility.in_(["shared", "public"]),  # type: ignore[union-attr]
-                    )
+                        Project.owner_user_id == user_id,
+                        Project.owner_user_id.is_(None),  # type: ignore[union-attr]
+                        Project.visibility.in_(["shared", "public"]),  # type: ignore[union-attr]
+                    ),
+                    Project.status.in_(statuses),  # type: ignore[attr-defined]
+                    Project.deleted_at.is_(None),  # type: ignore[union-attr]
                 )
-                .order_by(Collection.created_at.desc())  # type: ignore[attr-defined]
+                .order_by(Project.created_at.desc())  # type: ignore[attr-defined]
             ).all()
         )
 
+    def list_trashed(self, user_id: str) -> list[Project]:
+        """The user's trash: projects they own (or nobody owns) that were
+        deleted, most recently deleted first."""
+        return list(
+            self._session.exec(
+                select(Project)
+                .where(
+                    or_(
+                        Project.owner_user_id == user_id,
+                        Project.owner_user_id.is_(None),  # type: ignore[union-attr]
+                    ),
+                    Project.deleted_at.is_not(None),  # type: ignore[union-attr]
+                )
+                .order_by(Project.deleted_at.desc())  # type: ignore[union-attr]
+            ).all()
+        )
+
+    def trash(self, project_id: str) -> bool:
+        """Move a project to the trash. False if it's missing or already there."""
+        col = self.get_by_id(project_id)
+        if col is None:
+            return False
+        col.deleted_at = col.updated_at = utcnow()
+        self._session.add(col)
+        self._session.commit()
+        return True
+
+    def restore(self, project_id: str) -> bool:
+        """Take a project out of the trash. False if it isn't in the trash."""
+        col = self.get_by_id(project_id, include_trashed=True)
+        if col is None or col.deleted_at is None:
+            return False
+        col.deleted_at = None
+        col.updated_at = utcnow()
+        self._session.add(col)
+        self._session.commit()
+        return True
+
     def update(
         self,
-        collection_id: str,
+        project_id: str,
         *,
         name: str | None = None,
         description: str | None = _SENTINEL,
@@ -1723,10 +1987,14 @@ class CollectionRepository:
         sort_order: str | None = None,
         cover_asset_id: str | None = _SENTINEL,
         saved_query: dict | None = _SENTINEL,
-    ) -> Collection | None:
-        col = self.get_by_id(collection_id)
+        status: str | None = None,
+    ) -> Project | None:
+        col = self.get_by_id(project_id)
         if col is None:
             return None
+        if status is not None and status != col.status:
+            col.status = status
+            col.archived_at = utcnow() if status == "archived" else None
         if name is not None:
             col.name = name
         if description is not _SENTINEL:
@@ -1745,8 +2013,9 @@ class CollectionRepository:
         self._session.refresh(col)
         return col
 
-    def delete(self, collection_id: str) -> bool:
-        col = self.get_by_id(collection_id)
+    def delete(self, project_id: str) -> bool:
+        """Delete a project for good, trashed or not. Its clips stay."""
+        col = self.get_by_id(project_id, include_trashed=True)
         if col is None:
             return False
         self._session.delete(col)
@@ -1755,41 +2024,112 @@ class CollectionRepository:
 
     # ---- Asset count (no denormalized column) ----
 
-    def asset_count(self, collection_id: str) -> int:
+    def asset_count(self, project_id: str) -> int:
         result = self._session.execute(
             select(func.count())
-            .select_from(CollectionAsset)
-            .join(Asset, CollectionAsset.asset_id == Asset.asset_id)
+            .select_from(ProjectAsset)
+            .join(Asset, ProjectAsset.asset_id == Asset.asset_id)
             .where(
-                CollectionAsset.collection_id == collection_id,
+                ProjectAsset.project_id == project_id,
                 Asset.deleted_at.is_(None),  # type: ignore[union-attr]
             )
         )
         return int(result.scalar() or 0)
 
+    # Clips still linked to a project but hidden, in three kinds that need
+    # different actions: a person trashed them (restorable), a scan found
+    # the file missing (back when the file is), or their library is in the
+    # trash (libraries have no restore; never brought back from a project).
+    _HIDDEN_CLIPS_SQL = (
+        "SELECT"
+        " count(*) FILTER (WHERE l.status <> 'trashed' AND a.deleted_reason = 'user') AS trashed,"
+        " count(*) FILTER (WHERE l.status <> 'trashed'"
+        "   AND a.deleted_reason IS DISTINCT FROM 'user') AS missing,"
+        " count(*) FILTER (WHERE l.status = 'trashed') AS library_trashed"
+        " FROM project_assets pa"
+        " JOIN assets a ON a.asset_id = pa.asset_id"
+        " JOIN libraries l ON l.library_id = a.library_id"
+        " WHERE pa.project_id = :pid AND a.deleted_at IS NOT NULL"
+    )
+
+    def hidden_clip_counts(self, project_id: str, *, videos_only: bool = False) -> dict[str, int]:
+        """{"trashed", "missing", "library_trashed"} for the project's hidden
+        clips, in one query. videos_only for what an export leaves out."""
+        sql = self._HIDDEN_CLIPS_SQL
+        if videos_only:
+            sql += " AND a.media_type = 'video'"  # as export decides what's a video
+        row = self._session.execute(text(sql), {"pid": project_id}).one()
+        return {"trashed": int(row[0]), "missing": int(row[1]), "library_trashed": int(row[2])}
+
+    def trashed_asset_ids(self, project_id: str) -> list[str]:
+        """The clips in the project that a person trashed, whose library
+        isn't in the trash: the ones restoring with the project brings back."""
+        return list(self._session.execute(
+            text(
+                "SELECT a.asset_id FROM project_assets pa"
+                " JOIN assets a ON a.asset_id = pa.asset_id"
+                " JOIN libraries l ON l.library_id = a.library_id"
+                " WHERE pa.project_id = :pid AND a.deleted_at IS NOT NULL"
+                "   AND a.deleted_reason = 'user' AND l.status <> 'trashed'"
+            ),
+            {"pid": project_id},
+        ).scalars().all())
+
+    def _usage_filter(self, asset_ids: list[str], library_ids: list[str]):
+        """Membership rows for these clips, or for any clip in these libraries."""
+        conds = []
+        if asset_ids:
+            conds.append(ProjectAsset.asset_id.in_(asset_ids))  # type: ignore[attr-defined]
+        if library_ids:
+            conds.append(ProjectAsset.asset_id.in_(  # type: ignore[attr-defined]
+                select(Asset.asset_id).where(Asset.library_id.in_(library_ids))  # type: ignore[attr-defined]
+            ))
+        return or_(*conds) if conds else None
+
+    def usage(
+        self, asset_ids: list[str], library_ids: list[str] | None = None
+    ) -> tuple[list[tuple[Project, int]], int]:
+        """Every project (trashed or not) holding any of these clips, or any
+        clip in these libraries, with how many it holds; and how many of the
+        clips are in any project."""
+        cond = self._usage_filter(asset_ids, library_ids or [])
+        if cond is None:
+            return [], 0
+        rows = self._session.execute(
+            select(Project, func.count(ProjectAsset.asset_id))
+            .join(ProjectAsset, ProjectAsset.project_id == Project.project_id)
+            .where(cond)
+            .group_by(Project.project_id)
+            .order_by(Project.name)
+        ).all()
+        in_any = self._session.execute(
+            select(func.count(func.distinct(ProjectAsset.asset_id))).where(cond)
+        ).scalar()
+        return [(row[0], int(row[1])) for row in rows], int(in_any or 0)
+
     # ---- Batch add / remove ----
 
-    def add_assets(self, collection_id: str, asset_ids: list[str]) -> int:
-        """Add assets to collection. Returns count actually inserted (idempotent)."""
+    def add_assets(self, project_id: str, asset_ids: list[str]) -> int:
+        """Add assets to project. Returns count actually inserted (idempotent)."""
         if not asset_ids:
             return 0
 
         # Get current max position
         max_pos_result = self._session.execute(
-            select(func.max(CollectionAsset.position)).where(
-                CollectionAsset.collection_id == collection_id
+            select(func.max(ProjectAsset.position)).where(
+                ProjectAsset.project_id == project_id
             )
         )
         next_pos = (max_pos_result.scalar() or -1) + 1
 
         inserted = 0
         for asset_id in asset_ids:
-            stmt = pg_insert(CollectionAsset).values(
-                collection_id=collection_id,
+            stmt = pg_insert(ProjectAsset).values(
+                project_id=project_id,
                 asset_id=asset_id,
                 position=next_pos,
                 added_at=utcnow(),
-            ).on_conflict_do_nothing(index_elements=["collection_id", "asset_id"])
+            ).on_conflict_do_nothing(index_elements=["project_id", "asset_id"])
             result = self._session.execute(stmt)
             if result.rowcount:  # type: ignore[union-attr]
                 inserted += 1
@@ -1797,17 +2137,25 @@ class CollectionRepository:
         self._session.commit()
         return inserted
 
-    def remove_assets(self, collection_id: str, asset_ids: list[str]) -> int:
-        """Remove assets from collection. Returns count removed."""
+    def remove_assets(self, project_id: str, asset_ids: list[str]) -> int:
+        """Remove assets from project. Returns count removed."""
         if not asset_ids:
             return 0
         from sqlalchemy import delete as sa_delete
 
         result = self._session.execute(
-            sa_delete(CollectionAsset).where(
-                CollectionAsset.collection_id == collection_id,
-                CollectionAsset.asset_id.in_(asset_ids),  # type: ignore[attr-defined]
+            sa_delete(ProjectAsset).where(
+                ProjectAsset.project_id == project_id,
+                ProjectAsset.asset_id.in_(asset_ids),  # type: ignore[attr-defined]
             )
+        )
+        # A chosen cover that leaves the project is no longer a choice.
+        self._session.execute(
+            text(
+                "UPDATE projects SET cover_asset_id = NULL"
+                " WHERE project_id = :pid AND cover_asset_id = ANY(:ids)"
+            ),
+            {"pid": project_id, "ids": list(asset_ids)},
         )
         self._session.commit()
         return result.rowcount  # type: ignore[return-value]
@@ -1816,34 +2164,36 @@ class CollectionRepository:
 
     def list_assets(
         self,
-        collection_id: str,
+        project_id: str,
         sort_order: str = "manual",
         after_cursor: str | None = None,
         limit: int = 200,
     ) -> tuple[list[Asset], str | None]:
-        """Return active assets in collection with cursor pagination.
+        """Return active assets in project with cursor pagination.
 
         Returns (assets, next_cursor). Cursor is the position/added_at/taken_at value
         of the last returned row, encoded as a string.
         """
         import base64 as _b64
 
+        if sort_order == "added_at":
+            order_col = ProjectAsset.added_at
+        elif sort_order == "taken_at":
+            # Capture time, never NULL so the cursor can compare it: assets
+            # without EXIF fall back to file mtime, then to when they were
+            # added (the same rule as the date filter).
+            order_col = func.coalesce(Asset.taken_at, Asset.file_mtime, Asset.created_at)
+        else:  # manual
+            order_col = ProjectAsset.position
+
         query = (
-            select(Asset, CollectionAsset.position, CollectionAsset.added_at)
-            .join(CollectionAsset, CollectionAsset.asset_id == Asset.asset_id)
+            select(Asset, order_col.label("sort_value"))
+            .join(ProjectAsset, ProjectAsset.asset_id == Asset.asset_id)
             .where(
-                CollectionAsset.collection_id == collection_id,
+                ProjectAsset.project_id == project_id,
                 Asset.deleted_at.is_(None),  # type: ignore[union-attr]
             )
         )
-
-        if sort_order == "added_at":
-            order_col = CollectionAsset.added_at
-        elif sort_order == "taken_at":
-            order_col = Asset.taken_at
-        else:  # manual
-            order_col = CollectionAsset.position
-
         query = query.order_by(order_col.asc(), Asset.asset_id.asc())  # type: ignore[union-attr]
 
         if after_cursor:
@@ -1852,6 +2202,8 @@ class CollectionRepository:
                 decoded = json.loads(_b64.urlsafe_b64decode(padded))
                 cursor_val = decoded["v"]
                 cursor_id = decoded["id"]
+                if sort_order in ("added_at", "taken_at"):
+                    cursor_val = datetime.fromisoformat(cursor_val)
                 query = query.where(
                     or_(
                         order_col > cursor_val,  # type: ignore[operator]
@@ -1867,11 +2219,13 @@ class CollectionRepository:
         next_cursor: str | None = None
         for i, row in enumerate(rows):
             if i >= limit:
-                # Encode cursor from last returned row
+                # Encode cursor from the last returned row's sort value
                 last_asset = assets[-1]
-                last_row = rows[i - 1]
+                sort_value = rows[i - 1][1]
+                if hasattr(sort_value, "isoformat"):
+                    sort_value = sort_value.isoformat()
                 cursor_payload = json.dumps(
-                    {"v": str(last_row[1] if sort_order == "manual" else last_row[2]), "id": last_asset.asset_id},
+                    {"v": sort_value, "id": last_asset.asset_id},
                     default=str,
                 )
                 next_cursor = _b64.urlsafe_b64encode(cursor_payload.encode()).decode().rstrip("=")
@@ -1882,17 +2236,17 @@ class CollectionRepository:
 
     # ---- Reorder ----
 
-    def reorder(self, collection_id: str, asset_ids: list[str]) -> bool:
-        """Reorder assets in collection. asset_ids must include ALL active assets.
+    def reorder(self, project_id: str, asset_ids: list[str]) -> bool:
+        """Reorder assets in project. asset_ids must include ALL active assets.
 
         Returns True on success. Raises ValueError if list is incomplete/has extras.
         """
-        # Get current active asset IDs in collection
+        # Get current active asset IDs in project
         rows = self._session.execute(
-            select(CollectionAsset.asset_id)
-            .join(Asset, CollectionAsset.asset_id == Asset.asset_id)
+            select(ProjectAsset.asset_id)
+            .join(Asset, ProjectAsset.asset_id == Asset.asset_id)
             .where(
-                CollectionAsset.collection_id == collection_id,
+                ProjectAsset.project_id == project_id,
                 Asset.deleted_at.is_(None),  # type: ignore[union-attr]
             )
         ).all()
@@ -1901,59 +2255,53 @@ class CollectionRepository:
 
         if current_ids != submitted_ids:
             raise ValueError(
-                f"Submitted {len(submitted_ids)} asset IDs but collection has {len(current_ids)} active assets. "
-                "Reorder must include all active assets in the collection."
+                f"Submitted {len(submitted_ids)} asset IDs but project has {len(current_ids)} active assets. "
+                "Reorder must include all active assets in the project."
             )
 
         for position, asset_id in enumerate(asset_ids):
             self._session.execute(
                 sa_text(
-                    "UPDATE collection_assets SET position = :pos "
-                    "WHERE collection_id = :cid AND asset_id = :aid"
+                    "UPDATE project_assets SET position = :pos "
+                    "WHERE project_id = :cid AND asset_id = :aid"
                 ),
-                {"pos": position, "cid": collection_id, "aid": asset_id},
+                {"pos": position, "cid": project_id, "aid": asset_id},
             )
         self._session.commit()
         return True
 
     # ---- Cover resolution ----
 
-    def resolve_cover(self, collection: Collection) -> str | None:
-        """Return the effective cover asset_id, applying lazy self-healing.
+    def resolve_cover(self, project: Project) -> str | None:
+        """The cover to show: the chosen one if it's in the project and not
+        in the trash, else the first clip by position.
 
-        If cover_asset_id is set and the asset is active and in the collection,
-        return it. Otherwise fall back to first-by-position, and null out the
-        stale cover_asset_id.
+        Reading never clears the choice: a chosen cover whose clip is only in
+        the trash comes back with it. The choice is cleared where the clip
+        really leaves, in remove_assets and when the clip is deleted for good.
         """
-        if collection.cover_asset_id:
-            # Check if cover asset is still active and in collection
+        if project.cover_asset_id:
             row = self._session.execute(
-                select(CollectionAsset.asset_id)
-                .join(Asset, CollectionAsset.asset_id == Asset.asset_id)
+                select(ProjectAsset.asset_id)
+                .join(Asset, ProjectAsset.asset_id == Asset.asset_id)
                 .where(
-                    CollectionAsset.collection_id == collection.collection_id,
-                    CollectionAsset.asset_id == collection.cover_asset_id,
+                    ProjectAsset.project_id == project.project_id,
+                    ProjectAsset.asset_id == project.cover_asset_id,
                     Asset.deleted_at.is_(None),  # type: ignore[union-attr]
                 )
             ).first()
             if row:
-                return collection.cover_asset_id
-
-            # Stale — null it out (lazy self-healing)
-            collection.cover_asset_id = None
-            collection.updated_at = utcnow()
-            self._session.add(collection)
-            self._session.commit()
+                return project.cover_asset_id
 
         # Fallback: first active asset by position
         row = self._session.execute(
-            select(CollectionAsset.asset_id)
-            .join(Asset, CollectionAsset.asset_id == Asset.asset_id)
+            select(ProjectAsset.asset_id)
+            .join(Asset, ProjectAsset.asset_id == Asset.asset_id)
             .where(
-                CollectionAsset.collection_id == collection.collection_id,
+                ProjectAsset.project_id == project.project_id,
                 Asset.deleted_at.is_(None),  # type: ignore[union-attr]
             )
-            .order_by(CollectionAsset.position.asc())  # type: ignore[union-attr]
+            .order_by(ProjectAsset.position.asc())  # type: ignore[union-attr]
             .limit(1)
         ).first()
         return row[0] if row else None
@@ -2139,7 +2487,7 @@ class UnifiedBrowseRepository:
 
     SORTABLE_COLUMNS = {
         "asset_id", "taken_at", "created_at", "file_size",
-        "iso", "aperture", "focal_length", "rel_path",
+        "iso", "exposure_time_us", "aperture", "focal_length", "rel_path",
     }
 
     def __init__(self, session: Session) -> None:
@@ -2199,12 +2547,14 @@ class UnifiedBrowseRepository:
                 params["cursor_id"] = cursor_id
             else:
                 conditions.append(f"""(
+                    -- Rows are ordered NULLS LAST: after an undated cursor only
+                    -- undated rows follow; after a dated one, later dated rows
+                    -- and every undated row.
                     CASE
                         WHEN :cursor_value IS NULL THEN
-                            a.{sort_col} IS NOT NULL
-                            OR (a.{sort_col} IS NULL AND a.asset_id {cmp_op} :cursor_id)
+                            a.{sort_col} IS NULL AND a.asset_id {cmp_op} :cursor_id
                         WHEN a.{sort_col} IS NULL THEN
-                            FALSE
+                            TRUE
                         ELSE
                             (a.{sort_col}, a.asset_id) {cmp_op} (:cursor_value, :cursor_id)
                     END
@@ -2344,12 +2694,14 @@ class UnifiedBrowseRepository:
                 params["cursor_id"] = cursor_id
             else:
                 conditions.append(f"""(
+                    -- Rows are ordered NULLS LAST: after an undated cursor only
+                    -- undated rows follow; after a dated one, later dated rows
+                    -- and every undated row.
                     CASE
                         WHEN :cursor_value IS NULL THEN
-                            a.{sort_col} IS NOT NULL
-                            OR (a.{sort_col} IS NULL AND a.asset_id {cmp_op} :cursor_id)
+                            a.{sort_col} IS NULL AND a.asset_id {cmp_op} :cursor_id
                         WHEN a.{sort_col} IS NULL THEN
-                            FALSE
+                            TRUE
                         ELSE
                             (a.{sort_col}, a.asset_id) {cmp_op} (:cursor_value, :cursor_id)
                     END
@@ -2640,6 +2992,31 @@ def _cluster_face_embeddings(
     return clusters
 
 
+def _bbox_corners(box: dict | None) -> tuple[float, float, float, float] | None:
+    """Normalized face box as (x1, y1, x2, y2); accepts {x, y, w, h} or corners."""
+    if not box:
+        return None
+    if "x1" in box:
+        return box["x1"], box["y1"], box["x2"], box["y2"]
+    if "x" in box:
+        return box["x"], box["y"], box["x"] + box["w"], box["y"] + box["h"]
+    return None
+
+
+def _bbox_iou(a: dict | None, b: dict | None) -> float:
+    """Intersection over union of two normalized face boxes (0.0 if either is missing)."""
+    ca, cb = _bbox_corners(a), _bbox_corners(b)
+    if ca is None or cb is None:
+        return 0.0
+    iw = min(ca[2], cb[2]) - max(ca[0], cb[0])
+    ih = min(ca[3], cb[3]) - max(ca[1], cb[1])
+    if iw <= 0 or ih <= 0:
+        return 0.0
+    inter = iw * ih
+    union = (ca[2] - ca[0]) * (ca[3] - ca[1]) + (cb[2] - cb[0]) * (cb[3] - cb[1]) - inter
+    return inter / union if union > 0 else 0.0
+
+
 class FaceRepository:
     """CRUD for detected faces. Operates within a tenant session."""
 
@@ -2691,6 +3068,23 @@ class FaceRepository:
         rows = self._session.execute(text(sql), params).fetchall()
         return [(r.asset_id, float(r.distance)) for r in rows]
 
+    # Re-detection pairs each new detection with the old face it re-finds, so
+    # the face keeps its face_id and everything a person attached to it
+    # (confirmed assignment, dismissal, "not this person"). Overlapping boxes
+    # pair only if the embeddings say it's the same face, and the closest
+    # embedding wins: the person standing next to (or, in a mirrored photo,
+    # in place of) a named face, even a lookalike sibling, must not inherit
+    # its name. The same face seen by two detectors in the same photo is far
+    # closer than 0.4; siblings are usually further. With both embeddings a
+    # small overlap is enough (a tight Apple Vision box inside a loose
+    # InsightFace one); without them, the floor is higher. Anything left
+    # can still pair by embedding alone, under the same gate. Lookalikes
+    # closer than 0.4 (identical twins) can still pair; the same face more
+    # than 0.4 apart becomes a second face (nothing is lost).
+    REDETECT_MIN_IOU = 0.1
+    REDETECT_MIN_IOU_NO_EMBEDDING = 0.3
+    REDETECT_MAX_EMBEDDING_DISTANCE = 0.4
+
     def submit_faces(
         self,
         asset_id: str,
@@ -2698,30 +3092,67 @@ class FaceRepository:
         detection_model_version: str,
         faces: list[dict],
     ) -> list[str]:
-        """Replace all faces for (asset_id, model, version) and update face_count.
+        """Store a fresh set of face detections for an asset and update face_count.
+
+        A detection that re-finds an existing face (by box overlap, else by
+        embedding) updates that face in place: it keeps its face_id, its
+        confirmed person assignment and its rejections, while machine-made
+        assignments are dropped and re-derived. Old faces that weren't
+        re-found are deleted, unless a person confirmed them; those are kept
+        as they are, since a re-run never drops human data. face_count is
+        the new detections plus kept faces.
 
         Args:
             faces: list of dicts with keys: bounding_box, detection_confidence, embedding (optional).
 
         Returns:
-            List of created face_ids.
+            One face_id per input detection, in input order.
         """
         from sqlalchemy import delete as sa_delete
 
-        # Delete ALL existing faces for this asset (regardless of model).
-        # An asset should only have one set of face detections active at a time,
-        # even if re-detected by a different provider (e.g. insightface → apple_vision).
-        old_face_ids = [
-            row[0]
-            for row in self._session.execute(
-                text("SELECT face_id FROM faces WHERE asset_id = :aid"),
-                {"aid": asset_id},
-            ).fetchall()
+        old_rows = self._session.execute(
+            text(
+                "SELECT f.face_id, f.bounding_box_json, f.embedding_vector::text AS emb,"
+                " EXISTS (SELECT 1 FROM face_person_matches m"
+                "         WHERE m.face_id = f.face_id AND m.confirmed) AS confirmed"
+                " FROM faces f WHERE f.asset_id = :aid"
+            ),
+            {"aid": asset_id},
+        ).all()
+
+        pairs = self._pair_redetected_faces(old_rows, faces)
+        reused_ids = set(pairs.values())
+        kept_ids = [r.face_id for r in old_rows if r.face_id not in reused_ids and r.confirmed]
+        dropped_ids = [
+            r.face_id for r in old_rows if r.face_id not in reused_ids and not r.confirmed
         ]
+
+        # Machine-made assignments on re-found faces are derived from the old
+        # embedding; drop them (and the denormalized faces.person_id) so
+        # auto-assign below re-derives them from the new one.
+        unmatched_reused: list[str] = []
+        if reused_ids:
+            unmatched_reused = [
+                row[0]
+                for row in self._session.execute(
+                    text(
+                        "DELETE FROM face_person_matches"
+                        " WHERE face_id = ANY(:fids) AND confirmed = false"
+                        " RETURNING face_id"
+                    ),
+                    {"fids": list(reused_ids)},
+                ).fetchall()
+            ]
+            if unmatched_reused:
+                self._session.execute(
+                    text("UPDATE faces SET person_id = NULL WHERE face_id = ANY(:fids)"),
+                    {"fids": unmatched_reused},
+                )
+
         affected_person_ids: list[str] = []
-        if old_face_ids:
+        if dropped_ids:
             self._session.execute(
-                sa_delete(FacePersonMatch).where(FacePersonMatch.face_id.in_(old_face_ids))
+                sa_delete(FacePersonMatch).where(FacePersonMatch.face_id.in_(dropped_ids))
             )
             # Capture the people whose representative is about to dangle
             # so we can re-pick a fresh face for each one after auto-
@@ -2737,7 +3168,7 @@ class FaceRepository:
                         "SELECT person_id FROM people"
                         " WHERE representative_face_id = ANY(:fids)"
                     ),
-                    {"fids": old_face_ids},
+                    {"fids": dropped_ids},
                 ).fetchall()
             ]
             # Null out representative_face_id on people pointing to these faces
@@ -2746,16 +3177,24 @@ class FaceRepository:
                     "UPDATE people SET representative_face_id = NULL"
                     " WHERE representative_face_id = ANY(:fids)"
                 ),
-                {"fids": old_face_ids},
+                {"fids": dropped_ids},
             )
-
-        # Delete all existing faces for this asset
-        self._session.execute(
-            sa_delete(Face).where(Face.asset_id == asset_id)
-        )
+            # Rejections on these faces go with them (ON DELETE CASCADE).
+            self._session.execute(sa_delete(Face).where(Face.face_id.in_(dropped_ids)))
 
         face_ids: list[str] = []
-        for f in faces:
+        for i, f in enumerate(faces):
+            old_id = pairs.get(i)
+            if old_id is not None:
+                face = self._session.get(Face, old_id)
+                face.bounding_box_json = f.get("bounding_box")
+                face.embedding_vector = f.get("embedding")
+                face.detection_confidence = f.get("detection_confidence")
+                face.detection_model = detection_model
+                face.detection_model_version = detection_model_version
+                self._session.add(face)
+                face_ids.append(old_id)
+                continue
             face_id = "face_" + str(ULID())
             face = Face(
                 face_id=face_id,
@@ -2768,15 +3207,43 @@ class FaceRepository:
             )
             self._session.add(face)
             face_ids.append(face_id)
+        self._session.flush()
 
         # Update face_count on the asset
         self._session.execute(
             text("UPDATE assets SET face_count = :count WHERE asset_id = :aid"),
-            {"count": len(faces), "aid": asset_id},
+            {"count": len(faces) + len(kept_ids), "aid": asset_id},
         )
 
-        # Auto-assign faces to known people by centroid proximity
-        self._auto_assign_by_centroid(face_ids, faces)
+        # Auto-assign the faces that don't carry a confirmed assignment.
+        assigned = {
+            row[0]
+            for row in self._session.execute(
+                text("SELECT face_id FROM face_person_matches WHERE face_id = ANY(:fids)"),
+                {"fids": face_ids},
+            ).fetchall()
+        }
+        unassigned = [(fid, f) for fid, f in zip(face_ids, faces) if fid not in assigned]
+        self._auto_assign_by_centroid(
+            [fid for fid, _ in unassigned], [f for _, f in unassigned]
+        )
+
+        # A re-found face that lost its machine match and wasn't re-assigned
+        # to the same person can't stay that person's representative.
+        if unmatched_reused:
+            affected_person_ids += [
+                row[0]
+                for row in self._session.execute(
+                    text(
+                        "SELECT p.person_id FROM people p"
+                        " WHERE p.representative_face_id = ANY(:fids)"
+                        "   AND NOT EXISTS (SELECT 1 FROM face_person_matches m"
+                        "                   WHERE m.face_id = p.representative_face_id"
+                        "                     AND m.person_id = p.person_id)"
+                    ),
+                    {"fids": unmatched_reused},
+                ).fetchall()
+            ]
 
         # Re-pick representative_face_id for any person whose previous
         # representative was deleted above. The auto-assign above will
@@ -2795,18 +3262,100 @@ class FaceRepository:
                 ),
                 {"pid": pid},
             ).scalar()
-            if new_rep:
-                self._session.execute(
-                    text(
-                        "UPDATE people SET representative_face_id = :fid"
-                        " WHERE person_id = :pid"
-                    ),
-                    {"fid": new_rep, "pid": pid},
-                )
+            # NULL when the person has no face left; list_people backfills lazily.
+            self._session.execute(
+                text(
+                    "UPDATE people SET representative_face_id = :fid"
+                    " WHERE person_id = :pid"
+                ),
+                {"fid": new_rep, "pid": pid},
+            )
 
         _mark_clusters_dirty(self._session)
         self._session.commit()
         return face_ids
+
+    @classmethod
+    def _pair_redetected_faces(cls, old_rows: list, faces: list[dict]) -> dict[int, str]:
+        """Pair new detections with the old faces they re-find.
+
+        Greedy one-to-one. First overlapping boxes whose embeddings agree
+        (distance < REDETECT_MAX_EMBEDDING_DISTANCE), closest embedding
+        first and overlap as the tie-break; boxes without embeddings pair on
+        overlap alone (IoU >= REDETECT_MIN_IOU_NO_EMBEDDING), after those.
+        Then embedding distance alone, with the same gate, for whatever is
+        left. Returns {index into faces: old face_id}.
+        """
+        import numpy as np
+
+        def unit(values: list[float]) -> np.ndarray:
+            vec = np.asarray(values, dtype=np.float32)
+            norm = np.linalg.norm(vec)
+            return vec / norm if norm > 0 else vec
+
+        old_vecs = [
+            unit([float(x) for x in row.emb.strip("[]").split(",")]) if row.emb else None
+            for row in old_rows
+        ]
+        new_vecs = [unit(f["embedding"]) if f.get("embedding") else None for f in faces]
+
+        def distance(oi: int, ni: int) -> float | None:
+            if old_vecs[oi] is None or new_vecs[ni] is None:
+                return None
+            return 1.0 - float(old_vecs[oi] @ new_vecs[ni])
+
+        pairs: dict[int, str] = {}
+        used_old: set[int] = set()
+
+        def take(candidates: list[tuple[float, int, int]]) -> None:
+            for _, oi, ni in candidates:
+                if oi in used_old or ni in pairs:
+                    continue
+                pairs[ni] = old_rows[oi].face_id
+                used_old.add(oi)
+
+        overlaps = []
+        for oi, row in enumerate(old_rows):
+            for ni, f in enumerate(faces):
+                iou = _bbox_iou(row.bounding_box_json, f.get("bounding_box"))
+                dist = distance(oi, ni)
+                if dist is None:
+                    ok = iou >= cls.REDETECT_MIN_IOU_NO_EMBEDDING
+                else:
+                    ok = iou >= cls.REDETECT_MIN_IOU and dist < cls.REDETECT_MAX_EMBEDDING_DISTANCE
+                if ok:
+                    rank = dist if dist is not None else cls.REDETECT_MAX_EMBEDDING_DISTANCE
+                    overlaps.append((rank, -iou, oi, ni))
+        take([(rank, oi, ni) for rank, _, oi, ni in sorted(overlaps)])
+
+        close = []
+        for oi in range(len(old_rows)):
+            if oi in used_old:
+                continue
+            for ni in range(len(faces)):
+                if ni in pairs:
+                    continue
+                dist = distance(oi, ni)
+                if dist is not None and dist < cls.REDETECT_MAX_EMBEDDING_DISTANCE:
+                    close.append((dist, oi, ni))
+        take(sorted(close))
+        return pairs
+
+    def _rejections_for(self, face_ids: list[str]) -> dict[str, set[str]]:
+        """Return {face_id: person_ids the user said it is not}."""
+        if not face_ids:
+            return {}
+        rows = self._session.execute(
+            text(
+                "SELECT face_id, person_id FROM face_person_rejections"
+                " WHERE face_id = ANY(:fids)"
+            ),
+            {"fids": face_ids},
+        ).all()
+        result: dict[str, set[str]] = {}
+        for face_id, person_id in rows:
+            result.setdefault(face_id, set()).add(person_id)
+        return result
 
     # Auto-assign threshold — tighter than clustering (0.55) because centroids
     # are averaged over many confirmed faces and more stable.
@@ -2816,7 +3365,8 @@ class FaceRepository:
         """Auto-assign new faces to known people if embedding is close to a centroid.
 
         Only assigns faces that have embeddings. Uses cosine distance against
-        person centroid vectors. Assigned with confirmed=false so user can review.
+        person centroid vectors, skipping people the user rejected for that
+        face. Assigned with confirmed=false so user can review.
         """
         # Collect faces with embeddings
         faces_with_emb = [
@@ -2846,6 +3396,8 @@ class FaceRepository:
         norms = np.linalg.norm(centroids, axis=1, keepdims=True)
         norms[norms == 0] = 1.0
         centroids = centroids / norms
+        person_index = {pid: i for i, pid in enumerate(person_ids)}
+        rejections = self._rejections_for([fid for fid, _ in faces_with_emb])
 
         for face_id, embedding in faces_with_emb:
             vec = np.array(embedding, dtype=np.float32)
@@ -2855,6 +3407,9 @@ class FaceRepository:
 
             # Cosine distance to each centroid
             distances = 1.0 - (centroids @ vec)
+            for pid in rejections.get(face_id, ()):
+                if pid in person_index:  # people without a centroid aren't candidates
+                    distances[person_index[pid]] = np.inf
             best_idx = int(np.argmin(distances))
             best_dist = float(distances[best_idx])
 
@@ -2924,6 +3479,10 @@ class FaceRepository:
         if not rows:
             return {"assigned": 0, "scanned": 0}
 
+        # Never re-assign a face to a person the user removed it from.
+        person_index = {pid: i for i, pid in enumerate(person_ids)}
+        rejections = self._rejections_for([r[0] for r in rows])
+
         assigned = 0
         for face_id, emb_text in rows:
             vec = np.array([float(x) for x in emb_text.strip("[]").split(",")], dtype=np.float32)
@@ -2932,6 +3491,9 @@ class FaceRepository:
                 vec = vec / norm
 
             distances = 1.0 - (centroids @ vec)
+            for pid in rejections.get(face_id, ()):
+                if pid in person_index:  # people without a centroid aren't candidates
+                    distances[person_index[pid]] = np.inf
             best_idx = int(np.argmin(distances))
             best_dist = float(distances[best_idx])
 
@@ -3422,7 +3984,14 @@ class PersonRepository:
         return [faces_by_id[fid] for fid in face_ids if fid in faces_by_id]
 
     def assign_face(self, face_id: str, person_id: str, *, confidence: float | None = None, confirmed: bool = False) -> FacePersonMatch:
-        """Assign a face to a person. Raises if face is already assigned (unique constraint)."""
+        """Assign a face to a person. Raises if face is already assigned (unique constraint).
+
+        An explicit assignment overrides an earlier rejection of the same pair.
+        """
+        self._session.execute(
+            text("DELETE FROM face_person_rejections WHERE face_id = :fid AND person_id = :pid"),
+            {"fid": face_id, "pid": person_id},
+        )
         match_id = "fpm_" + str(ULID())
         match = FacePersonMatch(
             match_id=match_id,
@@ -3445,7 +4014,11 @@ class PersonRepository:
         return match
 
     def unassign_face(self, face_id: str) -> bool:
-        """Remove face-person assignment and clear denormalized faces.person_id."""
+        """Remove face-person assignment and clear denormalized faces.person_id.
+
+        Records a rejection ("this face is not this person") so neither
+        auto-assignment nor the upkeep sweep puts it back.
+        """
         # Get the person_id before deleting (for centroid recomputation)
         old_pid = self._session.execute(
             text("SELECT person_id FROM face_person_matches WHERE face_id = :fid"),
@@ -3461,20 +4034,72 @@ class PersonRepository:
                 {"fid": face_id},
             )
             if old_pid:
+                self._session.execute(
+                    text(
+                        "INSERT INTO face_person_rejections (face_id, person_id, created_at)"
+                        " VALUES (:fid, :pid, :now) ON CONFLICT DO NOTHING"
+                    ),
+                    {"fid": face_id, "pid": old_pid, "now": utcnow()},
+                )
+                # The person's tile can't keep showing a face that isn't theirs.
+                rep_id = self._session.execute(
+                    text("SELECT representative_face_id FROM people WHERE person_id = :pid"),
+                    {"pid": old_pid},
+                ).scalar()
+                if rep_id == face_id:
+                    self._repick_representative(old_pid)
+            if old_pid:
                 self._recompute_centroid(old_pid)
             _mark_clusters_dirty(self._session)
             self._session.commit()
             return True
         return False
 
+    def _repick_representative(self, person_id: str) -> None:
+        """Point the person's tile at their best remaining face, or NULL if none (no commit)."""
+        best = self._session.execute(
+            text(
+                "SELECT f.face_id FROM faces f "
+                "JOIN face_person_matches m ON m.face_id = f.face_id "
+                "WHERE m.person_id = :pid "
+                "ORDER BY f.detection_confidence DESC NULLS LAST "
+                "LIMIT 1"
+            ),
+            {"pid": person_id},
+        ).scalar()
+        self._session.execute(
+            text("UPDATE people SET representative_face_id = :fid WHERE person_id = :pid"),
+            {"fid": best, "pid": person_id},
+        )
+
     def _assign_faces(self, person_id: str, face_ids: list[str]) -> None:
-        """Batch assign faces to a person (no commit)."""
+        """Batch assign faces to a person (no commit).
+
+        These come from a person's action (naming, dismissing or assigning a
+        cluster), so they're confirmed and survive re-detection. Faces the
+        user already rejected for this person are skipped: a bulk action
+        doesn't override a per-face decision.
+        """
+        rejected = {
+            row[0]
+            for row in self._session.execute(
+                text(
+                    "SELECT face_id FROM face_person_rejections"
+                    " WHERE person_id = :pid AND face_id = ANY(:fids)"
+                ),
+                {"pid": person_id, "fids": face_ids},
+            ).fetchall()
+        } if face_ids else set()
+        face_ids = [fid for fid in face_ids if fid not in rejected]
+        now = utcnow()
         for fid in face_ids:
             match_id = "fpm_" + str(ULID())
             self._session.add(FacePersonMatch(
                 match_id=match_id,
                 face_id=fid,
                 person_id=person_id,
+                confirmed=True,
+                confirmed_at=now,
             ))
         self._session.flush()
         # Sync denormalized faces.person_id
@@ -3538,6 +4163,18 @@ class PersonRepository:
         if target is None:
             return None
 
+        # S and T are one person, so "not S" means "not T". When both people
+        # carry a rejection for a face, keep the later one.
+        self._session.execute(
+            text(
+                "INSERT INTO face_person_rejections (face_id, person_id, created_at)"
+                " SELECT face_id, :tid, created_at FROM face_person_rejections"
+                " WHERE person_id = :sid"
+                " ON CONFLICT (face_id, person_id) DO UPDATE"
+                " SET created_at = GREATEST(face_person_rejections.created_at, EXCLUDED.created_at)"
+            ),
+            {"tid": target_person_id, "sid": source_person_id},
+        )
         # Reassign face_person_matches from source to target
         self._session.execute(
             text("UPDATE face_person_matches SET person_id = :tid WHERE person_id = :sid"),
@@ -3547,6 +4184,35 @@ class PersonRepository:
         self._session.execute(
             text("UPDATE faces SET person_id = :tid WHERE person_id = :sid"),
             {"tid": target_person_id, "sid": source_person_id},
+        )
+        # A face now both matched to and rejected for the merged person: a
+        # machine match always loses to the user's "not this person"; between
+        # a confirmation and a rejection, the later decision wins. This is
+        # the same whichever way the two people are merged.
+        unassigned = [
+            row[0]
+            for row in self._session.execute(
+                text(
+                    "DELETE FROM face_person_matches m USING face_person_rejections r"
+                    " WHERE m.person_id = :tid AND r.person_id = :tid AND r.face_id = m.face_id"
+                    "   AND (NOT m.confirmed"
+                    "        OR COALESCE(m.confirmed_at, m.created_at) < r.created_at)"
+                    " RETURNING m.face_id"
+                ),
+                {"tid": target_person_id},
+            ).fetchall()
+        ]
+        if unassigned:
+            self._session.execute(
+                text("UPDATE faces SET person_id = NULL WHERE face_id = ANY(:fids)"),
+                {"fids": unassigned},
+            )
+        self._session.execute(
+            text(
+                "DELETE FROM face_person_rejections r USING face_person_matches m"
+                " WHERE r.person_id = :tid AND m.person_id = :tid AND m.face_id = r.face_id"
+            ),
+            {"tid": target_person_id},
         )
 
         # Recompute centroid on target
@@ -3563,8 +4229,8 @@ class PersonRepository:
             ),
             {"pid": target_person_id},
         ).scalar()
-        if best_face_id:
-            target.representative_face_id = best_face_id
+        # NULL when the merge left the person with no faces.
+        target.representative_face_id = best_face_id
 
         # Delete source person
         self._session.execute(

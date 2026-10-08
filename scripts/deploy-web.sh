@@ -8,6 +8,11 @@
 # Usage:
 #   bash scripts/deploy-web.sh --domain app.example.com --api-upstream http://10.0.0.5:8000
 #
+# On a LAN/Tailscale box (the brain), answer on any address over HTTP and
+# leave the firewall alone:
+#   sudo bash scripts/deploy-web.sh --domain _ --api-upstream http://127.0.0.1:8100 \
+#     --no-firewall --branch feat/brain
+#
 # Idempotent: safe to run again to update an existing install.
 #
 set -euo pipefail
@@ -25,6 +30,8 @@ step()  { echo -e "\n${BOLD}=== $1 ===${NC}"; }
 ok()    { echo -e "${GREEN}  ✓${NC} $1"; }
 warn()  { echo -e "${YELLOW}  ⚠${NC} $1"; }
 fail()  { echo -e "${RED}  ✗ $1${NC}" >&2; exit 1; }
+# set -e stops at the first failed command; say which, so a stop is never silent.
+trap 'echo -e "${RED}  ✗ Stopped at line ${LINENO}: ${BASH_COMMAND}${NC}" >&2' ERR
 
 # ---------------------------------------------------------------------------
 # Args
@@ -32,10 +39,12 @@ fail()  { echo -e "${RED}  ✗ $1${NC}" >&2; exit 1; }
 DOMAIN=""
 API_UPSTREAM=""
 REPO_URL="https://github.com/bubbafat/lumiverb.git"
-BRANCH="main"
+BRANCH=""
 CERTBOT_EMAIL=""
 SKIP_CERTBOT=false
 CERTIFICATE_ARCHIVE=""
+NO_FIREWALL=""
+DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -46,8 +55,14 @@ while [[ $# -gt 0 ]]; do
     --email)          CERTBOT_EMAIL="${2:?Missing value for --email}"; shift 2 ;;
     --certificate)    CERTIFICATE_ARCHIVE="${2:?Missing value for --certificate}"; shift 2 ;;
     --skip-certbot)   SKIP_CERTBOT=true; shift ;;
+    --no-firewall)    NO_FIREWALL=true; shift ;;
+    --firewall)       NO_FIREWALL=false; shift ;;
+    --dry-run)        DRY_RUN=true; shift ;;
     -h|--help)
-      echo "Usage: $0 --domain <FQDN> --api-upstream <URL> [--email <certbot-email>] [--certificate <letsencrypt.tar.gz>] [--repo <url>] [--branch <ref>] [--skip-certbot]"
+      echo "Usage: $0 --domain <FQDN|_> --api-upstream <URL> [--email <certbot-email>] [--certificate <letsencrypt.tar.gz>] [--repo <url>] [--branch <ref>] [--skip-certbot] [--no-firewall | --firewall] [--dry-run]"
+      echo "  --domain _      Answer on any host name or address, over HTTP (no certificate)"
+      echo "  --no-firewall   Leave ufw alone (the host runs other services)"
+      echo "  --firewall      Configure ufw even where deploy-api.sh remembered --no-firewall"
       exit 0
       ;;
     *) fail "Unknown option: $1" ;;
@@ -65,6 +80,34 @@ if [[ "$DOMAIN" == *"example.com"* ]]; then
 fi
 if [[ -n "$CERTIFICATE_ARCHIVE" ]] && [[ ! -f "$CERTIFICATE_ARCHIVE" ]]; then
   fail "Certificate archive not found: $CERTIFICATE_ARCHIVE"
+fi
+# Any host name: there's no name to get a certificate for.
+ANY_HOST=false
+if [[ "$DOMAIN" == "_" ]]; then
+  ANY_HOST=true
+  SKIP_CERTBOT=true
+  [[ -z "$CERTIFICATE_ARCHIVE" ]] || fail "--certificate needs a real --domain"
+fi
+
+# On the API's machine, follow what deploy-api.sh remembered: both deploy
+# /opt/lumiverb, so another branch here would switch the API's code too.
+API_CONF_DIR="${LUMIVERB_CONF_DIR:-/etc/lumiverb}"
+API_ENV="${API_CONF_DIR}/env"
+# It's root's (600, in a 750 folder): read as anyone else it looks absent.
+if [[ -e "$API_ENV" && ! -r "$API_ENV" ]] || [[ -d "$API_CONF_DIR" && ! -x "$API_CONF_DIR" ]]; then
+  fail "Run with sudo to see the settings remembered in ${API_ENV}"
+fi
+_api_val() { grep "^${1}=" "$API_ENV" 2>/dev/null | head -1 | cut -d= -f2- || true; }
+BRANCH="${BRANCH:-$(_api_val BRANCH)}"; BRANCH="${BRANCH:-main}"
+NO_FIREWALL="${NO_FIREWALL:-$(_api_val NO_FIREWALL)}"
+[[ "$NO_FIREWALL" == "true" ]] || NO_FIREWALL=false
+
+if [[ "$DRY_RUN" == "true" ]]; then
+  echo "DOMAIN=${DOMAIN}"
+  echo "API_UPSTREAM=${API_UPSTREAM}"
+  echo "BRANCH=${BRANCH}"
+  echo "NO_FIREWALL=${NO_FIREWALL}"
+  exit 0
 fi
 
 [[ "$(id -u)" -eq 0 ]] || fail "This script must be run as root (try: sudo bash ...)"
@@ -93,7 +136,9 @@ if ! command -v node >/dev/null 2>&1; then
   curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash -
 fi
 
-apt-get install -y -qq nginx certbot python3-certbot-nginx git nodejs ufw
+apt-get install -y -qq nginx git nodejs
+[[ "$SKIP_CERTBOT" == "true" && -z "$CERTIFICATE_ARCHIVE" ]] || apt-get install -y -qq certbot python3-certbot-nginx
+[[ "$NO_FIREWALL" == "true" ]] || apt-get install -y -qq ufw
 
 ok "System packages installed (nginx, Node.js ${NODE_MAJOR}, certbot)"
 
@@ -146,9 +191,15 @@ step "Configuring nginx"
 # Strip trailing slash from upstream URL
 API_UPSTREAM="${API_UPSTREAM%/}"
 
+if [[ "$ANY_HOST" == "true" ]]; then
+  LISTEN="listen 80 default_server;"
+else
+  LISTEN="listen 80;"
+fi
+
 cat > /etc/nginx/sites-available/lumiverb <<NGINX
 server {
-    listen 80;
+    ${LISTEN}
     server_name ${DOMAIN};
 
     root ${APP_DIR}/src/ui/web/dist;
@@ -157,6 +208,23 @@ server {
     add_header X-Content-Type-Options nosniff always;
     add_header X-Frame-Options DENY always;
     add_header Referrer-Policy no-referrer-when-downgrade always;
+
+    # Playback: a multi-GB proxy streams straight through instead of being
+    # spooled to disk, and the link (a bearer token good for hours) stays
+    # out of the access log. Range requests pass through as they are.
+    location /v1/stream/ {
+        proxy_pass ${API_UPSTREAM};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        access_log off;
+        proxy_connect_timeout 60s;
+        proxy_read_timeout 300s;
+    }
 
     location /v1/ {
         proxy_pass ${API_UPSTREAM};
@@ -219,15 +287,20 @@ fi
 # ---------------------------------------------------------------------------
 # 7. Firewall
 # ---------------------------------------------------------------------------
-step "Configuring firewall (ufw)"
+if [[ "$NO_FIREWALL" == "true" ]]; then
+  step "Firewall"
+  ok "Left alone (--no-firewall)"
+else
+  step "Configuring firewall (ufw)"
 
-ufw default deny incoming
-ufw default allow outgoing
-ufw allow 22/tcp   # SSH
-ufw allow 80/tcp   # HTTP (certbot + redirect)
-ufw allow 443/tcp  # HTTPS
-ufw --force enable
-ok "Firewall active — inbound limited to SSH, HTTP, HTTPS"
+  ufw default deny incoming
+  ufw default allow outgoing
+  ufw allow 22/tcp   # SSH
+  ufw allow 80/tcp   # HTTP (certbot + redirect)
+  ufw allow 443/tcp  # HTTPS
+  ufw --force enable
+  ok "Firewall active — inbound limited to SSH, HTTP, HTTPS"
+fi
 
 # ---------------------------------------------------------------------------
 # 8. Verify
@@ -252,6 +325,8 @@ fi
 echo ""
 if [[ "$TLS_ACTIVE" == "true" ]]; then
   SITE_URL="https://${DOMAIN}"
+elif [[ "$ANY_HOST" == "true" ]]; then
+  SITE_URL="http://<this machine's address> (port 80, any host name)"
 else
   SITE_URL="http://${DOMAIN}"
 fi

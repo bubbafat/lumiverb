@@ -264,7 +264,7 @@ Deploy Lumiverb to a DigitalOcean Droplet, Hetzner VPS, or any Ubuntu server (x8
 | **A domain** | e.g. `app.example.com`. You need access to its DNS records. |
 | **SSH access** | You'll run the deploy script as root over SSH. |
 
-The VPS does not need anything pre-installed beyond the Ubuntu base image. The script installs all dependencies (PostgreSQL 16, pgvector, nginx, Node.js 20, Python/uv, Quickwit, certbot).
+The VPS does not need anything pre-installed beyond the Ubuntu base image. The script installs all dependencies (PostgreSQL 18, pgvector, nginx, Node.js 20, Python/uv, Quickwit, certbot).
 
 ### Step 1: Create the VPS
 

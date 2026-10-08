@@ -93,6 +93,43 @@ def build_scene_document(scene: VideoScene, asset: Asset) -> dict:
 # Inline sync (best-effort, never raises)
 # ---------------------------------------------------------------------------
 
+def index_transcript_segments(tenant_id: str, asset: Asset, srt: str | None = None) -> None:
+    """Replace an asset's documents in the transcript-segment index.
+
+    The sync sweep never touches this index, so it's called wherever the
+    segments change or come back: when a transcript is submitted, and when
+    a trashed asset is restored (trashing deletes them). Best effort.
+    """
+    from src.server.search import quickwit_client as qwc
+    from src.server.srt import parse_srt_segments
+
+    srt = srt if srt is not None else asset.transcript_srt
+    try:
+        qw = qwc.QuickwitClient()
+        qw.ensure_tenant_transcript_index(tenant_id)
+        qw.delete_tenant_transcript_documents(tenant_id, asset.asset_id)
+        segments = parse_srt_segments(srt) if srt else []
+        if segments:
+            now = int(utcnow().timestamp())
+            qw.ingest_tenant_transcript_documents(tenant_id, [
+                {
+                    "id": f"{asset.asset_id}_{seg.start_ms}_{seg.end_ms}",
+                    "asset_id": asset.asset_id,
+                    "library_id": asset.library_id,
+                    "rel_path": asset.rel_path,
+                    "media_type": asset.media_type,
+                    "start_ms": seg.start_ms,
+                    "end_ms": seg.end_ms,
+                    "text": seg.text,
+                    "language": asset.transcript_language or "",
+                    "indexed_at": now,
+                }
+                for seg in segments
+            ])
+    except Exception as exc:
+        logger.warning("Transcript segment indexing failed for %s: %s", asset.asset_id, exc)
+
+
 def _get_quickwit() -> QuickwitClient | None:
     """Get a QuickwitClient, returning None if disabled or unavailable."""
     try:

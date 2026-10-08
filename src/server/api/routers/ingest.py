@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from PIL import Image
 from sqlmodel import Session
 
+from src.shared.io_utils import normalize_rel_path
 from src.server.api.dependencies import get_tenant_session
 from src.shared import asset_status
 from src.shared.path_filter import PathFilter, is_path_included_merged
@@ -271,6 +272,26 @@ def _do_ingest(
 # ---------------------------------------------------------------------------
 
 
+def _parse_video_facet(raw: str | None, media_type: str) -> dict | None:
+    """Validate the optional video_facet form field (a probe result, see VideoFacetModel)."""
+    if raw is None:
+        return None
+    from pydantic import ValidationError
+
+    from src.server.api.routers.assets import VideoFacetModel
+
+    if media_type != "video":
+        raise HTTPException(status_code=400, detail="video_facet is only for video assets")
+    data = _parse_optional_json(raw, "video_facet")
+    try:
+        return VideoFacetModel(**(data or {})).model_dump()
+    except ValidationError as exc:
+        # A probe value we can't accept never blocks ingest: keep the video,
+        # leave it unprobed (enrich --job-type probe can retry).
+        logger.warning("Ignoring invalid video_facet: %s", exc.errors()[:3])
+        return None
+
+
 @router.post("/v1/ingest", response_model=IngestResponse)
 async def create_and_ingest(
     request: Request,
@@ -286,6 +307,7 @@ async def create_and_ingest(
     exif: str | None = Form(default=None),
     vision: str | None = Form(default=None),
     embeddings: str | None = Form(default=None),
+    video_facet: str | None = Form(default=None),
 ) -> IngestResponse:
     """Create an asset record and ingest proxy + metadata in one atomic request.
 
@@ -323,12 +345,17 @@ async def create_and_ingest(
         raise HTTPException(status_code=400, detail="Proxy file is empty")
 
     tenant_id: str = request.state.tenant_id
+    rel_path = normalize_rel_path(rel_path)
 
     # Validate library
     lib_repo = LibraryRepository(session)
     library = lib_repo.get_by_id(library_id)
     if library is None:
         raise HTTPException(status_code=404, detail="Library not found")
+    # A trashed library takes no new clips and doesn't get its clips back
+    # from a scan already under way (or a client still holding its id).
+    if library.status == "trashed":
+        raise HTTPException(status_code=409, detail="Library is in the trash")
 
     # Enforce path filters (merged tenant + library)
     filter_repo = PathFilterRepository(session)
@@ -346,6 +373,7 @@ async def create_and_ingest(
     exif_data = _parse_optional_json(exif, "exif")
     vision_data = _parse_optional_json(vision, "vision")
     embeddings_data = _parse_optional_json_list(embeddings, "embeddings")
+    facet_data = _parse_video_facet(video_facet, media_type)
 
     # Parse mtime
     file_mtime_dt: datetime | None = None
@@ -358,9 +386,15 @@ async def create_and_ingest(
     # Create or find existing asset
     asset_repo = AssetRepository(session)
     existing = asset_repo.get_by_library_and_rel_path(library_id, rel_path)
+    reappeared = None  # set when a file the scanner marked missing is back
     created = False
 
     if existing is None:
+        if asset_repo.is_ignored(library_id, rel_path):
+            raise HTTPException(
+                status_code=409,
+                detail=f"File was removed from the library (trash emptied): {rel_path}",
+            )
         asset = asset_repo.create_asset(
             library_id=library_id,
             rel_path=rel_path,
@@ -371,16 +405,33 @@ async def create_and_ingest(
         asset_id = asset.asset_id
         created = True
     else:
+        # The user's trash is human data: a rescan of a file still on disk
+        # never undoes it. Scanners skip these via
+        # GET /v1/libraries/{id}/ignored-paths.
+        if existing.deleted_at is not None and existing.deleted_reason == "user":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Asset is in the trash: {rel_path}",
+            )
         asset_id = existing.asset_id
         # Update file metadata if changed
         existing.file_size = file_size
         if file_mtime_dt is not None:
             existing.file_mtime = file_mtime_dt
         existing.media_type = media_type
-        # Re-ingesting a soft-deleted asset restores it. Without this,
-        # the asset stays invisible (active_assets filters deleted_at)
-        # and the scanner re-discovers it every cycle.
-        existing.deleted_at = None
+        # A file the scanner marked missing has reappeared: restore it, and
+        # put it back in search (trashing deleted its search documents).
+        # Without this, the asset stays invisible (active_assets filters
+        # deleted_at) and the scanner re-discovers it every cycle.
+        if existing.deleted_at is not None:
+            AssetRepository(session).clear_trash(existing)
+            reappeared = existing
+        # The file was replaced: its analysis proxy shows the old content.
+        new_sha = (exif_data or {}).get("sha256")
+        if new_sha and existing.sha256 and new_sha != existing.sha256:
+            existing.analysis_proxy_key = None
+            existing.analysis_proxy_sha256 = None
+            existing.analysis_proxy_generated_at = None
         session.add(existing)
 
     result = _do_ingest(
@@ -396,6 +447,12 @@ async def create_and_ingest(
         embeddings_data=embeddings_data,
         session=session,
     )
+    if facet_data is not None:
+        asset_repo.upsert_video_facet(asset_id, facet_data)
+    if reappeared is not None and reappeared.transcript_srt:
+        from src.server.search.sync import index_transcript_segments
+
+        index_transcript_segments(tenant_id, reappeared)
     result.created = created
     return result
 

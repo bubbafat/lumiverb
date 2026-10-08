@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — Phase 0 in progress
+Accepted — Phase 1 built, in review
 
 This ADR sets the direction for Lumiverb. Where another doc in this repo disagrees with it, this ADR wins and that doc is out of date. The working version, with discussion and the decision log, is the "Lumiverb Operating Model" doc (https://claude.ai/artifact/UuLm2upRoZKRbrvR59SvqM).
 
@@ -10,9 +10,9 @@ This ADR sets the direction for Lumiverb. Where another doc in this repo disagre
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 0 | Groundwork and safety: this ADR, doc updates, stop overwriting human data, safe scanning | In progress |
-| 1 | Projects and send to editor (v1) | Not started |
-| 2 | The brain: one machine schedules all processing and reads storage read-only | Not started |
+| 0 | Groundwork and safety: this ADR, doc updates, stop overwriting human data, safe scanning | Built, in review |
+| 1 | Projects and send to editor (v1) | Built, in review, with project trash. Left: real editor imports on a Mac; the macOS and iOS rename |
+| 2 | The brain: one machine schedules all processing and reads storage read-only | Built; installed on the brain and ingesting. In review (PR #9). Left: the macOS app's change reports and retiring its AI (Swift), finishing the fresh ingest |
 | 3 | Lineage and reconciliation | Not started |
 | 4 | Producers and endpoints | Not started |
 
@@ -53,7 +53,8 @@ These are the rules other docs defer to.
 6. **One producer per artifact kind.** A producer declares the milestone it needs (never another producer by name), which assets it applies to (a condition such as "only video"), which of its settings change its output, and which scarce resources it uses. AI producers also name a model and an endpoint. Producers are first-party for now.
 7. **Milestones, not a chain of workers.** Discovered (the asset exists and has an identity) → Probed (technical facts known) → Rendered (proxies and thumbnails exist) → Enriched (AI outputs exist) → Indexed (searchable). A producer whose prerequisites can never exist is disabled with a stated reason instead of failing on every asset.
 8. **Paths are resolved, not stored.** The catalog stores a library root and each asset's path relative to it, Unicode-normalized to NFC. A full path is built when needed, for whoever needs it: the brain's mount, an edit station's mount, or an export prefix. No machine-specific absolute path is treated as truth.
-9. **Surprising outcomes need explicit agreement.** When an action may do something the user doesn't expect (re-embedding a whole library, replacing edited values), the prompt spells out the outcome and the confirm button names the action ("Re-embed all 12,408 assets"), not a default Yes.
+9. **Surprising outcomes need explicit agreement.** When an action may do something the user doesn't expect (re-embedding a whole library, replacing edited values), the prompt spells out the outcome and the confirm button names the action ("Re-embed all 12,408 assets"), not a default Yes. **The API requires that agreement, not just the UI:** the request must carry the user's choice, or it's refused (409, with the facts), so every client (web, CLI, macOS, iOS) has to show the facts and ask. Moving an asset or a project to the trash is reversible and needs none.
+10. **Deleting goes through the trash.** Assets and projects follow one pattern: delete → trash → restore or delete forever. Libraries have a trash but no restore yet. Deleting for good is a separate, explicit step, and it says what else it touches (the projects a clip is in) before it runs.
 
 ### Roles
 
@@ -81,7 +82,7 @@ Where inference runs is configuration, not architecture.
 
 These are two different things, and the names are reserved:
 
-- A **project** is transient and many-to-many: a named, unordered set of whole assets for one job, such as "Customer Video 123". Create it, find media, send it to the editor, relink if needed, then archive or delete it. A clip can be in many projects. Static projects hold hand-picked clips; smart projects are saved searches. **What the code calls "collections" today are projects**, and phase 1 renames them everywhere (tables, API routes, CLI, web, macOS and iOS).
+- A **project** is transient and many-to-many: a named, unordered set of whole assets for one job, such as "Customer Video 123". Create it, find media, send it to the editor, relink if needed, then archive or delete it. Archive means done but kept: it leaves the lists and pickers and still opens and exports. Delete moves it to the trash; restoring it can bring back its trashed clips too, and deleting it for good never touches its clips. A clip can be in many projects. Static projects hold hand-picked clips; smart projects are saved searches. **What the code calls "collections" today are projects**, and phase 1 renames them everywhere (tables, API routes, CLI, web, macOS and iOS).
 - A **collection** is a long-lived container where each piece of media lives once. It doesn't exist yet; the name is kept free for it.
 
 ### v1: find, collect, send
@@ -134,6 +135,18 @@ Proposed (not yet decided): whole-value overrides (a description, OCR text) win 
 | Storage asleep (Mac Studio off) | Proposed: enrichment continues from analysis proxies; only discovery, probing and rendering wait. |
 | Producer whose prerequisites can never exist | Disabled with a stated reason, not failing per asset. |
 
+Known limitations after phase 0 (accepted for now; each is a follow-up):
+
+| Limitation | Effect | Follow-up |
+|---|---|---|
+| A "not this person" on a face that re-detection doesn't find again is dropped with the face | If a later detection of the same face isn't paired, it can be auto-assigned to that person again | Narrow; revisit with region-anchored corrections (phase 3) |
+| Re-detection pairs a face with its old self only within embedding distance 0.4 | The same face seen more than 0.4 apart becomes a second face next to the kept confirmed one (nothing is lost); identical twins closer than 0.4 can still be paired | Tune the gate on real Apple Vision vs InsightFace data |
+| Trash is tracked by path | A trashed file that is renamed or moved on disk comes back as a new asset | Use the stored SHA-256 to recognise it |
+| The macOS scanner doesn't read the trashed list | It re-uploads trashed files and logs a 409 for each, every scan; no data changes | Fix in Swift, or moot once scanning moves to the brain (phase 2) |
+| Assets marked missing have no listing or purge UI | They wait, with their human data, until the file returns or someone purges them by id | A "missing files" view |
+| Two rows whose paths differ only in Unicode form are left as they are by the migration | The NFD one is marked missing on the next scan | Merge them by hand; the migration logs the count |
+| `recreate-search-indexes` and forced `search-sync` accept any tenant key | They only rebuild derived data | Require admin with the other upkeep routes |
+
 ## Code References
 
 Phase 0 targets, read from the repo on 2026-10-07:
@@ -149,7 +162,7 @@ Phase 0 targets, read from the repo on 2026-10-07:
 | No NFC normalization in Python | `src/client/cli/ingest.py` (file discovery, `rel_path`) | macOS normalizes in `ScanPipeline.swift` |
 | What runs today | `src/server/repository/tenant.py` `MISSING_CONDITIONS`; `src/client/cli/repair.py` | Replaced by the reconciler in phase 3 |
 | Closest model for reconciliation | `src/server/upgrade/` | Upgrade-step registry |
-| Projects (today "collections") | `src/server/api/routers/collections.py` | Smart evaluation caps at 1,000 assets with no `next_cursor` |
+| Projects (formerly "collections") | `src/server/api/routers/projects.py` | Smart evaluation caps at 1,000 assets with no `next_cursor` |
 
 ## Doc References
 
@@ -200,6 +213,8 @@ A project becomes a bin in Resolve, Premiere or Final Cut, with media online.
 
 **Done when:** one project mixing two cameras and frame rates imports into Resolve, Premiere and Final Cut with every clip online at the right duration; a smart project over 1,000 clips exports whole; an archived project can still be exported.
 
+**Where it stands:** built, and the full suite passes with every marker. Tests show a smart project over 1,000 clips exporting whole and an archived project exporting. Both export files are read back by OpenTimelineIO's FCP7 and FCPXML adapters with every clip finding its media, but the real imports into Resolve, Premiere and Final Cut still need a check on a Mac. The macOS and iOS apps aren't renamed yet (they can't be built here); the API keeps `/v1/collections` and a legacy `collection_id` for them until they are. Browsing the result on a phone led to fixes for phone layouts and to project trash (principles 9 and 10): delete, trash, restore or delete forever, with the API requiring the user's say before surprising deletes and restores.
+
 ### Phase 2 — The brain
 
 The brain reads storage, schedules all rendering and enrichment, and is where Lumiverb lives.
@@ -213,6 +228,8 @@ The brain reads storage, schedules all rendering and enrichment, and is where Lu
 - Ingest the whole library fresh
 
 **Done when:** footage copied to storage becomes searchable and transcribed without starting anything on an edit station, and enrichment continues from proxies while storage sleeps.
+
+**Where it stands:** the code is built and checked on the dev stack. A clip copied into a mapped library and reported the way the macOS app will report it was transcribed and searchable 12 seconds later. With the storage unreachable, the worker scanned nothing, kept the report, and still transcribed and found scenes in a clip from its analysis proxy. When the storage came back, it scanned the reported folder. Production, dev and tests run Postgres 18, which Ubuntu 26.04 ships with pgvector. `docs/brain-setup.md` has the install, which needs sudo, and the Swift changes for the macOS app, which can't be built here. The brain is installed from this branch and ingesting its first library. Playback grew out of it: the web plays whole videos from their analysis proxies (a mix of every audio track first), public pages 10 seconds unless raised, and public pages show visitors only what the page itself does. Five independent review rounds; the last found nothing blocking.
 
 ### Phase 3 — Lineage and reconciliation
 
