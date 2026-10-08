@@ -13,6 +13,7 @@ import logging
 import os
 import threading
 import unicodedata
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -567,8 +568,12 @@ def run_backfill_vision(
     *,
     concurrency: int = 4,
     console: Console,
+    should_stop: Callable[[], bool] | None = None,
 ) -> _IngestStats:
-    """Backfill AI descriptions for assets that don't have them."""
+    """Backfill AI descriptions for assets that don't have them.
+
+    should_stop is asked before each asset; once it says stop, no more start.
+    """
     library_id = library["library_id"]
 
     # Resolve vision config (client > tenant > auto-discover)
@@ -662,6 +667,8 @@ def run_backfill_vision(
         pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="backfill")
         inflight: set[Future] = set()
         for a in to_backfill:
+            if should_stop is not None and should_stop():
+                break
             fut = pool.submit(
                 _backfill_one,
                 asset_id=a["asset_id"],

@@ -1,8 +1,9 @@
 """The brain's worker: scan what changed, enrich what's missing (ADR-016 phase 2).
 
-Runs as a service (`lumiverb worker`). Each cycle, for each library:
+Runs as a service (`lumiverb worker`). Each cycle scans every library, then
+enriches them:
 
-1. If its storage is reachable from here and the Mac reported changes (or a
+1. If a library's storage is reachable from here and the Mac reported changes (or a
    full scan is due), scan the one folder that covers them, then acknowledge
    the changes the scan saw. A file that fails to scan doesn't hold its
    changes back; it's tried again on its own, after 5 minutes, then 10, 20
@@ -14,7 +15,10 @@ Runs as a service (`lumiverb worker`). Each cycle, for each library:
    rendering wait for it. Enrichment runs again only when a library's
    counts change, its storage comes back, or an hour has passed, so a
    file that fails every time isn't retried every minute. Steps that need
-   vision AI are skipped while none is configured.
+   vision AI are skipped while none is configured. Enrichment gets 15
+   minutes a cycle (a first ingest's can take days), stopping between
+   items so change reports are scanned next cycle; it goes on from there,
+   least recently enriched library first.
 
 A library is skipped, never failed: the next cycle tries again.
 """
@@ -48,6 +52,7 @@ DEFAULT_RETRY_EVERY_SEC = 3600.0
 # Files that failed to scan are tried again after this, doubling up to a day.
 RETRY_FIRST_SEC = 300.0
 RETRY_MAX_SEC = 24 * 3600.0
+DEFAULT_ENRICH_BUDGET_SEC = 15 * 60.0
 
 # Enrich steps that need a vision AI endpoint, and the count each repairs.
 VISION_STEPS = {"vision": "missing_vision", "ocr": "missing_ocr", "scene-vision": "missing_scene_vision"}
@@ -109,8 +114,9 @@ class WorkerState:
     """What the worker remembers between cycles (in memory only)."""
 
     last_full_scan: dict[str, float] = field(default_factory=dict)
-    # library_id -> (what the library looked like after the last enrich, when)
-    last_enrich: dict[str, tuple[tuple, float]] = field(default_factory=dict)
+    # library_id -> (what the library looked like after the last enrich, when).
+    # None: enrichment was cut short, so it goes on next cycle.
+    last_enrich: dict[str, tuple[tuple | None, float]] = field(default_factory=dict)
     retries: dict[str, Retry] = field(default_factory=dict)
 
 
@@ -250,11 +256,13 @@ def run_cycle(
     now: float | None = None,
     full_scan_every: float = DEFAULT_FULL_SCAN_EVERY_SEC,
     retry_every: float = DEFAULT_RETRY_EVERY_SEC,
+    enrich_budget: float = DEFAULT_ENRICH_BUDGET_SEC,
     only: list[str] | None = None,
     scan_fn: Callable | None = None,
     enrich_fn: Callable | None = None,
+    clock: Callable[[], float] = time.monotonic,
 ) -> None:
-    """Scan and enrich every library once."""
+    """Scan every library, then enrich them for up to enrich_budget seconds."""
     if scan_fn is None:
         from src.client.cli.scan import run_scan as scan_fn
     if enrich_fn is None:
@@ -266,25 +274,40 @@ def run_cycle(
         libraries = [lib for lib in libraries if lib["name"] in only]
     skip = set() if _vision_configured(client) else set(VISION_STEPS)
 
+    reachable: dict[str, bool] = {}
     for library in libraries:
         name = library["name"]
         # require_entries: an unmounted mount point is an empty folder, and
         # scanning it would mark every file missing.
         root = reachable_root(library, require_entries=True)
+        reachable[library["library_id"]] = root is not None
         if root is None:
             logger.info("worker: %s isn't reachable from here; not scanning it", name)
-        else:
-            try:
-                _scan_library(client, library, root, state, now=now, full_scan_every=full_scan_every,
-                              scan_fn=scan_fn, console=console)
-            except Exception:  # noqa: BLE001 — one library's trouble doesn't stop the rest
-                logger.exception("worker: scanning %s failed; trying again next cycle", name)
-
+            continue
         try:
-            _enrich_library(client, library, state, reachable=root is not None, skip=skip, now=now,
-                            retry_every=retry_every, enrich_fn=enrich_fn, console=console)
+            _scan_library(client, library, root, state, now=now, full_scan_every=full_scan_every,
+                          scan_fn=scan_fn, console=console)
+        except Exception:  # noqa: BLE001 — one library's trouble doesn't stop the rest
+            logger.exception("worker: scanning %s failed; trying again next cycle", name)
+
+    deadline = clock() + enrich_budget
+
+    def out_of_time() -> bool:
+        return clock() >= deadline
+
+    # Least recently enriched first, so one library's long backlog doesn't
+    # keep the others waiting.
+    for library in sorted(libraries, key=lambda lib: state.last_enrich.get(lib["library_id"], ((), float("-inf")))[1]):
+        if out_of_time():
+            logger.info("worker: out of time for enrichment this cycle; %s and the rest go on next cycle",
+                        library["name"])
+            break
+        try:
+            _enrich_library(client, library, state, reachable=reachable[library["library_id"]], skip=skip,
+                            now=now, retry_every=retry_every, enrich_fn=enrich_fn, should_stop=out_of_time,
+                            console=console)
         except Exception:  # noqa: BLE001
-            logger.exception("worker: enriching %s failed; trying again next cycle", name)
+            logger.exception("worker: enriching %s failed; trying again next cycle", library["name"])
 
 
 def _enrich_library(
@@ -297,6 +320,7 @@ def _enrich_library(
     now: float,
     retry_every: float,
     enrich_fn: Callable,
+    should_stop: Callable[[], bool],
     console: Console,
 ) -> None:
     library_id = library["library_id"]
@@ -311,8 +335,11 @@ def _enrich_library(
     previous = state.last_enrich.get(library_id)
     if previous is not None and previous[0] == before and now - previous[1] < retry_every:
         return  # nothing changed since the last try
-    enrich_fn(client, library, job_type="all", console=console, skip_types=skip)
-    state.last_enrich[library_id] = (look(), now)
+    enrich_fn(client, library, job_type="all", console=console, skip_types=skip, should_stop=should_stop)
+    if should_stop():
+        state.last_enrich[library_id] = (None, now)  # cut short, not stuck
+    else:
+        state.last_enrich[library_id] = (look(), now)
 
 
 def run_forever(

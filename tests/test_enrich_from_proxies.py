@@ -51,7 +51,7 @@ def _cached(home: Path, asset_id: str, body: bytes = b"proxy") -> Path:
     return path
 
 
-def _run(client: MagicMock, library: dict, job_type: str, summary: dict, pages: dict[str, list[dict]], **patches):
+def _run(client: MagicMock, library: dict, job_type: str, summary: dict, pages: dict[str, list[dict]], **kwargs):
     def page_missing(_client, _library_id, **flags):
         [flag] = [k for k, v in flags.items() if v]
         return pages.get(flag, [])
@@ -60,7 +60,7 @@ def _run(client: MagicMock, library: dict, job_type: str, summary: dict, pages: 
         patch("src.client.cli.repair.get_repair_summary", return_value={"total_assets": 2, **summary}),
         patch("src.client.cli.repair._page_missing", side_effect=page_missing),
     ):
-        run_repair(client, library, job_type=job_type, console=Console(quiet=True))
+        run_repair(client, library, job_type=job_type, console=Console(quiet=True), **kwargs)
 
 
 def _posts(client: MagicMock, suffix: str) -> list[str]:
@@ -254,3 +254,138 @@ def test_scene_steps_count_what_they_did(home: Path, asleep: dict) -> None:
     ):
         run_repair(client, asleep, job_type="video-scenes", console=console)
     assert "1 fixed" in console.export_text()
+
+
+# ---------------------------------------------------------------------------
+# The worker gives enrichment a time budget: told to stop, each step stops
+# between items and no later step starts. Probing and rendering stop when
+# the storage goes to sleep mid-step, instead of timing out on each file.
+# ---------------------------------------------------------------------------
+
+VISION = ("http://vision", None, "model", "test")
+
+# job type, its missing_* flag, what handles one item, extra patches
+STEPS = [
+    ("probe", "missing_probe", "src.client.cli.repair._probe_one", {}),
+    ("render", "missing_analysis_proxy", "src.client.cli.repair._render_one", {}),
+    ("embed", "missing_embeddings", "src.client.cli.repair._repair_embed_one",
+     {"src.client.workers.embeddings.clip_provider.CLIPEmbeddingProvider": MagicMock()}),
+    ("ocr", "missing_ocr", "src.client.cli.repair._ocr_one",
+     {"src.client.cli.ingest._resolve_vision_config": MagicMock(return_value=VISION),
+      "src.client.workers.captions.factory.get_caption_provider": MagicMock()}),
+    ("faces", "missing_faces", "src.client.cli.repair._run_face_pipeline", {}),
+    ("transcribe", "missing_transcription", "src.client.cli.repair._transcribe_one", {}),
+    ("video-scenes", "missing_video_scenes", "src.client.cli.video_index.index_video_scenes", {}),
+    ("scene-vision", "missing_scene_vision", "src.client.cli.video_index.enrich_video_scenes",
+     {"src.client.cli.ingest._resolve_vision_config": MagicMock(return_value=(None, None, None, "none"))}),
+]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(("job_type", "flag", "target", "extra"), STEPS, ids=[s[0] for s in STEPS])
+def test_a_step_told_to_stop_does_no_more_items(home: Path, library: dict, job_type: str, flag: str,
+                                                target: str, extra: dict) -> None:
+    from contextlib import ExitStack
+
+    _cached(home, "ast_a")
+    stop = {"now": False}
+
+    def page_missing(_client, _library_id, **flags):
+        stop["now"] = True  # the step has started
+        return [{"asset_id": "ast_a", "rel_path": "a.mov", "duration_sec": 4.0, "has_analysis_proxy": True}]
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("src.client.cli.repair.get_repair_summary",
+                                  return_value={"total_assets": 1, flag: 1}))
+        stack.enter_context(patch("src.client.cli.repair._page_missing", side_effect=page_missing))
+        for name, value in extra.items():
+            stack.enter_context(patch(name, value))
+        one = stack.enter_context(patch(target, return_value="ok"))
+        run_repair(MagicMock(), library, job_type=job_type, console=Console(quiet=True),
+                   should_stop=lambda: stop["now"])
+    one.assert_not_called()
+
+
+@pytest.mark.fast
+def test_vision_told_to_stop_does_no_more_items(home: Path, library: dict) -> None:
+    stop = {"now": False}
+    client = MagicMock()
+
+    def get(url: str, **kw):
+        stop["now"] = True
+        return MagicMock(**{"json.return_value": {"items": [{"asset_id": "ast_a", "rel_path": "a.jpg"}]}})
+
+    client.get.side_effect = get
+    with (
+        patch("src.client.cli.repair.get_repair_summary", return_value={"total_assets": 1, "missing_vision": 1}),
+        patch("src.client.cli.ingest._resolve_vision_config", return_value=VISION),
+        patch("src.client.workers.captions.factory.get_caption_provider"),
+        patch("src.client.cli.ingest._backfill_one") as one,
+    ):
+        run_repair(client, library, job_type="vision", console=Console(quiet=True), should_stop=lambda: stop["now"])
+    one.assert_not_called()
+
+
+@pytest.mark.fast
+def test_a_step_stops_between_items(home: Path, library: dict) -> None:
+    done: list[str] = []
+    pages = {"missing_analysis_proxy": [{"asset_id": f"ast_{x}", "rel_path": f"{x}.mov"} for x in "abc"]}
+    with patch("src.client.cli.repair._render_one", side_effect=lambda *a: done.append(a[2]["asset_id"]) or "ok"):
+        _run(MagicMock(), library, "render", {"missing_analysis_proxy": 3}, pages, should_stop=lambda: bool(done))
+    assert done == ["ast_a"]
+
+
+@pytest.mark.fast
+def test_no_step_starts_once_told_to_stop(home: Path, library: dict) -> None:
+    started: list[str] = []
+
+    def page_missing(_client, _library_id, **flags):
+        [flag] = [k for k, v in flags.items() if v]
+        started.append(flag)
+        return []
+
+    with (
+        patch("src.client.cli.repair.get_repair_summary",
+              return_value={"total_assets": 1, "missing_probe": 1, "missing_analysis_proxy": 1}),
+        patch("src.client.cli.repair._page_missing", side_effect=page_missing),
+    ):
+        run_repair(MagicMock(), library, job_type="all", console=Console(quiet=True), should_stop=lambda: bool(started))
+    assert started == ["missing_probe"]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(("job_type", "flag", "target"), [
+    ("render", "missing_analysis_proxy", "src.client.cli.repair._render_one"),
+    ("probe", "missing_probe", "src.client.cli.repair._probe_one"),
+])
+def test_a_step_stops_when_the_storage_goes_to_sleep(home: Path, library: dict, tmp_path: Path,
+                                                     job_type: str, flag: str, target: str) -> None:
+    # Otherwise each remaining file costs a CIFS timeout.
+    tried: list[str] = []
+
+    def one(*args):
+        asset = args[2]
+        tried.append(asset["asset_id"])
+        if asset["asset_id"] == "ast_b":
+            (tmp_path / "mnt").rename(tmp_path / "asleep")
+            return "missing"
+        return "ok"
+
+    pages = {flag: [{"asset_id": f"ast_{x}", "rel_path": f"{x}.mov"} for x in "abcd"]}
+    with patch(target, side_effect=one):
+        _run(MagicMock(), library, job_type, {flag: 4}, pages)
+    assert tried == ["ast_a", "ast_b"]
+
+
+@pytest.mark.fast
+def test_a_missing_file_alone_does_not_stop_the_step(home: Path, library: dict) -> None:
+    tried: list[str] = []
+
+    def one(*args):
+        tried.append(args[2]["asset_id"])
+        return "missing" if args[2]["asset_id"] == "ast_b" else "ok"
+
+    pages = {"missing_analysis_proxy": [{"asset_id": f"ast_{x}", "rel_path": f"{x}.mov"} for x in "abc"]}
+    with patch("src.client.cli.repair._render_one", side_effect=one):
+        _run(MagicMock(), library, "render", {"missing_analysis_proxy": 3}, pages)
+    assert tried == ["ast_a", "ast_b", "ast_c"]

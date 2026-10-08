@@ -7,6 +7,7 @@ import io
 import json
 import logging
 import multiprocessing as mp
+from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor, wait, FIRST_COMPLETED
 from typing import TYPE_CHECKING, Literal
 
@@ -43,6 +44,19 @@ def _drain(inflight: set[Future]) -> set[Future]:
     for fut in done:
         fut.result()  # re-raise if failed
     return inflight
+
+
+# Faces run in batches of this many when a run may be told to stop, so it
+# can stop between them (each batch starts its own detection processes).
+FACE_CHUNK = 500
+
+
+def _until[T](stop: Callable[[], bool], items: Iterable[T]) -> Iterator[T]:
+    """items, one at a time, until stop() says to stop."""
+    for item in items:
+        if stop():
+            return
+        yield item
 
 
 REPAIR_TYPES = ("probe", "render", "embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all")
@@ -810,6 +824,7 @@ def run_repair(
     console: Console,
     asset_ids: list[str] | None = None,
     skip_types: set[str] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> None:
     """Detect and fix missing pipeline outputs.
 
@@ -820,6 +835,10 @@ def run_repair(
     If skip_types is provided, those enrichment types are excluded from the
     plan even when job_type="all". Used by ingest to honor --skip-vision
     and --skip-embeddings.
+
+    If should_stop is provided, it's asked between items: once it says
+    stop, the current step ends after the item in hand and no other starts.
+    The brain's worker uses it to give enrichment a time budget.
     """
     library_id = library["library_id"]
     library_name = library["name"]
@@ -958,7 +977,20 @@ def run_repair(
             )
         return [a for a in assets if a.get("has_analysis_proxy")]
 
+    stop = should_stop or (lambda: False)
+
+    def _asleep() -> bool:
+        """After a missing file: is the storage gone, rather than the file?"""
+        if reachable_root(library, require_entries=True) is not None:
+            return False
+        console.print(f"[yellow]Library root stopped answering: {_here(library)}. "
+                      "The rest waits until it's reachable.[/yellow]")
+        return True
+
     for repair_type, count, desc in plan:
+        if stop():
+            console.print("[yellow]Stopping here; the rest waits for the next run.[/yellow]")
+            break
         if repair_type == "embed":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
             try:
@@ -1018,7 +1050,7 @@ def run_repair(
                 tid = progress.add_task("Embeddings", total=len(assets), ok=0, fail=0)
                 pool = ThreadPoolExecutor(max_workers=embed_conc, thread_name_prefix="embed")
                 inflight: set[Future] = set()
-                for a in assets:
+                for a in _until(stop, assets):
                     fut = pool.submit(
                         _repair_embed_one,
                         asset_id=a["asset_id"],
@@ -1039,7 +1071,7 @@ def run_repair(
         elif repair_type == "vision":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
             from src.client.cli.ingest import run_backfill_vision
-            run_backfill_vision(client, library, concurrency=vision_conc, console=console)
+            run_backfill_vision(client, library, concurrency=vision_conc, console=console, should_stop=should_stop)
 
         elif repair_type == "ocr":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
@@ -1082,7 +1114,7 @@ def run_repair(
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("OCR", total=len(assets), ok=0, fail=0)
-                for a in assets:
+                for a in _until(stop, assets):
                     result = _ocr_one(
                         asset_id=a["asset_id"],
                         rel_path=a["rel_path"],
@@ -1120,23 +1152,27 @@ def run_repair(
             from src.client.cli.config import load_config
             cfg = load_config()
 
+            chunks = [assets] if should_stop is None else [
+                assets[i:i + FACE_CHUNK] for i in range(0, len(assets), FACE_CHUNK)
+            ]
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Faces", total=len(assets), ok=0, fail=0)
-                _run_face_pipeline(
-                    assets=assets,
-                    client=client,
-                    proxy_cache=proxy_cache,
-                    root_path=_face_root,
-                    face_conc=face_conc,
-                    batch_size=cfg.face_batch_size,
-                    batch_limit=cfg.face_batch_limit,
-                    stats=stats,
-                    progress=progress,
-                    tid=tid,
-                    console=console,
-                    label="faces",
-                )
+                for chunk in _until(stop, chunks):
+                    _run_face_pipeline(
+                        assets=chunk,
+                        client=client,
+                        proxy_cache=proxy_cache,
+                        root_path=_face_root,
+                        face_conc=face_conc,
+                        batch_size=cfg.face_batch_size,
+                        batch_limit=cfg.face_batch_limit,
+                        stats=stats,
+                        progress=progress,
+                        tid=tid,
+                        console=console,
+                        label="faces",
+                    )
 
         elif repair_type == "redetect-faces":
             console.print(f"\n[bold]Re-detecting faces on all images ({count})[/bold]")
@@ -1194,7 +1230,7 @@ def run_repair(
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Probe", total=len(assets), ok=0, fail=0)
-                for a in assets:
+                for a in _until(stop, assets):
                     outcome = _probe_one(client, lib_root, a)
                     with stats.lock:
                         if outcome == "ok":
@@ -1205,6 +1241,8 @@ def run_repair(
                             stats.failed += 1
                     progress.advance(tid, 1)
                     progress.update(tid, ok=stats.processed, fail=stats.failed)
+                    if outcome == "missing" and _asleep():
+                        break
 
         elif repair_type == "render":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
@@ -1225,7 +1263,7 @@ def run_repair(
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Render", total=len(assets), ok=0, fail=0)
-                for a in assets:
+                for a in _until(stop, assets):
                     outcome = _render_one(client, lib_root, a, settings, analysis_cache)
                     with stats.lock:
                         if outcome == "ok":
@@ -1236,6 +1274,8 @@ def run_repair(
                             stats.failed += 1
                     progress.advance(tid, 1)
                     progress.update(tid, ok=stats.processed, fail=stats.failed)
+                    if outcome == "missing" and _asleep():
+                        break
 
         elif repair_type == "transcribe":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
@@ -1253,7 +1293,7 @@ def run_repair(
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Transcribe", total=len(assets), ok=0, fail=0)
-                for a in assets:
+                for a in _until(stop, assets):
                     rel_path = a["rel_path"]
                     asset_id = a["asset_id"]
 
@@ -1323,7 +1363,7 @@ def run_repair(
                 done, failed = run_video_index(
                     client=client,
                     source_for=lambda v: analysis_cache.get(v["asset_id"]),
-                    videos=indexable,
+                    videos=_until(stop, indexable),
                     console=console,
                     progress=progress,
                     task_id=tid,
@@ -1364,7 +1404,7 @@ def run_repair(
                 done, failed = run_video_enrich(
                     client=client,
                     source_for=lambda v: analysis_cache.get(v["asset_id"]),
-                    videos=videos,
+                    videos=_until(stop, videos),
                     vision_provider=scene_vision_provider,
                     vision_model_id=vision_model_id,
                     console=console,

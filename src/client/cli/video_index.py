@@ -15,7 +15,7 @@ import io
 import logging
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from rich.console import Console
@@ -144,7 +144,7 @@ def run_video_index(
     *,
     client: LumiverbClient,
     source_for: SourceFor,
-    videos: list[dict],
+    videos: Iterable[dict],
     console: Console,
     progress: Progress,
     task_id: object,
@@ -310,7 +310,7 @@ def run_video_enrich(
     *,
     client: LumiverbClient,
     source_for: SourceFor,
-    videos: list[dict],
+    videos: Iterable[dict],
     vision_provider: object | None,
     vision_model_id: str | None,
     console: Console,

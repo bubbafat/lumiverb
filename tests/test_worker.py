@@ -434,6 +434,73 @@ def test_report_changes_makes_relative_paths_absolute(home: Path, tmp_path: Path
 
 
 # ---------------------------------------------------------------------------
+# Scanning first, then enrichment for a limited time: a first ingest's
+# enrichment can run for days, and change reports mustn't wait on it.
+# ---------------------------------------------------------------------------
+
+TWO = [LIB, {**LIB, "library_id": "lib_2", "name": "Two"}]
+BOTH_SCANNED = {"lib_1": 99 * HOUR, "lib_2": 99 * HOUR}
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.t = 0.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def _enriched(enrich: MagicMock) -> list[str]:
+    return [c.args[1]["library_id"] for c in enrich.call_args_list]
+
+
+@pytest.mark.fast
+def test_every_library_is_scanned_before_any_is_enriched(das: Path) -> None:
+    server = FakeServer(TWO, pending={"lib_1": [CHANGE], "lib_2": [{**CHANGE, "change_id": "chg_2"}]},
+                        summaries={"lib_1": WORK, "lib_2": WORK})
+    order: list[tuple[str, str]] = []
+    scan = MagicMock(side_effect=lambda client, lib, **kw: order.append(("scan", lib["library_id"])) or ScanStats())
+    enrich = MagicMock(side_effect=lambda client, lib, **kw: order.append(("enrich", lib["library_id"])))
+    _cycle(server, WorkerState(last_full_scan=dict(BOTH_SCANNED)), scan=scan, enrich=enrich)
+    assert order == [("scan", "lib_1"), ("scan", "lib_2"), ("enrich", "lib_1"), ("enrich", "lib_2")]
+
+
+@pytest.mark.fast
+def test_enrichment_stops_when_its_time_is_up(das: Path) -> None:
+    server = FakeServer(TWO, summaries={"lib_1": WORK, "lib_2": WORK})
+    clock = Clock()
+    told: list[bool] = []
+
+    def enrich(client, lib, *, should_stop, **kw):
+        told.append(should_stop())
+        clock.t += 16 * MIN
+        told.append(should_stop())
+
+    _, mock, _ = _cycle(server, WorkerState(last_full_scan=dict(BOTH_SCANNED)),
+                        enrich=MagicMock(side_effect=enrich), clock=clock)
+    assert _enriched(mock) == ["lib_1"]
+    assert told == [False, True]
+
+
+@pytest.mark.fast
+def test_a_library_cut_short_goes_on_next_cycle_after_the_others(das: Path) -> None:
+    server = FakeServer(TWO, summaries={"lib_1": WORK, "lib_2": WORK})
+    clock = Clock()
+
+    def enrich(client, lib, **kw):
+        clock.t += 16 * MIN
+
+    state = WorkerState(last_full_scan=dict(BOTH_SCANNED))
+    runs = []
+    for minute in range(3):
+        _, mock, state = _cycle(server, state, now=100 * HOUR + minute * MIN,
+                                enrich=MagicMock(side_effect=enrich), clock=clock)
+        runs.append(_enriched(mock))
+    # lib_1's counts didn't change, but it wasn't finished, so it isn't paced.
+    assert runs == [["lib_1"], ["lib_2"], ["lib_1"]]
+
+
+# ---------------------------------------------------------------------------
 # Pacing enrichment
 # ---------------------------------------------------------------------------
 
