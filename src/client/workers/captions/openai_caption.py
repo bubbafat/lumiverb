@@ -36,10 +36,24 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
     The model ID is passed at construction time (auto-discovered or from config).
     """
 
-    def __init__(self, base_url: str, model: str, api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        api_key: str | None = None,
+        *,
+        settings: dict | None = None,
+        ocr_settings: dict | None = None,
+    ) -> None:
+        from src.shared.producers import effective_settings
+
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._api_key = api_key
+        # Output-affecting settings (prompt, image size, sampling): the server's,
+        # so what's recorded in lineage is what was sent. Defaults otherwise.
+        self._vision = settings or effective_settings("vision")
+        self._ocr = ocr_settings or effective_settings("ocr")
 
     @property
     def provider_id(self) -> str:
@@ -165,7 +179,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         try:
             img = Image.open(proxy_path)
             try:
-                max_edge = 1280
+                max_edge = int(self._vision["max_edge"])
                 if max(img.width, img.height) > max_edge:
                     img.thumbnail((max_edge, max_edge), Image.LANCZOS)
                 buf = io.BytesIO()
@@ -178,18 +192,13 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             logger.warning("OpenAI-compatible caption failed for %s: %s", proxy_path, e)
             return {}
 
-        prompt = (
-            "Describe this image in 2-3 sentences, being specific about "
-            "the subject, setting, and mood. Then provide 5-10 descriptive "
-            "tags. Respond only with valid JSON in this exact format:\n"
-            '{"description": "...", "tags": ["tag1", "tag2", ...]}'
-        )
+        prompt = self._vision["prompt"]
 
         last_error: Exception | None = None
         last_raw: str = ""
         for attempt in range(1, self.MAX_ATTEMPTS + 1):
             try:
-                raw = self._chat(data_url, prompt)
+                raw = self._chat(data_url, prompt, self._vision)
                 last_raw = raw
 
                 # Strip markdown code fences if present
@@ -247,7 +256,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         try:
             img = Image.open(proxy_path)
             try:
-                max_edge = 1280
+                max_edge = int(self._ocr["max_edge"])
                 if max(img.width, img.height) > max_edge:
                     img.thumbnail((max_edge, max_edge), Image.LANCZOS)
                 buf = io.BytesIO()
@@ -260,11 +269,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             logger.warning("OCR image prep failed for %s: %s", proxy_path, e)
             return ""
 
-        prompt = (
-            "What text is visible in this image? "
-            "Include text from signs, labels, products, screens, documents, or watermarks. "
-            "If none, say NONE."
-        )
+        prompt = self._ocr["prompt"]
 
         # Words from the prompt that should not appear in OCR results
         _prompt_noise = {
@@ -275,7 +280,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
 
         for attempt in range(1, self.MAX_ATTEMPTS + 1):
             try:
-                raw = self._chat(data_url, prompt)
+                raw = self._chat(data_url, prompt, self._ocr)
                 text = raw.strip()
                 logger.info("OCR raw response (%d chars): %s", len(text), text[:200] if text else "(empty)")
                 if not text or text.upper() == "NONE" or text == "<none>":
@@ -423,7 +428,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                 i += 1
         return out
 
-    def _chat(self, data_url: str, prompt: str) -> str:
+    def _chat(self, data_url: str, prompt: str, settings: dict) -> str:
         payload = {
             "model": self._model,
             "messages": [
@@ -435,8 +440,8 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                     ],
                 }
             ],
-            "max_tokens": 500,
-            "temperature": 0.2,
+            "max_tokens": int(settings["max_tokens"]),
+            "temperature": float(settings["temperature"]),
         }
         headers = {}
         if self._api_key:

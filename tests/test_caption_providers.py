@@ -68,7 +68,7 @@ def test_openai_provider_sends_auth_header_when_api_key_set() -> None:
     }
 
     with patch("requests.post", return_value=mock_resp) as mock_post:
-        p._chat("data:image/jpeg;base64,abc", "describe this")
+        p._chat("data:image/jpeg;base64,abc", "describe this", p._vision)
         headers = mock_post.call_args.kwargs.get("headers", {})
         assert headers.get("Authorization") == "Bearer sk-test"
 
@@ -90,7 +90,7 @@ def test_openai_provider_omits_auth_header_when_no_api_key() -> None:
     }
 
     with patch("requests.post", return_value=mock_resp) as mock_post:
-        p._chat("data:image/jpeg;base64,abc", "describe this")
+        p._chat("data:image/jpeg;base64,abc", "describe this", p._vision)
         headers = mock_post.call_args.kwargs.get("headers", {})
         assert "Authorization" not in headers
 
@@ -125,3 +125,22 @@ def test_openai_provider_retries_once_on_empty_completion(tmp_path) -> None:
 
     assert out == {"description": "hi", "tags": ["a"]}
     assert mock_post.call_count == 2
+
+
+def test_openai_provider_sends_the_settings_it_was_given() -> None:
+    """The server's producer settings decide the prompt and sampling: what's
+    recorded in lineage is what was sent."""
+    from unittest.mock import MagicMock, patch
+
+    from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from src.shared.producers import effective_settings
+
+    settings = {**effective_settings("vision"), "prompt": "Say what you see.", "temperature": 0.7, "max_tokens": 99}
+    p = OpenAICompatibleCaptionProvider("http://x/v1", "m", settings=settings)
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = {"choices": [{"message": {"content": "{}"}}]}
+    with patch("src.client.workers.captions.openai_caption.requests.post", return_value=resp) as post:
+        p._chat("data:image/jpeg;base64,abc", p._vision["prompt"], p._vision)
+    payload = post.call_args.kwargs["json"]
+    assert (payload["temperature"], payload["max_tokens"]) == (0.7, 99)
+    assert payload["messages"][0]["content"][1]["text"] == "Say what you see."
