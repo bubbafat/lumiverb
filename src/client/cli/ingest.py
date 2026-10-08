@@ -13,7 +13,7 @@ import logging
 import os
 import threading
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -578,10 +578,14 @@ def run_backfill_vision(
     concurrency: int = 4,
     console: Console,
     should_stop: Callable[[], bool] | None = None,
+    skip: Collection[str] = (),
+    on_take: Callable[[str], None] | None = None,
 ) -> _IngestStats:
     """Backfill AI descriptions for assets that don't have them.
 
     should_stop is asked before each asset; once it says stop, no more start.
+    Assets in skip are left for a later run; on_take(asset_id) hears of each
+    one taken.
     """
     library_id = library["library_id"]
 
@@ -616,8 +620,7 @@ def run_backfill_vision(
         items = data.get("items", [])
         if not items:
             break
-        for a in items:
-            to_backfill.append(a)
+        to_backfill.extend(a for a in items if a["asset_id"] not in skip)
         cursor = data.get("next_cursor")
         if not cursor:
             break
@@ -678,6 +681,8 @@ def run_backfill_vision(
         for a in to_backfill:
             if should_stop is not None and should_stop():
                 break
+            if on_take is not None:
+                on_take(a["asset_id"])
             fut = pool.submit(
                 _backfill_one,
                 asset_id=a["asset_id"],

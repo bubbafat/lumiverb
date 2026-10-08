@@ -18,7 +18,9 @@ enriches them:
    vision AI are skipped while none is configured. Enrichment gets 15
    minutes a cycle (a first ingest's can take days), stopping between
    items so change reports are scanned next cycle; it goes on from there,
-   least recently enriched library first.
+   least recently enriched library first. An item enrichment took isn't
+   taken again for an hour, so one that keeps failing (a render that runs
+   for 15 minutes, then fails) doesn't sit first in every cycle's queue.
 
 A library is skipped, never failed: the next cycle tries again.
 """
@@ -56,6 +58,9 @@ DEFAULT_RETRY_EVERY_SEC = 3600.0
 RETRY_FIRST_SEC = 300.0
 RETRY_MAX_SEC = 24 * 3600.0
 DEFAULT_ENRICH_BUDGET_SEC = 15 * 60.0
+# A library isn't started with less time left than this: it would run out
+# getting going, and be paced as if it had got nowhere.
+ENRICH_MIN_START_SEC = 60.0
 
 # Enrich steps that need a vision AI endpoint, and the count each repairs.
 VISION_STEPS = {"vision": "missing_vision", "ocr": "missing_ocr", "scene-vision": "missing_scene_vision"}
@@ -122,6 +127,9 @@ class WorkerState:
     # None: enrichment was cut short, so it goes on next cycle.
     last_enrich: dict[str, tuple[tuple | None, float]] = field(default_factory=dict)
     retries: dict[str, Retry] = field(default_factory=dict)
+    # library_id -> {(step, asset_id): when enrichment may take it again}. One
+    # still missing by then failed; meanwhile the rest of the step goes on.
+    taken: dict[str, dict[tuple[str, str], float]] = field(default_factory=dict)
 
 
 def load_full_scans(path: Path) -> dict[str, float]:
@@ -330,7 +338,7 @@ def run_cycle(
     # Least recently enriched first, so one library's long backlog doesn't
     # keep the others waiting.
     for library in sorted(libraries, key=lambda lib: state.last_enrich.get(lib["library_id"], ((), float("-inf")))[1]):
-        if out_of_time():
+        if clock() >= deadline - ENRICH_MIN_START_SEC:
             logger.info("worker: out of time for enrichment this cycle; %s and the rest go on next cycle",
                         library["name"])
             break
@@ -367,8 +375,19 @@ def _enrich_library(
     previous = state.last_enrich.get(library_id)
     if previous is not None and previous[0] == before and now - previous[1] < retry_every:
         return  # nothing changed since the last try
+    taken = {item: due for item, due in state.taken.get(library_id, {}).items() if due > now}
+    state.taken[library_id] = taken
+    waiting = set(taken)
+    took = False
+
+    def on_take(step: str, asset_id: str) -> None:
+        nonlocal took
+        taken[(step, asset_id)] = now + retry_every
+        took = True
+
     try:
-        enrich_fn(client, library, job_type="all", console=console, skip_types=skip, should_stop=should_stop)
+        enrich_fn(client, library, job_type="all", console=console, skip_types=skip, should_stop=should_stop,
+                  skip_items=waiting, on_take=on_take)
     except (Exception, SystemExit) as exc:
         # Paced like any try, so a crash isn't repeated every cycle.
         state.last_enrich[library_id] = (before, now)
@@ -377,10 +396,11 @@ def _enrich_library(
         logger.exception("worker: enriching %s failed; trying again when it changes or in an hour",
                          library["name"])
         return
-    if should_stop():
+    after = look()
+    if should_stop() and (took or after != before):
         state.last_enrich[library_id] = (None, now)  # cut short, not stuck
     else:
-        state.last_enrich[library_id] = (look(), now)
+        state.last_enrich[library_id] = (after, now)
 
 
 def run_forever(

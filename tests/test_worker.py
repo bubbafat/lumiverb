@@ -594,7 +594,8 @@ def test_a_library_cut_short_goes_on_next_cycle_after_the_others(das: Path) -> N
     server = FakeServer(TWO, summaries={"lib_1": WORK, "lib_2": WORK})
     clock = Clock()
 
-    def enrich(client, lib, **kw):
+    def enrich(client, lib, *, on_take, **kw):
+        on_take("render", f"ast_{clock.t}")  # a long render that failed
         clock.t += 16 * MIN
 
     state = WorkerState(last_full_scan=dict(BOTH_SCANNED))
@@ -605,6 +606,82 @@ def test_a_library_cut_short_goes_on_next_cycle_after_the_others(das: Path) -> N
         runs.append(_enriched(mock))
     # lib_1's counts didn't change, but it wasn't finished, so it isn't paced.
     assert runs == [["lib_1"], ["lib_2"], ["lib_1"]]
+
+
+class FakeRenders:
+    """run_repair's render step over `missing`: "bad" takes 16 minutes and fails, the rest a minute each."""
+
+    def __init__(self, server: FakeServer, clock: Clock, missing: list[str]) -> None:
+        self.server, self.clock, self.missing = server, clock, missing
+        self.runs: list[list[str]] = []
+        self._count()
+
+    def _count(self) -> None:
+        self.server.summaries["lib_1"] = {"total_assets": 3, "missing_analysis_proxy": len(self.missing)}
+
+    def __call__(self, client, lib, *, should_stop, skip_items, on_take, **kw) -> None:
+        run: list[str] = []
+        self.runs.append(run)
+        for asset_id in list(self.missing):
+            if ("render", asset_id) in skip_items:
+                continue
+            if should_stop():
+                return
+            on_take("render", asset_id)
+            run.append(asset_id)
+            if asset_id == "bad":
+                self.clock.t += 16 * MIN
+            else:
+                self.clock.t += MIN
+                self.missing.remove(asset_id)
+                self._count()
+
+
+@pytest.mark.fast
+def test_an_item_that_keeps_failing_does_not_hold_up_the_rest(das: Path) -> None:
+    server = FakeServer([LIB])
+    clock = Clock()
+    renders = FakeRenders(server, clock, ["bad", "a", "b"])
+    state = WorkerState(last_full_scan={"lib_1": 100 * HOUR})
+    for minute in (0, 1, 2, 61):
+        _cycle(server, state, now=100 * HOUR + minute * MIN, enrich=renders, clock=clock)
+    # The next cycle goes on past it; it's tried again after an hour.
+    assert renders.runs == [["bad"], ["a", "b"], ["bad"]]
+
+
+@pytest.mark.fast
+def test_a_run_cut_short_without_getting_anywhere_is_paced(das: Path) -> None:
+    # It took nothing new and changed nothing: running it again every
+    # cycle would only use up every cycle's time.
+    server = FakeServer([LIB], summaries={"lib_1": WORK})
+    clock = Clock()
+
+    def enrich(client, lib, **kw):
+        clock.t += 16 * MIN
+
+    state = WorkerState(last_full_scan={"lib_1": 100 * HOUR})
+    calls = []
+    for minute in (0, 1, 61):
+        _, mock, state = _cycle(server, state, now=100 * HOUR + minute * MIN,
+                                enrich=MagicMock(side_effect=enrich), clock=clock)
+        calls.append(mock.call_count)
+    assert calls == [1, 0, 1]
+
+
+@pytest.mark.fast
+def test_a_library_is_not_started_with_almost_no_time_left(das: Path) -> None:
+    # It would run out of time getting going, and be paced as if stuck.
+    server = FakeServer(TWO, summaries={"lib_1": WORK, "lib_2": WORK})
+    clock = Clock()
+
+    def enrich(client, lib, **kw):
+        clock.t += 14.5 * MIN
+        return None
+
+    _, mock, state = _cycle(server, WorkerState(last_full_scan=dict(BOTH_SCANNED)),
+                            enrich=MagicMock(side_effect=enrich), clock=clock)
+    assert _enriched(mock) == ["lib_1"]
+    assert "lib_2" not in state.last_enrich
 
 
 # ---------------------------------------------------------------------------

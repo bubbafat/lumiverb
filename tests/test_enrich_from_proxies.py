@@ -389,3 +389,53 @@ def test_a_missing_file_alone_does_not_stop_the_step(home: Path, library: dict) 
     with patch("src.client.cli.repair._render_one", side_effect=one):
         _run(MagicMock(), library, "render", {"missing_analysis_proxy": 3}, pages)
     assert tried == ["ast_a", "ast_b", "ast_c"]
+
+
+# ---------------------------------------------------------------------------
+# The worker leaves items that failed recently for later (skip_items), and
+# hears of each item a step takes (on_take): an item that keeps failing
+# mustn't sit first and use up every run's time.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(("job_type", "flag", "target", "extra"), STEPS, ids=[s[0] for s in STEPS])
+def test_a_step_leaves_skipped_items_and_reports_what_it_takes(home: Path, library: dict, job_type: str, flag: str,
+                                                               target: str, extra: dict) -> None:
+    from contextlib import ExitStack
+
+    for asset_id in ("ast_a", "ast_b"):
+        _cached(home, asset_id)
+    page = [{"asset_id": x, "rel_path": f"{x}.mov", "duration_sec": 4.0, "has_analysis_proxy": True}
+            for x in ("ast_a", "ast_b")]
+    taken: list[tuple[str, str]] = []
+    with ExitStack() as stack:
+        stack.enter_context(patch("src.client.cli.repair.get_repair_summary",
+                                  return_value={"total_assets": 2, flag: 2}))
+        stack.enter_context(patch("src.client.cli.repair._page_missing", return_value=page))
+        for name, value in extra.items():
+            stack.enter_context(patch(name, value))
+        one = stack.enter_context(patch(target, return_value="ok"))
+        run_repair(MagicMock(), library, job_type=job_type, console=Console(quiet=True),
+                   should_stop=lambda: False, skip_items={(job_type, "ast_a")},
+                   on_take=lambda step, asset_id: taken.append((step, asset_id)))
+    assert taken == [(job_type, "ast_b")]
+    assert one.call_count == 1
+
+
+@pytest.mark.fast
+def test_vision_leaves_skipped_items_and_reports_what_it_takes(home: Path, library: dict) -> None:
+    client = MagicMock()
+    client.get.return_value.json.return_value = {"items": [{"asset_id": x, "rel_path": f"{x}.jpg"}
+                                                           for x in ("ast_a", "ast_b")]}
+    taken: list[tuple[str, str]] = []
+    with (
+        patch("src.client.cli.repair.get_repair_summary", return_value={"total_assets": 2, "missing_vision": 2}),
+        patch("src.client.cli.ingest._resolve_vision_config", return_value=VISION),
+        patch("src.client.workers.captions.factory.get_caption_provider"),
+        patch("src.client.cli.ingest._backfill_one", return_value=None) as one,
+    ):
+        run_repair(client, library, job_type="vision", console=Console(quiet=True), skip_items={("vision", "ast_a")},
+                   on_take=lambda step, asset_id: taken.append((step, asset_id)))
+    assert taken == [("vision", "ast_b")]
+    assert [c.kwargs["asset_id"] for c in one.call_args_list] == ["ast_b"]

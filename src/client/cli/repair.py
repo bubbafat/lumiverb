@@ -7,7 +7,7 @@ import io
 import json
 import logging
 import multiprocessing as mp
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Collection, Iterable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor, wait, FIRST_COMPLETED
 from typing import TYPE_CHECKING, Literal
 
@@ -51,11 +51,13 @@ def _drain(inflight: set[Future]) -> set[Future]:
 FACE_CHUNK = 500
 
 
-def _until[T](stop: Callable[[], bool], items: Iterable[T]) -> Iterator[T]:
-    """items, one at a time, until stop() says to stop."""
+def _until[T](stop: Callable[[], bool], items: Iterable[T], taken: Callable[[T], None] | None = None) -> Iterator[T]:
+    """items, one at a time, until stop() says to stop. taken(item) hears of each before it's worked."""
     for item in items:
         if stop():
             return
+        if taken is not None:
+            taken(item)
         yield item
 
 
@@ -825,6 +827,8 @@ def run_repair(
     asset_ids: list[str] | None = None,
     skip_types: set[str] | None = None,
     should_stop: Callable[[], bool] | None = None,
+    skip_items: Collection[tuple[str, str]] = (),
+    on_take: Callable[[str, str], None] | None = None,
 ) -> None:
     """Detect and fix missing pipeline outputs.
 
@@ -839,6 +843,10 @@ def run_repair(
     If should_stop is provided, it's asked between items: once it says
     stop, the current step ends after the item in hand and no other starts.
     The brain's worker uses it to give enrichment a time budget.
+
+    skip_items are (step, asset_id) pairs left for a later run, and
+    on_take(step, asset_id) hears of each item a step takes. The worker
+    uses them so an item that keeps failing doesn't hold up the rest.
     """
     library_id = library["library_id"]
     library_name = library["name"]
@@ -979,6 +987,17 @@ def run_repair(
 
     stop = should_stop or (lambda: False)
 
+    def _due(step: str, assets: list[dict]) -> list[dict]:
+        """assets, less those skip_items leaves for a later run."""
+        left = [a for a in assets if (step, a["asset_id"]) not in skip_items]
+        if len(left) < len(assets):
+            console.print(f"  {len(assets) - len(left):,} tried recently; they wait for a later run.")
+        return left
+
+    def _taking(step: str) -> Callable[[dict], None] | None:
+        """For _until: tells on_take of each asset a step takes."""
+        return None if on_take is None else lambda a: on_take(step, a["asset_id"])
+
     def _asleep() -> bool:
         """After a missing file: is the storage gone, rather than the file?"""
         if reachable_root(library, require_entries=True) is not None:
@@ -1005,6 +1024,7 @@ def run_repair(
             if not assets:
                 console.print("No assets found (already repaired?).")
                 continue
+            assets = _due("embed", assets)
 
             EMBED_BATCH_SIZE = 50
             embed_batch: list[dict] = []
@@ -1050,7 +1070,7 @@ def run_repair(
                 tid = progress.add_task("Embeddings", total=len(assets), ok=0, fail=0)
                 pool = ThreadPoolExecutor(max_workers=embed_conc, thread_name_prefix="embed")
                 inflight: set[Future] = set()
-                for a in _until(stop, assets):
+                for a in _until(stop, assets, _taking("embed")):
                     fut = pool.submit(
                         _repair_embed_one,
                         asset_id=a["asset_id"],
@@ -1071,7 +1091,11 @@ def run_repair(
         elif repair_type == "vision":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
             from src.client.cli.ingest import run_backfill_vision
-            run_backfill_vision(client, library, concurrency=vision_conc, console=console, should_stop=should_stop)
+            run_backfill_vision(
+                client, library, concurrency=vision_conc, console=console, should_stop=should_stop,
+                skip={asset_id for step, asset_id in skip_items if step == "vision"},
+                on_take=None if on_take is None else lambda asset_id: on_take("vision", asset_id),
+            )
 
         elif repair_type == "ocr":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
@@ -1088,6 +1112,7 @@ def run_repair(
             if not assets:
                 console.print("No assets found (already repaired?).")
                 continue
+            assets = _due("ocr", assets)
 
             import time as _time
             ocr_batch_size = _cfg.ocr_batch_size
@@ -1114,7 +1139,7 @@ def run_repair(
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("OCR", total=len(assets), ok=0, fail=0)
-                for a in _until(stop, assets):
+                for a in _until(stop, assets, _taking("ocr")):
                     result = _ocr_one(
                         asset_id=a["asset_id"],
                         rel_path=a["rel_path"],
@@ -1146,6 +1171,13 @@ def run_repair(
             if not assets:
                 console.print("No assets found (already repaired?).")
                 continue
+            assets = _due("faces", assets)
+            if not assets:
+                continue
+
+            def _take_chunk(chunk: list[dict]) -> None:
+                for a in chunk:
+                    on_take("faces", a["asset_id"])
 
             _face_root = reachable_root(library)
 
@@ -1158,7 +1190,7 @@ def run_repair(
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Faces", total=len(assets), ok=0, fail=0)
-                for chunk in _until(stop, chunks):
+                for chunk in _until(stop, chunks, _take_chunk if on_take else None):
                     _run_face_pipeline(
                         assets=chunk,
                         client=client,
@@ -1219,6 +1251,7 @@ def run_repair(
             if not assets:
                 console.print("No assets found (already probed?).")
                 continue
+            assets = _due("probe", assets)
 
             # Probing reads source files, not proxies
             lib_root = reachable_root(library)
@@ -1230,7 +1263,7 @@ def run_repair(
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Probe", total=len(assets), ok=0, fail=0)
-                for a in _until(stop, assets):
+                for a in _until(stop, assets, _taking("probe")):
                     outcome = _probe_one(client, lib_root, a)
                     with stats.lock:
                         if outcome == "ok":
@@ -1258,12 +1291,13 @@ def run_repair(
             if not assets:
                 console.print("No assets found (already rendered?).")
                 continue
+            assets = _due("render", assets)
 
             settings = AnalysisProxySettings.from_config()
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Render", total=len(assets), ok=0, fail=0)
-                for a in _until(stop, assets):
+                for a in _until(stop, assets, _taking("render")):
                     outcome = _render_one(client, lib_root, a, settings, analysis_cache)
                     with stats.lock:
                         if outcome == "ok":
@@ -1284,6 +1318,7 @@ def run_repair(
             if not assets:
                 console.print("No assets found (already transcribed?).")
                 continue
+            assets = _due("transcribe", assets)
             # Transcription reads the analysis proxy, so it runs while the
             # originals' storage sleeps.
             assets = _waiting_for_proxy(assets)
@@ -1293,7 +1328,7 @@ def run_repair(
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Transcribe", total=len(assets), ok=0, fail=0)
-                for a in _until(stop, assets):
+                for a in _until(stop, assets, _taking("transcribe")):
                     rel_path = a["rel_path"]
                     asset_id = a["asset_id"]
 
@@ -1341,6 +1376,7 @@ def run_repair(
             if not assets:
                 console.print("No assets found (already repaired?).")
                 continue
+            assets = _due("video-scenes", assets)
             # Scenes are found in the analysis proxy, so this runs while the
             # originals' storage sleeps.
             assets = _waiting_for_proxy(assets)
@@ -1363,7 +1399,7 @@ def run_repair(
                 done, failed = run_video_index(
                     client=client,
                     source_for=lambda v: analysis_cache.get(v["asset_id"]),
-                    videos=_until(stop, indexable),
+                    videos=_until(stop, indexable, _taking("video-scenes")),
                     console=console,
                     progress=progress,
                     task_id=tid,
@@ -1390,6 +1426,7 @@ def run_repair(
             if not assets:
                 console.print("No assets found (already repaired?).")
                 continue
+            assets = _due("scene-vision", assets)
             # Representative frames come from the analysis proxy.
             assets = _waiting_for_proxy(assets)
             if not assets:
@@ -1404,7 +1441,7 @@ def run_repair(
                 done, failed = run_video_enrich(
                     client=client,
                     source_for=lambda v: analysis_cache.get(v["asset_id"]),
-                    videos=_until(stop, videos),
+                    videos=_until(stop, videos, _taking("scene-vision")),
                     vision_provider=scene_vision_provider,
                     vision_model_id=vision_model_id,
                     console=console,
