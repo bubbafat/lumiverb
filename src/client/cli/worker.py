@@ -4,7 +4,9 @@ Runs as a service (`lumiverb worker`). Each cycle, for each library:
 
 1. If its storage is reachable from here and the Mac reported changes (or a
    full scan is due), scan the one folder that covers them, then acknowledge
-   the changes the scan saw.
+   the changes the scan saw. A file that fails to scan doesn't hold its
+   changes back; it's tried again on its own, after 5 minutes, then 10, 20
+   and so on up to a day.
 2. If anything is missing, enrich. Videos are enriched from analysis
    proxies, so this continues while the storage sleeps; only probing and
    rendering wait for it. Enrichment runs again only when a library's
@@ -24,18 +26,26 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
 
 from rich.console import Console
 
 from src.client.cache_dir import cache_dir
 from src.client.cli.client import LumiverbClient
 from src.client.cli.roots import reachable_root
+from src.shared.io_utils import resolve_source_path
+
+if TYPE_CHECKING:
+    from src.client.cli.scan import ScanStats
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_POLL_SEC = 60.0
 DEFAULT_FULL_SCAN_EVERY_SEC = 24 * 3600.0
 DEFAULT_RETRY_EVERY_SEC = 3600.0
+# Files that failed to scan are tried again after this, doubling up to a day.
+RETRY_FIRST_SEC = 300.0
+RETRY_MAX_SEC = 24 * 3600.0
 
 # Enrich steps that need a vision AI endpoint, and the count each repairs.
 VISION_STEPS = {"vision": "missing_vision", "ocr": "missing_ocr", "scene-vision": "missing_scene_vision"}
@@ -80,6 +90,20 @@ def scan_scope(rel_paths: list[str], is_dir: Callable[[str], bool]) -> str | Non
     return "/".join(common) or None
 
 
+def _within(rel: str, folder: str | None) -> bool:
+    """rel is the folder or inside it. None or "" is the whole library."""
+    return not folder or rel == folder or rel.startswith(folder + "/")
+
+
+@dataclass
+class Retry:
+    """Files a library's scans couldn't take in, and when to try them again."""
+
+    paths: set[str]
+    delay: float
+    due: float
+
+
 @dataclass
 class WorkerState:
     """What the worker remembers between cycles (in memory only)."""
@@ -87,6 +111,7 @@ class WorkerState:
     last_full_scan: dict[str, float] = field(default_factory=dict)
     # library_id -> (what the library looked like after the last enrich, when)
     last_enrich: dict[str, tuple[tuple, float]] = field(default_factory=dict)
+    retries: dict[str, Retry] = field(default_factory=dict)
 
 
 class WorkerLock:
@@ -146,37 +171,61 @@ def _scan_library(
     library_id = library["library_id"]
     resp = client.get(f"/v1/libraries/{library_id}/changes").json()
     changes: list[dict] = resp.get("changes", [])
+    retry = state.retries.get(library_id)
+    retry_due = retry is not None and now >= retry.due
     full_due = now - state.last_full_scan.get(library_id, float("-inf")) >= full_scan_every
-    if not changes and not full_due:
+    if not changes and not retry_due and not full_due:
         return
 
     if full_due or resp.get("truncated"):
         prefix = None
     else:
-        prefix = scan_scope([c["rel_path"] for c in changes], lambda rel: (root / rel).is_dir())
+        paths = [c["rel_path"] for c in changes] + (sorted(retry.paths) if retry_due else [])
+        prefix = scan_scope(paths, lambda rel: resolve_source_path(root, rel).is_dir())
     logger.info(
-        "worker: scanning %s%s (%d reported change(s)%s)",
-        library["name"], f" / {prefix}" if prefix else "", len(changes), ", full scan due" if full_due else "",
+        "worker: scanning %s%s (%d reported change(s)%s%s)",
+        library["name"], f" / {prefix}" if prefix else "", len(changes),
+        ", retrying failed files" if retry_due else "", ", full scan due" if full_due else "",
     )
     stats = scan_fn(client, library, path_prefix=prefix, allow_moves=True, console=console)
     if stats.root_unreachable:
         logger.warning("worker: %s became unreachable during the scan; changes kept", library["name"])
         return
-    if stats.failed or stats.settling:
-        logger.warning(
-            "worker: in %s, %d file(s) failed to scan and %d are still being written; changes kept for another try",
-            library["name"], stats.failed, stats.settling,
-        )
-        if prefix is None:
-            state.last_full_scan[library_id] = now
-        return
-    if changes:
-        client.post(
-            f"/v1/libraries/{library_id}/changes/ack",
-            json={"changes": [{"change_id": c["change_id"], "version": c["version"]} for c in changes]},
-        )
     if prefix is None:
         state.last_full_scan[library_id] = now
+    _note_failures(state, library, prefix, stats, now)
+
+    # A file still being written is scanned next cycle: changes that cover
+    # it wait, the rest are done.
+    seen = [c for c in changes if not any(_within(s, c["rel_path"]) for s in stats.settling_paths)]
+    if len(seen) < len(changes):
+        logger.info("worker: in %s, %d file(s) still being written; %d change(s) wait for the next cycle",
+                    library["name"], stats.settling, len(changes) - len(seen))
+    if seen:
+        client.post(
+            f"/v1/libraries/{library_id}/changes/ack",
+            json={"changes": [{"change_id": c["change_id"], "version": c["version"]} for c in seen]},
+        )
+
+
+def _note_failures(state: WorkerState, library: dict, prefix: str | None, stats: ScanStats, now: float) -> None:
+    """Remember files that failed to scan, to try them again with back-off.
+
+    A scan covering a failed file clears it unless it fails again.
+    """
+    library_id = library["library_id"]
+    failed = set(stats.failed_paths)
+    if stats.failed and not failed:
+        failed.add(prefix or "")
+    old = state.retries.pop(library_id, None)
+    left = {p for p in old.paths if not _within(p, prefix)} if old else set()
+    if failed:
+        delay = min(old.delay * 2, RETRY_MAX_SEC) if old else RETRY_FIRST_SEC
+        state.retries[library_id] = Retry(left | failed, delay, now + delay)
+        logger.warning("worker: in %s, %d file(s) failed to scan; trying them again in %.0f min",
+                       library["name"], len(failed), delay / 60)
+    elif left:
+        state.retries[library_id] = Retry(left, old.delay, old.due)
 
 
 def run_cycle(

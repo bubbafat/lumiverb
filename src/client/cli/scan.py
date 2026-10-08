@@ -56,6 +56,9 @@ logger = logging.getLogger(__name__)
 # The macOS scanner's quarantine: a file modified this recently may still be
 # copying.
 SETTLE_SEC = 30
+# A file stamped further ahead than this came from a camera whose clock runs
+# ahead, not from a copy in progress.
+FUTURE_MTIME_SEC = 300
 
 
 @dataclass
@@ -68,11 +71,13 @@ class ScanStats:
     moved: int = 0
     cache_populated: int = 0
     failed: int = 0
+    failed_paths: list[str] = field(default_factory=list)
     scanned_asset_ids: list[str] = field(default_factory=list)
     # The library's root couldn't be read, so nothing was scanned.
     root_unreachable: bool = False
     # Files written too recently to trust: left for a later scan.
     settling: int = 0
+    settling_paths: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -360,6 +365,7 @@ def _scan_one(
         logger.warning("Skipping %s: escapes library root", rel_path)
         with stats.lock:
             stats.failed += 1
+            stats.failed_paths.append(rel_path)
         return
 
     try:
@@ -411,6 +417,7 @@ def _scan_one(
         logger.exception("Failed to scan %s: %s", rel_path, e)
         with stats.lock:
             stats.failed += 1
+            stats.failed_paths.append(rel_path)
         progress.console.print(f"[red]scan \u2717[/red] {rel_path}: {e}")
         progress.advance(task_id)
 
@@ -434,6 +441,7 @@ def _scan_one_video(
         logger.warning("Skipping %s: escapes library root", rel_path)
         with stats.lock:
             stats.failed += 1
+            stats.failed_paths.append(rel_path)
         return
 
     try:
@@ -501,6 +509,7 @@ def _scan_one_video(
         logger.exception("Failed to scan video %s: %s", rel_path, e)
         with stats.lock:
             stats.failed += 1
+            stats.failed_paths.append(rel_path)
         progress.console.print(f"[red]scan \u2717[/red] {rel_path}: {e}")
         progress.advance(task_id)
 
@@ -571,6 +580,7 @@ def _apply_moves(
             logger.warning("Batch move failed: %s", e)
             # Fallback: skip these moves rather than crash
             stats.failed += len(batch)
+            stats.failed_paths.extend(m.new_rel_path for m in batch)
             continue
         stats.moved += len(batch)
 
@@ -673,9 +683,16 @@ def run_scan(
     # Files written in the last SETTLE_SEC may still be copying, so they wait
     # for a later scan, as on the Mac. They still count as on disk, so they
     # are never taken for deleted.
-    cutoff = datetime.now(timezone.utc) - timedelta(seconds=SETTLE_SEC)
-    settled = [f for f in local_files if not (f.get("file_mtime") and f["file_mtime"] > cutoff)]
-    stats.settling = len(local_files) - len(settled)
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(seconds=SETTLE_SEC)
+    ahead = now + timedelta(seconds=FUTURE_MTIME_SEC)
+    settled: list[dict] = []
+    for f in local_files:
+        if f.get("file_mtime") and cutoff < f["file_mtime"] <= ahead:
+            stats.settling_paths.append(f["rel_path"])
+        else:
+            settled.append(f)
+    stats.settling = len(stats.settling_paths)
     if stats.settling:
         console.print(f"{stats.settling:,} file(s) still being written; a later scan picks them up")
 

@@ -223,11 +223,13 @@ def test_a_scan_that_lost_its_root_keeps_the_changes(das: Path) -> None:
 
 
 @pytest.mark.fast
-def test_a_scan_with_failures_keeps_the_changes(das: Path) -> None:
-    # Files that failed to ingest get another try on the next cycle.
+def test_a_file_that_fails_does_not_hold_up_the_changes(das: Path) -> None:
+    # Kept, every new report would widen the scan toward the whole library,
+    # retrying the bad file every minute. It gets its own retry instead.
     server = FakeServer([LIB], pending={"lib_1": [CHANGE]})
-    _cycle(server, scan=MagicMock(return_value=ScanStats(failed=1)))
-    assert server.acks == []
+    _, _, state = _cycle(server, scan=_failing("Day 1/A001.mov"))
+    assert server.acks == [("lib_1", [{"change_id": "chg_1", "version": 7}])]
+    assert state.retries["lib_1"].paths == {"Day 1/A001.mov"}
 
 
 @pytest.mark.fast
@@ -489,5 +491,76 @@ def test_without_vision_ai_its_steps_are_skipped(das: Path, monkeypatch: pytest.
 @pytest.mark.fast
 def test_files_still_being_written_keep_the_changes(das: Path) -> None:
     server = FakeServer([LIB], pending={"lib_1": [CHANGE]})
-    _cycle(server, scan=MagicMock(return_value=ScanStats(settling=1)))
+    _cycle(server, scan=MagicMock(return_value=ScanStats(settling=1, settling_paths=["Day 1/A001.mov"])))
     assert server.acks == []
+
+
+@pytest.mark.fast
+def test_only_changes_covering_a_file_still_being_written_wait(das: Path) -> None:
+    changes = [CHANGE, {**CHANGE, "change_id": "chg_2", "rel_path": "Day 1/A002.mov"},
+               {**CHANGE, "change_id": "chg_3", "rel_path": "Day 1"}]
+    server = FakeServer([LIB], pending={"lib_1": changes})
+    _cycle(server, scan=MagicMock(return_value=ScanStats(settling=1, settling_paths=["Day 1/A001.mov"])))
+    assert server.acks == [("lib_1", [{"change_id": "chg_2", "version": 7}])]
+
+
+# ---------------------------------------------------------------------------
+# A file that always fails is retried with back-off, not every cycle
+# ---------------------------------------------------------------------------
+
+MIN = 60.0
+
+
+def _failing(*paths: str) -> MagicMock:
+    return MagicMock(return_value=ScanStats(failed=len(paths), failed_paths=list(paths)))
+
+
+@pytest.mark.fast
+def test_a_failed_file_is_tried_again_with_back_off(das: Path) -> None:
+    t = 100 * HOUR
+    server = FakeServer([LIB], pending={"lib_1": [CHANGE]})
+    _, _, state = _cycle(server, now=t, scan=_failing("Day 1/A001.mov"))
+    server.pending = {}
+    tries = []
+    for minute in range(1, 40):
+        scan, _, state = _cycle(server, state, now=t + minute * MIN, scan=_failing("Day 1/A001.mov"))
+        if scan.called:
+            assert scan.call_args.kwargs["path_prefix"] == "Day 1"
+            tries.append(minute)
+    assert tries == [5, 15, 35]
+
+
+@pytest.mark.fast
+def test_back_off_stops_growing_at_a_day(das: Path) -> None:
+    t = 100 * HOUR
+    server = FakeServer([LIB], pending={"lib_1": [CHANGE]})
+    state = WorkerState(last_full_scan={"lib_1": t})
+    _cycle(server, state, now=t, scan=_failing("Day 1/A001.mov"), full_scan_every=1e9)
+    server.pending = {}
+    for _ in range(12):
+        _cycle(server, state, now=state.retries["lib_1"].due, scan=_failing("Day 1/A001.mov"), full_scan_every=1e9)
+    assert state.retries["lib_1"].delay == 24 * HOUR
+
+
+@pytest.mark.fast
+def test_a_clean_scan_of_the_folder_ends_the_retries(das: Path) -> None:
+    t = 100 * HOUR
+    server = FakeServer([LIB], pending={"lib_1": [CHANGE]})
+    _, _, state = _cycle(server, now=t, scan=_failing("Day 1/A001.mov"))
+    # The Mac reports the file again (fixed, say) before the retry is due.
+    _, _, state = _cycle(server, state, now=t + MIN)
+    assert state.retries == {}
+    server.pending = {}
+    scan, _, _ = _cycle(server, state, now=t + HOUR)
+    scan.assert_not_called()
+
+
+@pytest.mark.fast
+def test_a_retry_not_yet_due_does_not_widen_other_scans(das: Path) -> None:
+    t = 100 * HOUR
+    server = FakeServer([LIB], pending={"lib_1": [CHANGE]})
+    _, _, state = _cycle(server, now=t, scan=_failing("Day 1/A001.mov"))
+    server.pending = {"lib_1": [{**CHANGE, "change_id": "chg_2", "rel_path": "Day 2/B001.mov"}]}
+    scan, _, state = _cycle(server, state, now=t + MIN)
+    assert scan.call_args.kwargs["path_prefix"] == "Day 2"
+    assert state.retries["lib_1"].paths == {"Day 1/A001.mov"}

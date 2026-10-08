@@ -259,3 +259,36 @@ def test_scan_counts_files_still_being_written(tmp_path: Path) -> None:
         stats = run_scan(MagicMock(), {"library_id": "lib_1", "root_path": str(root)},
                          console=Console(quiet=True), skip_moves=True)
     assert stats.settling == 1
+    assert stats.settling_paths == ["copying.jpg"]
+
+
+@pytest.mark.fast
+def test_a_camera_clock_far_ahead_is_not_taken_for_a_copy(tmp_path: Path) -> None:
+    # Stamped an hour in the future, it would otherwise wait an hour.
+    local = [_local("ahead.jpg", -3600), _local("copying.jpg", -60)]
+    split = MagicMock(return_value=([], [], []))
+    _scan_with(tmp_path, on_disk=0, on_server=0, local=local, split=split)
+    passed = [f["rel_path"] for f in split.call_args.args[0]]
+    assert passed == ["ahead.jpg"]
+
+
+@pytest.mark.fast
+def test_scan_names_the_files_that_failed(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    root.mkdir()
+    (root / "bad.jpg").write_bytes(b"jpeg")
+    new = [{"rel_path": "bad.jpg", "file_size": 4, "file_mtime": None, "media_type": "image", "ext": ".jpg"}]
+    with (
+        patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
+        patch("src.client.cli.scan._load_library_filters", return_value=[]),
+        patch("src.client.cli.scan._walk_library", return_value=new),
+        patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value={}),
+        patch("src.client.cli.scan._fetch_ignored_paths", return_value=set()),
+        patch("src.client.cli.scan._generate_proxy_bytes", side_effect=RuntimeError("not a JPEG")),
+        patch("src.client.cli.scan.ProxyCache"),
+        patch("src.client.cli.scan._populate_cache_for_unchanged"),
+    ):
+        stats = run_scan(MagicMock(), {"library_id": "lib_1", "root_path": str(root)},
+                         console=Console(quiet=True), skip_moves=True)
+    assert stats.failed == 1
+    assert stats.failed_paths == ["bad.jpg"]

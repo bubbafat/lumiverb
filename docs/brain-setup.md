@@ -113,7 +113,8 @@ Keep `soft`: when the Mac Studio sleeps, reads fail instead of hanging forever.
 
 ## How it runs
 
-- **Changes.** The Mac reports paths it sees change: `POST /v1/changes`. Each cycle (every 60 s), the worker scans the one folder that covers a library's reported changes, then acknowledges them. A file modified in the last 30 seconds may still be copying, so it waits for the next cycle.
+- **Changes.** The Mac reports paths it sees change: `POST /v1/changes`. Each cycle (every 60 s), the worker scans the one folder that covers a library's reported changes, then acknowledges them. A file modified in the last 30 seconds may still be copying, so it waits for the next cycle (one stamped more than 5 minutes in the future came from a camera clock running ahead, and doesn't wait).
+- **Files that fail.** A file that fails to scan doesn't hold back the changes around it. It's tried again on its own after 5 minutes, then 10, 20 and so on, up to once a day.
 - **Safety net.** Each library is scanned in full once a day, in case a report was missed.
 - **The Mac Studio asleep.** The worker doesn't scan its libraries: an unmounted share looks empty, and an empty mount point is never scanned. It keeps enriching from analysis proxies. Only probing and rendering wait, and they start as soon as the storage is back.
 - **Pacing.** Enrichment runs again when a library's counts change, when its storage comes back, or hourly, so a clip that fails every time isn't retried every minute.
