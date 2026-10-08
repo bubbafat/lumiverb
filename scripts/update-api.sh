@@ -9,7 +9,7 @@
 #
 # What it does:
 #   1. git pull
-#   2. uv sync (the API and worker stopped first if Python changes)
+#   2. uv sync (if Python changes: built beside the running one, then a short stop to swap)
 #   3. Run migrations (control plane + tenants)
 #   4. Sync data directory
 #   5. Fix Quickwit sandbox
@@ -89,24 +89,28 @@ EXTRAS=(--extra cli --extra embeddings --extra face_recognition)
 if systemctl is-enabled lumiverb-worker >/dev/null 2>&1; then
   EXTRAS+=(--extra workers)
 fi
-# A new Python makes uv sync delete the venv and download it all again;
-# the API and worker would run on deleted files until the restart below.
+# A new Python makes uv sync delete the venv and download it all again. So
+# download first, into a side venv, while the API and worker run; then stop
+# them only for the swap, which the warm cache makes quick.
 HAVE_PY="$(sed -n 's/^version_info *= *\([0-9]*\.[0-9]*\).*/\1/p' "$APP_DIR/.venv/pyvenv.cfg" 2>/dev/null || true)"
 WANT_PY="$(grep -oE '[0-9]+\.[0-9]+' "$APP_DIR/.python-version" 2>/dev/null | head -1 || true)"
 PY_CHANGED=""
+SERVICES_STOPPED=""
 if [[ -n "$HAVE_PY" && -n "$WANT_PY" && "$HAVE_PY" != "$WANT_PY" ]]; then
   PY_CHANGED=1
-  warn "Python changes from ${HAVE_PY} to ${WANT_PY}: rebuilding the environment downloads a few GB; the API and worker are stopped until it's done"
+  warn "Python changes from ${HAVE_PY} to ${WANT_PY}: building the new environment (a few GB) while Lumiverb keeps running"
+  sudo -u "$SVC_USER" "$UV_BIN" python install "$WANT_PY"
+  sudo -u "$SVC_USER" env UV_PROJECT_ENVIRONMENT="$APP_DIR/.venv-next" "$UV_BIN" sync "${EXTRAS[@]}"
+  trap 'if [[ -n "$SERVICES_STOPPED" ]]; then echo -e "${RED}  ✗ The API and worker are stopped. Fix the error above, then run update-api.sh again: it carries on from here.${NC}" >&2; fi' EXIT
+  SERVICES_STOPPED=1
   if systemctl is-enabled lumiverb-worker >/dev/null 2>&1; then
     systemctl stop lumiverb-worker
   fi
   systemctl stop lumiverb-api
 fi
 sudo -u "$SVC_USER" "$UV_BIN" sync "${EXTRAS[@]}"
+rm -rf "$APP_DIR/.venv-next"
 ok "Python venv synced (${EXTRAS[*]})"
-if [[ -n "$PY_CHANGED" ]]; then
-  sudo -u "$SVC_USER" "$UV_BIN" cache prune || warn "Couldn't prune uv's cache of the old Python's packages"
-fi
 
 # ---------------------------------------------------------------------------
 step "Running migrations"
@@ -264,6 +268,11 @@ step "Restarting services"
 systemctl restart lumiverb-api
 systemctl is-enabled lumiverb-worker >/dev/null 2>&1 && systemctl restart lumiverb-worker
 systemctl is-enabled lumiverb-quickwit >/dev/null 2>&1 && systemctl restart lumiverb-quickwit
+SERVICES_STOPPED=""
+if [[ -n "$PY_CHANGED" ]]; then
+  # The old Python's packages: prune keeps them; the venv doesn't need the cache.
+  sudo -u "$SVC_USER" "$UV_BIN" cache clean || warn "Couldn't clear uv's cache of the old Python's packages"
+fi
 
 for i in {1..10}; do
   if curl -sf http://127.0.0.1:${API_PORT}/health >/dev/null 2>&1; then
