@@ -225,15 +225,20 @@ def empty_trash(
                 "those projects. Send remove_from_projects: true to go ahead.",
                 usage.model_dump(),
             )
-    deleted = 0
-    for lib in trashed:
+    return EmptyTrashResponse(deleted=delete_libraries_for_good(session, tenant_id, trashed))
+
+
+def delete_libraries_for_good(session: Session, tenant_id: str | None, libraries: list) -> int:
+    """Delete trashed libraries with everything in them: rows, search documents
+    and public pages. Their files go with the daily cleanup."""
+    repo = LibraryRepository(session)
+    for lib in libraries:
         purge_library_from_quickwit(lib.library_id, tenant_id=tenant_id)
         if lib.is_public:
             with get_control_session() as ctrl_session:
                 PublicLibraryRepository(ctrl_session).delete(lib.library_id)
         repo.hard_delete(lib.library_id)
-        deleted += 1
-    return EmptyTrashResponse(deleted=deleted)
+    return len(libraries)
 
 
 @router.get("/{library_id}", response_model=LibraryResponse)

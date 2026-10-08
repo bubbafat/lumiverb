@@ -301,8 +301,6 @@ def test_a_purge_leaves_alone_an_asset_restored_since_it_was_listed(env):
 @pytest.mark.slow
 def test_a_purge_keeps_the_files_of_an_asset_restored_since_it_was_listed(env):
     """The file side too: proxy and thumbnail of the restored asset stay."""
-    from types import SimpleNamespace
-
     from src.server.api.routers.trash import purge_assets
 
     client, headers, library_id, storage, tenant_id, _ = env
@@ -315,8 +313,7 @@ def test_a_purge_keeps_the_files_of_an_asset_restored_since_it_was_listed(env):
         keys = session.execute(text("SELECT proxy_key, thumbnail_key FROM assets WHERE asset_id = :a"),
                                {"a": asset}).one()
         assert all(k and storage.abs_path(k).exists() for k in keys)
-        request = SimpleNamespace(state=SimpleNamespace(tenant_id=tenant_id))
-        assert purge_assets(session, request, listed, "usr_test", remove_from_projects=True) == 0
+        assert purge_assets(session, tenant_id, listed, "usr_test", remove_from_projects=True) == 0
         session.commit()
     assert all(storage.abs_path(k).exists() for k in keys)
     assert _get(env, asset)["rel_path"] == "purge/R001.mov"

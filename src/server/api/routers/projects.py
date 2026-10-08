@@ -344,12 +344,18 @@ def empty_project_trash(
     if body is not None and body.project_ids is not None:
         wanted = set(body.project_ids)
         doomed = [c for c in doomed if c.project_id in wanted]
-    for col in doomed:
+    return EmptyTrashResponse(deleted=delete_projects_for_good(session, doomed))
+
+
+def delete_projects_for_good(session: Session, projects: list) -> int:
+    """Delete trashed projects and their public pages. The clips stay in their libraries."""
+    repo = ProjectRepository(session)
+    for col in projects:
         if col.visibility == "public":
             with get_control_session() as ctrl_session:
                 PublicProjectRepository(ctrl_session).delete(col.project_id)
         repo.delete(col.project_id)
-    return EmptyTrashResponse(deleted=len(doomed))
+    return len(projects)
 
 
 @router.get("/{project_id}", response_model=ProjectItem)

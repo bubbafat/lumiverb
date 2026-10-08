@@ -1034,6 +1034,40 @@ class AssetRepository:
         self._session.commit()
         return _split(asset_ids, set(back))
 
+    def page_hidden(
+        self,
+        reasons: tuple[str, ...],
+        *,
+        library_id: str | None = None,
+        folder: str | None = None,
+        after: tuple[datetime, str] | None = None,
+        limit: int = 100,
+    ) -> tuple[list[dict], int]:
+        """Clips out of sight for these reasons, most recent first, outside
+        trashed libraries (those come back or go with their library). Under a
+        folder (recursive) if given. Returns (page, total matching)."""
+        where = (
+            " FROM assets a JOIN libraries l ON l.library_id = a.library_id"
+            " WHERE a.deleted_at IS NOT NULL AND a.deleted_reason = ANY(:reasons) AND l.status <> 'trashed'"
+            "   AND (CAST(:lib AS text) IS NULL OR a.library_id = :lib)"
+            "   AND (CAST(:under AS text) IS NULL OR a.rel_path LIKE :under ESCAPE '\\')"
+        )
+        params = {"reasons": list(reasons), "lib": library_id, "under": _under(folder)}
+        total = int(self._session.execute(text("SELECT count(*)" + where), params).scalar() or 0)
+        page_sql = where
+        if after is not None:
+            page_sql += " AND (a.deleted_at, a.asset_id) < (:ts, :aid)"
+            params = {**params, "ts": after[0], "aid": after[1]}
+        rows = self._session.execute(
+            text(
+                "SELECT a.asset_id, a.library_id, l.name AS library_name, a.rel_path, a.media_type,"
+                " a.deleted_at, a.deleted_reason" + page_sql +
+                " ORDER BY a.deleted_at DESC, a.asset_id DESC LIMIT :limit"
+            ),
+            {**params, "limit": limit},
+        ).mappings().all()
+        return [dict(r) for r in rows], total
+
     def library_ids_of(self, asset_ids: list[str]) -> list[str]:
         """The libraries these clips are in, whatever their state."""
         if not asset_ids:
@@ -1245,14 +1279,19 @@ class AssetRepository:
         self,
         asset_ids: list[str] | None = None,
         trashed_before: datetime | None = None,
+        limit: int | None = None,
     ) -> list[Asset]:
-        """Clips a person trashed, matching the filters. Archived clips (missing or
-        archived by hand) are never here: they're deleted only by trashing them first."""
+        """Clips a person trashed, matching the filters, longest in the trash
+        first. Archived clips (missing or archived by hand) are never here:
+        they're deleted only by trashing them first."""
         stmt = select(Asset).where(Asset.deleted_at.isnot(None), Asset.deleted_reason == "user")
         if asset_ids is not None:
             stmt = stmt.where(Asset.asset_id.in_(asset_ids))
         if trashed_before is not None:
             stmt = stmt.where(Asset.deleted_at < trashed_before)
+        stmt = stmt.order_by(Asset.deleted_at, Asset.asset_id)
+        if limit is not None:
+            stmt = stmt.limit(limit)
         return list(self._session.exec(stmt).all())
 
     def permanently_delete(self, asset_ids: list[str]) -> int:
@@ -2165,6 +2204,11 @@ class ProjectRepository:
                 .order_by(Project.created_at.desc())  # type: ignore[attr-defined]
             ).all()
         )
+
+    def list_trashed_before(self, cutoff: datetime) -> list[Project]:
+        """Every project trashed before cutoff, whoever owns it: the trash days are the account's."""
+        stmt = select(Project).where(Project.deleted_at.is_not(None), Project.deleted_at < cutoff)  # type: ignore[union-attr]
+        return list(self._session.exec(stmt).all())
 
     def list_trashed(self, user_id: str) -> list[Project]:
         """The user's trash: projects they own (or nobody owns) that were

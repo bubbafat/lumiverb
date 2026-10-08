@@ -14,9 +14,11 @@ from src.server.api.dependencies import get_tenant_session, require_editor, requ
 from src.server.tenant_settings import (
     get_follow_moves,
     get_public_video_preview_max_seconds,
+    get_trash_days,
     get_video_preview_max_seconds,
     set_follow_moves,
     set_public_video_preview_max_seconds,
+    set_trash_days,
     set_video_preview_max_seconds,
 )
 from src.shared.path_filter import validate_pattern
@@ -33,6 +35,7 @@ class TenantContextResponse(BaseModel):
 
 
 _Seconds = Annotated[int, Field(strict=True, ge=1, le=86_400)]
+_Days = Annotated[int, Field(strict=True, ge=1, le=3650)]
 
 
 class TenantSettingsResponse(BaseModel):
@@ -43,14 +46,18 @@ class TenantSettingsResponse(BaseModel):
     # The same content is the same asset: moves, renames, copy then delete.
     # Off, the path is the only identity.
     follow_moves: bool = True
+    # Days clips, libraries and projects stay in the trash before they're
+    # deleted for good; None when that's off (the trash is emptied by hand).
+    trash_days: int | None = 30
 
 
 class TenantSettingsUpdate(BaseModel):
-    """Fields left out stay as they are; null means the whole video."""
+    """Fields left out stay as they are; null means the whole video, or (trash_days) never."""
 
     video_preview_max_seconds: _Seconds | None = None
     public_video_preview_max_seconds: _Seconds | None = None
     follow_moves: StrictBool = True
+    trash_days: _Days | None = None
 
 
 class TenantFilterDefaultItem(BaseModel):
@@ -89,6 +96,7 @@ def _settings(session: Session) -> TenantSettingsResponse:
         video_preview_max_seconds=get_video_preview_max_seconds(session),
         public_video_preview_max_seconds=get_public_video_preview_max_seconds(session),
         follow_moves=get_follow_moves(session),
+        trash_days=get_trash_days(session),
     )
 
 
@@ -112,6 +120,8 @@ def update_tenant_settings(
         set_public_video_preview_max_seconds(session, body.public_video_preview_max_seconds)
     if "follow_moves" in body.model_fields_set:
         set_follow_moves(session, body.follow_moves)
+    if "trash_days" in body.model_fields_set:
+        set_trash_days(session, body.trash_days)
     after = _settings(session)
     caps = ("video_preview_max_seconds", "public_video_preview_max_seconds")
     if any(getattr(after, c) != getattr(before, c) for c in caps):

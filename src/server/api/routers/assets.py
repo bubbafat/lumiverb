@@ -545,11 +545,13 @@ def _stream_asset_file(
     request: Request,
     session: Session,
 ) -> StreamingResponse:
-    asset_repo = AssetRepository(session)
-    asset = asset_repo.get_by_id(asset_id)
-    if asset is None or asset.deleted_at is not None:
+    # Signed in, a clip out of sight (archived, in the trash) still shows its
+    # pictures: the archive and trash views need them. Public pages never do.
+    asset = session.get(Asset, asset_id)
+    is_public = getattr(request.state, "is_public_request", False)
+    if asset is None or (asset.deleted_at is not None and (is_public or not getattr(request.state, "role", None))):
         raise HTTPException(status_code=404, detail="Asset not found")
-    if getattr(request.state, "is_public_request", False):
+    if is_public:
         public_library_id = request.query_params.get("public_library_id")
         public_project_id = request.query_params.get("public_project_id") or request.query_params.get(
             "public_collection_id"  # pre-rename name
