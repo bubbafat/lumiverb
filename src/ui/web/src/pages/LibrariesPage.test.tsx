@@ -12,6 +12,8 @@ const api = vi.hoisted(() => ({
   restoreLibrary: vi.fn(),
   getTenantSettings: vi.fn(),
   listLibraryHealth: vi.fn(),
+  getCurrentUser: vi.fn(),
+  listArchive: vi.fn(),
 }));
 vi.mock("../api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/client")>()),
@@ -35,6 +37,8 @@ beforeEach(() => {
   api.getTenantSettings.mockResolvedValue({ video_preview_max_seconds: null, public_video_preview_max_seconds: 10,
                                            trash_days: 30 });
   api.listLibraryHealth.mockResolvedValue([]);
+  api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role: "admin" });
+  api.listArchive.mockResolvedValue({ items: [], next_cursor: null, total: 0 });
 });
 
 afterEach(() => {
@@ -64,7 +68,7 @@ describe("LibrariesPage empty trash", () => {
     renderPage();
     const dialog = await openEmptyTrash();
     fireEvent.click(within(dialog).getByRole("button", { name: "Empty trash" }));
-    await waitFor(() => expect(api.emptyTrash).toHaveBeenCalledWith(false, undefined));
+    await waitFor(() => expect(api.emptyTrash).toHaveBeenCalledWith(false, ["lib_1"]));
   });
 
   it("names the projects that would lose clips and asks again", async () => {
@@ -81,7 +85,7 @@ describe("LibrariesPage empty trash", () => {
     expect(within(dialog).getByText(/Old reel/)).toBeTruthy();
     expect(within(dialog).getByText(/1 more you can't see/)).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete and remove from projects" }));
-    await waitFor(() => expect(api.emptyTrash).toHaveBeenLastCalledWith(true, undefined));
+    await waitFor(() => expect(api.emptyTrash).toHaveBeenLastCalledWith(true, ["lib_1"]));
   });
 
   it("says why when emptying the trash fails", async () => {
@@ -115,6 +119,15 @@ describe("LibrariesPage a library in the trash", () => {
     await waitFor(() => expect(api.restoreLibrary).toHaveBeenCalledWith("lib_1"));
   });
 
+  it("offers viewers nothing to change", async () => {
+    api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role: "viewer" });
+    renderPage();
+    expect(await screen.findByText(/Deleted for good on/)).toBeTruthy();
+    for (const name of ["Restore", "Delete for good", /Empty trash/]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
+  });
+
   it("says it stays when the trash is emptied by hand only", async () => {
     api.getTenantSettings.mockResolvedValue({ trash_days: null });
     renderPage();
@@ -145,6 +158,14 @@ describe("LibrariesPage delete asks about projects", () => {
     expect(screen.getByText(/moves to the trash with everything in it and is deleted for good after 30 days/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
   }
+
+  it("says its archived clips go with it", async () => {
+    api.listArchive.mockResolvedValue({ items: [], next_cursor: null, total: 3 });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    expect(await screen.findByText(/with everything in it, its 3 archived clips too, and is deleted for good/)).toBeTruthy();
+    expect(api.listArchive).toHaveBeenCalledWith({ libraryId: "lib_2", limit: 1 });
+  });
 
   it("a library no project uses goes to the trash straight away", async () => {
     api.deleteLibrary.mockResolvedValue(undefined);

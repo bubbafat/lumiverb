@@ -78,7 +78,7 @@ describe("TrashPage", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete 1 clip for good" }));
     expect(await within(dialog).findByText(/Reel: 1 clip/)).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete and remove from projects" }));
-    await waitFor(() => expect(api.emptyClipTrash).toHaveBeenLastCalledWith(["a2"], true));
+    await waitFor(() => expect(api.emptyClipTrash).toHaveBeenLastCalledWith(["a2"], true, {}));
   });
 
   it("empties the whole trash", async () => {
@@ -88,7 +88,34 @@ describe("TrashPage", () => {
     const dialog = await screen.findByRole("dialog", { name: "Empty the trash?" });
     expect(dialog.textContent).toMatch(/Every clip in the trash \(2 clips\)/);
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete 2 clips for good" }));
-    await waitFor(() => expect(api.emptyClipTrash).toHaveBeenCalledWith(undefined, false));
+    await waitFor(() => expect(api.emptyClipTrash).toHaveBeenCalledWith(undefined, false, { libraryId: undefined }));
+  });
+
+  it("empties only the library it's filtered to, and says so", async () => {
+    api.emptyClipTrash.mockResolvedValue({ deleted: 2 });
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter initialEntries={["/trash?library=lib_1"]}>
+          <TrashPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Empty Media's trash (2)" }));
+    const dialog = await screen.findByRole("dialog", { name: "Empty Media's trash?" });
+    expect(dialog.textContent).toMatch(/Every clip in the trash of Media \(2 clips\)/);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete 2 clips for good" }));
+    await waitFor(() => expect(api.emptyClipTrash).toHaveBeenCalledWith(undefined, false, { libraryId: "lib_1" }));
+  });
+
+  it("says which restored clips went back to the archive", async () => {
+    api.restoreClips.mockResolvedValue({ restored: ["a1", "a2"], skipped: [], to_archive: ["a2"] });
+    renderPage();
+    fireEvent.click(await screen.findByRole("checkbox", { name: "A001.mov" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "A002.mov" }));
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    expect((await screen.findByRole("status")).textContent).toMatch(
+      /Restored 2 clips\. 1 clip went back to the archive, where it was\./,
+    );
   });
 
   it("editors restore but don't delete for good", async () => {

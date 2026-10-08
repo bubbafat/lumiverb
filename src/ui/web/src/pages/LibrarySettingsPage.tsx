@@ -7,9 +7,11 @@ import {
   addLibraryFilter,
   deleteLibraryFilter,
   previewLibraryFilter,
+  getTenantSettings,
   ApiError,
 } from "../api/client";
-import type { PathFilterItem } from "../api/client";
+import type { PathFilterItem, ProjectUsage } from "../api/client";
+import { ProjectUsageList, clipCount } from "../components/ProjectUsageList";
 
 /* ---------- pattern warning helper ---------- */
 
@@ -72,6 +74,13 @@ function FilterSection({
   }, [initialPattern]);
 
   const suggestedPattern = detectDoubleStarExt(pattern);
+  const { data: settings } = useQuery({
+    queryKey: ["tenant-settings"],
+    queryFn: getTenantSettings,
+    enabled: Boolean(isExclude),
+    staleTime: 60_000,
+  });
+  const trashDays = settings?.trash_days === undefined ? 30 : settings.trash_days;
 
   const handleAdd = async () => {
     const trimmed = pattern.trim();
@@ -229,8 +238,9 @@ function FilterSection({
         {confirmState && (
           <div className="rounded-lg border border-red-700/50 bg-red-900/20 px-4 py-3">
             <p className="text-sm text-red-300">
-              This will trash <strong>{confirmState.count.toLocaleString()}</strong> existing
-              {confirmState.count === 1 ? " asset" : " assets"} and prevent future
+              This will move <strong>{confirmState.count.toLocaleString()}</strong> existing
+              {confirmState.count === 1 ? " clip" : " clips"} to the trash
+              {trashDays ? `, deleted for good after ${trashDays} days unless restored,` : ""} and prevent future
               ingestion.
             </p>
             <div className="mt-3 flex gap-2">
@@ -268,6 +278,8 @@ export default function LibrarySettingsPage() {
 
   const [includeAddError, setIncludeAddError] = useState<string | null>(null);
   const [excludeAddError, setExcludeAddError] = useState<string | null>(null);
+  // Projects use clips the exclude filter would trash: the API asked first.
+  const [projectsAsk, setProjectsAsk] = useState<{ pattern: string; usage: ProjectUsage } | null>(null);
 
   const { data: libraries } = useQuery({
     queryKey: ["libraries", true],
@@ -314,15 +326,23 @@ export default function LibrarySettingsPage() {
     onError: (err: ApiError) => setIncludeAddError(err.message),
   });
 
+  type ExcludeVars = { pattern: string; trashMatching: boolean; removeFromProjects?: boolean };
   const addExcludeMutation = useMutation({
-    mutationFn: ({ pattern, trashMatching }: { pattern: string; trashMatching: boolean }) =>
-      addLibraryFilter(libraryId!, "exclude", pattern, trashMatching),
+    mutationFn: ({ pattern, trashMatching, removeFromProjects }: ExcludeVars) =>
+      addLibraryFilter(libraryId!, "exclude", pattern, trashMatching, removeFromProjects ?? false),
     onSuccess: () => {
       setExcludeAddError(null);
+      setProjectsAsk(null);
       clearExcludeParam();
       invalidateAll();
     },
-    onError: (err: ApiError) => setExcludeAddError(err.message),
+    onError: (err: ApiError, vars) => {
+      if (err.code === "in_projects" && err.details) {
+        setProjectsAsk({ pattern: vars.pattern, usage: err.details as unknown as ProjectUsage });
+      } else {
+        setExcludeAddError(err.message);
+      }
+    },
   });
 
   const deleteMutation = useMutation({
@@ -386,7 +406,9 @@ export default function LibrarySettingsPage() {
                 filters={filters?.excludes ?? []}
                 onAdd={(pattern) => {
                   setExcludeAddError(null);
-                  return addExcludeMutation.mutateAsync({ pattern, trashMatching: true });
+                  setProjectsAsk(null);
+                  // A refusal (the projects question) is shown below, not thrown.
+                  return addExcludeMutation.mutateAsync({ pattern, trashMatching: true }).catch(() => undefined);
                 }}
                 onDelete={(filterId) => deleteMutation.mutate(filterId)}
                 isAdding={addExcludeMutation.isPending}
@@ -396,6 +418,36 @@ export default function LibrarySettingsPage() {
                 isExclude
                 libraryId={libraryId}
               />
+              {projectsAsk && (
+                <div role="alertdialog" aria-label="Clips in projects" className="space-y-3">
+                  <ProjectUsageList usage={projectsAsk.usage}>
+                    {clipCount(projectsAsk.usage.assets_in_projects)} that{" "}
+                    <span className="font-mono">{projectsAsk.pattern}</span> matches{" "}
+                    {projectsAsk.usage.assets_in_projects === 1 ? "is" : "are"} in projects. In the trash{" "}
+                    {projectsAsk.usage.assets_in_projects === 1 ? "it's" : "they're"} hidden there; deleted for good,{" "}
+                    {projectsAsk.usage.assets_in_projects === 1 ? "it leaves" : "they leave"} those projects.
+                  </ProjectUsageList>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={addExcludeMutation.isPending}
+                      onClick={() =>
+                        addExcludeMutation.mutate({ pattern: projectsAsk.pattern, trashMatching: true, removeFromProjects: true })
+                      }
+                      className="rounded-lg bg-red-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-50"
+                    >
+                      Exclude and move them to the trash
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setProjectsAsk(null)}
+                      className="rounded-lg px-4 py-1.5 text-sm font-medium text-gray-400 hover:text-gray-200"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

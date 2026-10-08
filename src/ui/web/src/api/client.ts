@@ -304,17 +304,30 @@ export async function trashClips(
   });
 }
 
-/** Take clips out of the trash; anything else asked for is skipped. */
-export async function restoreClips(assetIds: string[]): Promise<{ restored: string[]; skipped: string[] }> {
+/** Take clips out of the trash, back to where they were: in sight, or the
+ * archive for those archived before (to_archive). Anything else is skipped. */
+export async function restoreClips(
+  assetIds: string[],
+): Promise<{ restored: string[]; skipped: string[]; to_archive?: string[] }> {
   return apiFetch("/assets/restore", { method: "POST", body: { asset_ids: assetIds } });
 }
 
-/** Delete clips in the trash for good now: these, or all of them (admins).
- * 409 in_projects until removeFromProjects. Never reaches archived clips. */
-export async function emptyClipTrash(assetIds?: string[], removeFromProjects = false): Promise<{ deleted: number }> {
+/** Delete clips in the trash for good now: these, or every one shown (a
+ * library's, under a folder, when given). Admins. 409 in_projects until
+ * removeFromProjects. Never reaches archived clips or a trashed library's. */
+export async function emptyClipTrash(
+  assetIds?: string[],
+  removeFromProjects = false,
+  scope: { libraryId?: string; path?: string } = {},
+): Promise<{ deleted: number }> {
   return apiFetch("/trash/empty", {
     method: "DELETE",
-    body: { ...(assetIds ? { asset_ids: assetIds } : {}), remove_from_projects: removeFromProjects },
+    body: {
+      ...(assetIds ? { asset_ids: assetIds } : {}),
+      ...(scope.libraryId ? { library_id: scope.libraryId } : {}),
+      ...(scope.path ? { path: scope.path } : {}),
+      remove_from_projects: removeFromProjects,
+    },
   });
 }
 
@@ -742,7 +755,12 @@ export async function getTenantSettings(): Promise<TenantSettings> {
   return apiFetch<TenantSettings>("/tenant/settings");
 }
 
-export async function updateTenantSettings(update: Partial<TenantSettings>): Promise<TenantSettings> {
+/** Change account settings (admins). Fewer trash_days answers 409
+ * trash_days_shortened (with counts) when it would delete things at once,
+ * until confirm_purge says yes. */
+export async function updateTenantSettings(
+  update: Partial<TenantSettings> & { confirm_purge?: boolean },
+): Promise<TenantSettings> {
   return apiFetch<TenantSettings>("/tenant/settings", { method: "PATCH", body: update });
 }
 
@@ -817,15 +835,19 @@ export async function getLibraryFilters(
   );
 }
 
+/** Add a path filter. An exclude filter with trashMatching moves the clips it
+ * matches to the trash: 409 in_projects first when projects use them, unless
+ * removeFromProjects says the user agreed (nothing changes until then). */
 export async function addLibraryFilter(
   libraryId: string,
   type: "include" | "exclude",
   pattern: string,
   trashMatching = false,
+  removeFromProjects = false,
 ): Promise<CreatedFilterResponse> {
   return apiFetch<CreatedFilterResponse>(
     `/libraries/${libraryId}/filters`,
-    { method: "POST", body: { type, pattern, trash_matching: trashMatching } },
+    { method: "POST", body: { type, pattern, trash_matching: trashMatching, remove_from_projects: removeFromProjects } },
   );
 }
 

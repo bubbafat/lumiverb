@@ -61,12 +61,13 @@ export default function ArchivePage() {
       const r = await unarchiveClips(pick);
       setSelected(new Set());
       void queryClient.invalidateQueries();
-      const missing = r.skipped.length;
+      const kept = r.skipped.length;
       setNotice({
         text:
           `Unarchived ${clipCount(r.unarchived.length)}.` +
-          (missing
-            ? ` ${clipCount(missing)} with a missing file ${missing === 1 ? "stays" : "stay"} archived until the file is back.`
+          (kept
+            ? ` ${clipCount(kept)} ${kept === 1 ? "wasn't" : "weren't"} archived by hand: a missing file comes back` +
+              " when the file does."
             : ""),
       });
     } catch (err) {

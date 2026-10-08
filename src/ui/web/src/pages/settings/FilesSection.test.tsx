@@ -153,6 +153,34 @@ describe("FilesSection: the trash", () => {
     expect(patches).toEqual([]);
   });
 
+  it("asks before fewer days delete things at once, and saves only when told to", async () => {
+    let asked = false;
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        const body = JSON.parse(String(init.body));
+        if (!body.confirm_purge) {
+          asked = true;
+          patches.push(body);
+          return new Response(JSON.stringify({ error: { code: "trash_days_shortened", message: "m",
+            details: { trash_days: 7, clips: 12, libraries: 1, projects: 0 } } }), { status: 409 });
+        }
+      }
+      return base(url, init);
+    });
+    renderSection();
+    await screen.findByRole("radio", { name: /Delete for good after/ });
+    fireEvent.change(within(trash()).getByRole("textbox", { name: "Days in the trash" }), { target: { value: "7" } });
+    fireEvent.click(within(trash()).getByRole("button", { name: "Save" }));
+    const ask = await within(trash()).findByRole("alertdialog", { name: "Delete them now?" });
+    expect(asked).toBe(true);
+    expect(ask.textContent).toMatch(/12 clips, 1 library have been in the trash longer than 7 days, and would be deleted for good within minutes\./);
+    expect(within(trash()).queryByText(/Couldn't save/)).toBeNull();
+    fireEvent.click(within(ask).getByRole("button", { name: "Save and delete them" }));
+    await within(trash()).findByText("Saved");
+    expect(patches).toEqual([{ trash_days: 7 }, { trash_days: 7, confirm_purge: true }]);
+  });
+
   it("people who aren't admins see how long, but can't change it", async () => {
     role = "editor";
     trashDays = null;

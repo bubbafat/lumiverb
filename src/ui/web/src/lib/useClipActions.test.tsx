@@ -153,3 +153,20 @@ describe("useClipActions", () => {
     expect(onDone).not.toHaveBeenCalled();
   });
 });
+
+describe("useClipActions undo of a big folder", () => {
+  it("unarchives in chunks the API takes", async () => {
+    const ids = Array.from({ length: 12_001 }, (_, i) => `a${i}`);
+    api.archiveClips.mockResolvedValue({ archived: ids, skipped: [] });
+    api.unarchiveClips.mockResolvedValue({ unarchived: [], skipped: [] });
+    renderHarness();
+    fireEvent.click(screen.getByRole("button", { name: "folder" }));
+    const dialog = await screen.findByRole("dialog", { name: "Archive this folder?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: /^Archive / }));
+    const status = await screen.findByRole("status");
+    fireEvent.click(within(status).getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(api.unarchiveClips).toHaveBeenCalledTimes(3));
+    const sizes = api.unarchiveClips.mock.calls.map((c) => (c[0] as { asset_ids: string[] }).asset_ids.length);
+    expect(sizes).toEqual([5000, 5000, 2001]);
+  });
+});

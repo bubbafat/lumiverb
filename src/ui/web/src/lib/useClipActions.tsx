@@ -15,6 +15,12 @@ import { ProjectUsageList, clipCount } from "../components/ProjectUsageList";
 
 type Notice = { text: string; undo?: () => Promise<unknown>; error?: boolean };
 
+// The API takes at most 10,000 ids a request; a folder can hold more.
+const CHUNK = 5_000;
+async function inChunks(ids: string[], fn: (part: string[]) => Promise<unknown>): Promise<void> {
+  for (let i = 0; i < ids.length; i += CHUNK) await fn(ids.slice(i, i + CHUNK));
+}
+
 /**
  * Archive and trash, from wherever clips are picked (a selection, the
  * lightbox, a folder). Archive: out of sight, kept forever. Trash:
@@ -62,7 +68,7 @@ export function useClipActions(onDone?: () => void) {
       changed();
       setNotice({
         text: `Archived ${clipCount(r.archived.length)}.`,
-        undo: r.archived.length ? () => unarchiveClips({ asset_ids: r.archived }) : undefined,
+        undo: r.archived.length ? () => inChunks(r.archived, (part) => unarchiveClips({ asset_ids: part })) : undefined,
       });
     });
 
@@ -72,7 +78,7 @@ export function useClipActions(onDone?: () => void) {
     changed();
     setNotice({
       text: `Moved ${clipCount(ids.length)} to the trash.${days ? ` Deleted for good in ${days} days.` : ""}`,
-      undo: ids.length ? () => restoreClips(ids) : undefined,
+      undo: ids.length ? () => inChunks(ids, restoreClips) : undefined,
     });
   };
 
@@ -106,7 +112,7 @@ export function useClipActions(onDone?: () => void) {
       changed();
       setNotice({
         text: `Archived ${clipCount(r.archived.length)} in ${name}.`,
-        undo: r.archived.length ? () => unarchiveClips({ asset_ids: r.archived }) : undefined,
+        undo: r.archived.length ? () => inChunks(r.archived, (part) => unarchiveClips({ asset_ids: part })) : undefined,
       });
     });
   };

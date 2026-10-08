@@ -8,6 +8,7 @@ import {
   deleteLibrary,
   emptyTrash,
   getTenantSettings,
+  listArchive,
   restoreLibrary,
   ApiError,
   type ProjectUsage,
@@ -18,6 +19,7 @@ import { Modal } from "../components/Modal";
 import { ProjectUsageList, clipCount } from "../components/ProjectUsageList";
 import { SkeletonRow } from "../components/SkeletonRow";
 import { deletedForGoodOn, shortDate } from "../lib/format";
+import { useCanEdit } from "../lib/useCanEdit";
 
 function formatLastIngest(lastScanAt: string | null): string {
   if (!lastScanAt) return "Never ingested";
@@ -90,6 +92,14 @@ export default function LibrariesPage() {
 
   const { data: settings } = useQuery({ queryKey: ["tenant-settings"], queryFn: getTenantSettings, staleTime: 60_000 });
   const trashDays = settings?.trash_days === undefined ? 30 : settings.trash_days;
+  const canEdit = useCanEdit();
+  // Archived clips aren't deleted on their own, but they go with their library: say how many.
+  const { data: archivedInDeleting } = useQuery({
+    queryKey: ["archive", deleteConfirmId, null, "all", "count"],
+    queryFn: () => listArchive({ libraryId: deleteConfirmId!, limit: 1 }),
+    enabled: deleteConfirmId !== null,
+  });
+  const archivedCount = archivedInDeleting?.total ?? 0;
 
   type DeleteVars = { id: string; removeFromProjects?: boolean };
   const deleteMutation = useMutation({
@@ -123,8 +133,14 @@ export default function LibrariesPage() {
   });
 
   const emptyTrashMutation = useMutation({
+    // The libraries shown: one, or every one in the trash on this page (never one trashed since).
     mutationFn: (removeFromProjects: boolean) =>
-      emptyTrash(removeFromProjects, typeof emptyTrashConfirm === "string" ? [emptyTrashConfirm] : undefined),
+      emptyTrash(
+        removeFromProjects,
+        typeof emptyTrashConfirm === "string"
+          ? [emptyTrashConfirm]
+          : (libraries ?? []).filter((l) => l.status === "trashed").map((l) => l.library_id),
+      ),
     onMutate: () => setEmptyTrashError(null),
     onSuccess: () => {
       setEmptyTrashConfirm(false);
@@ -192,7 +208,7 @@ export default function LibrariesPage() {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <h1 className="text-2xl font-semibold">Libraries</h1>
           <div className="flex items-center gap-3">
-            {trashedCount > 0 && (
+            {canEdit && trashedCount > 0 && (
               <button
                 type="button"
                 onClick={() => setEmptyTrashConfirm(true)}
@@ -365,7 +381,7 @@ export default function LibrariesPage() {
                       <span className="text-sm text-gray-500">
                         {formatLastIngest(lib.last_scan_at)}
                       </span>
-                      {lib.status === "trashed" && (
+                      {canEdit && lib.status === "trashed" && (
                         <div className="flex items-center gap-2">
                           <button
                             type="button"
@@ -384,7 +400,7 @@ export default function LibrariesPage() {
                           </button>
                         </div>
                       )}
-                      {lib.status !== "trashed" && (
+                      {canEdit && lib.status !== "trashed" && (
                         <div>
                           {projectsAsk?.id === lib.library_id ? (
                             <div className="flex max-w-md flex-col gap-2" role="alertdialog" aria-label={`Delete ${lib.name}`}>
@@ -420,6 +436,9 @@ export default function LibrariesPage() {
                             <div className="flex items-center gap-2">
                               <span className="text-sm text-gray-400">
                                 Delete {lib.name}? It moves to the trash with everything in it
+                                {archivedCount > 0
+                                  ? `, its ${archivedCount === 1 ? "archived clip" : `${archivedCount.toLocaleString()} archived clips`} too,`
+                                  : ""}
                                 {trashDays ? ` and is deleted for good after ${trashDays} days` : ""}. You can
                                 restore it until then.
                               </span>

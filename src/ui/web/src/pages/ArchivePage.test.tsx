@@ -71,7 +71,7 @@ describe("ArchivePage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Unarchive" }));
     await waitFor(() => expect(api.unarchiveClips).toHaveBeenCalledWith({ asset_ids: ["a1", "a2"] }));
     expect((await screen.findByRole("status")).textContent).toMatch(
-      /Unarchived 1 clip\. 1 clip with a missing file stays archived until the file is back\./,
+      /Unarchived 1 clip\. 1 clip wasn't archived by hand: a missing file comes back when the file does\./,
     );
   });
 

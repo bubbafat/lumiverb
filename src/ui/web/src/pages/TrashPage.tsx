@@ -61,7 +61,11 @@ export default function TrashPage() {
     try {
       const r = await restoreClips([...selected]);
       refresh();
-      setNotice({ text: `Restored ${clipCount(r.restored.length)}.` });
+      const back = r.to_archive?.length ?? 0;
+      setNotice({
+        text: `Restored ${clipCount(r.restored.length)}.` +
+          (back ? ` ${clipCount(back)} went back to the archive, where ${back === 1 ? "it was" : "they were"}.` : ""),
+      });
     } catch (err) {
       fail("restore them", err);
     } finally {
@@ -73,7 +77,8 @@ export default function TrashPage() {
     if (!deleting) return;
     setBusy(true);
     try {
-      const r = await emptyClipTrash(deleting.ids ?? undefined, removeFromProjects);
+      // Everything shown: this library's trash when filtered, never more.
+      const r = await emptyClipTrash(deleting.ids ?? undefined, removeFromProjects, deleting.ids ? {} : { libraryId });
       setDeleting(null);
       refresh();
       setNotice({ text: `Deleted ${clipCount(r.deleted)} for good.` });
@@ -95,6 +100,7 @@ export default function TrashPage() {
   };
   const allShown = clips.length > 0 && clips.every((c) => selected.has(c.asset_id));
   const deleteCount = deleting?.ids ? deleting.ids.length : total;
+  const libraryName = libraries?.find((l) => l.library_id === libraryId)?.name;
 
   return (
     <div className="mx-auto max-w-6xl space-y-5 px-4 py-6 sm:px-6">
@@ -117,7 +123,7 @@ export default function TrashPage() {
             onClick={() => setDeleting({ ids: null })}
             className="shrink-0 rounded-lg border border-red-800/60 bg-red-950/30 px-4 py-2 text-sm font-medium text-red-300 hover:bg-red-900/40"
           >
-            Empty trash ({total.toLocaleString()})
+            {libraryName ? `Empty ${libraryName}'s trash` : "Empty trash"} ({total.toLocaleString()})
           </button>
         )}
       </div>
@@ -230,12 +236,14 @@ export default function TrashPage() {
       <Modal
         isOpen={deleting !== null}
         onClose={() => setDeleting(null)}
-        title={deleting?.ids ? "Delete for good?" : "Empty the trash?"}
+        title={deleting?.ids ? "Delete for good?" : libraryName ? `Empty ${libraryName}'s trash?` : "Empty the trash?"}
       >
         {deleting && (
           <div className="space-y-4">
             <p className="text-sm text-gray-300">
-              {deleting.ids ? clipCount(deleteCount) : `Every clip in the trash (${clipCount(deleteCount)})`} will be
+              {deleting.ids
+                ? clipCount(deleteCount)
+                : `Every clip in the trash${libraryName ? ` of ${libraryName}` : ""} (${clipCount(deleteCount)})`} will be
               deleted for good, with their previews and analysis. This can&apos;t be undone. The original files on
               your drives aren&apos;t touched.
             </p>
