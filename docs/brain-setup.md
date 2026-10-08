@@ -98,7 +98,7 @@ On Oct 8 there are two:
 
 To add a machine, as an admin: **Settings → AI → Add machine**, a name, the URL, **Connect** (it lists the models the machine offers), tick **Descriptions & text**, how many at once, **Add**. "At once" is how many images it works on together; more needs more GPU memory. It only helps if that Ollama runs that many in parallel (`OLLAMA_NUM_PARALLEL`); otherwise the rest wait there. A request is about 2k tokens (a 1280 px image, the prompt, a 500-token answer), so any context of 8k or more is plenty.
 
-Before each round of vision work the worker checks every machine, and sends work only to those online and offering the model, spread by how many each takes. One that stops answering (asleep, out of memory, the model gone) is skipped and its work goes to the others; it's checked again a minute later. Settings → AI shows each machine's state, offline ones in red, with a red dot on AI in the Settings menu. Only when no machine is left does vision work wait, and no clip is charged a failure.
+Before each round of vision work the worker checks every machine, and sends work only to those online and offering the model, spread by how many each takes. Descriptions, OCR and scene descriptions each keep as many requests going as the online machines take together; scenes from several videos go out together, so short clips don't leave a machine idle. One that stops answering (asleep, out of memory, the model gone) is skipped and its work goes to the others; it's checked again a minute later. Settings → AI shows each machine's state, offline ones in red, with a red dot on AI in the Settings menu. Only when no machine is left does vision work wait, and no clip is charged a failure.
 
 ### 7. The Mac app
 
