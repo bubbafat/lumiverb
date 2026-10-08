@@ -206,15 +206,13 @@ def try_sync_scene(
 
 # Every clip has a search document (its path, notes, transcript, description
 # and the text in its image); it's stale until synced after the latest of its
-# description and its OCR.
-_STALE_SEARCH_JOINS = """
-        LEFT JOIN LATERAL (
-            SELECT generated_at FROM asset_metadata
-            WHERE asset_id = a.asset_id ORDER BY generated_at DESC LIMIT 1
-        ) m ON TRUE
-        LEFT JOIN asset_ocr o ON o.asset_id = a.asset_id"""
-_STALE_SEARCH = ("(a.search_synced_at IS NULL OR a.search_synced_at < m.generated_at"
-                 " OR a.search_synced_at < o.generated_at)")
+# description and its OCR. SQL on active_assets a; the repair summary counts
+# with the same rule.
+STALE_SEARCH = (
+    "(a.search_synced_at IS NULL"
+    " OR a.search_synced_at < (SELECT MAX(sm.generated_at) FROM asset_metadata sm WHERE sm.asset_id = a.asset_id)"
+    " OR a.search_synced_at < (SELECT so.generated_at FROM asset_ocr so WHERE so.asset_id = a.asset_id))"
+)
 
 
 def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dict:
@@ -227,14 +225,14 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
     if qw is None or not tenant_id:
         return {"synced": 0, "failed": 0, "scenes_synced": 0, "scenes_failed": 0}
 
-    from src.server.repository.tenant import AssetMetadataRepository, AssetOcrRepository
+    from src.server.repository.tenant import AssetMetadataRepository
 
     # --- Asset sync ---
     rows = session.execute(text(f"""
-        SELECT a.asset_id, a.library_id
+        SELECT a.asset_id, a.library_id, COALESCE(o.text, '') AS ocr_text
         FROM active_assets a
-        {_STALE_SEARCH_JOINS}
-        WHERE {_STALE_SEARCH}
+        LEFT JOIN asset_ocr o ON o.asset_id = a.asset_id
+        WHERE {STALE_SEARCH}
         ORDER BY a.library_id, a.asset_id
         LIMIT 1000
     """)).fetchall()
@@ -242,7 +240,6 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
     synced = 0
     failed = 0
     meta_repo = AssetMetadataRepository(session)
-    ocr_repo = AssetOcrRepository(session)
 
     try:
         index_recreated = qw.ensure_tenant_index(tenant_id)
@@ -267,10 +264,10 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
             session.commit()
             # Re-query with cleared timestamps
             rows = session.execute(text(f"""
-                SELECT a.asset_id, a.library_id
+                SELECT a.asset_id, a.library_id, COALESCE(o.text, '') AS ocr_text
                 FROM active_assets a
-                {_STALE_SEARCH_JOINS}
-                WHERE {_STALE_SEARCH}
+                LEFT JOIN asset_ocr o ON o.asset_id = a.asset_id
+                WHERE {STALE_SEARCH}
                 ORDER BY a.library_id, a.asset_id
                 LIMIT 1000
             """)).fetchall()
@@ -286,7 +283,7 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
         if asset is None:
             continue
         meta = meta_repo.get_latest(asset_id=r.asset_id)
-        all_docs.append(build_asset_document(asset, meta, ocr_repo.text_for(r.asset_id)))
+        all_docs.append(build_asset_document(asset, meta, r.ocr_text))
         all_asset_ids.append(r.asset_id)
 
     if all_docs:

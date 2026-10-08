@@ -9,7 +9,8 @@ ocr_text, has_text), so describing a clip again wiped it, and OCR couldn't
 run before a description existed. Now it's one row per clip here. The
 backfill takes each clip's latest description row that has OCR (a newer
 description by another model may not), then removes the OCR keys from the
-descriptions so there's one place. Downgrade puts it back into each clip's
+descriptions so there's one place; those clips' search documents are built
+again. Downgrade puts it back into each clip's
 latest description row (OCR of a clip with no description is dropped).
 """
 
@@ -41,8 +42,13 @@ def upgrade() -> None:
         " SELECT DISTINCT ON (m.asset_id) m.asset_id, COALESCE(m.data->>'ocr_text', ''),"
         "   COALESCE((m.data->>'has_text')::boolean, COALESCE(m.data->>'ocr_text', '') <> ''),"
         "   m.model_id, m.generated_at"
-        " FROM asset_metadata m WHERE m.data ? 'has_text' OR m.data ? 'ocr_text'"
+        " FROM asset_metadata m WHERE m.data->>'has_text' IS NOT NULL OR m.data->>'ocr_text' IS NOT NULL"
         " ORDER BY m.asset_id, m.generated_at DESC"
+    ))
+    # Their search documents were built from the latest description, which
+    # may not have carried the OCR: build them again.
+    op.execute(sa.text(
+        "UPDATE assets SET search_synced_at = NULL WHERE asset_id IN (SELECT asset_id FROM asset_ocr)"
     ))
     op.execute(sa.text(
         "UPDATE asset_metadata SET data = data - 'ocr_text' - 'has_text'"

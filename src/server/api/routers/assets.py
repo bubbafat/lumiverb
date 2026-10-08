@@ -483,6 +483,7 @@ def repair_summary(
     if lib is None:
         raise HTTPException(status_code=404, detail="Library not found")
     from src.server.repository.tenant import MISSING_CONDITIONS
+    from src.server.search.sync import STALE_SEARCH  # the search sweep's own rule
     row = session.execute(
         text(f"""
             SELECT
@@ -499,15 +500,7 @@ def repair_summary(
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_transcription"]}) AS missing_transcription,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_probe"]}) AS missing_probe,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_analysis_proxy"]}) AS missing_analysis_proxy,
-                -- The search sweep's rule (search/sync.py): every clip, synced after
-                -- the latest of its description and its OCR.
-                COUNT(*) FILTER (
-                    WHERE a.search_synced_at IS NULL
-                       OR a.search_synced_at < (
-                            SELECT MAX(am2.generated_at) FROM asset_metadata am2 WHERE am2.asset_id = a.asset_id)
-                       OR a.search_synced_at < (
-                            SELECT o.generated_at FROM asset_ocr o WHERE o.asset_id = a.asset_id)
-                ) AS stale_search_sync,
+                COUNT(*) FILTER (WHERE {STALE_SEARCH}) AS stale_search_sync,
                 {_waiting_failures_sql()} AS waiting_failures
             FROM active_assets a
             {lineage.LINEAGE_JOIN}
@@ -1309,8 +1302,10 @@ def submit_ocr(
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
 
-    AssetOcrRepository(session).upsert(asset_id, body.ocr_text, body.model_id)
-    lineage.record(session, asset_id, "ocr", lineage_dict(body.lineage), outcome="ok" if body.ocr_text else "empty")
+    AssetOcrRepository(session).upsert(asset_id, body.ocr_text, body.model_id, commit=False)
+    lineage.record(session, asset_id, "ocr", lineage_dict(body.lineage), outcome="ok" if body.ocr_text else "empty",
+                   commit=False)
+    session.commit()  # the text and how it was made, together
 
     # Re-sync search
     meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)

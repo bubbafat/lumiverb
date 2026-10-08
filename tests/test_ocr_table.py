@@ -135,6 +135,44 @@ def test_the_search_sweep_covers_every_clip_and_carries_its_ocr(env):
 
 
 @pytest.mark.slow
+def test_the_summary_counts_stale_search_by_the_sweeps_own_rule(env):
+    from src.server.search.sync import run_search_sync_sweep
+
+    lib = _library(env, "OcrStaleCount")
+    clip = _ingest_with(lib, "a.jpg", _sha(), None)
+    qw = MagicMock()
+    qw.ensure_tenant_index.return_value = False
+    with _db(env) as s:
+        s.execute(text("UPDATE assets SET search_synced_at = NULL WHERE asset_id = :a"), {"a": clip})
+        s.commit()
+    assert _summary(lib)["stale_search_sync"] == 1  # undescribed, never synced
+    with _db(env) as s, patch("src.server.search.sync._get_quickwit", return_value=qw):
+        while run_search_sync_sweep(s, tenant_id=env[4])["synced"]:
+            pass
+    assert _summary(lib)["stale_search_sync"] == 0
+    with _db(env) as s:  # newer OCR than its document
+        s.execute(text("INSERT INTO asset_ocr (asset_id, text, has_text, model_id, generated_at)"
+                       " VALUES (:a, 'EXIT', true, 'm', now() + interval '1 minute')"), {"a": clip})
+        s.commit()
+    assert _summary(lib)["stale_search_sync"] == 1
+
+
+@pytest.mark.slow
+def test_describing_again_keeps_the_ocr_in_its_search_document(env):
+    client, headers, *_ = env
+    lib = _library(env, "OcrDocKept")
+    clip = _ingest_with(lib, "a.jpg", _sha(), None)
+    _ocr(lib, clip, "NO ENTRY", None)
+    qw = MagicMock()
+    with patch("src.server.search.sync._get_quickwit", return_value=qw):
+        r = client.post(f"/v1/assets/{clip}/vision", json={"model_id": "m", "description": "a door"},
+                        headers=headers)
+    assert r.status_code == 200, r.text
+    [docs] = [c.args[1] for c in qw.ingest_tenant_documents.call_args_list]
+    assert docs[0]["ocr_text"] == "NO ENTRY" and docs[0]["description"] == "a door"
+
+
+@pytest.mark.slow
 def test_deleting_a_clip_for_good_takes_its_ocr(env):
     client, headers, *_ = env
     lib = _library(env, "OcrPurge")
@@ -170,7 +208,7 @@ def test_the_migration_moves_ocr_into_its_table_and_back():
         with engine.begin() as conn:
             conn.execute(text("INSERT INTO libraries (library_id, name, root_path, status, created_at, updated_at)"
                               " VALUES ('lib', 'lib', '/lib', 'active', now(), now())"))
-            for aid in ("a_text", "a_none", "a_rewritten", "a_never"):
+            for aid in ("a_text", "a_none", "a_rewritten", "a_never", "a_inferred", "a_null"):
                 conn.execute(text("INSERT INTO assets (asset_id, library_id, rel_path, file_size, media_type, status,"
                                   " availability, created_at, updated_at) VALUES (:a, 'lib', :a, 1, 'image',"
                                   " 'proxy_ready', 'online', now(), now())"), {"a": aid})
@@ -186,6 +224,9 @@ def test_the_migration_moves_ocr_into_its_table_and_back():
             meta("a_rewritten", "qwen", '{"description": "d", "ocr_text": "STOP", "has_text": true}', "2026-10-01")
             meta("a_rewritten", "llava", '{"description": "d2"}', "2026-10-02")
             meta("a_never", "qwen", '{"description": "d"}', "2026-10-01")
+            meta("a_inferred", "qwen", '{"description": "d", "ocr_text": "OPEN"}', "2026-10-01")  # before has_text
+            meta("a_null", "qwen", '{"description": "d", "ocr_text": null, "has_text": null}', "2026-10-01")
+            conn.execute(text("UPDATE assets SET search_synced_at = now()"))
 
         _alembic(url, "upgrade", after)
         with engine.connect() as conn:
@@ -193,8 +234,10 @@ def test_the_migration_moves_ocr_into_its_table_and_back():
                 "SELECT asset_id, text, has_text, model_id FROM asset_ocr"))}
             leftover = conn.execute(text(
                 "SELECT count(*) FROM asset_metadata WHERE data ? 'ocr_text' OR data ? 'has_text'")).scalar()
+            resync = {r[0] for r in conn.execute(text("SELECT asset_id FROM assets WHERE search_synced_at IS NULL"))}
         assert ocr == {"a_text": ("EXIT", True, "qwen"), "a_none": ("", False, "qwen"),
-                       "a_rewritten": ("STOP", True, "qwen")}
+                       "a_rewritten": ("STOP", True, "qwen"), "a_inferred": ("OPEN", True, "qwen")}
+        assert resync == set(ocr)  # their search documents are built again, now with the OCR
         assert leftover == 0  # one place
 
         _alembic(url, "downgrade", before)
@@ -203,5 +246,5 @@ def test_the_migration_moves_ocr_into_its_table_and_back():
                 "SELECT DISTINCT ON (asset_id) asset_id, data->>'ocr_text' FROM asset_metadata"
                 " WHERE data ? 'has_text' ORDER BY asset_id, generated_at DESC")).all())
             assert conn.execute(text("SELECT to_regclass('asset_ocr')")).scalar() is None
-        assert back == {"a_text": "EXIT", "a_none": None, "a_rewritten": "STOP"}
+        assert back == {"a_text": "EXIT", "a_none": None, "a_rewritten": "STOP", "a_inferred": "OPEN"}
         engine.dispose()
