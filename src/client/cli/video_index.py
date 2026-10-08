@@ -434,9 +434,12 @@ def run_video_enrich(
                 continue
 
             v = _VideoScenes(video=video, t0=time.perf_counter())
+            # Only an approved upgrade hands out a video with every scene
+            # described: describe them all again. Otherwise pick up where it
+            # left off, skipping scenes already described.
+            again = bool(scenes) and all(scene.get("description") for scene in scenes)
             for scene in scenes:
-                # Skip scenes that already have vision descriptions
-                if scene.get("description"):
+                if scene.get("description") and not again:
                     v.skipped += 1
                     continue
                 if fault is not None:

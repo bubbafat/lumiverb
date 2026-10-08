@@ -526,10 +526,39 @@ def test_run_video_enrich_missing_source(mock_enrich):
 
 
 @patch("src.client.cli.video_index.enrich_scene")
-def test_a_video_with_every_scene_described_is_done(mock_enrich):
+def test_a_video_handed_out_with_every_scene_described_is_described_again(mock_enrich):
+    """Only an approved upgrade hands out a video whose scenes are all
+    described (ADR-016 phase 3, piece 5): every scene is made again."""
     client = MagicMock()
     client.get.return_value = _FakeResponse(data={"scenes": [
-        {"scene_id": "scn_1", "rep_frame_ms": 0, "description": "a cat"}]})
+        {"scene_id": "scn_1", "rep_frame_ms": 0, "description": "a cat"},
+        {"scene_id": "scn_2", "rep_frame_ms": 1000, "description": "a dog"}]})
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ok, failed, _, fails = _enrich_videos(client, tmpdir, ["a1"], MagicMock())
+
+    assert (ok, failed, fails) == (1, 0, [])
+    assert sorted(c.kwargs["scene"]["scene_id"] for c in mock_enrich.call_args_list) == ["scn_1", "scn_2"]
+
+
+@patch("src.client.cli.video_index.enrich_scene")
+def test_a_video_part_described_picks_up_where_it_left_off(mock_enrich):
+    client = MagicMock()
+    client.get.return_value = _FakeResponse(data={"scenes": [
+        {"scene_id": "scn_1", "rep_frame_ms": 0, "description": "a cat"},
+        {"scene_id": "scn_2", "rep_frame_ms": 1000, "description": None}]})
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ok, failed, _, _ = _enrich_videos(client, tmpdir, ["a1"], MagicMock())
+
+    assert (ok, failed) == (1, 0)
+    assert [c.kwargs["scene"]["scene_id"] for c in mock_enrich.call_args_list] == ["scn_2"]
+
+
+@patch("src.client.cli.video_index.enrich_scene")
+def test_a_video_without_scenes_is_done(mock_enrich):
+    client = MagicMock()
+    client.get.return_value = _FakeResponse(data={"scenes": []})
 
     with tempfile.TemporaryDirectory() as tmpdir:
         ok, failed, _, fails = _enrich_videos(client, tmpdir, ["a1"], MagicMock())
