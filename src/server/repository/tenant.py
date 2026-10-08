@@ -952,6 +952,28 @@ class AssetRepository:
         )
         return self._session.exec(stmt).first()
 
+    def find_empty_newer_copy(self, asset: Asset) -> Asset | None:
+        """For copy-then-delete: an active asset in the same library with the same
+        content, made after this one, that no person has touched (no note, no
+        rating, in no project, no confirmed person). The first made, locked."""
+        if not asset.sha256:
+            return None
+        row = self._session.execute(
+            text(
+                "SELECT a.asset_id FROM assets a"
+                " WHERE a.library_id = :library_id AND a.sha256 = :sha256 AND a.deleted_at IS NULL"
+                "   AND a.asset_id <> :asset_id AND a.created_at > :created_at AND a.note IS NULL"
+                "   AND NOT EXISTS (SELECT 1 FROM asset_ratings r WHERE r.asset_id = a.asset_id)"
+                "   AND NOT EXISTS (SELECT 1 FROM project_assets p WHERE p.asset_id = a.asset_id)"
+                "   AND NOT EXISTS (SELECT 1 FROM faces f JOIN face_person_matches m ON m.face_id = f.face_id"
+                "                   WHERE f.asset_id = a.asset_id AND m.confirmed)"
+                " ORDER BY a.created_at, a.asset_id LIMIT 1 FOR UPDATE OF a"
+            ),
+            {"library_id": asset.library_id, "sha256": asset.sha256, "asset_id": asset.asset_id,
+             "created_at": asset.created_at},
+        ).first()
+        return None if row is None else self.get_by_id(row[0])
+
     def lock_for_restore(self, asset: Asset, rel_path: str) -> bool:
         """Lock an archived asset found at rel_path before restoring it there.
         False when, meanwhile, another ingest restored it at another path (a

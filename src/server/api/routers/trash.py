@@ -11,6 +11,7 @@ from sqlmodel import Session
 from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_tenant_admin
 from src.server.api.errors import DecisionRequiredError
 from src.shared.utils import utcnow
+from src.server.models.tenant import Asset
 from src.server.repository.tenant import AssetRepository
 from src.server.storage.local import get_storage
 
@@ -68,6 +69,48 @@ def empty_trash(
     return EmptyTrashResponse(
         deleted=purge_assets(session, request, to_delete, user_id, remove_from_projects=body.remove_from_projects),
     )
+
+
+def hand_over_to_copies(session: Session, request: Request, archived_ids: list[str]) -> list[str]:
+    """Copy, then delete the original (when the account follows moves): each of
+    these just-archived assets whose content has an empty, newer copy in the
+    library moves to that copy's path, with its notes, ratings, projects and
+    people, and the copy goes. Returns the ids that moved."""
+    repo = AssetRepository(session)
+    moved: list[str] = []
+    for asset_id in archived_ids:
+        archived = session.get(Asset, asset_id)  # get_by_id leaves out deleted assets
+        if archived is None or not repo.lock_for_restore(archived, archived.rel_path):
+            continue
+        if archived.deleted_at is None or archived.deleted_reason not in (None, "missing"):
+            session.rollback()
+            continue
+        copy = repo.find_empty_newer_copy(archived)
+        if copy is None:
+            session.rollback()
+            continue
+        path, copy_id = copy.rel_path, copy.asset_id
+        # Out of the way first: (library, rel_path) is unique.
+        copy.rel_path = f".lumiverb-handed-over/{copy.asset_id}"
+        copy.deleted_at = utcnow()
+        copy.deleted_reason = "handed_over"
+        session.add(copy)
+        session.flush()
+        archived.rel_path = path
+        archived.file_size = copy.file_size
+        archived.file_mtime = copy.file_mtime
+        repo.clear_trash(archived)
+        session.add(archived)
+        session.flush()
+        # Deletes the copy for good and commits the move with it.
+        purge_assets(session, request, [copy], "", remove_from_projects=True)
+        if archived.transcript_srt and getattr(request.state, "tenant_id", None):
+            from src.server.search.sync import index_transcript_segments
+
+            index_transcript_segments(request.state.tenant_id, archived)
+        logger.info("Asset %s moved to its copy at %s (copy %s removed)", asset_id, path, copy_id)
+        moved.append(asset_id)
+    return moved
 
 
 def purge_assets(

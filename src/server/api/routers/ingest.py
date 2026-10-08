@@ -402,8 +402,12 @@ async def create_and_ingest(
             )
         # The archive model: a missing file's content may have turned up here
         # (moved, or renamed while the scan wasn't looking). Restore that asset
-        # at its new path, with everything it had, instead of starting over.
-        archived = asset_repo.find_archived_by_sha(library_id, (exif_data or {}).get("sha256"))
+        # at its new path, with everything it had, instead of starting over;
+        # unless the account doesn't follow moves (the path is the identity).
+        from src.server.tenant_settings import get_follow_moves
+
+        archived = (asset_repo.find_archived_by_sha(library_id, (exif_data or {}).get("sha256"))
+                    if get_follow_moves(session) else None)
         if archived is not None:
             archived.rel_path = rel_path
             existing = archived

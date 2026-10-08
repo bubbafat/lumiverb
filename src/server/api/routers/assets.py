@@ -14,6 +14,7 @@ from sqlmodel import Session
 
 from src.shared.io_utils import normalize_rel_path
 from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor, require_signed_in
+from src.server.api.errors import DecisionRequiredError
 from src.shared import asset_status
 from src.shared.io_utils import normalize_path_prefix
 from src.server.repository.tenant import AssetMetadataRepository, AssetRepository, LibraryRepository
@@ -906,6 +907,13 @@ def batch_trash_assets(
                     qw.delete_tenant_documents_by_asset_id(tenant_id, aid)
         except Exception as e:
             logger.warning("Quickwit delete after batch trash failed: %s", e)
+    if trashed_ids and body.reason != "user":
+        # Copy, then delete the original: the asset moves to its empty copy.
+        from src.server.api.routers.trash import hand_over_to_copies
+        from src.server.tenant_settings import get_follow_moves
+
+        if get_follow_moves(session):
+            hand_over_to_copies(session, request, trashed_ids)
     return BatchTrashResponse(trashed=trashed_ids, not_found=not_found_ids)
 
 
@@ -1511,7 +1519,17 @@ def submit_batch_moves(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> dict:
-    """Update rel_path for multiple assets (file moves detected by scan)."""
+    """Update rel_path for multiple assets (file moves detected by scan).
+    409 moves_off when the account doesn't follow moves."""
+    from src.server.tenant_settings import get_follow_moves
+
+    if not get_follow_moves(session):
+        raise DecisionRequiredError(
+            "moves_off",
+            "This account doesn't follow moves and renames: a file at a new path is a new asset. "
+            "Turn follow_moves on (PATCH /v1/tenant/settings) to move assets.",
+            {"follow_moves": False},
+        )
     asset_repo = AssetRepository(session)
     updated = 0
     skipped = 0

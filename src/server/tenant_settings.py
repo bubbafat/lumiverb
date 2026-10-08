@@ -62,6 +62,19 @@ def set_public_video_preview_max_seconds(session: Session, value: int | None) ->
     _put(session, PUBLIC_VIDEO_PREVIEW_MAX_SECONDS, _WHOLE if value is None else str(value))
 
 
+FOLLOW_MOVES = "follow_moves"
+
+
+def get_follow_moves(session: Session) -> bool:
+    """Whether the same content is the same asset (moves, renames, copy then
+    delete); on until an admin turns it off. Off, the path is the only identity."""
+    return _get(session, FOLLOW_MOVES) != "off"
+
+
+def set_follow_moves(session: Session, value: bool) -> None:
+    _put(session, FOLLOW_MOVES, None if value else "off")
+
+
 def playback_cap(session: Session, *, public: bool) -> int | None:
     """Seconds a video plays for this audience: the account's cap, and on public pages the public one too."""
     caps = [get_video_preview_max_seconds(session)]
