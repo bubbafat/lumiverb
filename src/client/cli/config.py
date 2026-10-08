@@ -28,8 +28,13 @@ class CLIConfig(BaseModel):
     # machine, by path prefix (src/client/cli/roots.py).
     root_map: dict[str, str] = {}
     # Analysis proxies (src/client/video/analysis_proxy.py) and their cache.
-    # The encoder is this machine's way of rendering (it doesn't change what's tracked).
+    # The encoder and decoder are this machine's way of rendering (they don't change what's tracked).
     analysis_proxy_encoder: str = "libx264"
+    # Where originals are decoded: "auto" (the GPU through Vulkan when it
+    # works), "cpu", or an ffmpeg hwaccel such as "cuda". Same pictures either way.
+    analysis_proxy_decoder: str = "auto"
+    # Analysis proxies rendered at once; 0: one per six cores, at most three.
+    render_concurrency: int = 0
     analysis_cache_gb: float = 50.0
     # Where caches, and the worker's lock and state, go instead of ~/.cache,
     # when XDG_CACHE_HOME isn't set (src/client/cache_dir.py). The brain's

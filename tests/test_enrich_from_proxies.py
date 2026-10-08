@@ -395,6 +395,9 @@ def test_a_step_stops_when_the_storage_goes_to_sleep(home: Path, library: dict, 
             return "missing"
         return "ok"
 
+    # One at a time: with several renders at once, those already started finish too.
+    cfg = CLIConfig.model_validate_json((home / ".lumiverb" / "config.json").read_text())
+    save_config(cfg.model_copy(update={"render_concurrency": 1}))
     pages = {flag: [{"asset_id": f"ast_{x}", "rel_path": f"{x}.mov"} for x in "abcd"]}
     with patch(target, side_effect=one):
         _run(MagicMock(), library, job_type, {flag: 4}, pages)
@@ -521,13 +524,13 @@ def test_render_uses_the_servers_settings_and_says_so(home: Path, library: dict)
 
 
 @pytest.mark.fast
-def test_the_encoder_is_this_machines_and_doesnt_make_a_proxy_stale(home: Path, library: dict) -> None:
+def test_the_encoder_and_decoder_are_this_machines_and_dont_make_a_proxy_stale(home: Path, library: dict) -> None:
     import json
 
     from src.shared import producers as P
 
     cfg = CLIConfig.model_validate_json((home / ".lumiverb" / "config.json").read_text())
-    save_config(cfg.model_copy(update={"analysis_proxy_encoder": "h264_nvenc"}))
+    save_config(cfg.model_copy(update={"analysis_proxy_encoder": "h264_nvenc", "analysis_proxy_decoder": "cuda"}))
     client = _with_producers()
     used = []
 
@@ -539,7 +542,7 @@ def test_the_encoder_is_this_machines_and_doesnt_make_a_proxy_stale(home: Path, 
     with patch("src.client.cli.repair.render_analysis_proxy", side_effect=fake_render):
         _run(client, library, "render", {"missing_analysis_proxy": 1}, pages)
 
-    assert used[0].encoder == "h264_nvenc"
+    assert (used[0].encoder, used[0].decoder) == ("h264_nvenc", "cuda")
     [call] = _sent(client, "/artifacts/analysis_proxy")
     assert json.loads(call.kwargs["data"]["lineage"])["settings_hash"] == P.settings_hash(
         P.effective_settings("analysis_proxy"))

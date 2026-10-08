@@ -6,9 +6,11 @@ import gc
 import io
 import json
 import logging
+import threading
 import multiprocessing as mp
+import os
 from collections.abc import Callable, Collection, Iterable, Iterator
-from concurrent.futures import Future, ThreadPoolExecutor, wait, FIRST_COMPLETED
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, as_completed, wait
 from typing import TYPE_CHECKING, Literal
 
 from rich.console import Console
@@ -16,7 +18,13 @@ from rich.progress import Progress, BarColumn, TextColumn, MofNCompleteColumn, T
 from rich.table import Table
 
 from src.client.cli.client import LumiverbClient
-from src.client.video.analysis_proxy import AnalysisProxySettings, RenderError, render_analysis_proxy, render_timeout
+from src.client.video.analysis_proxy import (
+    AnalysisProxySettings,
+    RenderError,
+    gpu_decoder,
+    render_analysis_proxy,
+    render_timeout,
+)
 from src.client.video.audio import audio_tracks, speech_wav_command
 from src.client.video.probe import probe_video
 from src.client.workers.faces.insightface_provider import InsightFaceProvider
@@ -138,6 +146,12 @@ def _ocr_one(
     except Exception as e:
         logger.exception("Failed OCR for %s: %s", rel_path, e)
         return None
+
+
+def default_render_concurrency() -> int:
+    """Analysis proxies rendered at once by default: a 4K HEVC decode uses a
+    few cores, so one per six, at most three (the storage's bandwidth)."""
+    return max(1, min(3, (os.cpu_count() or 1) // 6))
 
 
 def _probe_one(client: LumiverbClient, lib_root: "Path", asset: dict,
@@ -876,8 +890,12 @@ def run_repair(
     should_stop: Callable[[], bool] | None = None,
     skip_items: Collection[tuple[str, str]] = (),
     on_take: Callable[[str, str], None] | None = None,
+    render_alongside: bool = False,
 ) -> None:
     """Detect and fix missing pipeline outputs.
+
+    render_alongside: render analysis proxies in a thread beside the other
+    steps instead of before them (the worker does: see _render_step).
 
     If asset_ids is provided, only those assets are considered for enrichment.
     This is used by Phase 3 (ingest convergence) to pass scanned asset IDs
@@ -1071,6 +1089,89 @@ def run_repair(
         console.print(f"[yellow]Library root stopped answering: {_here(library)}. "
                       "The rest waits until it's reachable.[/yellow]")
         return True
+
+    def _render_step(count: int, desc: str, console: Console = console) -> None:
+        """Render analysis proxies (needs the originals' storage)."""
+        console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
+
+        # Rendering reads the originals, so it waits for their storage.
+        lib_root = reachable_root(library)
+        if lib_root is None:
+            console.print(f"[yellow]Library root not accessible: {_here(library)}[/yellow]")
+            console.print("[yellow]Analysis proxies are rendered once it's reachable. Skipping.[/yellow]")
+            return
+
+        assets = _filter(_page_missing(client, library_id, missing_analysis_proxy=True))
+        if not assets:
+            console.print("No assets found (already rendered?).")
+            return
+        assets = _due("render", assets)
+
+        # The account's settings, so what's recorded as current is what's
+        # rendered; the encoder and decoder are this machine's.
+        settings = AnalysisProxySettings.for_producer(producers.settings("analysis_proxy"),
+                                                      _cfg.analysis_proxy_encoder, _cfg.analysis_proxy_decoder)
+        hwaccel = gpu_decoder(settings.decoder)
+        if hwaccel:
+            console.print(f"Decoding on the GPU ({hwaccel}); the CPU takes what it can't.")
+        # Several at once: one render of a 4K HEVC original decodes on a few
+        # cores and leaves the rest idle.
+        render_conc = _cfg.render_concurrency or default_render_concurrency()
+        progress = _make_progress(console)
+        with progress:
+            tid = progress.add_task("Render", total=len(assets), ok=0, fail=0)
+            asleep = False
+
+            def _rendered(fut: Future) -> None:
+                nonlocal asleep
+                try:
+                    outcome = fut.result()
+                except Exception:  # noqa: BLE001 — _render_one reports its own failures
+                    logger.exception("render: failed")
+                    outcome = "failed"
+                with stats.lock:
+                    if outcome == "ok":
+                        stats.processed += 1
+                    elif outcome == "missing":
+                        stats.skipped += 1
+                    else:
+                        stats.failed += 1
+                progress.advance(tid, 1)
+                progress.update(tid, ok=stats.processed, fail=stats.failed)
+                if outcome == "missing" and not asleep and _asleep():
+                    asleep = True
+
+            with ThreadPoolExecutor(max_workers=render_conc, thread_name_prefix="render") as pool:
+                inflight: set[Future] = set()
+                for a in _until(lambda: stop() or asleep, assets, _taking("render")):
+                    inflight.add(pool.submit(_render_one, client, lib_root, a, settings, analysis_cache,
+                                             producers, failures.for_artifact("analysis_proxy")))
+                    if len(inflight) >= render_conc:
+                        done, inflight = wait(inflight, return_when=FIRST_COMPLETED)
+                        for f in done:
+                            _rendered(f)
+                for f in as_completed(inflight):
+                    _rendered(f)
+
+    # The worker renders alongside the other steps: rendering is CPU work on
+    # the originals, the rest mostly the GPU on proxies, and one long render
+    # queue in front would hold every other step back for days.
+    render_thread: threading.Thread | None = None
+    if render_alongside and not dry_run and any(rt == "render" for rt, _, _ in plan):
+        render = next(p for p in plan if p[0] == "render")
+        plan = [p for p in plan if p[0] != "render"]
+
+        def _render_in_background() -> None:
+            # Its own console on the same output: one live progress display each.
+            out = Console(file=console.file, force_terminal=console.is_terminal, width=console.width,
+                          quiet=console.quiet)
+            try:
+                _render_step(render[1], render[2], out)
+            except Exception:  # noqa: BLE001 — the other steps go on; the next run tries again
+                logger.exception("render: failed alongside the other steps")
+
+        render_thread = threading.Thread(target=_render_in_background, name="render", daemon=True)
+        render_thread.start()
 
     for repair_type, count, desc in plan:
         failures.flush()  # the step before's
@@ -1384,42 +1485,7 @@ def run_repair(
                         break
 
         elif repair_type == "render":
-            console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
-
-            # Rendering reads the originals, so it waits for their storage.
-            lib_root = reachable_root(library)
-            if lib_root is None:
-                console.print(f"[yellow]Library root not accessible: {_here(library)}[/yellow]")
-                console.print("[yellow]Analysis proxies are rendered once it's reachable. Skipping.[/yellow]")
-                continue
-
-            assets = _filter(_page_missing(client, library_id, missing_analysis_proxy=True))
-            if not assets:
-                console.print("No assets found (already rendered?).")
-                continue
-            assets = _due("render", assets)
-
-            # The account's settings, so what's recorded as current is what's
-            # rendered; the encoder is this machine's.
-            settings = AnalysisProxySettings.for_producer(producers.settings("analysis_proxy"),
-                                                          _cfg.analysis_proxy_encoder)
-            progress = _make_progress(console)
-            with progress:
-                tid = progress.add_task("Render", total=len(assets), ok=0, fail=0)
-                for a in _until(stop, assets, _taking("render")):
-                    outcome = _render_one(client, lib_root, a, settings, analysis_cache, producers,
-                                          failures.for_artifact("analysis_proxy"))
-                    with stats.lock:
-                        if outcome == "ok":
-                            stats.processed += 1
-                        elif outcome == "missing":
-                            stats.skipped += 1
-                        else:
-                            stats.failed += 1
-                    progress.advance(tid, 1)
-                    progress.update(tid, ok=stats.processed, fail=stats.failed)
-                    if outcome == "missing" and _asleep():
-                        break
+            _render_step(count, desc)
 
         elif repair_type == "transcribe":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
@@ -1578,6 +1644,8 @@ def run_repair(
             sync_failed = result.get("failed", 0)
             console.print(f"  Search sync: {synced} synced, {sync_failed} failed")
 
+    if render_thread is not None:
+        render_thread.join()  # it stops between items too, when told to
     failures.flush()
     # Proxy cache is persistent (shared between scan and enrich) — do not clean up.
 

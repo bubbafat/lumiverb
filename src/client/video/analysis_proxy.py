@@ -11,10 +11,17 @@ decode, in order, each as AAC at 48 kHz, at most stereo, at a low bitrate.
 With several tracks a stereo mix of them comes first (handler "Lumiverb mix"):
 browsers play only the first track, and a lav may be on any. It starts at 0
 like the original, so times found in it are times in the original.
+
+Decoding a 4K HEVC original is most of a render. Where ffmpeg and the GPU
+can, the GPU decodes (Vulkan by default): about four times faster on the
+brain, with the same pictures, since decoding is exact. ffmpeg itself
+decodes on the CPU what the GPU can't (ProRes, 4:2:2), and a render whose
+GPU decoding fails runs again on the CPU.
 """
 
 from __future__ import annotations
 
+import functools
 import logging
 import subprocess
 from collections.abc import Mapping
@@ -46,18 +53,47 @@ class AnalysisProxySettings:
     crf: int = 28
     # Speech, not music: Whisper hears 16 kHz mono.
     audio_kbps_per_channel: int = 48
+    # "auto" (Vulkan when it works here), "cpu", or an ffmpeg hwaccel name.
+    decoder: str = "auto"
 
     @classmethod
-    def for_producer(cls, settings: Mapping[str, Any], encoder: str) -> AnalysisProxySettings:
+    def for_producer(cls, settings: Mapping[str, Any], encoder: str, decoder: str = "auto") -> AnalysisProxySettings:
         """The account's settings (GET /v1/producers), rendered with this
-        machine's encoder. Settings this version doesn't know are left out."""
-        known = {f.name for f in fields(cls)} - {"encoder"}
-        return cls(**{k: v for k, v in settings.items() if k in known}, encoder=encoder)
+        machine's encoder and decoder. Settings this version doesn't know are left out."""
+        known = {f.name for f in fields(cls)} - set(MACHINE_CHOICES)
+        return cls(**{k: v for k, v in settings.items() if k in known}, encoder=encoder, decoder=decoder)
 
     def output(self) -> dict[str, Any]:
-        """What lineage hashes: everything but the encoder, which is this
-        machine's way of rendering, like an endpoint."""
-        return {k: v for k, v in asdict(self).items() if k != "encoder"}
+        """What lineage hashes: everything but this machine's way of
+        rendering (encoder and decoder), like an endpoint."""
+        return {k: v for k, v in asdict(self).items() if k not in MACHINE_CHOICES}
+
+
+MACHINE_CHOICES = ("encoder", "decoder")
+
+
+@functools.cache
+def _vulkan_decodes() -> bool:
+    """Whether this ffmpeg can open a Vulkan device here. A device without
+    video decoding (a software driver) is fine: ffmpeg then decodes on the CPU."""
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-init_hw_device", "vulkan",
+             "-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.04", "-frames:v", "1", "-f", "null", "-"],
+            capture_output=True, timeout=30, check=False,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return False
+    return result.returncode == 0
+
+
+def gpu_decoder(choice: str) -> str | None:
+    """The ffmpeg hwaccel to decode with, or None for the CPU."""
+    if choice in ("", "cpu"):
+        return None
+    if choice == "auto":
+        return "vulkan" if _vulkan_decodes() else None
+    return choice
 
 
 def _video_codec_args(settings: AnalysisProxySettings) -> list[str]:
@@ -93,8 +129,10 @@ def build_command(
     dest: Path,
     settings: AnalysisProxySettings | None = None,
     tracks: list[AudioTrack] = (),
+    hwaccel: str | None = None,
 ) -> list[str]:
-    """`tracks`: the source's decodable audio tracks (audio_tracks)."""
+    """`tracks`: the source's decodable audio tracks (audio_tracks);
+    `hwaccel`: decode on the GPU with it (frames come back for the CPU's filters)."""
     s = settings or AnalysisProxySettings()
     edge = s.max_edge
     scale = (
@@ -103,6 +141,7 @@ def build_command(
     )
     return [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+        *(["-hwaccel", hwaccel] if hwaccel else []),
         "-i", str(source),
         "-map", "0:V:0",
         "-vf", scale, "-fpsmax", str(s.fps_max), "-pix_fmt", "yuv420p",
@@ -121,8 +160,8 @@ def render_timeout(duration_sec: float | None) -> float:
 
 
 def _run(source: Path, part: Path, settings: AnalysisProxySettings | None, tracks: list[AudioTrack],
-         timeout: float | None) -> None:
-    cmd = build_command(source, part, settings, tracks)
+         timeout: float | None, hwaccel: str | None = None) -> None:
+    cmd = build_command(source, part, settings, tracks, hwaccel)
     try:
         result = subprocess.run(
             cmd, capture_output=True, timeout=timeout or UNKNOWN_DURATION_TIMEOUT_SEC, check=False,
@@ -149,8 +188,9 @@ def render_analysis_proxy(
 ) -> None:
     """Render `source` into `dest`, or raise RenderError and leave nothing.
 
-    If a render with several audio tracks fails, it tries once more with
-    only the first: one odd track shouldn't cost the clip its transcript.
+    If decoding on the GPU fails, it runs again on the CPU. If a render
+    with several audio tracks fails, it tries once more with only the first:
+    one odd track shouldn't cost the clip its transcript.
     """
     part = dest.with_name(dest.name + ".part")
     try:
@@ -158,13 +198,24 @@ def render_analysis_proxy(
     except (subprocess.SubprocessError, OSError, ValueError) as exc:
         # Never render without audio because a read failed: no transcript would follow.
         raise RenderError(f"ffprobe couldn't read {source.name}: {exc}") from exc
+    hwaccel = gpu_decoder((settings or AnalysisProxySettings()).decoder)
+
+    def attempt(with_tracks: list[AudioTrack]) -> None:
+        if hwaccel:
+            try:
+                _run(source, part, settings, with_tracks, timeout, hwaccel)
+                return
+            except RenderError as exc:
+                logger.info("%s; decoding on the CPU instead", exc)
+        _run(source, part, settings, with_tracks, timeout)
+
     try:
-        _run(source, part, settings, tracks, timeout)
+        attempt(tracks)
     except _TimeoutError:
         raise
     except RenderError as exc:
         if len(tracks) <= 1:
             raise
         logger.warning("%s; trying again with its first audio track only", exc)
-        _run(source, part, settings, tracks[:1], timeout)
+        attempt(tracks[:1])
     part.replace(dest)
