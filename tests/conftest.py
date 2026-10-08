@@ -33,6 +33,7 @@ if sys.platform == "darwin":
     if _existing_dyld:
         os.environ["DYLD_FALLBACK_LIBRARY_PATH"] = _existing_dyld
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
@@ -100,3 +101,14 @@ class _AuthClient:
         kwargs.setdefault("headers", {})
         kwargs["headers"].update(self._headers)
         return self._client.request("DELETE", path, **kwargs)
+
+
+@pytest.fixture(autouse=True)
+def _no_host_fstab(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Library roots are checked against /etc/fstab: tests see none of this
+    machine's mounts unless they write an fstab of their own."""
+    from pathlib import Path
+
+    from src.client.cli import roots
+
+    monkeypatch.setattr(roots, "FSTAB", Path("/nonexistent/lumiverb-test-fstab"))

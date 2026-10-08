@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import unicodedata
 from pathlib import Path
@@ -95,7 +96,8 @@ def _expected_mount(path: Path) -> Path | None:
         fields = line.split()
         if len(fields) < 2 or fields[0].startswith("#") or fields[1] in ("/", "none", "swap"):
             continue
-        mount = Path(fields[1].replace("\\040", " "))
+        # fstab escapes a space as \040, a tab as \011 and so on.
+        mount = Path(re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), fields[1]))
         if (path == mount or mount in path.parents) and (best is None or len(mount.parts) > len(best.parts)):
             best = mount
     return best
@@ -105,10 +107,11 @@ def _probe(path: Path, require_entries: bool) -> Path | None:
     """Resolve and list the folder. Runs in a thread: it can hang."""
     # A folder fstab says is a mount counts only while it's mounted: anything
     # in an unmounted mount point (a stray copy) isn't the share.
-    mount = _expected_mount(path)
-    if mount is not None and not os.path.ismount(mount):
-        return None
     resolved = path.resolve()
+    for candidate in (path, resolved):  # a root map may reach the mount through a symlink
+        mount = _expected_mount(candidate)
+        if mount is not None and not os.path.ismount(mount):
+            return None
     if not resolved.is_dir():
         return None
     if require_entries:

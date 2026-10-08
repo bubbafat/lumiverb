@@ -401,3 +401,31 @@ def test_an_unreadable_fstab_doesnt_block_anything(tmp_path: Path, monkeypatch, 
     (local / "a.mov").write_text("x")
     monkeypatch.setattr(roots, "FSTAB", tmp_path / "no-such-fstab")
     assert reachable_root({"root_path": str(local)}, root_map={}, require_entries=True) == local.resolve()
+
+
+def test_fstab_octal_escapes_are_read(tmp_path: Path, monkeypatch, mounts) -> None:
+    # fstab writes a space as \040, a tab as \011, a backslash as \134.
+    share = tmp_path / "mnt" / "media\t01"
+    (share / "Media").mkdir(parents=True)
+    (share / "Media" / "a.mov").write_text("x")
+    escaped = str(share).replace("\t", "\\011")
+    (tmp_path / "fstab").write_text(f"//nas/share {escaped} cifs soft 0 0\n")
+    monkeypatch.setattr(roots, "FSTAB", tmp_path / "fstab")
+    lib = {"root_path": str(share / "Media")}
+    assert reachable_root(lib, root_map={}, require_entries=True) is None
+    mounts.add(str(share))
+    assert reachable_root(lib, root_map={}, require_entries=True) == (share / "Media").resolve()
+
+
+def test_a_root_reached_through_a_symlink_is_checked_where_it_lands(tmp_path: Path, monkeypatch, mounts) -> None:
+    share = tmp_path / "mnt" / "media-01"
+    (share / "Media").mkdir(parents=True)
+    (share / "Media" / "a.mov").write_text("x")
+    link = tmp_path / "das"
+    link.symlink_to(share)
+    monkeypatch.setattr(roots, "FSTAB", _fstab(tmp_path, str(share)))
+    lib = {"root_path": "/Volumes/media-01/Media"}
+    root_map = {"/Volumes/media-01": str(link)}
+    assert reachable_root(lib, root_map=root_map, require_entries=True) is None
+    mounts.add(str(share))
+    assert reachable_root(lib, root_map=root_map, require_entries=True) == (share / "Media").resolve()
