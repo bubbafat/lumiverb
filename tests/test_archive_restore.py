@@ -1,3 +1,4 @@
+# ruff: noqa: F811 — pytest fixtures are named as parameters
 """The archive model: a missing file's asset is archived, and restored when its content turns up.
 
 The scanner marks files it no longer finds "missing" (archived): the asset

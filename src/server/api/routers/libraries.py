@@ -5,14 +5,20 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlmodel import Session
-from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor, require_signed_in
+
+from src.server.api.dependencies import (
+    get_current_user_id,
+    get_tenant_session,
+    require_editor,
+    require_signed_in,
+)
 from src.server.api.errors import DecisionRequiredError
 from src.server.database import get_control_session
-from src.shared.io_utils import normalize_path_prefix
-from src.shared.utils import utcnow
 from src.server.repository.control_plane import PublicLibraryRepository
 from src.server.repository.tenant import AssetRepository, LibraryRepository, PathFilterRepository
 from src.server.search.quickwit import purge_library_from_quickwit
+from src.shared.io_utils import normalize_path_prefix
+from src.shared.utils import utcnow
 
 router = APIRouter(prefix="/v1/libraries", tags=["libraries"])
 
@@ -153,6 +159,7 @@ def list_library_health(
     no work to do and shouldn't surface in the indicator either.
     """
     from sqlalchemy import text
+
     from src.server.repository.tenant import MISSING_CONDITIONS
 
     pending_clause = " OR ".join(
