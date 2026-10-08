@@ -68,7 +68,11 @@ def _frame_rate(stream: dict) -> Fraction | None:
 
 
 def _right_angle(degrees: float) -> int:
-    """Nearest of 0, 90, 180, 270."""
+    """Nearest of 0, 90, 180, 270 (0 for a non-finite angle)."""
+    import math
+
+    if not math.isfinite(degrees):
+        return 0
     return int(round(degrees / 90.0)) * 90 % 360
 
 

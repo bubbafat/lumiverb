@@ -244,3 +244,11 @@ def test_probe_ignores_non_finite_duration() -> None:
     data = _probe(_video(duration="nan"), duration="inf")
 
     assert parse_ffprobe(data).duration_sec is None
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("rotation", ["inf", "nan", "-inf"])
+def test_non_finite_rotation_means_upright(rotation: str) -> None:
+    facet = parse_ffprobe(_probe(_video(tags={"rotate": rotation})))
+
+    assert facet.rotation == 0
