@@ -1930,6 +1930,8 @@ def _normalize_bounding_box(bb: dict[str, float]) -> dict[str, float]:
 class FaceSubmitRequest(BaseModel):
     detection_model: str = "insightface"
     detection_model_version: str = "buffalo_l"
+    # The model that embedded the faces (the faces producer's `model`).
+    embedding_model: str = Field(default="buffalo_l", max_length=100)
     faces: list[FaceDetectionItem]
     lineage: LineageIn | None = None
 
@@ -2030,6 +2032,8 @@ class BatchFaceItem(BaseModel):
     asset_id: str
     detection_model: str = "insightface"
     detection_model_version: str = "buffalo_l"
+    # The model that embedded the faces (the faces producer's `model`).
+    embedding_model: str = Field(default="buffalo_l", max_length=100)
     faces: list[FaceDetectionItem]
     source_sha256: str | None = None  # the file it was made from; the batch's lineage otherwise
 
@@ -2074,6 +2078,7 @@ def submit_batch_faces(
             detection_model=item.detection_model,
             detection_model_version=item.detection_model_version,
             faces=faces_data,
+            embedding_model=item.embedding_model,
         )
         lineage.record(session, item.asset_id, "faces", lineage_dict(body.lineage, item.source_sha256),
                        outcome="ok" if faces_data else "empty")
@@ -2124,6 +2129,7 @@ def submit_faces(
         detection_model=body.detection_model,
         detection_model_version=body.detection_model_version,
         faces=faces_data,
+        embedding_model=body.embedding_model,
     )
     lineage.record(session, asset_id, "faces", lineage_dict(body.lineage), outcome="ok" if faces_data else "empty")
 

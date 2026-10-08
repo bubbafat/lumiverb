@@ -1014,3 +1014,65 @@ def test_machine_transcript_never_replaces_manual(env) -> None:
     # transcript may be written again.
     assert client.delete(f"/v1/assets/{asset_id}/transcript", headers=headers).status_code == 204
     assert post(_SRT_WHISPER, "whisper") == "transcribed"
+
+
+# ---------------------------------------------------------------------------
+# A face-model switch (ADR-016 phase 3, piece 4): embeddings from different
+# models aren't comparable, so names are re-anchored by box overlap alone.
+# ---------------------------------------------------------------------------
+
+
+def _redetect_with(client, headers, asset_id: str, faces: list[tuple[dict, object]], embedding_model: str) -> dict:
+    r = client.post(
+        f"/v1/assets/{asset_id}/faces",
+        json={
+            "detection_model": "insightface",
+            "detection_model_version": embedding_model,
+            "embedding_model": embedding_model,
+            "faces": [{"bounding_box": box, "detection_confidence": 0.9,
+                       "embedding": _unit(emb) if isinstance(emb, int) else emb} for box, emb in faces],
+        },
+        headers=headers,
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def _embedding_model(tenant_url: str, face_id: str) -> str | None:
+    with _db(tenant_url) as s:
+        return s.execute(text("SELECT embedding_model FROM faces WHERE face_id = :f"), {"f": face_id}).scalar()
+
+
+@pytest.mark.slow
+def test_a_named_face_keeps_its_name_through_a_face_model_switch(env) -> None:
+    """The new model's embedding of the same face looks nothing like the old
+    one's (another space); the box is where it was. The name stays."""
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    person_id = _seed_person(tenant_url, emb=1)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=1)
+    _seed_match(tenant_url, face_id, person_id, confirmed=True, confidence=None)
+    assert _embedding_model(tenant_url, face_id) == "buffalo_l"  # every face so far
+
+    result = _redetect_with(client, headers, asset_id, [(_box(0.11, 0.10), 300)], "antelopev2")
+
+    assert result["face_ids"] == [face_id] and result["face_count"] == 1
+    assert _match(tenant_url, face_id) == (person_id, True)
+    assert _embedding_model(tenant_url, face_id) == "antelopev2"
+
+
+@pytest.mark.slow
+def test_across_a_switch_only_a_solid_overlap_carries_a_name(env) -> None:
+    """Without comparable embeddings, a face beside the named one (a little
+    overlap) doesn't inherit the name."""
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    person_id = _seed_person(tenant_url, emb=2)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=2)
+    _seed_match(tenant_url, face_id, person_id, confirmed=True, confidence=None)
+
+    result = _redetect_with(client, headers, asset_id, [(_box(0.25, 0.10), 2)], "antelopev2")
+
+    assert face_id not in result["face_ids"]
+    assert _face_exists(tenant_url, face_id)  # a confirmed face that isn't found again is kept
+    assert _match(tenant_url, face_id) == (person_id, True)

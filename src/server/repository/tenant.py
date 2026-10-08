@@ -3476,8 +3476,10 @@ class FaceRepository:
         detection_model: str,
         detection_model_version: str,
         faces: list[dict],
+        embedding_model: str = "buffalo_l",
     ) -> list[str]:
         """Store a fresh set of face detections for an asset and update face_count.
+        embedding_model: which model embedded them (compared only within one model).
 
         A detection that re-finds an existing face (by box overlap, else by
         embedding) updates that face in place: it keeps its face_id, its
@@ -3497,7 +3499,7 @@ class FaceRepository:
 
         old_rows = self._session.execute(
             text(
-                "SELECT f.face_id, f.bounding_box_json, f.embedding_vector::text AS emb,"
+                "SELECT f.face_id, f.bounding_box_json, f.embedding_vector::text AS emb, f.embedding_model,"
                 " EXISTS (SELECT 1 FROM face_person_matches m"
                 "         WHERE m.face_id = f.face_id AND m.confirmed) AS confirmed"
                 " FROM faces f WHERE f.asset_id = :aid"
@@ -3505,7 +3507,7 @@ class FaceRepository:
             {"aid": asset_id},
         ).all()
 
-        pairs = self._pair_redetected_faces(old_rows, faces)
+        pairs = self._pair_redetected_faces(old_rows, faces, embedding_model)
         reused_ids = set(pairs.values())
         kept_ids = [r.face_id for r in old_rows if r.face_id not in reused_ids and r.confirmed]
         dropped_ids = [
@@ -3577,6 +3579,7 @@ class FaceRepository:
                 face.detection_confidence = f.get("detection_confidence")
                 face.detection_model = detection_model
                 face.detection_model_version = detection_model_version
+                face.embedding_model = embedding_model
                 self._session.add(face)
                 face_ids.append(old_id)
                 continue
@@ -3589,6 +3592,7 @@ class FaceRepository:
                 detection_confidence=f.get("detection_confidence"),
                 detection_model=detection_model,
                 detection_model_version=detection_model_version,
+                embedding_model=embedding_model,
             )
             self._session.add(face)
             face_ids.append(face_id)
@@ -3661,8 +3665,13 @@ class FaceRepository:
         return face_ids
 
     @classmethod
-    def _pair_redetected_faces(cls, old_rows: list, faces: list[dict]) -> dict[int, str]:
+    def _pair_redetected_faces(cls, old_rows: list, faces: list[dict],
+                               embedding_model: str = "buffalo_l") -> dict[int, str]:
         """Pair new detections with the old faces they re-find.
+
+        Embeddings are compared only when one model made both (a face-model
+        switch puts them in different spaces, maybe of different sizes);
+        otherwise the pair is judged like boxes without embeddings.
 
         Greedy one-to-one. First overlapping boxes whose embeddings agree
         (distance < REDETECT_MAX_EMBEDDING_DISTANCE), closest embedding
@@ -3686,6 +3695,9 @@ class FaceRepository:
 
         def distance(oi: int, ni: int) -> float | None:
             if old_vecs[oi] is None or new_vecs[ni] is None:
+                return None
+            if (getattr(old_rows[oi], "embedding_model", None) or "buffalo_l") != embedding_model \
+                    or old_vecs[oi].shape != new_vecs[ni].shape:
                 return None
             return 1.0 - float(old_vecs[oi] @ new_vecs[ni])
 
