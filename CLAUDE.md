@@ -39,7 +39,7 @@ clients/lumiverb-app/      Native macOS + iOS (XcodeGen)
 
 tests/        Python tests (pytest)
 migrations/   Alembic — control/ + tenant/ trees
-scripts/      Ops (deploy-*, update-*, migrate.sh, convert-models/, …)
+scripts/      Ops (update.sh = one-command update, logged; deploy-*, update-*, migrate.sh, convert-models/, …)
 docs/         Long-form docs + ADRs
 quickwit/     Quickwit index schemas
 ```

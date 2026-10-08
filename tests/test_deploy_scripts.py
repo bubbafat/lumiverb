@@ -446,7 +446,7 @@ def test_a_failure_while_stopped_says_how_to_recover(tmp_path):
     # The swap fails after the services were stopped: say so plainly.
     calls, _, err = _update_python(tmp_path, VENV_CFG.format("3.14.4"), fail_on="lumiverb /usr/local/bin/uv sync", ok=False)
     assert "systemctl stop lumiverb-api" in calls
-    assert "isn't running" in err and "update-api.sh" in err
+    assert "isn't running" in err and "update.sh" in err
 
 
 def test_a_rerun_that_fails_while_still_stopped_says_so_too(tmp_path):
