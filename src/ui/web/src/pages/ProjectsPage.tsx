@@ -64,7 +64,7 @@ function ProjectCard({
         </div>
       </Link>
       <div className="p-3">
-        <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-2">
+        <div className="flex flex-col gap-1">
           <div className="min-w-0">
             <Link
               to={`/projects/${project.project_id}`}
@@ -94,7 +94,7 @@ function ProjectCard({
               )}
             </div>
           </div>
-          <div className="-ml-2 shrink-0 sm:ml-0">
+          <div className="-ml-2">
             {deleteConfirmId === project.project_id ? (
               <div className="flex items-center gap-1">
                 <button

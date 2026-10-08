@@ -57,6 +57,10 @@ export default function BrowsePage() {
   const isFetchingNextPageRef = useRef(false);
   const hasNextPageRef = useRef(false);
   const [containerWidth, setContainerWidth] = useState(0);
+  // The grid's own box, not the scroll container: the page pads the grid,
+  // so the scroll container is wider than the rows can be. State, not a
+  // ref, because the grid mounts only once there are assets.
+  const [gridEl, setGridEl] = useState<HTMLDivElement | null>(null);
   const [lightboxAsset, setLightboxAsset] = useState<AssetPageItem | null>(null);
   const [errorDismissed, setErrorDismissed] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -492,13 +496,13 @@ export default function BrowsePage() {
   });
 
   useEffect(() => {
-    if (!parentEl) return;
+    if (!gridEl) return;
     const ro = new ResizeObserver((entries) => {
       setContainerWidth(entries[0]?.contentRect.width ?? 0);
     });
-    ro.observe(parentEl);
+    ro.observe(gridEl);
     return () => ro.disconnect();
-  }, [parentEl]);
+  }, [gridEl]);
 
   useLayoutEffect(() => {
     isFetchingNextPageRef.current = isFetchingNextPage;
@@ -788,7 +792,7 @@ export default function BrowsePage() {
           )}
         </div>
       ) : (
-        <div style={{ width: "100%" }}>
+        <div ref={setGridEl} style={{ width: "100%" }}>
           <div
             style={{
               height: `${rowVirtualizer.getTotalSize()}px`,

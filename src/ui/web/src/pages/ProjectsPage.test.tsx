@@ -57,12 +57,13 @@ describe("ProjectsPage", () => {
     expect(actions.className).toContain("[@media(hover:hover)]:opacity-0");
   });
 
-  it("puts card actions under the name on small screens", async () => {
-    // Beside the name, two buttons left a phone-width card room for one letter.
+  it("puts card actions under the name, not beside it", async () => {
+    // Beside the name, two buttons left a phone card room for one letter and
+    // a desktop card about 50px, even while they were hidden.
     renderPage();
-    const name = await screen.findByRole("link", { name: "Customer Video 123" });
-    const row = name.parentElement!.parentElement!;
+    const links = await screen.findAllByRole("link", { name: "Customer Video 123" });
+    const row = links[links.length - 1].parentElement!.parentElement!;
     expect(row.className.split(/\s+/)).toContain("flex-col");
-    expect(row.className).toContain("sm:flex-row");
+    expect(row.className).not.toMatch(/flex-row/);
   });
 });

@@ -10,8 +10,11 @@ export function SelectionToolbar({ count, onClear, children }: SelectionToolbarP
   if (count === 0) return null;
 
   return (
-    <div className="fixed bottom-6 left-1/2 z-40 -translate-x-1/2">
-      <div className="flex items-center gap-3 rounded-xl border border-gray-700 bg-gray-900/95 px-4 py-2.5 shadow-2xl backdrop-blur-sm">
+    // On phones, clear of the bottom nav (4rem plus the home-indicator inset).
+    // w-max: pinned at left-1/2, the box would otherwise only get the right
+    // half of the screen and squeeze every label onto two lines.
+    <div className="fixed bottom-safe-offset-20 left-1/2 z-40 w-max max-w-[calc(100vw-1rem)] -translate-x-1/2 md:bottom-6">
+      <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2 whitespace-nowrap rounded-xl border border-gray-700 bg-gray-900/95 px-4 py-2.5 shadow-2xl backdrop-blur-sm">
         <span className="text-sm font-medium text-gray-300">
           {count} selected
         </span>
