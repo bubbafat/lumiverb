@@ -77,3 +77,37 @@ def test_show_says_what_public_pages_actually_get(client):
                                                  "public_video_preview_max_seconds": 10}
     result = _run("show")
     assert "On public pages: first 5 seconds" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Follow moves and renames (Robert's call, Oct 8)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value,shown", [(True, "on"), (False, "off"), (None, "on")])
+def test_show_says_whether_moves_are_followed(client, value, shown):
+    settings = {"video_preview_max_seconds": None, "public_video_preview_max_seconds": 10}
+    if value is not None:
+        settings["follow_moves"] = value
+    client.get.return_value.json.return_value = settings
+    result = _run("show")
+    assert result.exit_code == 0, result.output
+    assert f"Follow moves and renames: {shown}" in result.output
+
+
+@pytest.mark.parametrize("arg,value", [("on", True), ("off", False), ("OFF", False)])
+def test_follow_moves_turns_it_on_or_off(client, arg, value):
+    client.patch.return_value.json.return_value = {"follow_moves": value}
+    result = _run("follow-moves", arg)
+    assert result.exit_code == 0, result.output
+    client.patch.assert_called_once_with("/v1/tenant/settings", json={"follow_moves": value})
+    assert f"Follow moves and renames: {'on' if value else 'off'}" in result.output
+    if not value:
+        assert "new path" in " ".join(result.output.split())  # says what off means
+
+
+@pytest.mark.parametrize("arg", ["yes", "1", "maybe"])
+def test_follow_moves_takes_on_or_off(client, arg):
+    result = _run("follow-moves", arg)
+    assert result.exit_code == 2, result.output
+    client.patch.assert_not_called()
