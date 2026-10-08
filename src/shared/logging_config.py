@@ -17,4 +17,6 @@ def configure_logging() -> None:
     )
     # Suppress noisy third-party loggers
     logging.getLogger("pyvips").setLevel(logging.WARNING)
+    # One line per request drowns a long-running worker's log.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
