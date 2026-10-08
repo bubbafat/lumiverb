@@ -19,7 +19,7 @@ import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from rich.console import Console
 from rich.progress import (
@@ -324,6 +324,17 @@ def _detect_moves(
     # Combine: files that didn't match by size + files that matched size but not SHA
     remaining = no_match + remaining
     return moves, remaining
+
+
+def _existing_folder(root: Path, rel: str) -> str | None:
+    """The deepest folder on the way to rel that's on disk, its name in either
+    Unicode form. None is the library root."""
+    parts = PurePosixPath(rel).parts
+    while parts:
+        if resolve_source_path(root, "/".join(parts)).is_dir():
+            return "/".join(parts)
+        parts = parts[:-1]
+    return None
 
 
 def _detect_deletions(
@@ -655,6 +666,17 @@ def run_scan(
     if total_filters:
         console.print(f"Loaded {len(tenant_filters)} tenant + {len(library_filters)} library filter(s)")
 
+    # A folder that's gone is scanned from the nearest folder still there,
+    # which sees what was in it as deleted.
+    if path_prefix:
+        found = _existing_folder(root_path, path_prefix)
+        if found != path_prefix:
+            console.print(f"{path_prefix} isn't on disk; scanning {found or 'the whole library'}")
+            path_prefix = found
+    if not path_prefix and not root_path.is_dir():
+        console.print(f"[red]Library root went away: {root_path}[/red]")
+        return ScanStats(root_unreachable=True)
+
     # Discover files
     console.print("[bold]Discovering files...[/bold]")
     local_files = _walk_library(root_path, path_prefix, tenant_filters=tenant_filters, library_filters=library_filters)
@@ -665,7 +687,9 @@ def run_scan(
 
     console.print(f"Found {len(local_files):,} media files")
 
-    if not local_files and not force:
+    # An empty library is more likely an unmounted volume than a deleted
+    # one. An empty folder within it is just empty: its files are gone.
+    if not local_files and not force and not path_prefix:
         return stats
 
     # Fetch existing assets with SHA for change detection

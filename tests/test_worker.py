@@ -158,6 +158,17 @@ def test_reported_changes_are_scanned_then_acknowledged(das: Path) -> None:
 
 
 @pytest.mark.fast
+def test_a_folder_named_in_nfd_on_disk_is_scanned_itself(das: Path) -> None:
+    import unicodedata
+
+    zurich = unicodedata.normalize("NFC", "Zürich")
+    (das / "Footage" / unicodedata.normalize("NFD", zurich) / "Cam A").mkdir(parents=True)
+    server = FakeServer([LIB], pending={"lib_1": [{**CHANGE, "rel_path": f"{zurich}/Cam A"}]})
+    scan, _, _ = _cycle(server)
+    assert scan.call_args.kwargs["path_prefix"] == f"{zurich}/Cam A"
+
+
+@pytest.mark.fast
 def test_nothing_reported_and_no_full_scan_due_means_no_scan(das: Path) -> None:
     scan, _, _ = _cycle(FakeServer([LIB]))
     scan.assert_not_called()

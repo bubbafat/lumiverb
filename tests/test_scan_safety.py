@@ -292,3 +292,81 @@ def test_scan_names_the_files_that_failed(tmp_path: Path) -> None:
                          console=Console(quiet=True), skip_moves=True)
     assert stats.failed == 1
     assert stats.failed_paths == ["bad.jpg"]
+
+
+# ---------------------------------------------------------------------------
+# A scan sees the folder it was given (ADR-016 phase 2): the worker
+# acknowledges reports after the scan, so a walk that quietly finds nothing
+# would drop them.
+# ---------------------------------------------------------------------------
+
+ZURICH = unicodedata.normalize("NFC", "Zürich")
+
+
+def _scan_disk(root: Path, existing: dict[str, _ServerAsset], **kwargs) -> MagicMock:
+    """run_scan over real files under root, with every file on disk unchanged."""
+    client = MagicMock()
+    with (
+        patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
+        patch("src.client.cli.scan._load_library_filters", return_value=[]),
+        patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value=existing),
+        patch("src.client.cli.scan._fetch_ignored_paths", return_value=set()),
+        patch("src.client.cli.scan._split_files", side_effect=lambda files, existing, thorough: ([], [], files)),
+        patch("src.client.cli.scan.ProxyCache"),
+        patch("src.client.cli.scan._populate_cache_for_unchanged"),
+    ):
+        run_scan(client, {"library_id": "lib_1", "root_path": str(root)}, console=Console(quiet=True),
+                 allow_moves=True, **kwargs)
+    return client
+
+
+def _assets(*rel_paths: str) -> dict[str, _ServerAsset]:
+    return {rel: _ServerAsset(asset_id=f"ast_{rel}", sha256="x", file_size=4, media_type="image")
+            for rel in rel_paths}
+
+
+@pytest.mark.fast
+def test_walk_finds_a_folder_named_in_nfd(tmp_path: Path) -> None:
+    _write(tmp_path, unicodedata.normalize("NFD", ZURICH) + "/A001.jpg")
+    [entry] = _walk_library(tmp_path, ZURICH)
+    assert entry["rel_path"] == f"{ZURICH}/A001.jpg"
+
+
+@pytest.mark.fast
+def test_scanning_a_folder_named_in_nfd_keeps_its_files(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    _write(root, unicodedata.normalize("NFD", ZURICH) + "/A001.jpg")
+    client = _scan_disk(root, _assets(f"{ZURICH}/A001.jpg", f"{ZURICH}/gone.jpg"), path_prefix=ZURICH)
+    assert _deleted_ids(client) == [f"ast_{ZURICH}/gone.jpg"]
+
+
+@pytest.mark.fast
+def test_a_deleted_folder_is_seen_from_its_parent(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    _write(root, "Shoots/keep.jpg")
+    client = _scan_disk(root, _assets("Shoots/keep.jpg", "Shoots/Gone/a.jpg", "Other/b.jpg"),
+                        path_prefix="Shoots/Gone")
+    assert _deleted_ids(client) == ["ast_Shoots/Gone/a.jpg"]
+
+
+@pytest.mark.fast
+def test_an_emptied_folder_sees_its_deletions(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    (root / "Shoots" / "Day 1").mkdir(parents=True)
+    _write(root, "Other/b.jpg")
+    client = _scan_disk(root, _assets("Shoots/Day 1/a.jpg", "Other/b.jpg"), path_prefix="Shoots/Day 1")
+    assert _deleted_ids(client) == ["ast_Shoots/Day 1/a.jpg"]
+
+
+@pytest.mark.fast
+def test_a_root_gone_mid_scan_is_reported_unreachable(tmp_path: Path) -> None:
+    # Checked reachable, then unmounted: nothing was scanned, so the worker
+    # must keep the reports.
+    with (
+        patch("src.client.cli.scan.reachable_root", return_value=tmp_path / "gone"),
+        patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
+        patch("src.client.cli.scan._load_library_filters", return_value=[]),
+    ):
+        stats = run_scan(MagicMock(), {"library_id": "lib_1", "root_path": "/x"}, path_prefix="Day 1",
+                         console=Console(quiet=True))
+    assert stats.root_unreachable

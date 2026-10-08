@@ -23,6 +23,7 @@ from rich.progress import Progress, BarColumn, TextColumn, MofNCompleteColumn, T
 from src.client.cli.client import LumiverbClient
 from src.shared.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from src.shared.path_filter import PathFilter, is_path_included_merged
+from src.shared.io_utils import resolve_source_path
 from src.client.workers.exif_extract import (
     compute_sha256,
     extract_exif,
@@ -431,7 +432,7 @@ def _walk_library(
     """
     walk_root = root_path
     if path_prefix:
-        walk_root = root_path / path_prefix
+        walk_root = resolve_source_path(root_path, path_prefix)
 
     if not walk_root.is_dir():
         return []
