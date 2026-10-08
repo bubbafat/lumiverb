@@ -12,7 +12,9 @@ enriches them:
    back-off, and nothing is taken for deleted.
 2. If anything is missing, enrich. Videos are enriched from analysis
    proxies, so this continues while the storage sleeps; only probing and
-   rendering wait for it. Enrichment runs again only when a library's
+   rendering wait for it. Rendering runs alongside the other steps (CPU
+   work on the originals beside GPU work on proxies), so a long render
+   queue doesn't hold them back. Enrichment runs again only when a library's
    counts change, its storage comes back, or an hour has passed, so a
    file that fails every time isn't retried every minute. Steps that need
    vision AI wait while the endpoint chosen in Settings → AI doesn't offer
@@ -420,7 +422,7 @@ def _enrich_library(
 
     try:
         enrich_fn(client, library, job_type="all", console=console, skip_types=skip, should_stop=should_stop,
-                  skip_items=waiting, on_take=on_take)
+                  skip_items=waiting, on_take=on_take, render_alongside=True)
     except (Exception, SystemExit) as exc:
         # Paced like any try, so a crash isn't repeated every cycle.
         state.last_enrich[library_id] = (before, now)
