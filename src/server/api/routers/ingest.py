@@ -395,6 +395,14 @@ async def create_and_ingest(
                 status_code=409,
                 detail=f"File was removed from the library (trash emptied): {rel_path}",
             )
+        # The archive model: a missing file's content may have turned up here
+        # (moved, or renamed while the scan wasn't looking). Restore that asset
+        # at its new path, with everything it had, instead of starting over.
+        archived = asset_repo.find_archived_by_sha(library_id, (exif_data or {}).get("sha256"))
+        if archived is not None:
+            archived.rel_path = rel_path
+            existing = archived
+    if existing is None:
         asset = asset_repo.create_asset(
             library_id=library_id,
             rel_path=rel_path,

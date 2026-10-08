@@ -918,6 +918,23 @@ class AssetRepository:
         self._session.commit()
         return True
 
+    def find_archived_by_sha(self, library_id: str, sha256: str | None) -> Asset | None:
+        """The library's most recently archived (missing, not user-trashed) asset with this content."""
+        if not sha256:
+            return None
+        stmt = (
+            select(Asset)
+            .where(
+                Asset.library_id == library_id,
+                Asset.sha256 == sha256,
+                Asset.deleted_at.is_not(None),
+                or_(Asset.deleted_reason.is_(None), Asset.deleted_reason != "user"),
+            )
+            .order_by(Asset.deleted_at.desc())
+            .limit(1)
+        )
+        return self._session.exec(stmt).first()
+
     def clear_trash(self, asset: Asset) -> None:
         """Take an asset out of the trash and queue it and its scenes for the
         next search sync (trashing deleted their search documents). No
