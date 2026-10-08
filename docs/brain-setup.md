@@ -121,12 +121,21 @@ The fstab lines don't say `soft` or `hard`, so the mounts are `soft`, the CIFS d
 - **Pacing.** Enrichment runs again when a library's counts change, when its storage comes back, or hourly, so a clip that fails every time isn't retried every minute.
 - **Analysis proxies** are full-length copies at most 960 px on the long side, at most 30 fps, with every audio track: each at most stereo, 48 kHz AAC at 48 kbps per channel. Transcription hears all the tracks mixed, so a lav on its own track counts. Scenes and scene vision read the proxies too, never the originals. They are not edit proxies.
 - **Library health.** The libraries page shows a library as pending until its videos have analysis proxies.
+- **Playback.** The web plays each video in full from its analysis proxy, with every audio track; until the proxy exists, the 10-second preview plays. To cap it, use Settings → Playback, or `lumiverb settings video-preview <seconds>` (`full` to undo). The server enforces the cap, public pages included.
 
 Useful:
 
 ```bash
 journalctl -u lumiverb-worker -f
 ```
+
+Ctrl-C there only stops watching the log; the worker keeps going. To pause it:
+
+```bash
+sudo systemctl stop lumiverb-worker
+```
+
+and `sudo systemctl start lumiverb-worker` to carry on. Restarts don't rescan from scratch: files already in are skipped.
 
 ```bash
 sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb library report-changes /mnt/media-01/Media/New\ shoot
