@@ -87,6 +87,63 @@ class TestSplitFiles:
         assert len(fast_unchanged) == 1
         assert fast_unchanged[0]["asset_id"] == "id-1"
 
+    def test_fast_unchanged_when_the_server_answers_in_its_own_timezone(self):
+        """A server whose Postgres runs in, say, America/New_York returns the
+        same instant as 08:00-04:00. It's still a match: compare instants,
+        not strings, or every scan re-hashes every file."""
+        from datetime import timedelta
+
+        mtime = datetime(2024, 6, 15, 12, 0, 0, 123456, tzinfo=timezone.utc)
+        f = {"rel_path": "a.jpg", "media_type": "image", "file_size": 5000,
+             "file_mtime": mtime}
+        new_york = timezone(timedelta(hours=-4))
+        existing = {"a.jpg": _ServerAsset(
+            asset_id="id-1", sha256="abc", file_size=5000,
+            file_mtime=mtime.astimezone(new_york).isoformat(),
+        )}
+
+        new, needs_hash, fast_unchanged = _split_files([f], existing)
+        assert len(needs_hash) == 0
+        assert len(fast_unchanged) == 1
+
+    def test_fast_unchanged_reads_a_z_suffix(self):
+        mtime = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        f = {"rel_path": "a.jpg", "media_type": "image", "file_size": 5000,
+             "file_mtime": mtime}
+        existing = {"a.jpg": _ServerAsset(
+            asset_id="id-1", sha256="abc", file_size=5000,
+            file_mtime="2024-06-15T12:00:00Z",
+        )}
+
+        _, needs_hash, fast_unchanged = _split_files([f], existing)
+        assert len(fast_unchanged) == 1
+
+    def test_an_unreadable_server_mtime_needs_hash(self):
+        mtime = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        f = {"rel_path": "a.jpg", "media_type": "image", "file_size": 5000,
+             "file_mtime": mtime}
+        existing = {"a.jpg": _ServerAsset(
+            asset_id="id-1", sha256="abc", file_size=5000, file_mtime="yesterday",
+        )}
+
+        _, needs_hash, fast_unchanged = _split_files([f], existing)
+        assert len(needs_hash) == 1
+        assert len(fast_unchanged) == 0
+
+    def test_a_microsecond_apart_needs_hash(self):
+        """Same instant only: a file touched since is checked."""
+        from datetime import timedelta
+
+        mtime = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        f = {"rel_path": "a.jpg", "media_type": "image", "file_size": 5000,
+             "file_mtime": mtime + timedelta(microseconds=1)}
+        existing = {"a.jpg": _ServerAsset(
+            asset_id="id-1", sha256="abc", file_size=5000, file_mtime=mtime.isoformat(),
+        )}
+
+        _, needs_hash, _ = _split_files([f], existing)
+        assert len(needs_hash) == 1
+
     def test_fast_skip_disabled_by_thorough(self):
         """thorough=True forces hash even when mtime+size match."""
         mtime = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)

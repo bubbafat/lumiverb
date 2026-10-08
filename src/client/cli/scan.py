@@ -195,11 +195,18 @@ def _mtime_size_match(local_file: dict, server: _ServerAsset) -> bool:
         return False
     if local_file["file_size"] != server.file_size:
         return False
-    # Compare mtime: local is a datetime, server is ISO8601 string
+    # Compare instants, not strings: the server answers in its database's
+    # timezone (08:00-04:00 on a box set to New York), the scan in UTC.
     local_mtime = local_file.get("file_mtime")
     if local_mtime is None:
         return False
-    return local_mtime.isoformat() == server.file_mtime
+    try:
+        server_mtime = datetime.fromisoformat(server.file_mtime.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if server_mtime.tzinfo is None:
+        server_mtime = server_mtime.replace(tzinfo=timezone.utc)
+    return local_mtime == server_mtime
 
 
 @dataclass
