@@ -38,7 +38,7 @@ from sqlalchemy import create_engine, text
 
 # The Postgres image tests run against. Keep it the version production runs
 # (scripts/deploy-api.sh); LUMIVERB_TEST_PG_IMAGE overrides it to try another.
-PG_IMAGE = os.environ.get("LUMIVERB_TEST_PG_IMAGE", "pgvector/pgvector:pg16")
+PG_IMAGE = os.environ.get("LUMIVERB_TEST_PG_IMAGE", "pgvector/pgvector:pg18")
 
 
 def _ensure_psycopg2(url: str) -> str:
