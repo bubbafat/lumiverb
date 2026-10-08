@@ -3736,6 +3736,13 @@ class FaceRepository:
                 if dist is not None and dist < cls.REDETECT_MAX_EMBEDDING_DISTANCE:
                     close.append((dist, oi, ni))
         take(sorted(close))
+
+        # One face before and one now, with no embeddings to compare (a
+        # face-model switch): if the boxes touch at all, it's the same face,
+        # however differently the two models frame it.
+        if (not pairs and len(old_rows) == 1 and len(faces) == 1 and distance(0, 0) is None
+                and _bbox_iou(old_rows[0].bounding_box_json, faces[0].get("bounding_box")) > 0):
+            pairs[0] = old_rows[0].face_id
         return pairs
 
     def _rejections_for(self, face_ids: list[str]) -> dict[str, set[str]]:

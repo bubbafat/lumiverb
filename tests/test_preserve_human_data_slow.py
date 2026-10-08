@@ -1063,16 +1063,78 @@ def test_a_named_face_keeps_its_name_through_a_face_model_switch(env) -> None:
 
 @pytest.mark.slow
 def test_across_a_switch_only_a_solid_overlap_carries_a_name(env) -> None:
-    """Without comparable embeddings, a face beside the named one (a little
-    overlap) doesn't inherit the name."""
+    """Without comparable embeddings, of two faces the new model finds, the
+    one beside the named face (a little overlap) doesn't inherit the name;
+    the one where it was does."""
     client, headers, library_id, tenant_url = env
     asset_id = _seed_asset(tenant_url, library_id)
     person_id = _seed_person(tenant_url, emb=2)
     face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=2)
     _seed_match(tenant_url, face_id, person_id, confirmed=True, confidence=None)
 
-    result = _redetect_with(client, headers, asset_id, [(_box(0.25, 0.10), 2)], "antelopev2")
+    result = _redetect_with(client, headers, asset_id, [(_box(0.25, 0.10), 2), (_box(0.11, 0.11), 9)],
+                            "antelopev2")
+
+    assert result["face_ids"][1] == face_id and result["face_ids"][0] != face_id
+    assert _match(tenant_url, face_id) == (person_id, True)
+
+
+@pytest.mark.slow
+def test_across_a_switch_a_named_face_not_found_again_is_kept(env) -> None:
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    person_id = _seed_person(tenant_url, emb=6)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=6)
+    _seed_match(tenant_url, face_id, person_id, confirmed=True, confidence=None)
+
+    result = _redetect_with(client, headers, asset_id, [(_box(0.25, 0.10), 6), (_box(0.70, 0.70), 7)],
+                            "antelopev2")
 
     assert face_id not in result["face_ids"]
     assert _face_exists(tenant_url, face_id)  # a confirmed face that isn't found again is kept
     assert _match(tenant_url, face_id) == (person_id, True)
+
+
+@pytest.mark.slow
+def test_one_named_face_and_one_found_by_the_new_model_are_the_same_face(env) -> None:
+    """Robert's case: the picture had one face, named; the new model finds
+    one. Its box can differ a lot (a tight box inside a loose one) and its
+    embedding can't be compared: it's the same face, and keeps the name."""
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    person_id = _seed_person(tenant_url, emb=3)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=3)
+    _seed_match(tenant_url, face_id, person_id, confirmed=True, confidence=None)
+
+    result = _redetect_with(client, headers, asset_id, [(_box(0.15, 0.15, 0.08, 0.08), 301)], "antelopev2")
+
+    assert result["face_ids"] == [face_id]
+    assert _match(tenant_url, face_id) == (person_id, True)
+
+
+@pytest.mark.slow
+def test_one_and_one_in_different_places_are_different_faces(env) -> None:
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    person_id = _seed_person(tenant_url, emb=4)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=4)
+    _seed_match(tenant_url, face_id, person_id, confirmed=True, confidence=None)
+
+    result = _redetect_with(client, headers, asset_id, [(_box(0.60, 0.60), 302)], "antelopev2")
+
+    assert face_id not in result["face_ids"]
+    assert _match(tenant_url, face_id) == (person_id, True)  # kept, beside the new face
+
+
+@pytest.mark.slow
+def test_one_and_one_with_the_same_model_still_listens_to_the_embeddings(env) -> None:
+    """With comparable embeddings that disagree, it isn't the same face."""
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    person_id = _seed_person(tenant_url, emb=5)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=5)
+    _seed_match(tenant_url, face_id, person_id, confirmed=True, confidence=None)
+
+    result = _redetect_with(client, headers, asset_id, [(_box(0.15, 0.15, 0.08, 0.08), 303)], "buffalo_l")
+
+    assert face_id not in result["face_ids"]
