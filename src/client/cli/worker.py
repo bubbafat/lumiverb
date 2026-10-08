@@ -336,7 +336,16 @@ def _enrich_library(
     previous = state.last_enrich.get(library_id)
     if previous is not None and previous[0] == before and now - previous[1] < retry_every:
         return  # nothing changed since the last try
-    enrich_fn(client, library, job_type="all", console=console, skip_types=skip, should_stop=should_stop)
+    try:
+        enrich_fn(client, library, job_type="all", console=console, skip_types=skip, should_stop=should_stop)
+    except (Exception, SystemExit) as exc:
+        # Paced like any try, so a crash isn't repeated every cycle.
+        state.last_enrich[library_id] = (before, now)
+        if isinstance(exc, SystemExit) and exc.code in (0, None):
+            raise  # SIGTERM (main.py's handler): the worker is stopping
+        logger.exception("worker: enriching %s failed; trying again when it changes or in an hour",
+                         library["name"])
+        return
     if should_stop():
         state.last_enrich[library_id] = (None, now)  # cut short, not stuck
     else:

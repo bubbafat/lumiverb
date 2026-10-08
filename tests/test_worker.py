@@ -263,6 +263,36 @@ def test_a_failed_enrich_does_not_stop_the_cycle(das: Path) -> None:
 
 
 @pytest.mark.fast
+def test_an_enrich_step_that_exits_does_not_stop_the_worker(das: Path) -> None:
+    # run_backfill_vision raises SystemExit(1) when vision isn't configured.
+    libs = [LIB, {**LIB, "library_id": "lib_2", "name": "Two"}]
+    server = FakeServer(libs, summaries={"lib_1": WORK, "lib_2": WORK})
+    enrich = MagicMock(side_effect=[SystemExit(1), None])
+    _cycle(server, WorkerState(last_full_scan={"lib_1": 99 * HOUR, "lib_2": 99 * HOUR}), enrich=enrich)
+    assert enrich.call_count == 2
+
+
+@pytest.mark.fast
+def test_a_stop_signal_during_enrichment_still_stops_the_worker(das: Path) -> None:
+    # main.py turns SIGTERM into SystemExit(0).
+    server = FakeServer([LIB], summaries={"lib_1": WORK})
+    with pytest.raises(SystemExit):
+        _cycle(server, WorkerState(last_full_scan={"lib_1": 99 * HOUR}), enrich=MagicMock(side_effect=SystemExit(0)))
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("error", [RuntimeError("model crashed"), SystemExit(1)])
+def test_a_failed_enrich_is_paced_like_any_other(das: Path, error: BaseException) -> None:
+    server = FakeServer([LIB], summaries={"lib_1": WORK})
+    state = WorkerState(last_full_scan={"lib_1": 100 * HOUR})
+    _, _, state = _cycle(server, state, now=100 * HOUR, enrich=MagicMock(side_effect=error))
+    _, again, state = _cycle(server, state, now=100 * HOUR + 60)
+    _, later, _ = _cycle(server, state, now=101 * HOUR + 1)
+    again.assert_not_called()
+    assert later.call_count == 1
+
+
+@pytest.mark.fast
 def test_only_named_libraries_are_worked(das: Path) -> None:
     libs = [LIB, {**LIB, "library_id": "lib_2", "name": "Other"}]
     server = FakeServer(libs, summaries={"lib_1": WORK, "lib_2": WORK})
