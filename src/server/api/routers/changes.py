@@ -5,6 +5,9 @@ so the machine that holds the disks (the Mac Studio) reports the paths it
 sees change. Paths are absolute, as that machine sees them, which is how
 library roots are stored. The brain's worker reads a library's pending
 changes, scans the folders they're in, and acknowledges what it saw.
+
+Reporting and acknowledging need an editor; reading needs any signed-in
+user, never a public library's visitors (the paths name private files).
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 from sqlmodel import Session
 
-from src.server.api.dependencies import get_tenant_session
+from src.server.api.dependencies import get_tenant_session, require_editor, require_signed_in
 from src.server.repository.tenant import LibraryChangeRepository, LibraryRepository
 
 router = APIRouter(tags=["changes"])
@@ -101,6 +104,7 @@ def _match(path: str, roots: list[tuple[str, str]]) -> tuple[str, str] | None:
 def report_changes(
     body: ChangeReport,
     session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
 ) -> ChangeReportResponse:
     """Record paths that changed on storage. Paths in no library are counted, not kept."""
     roots = [
@@ -131,6 +135,7 @@ def report_changes(
 @router.get("/v1/changes", response_model=ChangeSummaryResponse)
 def change_summary(
     session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_signed_in)],
 ) -> ChangeSummaryResponse:
     """Pending change counts per library, for a worker deciding what to scan."""
     return ChangeSummaryResponse(
@@ -147,6 +152,7 @@ def _library_or_404(session: Session, library_id: str) -> None:
 def pending_changes(
     library_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_signed_in)],
     limit: Annotated[int, Query(ge=1, le=MAX_PATHS_PER_REPORT)] = MAX_PATHS_PER_REPORT,
 ) -> PendingChangesResponse:
     """A library's pending changes, oldest first. truncated means more are waiting."""
@@ -160,6 +166,7 @@ def acknowledge_changes(
     library_id: str,
     body: AckRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
 ) -> AckResponse:
     """Clear changes a scan covered. A change reported again since it was read stays."""
     _library_or_404(session, library_id)

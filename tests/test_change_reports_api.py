@@ -264,3 +264,53 @@ def test_summary_counts_pending_changes_per_library(env) -> None:
 def test_unknown_library_is_404(env) -> None:
     client, headers, _ = env
     assert client.get("/v1/libraries/lib_nope/changes", headers=headers).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Who may report, read and acknowledge
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def viewer(env) -> dict:
+    client, headers, _ = env
+    r = client.post("/v1/keys", json={"label": "changes-viewer", "role": "viewer"}, headers=headers)
+    assert r.status_code in (200, 201), r.text
+    return {"Authorization": f"Bearer {r.json()['plaintext']}"}
+
+
+@pytest.mark.slow
+def test_a_viewer_cannot_report_changes(env, viewer) -> None:
+    client, _, _ = env
+    r = client.post("/v1/changes", json={"paths": [f"{ROOT}/v.mov"]}, headers=viewer)
+    assert r.status_code == 403, r.text
+
+
+@pytest.mark.slow
+def test_a_viewer_cannot_acknowledge_changes(env, viewer) -> None:
+    client, _, footage = env
+    _clear(env)
+    _report(env, [f"{ROOT}/keep.mov"])
+    r = client.post(f"/v1/libraries/{footage}/changes/ack", json=_seen(_pending(env)), headers=viewer)
+    assert r.status_code == 403, r.text
+    assert [c["rel_path"] for c in _pending(env)["changes"]] == ["keep.mov"]
+
+
+@pytest.mark.slow
+def test_a_viewer_can_read_pending_changes(env, viewer) -> None:
+    client, _, footage = env
+    assert client.get(f"/v1/libraries/{footage}/changes", headers=viewer).status_code == 200
+    assert client.get("/v1/changes", headers=viewer).status_code == 200
+
+
+@pytest.mark.slow
+def test_a_public_library_s_changes_need_signing_in(env) -> None:
+    client, headers, _ = env
+    public = _library(client, headers, "Public footage", "/Volumes/media-05/Public")
+    r = client.patch(f"/v1/libraries/{public}", json={"is_public": True}, headers=headers)
+    assert r.status_code == 200, r.text
+    _report(env, ["/Volumes/media-05/Public/private-name.mov"])
+    assert client.get(f"/v1/libraries/{public}").status_code == 200  # the library itself is public
+    assert client.get(f"/v1/libraries/{public}/changes").status_code == 401
+    assert client.get("/v1/changes").status_code == 401
+    assert client.post(f"/v1/libraries/{public}/changes/ack", json={"changes": []}).status_code == 401

@@ -153,7 +153,7 @@ All under `/v1/video`; require tenant auth. Used by the CLI (`lumiverb ingest`) 
 
 ## Change reports API
 
-The brain mounts storage over the network and can't watch it, so the machine holding the disks (the Mac Studio) reports paths it sees change, and the brain's worker scans them (ADR-016 phase 2). Tenant auth, any role.
+The brain mounts storage over the network and can't watch it, so the machine holding the disks (the Mac Studio) reports paths it sees change, and the brain's worker scans them (ADR-016 phase 2). Tenant auth: reporting and acknowledging need editor or admin (403 for a viewer); reading needs a signed-in user of any role, even for a public library (401 signed out).
 
 - **POST /v1/changes** — Body: `{ "paths": [...] }`, up to 10,000 absolute paths as the reporting machine sees them, which is how library roots are stored. Each path goes to the library with the deepest matching root (whole folders, Unicode NFC); a path in no live library is counted, not kept. Files or folders, changed, added or removed. 422 for relative paths or `..`. Returns `{ "accepted", "libraries": { library_id: count }, "unmatched", "unmatched_sample" }`.
 - **GET /v1/changes** — Pending counts: `{ "libraries": [{ "library_id", "pending", "oldest_reported_at" }] }`.
