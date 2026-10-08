@@ -24,7 +24,7 @@ from src.server.config import get_settings
 from src.server.database import _engines, get_control_session
 from src.server.repository.control_plane import TenantDbRoutingRepository
 from src.server.storage.local import LocalStorage
-from tests.conftest import _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
+from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 FACET = {
     "duration_sec": 7.07, "container": "mov", "video_codec": "h264", "width": 640,
@@ -40,7 +40,7 @@ def env(tmp_path_factory):
     storage = LocalStorage(str(tmp_path_factory.mktemp("export_storage")))
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-    with PostgresContainer("pgvector/pgvector:pg16") as control_pg:
+    with PostgresContainer(PG_IMAGE) as control_pg:
         control_url = _ensure_psycopg2(control_pg.get_connection_url())
         _run_control_migrations(control_url)
         os.environ["CONTROL_PLANE_DATABASE_URL"] = control_url
@@ -64,7 +64,7 @@ def env(tmp_path_factory):
             tenant_id = r.json()["tenant_id"]
             api_key = r.json()["api_key"]
 
-        with PostgresContainer("pgvector/pgvector:pg16") as tenant_pg:
+        with PostgresContainer(PG_IMAGE) as tenant_pg:
             tenant_url = _ensure_psycopg2(tenant_pg.get_connection_url())
             _provision_tenant_db(tenant_url, project_root)
             with get_control_session() as session:

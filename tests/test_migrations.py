@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from testcontainers.postgres import PostgresContainer
 from uuid import uuid4
+from tests.conftest import PG_IMAGE
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +91,7 @@ def test_tenant_migration_down_revisions_exist() -> None:
 def test_control_plane_migrations_upgrade_and_downgrade() -> None:
     """Run control plane migrations up and down on a fresh Postgres with pgvector."""
     # pgvector image so we can enable the extension (control plane may not use it; tenant DB does)
-    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
+    with PostgresContainer(PG_IMAGE) as postgres:
         url = postgres.get_connection_url()
         # Ensure psycopg2 driver for Alembic
         if url.startswith("postgresql://"):
@@ -158,7 +159,7 @@ def test_api_keys_role_replaces_is_admin() -> None:
     Control plane: migration c8d9e0f1a2b3 adds role, backfills from is_admin, drops is_admin.
     Existing is_admin=TRUE rows get role='admin' after upgrade.
     """
-    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
+    with PostgresContainer(PG_IMAGE) as postgres:
         url = postgres.get_connection_url()
         if url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
@@ -242,7 +243,7 @@ def test_phase5_users_schema_and_api_keys_role_backfill() -> None:
     prev_rev = "d9e0f1a2b3c4"
     target_rev = "e1f2a3b4c5d6"
 
-    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
+    with PostgresContainer(PG_IMAGE) as postgres:
         url = postgres.get_connection_url()
         if url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
@@ -358,7 +359,7 @@ TENANT_TABLES = [
 @pytest.mark.migration
 def test_tenant_schema_upgrade_and_downgrade() -> None:
     """Run tenant migrations up and down on a fresh Postgres with pgvector."""
-    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
+    with PostgresContainer(PG_IMAGE) as postgres:
         url = postgres.get_connection_url()
         if url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
@@ -467,7 +468,7 @@ def test_face_detection_migration_columns_and_indexes() -> None:
     prev_rev = "e5f6g7h8i9j0"
     target_rev = "f6g7h8i9j0k1"
 
-    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
+    with PostgresContainer(PG_IMAGE) as postgres:
         url = postgres.get_connection_url()
         if url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
@@ -597,7 +598,7 @@ def test_faces_person_id_denormalized_migration() -> None:
     prev_rev = "g7h8i9j0k1l3"
     target_rev = "h8i9j0k1l2m4"
 
-    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
+    with PostgresContainer(PG_IMAGE) as postgres:
         url = postgres.get_connection_url()
         if url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
@@ -729,7 +730,7 @@ def test_migration_marks_invalid_ai_vision_missing_proxy_failed() -> None:
     target_rev = "x1y2z3a4b5c6"
     err = "Invalid ai_vision job: missing proxy_key (video proxy deferred or proxy not ready)"
 
-    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
+    with PostgresContainer(PG_IMAGE) as postgres:
         url = postgres.get_connection_url()
         if url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
@@ -870,7 +871,7 @@ def test_preserve_human_data_migration_backfills_existing_rows() -> None:
     clash_nfc = unicodedata.normalize("NFC", "Pâté.mov")
     clash_nfd = unicodedata.normalize("NFD", clash_nfc)
 
-    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
+    with PostgresContainer(PG_IMAGE) as postgres:
         url = postgres.get_connection_url().replace("postgresql://", "postgresql+psycopg2://", 1)
         engine = create_engine(url)
         with engine.connect() as conn:

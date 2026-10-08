@@ -16,6 +16,7 @@ from src.server.repository.control_plane import (
     TenantDbRoutingRepository,
     TenantRepository,
 )
+from tests.conftest import PG_IMAGE
 
 
 def _ensure_psycopg2(url: str) -> str:
@@ -41,7 +42,7 @@ def _run_control_migrations(url: str) -> None:
 @pytest.fixture(scope="module")
 def control_plane_session() -> Session:
     """Postgres with control plane schema; one container shared across module. Yields a Session."""
-    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
+    with PostgresContainer(PG_IMAGE) as postgres:
         url = postgres.get_connection_url()
         url = _ensure_psycopg2(url)
         engine = create_engine(url)

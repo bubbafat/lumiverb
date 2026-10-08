@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from testcontainers.postgres import PostgresContainer
 
-from tests.conftest import _ensure_psycopg2
+from tests.conftest import PG_IMAGE, _ensure_psycopg2
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BEFORE, AFTER = "u6v7w8x9y0z1", "v7w8x9y0z1a2"
@@ -34,7 +34,7 @@ def _reasons(conn) -> dict[str, str | None]:
 
 @pytest.mark.migration
 def test_clips_of_trashed_libraries_are_marked_and_unmarked() -> None:
-    with PostgresContainer("pgvector/pgvector:pg16") as pg:
+    with PostgresContainer(PG_IMAGE) as pg:
         url = _ensure_psycopg2(pg.get_connection_url())
         engine = create_engine(url)
         with engine.begin() as conn:

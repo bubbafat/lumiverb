@@ -44,13 +44,13 @@ from src.server.upgrade.context import UpgradeContext
 from src.server.upgrade.steps.recompute_centroids_for_trash_filter import (
     RecomputeCentroidsForTrashFilterStep,
 )
-from tests.conftest import _ensure_psycopg2, _provision_tenant_db
+from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db
 
 
 @pytest.fixture(scope="module")
 def tenant_engine():
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    with PostgresContainer("pgvector/pgvector:pg16") as pg:
+    with PostgresContainer(PG_IMAGE) as pg:
         url = _ensure_psycopg2(pg.get_connection_url())
         _provision_tenant_db(url, project_root)
         engine = create_engine(url, future=True)

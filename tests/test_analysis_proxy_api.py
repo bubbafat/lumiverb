@@ -27,7 +27,7 @@ from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
 from src.server.storage.local import LocalStorage
-from tests.conftest import _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
+from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 _STORAGE_USERS = ("artifacts", "assets", "trash", "ingest")
 
@@ -38,7 +38,7 @@ def env(tmp_path_factory):
     storage = LocalStorage(str(tmp_path_factory.mktemp("analysis_storage")))
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-    with PostgresContainer("pgvector/pgvector:pg16") as control_pg:
+    with PostgresContainer(PG_IMAGE) as control_pg:
         control_url = _ensure_psycopg2(control_pg.get_connection_url())
         engine = create_engine(control_url)
         with engine.connect() as conn:
@@ -62,7 +62,7 @@ def env(tmp_path_factory):
             assert r.status_code == 200, r.text
             tenant_id, api_key = r.json()["tenant_id"], r.json()["api_key"]
 
-        with PostgresContainer("pgvector/pgvector:pg16") as tenant_pg:
+        with PostgresContainer(PG_IMAGE) as tenant_pg:
             tenant_url = _ensure_psycopg2(tenant_pg.get_connection_url())
             _provision_tenant_db(tenant_url, project_root)
 

@@ -21,7 +21,7 @@ from src.server.upgrade.step import UpgradeStepInfo
 from src.server.upgrade.steps.clear_clobbered_video_preview_keys import (
     ClearClobberedVideoPreviewKeysStep,
 )
-from tests.conftest import _ensure_psycopg2, _provision_tenant_db
+from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +130,7 @@ def test_run_treats_none_rowcount_as_zero() -> None:
 @pytest.fixture(scope="module")
 def upgrade_db():
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    with PostgresContainer("pgvector/pgvector:pg16") as pg:
+    with PostgresContainer(PG_IMAGE) as pg:
         url = _ensure_psycopg2(pg.get_connection_url())
         _provision_tenant_db(url, project_root)
         engine = create_engine(url)
