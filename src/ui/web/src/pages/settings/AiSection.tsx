@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiError,
@@ -68,6 +69,8 @@ export default function AiSection() {
   const { data: user } = useQuery({ queryKey: ["settings", "me"], queryFn: getCurrentUser });
   const { data: ai, isLoading } = useQuery({ queryKey: AI_QUERY_KEY, queryFn: getAiSettings, refetchInterval: 30_000 });
   const [adding, setAdding] = useState(false);
+  // The model a job had before an admin changed it here: what it made is now stale.
+  const [replaced, setReplaced] = useState<{ label: string; model: string } | null>(null);
   if (isLoading || !ai) {
     return <div className="h-32 rounded-lg border border-gray-700/50 bg-gray-900/50 animate-pulse" />;
   }
@@ -112,8 +115,24 @@ export default function AiSection() {
         </h3>
         <p className="text-sm text-gray-500">One per job. Every machine doing a job must offer its model.</p>
         {ai.jobs.map((job) => (
-          <JobModel key={`${job.job}|${job.model}`} ai={ai} job={job} admin={admin} />
+          <JobModel
+            key={`${job.job}|${job.model}`}
+            ai={ai}
+            job={job}
+            admin={admin}
+            onChanged={(old) => setReplaced(old ? { label: job.label, model: old } : null)}
+          />
         ))}
+        {replaced && (
+          <p role="status" className="text-sm text-amber-200">
+            {replaced.label} made with {replaced.model} are now stale. They're made again only when you upgrade them
+            in{" "}
+            <Link to="/settings/processing" className="text-indigo-300 underline hover:text-indigo-200">
+              Processing
+            </Link>
+            .
+          </p>
+        )}
       </section>
       {!admin && <p className="text-sm text-gray-500">Only admins can change these.</p>}
     </div>
@@ -457,7 +476,18 @@ function MachineForm({ ai, machine, onDone }: { ai: AiSettings; machine?: AiMach
   );
 }
 
-function JobModel({ ai, job, admin }: { ai: AiSettings; job: AiJob; admin: boolean }) {
+function JobModel({
+  ai,
+  job,
+  admin,
+  onChanged,
+}: {
+  ai: AiSettings;
+  job: AiJob;
+  admin: boolean;
+  /** The model it had, when an admin changed it to another one here. */
+  onChanged: (old: string | null) => void;
+}) {
   const queryClient = useQueryClient();
   const [changing, setChanging] = useState(false);
   const [model, setModel] = useState(job.model);
@@ -468,7 +498,8 @@ function JobModel({ ai, job, admin }: { ai: AiSettings; job: AiJob; admin: boole
   const save = useMutation({
     mutationFn: (next: string) => setJobModel(job.job, next),
     onMutate: () => setProblem(null),
-    onSuccess: (next) => {
+    onSuccess: (next, chosen) => {
+      onChanged(job.model && chosen && chosen !== job.model ? job.model : null);
       queryClient.setQueryData(AI_QUERY_KEY, next);
       setChanging(false);
     },
@@ -519,7 +550,7 @@ function JobModel({ ai, job, admin }: { ai: AiSettings; job: AiJob; admin: boole
           </select>
           {job.model && model && model !== job.model && (
             <p className="text-sm text-amber-300">
-              Changing the model marks what was made with {job.model} as made with an old model.
+              What was made with {job.model} becomes stale: it's made again only when you upgrade it in Processing.
             </p>
           )}
           {problem && (

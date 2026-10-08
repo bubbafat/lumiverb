@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
 import AiSection, { aiHasProblem, ago } from "./AiSection";
 import type { AiMachine, AiSettings } from "../../api/client";
 
@@ -99,7 +100,9 @@ function renderSection() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <AiSection />
+      <MemoryRouter>
+        <AiSection />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -233,7 +236,7 @@ describe("AiSection", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Change the model for Descriptions & text" }));
     const select = screen.getByLabelText("Model for Descriptions & text");
     fireEvent.change(select, { target: { value: "llava:13b" } });
-    expect(screen.getByText(/marks what was made with qwen3-vl:8b as made with an old model/)).toBeTruthy();
+    expect(screen.getByText(/What was made with qwen3-vl:8b becomes stale/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect((await screen.findByRole("alert")).textContent).toContain("Brain: qwen3-vl:8b");
 
@@ -241,6 +244,9 @@ describe("AiSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await screen.findByText(/llava:13b/, { selector: "p" });
     expect(lastSent("PUT", "/ai/jobs/vision")!.body).toEqual({ model: "llava:13b" });
+    // What the old model made is stale now: Processing upgrades it.
+    const note = await screen.findByText(/Descriptions & text made with qwen3-vl:8b are now stale/);
+    expect(within(note).getByRole("link", { name: "Processing" }).getAttribute("href")).toBe("/settings/processing");
   });
 });
 
