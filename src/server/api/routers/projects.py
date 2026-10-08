@@ -65,6 +65,7 @@ class ProjectItem(BaseModel):
     updated_at: str
     status: str = "active"  # active | archived
     archived_at: str | None = None
+    deleted_at: str | None = None  # in the trash when set
     # Pre-rename name of project_id, for macOS/iOS builds that still read it.
     collection_id: str | None = None
 
@@ -76,6 +77,15 @@ class ProjectItem(BaseModel):
 
 class ProjectListResponse(BaseModel):
     items: list[ProjectItem]
+
+
+class EmptyTrashRequest(BaseModel):
+    # Which trashed projects to delete for good; all of the caller's when omitted.
+    project_ids: list[str] | None = None
+
+
+class EmptyTrashResponse(BaseModel):
+    deleted: int
 
 
 class AssetIdsRequest(BaseModel):
@@ -164,7 +174,23 @@ def _project_to_item(
         updated_at=col.updated_at.isoformat(),
         status=col.status,
         archived_at=col.archived_at.isoformat() if col.archived_at else None,
+        deleted_at=col.deleted_at.isoformat() if col.deleted_at else None,
     )
+
+
+def _sync_public_index(request: Request, project_id: str, *, public: bool) -> None:
+    """Keep the control plane's public_projects index, which routes
+    unauthenticated public links to this tenant, in step with visibility."""
+    tenant_id = getattr(request.state, "tenant_id", None)
+    connection_string = getattr(request.state, "connection_string", None)
+    if not (tenant_id and connection_string):
+        return
+    with get_control_session() as ctrl_session:
+        pub_repo = PublicProjectRepository(ctrl_session)
+        if public:
+            pub_repo.upsert(project_id, tenant_id, connection_string)
+        else:
+            pub_repo.delete(project_id)
 
 
 def _get_project_or_404(repo: ProjectRepository, project_id: str):
@@ -206,6 +232,7 @@ def _require_static(col) -> None:
 @router.post("", response_model=ProjectItem, status_code=201)
 def create_project(
     body: CreateProjectRequest,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
     user_id: Annotated[str, Depends(get_current_user_id)],
@@ -232,6 +259,8 @@ def create_project(
         type=body.type,
         saved_query=body.saved_query,
     )
+    if col.visibility == "public":
+        _sync_public_index(request, col.project_id, public=True)
 
     if body.asset_ids:
         asset_repo = AssetRepository(session)
@@ -249,15 +278,43 @@ def list_projects(
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
     user_id: Annotated[str, Depends(get_current_user_id)],
-    status: Literal["active", "archived", "all"] = "active",
+    status: Literal["active", "archived", "all", "trashed"] = "active",
 ) -> ProjectListResponse:
-    """List projects owned by user + shared projects. Active only unless status says otherwise."""
+    """List projects owned by user + shared projects. Active only unless status
+    says otherwise; "all" is active and archived. "trashed" is the caller's
+    own trash, and trashed projects appear nowhere else."""
     repo = ProjectRepository(session)
-    statuses = ("active", "archived") if status == "all" else (status,)
-    projects = repo.list_for_user(user_id, statuses=statuses)
+    if status == "trashed":
+        projects = repo.list_trashed(user_id)
+    else:
+        statuses = ("active", "archived") if status == "all" else (status,)
+        projects = repo.list_for_user(user_id, statuses=statuses)
     return ProjectListResponse(
         items=[_project_to_item(c, repo, user_id, session=session) for c in projects]
     )
+
+
+@router.post("/empty-trash", response_model=EmptyTrashResponse)
+def empty_project_trash(
+    body: EmptyTrashRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> EmptyTrashResponse:
+    """Delete trashed projects for good: the named ones, or the caller's whole
+    trash. Only the caller's own trash; active projects are never touched.
+    The clips stay in their libraries."""
+    repo = ProjectRepository(session)
+    doomed = repo.list_trashed(user_id)
+    if body.project_ids is not None:
+        wanted = set(body.project_ids)
+        doomed = [c for c in doomed if c.project_id in wanted]
+    for col in doomed:
+        if col.visibility == "public":
+            with get_control_session() as ctrl_session:
+                PublicProjectRepository(ctrl_session).delete(col.project_id)
+        repo.delete(col.project_id)
+    return EmptyTrashResponse(deleted=len(doomed))
 
 
 @router.get("/{project_id}", response_model=ProjectItem)
@@ -320,17 +377,8 @@ def update_project(
 
     col = repo.update(project_id, **kwargs)
 
-    # Maintain public_projects control plane index
     if body.visibility is not None and body.visibility != old_visibility:
-        tenant_id = getattr(request.state, "tenant_id", None)
-        connection_string = getattr(request.state, "connection_string", None)
-        if tenant_id and connection_string:
-            with get_control_session() as ctrl_session:
-                pub_repo = PublicProjectRepository(ctrl_session)
-                if col.visibility == "public":
-                    pub_repo.upsert(project_id, tenant_id, connection_string)
-                else:
-                    pub_repo.delete(project_id)
+        _sync_public_index(request, project_id, public=col.visibility == "public")
 
     return _project_to_item(col, repo, user_id, session=session)
 
@@ -343,16 +391,33 @@ def delete_project(
     _: Annotated[None, Depends(require_editor)],
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> None:
-    """Delete a project. Only the owner can delete."""
+    """Move a project to the trash. Only the owner can. It disappears
+    everywhere, its public link included, until restored; emptying the trash
+    deletes it for good."""
     repo = ProjectRepository(session)
     col = _get_project_or_404(repo, project_id)
     _require_owner(col, user_id)
-    was_public = col.visibility == "public"
-    repo.delete(project_id)
+    # The public_projects row stays, so a restored public project's link
+    # works again; the public routes treat a trashed project as missing.
+    repo.trash(project_id)
 
-    if was_public:
-        with get_control_session() as ctrl_session:
-            PublicProjectRepository(ctrl_session).delete(project_id)
+
+@router.post("/{project_id}/restore", status_code=204)
+def restore_project(
+    project_id: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> None:
+    """Take a project out of the trash, back to active or archived as it
+    was. 404 unless it's in the caller's trash."""
+    repo = ProjectRepository(session)
+    col = repo.get_by_id(project_id, include_trashed=True)
+    if col is None or col.deleted_at is None:
+        raise HTTPException(status_code=404, detail="Project not in the trash")
+    if col.owner_user_id is not None and col.owner_user_id != user_id:
+        raise HTTPException(status_code=404, detail="Project not in the trash")
+    repo.restore(project_id)
 
 
 # ---------------------------------------------------------------------------

@@ -1824,10 +1824,12 @@ class ProjectRepository:
         self._session.refresh(project)
         return project
 
-    def get_by_id(self, project_id: str) -> Project | None:
-        return self._session.exec(
-            select(Project).where(Project.project_id == project_id)
-        ).first()
+    def get_by_id(self, project_id: str, *, include_trashed: bool = False) -> Project | None:
+        """A project by id. A trashed one counts as gone unless include_trashed."""
+        stmt = select(Project).where(Project.project_id == project_id)
+        if not include_trashed:
+            stmt = stmt.where(Project.deleted_at.is_(None))  # type: ignore[union-attr]
+        return self._session.exec(stmt).first()
 
     def list_for_user(self, user_id: str, *, statuses: tuple[str, ...] = ("active",)) -> list[Project]:
         """Return projects owned by user + shared projects, in the given lifecycle states."""
@@ -1841,10 +1843,49 @@ class ProjectRepository:
                         Project.visibility.in_(["shared", "public"]),  # type: ignore[union-attr]
                     ),
                     Project.status.in_(statuses),  # type: ignore[attr-defined]
+                    Project.deleted_at.is_(None),  # type: ignore[union-attr]
                 )
                 .order_by(Project.created_at.desc())  # type: ignore[attr-defined]
             ).all()
         )
+
+    def list_trashed(self, user_id: str) -> list[Project]:
+        """The user's trash: projects they own (or nobody owns) that were
+        deleted, most recently deleted first."""
+        return list(
+            self._session.exec(
+                select(Project)
+                .where(
+                    or_(
+                        Project.owner_user_id == user_id,
+                        Project.owner_user_id.is_(None),  # type: ignore[union-attr]
+                    ),
+                    Project.deleted_at.is_not(None),  # type: ignore[union-attr]
+                )
+                .order_by(Project.deleted_at.desc())  # type: ignore[union-attr]
+            ).all()
+        )
+
+    def trash(self, project_id: str) -> bool:
+        """Move a project to the trash. False if it's missing or already there."""
+        col = self.get_by_id(project_id)
+        if col is None:
+            return False
+        col.deleted_at = utcnow()
+        self._session.add(col)
+        self._session.commit()
+        return True
+
+    def restore(self, project_id: str) -> bool:
+        """Take a project out of the trash. False if it isn't in the trash."""
+        col = self.get_by_id(project_id, include_trashed=True)
+        if col is None or col.deleted_at is None:
+            return False
+        col.deleted_at = None
+        col.updated_at = utcnow()
+        self._session.add(col)
+        self._session.commit()
+        return True
 
     def update(
         self,
@@ -1883,7 +1924,8 @@ class ProjectRepository:
         return col
 
     def delete(self, project_id: str) -> bool:
-        col = self.get_by_id(project_id)
+        """Delete a project for good, trashed or not. Its clips stay."""
+        col = self.get_by_id(project_id, include_trashed=True)
         if col is None:
             return False
         self._session.delete(col)

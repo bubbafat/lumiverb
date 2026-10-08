@@ -883,3 +883,190 @@ def test_paging_with_undated_clips_returns_each_clip_once(projects_env, directio
     # Every advertised sort column pages too (exposure: all NULL here)
     exposure = pages("/v1/query", {"f": f"library:{lib}", "sort": "exposure_time_us", "dir": direction})
     assert sorted(exposure) == expected
+
+
+@pytest.mark.slow
+def test_a_project_created_public_has_a_working_link(projects_env):
+    client, api_key, library_id = projects_env
+    asset_id = _ingest_asset(client, api_key, library_id, "public/at-create.jpg")
+    r = client.post(
+        "/v1/projects", json={"name": "Public from the start", "asset_ids": [asset_id], "visibility": "public"},
+        headers=_headers(api_key),
+    )
+    project_id = r.json()["project_id"]
+    assert client.get(f"/v1/public/projects/{project_id}").status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Trash: delete -> trash -> restore | delete forever (same pattern as assets)
+# ---------------------------------------------------------------------------
+
+
+def _project(client, api_key, name, asset_ids=(), **fields) -> str:
+    r = client.post(
+        "/v1/projects", json={"name": name, "asset_ids": list(asset_ids), **fields},
+        headers=_headers(api_key),
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["project_id"]
+
+
+def _trashed(client, api_key) -> dict[str, dict]:
+    r = client.get("/v1/projects", params={"status": "trashed"}, headers=_headers(api_key))
+    assert r.status_code == 200, r.text
+    return {p["project_id"]: p for p in r.json()["items"]}
+
+
+def _other_user_key(client, api_key) -> str:
+    r = client.post("/v1/keys", json={"label": "other", "role": "editor"}, headers=_headers(api_key))
+    assert r.status_code in (200, 201), r.text
+    return r.json()["plaintext"]
+
+
+@pytest.mark.slow
+def test_delete_moves_a_project_to_the_trash_with_its_clips(projects_env):
+    client, api_key, library_id = projects_env
+    asset_id = _ingest_asset(client, api_key, library_id, "trash/clip.jpg")
+    project_id = _project(client, api_key, "Customer Video 456", [asset_id])
+
+    assert client.delete(f"/v1/projects/{project_id}", headers=_headers(api_key)).status_code == 204
+
+    assert client.get(f"/v1/projects/{project_id}", headers=_headers(api_key)).status_code == 404
+    assert project_id not in _ids(client, api_key)
+    assert project_id not in _ids(client, api_key, status="archived")
+    assert project_id not in _ids(client, api_key, status="all")
+    trashed = _trashed(client, api_key)
+    assert trashed[project_id]["deleted_at"] is not None
+    assert trashed[project_id]["asset_count"] == 1
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("archived", [False, True])
+def test_restore_puts_a_project_back_where_it_was(projects_env, archived):
+    client, api_key, library_id = projects_env
+    asset_id = _ingest_asset(client, api_key, library_id, f"trash/restore-{archived}.jpg")
+    project_id = _project(client, api_key, f"Restore {archived}", [asset_id])
+    if archived:
+        client.patch(f"/v1/projects/{project_id}", json={"status": "archived"}, headers=_headers(api_key))
+    client.delete(f"/v1/projects/{project_id}", headers=_headers(api_key))
+
+    r = client.post(f"/v1/projects/{project_id}/restore", headers=_headers(api_key))
+    assert r.status_code == 204, r.text
+
+    item = client.get(f"/v1/projects/{project_id}", headers=_headers(api_key)).json()
+    assert item["status"] == ("archived" if archived else "active")
+    assert item["deleted_at"] is None
+    assert project_id in _ids(client, api_key, status="archived" if archived else "active")
+    assert project_id not in _trashed(client, api_key)
+    assets = client.get(f"/v1/projects/{project_id}/assets", headers=_headers(api_key)).json()
+    assert [a["asset_id"] for a in assets["items"]] == [asset_id]
+
+
+@pytest.mark.slow
+def test_restore_needs_a_project_in_the_trash(projects_env):
+    client, api_key, _ = projects_env
+    project_id = _project(client, api_key, "Not trashed")
+    assert client.post(f"/v1/projects/{project_id}/restore", headers=_headers(api_key)).status_code == 404
+    assert client.post("/v1/projects/prj_nonexistent/restore", headers=_headers(api_key)).status_code == 404
+
+
+@pytest.mark.slow
+def test_a_trashed_project_is_gone_everywhere_else(projects_env):
+    client, api_key, library_id = projects_env
+    asset_id = _ingest_asset(client, api_key, library_id, "trash/gone.jpg")
+    other = _ingest_asset(client, api_key, library_id, "trash/gone-other.jpg")
+    project_id = _project(client, api_key, "Gone", [asset_id])
+    client.delete(f"/v1/projects/{project_id}", headers=_headers(api_key))
+
+    h = _headers(api_key)
+    assert client.get(f"/v1/projects/{project_id}/assets", headers=h).status_code == 404
+    assert client.get(f"/v1/projects/{project_id}/export", params={"format": "fcp7"}, headers=h).status_code == 404
+    assert client.post(f"/v1/projects/{project_id}/assets", json={"asset_ids": [other]}, headers=h).status_code == 404
+    assert client.patch(f"/v1/projects/{project_id}", json={"name": "Renamed"}, headers=h).status_code == 404
+    assert client.delete(f"/v1/projects/{project_id}", headers=h).status_code == 404
+    # The Swift apps still use the old paths.
+    assert client.get(f"/v1/collections/{project_id}", headers=h).status_code == 404
+
+
+@pytest.mark.slow
+def test_the_old_collections_path_moves_to_the_trash_too(projects_env):
+    client, api_key, _ = projects_env
+    project_id = _project(client, api_key, "Deleted from the Mac app")
+    assert client.delete(f"/v1/collections/{project_id}", headers=_headers(api_key)).status_code == 204
+    assert project_id in _trashed(client, api_key)
+
+
+@pytest.mark.slow
+def test_a_trashed_public_link_stops_working_until_restored(projects_env):
+    client, api_key, library_id = projects_env
+    asset_id = _ingest_asset(client, api_key, library_id, "trash/public.jpg")
+    project_id = _project(client, api_key, "Public reel", [asset_id])
+    client.patch(f"/v1/projects/{project_id}", json={"visibility": "public"}, headers=_headers(api_key))
+    assert client.get(f"/v1/public/projects/{project_id}").status_code == 200
+
+    client.delete(f"/v1/projects/{project_id}", headers=_headers(api_key))
+    assert client.get(f"/v1/public/projects/{project_id}").status_code == 404
+    assert client.get(f"/v1/public/projects/{project_id}/assets").status_code == 404
+
+    client.post(f"/v1/projects/{project_id}/restore", headers=_headers(api_key))
+    assert client.get(f"/v1/public/projects/{project_id}").status_code == 200
+
+
+@pytest.mark.slow
+def test_empty_trash_deletes_only_the_chosen_projects_forever(projects_env):
+    client, api_key, library_id = projects_env
+    asset_id = _ingest_asset(client, api_key, library_id, "trash/forever.jpg")
+    doomed = _project(client, api_key, "Doomed", [asset_id], visibility="public")
+    kept = _project(client, api_key, "Kept in trash")
+    assert client.get(f"/v1/public/projects/{doomed}").status_code == 200
+    for pid in (doomed, kept):
+        client.delete(f"/v1/projects/{pid}", headers=_headers(api_key))
+
+    r = client.post("/v1/projects/empty-trash", json={"project_ids": [doomed]}, headers=_headers(api_key))
+    assert r.status_code == 200, r.text
+    assert r.json() == {"deleted": 1}
+
+    trashed = _trashed(client, api_key)
+    assert doomed not in trashed and kept in trashed
+    assert client.post(f"/v1/projects/{doomed}/restore", headers=_headers(api_key)).status_code == 404
+    # Gone from the public index too, so the link can't reach the tenant.
+    assert client.get(f"/v1/public/projects/{doomed}").status_code in (401, 404)
+    # The clips themselves stay in the library.
+    page = client.get(f"/v1/assets/page?library_id={library_id}", headers=_headers(api_key)).json()
+    assert asset_id in [a["asset_id"] for a in page["items"]]
+
+
+@pytest.mark.slow
+def test_empty_trash_leaves_active_projects_and_other_peoples_trash(projects_env):
+    client, api_key, _ = projects_env
+    other_key = _other_user_key(client, api_key)
+    mine = _project(client, api_key, "Mine, trashed")
+    active = _project(client, api_key, "Mine, active")
+    theirs = _project(client, other_key, "Theirs, trashed")
+    client.delete(f"/v1/projects/{mine}", headers=_headers(api_key))
+    client.delete(f"/v1/projects/{theirs}", headers=_headers(other_key))
+
+    # Naming an active project or someone else's doesn't delete it.
+    r = client.post("/v1/projects/empty-trash", json={"project_ids": [active, theirs]}, headers=_headers(api_key))
+    assert r.json() == {"deleted": 0}
+    r = client.post("/v1/projects/empty-trash", json={}, headers=_headers(api_key))
+    assert r.status_code == 200, r.text
+
+    assert mine not in _trashed(client, api_key)
+    assert active in _ids(client, api_key)
+    assert theirs in _trashed(client, other_key)
+
+
+@pytest.mark.slow
+def test_only_the_owner_trashes_restores_or_sees_the_trash(projects_env):
+    client, api_key, _ = projects_env
+    other_key = _other_user_key(client, api_key)
+    project_id = _project(client, api_key, "Owner's shared project", visibility="shared")
+
+    assert client.delete(f"/v1/projects/{project_id}", headers=_headers(other_key)).status_code == 403
+    client.delete(f"/v1/projects/{project_id}", headers=_headers(api_key))
+
+    assert project_id not in _ids(client, other_key)
+    assert project_id not in _trashed(client, other_key)
+    assert client.post(f"/v1/projects/{project_id}/restore", headers=_headers(other_key)).status_code == 404
+    assert project_id in _trashed(client, api_key)
