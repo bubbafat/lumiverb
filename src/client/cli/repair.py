@@ -8,16 +8,22 @@ import json
 import logging
 import multiprocessing as mp
 from concurrent.futures import Future, ThreadPoolExecutor, wait, FIRST_COMPLETED
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, MofNCompleteColumn, TimeRemainingColumn, SpinnerColumn
 from rich.table import Table
 
 from src.client.cli.client import LumiverbClient
+from src.client.video.analysis_proxy import AnalysisProxySettings, RenderError, render_analysis_proxy, render_timeout
 from src.client.video.probe import probe_video
 from src.client.workers.faces.insightface_provider import InsightFaceProvider
 from src.shared.io_utils import resolve_source_path
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from src.client.proxy.analysis_cache import AnalysisProxyCache
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +44,8 @@ def _drain(inflight: set[Future]) -> set[Future]:
     return inflight
 
 
-REPAIR_TYPES = ("probe", "embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all")
-RepairType = Literal["probe", "embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all"]
+REPAIR_TYPES = ("probe", "render", "embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all")
+RepairType = Literal["probe", "render", "embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all"]
 
 
 class _RepairStats:
@@ -123,6 +129,41 @@ def _probe_one(client: LumiverbClient, lib_root: "Path", asset: dict) -> str:
         logger.warning("Storing probe failed for %s: %s", asset["rel_path"], exc)
         return "failed"
     return "ok"
+
+
+def _render_one(
+    client: LumiverbClient,
+    lib_root: Path,
+    asset: dict,
+    settings: AnalysisProxySettings,
+    cache: AnalysisProxyCache,
+) -> str:
+    """Render, upload and cache one video's analysis proxy. Returns "ok", "missing" or "failed"."""
+    source = resolve_source_path(lib_root, asset["rel_path"])
+    if not source.is_file():
+        logger.warning("Source file not found for %s: %s", asset["asset_id"], asset["rel_path"])
+        return "missing"
+    # Rendered beside the cache (same filesystem, so put() is a rename),
+    # under a name eviction ignores.
+    work = cache.path_for(asset["asset_id"]).with_suffix(".rendering")
+    work.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        render_analysis_proxy(source, work, settings, timeout=render_timeout(asset.get("duration_sec")))
+        with open(work, "rb") as f:
+            client.post(
+                f"/v1/assets/{asset['asset_id']}/artifacts/analysis_proxy",
+                files={"file": ("analysis.mp4", f, "video/mp4")},
+            )
+        cache.put(asset["asset_id"], work)
+        return "ok"
+    except RenderError as exc:
+        logger.warning("Rendering the analysis proxy for %s failed: %s", asset["rel_path"], exc)
+        return "failed"
+    except Exception as exc:  # noqa: BLE001 — e.g. the upload failed or the asset was trashed
+        logger.warning("Storing the analysis proxy for %s failed: %s", asset["rel_path"], exc)
+        return "failed"
+    finally:
+        work.unlink(missing_ok=True)
 
 
 def _transcribe_one(
@@ -256,6 +297,7 @@ def _page_missing(
     missing_scene_vision: bool = False,
     missing_transcription: bool = False,
     missing_probe: bool = False,
+    missing_analysis_proxy: bool = False,
 ) -> list[dict]:
     """Page through assets matching the given missing filter."""
     results: list[dict] = []
@@ -283,6 +325,8 @@ def _page_missing(
             params["missing_transcription"] = "true"
         if missing_probe:
             params["missing_probe"] = "true"
+        if missing_analysis_proxy:
+            params["missing_analysis_proxy"] = "true"
         if cursor:
             params["after"] = cursor
         resp = client.get("/v1/assets/page", params=params)
@@ -794,6 +838,9 @@ def run_repair(
     # Probe first: its duration makes videos eligible for transcription and scenes.
     if job_type in ("probe", "all") and summary.get("missing_probe", 0) > 0:
         plan.append(("probe", summary["missing_probe"], "missing video probe"))
+    # Then the analysis proxies that transcription, scenes and vision read.
+    if job_type in ("render", "all") and summary.get("missing_analysis_proxy", 0) > 0:
+        plan.append(("render", summary["missing_analysis_proxy"], "missing analysis proxy"))
 
     if job_type in ("embed", "all") and summary.get("missing_embeddings", 0) > 0:
         plan.append(("embed", summary["missing_embeddings"], "missing CLIP embeddings"))
@@ -836,6 +883,7 @@ def run_repair(
 
     for label, key, needs_repair in [
         ("Video probe", "missing_probe", job_type in ("probe", "all")),
+        ("Analysis proxy", "missing_analysis_proxy", job_type in ("render", "all")),
         ("Proxy", "missing_proxy", job_type in ("proxy", "all")),
         ("EXIF", "missing_exif", job_type in ("exif", "all")),
         ("Embeddings", "missing_embeddings", job_type in ("embed", "all")),
@@ -890,6 +938,19 @@ def run_repair(
     # Shared proxy cache: generates from local source → server download → cached at configured size
     from src.client.proxy.proxy_cache import ProxyCache
     proxy_cache = ProxyCache(max_edge=_cfg.proxy_max_edge, root_path=root_path, client=client)
+    # Videos are analyzed from their analysis proxies, never the originals.
+    from src.client.proxy.analysis_cache import AnalysisProxyCache
+    analysis_cache = AnalysisProxyCache(client)
+
+    def _waiting_for_proxy(assets: list[dict]) -> list[dict]:
+        """Split off videos without an analysis proxy yet, and say so."""
+        waiting = [a for a in assets if not a.get("has_analysis_proxy")]
+        if waiting:
+            console.print(
+                f"  {len(waiting):,} wait for an analysis proxy "
+                f"(rendered while the library's storage is reachable)."
+            )
+        return [a for a in assets if a.get("has_analysis_proxy")]
 
     for repair_type, count, desc in plan:
         if repair_type == "embed":
@@ -1139,6 +1200,37 @@ def run_repair(
                     progress.advance(tid, 1)
                     progress.update(tid, ok=stats.processed, fail=stats.failed)
 
+        elif repair_type == "render":
+            console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
+
+            # Rendering reads the originals, so it waits for their storage.
+            lib_root = reachable_root(library)
+            if lib_root is None:
+                console.print(f"[yellow]Library root not accessible: {_here(library)}[/yellow]")
+                console.print("[yellow]Analysis proxies are rendered once it's reachable. Skipping.[/yellow]")
+                continue
+
+            assets = _filter(_page_missing(client, library_id, missing_analysis_proxy=True))
+            if not assets:
+                console.print("No assets found (already rendered?).")
+                continue
+
+            settings = AnalysisProxySettings.from_config()
+            progress = _make_progress(console)
+            with progress:
+                tid = progress.add_task("Render", total=len(assets), ok=0, fail=0)
+                for a in assets:
+                    outcome = _render_one(client, lib_root, a, settings, analysis_cache)
+                    with stats.lock:
+                        if outcome == "ok":
+                            stats.processed += 1
+                        elif outcome == "missing":
+                            stats.skipped += 1
+                        else:
+                            stats.failed += 1
+                    progress.advance(tid, 1)
+                    progress.update(tid, ok=stats.processed, fail=stats.failed)
+
         elif repair_type == "transcribe":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
 
@@ -1146,13 +1238,10 @@ def run_repair(
             if not assets:
                 console.print("No assets found (already transcribed?).")
                 continue
-
-            # Transcription needs source files (for audio extraction)
-            from src.shared.io_utils import resolve_source_path
-            lib_root = reachable_root(library)
-            if lib_root is None:
-                console.print(f"[yellow]Library root not accessible: {_here(library)}[/yellow]")
-                console.print("[yellow]Transcription requires source video files. Skipping.[/yellow]")
+            # Transcription reads the analysis proxy, so it runs while the
+            # originals' storage sleeps.
+            assets = _waiting_for_proxy(assets)
+            if not assets:
                 continue
 
             progress = _make_progress(console)
@@ -1162,10 +1251,9 @@ def run_repair(
                     rel_path = a["rel_path"]
                     asset_id = a["asset_id"]
 
-                    # Resolve source file
-                    source_path = resolve_source_path(lib_root, rel_path) if lib_root else None
-                    if source_path is None or not source_path.exists():
-                        logger.warning("Source file not found for %s: %s", asset_id, rel_path)
+                    source_path = analysis_cache.get(asset_id)
+                    if source_path is None:
+                        logger.warning("No analysis proxy for %s: %s", asset_id, rel_path)
                         with stats.lock:
                             stats.skipped += 1
                         progress.advance(tid, 1)
@@ -1203,14 +1291,14 @@ def run_repair(
         elif repair_type == "video-scenes":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
 
-            root_path = reachable_root(library)
-            if root_path is None:
-                console.print("[red]Library root not accessible — cannot run scene detection[/red]")
-                continue
-
             assets = _filter(_page_missing(client, library_id, missing_video_scenes=True))
             if not assets:
                 console.print("No assets found (already repaired?).")
+                continue
+            # Scenes are found in the analysis proxy, so this runs while the
+            # originals' storage sleeps.
+            assets = _waiting_for_proxy(assets)
+            if not assets:
                 continue
 
             videos = [
@@ -1228,7 +1316,7 @@ def run_repair(
                 tid = progress.add_task("Scenes", total=len(indexable), ok=0, fail=0)
                 run_video_index(
                     client=client,
-                    root_path=root_path,
+                    source_for=lambda v: analysis_cache.get(v["asset_id"]),
                     videos=indexable,
                     console=console,
                     progress=progress,
@@ -1237,11 +1325,6 @@ def run_repair(
 
         elif repair_type == "scene-vision":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
-
-            root_path = reachable_root(library)
-            if root_path is None:
-                console.print("[red]Library root not accessible — cannot run scene vision[/red]")
-                continue
 
             # Resolve vision config
             from src.client.cli.ingest import _resolve_vision_config
@@ -1258,6 +1341,10 @@ def run_repair(
             if not assets:
                 console.print("No assets found (already repaired?).")
                 continue
+            # Representative frames come from the analysis proxy.
+            assets = _waiting_for_proxy(assets)
+            if not assets:
+                continue
 
             videos = [{"asset_id": a["asset_id"], "rel_path": a["rel_path"]} for a in assets]
 
@@ -1267,7 +1354,7 @@ def run_repair(
                 tid = progress.add_task("Scene vision", total=len(videos), ok=0, fail=0)
                 run_video_enrich(
                     client=client,
-                    root_path=root_path,
+                    source_for=lambda v: analysis_cache.get(v["asset_id"]),
                     videos=videos,
                     vision_provider=scene_vision_provider,
                     vision_model_id=vision_model_id,

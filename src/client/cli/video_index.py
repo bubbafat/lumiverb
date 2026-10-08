@@ -1,7 +1,7 @@
 """Video scene detection and enrichment orchestration for CLI ingest and repair.
 
-Scene detection: runs VideoScanner + SceneSegmenter on local video files,
-submits scene boundaries to the server via the chunk API.
+Scene detection: runs VideoScanner + SceneSegmenter on each video's
+analysis proxy, submits scene boundaries to the server via the chunk API.
 
 Scene enrichment: extracts rep frame JPEGs at each scene's timestamp,
 uploads as artifacts, runs vision AI, and syncs to search.
@@ -15,6 +15,7 @@ import io
 import logging
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from rich.console import Console
@@ -23,8 +24,10 @@ from rich.progress import Progress
 from src.client.cli.client import LumiverbClient
 from src.client.video.clip_extractor import extract_video_frame_detailed
 from src.client.video.scene_segmenter import SceneSegmenter
-from src.shared.io_utils import resolve_source_path
 from src.client.video.video_scanner import SyncError, VideoScanner
+
+# Where to read a video from: its analysis proxy, or None when there isn't one.
+SourceFor = Callable[[dict], Path | None]
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +143,7 @@ def index_video_scenes(
 def run_video_index(
     *,
     client: LumiverbClient,
-    root_path: Path,
+    source_for: SourceFor,
     videos: list[dict],
     console: Console,
     progress: Progress,
@@ -158,10 +161,10 @@ def run_video_index(
         asset_id = video["asset_id"]
         rel_path = video["rel_path"]
         duration_sec = video["duration_sec"]
-        source_path = resolve_source_path(root_path, rel_path).resolve()
+        source_path = source_for(video)
 
-        if not source_path.is_file():
-            logger.warning("video-index: %s — source file not found, skipping", rel_path)
+        if source_path is None or not source_path.is_file():
+            logger.warning("video-index: %s — no analysis proxy, skipping", rel_path)
             fail += 1
             progress.advance(task_id, 1)
             progress.update(task_id, ok=ok, fail=fail)
@@ -303,7 +306,7 @@ def enrich_video_scenes(
 def run_video_enrich(
     *,
     client: LumiverbClient,
-    root_path: Path,
+    source_for: SourceFor,
     videos: list[dict],
     vision_provider: object | None,
     vision_model_id: str | None,
@@ -322,10 +325,10 @@ def run_video_enrich(
     for video in videos:
         asset_id = video["asset_id"]
         rel_path = video["rel_path"]
-        source_path = resolve_source_path(root_path, rel_path).resolve()
+        source_path = source_for(video)
 
-        if not source_path.is_file():
-            logger.warning("scene-enrich: %s — source file not found, skipping", rel_path)
+        if source_path is None or not source_path.is_file():
+            logger.warning("scene-enrich: %s — no analysis proxy, skipping", rel_path)
             fail += 1
             progress.advance(task_id, 1)
             progress.update(task_id, ok=ok, fail=fail)

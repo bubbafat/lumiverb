@@ -961,7 +961,7 @@ def scan(
             raise typer.Exit(1)
 
 
-ENRICH_TYPES = ("probe", "embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all")
+ENRICH_TYPES = ("probe", "render", "embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all")
 
 
 @app.command("enrich")
@@ -975,16 +975,20 @@ def enrich(
     """Run enrichment on assets with missing pipeline outputs.
 
     Reads proxies from the local cache (populated by scan) and runs
-    inference. On cache miss, downloads the proxy from the server.
+    inference. On cache miss, downloads the proxy from the server. Videos
+    are analyzed from their analysis proxies, so only probe and render need
+    the library's storage to be reachable.
 
     \b
     Job types:
+      probe           — Read frame rate, timecode and audio layout from videos (needs source files)
+      render          — Render full-length analysis proxies of videos (needs source files)
       embed           — Generate missing CLIP embeddings (similarity search)
       vision          — Generate missing AI descriptions and tags
       faces           — Detect faces using InsightFace (face recognition)
       redetect-faces  — Re-run face detection on ALL images with quality gates
       ocr             — Extract text from images via vision AI
-      transcribe      — Transcribe video audio via faster-whisper (needs source files)
+      transcribe      — Transcribe video audio via faster-whisper (from analysis proxies)
       video-scenes    — Run scene detection on unindexed videos
       scene-vision    — Extract rep frames + run vision AI on scenes
       search-sync     — Push stale assets to Quickwit search index
