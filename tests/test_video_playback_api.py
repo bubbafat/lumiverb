@@ -744,7 +744,10 @@ def test_if_range_with_an_old_version_gets_the_whole_new_file(env, media):
 def test_an_unreadable_public_setting_stays_capped():
     from unittest.mock import MagicMock
 
-    from src.server.tenant_settings import PUBLIC_DEFAULT_SECONDS, get_public_video_preview_max_seconds
+    from src.server.tenant_settings import (
+        PUBLIC_DEFAULT_SECONDS,
+        get_public_video_preview_max_seconds,
+    )
 
     session = MagicMock()
     session.get.return_value = MagicMock(value="garbage")
