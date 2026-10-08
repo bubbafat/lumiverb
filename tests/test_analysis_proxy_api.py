@@ -87,7 +87,8 @@ def env(tmp_path_factory):
         _engines.clear()
 
 
-def _ingest(env, rel_path: str, media_type: str = "video", sha: str | None = None) -> str:
+def _ingest(env, rel_path: str, media_type: str = "video", sha: str | None = None,
+            facet: dict | None = None) -> str:
     client, headers, library_id, *_ = env
     from PIL import Image
 
@@ -98,6 +99,8 @@ def _ingest(env, rel_path: str, media_type: str = "video", sha: str | None = Non
             "width": "64", "height": "36"}
     if sha:
         data["exif"] = json.dumps({"sha256": sha})
+    if facet is not None:
+        data["video_facet"] = json.dumps(facet)
     r = client.post("/v1/ingest", data=data, files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=headers)
     assert r.status_code == 200, r.text
     return r.json()["asset_id"]
@@ -300,3 +303,21 @@ def test_cleanup_keeps_proxies_and_removes_orphans(env) -> None:
     assert not orphan.exists()
     assert result.orphan_files >= 1
     assert library_id  # the files lived under this library
+
+
+@pytest.mark.slow
+def test_library_health_counts_videos_waiting_for_a_proxy(env) -> None:
+    # The libraries page shows a library as pending until the brain renders.
+    client, headers, library_id, *_ = env
+
+    def pending() -> int:
+        r = client.get("/v1/libraries/health", headers=headers)
+        assert r.status_code == 200, r.text
+        return next(row["pending"] for row in r.json() if row["library_id"] == library_id)
+
+    before = pending()
+    # Probed, length unknown: nothing else is missing, so only the proxy counts.
+    video = _ingest(env, "health/a.mov", facet={"video_codec": "h264"})
+    assert pending() == before + 1
+    _upload(env, video)
+    assert pending() == before
