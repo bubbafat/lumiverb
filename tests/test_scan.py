@@ -87,6 +87,63 @@ class TestSplitFiles:
         assert len(fast_unchanged) == 1
         assert fast_unchanged[0]["asset_id"] == "id-1"
 
+    def test_fast_unchanged_when_the_server_answers_in_its_own_timezone(self):
+        """A server whose Postgres runs in, say, America/New_York returns the
+        same instant as 08:00-04:00. It's still a match: compare instants,
+        not strings, or every scan re-hashes every file."""
+        from datetime import timedelta
+
+        mtime = datetime(2024, 6, 15, 12, 0, 0, 123456, tzinfo=timezone.utc)
+        f = {"rel_path": "a.jpg", "media_type": "image", "file_size": 5000,
+             "file_mtime": mtime}
+        new_york = timezone(timedelta(hours=-4))
+        existing = {"a.jpg": _ServerAsset(
+            asset_id="id-1", sha256="abc", file_size=5000,
+            file_mtime=mtime.astimezone(new_york).isoformat(),
+        )}
+
+        new, needs_hash, fast_unchanged = _split_files([f], existing)
+        assert len(needs_hash) == 0
+        assert len(fast_unchanged) == 1
+
+    def test_fast_unchanged_reads_a_z_suffix(self):
+        mtime = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        f = {"rel_path": "a.jpg", "media_type": "image", "file_size": 5000,
+             "file_mtime": mtime}
+        existing = {"a.jpg": _ServerAsset(
+            asset_id="id-1", sha256="abc", file_size=5000,
+            file_mtime="2024-06-15T12:00:00Z",
+        )}
+
+        _, needs_hash, fast_unchanged = _split_files([f], existing)
+        assert len(fast_unchanged) == 1
+
+    def test_an_unreadable_server_mtime_needs_hash(self):
+        mtime = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        f = {"rel_path": "a.jpg", "media_type": "image", "file_size": 5000,
+             "file_mtime": mtime}
+        existing = {"a.jpg": _ServerAsset(
+            asset_id="id-1", sha256="abc", file_size=5000, file_mtime="yesterday",
+        )}
+
+        _, needs_hash, fast_unchanged = _split_files([f], existing)
+        assert len(needs_hash) == 1
+        assert len(fast_unchanged) == 0
+
+    def test_a_microsecond_apart_needs_hash(self):
+        """Same instant only: a file touched since is checked."""
+        from datetime import timedelta
+
+        mtime = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        f = {"rel_path": "a.jpg", "media_type": "image", "file_size": 5000,
+             "file_mtime": mtime + timedelta(microseconds=1)}
+        existing = {"a.jpg": _ServerAsset(
+            asset_id="id-1", sha256="abc", file_size=5000, file_mtime=mtime.isoformat(),
+        )}
+
+        _, needs_hash, _ = _split_files([f], existing)
+        assert len(needs_hash) == 1
+
     def test_fast_skip_disabled_by_thorough(self):
         """thorough=True forces hash even when mtime+size match."""
         mtime = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
@@ -267,3 +324,71 @@ class TestPopulateCacheForUnchanged:
         assert stats.cache_populated == 1
         assert (tmp_path / "id-1").read_bytes() == b"server-proxy-bytes"
         assert (tmp_path / "id-1.sha").read_text() == "sha-1"
+
+
+class TestUnchangedFileStat:
+    """A file whose size or mtime changed but whose content didn't (touched,
+    copied back) is hashed and found unchanged. Its new stat goes to the
+    server, or every later scan hashes it again."""
+
+    OLD = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+    NEW = datetime(2025, 1, 2, 3, 4, 5, 678901, tzinfo=timezone.utc)
+
+    def _scan(self, tmp_path: Path, *, local_mtime, local_sha="abc", thorough=False,
+              client: MagicMock | None = None) -> MagicMock:
+        from src.client.cli.scan import run_scan
+
+        root = tmp_path / "lib"
+        root.mkdir(exist_ok=True)
+        (root / "a.jpg").write_bytes(b"x")
+        local = [{"rel_path": "a.jpg", "file_size": 5000, "file_mtime": local_mtime, "media_type": "image",
+                  "ext": ".jpg"}]
+        existing = {"a.jpg": _ServerAsset(asset_id="ast_1", sha256="abc", file_size=5000,
+                                          file_mtime=self.OLD.isoformat(), media_type="image")}
+        client = client or MagicMock()
+        with (
+            patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
+            patch("src.client.cli.scan._load_library_filters", return_value=[]),
+            patch("src.client.cli.scan._walk_library", return_value=local),
+            patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value=existing),
+            patch("src.client.cli.scan._fetch_ignored_paths", return_value=set()),
+            patch("src.client.cli.scan.compute_sha256", return_value=local_sha),
+            patch("src.client.cli.scan._scan_one") as scan_one,
+            patch("src.client.cli.scan.ProxyCache"),
+            patch("src.client.cli.scan._populate_cache_for_unchanged"),
+        ):
+            scan_one.return_value = None
+            client.stats = run_scan(client, {"library_id": "lib_1", "root_path": str(root)},
+                                    console=Console(quiet=True), thorough=thorough)
+        client.scan_one = scan_one
+        return client
+
+    @staticmethod
+    def _stat_posts(client: MagicMock) -> list[dict]:
+        return [c.kwargs["json"] for c in client.post.call_args_list if c.args and c.args[0] == "/v1/assets/upsert"]
+
+    def test_a_touched_file_s_new_mtime_goes_to_the_server(self, tmp_path):
+        client = self._scan(tmp_path, local_mtime=self.NEW)
+        assert self._stat_posts(client) == [{
+            "library_id": "lib_1", "rel_path": "a.jpg", "file_size": 5000,
+            "file_mtime": self.NEW.isoformat(), "media_type": "image",
+        }]
+        client.scan_one.assert_not_called()  # unchanged: not re-ingested
+
+    def test_a_changed_file_is_scanned_not_just_restamped(self, tmp_path):
+        client = self._scan(tmp_path, local_mtime=self.NEW, local_sha="different")
+        assert self._stat_posts(client) == []
+        client.scan_one.assert_called_once()
+
+    def test_a_thorough_scan_of_a_matching_file_sends_nothing(self, tmp_path):
+        client = self._scan(tmp_path, local_mtime=self.OLD, thorough=True)
+        assert self._stat_posts(client) == []
+
+    def test_a_failed_restamp_doesn_t_stop_the_scan(self, tmp_path):
+        from src.client.cli.client import LumiverbAPIError
+
+        client = MagicMock()
+        client.post.side_effect = LumiverbAPIError("internal", "boom", 500)
+        client = self._scan(tmp_path, local_mtime=self.NEW, client=client)
+        assert self._stat_posts(client)  # tried; the next scan hashes it again
+        assert client.stats.unchanged == 1

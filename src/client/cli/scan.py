@@ -195,11 +195,30 @@ def _mtime_size_match(local_file: dict, server: _ServerAsset) -> bool:
         return False
     if local_file["file_size"] != server.file_size:
         return False
-    # Compare mtime: local is a datetime, server is ISO8601 string
+    # Compare instants, not strings: the server answers in its database's
+    # timezone (08:00-04:00 on a box set to New York), the scan in UTC.
     local_mtime = local_file.get("file_mtime")
     if local_mtime is None:
         return False
-    return local_mtime.isoformat() == server.file_mtime
+    try:
+        server_mtime = datetime.fromisoformat(server.file_mtime.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if server_mtime.tzinfo is None:
+        server_mtime = server_mtime.replace(tzinfo=timezone.utc)
+    return local_mtime == server_mtime
+
+
+def _record_file_stat(client: LumiverbClient, library_id: str, f: dict) -> None:
+    """Tell the server a file's current size and mtime, so the next scan's
+    fast check matches. A failure only costs a hash next time."""
+    data = {"library_id": library_id, "rel_path": f["rel_path"], "file_size": f["file_size"],
+            "file_mtime": f["file_mtime"].isoformat() if f.get("file_mtime") else None,
+            "media_type": f["media_type"]}
+    try:
+        client.post("/v1/assets/upsert", json=data)
+    except Exception as exc:  # noqa: BLE001 — never stops a scan
+        logger.warning("Couldn't record the new mtime of %s: %s", f["rel_path"], exc)
 
 
 @dataclass
@@ -951,6 +970,10 @@ def run_scan(
                 unchanged_files.append(f)
                 stats.unchanged += 1
                 scan_progress.advance(tid)
+                # Same content, new size or mtime (touched, copied back): record
+                # it, or every later scan reads the whole file again.
+                if not _mtime_size_match(f, server):
+                    _record_file_stat(client, library_id, f)
 
         while inflight:
             done, inflight = _drain(inflight)
