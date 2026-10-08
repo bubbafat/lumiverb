@@ -33,6 +33,7 @@ import { groupAssetsByDate } from "../lib/groupByDate";
 import { useSelection } from "../lib/useSelection";
 import { useCanEdit } from "../lib/useCanEdit";
 import { useClipActions } from "../lib/useClipActions";
+import { useRevisionRefresh } from "../lib/useRevisionRefresh";
 import { buildVirtualRows, buildFixedGridRows } from "../lib/virtualRows";
 import { useLocalStorage } from "../lib/useLocalStorage";
 // parseSearchQuery available for future prefix query support
@@ -284,7 +285,12 @@ export default function BrowsePage() {
     navigate,
   ]);
 
-  // Poll library revision every 10 seconds; invalidate queries on change
+  // Poll the library's revision every 10 seconds: the server bumps it when
+  // the library's clips change (another tab, another person, a scan). Then
+  // refetch the grid, its facets and the folder counts, at most every 30
+  // seconds while it keeps changing, so a long ingest doesn't reload every
+  // loaded page on every poll. Changes made here refresh themselves
+  // (useClipActions invalidates everything).
   const queryClient = useQueryClient();
   const revisionQuery = useQuery({
     queryKey: ["library-revision", libraryId!],
@@ -292,16 +298,19 @@ export default function BrowsePage() {
     enabled: !!libraryId && canFetchAssets,
     refetchInterval: 10_000,
   });
-  const revision = revisionQuery.data?.revision ?? 0;
-  const prevRevisionRef = useRef(revision);
-  useEffect(() => {
-    if (revision !== prevRevisionRef.current) {
-      prevRevisionRef.current = revision;
-      queryClient.invalidateQueries({ queryKey: ["assets", libraryId!] });
-      queryClient.invalidateQueries({ queryKey: ["directories", libraryId] });
-      queryClient.invalidateQueries({ queryKey: ["facets", libraryId] });
-    }
-  }, [revision, libraryId, queryClient]);
+  const revision = revisionQuery.data?.revision;
+  useRevisionRefresh(
+    `library:${libraryId}`,
+    revision,
+    () => {
+      // Every cached grid and facet set, not just this one: a grid across
+      // libraries holds this library's clips too. Only the ones on screen
+      // refetch now; the rest refetch when next shown.
+      void queryClient.invalidateQueries({ queryKey: ["unified-query"] });
+      void queryClient.invalidateQueries({ queryKey: ["filtered-facets"] });
+      void queryClient.invalidateQueries({ queryKey: ["directories", libraryId] });
+    },
+  );
 
   // Facets scoped to active filters
   const facetsQuery = useQuery({
@@ -368,8 +377,10 @@ export default function BrowsePage() {
   const isError = browseQuery.isError;
 
   // Stable ref for scroll/pagination handlers
+  // A next page waits for a refresh in flight instead of cancelling it (the
+  // default), which would keep the old pages and lose the refresh.
   const fetchNextPageRef = useRef(fetchNextPage);
-  fetchNextPageRef.current = fetchNextPage;
+  fetchNextPageRef.current = () => fetchNextPage({ cancelRefetch: false });
 
   const browseCount = useMemo(() => {
     return browseQuery.data?.pages.flatMap((p) => p?.items ?? []).length ?? 0;
