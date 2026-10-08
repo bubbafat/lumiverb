@@ -115,7 +115,7 @@ The fstab lines don't say `soft` or `hard`, so the mounts are `soft`, the CIFS d
 
 - **Changes.** The Mac reports paths it sees change: `POST /v1/changes`. Each cycle (every 60 s), the worker scans the one folder that covers a library's reported changes, then acknowledges them. A file modified in the last 30 seconds may still be copying, so it waits for the next cycle (one stamped more than 5 minutes in the future came from a camera clock running ahead, and doesn't wait).
 - **Files that fail.** A file that fails to scan doesn't hold back the changes around it. It's tried again on its own after 5 minutes, then 10, 20 and so on, up to once a day. A folder that can't be listed (no permission, or the share timing out mid-scan) keeps its changes for the same retry, and that scan removes nothing.
-- **Safety net.** Each library is scanned in full once a day, in case a report was missed. When each was last scanned in full is kept in `worker-state.json` beside the worker lock (in `XDG_CACHE_HOME/lumiverb`), so a restart or deploy doesn't rescan everything; delete it to force full scans.
+- **Safety net.** Each library is scanned in full once a day, in case a report was missed. When each was last scanned in full is kept in `worker-state.json` beside the worker lock (in `/mnt/ssd2/lumiverb/cache/lumiverb`), so a restart or deploy doesn't rescan everything; delete it to force full scans.
 - **The Mac Studio asleep.** The worker doesn't scan its libraries: an unmounted share looks empty, and an empty mount point is never scanned. It keeps enriching from analysis proxies. Only probing and rendering wait, and they start as soon as the storage is back.
 - **Scanning first.** Each cycle scans every library before enriching any. Enrichment then gets 15 minutes and stops between items, so change reports never wait on a first ingest's days of renders and transcription; it goes on next cycle, least recently enriched library first. Probing and rendering stop as soon as the storage stops answering, rather than waiting out a timeout per file.
 - **Pacing.** Enrichment runs again when a library's counts change, when its storage comes back, or hourly, so a clip that fails every time isn't retried every minute. Within a run, a clip enrichment tried in the last hour waits, so one that fails slowly (a 15-minute render, say) doesn't hold up the clips behind it. After a restart each is tried once more.
@@ -137,6 +137,12 @@ sudo systemctl stop lumiverb-worker
 
 and `sudo systemctl start lumiverb-worker` to carry on. Restarts don't rescan from scratch: files already in are skipped.
 
+To run one cycle by hand, stop the service first; otherwise the run says a worker is already running. A manual run uses the same caches, lock and state as the service: the install sets `cache_home` in the `lumiverb` user's CLI config (`lumiverb config show`).
+
+```bash
+sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb worker --once
+```
+
 ```bash
 sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb library report-changes /mnt/media-01/Media/New\ shoot
 ```
@@ -156,6 +162,12 @@ sudo bash /opt/lumiverb/scripts/update-web.sh
 `update-api.sh` keeps the worker's packages and restarts it.
 
 The repo pins Python 3.12 (`.python-version`), the version the tests run on; this box's own Python is 3.14. The first update after the pin rebuilds `/opt/lumiverb/.venv` on 3.12, which uv downloads for the `lumiverb` user, so that update's dependency step takes a few minutes. Later updates reuse it.
+
+Caches used to live in the `lumiverb` user's home, on the root disk. They are now all under `/mnt/ssd2/lumiverb/cache`, so after updating, the old ones can be deleted:
+
+```bash
+sudo rm -rf /var/lib/lumiverb/.cache/lumiverb
+```
 
 ## Mac app changes (Swift, not built yet)
 

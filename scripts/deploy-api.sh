@@ -350,6 +350,7 @@ JWT_SECRET=${JWT_SECRET}
 # Storage
 STORAGE_PROVIDER=local
 DATA_DIR=${DATA_DIR}
+XDG_CACHE_HOME=${DATA_DIR}/cache
 
 # Search
 QUICKWIT_URL=http://127.0.0.1:${QW_PORT}
@@ -693,6 +694,10 @@ fi
 # ---------------------------------------------------------------------------
 # 14. Worker: where library roots are on this machine, then start it
 # ---------------------------------------------------------------------------
+# Caches, and the worker's lock and state, on the data disk for manual runs
+# as the service user too (sudo -u lumiverb -H lumiverb worker --once), so
+# one never runs beside the service.
+sudo -u "${SVC_USER}" -H "${APP_DIR}/.venv/bin/lumiverb" config set --cache-home "${DATA_DIR}/cache" >/dev/null
 for map in "${ROOT_MAPS[@]}"; do
   sudo -u "${SVC_USER}" -H "${APP_DIR}/.venv/bin/lumiverb" config map-root "${map%%=*}" "${map#*=}"
 done

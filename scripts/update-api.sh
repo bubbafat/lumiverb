@@ -102,10 +102,14 @@ ok "Tenant migrations applied"
 
 # ---------------------------------------------------------------------------
 step "Ensuring data directory"
-DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2-)"
+DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2- || true)"
 if [[ -n "$DATA_DIR" ]]; then
   mkdir -p "$DATA_DIR"/quickwit "$DATA_DIR"/tmp
   chown -R "$SVC_USER":"$SVC_USER" "$DATA_DIR"
+  # Caches, and the worker's lock and state, on the data disk for manual
+  # runs as the service user too, so one never runs beside the service.
+  grep -q '^XDG_CACHE_HOME=' "$ENV_FILE" || echo "XDG_CACHE_HOME=${DATA_DIR}/cache" >> "$ENV_FILE"
+  sudo -u "$SVC_USER" -H "$APP_DIR/.venv/bin/lumiverb" config set --cache-home "${DATA_DIR}/cache" >/dev/null
   ok "Data dir: $DATA_DIR"
 fi
 

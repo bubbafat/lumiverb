@@ -184,6 +184,48 @@ def test_update_makes_the_api_tmpdir():
     assert 'chown -R "$SVC_USER":"$SVC_USER" "$DATA_DIR"' in data_step
 
 
+def test_a_manual_worker_run_finds_the_service_s_lock():
+    # `sudo -u lumiverb -H lumiverb worker --once` gets neither the unit's
+    # XDG_CACHE_HOME nor the env file (root only); the CLI config carries it.
+    text = DEPLOY_API.read_text()
+    env_block = text.split('cat > "$ENV_FILE" <<ENVEOF', 1)[1].split("ENVEOF", 1)[0]
+    assert "\nXDG_CACHE_HOME=${DATA_DIR}/cache\n" in env_block
+    assert 'lumiverb" config set --cache-home "${DATA_DIR}/cache"' in text
+
+
+def _update_data_dir(tmp_path: Path, env_text: str) -> tuple[str, list[str]]:
+    """Run update-api.sh's data-dir step against an env file; returns it and the sudo calls."""
+    env = tmp_path / "env"
+    env.write_text(env_text)
+    calls = tmp_path / "sudo-calls"
+    calls.touch()
+    text = UPDATE_API.read_text()
+    block = text.split('step "Ensuring data directory"', 1)[1].split("# ----", 1)[0]
+    script = (
+        'step() { :; }; ok() { :; }; warn() { :; }; chown() { :; }\n'
+        f'sudo() {{ echo "$*" >> "{calls}"; }}\n'
+        f'ENV_FILE="{env}"; SVC_USER=lumiverb; APP_DIR=/opt/lumiverb\n'
+        + block
+    )
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stdout + out.stderr
+    return env.read_text(), calls.read_text().splitlines()
+
+
+def test_update_points_caches_and_the_worker_lock_at_the_data_disk(tmp_path):
+    data = tmp_path / "data"
+    _update_data_dir(tmp_path, f"DATA_DIR={data}\nAPI_PORT=8100\n")
+    env, calls = _update_data_dir(tmp_path, (tmp_path / "env").read_text())  # reruns add nothing
+    assert env.splitlines().count(f"XDG_CACHE_HOME={data}/cache") == 1
+    assert f"-u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb config set --cache-home {data}/cache" in calls
+
+
+def test_update_without_a_data_dir_leaves_caches_alone(tmp_path):
+    env, calls = _update_data_dir(tmp_path, "API_PORT=8100\n")
+    assert env == "API_PORT=8100\n"
+    assert calls == []
+
+
 DEPLOY_WEB = REPO / "scripts" / "deploy-web.sh"
 
 

@@ -58,9 +58,12 @@ def config_set(
     vision_api_url: Annotated[str | None, typer.Option("--vision-api-url", help="Local vision API URL (overrides tenant default).")] = None,
     vision_api_key: Annotated[str | None, typer.Option("--vision-api-key", help="Local vision API key (overrides tenant default).")] = None,
     vision_model_id: Annotated[str | None, typer.Option("--vision-model-id", help="Vision model ID override (default: auto-discover from API).")] = None,
+    cache_home: Annotated[str | None, typer.Option("--cache-home", help="Where caches and the worker's lock go instead of ~/.cache, unless XDG_CACHE_HOME is set ('' to undo).")] = None,
 ) -> None:
     """Set API URL, API key, and/or admin key in ~/.lumiverb/config.json."""
     cfg = load_config()
+    if cache_home is not None:
+        cfg.cache_home = cache_home.rstrip("/")
     if api_url is not None:
         cfg.api_url = api_url.rstrip("/")
     if api_key is not None:
@@ -90,6 +93,7 @@ def config_show() -> None:
     table.add_row("vision_api_url", cfg.vision_api_url or escape("[not set — will use tenant default]"))
     table.add_row("vision_api_key", escape("[set]") if cfg.vision_api_key else escape("[not set — will use tenant default]"))
     table.add_row("vision_model_id", cfg.vision_model_id or escape("[not set — will auto-discover from API]"))
+    table.add_row("cache_home", cfg.cache_home or escape("[not set — ~/.cache unless XDG_CACHE_HOME]"))
     console.print(table)
     if cfg.root_map:
         console.print("Library roots on this machine (server → here):")
