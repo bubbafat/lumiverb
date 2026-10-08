@@ -23,6 +23,9 @@ class CLIConfig(BaseModel):
     ocr_batch_size: int = 25
     whisper_model: str = "small"
     transcribe_concurrency: int = 1
+    # Library roots as stored on the server -> where they are on this
+    # machine, by path prefix (src/client/cli/roots.py).
+    root_map: dict[str, str] = {}
 
 
 def _config_path() -> Path:

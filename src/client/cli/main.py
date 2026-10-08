@@ -89,6 +89,53 @@ def config_show() -> None:
     table.add_row("vision_api_key", escape("[set]") if cfg.vision_api_key else escape("[not set — will use tenant default]"))
     table.add_row("vision_model_id", cfg.vision_model_id or escape("[not set — will auto-discover from API]"))
     console.print(table)
+    if cfg.root_map:
+        console.print("Library roots on this machine (server → here):")
+        for src, dst in sorted(cfg.root_map.items()):
+            console.print(f"  {escape(src)} → {escape(dst)}", soft_wrap=True)
+
+
+@config_app.command("map-root")
+def config_map_root(
+    server_prefix: Annotated[str, typer.Argument(help="Library root prefix as stored on the server, e.g. /Volumes/media-01.")],
+    local_prefix: Annotated[str, typer.Argument(help="Where that folder is on this machine, e.g. /mnt/media-01.")],
+) -> None:
+    """Map a library root prefix to where it is on this machine.
+
+    Libraries keep the root the editing machine sees, since exports point
+    editors there. Scan and enrich on this machine use the mapped path.
+    """
+    from src.client.cli.roots import _clean
+
+    if not server_prefix.startswith("/") or not local_prefix.startswith("/"):
+        console.print("[red]Both paths must be absolute.[/red]")
+        raise typer.Exit(1)
+    src, dst = _clean(server_prefix), _clean(local_prefix)
+    cfg = load_config()
+    cfg.root_map = {k: v for k, v in cfg.root_map.items() if _clean(k) != src}
+    cfg.root_map[src] = dst
+    save_config(cfg)
+    console.print(f"[green]Mapped[/green] {escape(src)} → {escape(dst)}")
+    if not Path(dst).is_dir():
+        console.print(f"[yellow]{escape(dst)} is not a folder right now. Is the volume mounted?[/yellow]")
+
+
+@config_app.command("unmap-root")
+def config_unmap_root(
+    server_prefix: Annotated[str, typer.Argument(help="A prefix added with map-root.")],
+) -> None:
+    """Remove a root mapping."""
+    from src.client.cli.roots import _clean
+
+    src = _clean(server_prefix)
+    cfg = load_config()
+    kept = {k: v for k, v in cfg.root_map.items() if _clean(k) != src}
+    if len(kept) == len(cfg.root_map):
+        console.print(f"[red]No mapping for {escape(src)}.[/red]")
+        raise typer.Exit(1)
+    cfg.root_map = kept
+    save_config(cfg)
+    console.print(f"[green]Unmapped[/green] {escape(src)}")
 
 
 # ---------------------------------------------------------------------------
@@ -120,15 +167,23 @@ def library_list() -> None:
     table = Table(title="Libraries")
     table.add_column("ID", style="dim")
     table.add_column("Name")
-    table.add_column("Root path")
+    table.add_column("Root path", overflow="fold")
+    from src.client.cli.roots import local_library_root
+
+    root_map = load_config().root_map
+    # Shown only when a mapping moves a root on this machine.
+    here = {lib.get("library_id"): local_library_root(lib, root_map) for lib in libraries}
+    mapped = any(str(p) != lib.get("root_path") for lib in libraries if (p := here[lib.get("library_id")]))
+    if mapped:
+        table.add_column("Here", overflow="fold")
     table.add_column("Last ingest")
     for lib in libraries:
-        table.add_row(
-            lib.get("library_id", ""),
-            lib.get("name", ""),
-            lib.get("root_path", ""),
-            lib.get("last_scan_at") or "—",
-        )
+        local = here[lib.get("library_id")]
+        row = [lib.get("library_id", ""), lib.get("name", ""), lib.get("root_path", "")]
+        if mapped:
+            row.append(str(local) if local is not None and str(local) != lib.get("root_path") else "")
+        row.append(lib.get("last_scan_at") or "—")
+        table.add_row(*row)
     console.print(table)
 
 

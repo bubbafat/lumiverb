@@ -32,6 +32,7 @@ from rich.progress import (
 )
 
 from src.client.cli.client import LumiverbClient
+from src.client.cli.roots import local_library_root, reachable_root
 from src.client.cli.ingest import (
     SUPPORTED_EXTENSIONS,
     _build_exif_payload,
@@ -614,11 +615,16 @@ def run_scan(
     enrich (Phase 2) operates on the proxy cache only.
     """
     library_id = library["library_id"]
-    root_path = Path(library["root_path"]).resolve()
+    root_path = reachable_root(library)
 
-    if not root_path.is_dir():
-        console.print(f"[red]Library root not accessible: {root_path}[/red]")
-        console.print("Is the volume mounted?")
+    if root_path is None:
+        here = local_library_root(library)
+        console.print(f"[red]Library root not accessible: {here}[/red]")
+        if here is not None and str(here) == library.get("root_path"):
+            console.print("Is the volume mounted? If it's mounted elsewhere on this machine, "
+                          "run `lumiverb config map-root`.")
+        else:
+            console.print("Is the volume mounted?")
         return ScanStats()
 
     stats = ScanStats()

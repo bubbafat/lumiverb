@@ -603,11 +603,8 @@ def run_backfill_vision(
         return stats
 
     from src.client.proxy.proxy_cache import ProxyCache
-    from pathlib import Path as _Path
-    root_path_str = library.get("root_path")
-    root_path = _Path(root_path_str).resolve() if root_path_str else None
-    if root_path and not root_path.is_dir():
-        root_path = None
+    from src.client.cli.roots import reachable_root
+    root_path = reachable_root(library)
     proxy_cache = ProxyCache(root_path=root_path, client=client)
 
     BATCH_SIZE = 25

@@ -736,6 +736,13 @@ def _run_face_pipeline(
         proxy_pool.shutdown(wait=False)
 
 
+def _here(library: dict) -> str:
+    """The library's root as this machine sees it, for messages."""
+    from src.client.cli.roots import local_library_root
+
+    return str(local_library_root(library) or library.get("root_path") or "")
+
+
 def get_repair_summary(client: LumiverbClient, library_id: str) -> dict:
     """Fetch repair summary counts from the API."""
     resp = client.get("/v1/assets/repair-summary", params={"library_id": library_id})
@@ -874,12 +881,11 @@ def run_repair(
     # to 1 worker; concurrency applies to proxy generation threads instead.
     face_conc = 1
 
-    # Resolve library root path for local proxy generation
-    from pathlib import Path as _Path
-    _root_path_str = library.get("root_path")
-    root_path = _Path(_root_path_str).resolve() if _root_path_str else None
-    if root_path and not root_path.is_dir():
-        root_path = None
+    # The library's root on this machine (mapped by `lumiverb config
+    # map-root`), or None when it can't be read now. Checked again before
+    # each step that reads source files: storage can go to sleep mid-run.
+    from src.client.cli.roots import reachable_root
+    root_path = reachable_root(library)
 
     # Shared proxy cache: generates from local source → server download → cached at configured size
     from src.client.proxy.proxy_cache import ProxyCache
@@ -1042,11 +1048,7 @@ def run_repair(
                 console.print("No assets found (already repaired?).")
                 continue
 
-            from pathlib import Path
-            root_path_str = library.get("root_path")
-            _face_root = Path(root_path_str).resolve() if root_path_str else None
-            if _face_root and not _face_root.is_dir():
-                _face_root = None
+            _face_root = reachable_root(library)
 
             from src.client.cli.config import load_config
             cfg = load_config()
@@ -1075,11 +1077,7 @@ def run_repair(
 
             assets = all_images  # noqa: F821 — bound in plan phase above
 
-            from pathlib import Path
-            root_path_str = library.get("root_path")
-            _face_root = Path(root_path_str).resolve() if root_path_str else None
-            if _face_root and not _face_root.is_dir():
-                _face_root = None
+            _face_root = reachable_root(library)
 
             from src.client.cli.config import load_config
             cfg = load_config()
@@ -1120,11 +1118,9 @@ def run_repair(
                 continue
 
             # Probing reads source files, not proxies
-            from pathlib import Path as _Path
-            root_path_str = library.get("root_path")
-            lib_root = _Path(root_path_str).resolve() if root_path_str else None
-            if lib_root is None or not lib_root.is_dir():
-                console.print(f"[yellow]Library root not accessible: {lib_root}[/yellow]")
+            lib_root = reachable_root(library)
+            if lib_root is None:
+                console.print(f"[yellow]Library root not accessible: {_here(library)}[/yellow]")
                 console.print("[yellow]Probing requires source video files. Skipping.[/yellow]")
                 continue
 
@@ -1152,12 +1148,10 @@ def run_repair(
                 continue
 
             # Transcription needs source files (for audio extraction)
-            from pathlib import Path as _Path
             from src.shared.io_utils import resolve_source_path
-            root_path_str = library.get("root_path")
-            lib_root = _Path(root_path_str).resolve() if root_path_str else None
-            if lib_root and not lib_root.is_dir():
-                console.print(f"[yellow]Library root not accessible: {lib_root}[/yellow]")
+            lib_root = reachable_root(library)
+            if lib_root is None:
+                console.print(f"[yellow]Library root not accessible: {_here(library)}[/yellow]")
                 console.print("[yellow]Transcription requires source video files. Skipping.[/yellow]")
                 continue
 
@@ -1209,10 +1203,8 @@ def run_repair(
         elif repair_type == "video-scenes":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
 
-            from pathlib import Path
-            root_path_str = library.get("root_path")
-            root_path = Path(root_path_str).resolve() if root_path_str else None
-            if root_path is None or not root_path.is_dir():
+            root_path = reachable_root(library)
+            if root_path is None:
                 console.print("[red]Library root not accessible — cannot run scene detection[/red]")
                 continue
 
@@ -1246,10 +1238,8 @@ def run_repair(
         elif repair_type == "scene-vision":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
 
-            from pathlib import Path as _Path
-            root_path_str = library.get("root_path")
-            root_path = _Path(root_path_str).resolve() if root_path_str else None
-            if root_path is None or not root_path.is_dir():
+            root_path = reachable_root(library)
+            if root_path is None:
                 console.print("[red]Library root not accessible — cannot run scene vision[/red]")
                 continue
 
