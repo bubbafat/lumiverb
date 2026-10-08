@@ -15,7 +15,6 @@ stale.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, StrictBool, field_validator

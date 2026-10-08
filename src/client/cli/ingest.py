@@ -56,6 +56,7 @@ from src.client.proxy.proxy_gen import PROXY_LONG_EDGE, PROXY_JPEG_QUALITY
 
 if TYPE_CHECKING:
     from src.client.cli.producer_settings import ProducerSettings
+    from src.client.workers.captions.base import CaptionProvider
 
 PROXY_WEBP_QUALITY = 80
 SUPPORTED_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
@@ -574,9 +575,13 @@ def run_backfill_vision(
     on_take: Callable[[str], None] | None = None,
     producers: "ProducerSettings | None" = None,
     on_fail: Callable[[str, object], None] | None = None,
+    provider: "CaptionProvider | None" = None,
+    model: str | None = None,
 ) -> _IngestStats:
     """Backfill AI descriptions for assets that don't have them, made with the
-    server's vision settings and sent with their lineage.
+    server's vision settings and sent with their lineage. provider and model:
+    the account's machines (the worker's pool); otherwise the first machine
+    doing vision.
 
     should_stop is asked before each asset; once it says stop, no more start.
     Assets in skip are left for a later run; on_take(asset_id) hears of each
@@ -584,21 +589,24 @@ def run_backfill_vision(
     """
     library_id = library["library_id"]
 
-    vision_api_url, vision_api_key, vision_model_id, vision_source = _resolve_vision_config(client)
-    if not vision_api_url or not vision_model_id:
-        console.print("[red]Vision AI: no model chosen.[/red] An admin picks one in Settings → AI.")
-        raise SystemExit(1)
-
     from src.client.cli.producer_settings import ProducerSettings
     from src.client.workers.captions.factory import get_caption_provider
 
     producers = producers or ProducerSettings(client)
-    # The model read just now, which may be newer than the settings read at the run's start.
-    vision_settings = producers.with_model("vision", vision_model_id)
-    vision_provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key,
-                                           settings=vision_settings,
-                                           ocr_settings=producers.with_model("ocr", vision_model_id))
-    console.print(f"Vision AI: {vision_model_id} via {vision_api_url} ({vision_source})")
+    if provider is not None and model:
+        vision_model_id, vision_provider = model, provider
+        vision_settings = producers.with_model("vision", vision_model_id)
+    else:
+        vision_api_url, vision_api_key, vision_model_id, vision_source = _resolve_vision_config(client)
+        if not vision_api_url or not vision_model_id:
+            console.print("[red]Vision AI: no model chosen.[/red] An admin picks one in Settings → AI.")
+            raise SystemExit(1)
+        # The model read just now, which may be newer than the settings read at the run's start.
+        vision_settings = producers.with_model("vision", vision_model_id)
+        vision_provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key,
+                                               settings=vision_settings,
+                                               ocr_settings=producers.with_model("ocr", vision_model_id))
+        console.print(f"Vision AI: {vision_model_id} via {vision_api_url} ({vision_source})")
 
     # Page through assets missing vision
     console.print("Finding assets without AI descriptions...")

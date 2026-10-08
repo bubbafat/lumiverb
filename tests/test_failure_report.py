@@ -42,9 +42,11 @@ def library(home: Path, tmp_path: Path) -> dict:
 
 
 @pytest.fixture(autouse=True)
-def endpoint_offers_the_model():
-    """The vision endpoint answers (vision_guard asks it before vision steps)."""
-    with patch("src.client.cli.vision_guard.check_model", return_value=None):
+def machine_offers_the_model():
+    """An AI machine doing vision offers the model (checked before vision steps)."""
+    from tests.ai_machine_fakes import one_machine
+
+    with one_machine("m"):
         yield
 
 
@@ -172,7 +174,6 @@ def test_a_description_that_fails_is_reported(home: Path, library: dict):
     client.get.return_value.json.return_value = {"items": [{"asset_id": "ast_a", "rel_path": "a.jpg"}]}
     with (
         patch("src.client.cli.repair.get_repair_summary", return_value={"total_assets": 1, "missing_vision": 1}),
-        patch("src.client.cli.ingest._resolve_vision_config", return_value=("http://vision", None, "m", "test")),
         patch("src.client.workers.captions.factory.get_caption_provider"),
         patch("src.client.cli.ingest._backfill_one", return_value=None),
     ):
