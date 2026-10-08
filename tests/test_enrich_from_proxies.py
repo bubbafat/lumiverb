@@ -72,6 +72,13 @@ def _run(client: MagicMock, library: dict, job_type: str, summary: dict, pages: 
         run_repair(client, library, job_type=job_type, console=Console(quiet=True), **kwargs)
 
 
+def _with_a_scene(client: MagicMock) -> MagicMock:
+    """client, whose videos each have one scene to describe."""
+    client.get.return_value.json.return_value = {
+        "scenes": [{"scene_id": "scn_1", "rep_frame_ms": 0, "description": None}]}
+    return client
+
+
 def _posts(client: MagicMock, suffix: str) -> list[str]:
     return [c.args[0] for c in client.post.call_args_list if c.args and c.args[0].endswith(suffix)]
 
@@ -207,15 +214,14 @@ def test_scene_detection_reads_the_proxy_while_storage_sleeps(home: Path, asleep
 @pytest.mark.fast
 def test_scene_vision_reads_the_proxy_while_storage_sleeps(home: Path, asleep: dict) -> None:
     proxy = _cached(home, "ast_a")
-    client = MagicMock()
+    client = _with_a_scene(MagicMock())
     pages = {"missing_scene_vision": [
         {"asset_id": "ast_a", "rel_path": "a.mov", "has_analysis_proxy": True},
         {"asset_id": "ast_b", "rel_path": "b.mov", "has_analysis_proxy": False},
     ]}
     with (
         patch("src.client.workers.captions.factory.get_caption_provider"),
-        patch("src.client.cli.video_index.enrich_video_scenes",
-              return_value={"enriched": 1, "skipped": 0, "failed": 0, "elapsed": 0.1}) as enr,
+        patch("src.client.cli.video_index.enrich_scene") as enr,
     ):
         _run(client, asleep, "scene-vision", {"missing_scene_vision": 2}, pages)
     assert [c.kwargs["source_path"] for c in enr.call_args_list] == [proxy]
@@ -224,14 +230,14 @@ def test_scene_vision_reads_the_proxy_while_storage_sleeps(home: Path, asleep: d
 @pytest.mark.fast
 def test_without_a_usable_vision_model_scene_vision_waits(home: Path, asleep: dict) -> None:
     _cached(home, "ast_a")
-    client = MagicMock()
+    client = _with_a_scene(MagicMock())
     pages = {"missing_scene_vision": [{"asset_id": "ast_a", "rel_path": "a.mov", "has_analysis_proxy": True}]}
     from tests.ai_machine_fakes import one_machine
     from src.shared.vision_endpoint import VisionEndpointError
 
     with (
         one_machine("model", offers=VisionEndpointError("no answer")),
-        patch("src.client.cli.video_index.enrich_video_scenes") as enr,
+        patch("src.client.cli.video_index.enrich_scene") as enr,
     ):
         _run(client, asleep, "scene-vision", {"missing_scene_vision": 1}, pages)
     enr.assert_not_called()
@@ -299,7 +305,7 @@ STEPS = [
     ("faces", "missing_faces", "src.client.cli.repair._run_face_pipeline", {}),
     ("transcribe", "missing_transcription", "src.client.cli.repair._transcribe_one", {}),
     ("video-scenes", "missing_video_scenes", "src.client.cli.video_index.index_video_scenes", {}),
-    ("scene-vision", "missing_scene_vision", "src.client.cli.video_index.enrich_video_scenes",
+    ("scene-vision", "missing_scene_vision", "src.client.cli.video_index.enrich_scene",
      {"src.client.workers.captions.factory.get_caption_provider": MagicMock()}),
 ]
 
@@ -324,7 +330,7 @@ def test_a_step_told_to_stop_does_no_more_items(home: Path, library: dict, job_t
         for name, value in extra.items():
             stack.enter_context(patch(name, value))
         one = stack.enter_context(patch(target, return_value="ok"))
-        run_repair(MagicMock(), library, job_type=job_type, console=Console(quiet=True),
+        run_repair(_with_a_scene(MagicMock()), library, job_type=job_type, console=Console(quiet=True),
                    should_stop=lambda: stop["now"])
     one.assert_not_called()
 
@@ -443,7 +449,7 @@ def test_a_step_leaves_skipped_items_and_reports_what_it_takes(home: Path, libra
         # Embed and OCR batch what each item returns: a result for that clip.
         result = {"asset_id": "ast_b"} if job_type in ("embed", "ocr") else "ok"
         one = stack.enter_context(patch(target, return_value=result))
-        run_repair(MagicMock(), library, job_type=job_type, console=Console(quiet=True),
+        run_repair(_with_a_scene(MagicMock()), library, job_type=job_type, console=Console(quiet=True),
                    should_stop=lambda: False, skip_items={(job_type, "ast_a")},
                    on_take=lambda step, asset_id: taken.append((step, asset_id)))
     assert taken == [(job_type, "ast_b")]
