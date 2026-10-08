@@ -50,8 +50,9 @@ This follows the Immich model: fully open source, no open-core, with a hosted op
 A single shared Postgres database (tiny) with three tables:
 
 ```
-tenants           — tenant_id, name, plan, status, vision_api_url,
-                    vision_api_key, vision_model_id, created_at
+tenants           — tenant_id, name, plan, status, vision_model_id, created_at
+ai_machines       — machine_id, tenant_id, name, api_url, api_key, jobs, at_once,
+                    enabled, online, status_error, models, checked_at, created_at
 api_keys          — key_id, key_hash, tenant_id, name, label, scopes,
                     role, created_at, last_used_at, revoked_at
 users             — user_id, tenant_id, email, password_hash, role,

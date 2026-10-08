@@ -9,9 +9,9 @@ class CLIConfig(BaseModel):
     """CLI configuration stored in ~/.lumiverb/config.json.
 
     Only how this machine works (where things are, how much at once). What
-    changes the output (models, prompts, sizes, the vision AI endpoint) is
-    the account's, on the server: one source of truth. Keys an older config
-    file still has are ignored.
+    changes the output (models, prompts, sizes) is the account's, on the
+    server: one source of truth, and so are its AI machines (Settings → AI).
+    Keys an older config file still has are ignored.
     """
 
     api_url: str = "http://localhost:8000"
@@ -20,8 +20,7 @@ class CLIConfig(BaseModel):
     face_batch_size: int = 25
     face_batch_limit: int = 20
     max_concurrency: int = 4
-    vision_concurrency: int = 2
-    ocr_concurrency: int = 1
+    # How many vision requests go at once is each AI machine's (Settings → AI).
     ocr_batch_size: int = 25
     transcribe_concurrency: int = 1
     # Library roots as stored on the server -> where they are on this

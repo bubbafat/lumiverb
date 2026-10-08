@@ -1,7 +1,7 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { getCurrentUser, getVisionSettings } from "../api/client";
-import { visionHasProblem } from "./settings/AiSection";
+import { getAiSettings, getCurrentUser } from "../api/client";
+import { AI_QUERY_KEY, aiHasProblem } from "./settings/AiSection";
 
 interface NavItem {
   to: string;
@@ -26,8 +26,8 @@ export default function SettingsPage() {
   });
 
   // The worker couldn't use the vision model: flag the AI page until it's fixed.
-  const { data: vision } = useQuery({ queryKey: ["vision-settings"], queryFn: getVisionSettings });
-  const aiProblem = visionHasProblem(vision);
+  const { data: ai } = useQuery({ queryKey: AI_QUERY_KEY, queryFn: getAiSettings });
+  const aiProblem = aiHasProblem(ai);
 
   // Don't hide editor-only items until we know the role (avoids flicker)
   const isEditorOrAbove =

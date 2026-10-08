@@ -1030,19 +1030,17 @@ def run_repair(
     from src.client.cli.failure_report import FailureReport
     from src.client.cli.vision_guard import VisionGuard
     failures = FailureReport(client)
-    # Vision steps run only while the account's endpoint offers its model.
+    # Vision steps run only while a machine doing vision offers the account's model.
     vision = VisionGuard(client, failures)
 
     def _vision_ready() -> bool:
         if vision.check():
-            console.print(f"  Vision AI: {vision.model} via {vision.api_url}")
+            console.print(f"  Vision AI: {vision.describe()}")
             return True
         console.print(f"[yellow]  Vision AI can't be used: {vision.error}[/yellow]")
         return False
     max_conc = min(concurrency, _cfg.max_concurrency)
     embed_conc = min(max_conc, concurrency)  # embed is CPU-bound (CLIP), full concurrency
-    vision_conc = min(max_conc, _cfg.vision_concurrency)
-    ocr_conc = min(max_conc, _cfg.ocr_concurrency)
     # Face detection uses subprocess isolation (ONNX memory leak). On macOS,
     # multiple workers loading CoreML models simultaneously can hang. Default
     # to 1 worker; concurrency applies to proxy generation threads instead.
@@ -1282,25 +1280,27 @@ def run_repair(
             if not _vision_ready():
                 continue
             from src.client.cli.ingest import run_backfill_vision
+            # As many at once as the online machines take together (Settings → AI).
             run_backfill_vision(
-                client, library, concurrency=vision_conc, console=console,
+                client, library, concurrency=vision.capacity(), console=console,
                 should_stop=lambda: stop() or vision.down,
                 skip={asset_id for step, asset_id in skip_items if step == "vision"},
                 on_take=None if on_take is None else lambda asset_id: on_take("vision", asset_id),
                 producers=producers,
                 on_fail=vision.on_fail("vision"),
+                provider=vision.provider(settings=producers.with_model("vision", vision.model),
+                                         ocr_settings=producers.with_model("ocr", vision.model)),
+                model=vision.model,
             )
 
         elif repair_type == "ocr":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
             if not _vision_ready():
                 continue
-            from src.client.workers.captions.factory import get_caption_provider
             # The model the guard just read, which may be newer than the run's settings.
             ocr_settings = producers.with_model("ocr", vision.model)
-            ocr_provider = get_caption_provider(vision.model, vision.api_url, vision.api_key,
-                                                settings=producers.with_model("vision", vision.model),
-                                                ocr_settings=ocr_settings)
+            ocr_provider = vision.provider(settings=producers.with_model("vision", vision.model),
+                                           ocr_settings=ocr_settings)
             ocr_fail = vision.on_fail("ocr")
 
             assets = _filter(_page_missing(client, library_id, missing_ocr=True))
@@ -1338,37 +1338,49 @@ def run_repair(
                             pass
                 batch_buf.clear()
 
+            from src.client.workers.captions.base import CaptionError
+
+            def _ocr(a: dict) -> tuple[dict, dict | None, object]:
+                try:
+                    return a, _ocr_one(asset_id=a["asset_id"], rel_path=a["rel_path"],
+                                       ocr_provider=ocr_provider, proxy_cache=proxy_cache), None
+                except CaptionError as e:
+                    return a, None, e
+
+            def _ocr_done(fut: Future) -> None:
+                a, result, ocr_error = fut.result()
+                if result is not None:
+                    batch_buf.append(result)
+                    with stats.lock:
+                        stats.processed += 1
+                else:
+                    ocr_fail(a["asset_id"], ocr_error or
+                             "no OCR result (no proxy, or the image couldn't be read: see the log)")
+                    with stats.lock:
+                        stats.skipped += 1
+                if len(batch_buf) >= ocr_batch_size:
+                    _flush_ocr_batch()
+                with stats.lock:
+                    ok, fail = stats.processed, stats.failed
+                progress.advance(tid, 1)
+                progress.update(tid, ok=ok, fail=fail)
+
+            # As many at once as the online machines take together (Settings → AI);
+            # results are gathered here, so the batch is this thread's alone.
+            ocr_conc = vision.capacity()
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("OCR", total=len(assets), ok=0, fail=0)
-                for a in _until(lambda: stop() or vision.down, assets, _taking("ocr")):
-                    from src.client.workers.captions.base import CaptionError
-                    ocr_error: object = "no OCR result (no proxy, or the image couldn't be read: see the log)"
-                    try:
-                        result = _ocr_one(
-                            asset_id=a["asset_id"],
-                            rel_path=a["rel_path"],
-                            ocr_provider=ocr_provider,
-                            proxy_cache=proxy_cache,
-                        )
-                    except CaptionError as e:
-                        result, ocr_error = None, e
-                    if result is not None:
-                        batch_buf.append(result)
-                        with stats.lock:
-                            stats.processed += 1
-                    else:
-                        ocr_fail(a["asset_id"], ocr_error)
-                        with stats.lock:
-                            stats.skipped += 1
-
-                    if len(batch_buf) >= ocr_batch_size:
-                        _flush_ocr_batch()
-
-                    with stats.lock:
-                        ok, fail = stats.processed, stats.failed
-                    progress.advance(tid, 1)
-                    progress.update(tid, ok=ok, fail=fail)
+                with ThreadPoolExecutor(max_workers=ocr_conc, thread_name_prefix="ocr") as ocr_pool:
+                    inflight: set[Future] = set()
+                    for a in _until(lambda: stop() or vision.down, assets, _taking("ocr")):
+                        inflight.add(ocr_pool.submit(_ocr, a))
+                        if len(inflight) >= ocr_conc:
+                            done, inflight = wait(inflight, return_when=FIRST_COMPLETED)
+                            for f in done:
+                                _ocr_done(f)
+                    for f in as_completed(inflight):
+                        _ocr_done(f)
 
                 _flush_ocr_batch()  # flush remaining
 
@@ -1601,10 +1613,8 @@ def run_repair(
 
             if not _vision_ready():
                 continue
-            from src.client.workers.captions.factory import get_caption_provider
             scene_vision_settings = producers.with_model("scene_vision", vision.model)
-            scene_vision_provider = get_caption_provider(vision.model, vision.api_url, vision.api_key,
-                                                         settings=scene_vision_settings)
+            scene_vision_provider = vision.provider(settings=scene_vision_settings)
 
             assets = _filter(_page_missing(client, library_id, missing_scene_vision=True))
             if not assets:

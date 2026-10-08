@@ -81,13 +81,24 @@ sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb library list
 
 `library list` shows a **Here** column with the mapped path. Within a minute the worker starts the first full scan. That is the fresh ingest of the DAS: probe, poster and preview, then analysis proxies, transcripts and scenes.
 
-### 6. Vision AI
+### 6. AI machines
 
-Descriptions, OCR and scene descriptions need a vision model; until one is chosen, those steps wait rather than fail. For now the brain uses `qwen3-vl:8b` in the Ollama container of the ResourceSpace stack (`~/dam-stack/resourcespace`), on the RTX 3080, reached at its internal address. In the web app, as an admin: **Settings → AI**, enter `http://172.18.0.6:11434/v1`, press **Connect**, pick `qwen3-vl:8b`, **Save**. That is the one place the endpoint and model live: the worker reads them from the server and keeps none of its own (a `vision_*` key left in an older worker config is ignored).
+Descriptions, OCR and scene descriptions run on the account's **AI machines** (Settings → AI): GPU boxes, each an OpenAI-compatible endpoint such as Ollama, with the jobs it does and how many requests it takes at once. The job's one model must be on every machine doing it; until a model is chosen and a machine offers it, those steps wait rather than fail. The worker reads all of this from the server and keeps none of its own (a `vision_*` key left in an older worker config is ignored).
 
-Before each round of vision work the worker asks the endpoint whether it still offers the model. When it doesn't (the container was recreated at another address, the model was removed), vision work waits, no clip is charged a failure, and Settings → AI shows the problem in red, with a red dot on AI in the Settings menu, until it's fixed.
+The model is `qwen3-vl:8b-instruct`. Plain `qwen3-vl:8b` is the thinking variant: its reasoning used up the 500-token answer budget, so most descriptions came back empty or cut off (Oct 8). Every machine doing descriptions needs it pulled (`ollama pull qwen3-vl:8b-instruct`).
 
-That address changes if the container is recreated, and the endpoint goes with ResourceSpace: give Lumiverb its own Ollama before switching ResourceSpace off.
+On Oct 8 there are two:
+
+| Machine | URL | At once |
+|---|---|---|
+| Brain 3080 | `http://10.10.10.2:11434/v1` | 2 |
+| Mac Studio (over the direct 10 Gb link) | `http://10.10.10.1:11434/v1` | 4 |
+
+**The brain's Ollama** is Lumiverb's own: `~/ollama/docker-compose.yaml` (`docker compose -f ~/ollama/docker-compose.yaml up -d`), with the image digest and model folder (`/mnt/ssd1/ollama-models`) it had as ResourceSpace's `ollama` service. Its port is published on every address of the brain, so it's at a fixed address: 10.10.10.2 (the direct link to the Mac), localhost, and the LAN. Ollama has no password. Until Oct 8 Lumiverb borrowed ResourceSpace's Ollama at a Docker-internal address, which changed when that container restarted and stopped vision. ResourceSpace is retired: its containers are stopped with `restart=no`. If its compose file is ever started again, take the `ollama` service out of it first: it would take the same container name and GPU.
+
+To add a machine, as an admin: **Settings → AI → Add machine**, a name, the URL, **Connect** (it lists the models the machine offers), tick **Descriptions & text**, how many at once, **Add**. "At once" is how many images it works on together; more needs more GPU memory. It only helps if that Ollama runs that many in parallel (`OLLAMA_NUM_PARALLEL`); otherwise the rest wait there. A request is about 2k tokens (a 1280 px image, the prompt, a 500-token answer), so any context of 8k or more is plenty.
+
+Before each round of vision work the worker checks every machine, and sends work only to those online and offering the model, spread by how many each takes. One that stops answering (asleep, out of memory, the model gone) is skipped and its work goes to the others; it's checked again a minute later. Settings → AI shows each machine's state, offline ones in red, with a red dot on AI in the Settings menu. Only when no machine is left does vision work wait, and no clip is charged a failure.
 
 ### 7. The Mac app
 

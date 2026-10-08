@@ -45,9 +45,11 @@ def asleep(home: Path) -> dict:
 
 
 @pytest.fixture(autouse=True)
-def endpoint_offers_the_model():
-    """The vision endpoint answers (vision_guard asks it before vision steps)."""
-    with patch("src.client.cli.vision_guard.check_model", return_value=None):
+def machine_offers_the_model():
+    """An AI machine doing vision offers the model (checked before vision steps)."""
+    from tests.ai_machine_fakes import one_machine
+
+    with one_machine("model"):
         yield
 
 
@@ -211,7 +213,6 @@ def test_scene_vision_reads_the_proxy_while_storage_sleeps(home: Path, asleep: d
         {"asset_id": "ast_b", "rel_path": "b.mov", "has_analysis_proxy": False},
     ]}
     with (
-        patch("src.client.cli.ingest._resolve_vision_config", return_value=VISION),
         patch("src.client.workers.captions.factory.get_caption_provider"),
         patch("src.client.cli.video_index.enrich_video_scenes",
               return_value={"enriched": 1, "skipped": 0, "failed": 0, "elapsed": 0.1}) as enr,
@@ -225,9 +226,11 @@ def test_without_a_usable_vision_model_scene_vision_waits(home: Path, asleep: di
     _cached(home, "ast_a")
     client = MagicMock()
     pages = {"missing_scene_vision": [{"asset_id": "ast_a", "rel_path": "a.mov", "has_analysis_proxy": True}]}
+    from tests.ai_machine_fakes import one_machine
+    from src.shared.vision_endpoint import VisionEndpointError
+
     with (
-        patch("src.client.cli.vision_guard.check_model", return_value="no model chosen"),
-        patch("src.client.cli.ingest._resolve_vision_config", return_value=VISION),
+        one_machine("model", offers=VisionEndpointError("no answer")),
         patch("src.client.cli.video_index.enrich_video_scenes") as enr,
     ):
         _run(client, asleep, "scene-vision", {"missing_scene_vision": 1}, pages)
@@ -250,7 +253,6 @@ def test_all_renders_before_reading_proxies(home: Path, library: dict) -> None:
     with (
         patch("src.client.cli.repair.get_repair_summary", return_value=summary),
         patch("src.client.cli.repair._page_missing", side_effect=page_missing),
-        patch("src.client.cli.ingest._resolve_vision_config", return_value=(None, None, None, "none")),
     ):
         run_repair(client, library, job_type="all", console=Console(quiet=True))
     assert order.index("missing_probe") < order.index("missing_analysis_proxy") < order.index("missing_transcription")
@@ -285,7 +287,6 @@ def test_scene_steps_count_what_they_did(home: Path, asleep: dict) -> None:
 # the storage goes to sleep mid-step, instead of timing out on each file.
 # ---------------------------------------------------------------------------
 
-VISION = ("http://vision", None, "model", "test")
 
 # job type, its missing_* flag, what handles one item, extra patches
 STEPS = [
@@ -294,14 +295,12 @@ STEPS = [
     ("embed", "missing_embeddings", "src.client.cli.repair._repair_embed_one",
      {"src.client.workers.embeddings.clip_provider.CLIPEmbeddingProvider": MagicMock()}),
     ("ocr", "missing_ocr", "src.client.cli.repair._ocr_one",
-     {"src.client.cli.ingest._resolve_vision_config": MagicMock(return_value=VISION),
-      "src.client.workers.captions.factory.get_caption_provider": MagicMock()}),
+     {"src.client.workers.captions.factory.get_caption_provider": MagicMock()}),
     ("faces", "missing_faces", "src.client.cli.repair._run_face_pipeline", {}),
     ("transcribe", "missing_transcription", "src.client.cli.repair._transcribe_one", {}),
     ("video-scenes", "missing_video_scenes", "src.client.cli.video_index.index_video_scenes", {}),
     ("scene-vision", "missing_scene_vision", "src.client.cli.video_index.enrich_video_scenes",
-     {"src.client.cli.ingest._resolve_vision_config": MagicMock(return_value=VISION),
-      "src.client.workers.captions.factory.get_caption_provider": MagicMock()}),
+     {"src.client.workers.captions.factory.get_caption_provider": MagicMock()}),
 ]
 
 
@@ -342,7 +341,6 @@ def test_vision_told_to_stop_does_no_more_items(home: Path, library: dict) -> No
     client.get.side_effect = get
     with (
         patch("src.client.cli.repair.get_repair_summary", return_value={"total_assets": 1, "missing_vision": 1}),
-        patch("src.client.cli.ingest._resolve_vision_config", return_value=VISION),
         patch("src.client.workers.captions.factory.get_caption_provider"),
         patch("src.client.cli.ingest._backfill_one") as one,
     ):
@@ -460,7 +458,6 @@ def test_vision_leaves_skipped_items_and_reports_what_it_takes(home: Path, libra
     taken: list[tuple[str, str]] = []
     with (
         patch("src.client.cli.repair.get_repair_summary", return_value={"total_assets": 2, "missing_vision": 2}),
-        patch("src.client.cli.ingest._resolve_vision_config", return_value=VISION),
         patch("src.client.workers.captions.factory.get_caption_provider"),
         patch("src.client.cli.ingest._backfill_one", return_value=None) as one,
     ):
@@ -593,11 +590,16 @@ def test_ocr_says_which_file_each_came_from(home: Path, library: dict) -> None:
 
     client = _with_producers({a: {"model": "qwen3-vl:8b"} for a in ("vision", "ocr", "scene_vision")})
     pages = {"missing_ocr": [{"asset_id": "ast_a", "rel_path": "a.jpg", "sha256": SHA}]}
+    from tests.ai_machine_fakes import one_machine
+
+    def ocr_one(**kw):
+        kw["ocr_provider"].extract_text(Path("a.jpg"))  # made for the machine on its first request
+        return {"asset_id": "ast_a", "ocr_text": "EXIT"}
+
     with (
-        patch("src.client.cli.ingest._resolve_vision_config",
-              return_value=("http://vision", None, "qwen3-vl:8b", "account settings")),
+        one_machine("qwen3-vl:8b"),
         patch("src.client.workers.captions.factory.get_caption_provider") as provider,
-        patch("src.client.cli.repair._ocr_one", return_value={"asset_id": "ast_a", "ocr_text": "EXIT"}),
+        patch("src.client.cli.repair._ocr_one", side_effect=ocr_one),
     ):
         _run(client, library, "ocr", {"missing_ocr": 1}, pages)
 

@@ -1,48 +1,85 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import AiSection, { ago } from "./AiSection";
+import AiSection, { aiHasProblem, ago } from "./AiSection";
+import type { AiMachine, AiSettings } from "../../api/client";
 
-const URL = "http://vision.local:11434/v1";
+const BRAIN = "http://172.18.0.6:11434/v1";
+const STUDIO = "http://10.10.10.1:11434/v1";
+const QWEN = "qwen3-vl:8b";
 const fetchMock = vi.fn();
 let role = "admin";
-let saved: { api_url: string; has_key: boolean; model: string; status: unknown } = {
-  api_url: "",
-  has_key: false,
-  model: "",
-  status: null,
-};
-let offered: string[] = ["llava:13b", "qwen3-vl:8b"];
-let reachable = true;
+let model = QWEN;
+let machines: AiMachine[] = [];
+// What each URL offers when asked; missing: unreachable.
+let offers: Record<string, string[]> = {};
+const sent: { method: string; url: string; body: unknown }[] = [];
+
+function machine(over: Partial<AiMachine>): AiMachine {
+  return {
+    machine_id: `aim_${over.name}`, name: "Brain", api_url: BRAIN, has_key: false, jobs: ["vision"], at_once: 2,
+    enabled: true, status: { online: true, error: "", models: [QWEN], checked_at: new Date().toISOString() }, ...over,
+  };
+}
+
+function settings(): AiSettings {
+  const doing = machines.filter((m) => m.enabled && m.jobs.includes("vision"));
+  return {
+    machines,
+    jobs: [{ job: "vision", label: "Descriptions & text", model, machines: doing.length,
+             offering: doing.filter((m) => m.status?.online && m.status.models.includes(model)).length }],
+  };
+}
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status });
 }
 
+function err(status: number, code: string, message: string, details: unknown = {}) {
+  return json({ error: { code, message, details } }, status);
+}
+
 beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
   fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    const method = init?.method ?? "GET";
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
-    if (url.endsWith("/v1/me")) return json({ email: "a@b.c", role });
-    if (url.endsWith("/v1/tenant/vision/connect")) {
-      if (!reachable) {
-        return json({ error: { code: "vision_unreachable", message: `Couldn't reach ${body.api_url}: ConnectionError.` } }, 502);
-      }
-      return json({ models: offered });
+    sent.push({ method, url, body });
+    const path = new URL(url, "http://x").pathname.replace(/^\/v1/, "");
+    const leave = url.includes("leave_jobs=true");
+    if (path === "/me") return json({ email: "a@b.c", role });
+    if (path === "/ai" && method === "GET") return json(settings());
+    if (path === "/ai/connect") {
+      const models = offers[body.api_url.replace(/\/+$/, "")];
+      return models ? json({ models }) : err(502, "machine_unreachable", `Couldn't reach ${body.api_url}: ConnectionError.`);
     }
-    if (url.endsWith("/v1/tenant/vision") && init?.method === "PUT") {
-      if (body.api_url && !offered.includes(body.model)) {
-        return json({ error: { code: "vision_model_unavailable", message: `${body.api_url} doesn't offer ${body.model}.`, details: { models: offered } } }, 409);
-      }
-      saved = {
-        api_url: body.api_url,
-        has_key: body.api_key === undefined ? saved.has_key : !!body.api_key,
-        model: body.model,
-        status: null, // the worker checks the new settings before using them
-      };
-      return json(saved);
+    if (path === "/ai/machines" && method === "POST") {
+      const models = offers[body.api_url] ?? [];
+      machines = [...machines, machine({ ...body, has_key: !!body.api_key, status: { online: true, error: "", models, checked_at: null } })];
+      return json(settings(), 201);
     }
-    if (url.endsWith("/v1/tenant/vision")) return json(saved);
+    const m = path.match(/^\/ai\/machines\/([^/]+)$/);
+    if (m) {
+      const target = machines.find((x) => x.machine_id === m[1])!;
+      const after = method === "DELETE" ? null : { ...target, ...body };
+      const others = machines.filter((x) => x !== target && x.enabled && x.jobs.includes("vision"));
+      const stillDoes = after && after.enabled && after.jobs.includes("vision");
+      if (model && !others.length && !stillDoes && !leave) {
+        return err(409, "job_left_without_machine", "No other machine does descriptions & text.",
+                   { jobs: [{ job: "vision", label: "Descriptions & text", model }] });
+      }
+      machines = after ? machines.map((x) => (x === target ? { ...after, has_key: body.api_key === undefined ? x.has_key : !!body.api_key } : x))
+                       : machines.filter((x) => x !== target);
+      return json(settings());
+    }
+    if (path === "/ai/jobs/vision" && method === "PUT") {
+      if (body.model && !machines.some((x) => offers[x.api_url]?.includes(body.model))) {
+        return err(409, "model_not_offered", `No machine doing descriptions & text offers ${body.model}.`,
+                   { job: "vision", model: body.model, machines: machines.map((x) => ({ name: x.name, models: offers[x.api_url] ?? [], error: offers[x.api_url] ? "" : "Couldn't reach it." })) });
+      }
+      model = body.model;
+      return json(settings());
+    }
     return json({}, 404);
   });
 });
@@ -52,9 +89,10 @@ afterEach(() => {
   fetchMock.mockReset();
   vi.unstubAllGlobals();
   role = "admin";
-  saved = { api_url: "", has_key: false, model: "", status: null };
-  offered = ["llava:13b", "qwen3-vl:8b"];
-  reachable = true;
+  model = QWEN;
+  machines = [];
+  offers = {};
+  sent.length = 0;
 });
 
 function renderSection() {
@@ -66,135 +104,164 @@ function renderSection() {
   );
 }
 
-function calls(suffix: string, method?: string) {
-  return fetchMock.mock.calls
-    .filter(([u, init]) => String(u).endsWith(suffix) && (!method || (init as RequestInit | undefined)?.method === method))
-    .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
-}
+const lastSent = (method: string, part: string) => [...sent].reverse().find((s) => s.method === method && s.url.includes(part));
 
 describe("AiSection", () => {
-  it("says vision AI is off until a model is chosen", async () => {
+  it("lists each machine with its jobs, how many at once and how it's doing", async () => {
+    machines = [
+      machine({ name: "Brain 3080" }),
+      machine({ name: "Mac Studio", api_url: STUDIO, at_once: 4,
+                status: { online: false, error: `Couldn't reach ${STUDIO}: ConnectionError.`, models: [], checked_at: new Date().toISOString() } }),
+      machine({ name: "Spare", enabled: false, status: null }),
+    ];
     renderSection();
-    expect(await screen.findByText(/Vision AI is off/)).toBeTruthy();
+    const brain = (await screen.findByText("Brain 3080")).closest("li")!;
+    expect(within(brain).getByText("Does: Descriptions & text · 2 at once")).toBeTruthy();
+    expect(within(brain).getByText(/Online · checked just now/)).toBeTruthy();
+    const studio = screen.getByText("Mac Studio").closest("li")!;
+    expect(within(studio).getByRole("alert").textContent).toContain("Offline: Couldn't reach");
+    expect(within(studio).getByText(/4 at once/)).toBeTruthy();
+    expect(within(screen.getByText("Spare").closest("li")!).getByText("Turned off: gets no work.")).toBeTruthy();
+    expect(screen.getByText(/offered by 1 of 2 machines/)).toBeTruthy();
   });
 
-  it("connects, lists the endpoint's models, and saves the one picked", async () => {
+  it("says plainly when a job can't run, and when it's off", async () => {
+    machines = [machine({ status: { online: false, error: "no answer", models: [], checked_at: null } })];
     renderSection();
-    fireEvent.change(await screen.findByLabelText("Endpoint URL"), { target: { value: URL } });
-    fireEvent.change(screen.getByLabelText("API key"), { target: { value: "sk-1" } });
-    const save = screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
-    expect(save.disabled).toBe(true); // nothing to pick from yet
+    expect((await screen.findByText("Descriptions & text: paused")).closest("[role=alert]")).toBeTruthy();
+    cleanup();
+    model = "";
+    renderSection();
+    expect(await screen.findByText(/Descriptions & text are off: no model is chosen/)).toBeTruthy();
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
-    const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
-    expect(screen.getByText("Connected: 2 models")).toBeTruthy();
-    expect(Array.from(select.options).map((o) => o.value)).toEqual(["", "llava:13b", "qwen3-vl:8b"]);
-    expect(calls("/tenant/vision/connect")).toEqual([{ api_url: URL, api_key: "sk-1" }]);
-    expect(save.disabled).toBe(true); // a model must be picked
+  it("a viewer sees it all and changes nothing", async () => {
+    role = "viewer";
+    machines = [machine({ name: "Brain" })];
+    renderSection();
+    await screen.findByText("Brain");
+    await screen.findByText("Only admins can change these.");
+    expect(screen.queryByRole("button", { name: "Add machine" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Edit Brain" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Change the model/ })).toBeNull();
+  });
 
-    fireEvent.change(select, { target: { value: "qwen3-vl:8b" } });
+  it("adds a machine once Connect has checked it", async () => {
+    machines = [machine({ name: "Brain" })];
+    offers = { [STUDIO]: [QWEN, "llava:13b"] };
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Add machine" }));
+    const form = screen.getByRole("form", { name: "Add a machine" });
+    fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Mac Studio" } });
+    fireEvent.change(within(form).getByLabelText("Endpoint URL"), { target: { value: STUDIO } });
+    fireEvent.change(within(form).getByLabelText("Requests at once"), { target: { value: "4" } });
+    const add = within(form).getByRole("button", { name: "Add" }) as HTMLButtonElement;
+    expect(add.disabled).toBe(true); // not checked yet
+    fireEvent.click(within(form).getByRole("button", { name: "Connect" }));
+    expect((await within(form).findByText(/Connected: offers/)).textContent).toContain(QWEN);
+    await waitFor(() => expect(add.disabled).toBe(false));
+    fireEvent.click(add);
+    await waitFor(() => expect(screen.queryByRole("form", { name: "Add a machine" })).toBeNull());
+    expect(lastSent("POST", "/ai/machines")!.body).toEqual({ name: "Mac Studio", api_url: STUDIO, api_key: "", jobs: ["vision"], at_once: 4, enabled: true });
+    expect(await screen.findByText("Mac Studio")).toBeTruthy();
+  });
+
+  it("says why Connect couldn't, and won't give a machine a job whose model it lacks", async () => {
+    offers = { [STUDIO]: ["llava:13b"] };
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Add machine" }));
+    const form = screen.getByRole("form", { name: "Add a machine" });
+    fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "X" } });
+    fireEvent.change(within(form).getByLabelText("Endpoint URL"), { target: { value: "http://nowhere:1/v1" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Connect" }));
+    expect((await within(form).findByRole("alert")).textContent).toContain("Couldn't reach");
+
+    fireEvent.change(within(form).getByLabelText("Endpoint URL"), { target: { value: STUDIO } });
+    fireEvent.click(within(form).getByRole("button", { name: "Connect" }));
+    expect((await within(form).findByRole("alert")).textContent).toContain(`It doesn't offer ${QWEN}`);
+    const add = within(form).getByRole("button", { name: "Add" }) as HTMLButtonElement;
+    expect(add.disabled).toBe(true);
+    fireEvent.click(within(form).getByRole("checkbox", { name: /Descriptions & text/ }));
+    expect(add.disabled).toBe(false); // it can join without the job
+  });
+
+  it("edits a machine: a rename needs no Connect, and the saved key stays unless changed", async () => {
+    machines = [machine({ name: "Brain", has_key: true })];
+    offers = { [BRAIN]: [QWEN] };
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Edit Brain" }));
+    const form = screen.getByRole("form", { name: "Edit Brain" });
+    expect((within(form).getByLabelText("API key") as HTMLInputElement).placeholder).toContain("Saved");
+    fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Brain 3080" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Save" }));
+    await screen.findByText("Brain 3080");
+    const body = lastSent("PATCH", "/ai/machines/aim_Brain")!.body as Record<string, unknown>;
+    expect(body.name).toBe("Brain 3080");
+    expect("api_key" in body).toBe(false);
+  });
+
+  it("removing the last machine doing a job asks first", async () => {
+    machines = [machine({ name: "Brain" })];
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Remove Brain" }));
+    const ask = await screen.findByText(/No other machine does descriptions & text/);
+    expect(ask.textContent).toContain("without Brain");
+    fireEvent.click(screen.getByRole("button", { name: "Keep it" }));
+    expect(screen.getByText("Brain")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Remove Brain" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Remove anyway" }));
+    await waitFor(() => expect(screen.queryByText("Brain")).toBeNull());
+    expect(lastSent("DELETE", "/ai/machines/aim_Brain")!.url).toContain("leave_jobs=true");
+  });
+
+  it("turning off the last machine doing a job asks first", async () => {
+    machines = [machine({ name: "Brain" })];
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Edit Brain" }));
+    const form = screen.getByRole("form", { name: "Edit Brain" });
+    fireEvent.click(within(form).getByRole("checkbox", { name: "Use this machine" }));
+    fireEvent.click(within(form).getByRole("button", { name: "Save" }));
+    fireEvent.click(await within(form).findByRole("button", { name: "Save anyway" }));
+    expect(await screen.findByText("Turned off: gets no work.")).toBeTruthy();
+    expect(lastSent("PATCH", "/ai/machines/aim_Brain")!.url).toContain("leave_jobs=true");
+  });
+
+  it("changes a job's model to one its machines offer, and says why not when none does", async () => {
+    machines = [machine({ name: "Brain", status: { online: true, error: "", models: [QWEN, "llava:13b"], checked_at: null } })];
+    offers = { [BRAIN]: [QWEN] };
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Change the model for Descriptions & text" }));
+    const select = screen.getByLabelText("Model for Descriptions & text");
+    fireEvent.change(select, { target: { value: "llava:13b" } });
+    expect(screen.getByText(/marks what was made with qwen3-vl:8b as made with an old model/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(screen.getByText(/Saved. The worker hasn't checked it yet/)).toBeTruthy());
-    expect(calls("/tenant/vision", "PUT")).toEqual([{ api_url: URL, api_key: "sk-1", model: "qwen3-vl:8b" }]);
-    // The key typed is saved now, and never shown again.
-    expect((screen.getByLabelText("API key") as HTMLInputElement).value).toBe("");
-  });
+    expect((await screen.findByRole("alert")).textContent).toContain("Brain: qwen3-vl:8b");
 
-  it("clears a key once it's saved, even when nothing else changed", async () => {
-    saved = { api_url: URL, has_key: true, model: "llava:13b", status: null };
-    renderSection();
-    fireEvent.change(await screen.findByLabelText("API key"), { target: { value: "sk-2" } });
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
-    fireEvent.change(await screen.findByLabelText("Model"), { target: { value: "llava:13b" } });
+    offers = { [BRAIN]: [QWEN, "llava:13b"] };
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(calls("/tenant/vision", "PUT")).toHaveLength(1));
-    await waitFor(() => expect((screen.getByLabelText("API key") as HTMLInputElement).value).toBe(""));
-    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+    await screen.findByText(/llava:13b/, { selector: "p" });
+    expect(lastSent("PUT", "/ai/jobs/vision")!.body).toEqual({ model: "llava:13b" });
   });
+});
 
-  it("says when the worker found it working", async () => {
-    saved = {
-      api_url: URL,
-      has_key: false,
-      model: "qwen3-vl:8b",
-      status: { ok: true, error: "", model: "qwen3-vl:8b", api_url: URL, checked_at: new Date().toISOString() },
-    };
-    renderSection();
-    expect(await screen.findByText(/Working: qwen3-vl:8b answered just now/)).toBeTruthy();
-  });
-
-  it("says plainly why it couldn't connect, and offers no models", async () => {
-    reachable = false;
-    renderSection();
-    fireEvent.change(await screen.findByLabelText("Endpoint URL"), { target: { value: URL } });
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
-    expect(await screen.findByText(/Couldn't reach http:\/\/vision.local/)).toBeTruthy();
-    expect(screen.queryByLabelText("Model")).toBeNull();
-  });
-
-  it("highlights the worker's report that it can't use the model", async () => {
-    saved = {
-      api_url: URL,
-      has_key: false,
-      model: "qwen3-vl:8b",
-      status: { ok: false, error: `${URL} no longer offers qwen3-vl:8b.`, model: "qwen3-vl:8b", api_url: URL, checked_at: new Date().toISOString() },
-    };
-    renderSection();
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("Vision AI is paused");
-    expect(alert.textContent).toContain("no longer offers qwen3-vl:8b");
-    expect(alert.textContent).toContain("no clip is marked as failed");
-  });
-
-  it("keeps the saved key unless one is typed or it's removed", async () => {
-    saved = { api_url: URL, has_key: true, model: "llava:13b", status: null };
-    renderSection();
-    expect(((await screen.findByLabelText("API key")) as HTMLInputElement).placeholder).toMatch(/Saved/);
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
-    fireEvent.change(await screen.findByLabelText("Model"), { target: { value: "qwen3-vl:8b" } });
-    expect(screen.getByText(/Changing the model marks existing descriptions/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(calls("/tenant/vision", "PUT")).toHaveLength(1));
-    expect(calls("/tenant/vision/connect")[0]).toEqual({ api_url: URL }); // the saved key, server-side
-    expect(calls("/tenant/vision", "PUT")[0]).toEqual({ api_url: URL, model: "qwen3-vl:8b" });
-  });
-
-  it("shows what the endpoint offers when the model went away before saving", async () => {
-    renderSection();
-    fireEvent.change(await screen.findByLabelText("Endpoint URL"), { target: { value: URL } });
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
-    fireEvent.change(await screen.findByLabelText("Model"), { target: { value: "qwen3-vl:8b" } });
-    offered = ["llava:13b"];
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(await screen.findByText(/doesn't offer qwen3-vl:8b/)).toBeTruthy();
-    const select = screen.getByLabelText("Model") as HTMLSelectElement;
-    expect(Array.from(select.options).map((o) => o.value)).toEqual(["", "llava:13b"]);
-    expect(select.value).toBe("");
-  });
-
-  it("turns vision AI off", async () => {
-    saved = { api_url: URL, has_key: true, model: "llava:13b", status: null };
-    renderSection();
-    fireEvent.click(await screen.findByRole("button", { name: "Turn off vision AI" }));
-    await waitFor(() => expect(screen.getByText(/Vision AI is off/)).toBeTruthy());
-    expect(calls("/tenant/vision", "PUT")).toEqual([{ api_url: "", model: "" }]);
-  });
-
-  it("shows others the settings without letting them change them", async () => {
-    role = "editor";
-    saved = { api_url: URL, has_key: true, model: "llava:13b", status: null };
-    renderSection();
-    expect(await screen.findByText("Only admins can change this.")).toBeTruthy();
-    expect(screen.getByText("Model: llava:13b")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
+describe("aiHasProblem", () => {
+  const ok = { machines: [machine({})], jobs: [{ job: "vision", label: "Descriptions & text", model: QWEN, machines: 1, offering: 1 }] };
+  it("flags a job that can't run, or an offline machine doing one", () => {
+    expect(aiHasProblem(ok)).toBe(false);
+    expect(aiHasProblem({ ...ok, jobs: [{ ...ok.jobs[0], machines: 0, offering: 0 }], machines: [] })).toBe(true);
+    const offline = machine({ name: "B", status: { online: false, error: "x", models: [], checked_at: null } });
+    expect(aiHasProblem({ ...ok, machines: [machine({}), offline] })).toBe(true);
+    expect(aiHasProblem({ ...ok, machines: [machine({}), { ...offline, enabled: false }] })).toBe(false);
+    expect(aiHasProblem(undefined)).toBe(false);
   });
 });
 
 describe("ago", () => {
-  it("says how long ago, plainly", () => {
+  it("says roughly when", () => {
     const now = Date.parse("2026-10-08T12:00:00Z");
     expect(ago("2026-10-08T11:59:30Z", now)).toBe("just now");
-    expect(ago("2026-10-08T11:59:00Z", now)).toBe("1 minute ago");
-    expect(ago("2026-10-08T09:00:00Z", now)).toBe("3 hours ago");
+    expect(ago("2026-10-08T11:57:00Z", now)).toBe("3 minutes ago");
+    expect(ago("2026-10-08T10:00:00Z", now)).toBe("2 hours ago");
+    expect(ago(null, now)).toBe("");
   });
 });

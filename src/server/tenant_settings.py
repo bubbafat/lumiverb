@@ -103,24 +103,3 @@ def playback_cap(session: Session, *, public: bool) -> int | None:
     caps = [c for c in caps if c is not None]
     return min(caps) if caps else None
 
-
-VISION_STATUS = "vision_status"
-
-
-def get_vision_status(session: Session) -> dict | None:
-    """The worker's last check of the vision endpoint: {ok, error, model,
-    api_url, checked_at}; None until it has checked since the settings changed."""
-    import json
-
-    raw = _get(session, VISION_STATUS)
-    try:
-        value = json.loads(raw) if raw else None
-    except ValueError:
-        return None
-    return value if isinstance(value, dict) else None
-
-
-def set_vision_status(session: Session, status: dict | None) -> None:
-    import json
-
-    _put(session, VISION_STATUS, None if status is None else json.dumps(status))
