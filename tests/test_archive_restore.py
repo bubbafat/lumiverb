@@ -26,6 +26,16 @@ def _sha() -> str:
     return os.urandom(32).hex()
 
 
+def _jpeg() -> bytes:
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 36), color=(10, 20, 30)).save(buf, format="JPEG")
+    return buf.getvalue()
+
+
 def _archive(env, asset_id: str, reason: str = "missing") -> None:
     client, headers, *_ = env
     r = client.request("DELETE", "/v1/assets", json={"asset_ids": [asset_id], "reason": reason}, headers=headers)
@@ -115,6 +125,52 @@ def test_a_file_back_at_its_own_path_still_comes_back(env):
     assert _get(env, asset)["rel_path"] == "same/F001.mov"
 
 
+@pytest.mark.slow
+def test_a_restore_by_content_keeps_the_note_and_goes_back_in_search(env):
+    client, headers, *_ = env
+    sha = _sha()
+    asset = _ingest(env, "keep/M001.mov", sha=sha)
+    assert client.put(f"/v1/assets/{asset}/note", json={"text": "Best take"}, headers=headers).status_code == 200
+    _archive(env, asset)
+    assert _ingest(env, "moved/M001.mov", sha=sha) == asset
+    assert _get(env, asset)["note"] == "Best take"
+    with _sessions(env, 1) as [(session, _)]:
+        synced = session.execute(text("SELECT search_synced_at FROM assets WHERE asset_id = :a"), {"a": asset}).scalar()
+    assert synced is None  # queued for the next search sync, at its new path
+
+
+@pytest.mark.slow
+def test_a_file_without_a_hash_is_a_new_asset(env):
+    sha = _sha()
+    asset = _ingest(env, "nohash/N001.mov", sha=sha)
+    _archive(env, asset)
+    assert _ingest(env, "nohash/elsewhere/N001.mov") != asset
+    assert _get(env, asset) == {"status_code": 404}  # still archived
+
+
+@pytest.mark.slow
+def test_a_path_the_user_emptied_from_the_trash_isnt_a_way_back(env):
+    """A path in ignored_files is refused before any content match: the
+    archived asset with the same content stays archived."""
+    client, headers, *_ = env
+    gone = _ingest(env, "ignored/O001.mov", sha=_sha())
+    _archive(env, gone, reason="user")
+    r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [gone]}, headers=headers)
+    assert r.json()["deleted"] == 1
+    sha = _sha()
+    archived = _ingest(env, "ignored/P001.mov", sha=sha)
+    _archive(env, archived)
+
+    import io
+    import json
+
+    r = client.post("/v1/ingest", headers=headers, files={"proxy": ("p.jpg", io.BytesIO(_jpeg()), "image/jpeg")},
+                    data={"library_id": env[2], "rel_path": "ignored/O001.mov", "file_size": "1000",
+                          "media_type": "video", "exif": json.dumps({"sha256": sha})})
+    assert r.status_code == 409
+    assert _get(env, archived) == {"status_code": 404}  # not restored at the ignored path
+
+
 # Two ingests at once (the scanner sends four at a time): the file back at its
 # own path and a copy of it elsewhere, or two copies. Only one may claim the
 # archived asset; the other gets an asset of its own.
@@ -164,7 +220,7 @@ def test_a_file_back_at_its_path_after_a_copy_claimed_it_gets_its_own_asset(env)
     sha = _sha()
     asset = _ingest(env, "race/I001.mov", sha=sha)
     _archive(env, asset)
-    with _sessions(env) as [(path_session, by_path), (content_session, by_content)]:
+    with _sessions(env) as [(_, by_path), (content_session, by_content)]:
         found = by_path.get_by_library_and_rel_path(library_id, "race/I001.mov")  # read before the copy's commit
         claimed = by_content.find_archived_by_sha(library_id, sha)
         claimed.rel_path = "race/copy of I001.mov"
@@ -249,7 +305,8 @@ def _library_with_archived(env, name: str, in_project: bool = False) -> tuple[st
 
 
 def _still_archived(env, asset_id: str) -> bool:
-    """True if the asset is still there, archived: naming it for deletion finds it (then puts it back)."""
+    """True if the asset was still there, archived. Checking deletes it for good: naming it
+    with include_missing is how the API reaches an archived asset, so check last."""
     client, headers, *_ = env
     r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [asset_id], "include_missing": True,
                                                           "remove_from_projects": True}, headers=headers)
@@ -276,6 +333,43 @@ def test_keep_leaves_archived_clips_with_the_trashed_library(env):
     r = client.request("DELETE", f"/v1/libraries/{library_id}", json={"archived": "keep"}, headers=headers)
     assert r.status_code == 204, r.text
     assert _still_archived(env, archived)
+
+
+@pytest.mark.slow
+def test_keep_leaves_each_clip_with_its_own_reason(env):
+    """Kept archived clips stay "missing" (they can still come back by
+    content if the library is ever restored); the rest went with the library."""
+    client, headers, *_ = env
+    library_id, archived, _ = _library_with_archived(env, "KeepReasons")
+    assert client.request("DELETE", f"/v1/libraries/{library_id}", json={"archived": "keep"},
+                          headers=headers).status_code == 204
+    with _sessions(env, 1) as [(session, _)]:
+        rows = dict(session.execute(text("SELECT asset_id, deleted_reason FROM assets WHERE library_id = :l"),
+                                    {"l": library_id}).all())
+    assert rows.pop(archived) == "missing"
+    assert set(rows.values()) == {"library"}
+
+
+@pytest.mark.slow
+def test_a_trashed_library_s_archived_clips_arent_restored_by_content(env):
+    client, headers, *_ = env
+    library_id, archived, lib_env = _library_with_archived(env, "TrashedLib")
+    with _sessions(env, 1) as [(session, _)]:
+        sha = session.execute(text("SELECT sha256 FROM assets WHERE asset_id = :a"), {"a": archived}).scalar()
+    assert client.request("DELETE", f"/v1/libraries/{library_id}", json={"archived": "keep"},
+                          headers=headers).status_code == 204
+
+    import io
+    import json
+
+    r = client.post("/v1/ingest", headers=headers, files={"proxy": ("p.jpg", io.BytesIO(_jpeg()), "image/jpeg")},
+                    data={"library_id": library_id, "rel_path": "back.mov", "file_size": "1000",
+                          "media_type": "video", "exif": json.dumps({"sha256": sha})})
+    assert r.status_code == 409
+    with _sessions(env, 1) as [(session, _)]:
+        row = session.execute(text("SELECT rel_path, deleted_reason FROM assets WHERE asset_id = :a"),
+                              {"a": archived}).one()
+    assert tuple(row) == ("gone.mov", "missing")
 
 
 @pytest.mark.slow

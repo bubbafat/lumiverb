@@ -931,6 +931,10 @@ class AssetRepository:
         stmt = select(Asset).where(Asset.library_id == library_id, _archived())
         return list(self._session.exec(stmt).all())
 
+    def count_archived(self, library_id: str) -> int:
+        stmt = select(func.count()).select_from(Asset).where(Asset.library_id == library_id, _archived())
+        return int(self._session.exec(stmt).one())
+
     def find_archived_by_sha(self, library_id: str, sha256: str | None) -> Asset | None:
         """The library's most recently archived (missing) asset with this content,
         locked for restoring. One another ingest has locked is skipped, so two

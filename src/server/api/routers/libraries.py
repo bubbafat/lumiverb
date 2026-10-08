@@ -329,11 +329,10 @@ def delete_library(
         raise HTTPException(status_code=404, detail="Library not found")
     if library.status == "trashed":
         raise HTTPException(status_code=409, detail="Library is already in trash")
-    archived = AssetRepository(session).list_archived(library_id)
-    if archived:
+    n = AssetRepository(session).count_archived(library_id)
+    if n:
         choice = body.archived if body else None
         if choice is None:
-            n = len(archived)
             raise DecisionRequiredError(
                 "archived_clips",
                 f"{n} {'clip' if n == 1 else 'clips'} in this library {'is' if n == 1 else 'are'} archived: "
@@ -345,7 +344,7 @@ def delete_library(
         if choice == "delete":
             from src.server.api.routers.trash import purge_assets
 
-            purge_assets(session, request, archived, user_id,
+            purge_assets(session, request, AssetRepository(session).list_archived(library_id), user_id,
                          remove_from_projects=body.remove_from_projects)
     was_public = library.is_public
     try:
