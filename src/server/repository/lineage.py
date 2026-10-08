@@ -24,7 +24,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlmodel import Session
 
-from src.shared.producers import PERSON, PRODUCERS, UNKNOWN, effective_settings, settings_hash
+from src.shared.producers import CLIP_MODEL_ID, PERSON, PRODUCERS, UNKNOWN, effective_settings, settings_hash
 from src.shared.utils import utcnow
 
 # Which clips each producer applies to (SQL on active_assets a).
@@ -57,7 +57,7 @@ MADE: dict[str, str] = {
     "vision": "EXISTS (SELECT 1 FROM asset_metadata am WHERE am.asset_id = a.asset_id)",
     "ocr": ("EXISTS (SELECT 1 FROM asset_metadata am"
             " WHERE am.asset_id = a.asset_id AND (am.data->>'has_text') IS NOT NULL)"),
-    "clip": "EXISTS (SELECT 1 FROM asset_embeddings ae WHERE ae.asset_id = a.asset_id)",
+    "clip": f"EXISTS (SELECT 1 FROM asset_embeddings ae WHERE ae.asset_id = a.asset_id AND ae.model_id = '{CLIP_MODEL_ID}')",
     "faces": "a.face_count IS NOT NULL",
     "transcript": "a.has_transcript IS NOT NULL",
 }
@@ -155,14 +155,17 @@ def counts(session: Session, artifact: str, want: dict[str, Any], library_id: st
 
 
 def record(session: Session, asset_id: str, artifact: str, lineage: dict[str, Any] | None,
-           *, outcome: str = "ok", source_sha256: str | None = None, commit: bool = True) -> None:
+           *, outcome: str = "ok", source_sha256: str | None = None, person: bool = False,
+           commit: bool = True) -> None:
     """Record how an artifact was just made. A write that doesn't say (an
     old client, the macOS app today) is an unknown producer's: stale, so
-    the brain makes it again. The source defaults to the clip's file now."""
+    the brain makes it again. person: a person made it (only the server
+    says so; a client can't). The source defaults to the clip's file now."""
     lineage = lineage or {}
-    producer = str(lineage.get("producer") or UNKNOWN)
-    if producer not in (UNKNOWN, PERSON) and producer != PRODUCERS[artifact].producer:
-        # Another kind's producer can't make this one: whatever it is, it isn't current.
+    producer = PERSON if person else str(lineage.get("producer") or UNKNOWN)
+    if not person and producer != PRODUCERS[artifact].producer:
+        # Another kind's producer can't make this one, and a client can't
+        # claim a person made it: whatever it is, it isn't current.
         producer = UNKNOWN
     source = lineage.get("source_sha256") or source_sha256
     session.execute(text(

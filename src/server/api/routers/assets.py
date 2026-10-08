@@ -19,8 +19,8 @@ from src.shared import asset_status
 from src.shared.io_utils import normalize_path_prefix
 from src.server.repository.tenant import AssetMetadataRepository, AssetRepository, LibraryRepository
 from src.server.repository import lineage
+from src.shared.producers import CLIP_MODEL_ID
 from src.server.api.routers.producers import LineageIn, lineage_dict
-from src.shared.producers import PERSON
 from src.server.models.tenant import Asset
 from src.server.storage.local import get_storage
 from src.shared.utils import utcnow
@@ -1464,11 +1464,12 @@ class TranscriptSubmitResponse(BaseModel):
     status: str
 
 
-def _transcript_lineage(body: TranscriptSubmitRequest) -> dict | None:
-    """A person's transcript is a person's: current, never regenerated over."""
+def _transcript_lineage(body: TranscriptSubmitRequest) -> dict:
+    """record() arguments: a person's transcript is a person's (current,
+    never regenerated over); a machine's says how it was made."""
     if body.source == "manual":
-        return {"producer": PERSON}
-    return lineage_dict(body.lineage)
+        return {"lineage": None, "person": True}
+    return {"lineage": lineage_dict(body.lineage)}
 
 
 @router.post("/{asset_id}/transcript", response_model=TranscriptSubmitResponse)
@@ -1503,7 +1504,7 @@ def submit_transcript(
         asset.updated_at = utcnow()
         session.add(asset)
         session.commit()
-        lineage.record(session, asset_id, "transcript", _transcript_lineage(body), outcome="empty")
+        lineage.record(session, asset_id, "transcript", **_transcript_lineage(body), outcome="empty")
         return TranscriptSubmitResponse(asset_id=asset_id, status="no_speech")
 
     if not validate_srt(body.srt):
@@ -1520,7 +1521,7 @@ def submit_transcript(
     asset.updated_at = utcnow()
     session.add(asset)
     session.commit()
-    lineage.record(session, asset_id, "transcript", _transcript_lineage(body),
+    lineage.record(session, asset_id, "transcript", **_transcript_lineage(body),
                    outcome="ok" if asset.has_transcript else "empty")
 
     # Sync to search (works with or without vision metadata)
@@ -1561,7 +1562,7 @@ def delete_transcript(
     session.add(asset)
     session.commit()
     # A person removed it: their choice stands, nothing regenerates it.
-    lineage.record(session, asset_id, "transcript", {"producer": PERSON}, outcome="empty")
+    lineage.record(session, asset_id, "transcript", None, person=True, outcome="empty")
 
     # Sync to search
     from src.server.search.sync import try_sync_asset
@@ -1687,7 +1688,8 @@ def submit_embedding(
         model_version=body.model_version,
         vector=[float(x) for x in body.vector],
     )
-    lineage.record(session, asset_id, "clip", lineage_dict(body.lineage))
+    if body.model_id == CLIP_MODEL_ID:  # another model's vectors aren't the CLIP producer's artifact
+        lineage.record(session, asset_id, "clip", lineage_dict(body.lineage))
     return {"ok": True}
 
 
@@ -1728,7 +1730,9 @@ def submit_batch_embeddings(
             model_version=item.model_version,
             vector=[float(x) for x in item.vector],
         )
-        lineage.record(session, item.asset_id, "clip", lineage_dict(body.lineage, item.source_sha256), commit=False)
+        if item.model_id == CLIP_MODEL_ID:
+            lineage.record(session, item.asset_id, "clip", lineage_dict(body.lineage, item.source_sha256),
+                           commit=False)
         updated += 1
 
     if updated > 0:

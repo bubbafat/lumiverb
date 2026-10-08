@@ -47,11 +47,14 @@ def lineage_dict(value: "LineageIn | dict | str | None", source_sha256: str | No
             return None
         if value is None:
             return None
-    if isinstance(value, LineageIn):
-        value = value.model_dump()
-    if not isinstance(value, dict):
+    if isinstance(value, dict):  # a form field's JSON: held to the same shape as a JSON body's
+        try:
+            value = LineageIn.model_validate(value)
+        except ValueError:
+            return None
+    if not isinstance(value, LineageIn):
         return None
-    out = dict(value)
+    out = value.model_dump()
     if source_sha256:
         out["source_sha256"] = source_sha256
     return out

@@ -89,6 +89,10 @@ def _producers() -> tuple[Producer, ...]:
 PRODUCERS: dict[str, Producer] = {p.artifact: p for p in _producers()}
 ARTIFACTS: tuple[str, ...] = tuple(PRODUCERS)
 
+# The model_id the CLIP producer's vectors are stored under (asset_embeddings);
+# other models' vectors (the macOS app's FeaturePrint) aren't its artifact.
+CLIP_MODEL_ID = "clip"
+
 # The repair summary's counts and page filters (what the worker is handed)
 # and the artifact each is about.
 MISSING_FLAGS: dict[str, str] = {

@@ -322,3 +322,93 @@ def test_a_failure_is_kept_and_tried_again_later_and_later(env):
         L.record(s, clip, "transcript", None)
         assert s.execute(text("SELECT error, attempts FROM artifact_lineage WHERE asset_id = :a"
                               " AND artifact = 'transcript'"), {"a": clip}).one() == (None, 0)
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: only the server says a person made it; only CLIP's vectors are
+# CLIP's; a form field's lineage is checked like a body's.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_a_client_cant_claim_a_person_made_it(env):
+    client, headers, *_ = env
+    sha = _sha()
+    img = _ingest_with(env, "lin/claims-person.jpg", sha, None)
+    r = client.post(f"/v1/assets/{img}/vision", json={
+        "model_id": "m", "description": "d",
+        "lineage": {"producer": P.PERSON, "version": "", "settings_hash": "", "source_sha256": sha}}, headers=headers)
+    assert r.status_code == 200, r.text
+    assert _row(env, img, "vision")[0] == P.UNKNOWN
+
+    vid = _ingest_with(env, "lin/claims-person.mov", sha, None, media_type="video")
+    client.post(f"/v1/assets/{vid}/transcript", json={
+        "srt": "1\n00:00:00,000 --> 00:00:01,000\nhi\n", "source": "whisper",
+        "lineage": {"producer": P.PERSON, "version": "", "settings_hash": ""}}, headers=headers)
+    assert _row(env, vid, "transcript")[0] == P.UNKNOWN
+    # A transcript a person typed is theirs.
+    client.post(f"/v1/assets/{vid}/transcript", json={"srt": "1\n00:00:00,000 --> 00:00:01,000\nmine\n"},
+                headers=headers)
+    assert _row(env, vid, "transcript")[0] == P.PERSON
+
+
+@pytest.mark.slow
+def test_another_models_vectors_leave_clips_lineage_alone(env):
+    client, headers, *_ = env
+    sha = _sha()
+    img = _ingest_with(env, "lin/featureprint.jpg", sha, None)
+    r = client.post(f"/v1/assets/{img}/embeddings", json={
+        "model_id": "clip", "model_version": "ViT-B-32-openai", "vector": [0.0] * 512,
+        "lineage": _want(env, "clip", sha)}, headers=headers)
+    assert r.status_code == 201, r.text
+    r = client.post("/v1/assets/batch-embeddings", json={"items": [{
+        "asset_id": img, "model_id": "apple_vision", "model_version": "1", "vector": [0.0] * 768}]}, headers=headers)
+    assert r.status_code == 200, r.text
+    assert _state(env, img, "clip") == "current"
+
+
+@pytest.mark.slow
+def test_only_clips_vectors_count_as_made(env):
+    from src.server.repository import lineage as L
+
+    client, headers, *_ = env
+    lib = client.post("/v1/libraries", json={"name": "LinFP", "root_path": "/tmp/LinFP"}, headers=headers).json()
+    img = _ingest_with((client, headers, lib["library_id"]), "fp.jpg", _sha(), None)
+    client.post("/v1/assets/batch-embeddings", json={"items": [{
+        "asset_id": img, "model_id": "apple_vision", "model_version": "1", "vector": [0.0] * 768}]}, headers=headers)
+    with _db(env) as s:
+        assert L.counts(s, "clip", L.desired(s, "clip"), lib["library_id"])["missing"] == 1
+
+
+@pytest.mark.slow
+def test_a_form_fields_lineage_is_checked(env):
+    client, headers, *_ = env
+    sha = _sha()
+    vid = _ingest_with(env, "lin/badform.mov", sha, None, media_type="video")
+    for bad in ({"producer": "analysis-proxy", "version": "1", "settings_hash": "x", "source_sha256": 12},
+                {"producer": "analysis-proxy", "version": "1" * 500, "settings_hash": "x"}, ["not", "a", "dict"]):
+        r = client.post(f"/v1/assets/{vid}/artifacts/analysis_proxy",
+                        files={"file": ("a.mp4", io.BytesIO(b"\x00\x00\x00\x18ftypmp42 x"), "video/mp4")},
+                        data={"lineage": json.dumps(bad)}, headers=headers)
+        assert r.status_code in (200, 201), r.text
+        assert _row(env, vid, "analysis_proxy")[0] == P.UNKNOWN
+
+
+@pytest.mark.slow
+def test_an_ingest_records_only_what_it_stored(env):
+    from PIL import Image
+
+    client, headers, library_id, *_ = env
+    sha = _sha()
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 36)).save(buf, format="JPEG")
+    buf.seek(0)
+    r = client.post("/v1/ingest", data={
+        "library_id": library_id, "rel_path": "lin/nothing-stored.jpg", "file_size": "1000", "media_type": "image",
+        "width": "64", "height": "36", "exif": json.dumps({"sha256": sha}),
+        "vision": json.dumps({"model_id": "", "description": "dropped"}), "embeddings": json.dumps([]),
+        "lineage": json.dumps({"vision": _want(env, "vision", sha), "clip": _want(env, "clip", sha)}),
+    }, files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=headers)
+    assert r.status_code == 200, r.text
+    clip = r.json()["asset_id"]
+    assert _row(env, clip, "vision") is None and _row(env, clip, "clip") is None

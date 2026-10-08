@@ -169,6 +169,7 @@ def _do_ingest(
     artifact kind to its lineage; one not given is an unknown producer's."""
     from src.server.api.routers.producers import lineage_dict
     from src.server.repository.lineage import record as record_lineage
+    from src.shared.producers import CLIP_MODEL_ID
 
     lineage_by_kind = lineage_by_kind or {}
     storage: LocalStorage = get_storage()
@@ -277,9 +278,11 @@ def _do_ingest(
     LibraryRepository(session).bump_revision(library_id)
 
     record_lineage(session, asset_id, "proxy", lineage_dict(lineage_by_kind.get("proxy")), commit=False)
-    if vision_data is not None:
+    # Only what was stored: a description with no model is dropped above,
+    # and only the CLIP producer's vectors are its artifact.
+    if vision_data is not None and vision_data.get("model_id"):
         record_lineage(session, asset_id, "vision", lineage_dict(lineage_by_kind.get("vision")), commit=False)
-    if embeddings_data is not None:
+    if embeddings_data and any(e.get("model_id") == CLIP_MODEL_ID for e in embeddings_data):
         record_lineage(session, asset_id, "clip", lineage_dict(lineage_by_kind.get("clip")), commit=False)
 
     # Commit all changes atomically. The tenant session does NOT auto-commit
