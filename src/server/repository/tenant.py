@@ -1985,19 +1985,9 @@ class ProjectRepository:
         clips, in one query. videos_only for what an export leaves out."""
         sql = self._HIDDEN_CLIPS_SQL
         if videos_only:
-            sql += " AND (a.media_type = 'video' OR a.media_type LIKE 'video/%')"
+            sql += " AND a.media_type = 'video'"  # as export decides what's a video
         row = self._session.execute(text(sql), {"pid": project_id}).one()
         return {"trashed": int(row[0]), "missing": int(row[1]), "library_trashed": int(row[2])}
-
-    def trashed_asset_count(self, project_id: str) -> int:
-        """Clips in the project that a person trashed: hidden and left out
-        of exports until restored."""
-        return self.hidden_clip_counts(project_id)["trashed"]
-
-    def missing_asset_count(self, project_id: str) -> int:
-        """Clips in the project a scan trashed because the file went
-        missing; they come back when the file does."""
-        return self.hidden_clip_counts(project_id)["missing"]
 
     def trashed_asset_ids(self, project_id: str) -> list[str]:
         """The clips in the project that a person trashed, whose library

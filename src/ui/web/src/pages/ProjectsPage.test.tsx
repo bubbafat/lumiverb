@@ -11,6 +11,7 @@ const api = vi.hoisted(() => ({
   restoreProject: vi.fn(),
   restoreProjectClips: vi.fn(),
   emptyProjectTrash: vi.fn(),
+  setProjectStatus: vi.fn(),
 }));
 vi.mock("../api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/client")>()),
@@ -216,5 +217,20 @@ describe("ProjectsPage", () => {
     await screen.findByText("Customer Video 123");
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Archive" })).toBeNull();
+  });
+
+  it("offers archive and delete on an older project with no owner", async () => {
+    // Projects from before ownership belong to everyone, and the server lets anyone change them.
+    api.listProjects.mockResolvedValue([project({ ownership: "shared", owner_user_id: null })]);
+    renderPage();
+    expect(await screen.findByRole("button", { name: "Delete" })).toBeTruthy();
+  });
+
+  it("says so when archiving fails", async () => {
+    renderPage();
+    const archive = await screen.findByRole("button", { name: "Archive" });
+    api.setProjectStatus.mockRejectedValue(new ApiError(500, "Archive failed"));
+    fireEvent.click(archive);
+    expect((await screen.findByRole("alert")).textContent).toMatch(/Archive failed/);
   });
 });

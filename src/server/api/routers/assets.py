@@ -807,9 +807,14 @@ def batch_trash_assets(
     body: BatchTrashRequest,
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
-    _: Annotated[None, Depends(require_editor)],
 ) -> BatchTrashResponse:
-    """Soft-delete multiple assets. Returns trashed and not_found lists. Quickwit delete is best-effort."""
+    """Soft-delete multiple assets. Returns trashed and not_found lists. Quickwit delete is best-effort.
+
+    A person's trash ("user") needs an editor. Marking files the scanner no
+    longer finds ("missing", or no reason) stays open to whoever can scan.
+    """
+    if body.reason == "user":
+        require_editor(request)
     asset_repo = AssetRepository(session)
     trashed_ids, not_found_ids = asset_repo.trash_many(body.asset_ids, reason=body.reason)
     if trashed_ids:

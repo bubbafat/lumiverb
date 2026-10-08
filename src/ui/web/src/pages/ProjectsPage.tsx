@@ -193,7 +193,9 @@ export default function ProjectsPage() {
         project.project_id,
         project.status === "archived" ? "active" : "archived",
       ),
+    onMutate: () => setActionError(null),
     onSuccess: refresh,
+    onError: (err: Error) => setActionError(err.message),
   });
 
   const createMutation = useMutation({
@@ -287,8 +289,9 @@ export default function ProjectsPage() {
         </div>
       );
     }
-    // Only the owner archives or deletes; the server would refuse anyway.
-    if (project.ownership === "shared") return null;
+    // Only the owner archives or deletes (the server refuses anyone else);
+    // a project from before ownership belongs to everyone.
+    if (project.ownership === "shared" && project.owner_user_id != null) return null;
     return (
       // Hidden until hover only where hovering exists; a phone can't hover.
       <div className="flex items-center gap-1 transition-opacity focus-within:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100">

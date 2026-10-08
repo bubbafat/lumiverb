@@ -262,7 +262,8 @@ export default function ProjectDetailPage() {
   const trashedClips = project?.trashed_asset_count ?? 0;
   const missingClips = project?.missing_asset_count ?? 0;
   const libraryTrashedClips = project?.library_trashed_asset_count ?? 0;
-  const isOwner = project?.ownership !== "shared";
+  // A project from before ownership belongs to everyone.
+  const isOwner = project?.ownership !== "shared" || project?.owner_user_id == null;
 
   if (isProjectLoading) {
     return (

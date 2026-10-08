@@ -352,6 +352,10 @@ async def create_and_ingest(
     library = lib_repo.get_by_id(library_id)
     if library is None:
         raise HTTPException(status_code=404, detail="Library not found")
+    # A trashed library takes no new clips and doesn't get its clips back
+    # from a scan already under way (or a client still holding its id).
+    if library.status == "trashed":
+        raise HTTPException(status_code=409, detail="Library is in the trash")
 
     # Enforce path filters (merged tenant + library)
     filter_repo = PathFilterRepository(session)

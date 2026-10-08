@@ -173,4 +173,11 @@ describe("ProjectDetailPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
     expect(screen.queryByRole("button", { name: "Move to trash" })).toBeNull();
   });
+
+  it("offers move to trash on an older project with no owner", async () => {
+    withProject({ ownership: "shared", owner_user_id: null });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    expect(screen.getByRole("button", { name: "Move to trash" })).toBeTruthy();
+  });
 });

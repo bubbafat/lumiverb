@@ -1519,6 +1519,44 @@ def test_viewers_cannot_trash_or_restore_clips(projects_env):
 
 
 @pytest.mark.slow
+def test_anyone_who_can_scan_can_mark_files_missing(projects_env):
+    # The scanner marks files it no longer finds; that stays open to every
+    # role that can ingest, or a viewer's scan would fail halfway.
+    client, api_key, library_id = projects_env
+    viewer = _viewer_key(client, api_key)
+    clip = _ingest_asset(client, api_key, library_id, "roles/gone-from-disk.jpg")
+    r = client.request("DELETE", "/v1/assets", json={"asset_ids": [clip], "reason": "missing"},
+                       headers=_headers(viewer))
+    assert r.status_code == 200, r.text
+    assert r.json()["trashed"] == [clip]
+
+
+@pytest.mark.slow
+def test_a_scan_cant_bring_back_clips_of_a_trashed_library(projects_env):
+    client, api_key, _ = projects_env
+    lib = _library(client, api_key, "Trashed-then-scanned")
+    clip = _ingest_asset(client, api_key, lib, "scan/old.jpg")
+    assert client.delete(f"/v1/libraries/{lib}", headers=_headers(api_key)).status_code == 204
+
+    import io
+
+    from PIL import Image as PILImage
+
+    for rel_path in ("scan/old.jpg", "scan/new.jpg"):
+        buf = io.BytesIO()
+        PILImage.new("RGB", (10, 10)).save(buf, format="JPEG")
+        buf.seek(0)
+        r = client.post(
+            "/v1/ingest",
+            data={"library_id": lib, "rel_path": rel_path, "file_size": "1000", "media_type": "image"},
+            files={"proxy": ("proxy.jpg", buf, "image/jpeg")},
+            headers=_headers(api_key),
+        )
+        assert r.status_code == 409, (rel_path, r.text)
+    assert client.get(f"/v1/assets/{clip}", headers=_headers(api_key)).status_code == 404
+
+
+@pytest.mark.slow
 def test_another_editor_can_restore_clips_in_a_shared_project(projects_env):
     client, api_key, library_id = projects_env
     other_key = _other_user_key(client, api_key)
