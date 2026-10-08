@@ -109,7 +109,7 @@ sudo mount -o remount,ro /mnt/media-01
 sudo mount -o remount,ro /mnt/media-02
 ```
 
-Keep `soft`: when the Mac Studio sleeps, reads fail instead of hanging forever.
+The fstab lines don't say `soft` or `hard`, so the mounts are `soft`, the CIFS default: when the Mac Studio sleeps, reads fail instead of hanging forever. Never add `hard`: a sleeping Mac would then hang the worker's scans and renders indefinitely.
 
 ## How it runs
 
