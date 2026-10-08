@@ -39,7 +39,7 @@ V1 = {
     "proxy": ("proxy", "8baa5eb52e86ea80"),
     "video_preview": ("preview", "4f627804650c7f23"),
     "analysis_proxy": ("analysis-proxy", "172962a68536b54f"),
-    "scenes": ("scene-detect", "7d15327f063f4682"),
+    "scenes": ("scene-detect", "27e5da9cd68d56d9"),
     "clip": ("clip", "c34fd145303f354e"),
     "faces": ("insightface", "8a9e204f61973fa2"),
     "transcript": ("whisper", "82c28198e6c0a481"),

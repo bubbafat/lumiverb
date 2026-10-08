@@ -415,7 +415,9 @@ def test_a_step_leaves_skipped_items_and_reports_what_it_takes(home: Path, libra
         stack.enter_context(patch("src.client.cli.repair._page_missing", return_value=page))
         for name, value in extra.items():
             stack.enter_context(patch(name, value))
-        one = stack.enter_context(patch(target, return_value="ok"))
+        # Embed and OCR batch what each item returns: a result for that clip.
+        result = {"asset_id": "ast_b"} if job_type in ("embed", "ocr") else "ok"
+        one = stack.enter_context(patch(target, return_value=result))
         run_repair(MagicMock(), library, job_type=job_type, console=Console(quiet=True),
                    should_stop=lambda: False, skip_items={(job_type, "ast_a")},
                    on_take=lambda step, asset_id: taken.append((step, asset_id)))
@@ -439,3 +441,147 @@ def test_vision_leaves_skipped_items_and_reports_what_it_takes(home: Path, libra
                    on_take=lambda step, asset_id: taken.append((step, asset_id)))
     assert taken == [("vision", "ast_b")]
     assert [c.kwargs["asset_id"] for c in one.call_args_list] == ["ast_b"]
+
+
+# ---------------------------------------------------------------------------
+# Lineage (ADR-016 phase 3): each step makes its artifact with the server's
+# settings and says so, with the hash of the file it was made from.
+# ---------------------------------------------------------------------------
+
+SHA = "ab" * 32
+
+
+def _with_producers(overrides: dict | None = None) -> MagicMock:
+    """A client whose server says what each producer makes its artifact with."""
+    from src.shared import producers as P
+
+    listing = {"producers": [{"artifact": a, "settings": {**P.effective_settings(a), **(overrides or {}).get(a, {})}}
+                             for a in P.ARTIFACTS]}
+    client = MagicMock()
+
+    def get(path, **_kwargs):
+        resp = MagicMock()
+        resp.json.return_value = listing if path == "/v1/producers" else {"items": []}
+        return resp
+
+    client.get.side_effect = get
+    return client
+
+
+def _sent(client: MagicMock, suffix: str) -> list:
+    return [c for c in client.post.call_args_list if c.args and c.args[0].endswith(suffix)]
+
+
+@pytest.mark.fast
+def test_render_uses_the_servers_settings_and_says_so(home: Path, library: dict) -> None:
+    import json
+
+    from src.shared import producers as P
+
+    client = _with_producers({"analysis_proxy": {"crf": 30}})
+    used = []
+
+    def fake_render(source: Path, dest: Path, settings=None, *, timeout=None) -> None:
+        used.append(settings)
+        dest.write_bytes(b"proxy")
+
+    pages = {"missing_analysis_proxy": [{"asset_id": "ast_a", "rel_path": "a.mov", "duration_sec": 4.0, "sha256": SHA}]}
+    with patch("src.client.cli.repair.render_analysis_proxy", side_effect=fake_render):
+        _run(client, library, "render", {"missing_analysis_proxy": 1}, pages)
+
+    assert used[0].crf == 30
+    [call] = _sent(client, "/artifacts/analysis_proxy")
+    want = {**P.effective_settings("analysis_proxy"), "crf": 30}
+    assert json.loads(call.kwargs["data"]["lineage"]) == {
+        "producer": "analysis-proxy", "version": "1", "settings_hash": P.settings_hash(want), "source_sha256": SHA}
+
+
+@pytest.mark.fast
+def test_probe_says_how_it_was_made(library: dict, tmp_path: Path) -> None:
+    from src.client.cli.repair import _probe_one
+    from src.client.cli.producer_settings import ProducerSettings
+    from src.shared import producers as P
+
+    client = _with_producers()
+    facet = MagicMock()
+    facet.to_dict.return_value = {"frame_rate": 25.0}
+    with patch("src.client.cli.repair.probe_video", return_value=facet):
+        assert _probe_one(client, tmp_path / "mnt" / "Footage", {"asset_id": "ast_a", "rel_path": "a.mov", "sha256": SHA},
+                          ProducerSettings(client)) == "ok"
+    body = client.put.call_args.kwargs["json"]
+    assert body["frame_rate"] == 25.0
+    assert body["lineage"] == P.lineage("probe", {}, SHA)
+
+
+@pytest.mark.fast
+def test_transcription_uses_the_servers_whisper_settings_and_says_so(home: Path, library: dict) -> None:
+    from src.shared import producers as P
+
+    _cached(home, "ast_a")
+    client = _with_producers({"transcript": {"model": "medium", "vad_min_silence_ms": 700}})
+    pages = {"missing_transcription": [{"asset_id": "ast_a", "rel_path": "a.mov", "duration_sec": 4.0, "sha256": SHA,
+                                         "has_analysis_proxy": True}]}
+    with patch("src.client.cli.repair._transcribe_one", return_value=("", "")) as tr:
+        _run(client, library, "transcribe", {"missing_transcription": 1}, pages)
+
+    assert tr.call_args.args[1:] == ("medium", 700)
+    [call] = _sent(client, "/transcript")
+    assert call.kwargs["json"]["lineage"] == P.lineage(
+        "transcript", {**P.effective_settings("transcript"), "model": "medium", "vad_min_silence_ms": 700}, SHA)
+
+
+@pytest.mark.fast
+def test_embeddings_say_which_file_each_came_from_and_what_clip_saw(home: Path, library: dict) -> None:
+    from src.shared import producers as P
+
+    client = _with_producers()
+    pages = {"missing_embeddings": [{"asset_id": "ast_a", "rel_path": "a.jpg", "sha256": SHA}]}
+    with (
+        patch("src.client.workers.embeddings.clip_provider.CLIPEmbeddingProvider") as clip,
+        patch("src.client.cli.repair._repair_embed_one",
+              return_value={"asset_id": "ast_a", "model_id": "clip", "model_version": "x", "vector": [0.1]}),
+    ):
+        _run(client, library, "embed", {"missing_embeddings": 1}, pages)
+
+    clip.assert_called_once_with(model_name="ViT-B-32", pretrained="openai")
+    [call] = _sent(client, "/batch-embeddings")
+    body = call.kwargs["json"]
+    assert body["items"][0]["source_sha256"] == SHA and "lineage" not in body["items"][0]
+    used = {**P.effective_settings("clip"), "input_edge": CLIConfig().proxy_max_edge}
+    assert body["lineage"] == P.lineage("clip", used, None)
+
+
+@pytest.mark.fast
+def test_ocr_says_which_file_each_came_from(home: Path, library: dict) -> None:
+    from src.shared import producers as P
+
+    client = _with_producers({a: {"model": "qwen3-vl:8b"} for a in ("vision", "ocr", "scene_vision")})
+    pages = {"missing_ocr": [{"asset_id": "ast_a", "rel_path": "a.jpg", "sha256": SHA}]}
+    with (
+        patch("src.client.cli.ingest._resolve_vision_config", return_value=VISION),
+        patch("src.client.workers.captions.factory.get_caption_provider") as provider,
+        patch("src.client.cli.repair._ocr_one", return_value={"asset_id": "ast_a", "ocr_text": "EXIT"}),
+    ):
+        _run(client, library, "ocr", {"missing_ocr": 1}, pages)
+
+    assert provider.call_args.args[0] == "qwen3-vl:8b"
+    assert provider.call_args.kwargs["ocr_settings"]["prompt"] == P.OCR_PROMPT
+    [call] = _sent(client, "/batch-ocr")
+    body = call.kwargs["json"]
+    assert body["items"] == [{"asset_id": "ast_a", "ocr_text": "EXIT", "source_sha256": SHA}]
+    assert body["lineage"] == P.lineage("ocr", P.effective_settings("ocr", account={"model": "qwen3-vl:8b"}), None)
+
+
+@pytest.mark.fast
+def test_scenes_say_how_they_were_found(home: Path, library: dict) -> None:
+    from src.shared import producers as P
+
+    _cached(home, "ast_a")
+    client = _with_producers()
+    pages = {"missing_video_scenes": [{"asset_id": "ast_a", "rel_path": "a.mov", "duration_sec": 4.0, "sha256": SHA,
+                                         "has_analysis_proxy": True}]}
+    with patch("src.client.cli.video_index.index_video_scenes",
+               return_value={"scenes": 1, "chunks": 1, "elapsed": 0.1}) as index:
+        _run(client, library, "video-scenes", {"missing_video_scenes": 1}, pages)
+
+    assert index.call_args.kwargs["lineage"] == P.lineage("scenes", P.effective_settings("scenes"), SHA)

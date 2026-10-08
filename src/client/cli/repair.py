@@ -25,6 +25,7 @@ from src.shared.io_utils import resolve_source_path
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from src.client.cli.producer_settings import ProducerSettings
     from src.client.proxy.analysis_cache import AnalysisProxyCache
 
 logger = logging.getLogger(__name__)
@@ -129,7 +130,8 @@ def _ocr_one(
         return None
 
 
-def _probe_one(client: LumiverbClient, lib_root: "Path", asset: dict) -> str:
+def _probe_one(client: LumiverbClient, lib_root: "Path", asset: dict,
+               producers: "ProducerSettings | None" = None) -> str:
     """Probe one video's source file and store the facet. Returns "ok", "missing" or "failed"."""
     source = resolve_source_path(lib_root, asset["rel_path"])
     if not source.is_file():
@@ -141,7 +143,10 @@ def _probe_one(client: LumiverbClient, lib_root: "Path", asset: dict) -> str:
         logger.warning("Probe failed for %s: %s", asset["rel_path"], exc)
         return "failed"
     try:
-        client.put(f"/v1/assets/{asset['asset_id']}/video-facet", json=facet.to_dict())
+        body = facet.to_dict()
+        if producers is not None:
+            body["lineage"] = producers.lineage("probe", asset.get("sha256"))
+        client.put(f"/v1/assets/{asset['asset_id']}/video-facet", json=body)
     except Exception as exc:  # noqa: BLE001 — e.g. the asset was trashed mid-run
         logger.warning("Storing probe failed for %s: %s", asset["rel_path"], exc)
         return "failed"
@@ -154,6 +159,7 @@ def _render_one(
     asset: dict,
     settings: AnalysisProxySettings,
     cache: AnalysisProxyCache,
+    producers: "ProducerSettings | None" = None,
 ) -> str:
     """Render, upload and cache one video's analysis proxy. Returns "ok", "missing" or "failed"."""
     source = resolve_source_path(lib_root, asset["rel_path"])
@@ -166,10 +172,16 @@ def _render_one(
     work.parent.mkdir(parents=True, exist_ok=True)
     try:
         render_analysis_proxy(source, work, settings, timeout=render_timeout(asset.get("duration_sec")))
+        data = {}
+        if producers is not None:
+            from dataclasses import asdict
+
+            data["lineage"] = json.dumps(producers.lineage("analysis_proxy", asset.get("sha256"), used=asdict(settings)))
         with open(work, "rb") as f:
             client.post(
                 f"/v1/assets/{asset['asset_id']}/artifacts/analysis_proxy",
                 files={"file": ("analysis.mp4", f, "video/mp4")},
+                data=data,
             )
         cache.put(asset["asset_id"], work)
         return "ok"
@@ -186,6 +198,7 @@ def _render_one(
 def _transcribe_one(
     source_path: "Path",
     whisper_model: str = "small",
+    vad_min_silence_ms: int = 500,
 ) -> tuple[str, str] | None:
     """Transcribe a video file using faster-whisper in a subprocess.
 
@@ -238,7 +251,7 @@ try:
     segments, info = model.transcribe(
         sys.argv[1],
         vad_filter=True,
-        vad_parameters=dict(min_silence_duration_ms=500),
+        vad_parameters=dict(min_silence_duration_ms={int(vad_min_silence_ms)}),
     )
     srt_parts = []
     for i, seg in enumerate(segments, 1):
@@ -433,8 +446,10 @@ def _face_batch_worker(
     token: str,
     batch: list[dict],
     cache_dir: str | None = None,
+    lineage: dict | None = None,
 ) -> dict:
     """Run face detection on a batch of assets in a subprocess.
+    lineage: how the faces are found, sent with them (each item's file hash its own).
 
     ONNX Runtime leaks ~35MB per inference call with no fix available.
     Running in a subprocess ensures all native memory is reclaimed by
@@ -510,6 +525,7 @@ def _face_batch_worker(
 
             batch_items.append({
                 "asset_id": asset_id,
+                "source_sha256": item.get("sha256"),
                 "detection_model": provider.model_id,
                 "detection_model_version": provider.model_version,
                 "faces": [
@@ -529,7 +545,7 @@ def _face_batch_worker(
     # Single batch POST instead of N individual requests
     if batch_items:
         try:
-            resp = client.post("/v1/assets/batch-faces", json={"items": batch_items})
+            resp = client.post("/v1/assets/batch-faces", json={"items": batch_items, "lineage": lineage})
             result_data = resp.json()
             processed = result_data.get("processed", 0)
             skipped += result_data.get("skipped", 0)
@@ -542,6 +558,7 @@ def _face_batch_worker(
                         "detection_model": bi["detection_model"],
                         "detection_model_version": bi["detection_model_version"],
                         "faces": bi["faces"],
+                        "lineage": {**lineage, "source_sha256": bi.get("source_sha256")} if lineage else None,
                     })
                     processed += 1
                 except Exception as e2:
@@ -685,6 +702,7 @@ def _run_face_pipeline(
     tid,
     console,
     label: str = "faces",
+    lineage: dict | None = None,
 ) -> None:
     """Pipeline proxy generation → face detection → result collection.
 
@@ -769,7 +787,7 @@ def _run_face_pipeline(
                 logger.info("%s batch %d: %d assets", label, batch_num, len(batch_buf))
                 ar = pool.apply_async(
                     _face_batch_worker,
-                    (client.base_url, client.token, batch_buf, str(proxy_cache.path)),
+                    (client.base_url, client.token, batch_buf, str(proxy_cache.path), lineage),
                 )
                 inflight.append((batch_num, len(batch_buf), ar))
                 batch_buf = []
@@ -784,7 +802,7 @@ def _run_face_pipeline(
             logger.info("%s batch %d: %d assets (final)", label, batch_num, len(batch_buf))
             ar = pool.apply_async(
                 _face_batch_worker,
-                (client.base_url, client.token, batch_buf, str(proxy_cache.path)),
+                (client.base_url, client.token, batch_buf, str(proxy_cache.path), lineage),
             )
             inflight.append((batch_num, len(batch_buf), ar))
 
@@ -953,6 +971,10 @@ def run_repair(
     # Load concurrency config: --concurrency flag acts as max, per-type defaults are lower for GPU ops
     from src.client.cli.config import load_config as _load_cfg
     _cfg = _load_cfg()
+    # What each producer makes its artifact with now: the server's settings,
+    # so what's recorded in lineage is current.
+    from src.client.cli.producer_settings import ProducerSettings
+    producers = ProducerSettings(client)
     max_conc = min(concurrency, _cfg.max_concurrency)
     embed_conc = min(max_conc, concurrency)  # embed is CPU-bound (CLIP), full concurrency
     vision_conc = min(max_conc, _cfg.vision_concurrency)
@@ -1014,7 +1036,10 @@ def run_repair(
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
             try:
                 from src.client.workers.embeddings.clip_provider import CLIPEmbeddingProvider
-                clip_provider = CLIPEmbeddingProvider()
+                clip_set = producers.settings("clip")
+                clip_provider = CLIPEmbeddingProvider(model_name=clip_set["model"], pretrained=clip_set["pretrained"])
+                # The images CLIP sees are the proxy cache's: its size is what was used.
+                clip_used = {**clip_set, "input_edge": _cfg.proxy_max_edge}
                 console.print(f"CLIP model: {clip_provider.model_version}")
             except Exception as e:
                 console.print(f"[red]Cannot load CLIP model: {e}[/red]")
@@ -1025,6 +1050,7 @@ def run_repair(
                 console.print("No assets found (already repaired?).")
                 continue
             assets = _due("embed", assets)
+            embed_sha = {a["asset_id"]: a.get("sha256") for a in assets}
 
             EMBED_BATCH_SIZE = 50
             embed_batch: list[dict] = []
@@ -1032,8 +1058,14 @@ def run_repair(
             def _flush_embed_batch() -> None:
                 if not embed_batch:
                     return
+                for item in embed_batch:
+                    item["source_sha256"] = embed_sha.get(item["asset_id"])
+                    item["lineage"] = producers.lineage("clip", item["source_sha256"], used=clip_used)
                 try:
-                    client.post("/v1/assets/batch-embeddings", json={"items": list(embed_batch)})
+                    client.post("/v1/assets/batch-embeddings", json={
+                        "items": [{k: v for k, v in item.items() if k != "lineage"} for item in embed_batch],
+                        "lineage": producers.lineage("clip", None, used=clip_used),
+                    })
                     logger.info("embed batch POST: %d items", len(embed_batch))
                 except Exception as e:
                     logger.warning("embed batch POST failed (%d items): %s", len(embed_batch), e)
@@ -1095,6 +1127,7 @@ def run_repair(
                 client, library, concurrency=vision_conc, console=console, should_stop=should_stop,
                 skip={asset_id for step, asset_id in skip_items if step == "vision"},
                 on_take=None if on_take is None else lambda asset_id: on_take("vision", asset_id),
+                producers=producers,
             )
 
         elif repair_type == "ocr":
@@ -1105,7 +1138,10 @@ def run_repair(
                 console.print("[red]Vision AI: not configured.[/red]")
                 continue
             from src.client.workers.captions.factory import get_caption_provider
-            ocr_provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key)
+            vision_model_id = producers.vision_model(vision_model_id)
+            ocr_provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key,
+                                                settings=producers.settings("vision"),
+                                                ocr_settings=producers.settings("ocr"))
             console.print(f"  Vision AI: {vision_model_id} via {vision_api_url} ({vision_source})")
 
             assets = _filter(_page_missing(client, library_id, missing_ocr=True))
@@ -1113,6 +1149,7 @@ def run_repair(
                 console.print("No assets found (already repaired?).")
                 continue
             assets = _due("ocr", assets)
+            ocr_sha = {a["asset_id"]: a.get("sha256") for a in assets}
 
             import time as _time
             ocr_batch_size = _cfg.ocr_batch_size
@@ -1122,8 +1159,11 @@ def run_repair(
                 if not batch_buf:
                     return
                 t0 = _time.perf_counter()
+                for item in batch_buf:
+                    item["source_sha256"] = ocr_sha.get(item["asset_id"])
                 try:
-                    client.post("/v1/assets/batch-ocr", json={"items": list(batch_buf)})
+                    client.post("/v1/assets/batch-ocr", json={"items": list(batch_buf),
+                                                              "lineage": producers.lineage("ocr", None)})
                     t_post = _time.perf_counter() - t0
                     logger.info("ocr batch POST: %d items in %.1fms", len(batch_buf), t_post * 1000)
                 except Exception as e:
@@ -1131,7 +1171,9 @@ def run_repair(
                     # Fallback: post individually
                     for item in batch_buf:
                         try:
-                            client.post(f"/v1/assets/{item['asset_id']}/ocr", json={"ocr_text": item["ocr_text"]})
+                            client.post(f"/v1/assets/{item['asset_id']}/ocr", json={
+                                "ocr_text": item["ocr_text"],
+                                "lineage": producers.lineage("ocr", item.get("source_sha256"))})
                         except Exception:
                             pass
                 batch_buf.clear()
@@ -1204,6 +1246,7 @@ def run_repair(
                         tid=tid,
                         console=console,
                         label="faces",
+                        lineage=producers.lineage("faces", None),
                     )
 
         elif repair_type == "redetect-faces":
@@ -1233,6 +1276,7 @@ def run_repair(
                     tid=tid,
                     console=console,
                     label="redetect-faces",
+                    lineage=producers.lineage("faces", None),
                 )
 
             # Clean up dismissed people left with zero face matches
@@ -1264,7 +1308,7 @@ def run_repair(
             with progress:
                 tid = progress.add_task("Probe", total=len(assets), ok=0, fail=0)
                 for a in _until(stop, assets, _taking("probe")):
-                    outcome = _probe_one(client, lib_root, a)
+                    outcome = _probe_one(client, lib_root, a, producers)
                     with stats.lock:
                         if outcome == "ok":
                             stats.processed += 1
@@ -1293,12 +1337,13 @@ def run_repair(
                 continue
             assets = _due("render", assets)
 
-            settings = AnalysisProxySettings.from_config()
+            # The server's settings: what it records as current is what's rendered.
+            settings = AnalysisProxySettings(**producers.settings("analysis_proxy"))
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Render", total=len(assets), ok=0, fail=0)
                 for a in _until(stop, assets, _taking("render")):
-                    outcome = _render_one(client, lib_root, a, settings, analysis_cache)
+                    outcome = _render_one(client, lib_root, a, settings, analysis_cache, producers)
                     with stats.lock:
                         if outcome == "ok":
                             stats.processed += 1
@@ -1340,7 +1385,8 @@ def run_repair(
                         progress.advance(tid, 1)
                         continue
 
-                    result = _transcribe_one(source_path, _cfg.whisper_model)
+                    whisper = producers.settings("transcript")
+                    result = _transcribe_one(source_path, whisper["model"], whisper["vad_min_silence_ms"])
 
                     if result is None:
                         # Transient failure — leave has_transcript=NULL for retry
@@ -1355,7 +1401,8 @@ def run_repair(
                     try:
                         client.post(
                             f"/v1/assets/{asset_id}/transcript",
-                            json={"srt": srt_text, "language": language, "source": "whisper"},
+                            json={"srt": srt_text, "language": language, "source": "whisper",
+                                  "lineage": producers.lineage("transcript", a.get("sha256"))},
                         )
                         with stats.lock:
                             stats.processed += 1
@@ -1384,7 +1431,8 @@ def run_repair(
                 continue
 
             videos = [
-                {"asset_id": a["asset_id"], "rel_path": a["rel_path"], "duration_sec": a.get("duration_sec")}
+                {"asset_id": a["asset_id"], "rel_path": a["rel_path"], "duration_sec": a.get("duration_sec"),
+                 "sha256": a.get("sha256")}
                 for a in assets
             ]
             indexable = [v for v in videos if v.get("duration_sec")]
@@ -1403,6 +1451,7 @@ def run_repair(
                     console=console,
                     progress=progress,
                     task_id=tid,
+                    lineage_for=lambda v: producers.lineage("scenes", v.get("sha256")),
                 )
             with stats.lock:
                 stats.processed += done
@@ -1417,7 +1466,9 @@ def run_repair(
             scene_vision_provider = None
             if vision_api_url and vision_model_id:
                 from src.client.workers.captions.factory import get_caption_provider
-                scene_vision_provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key)
+                vision_model_id = producers.vision_model(vision_model_id)
+                scene_vision_provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key,
+                                                             settings=producers.settings("scene_vision"))
                 console.print(f"  Vision AI: {vision_model_id} via {vision_api_url} ({vision_source})")
             else:
                 console.print("  Vision AI: not configured — extracting rep frames only")
@@ -1432,7 +1483,8 @@ def run_repair(
             if not assets:
                 continue
 
-            videos = [{"asset_id": a["asset_id"], "rel_path": a["rel_path"]} for a in assets]
+            videos = [{"asset_id": a["asset_id"], "rel_path": a["rel_path"], "sha256": a.get("sha256")}
+                      for a in assets]
 
             from src.client.cli.video_index import run_video_enrich
             progress = _make_progress(console)
@@ -1447,6 +1499,7 @@ def run_repair(
                     console=console,
                     progress=progress,
                     task_id=tid,
+                    lineage_for=lambda v: producers.lineage("scene_vision", v.get("sha256")),
                 )
             with stats.lock:
                 stats.processed += done

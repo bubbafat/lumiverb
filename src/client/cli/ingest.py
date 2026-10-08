@@ -18,6 +18,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from stat import S_ISREG
+from typing import TYPE_CHECKING
 
 from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, MofNCompleteColumn, TimeRemainingColumn, SpinnerColumn
@@ -52,6 +53,9 @@ def _silence_subprocess_stdout() -> None:
 
 
 from src.client.proxy.proxy_gen import PROXY_LONG_EDGE, PROXY_JPEG_QUALITY
+
+if TYPE_CHECKING:
+    from src.client.cli.producer_settings import ProducerSettings
 
 PROXY_WEBP_QUALITY = 80
 SUPPORTED_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
@@ -585,8 +589,10 @@ def run_backfill_vision(
     should_stop: Callable[[], bool] | None = None,
     skip: Collection[str] = (),
     on_take: Callable[[str], None] | None = None,
+    producers: "ProducerSettings | None" = None,
 ) -> _IngestStats:
-    """Backfill AI descriptions for assets that don't have them.
+    """Backfill AI descriptions for assets that don't have them, made with the
+    server's vision settings and sent with their lineage.
 
     should_stop is asked before each asset; once it says stop, no more start.
     Assets in skip are left for a later run; on_take(asset_id) hears of each
@@ -602,8 +608,14 @@ def run_backfill_vision(
         console.print("  Set it via: lumiverb config set --vision-api-url <url>")
         raise SystemExit(1)
 
+    from src.client.cli.producer_settings import ProducerSettings
     from src.client.workers.captions.factory import get_caption_provider
-    vision_provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key)
+
+    producers = producers or ProducerSettings(client)
+    vision_model_id = producers.vision_model(vision_model_id)
+    vision_provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key,
+                                           settings=producers.settings("vision"),
+                                           ocr_settings=producers.settings("ocr"))
     console.print(f"Vision AI: {vision_model_id} via {vision_api_url} ({vision_source})")
 
     # Page through assets missing vision
@@ -644,11 +656,18 @@ def run_backfill_vision(
     BATCH_SIZE = 25
     batch_buf: list[dict] = []
 
+    vision_sha = {a["asset_id"]: a.get("sha256") for a in to_backfill}
+
     def _flush_vision_batch() -> None:
         if not batch_buf:
             return
+        for item in batch_buf:
+            item["source_sha256"] = vision_sha.get(item["asset_id"])
+            item["lineage"] = producers.lineage("vision", item["source_sha256"])
         try:
-            client.post("/v1/assets/batch-vision", json={"items": list(batch_buf)})
+            client.post("/v1/assets/batch-vision", json={
+                "items": [{k: v for k, v in item.items() if k != "lineage"} for item in batch_buf],
+                "lineage": producers.lineage("vision", None)})
             logger.info("vision batch POST: %d items", len(batch_buf))
         except Exception as e:
             logger.warning("vision batch POST failed (%d items): %s", len(batch_buf), e)

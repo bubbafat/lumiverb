@@ -67,7 +67,7 @@ def _producers() -> tuple[Producer, ...]:
         Producer("analysis_proxy", "analysis-proxy", "1", VIDEO, "Analysis proxies",
                  {"max_edge": 960, "fps_max": 30, "encoder": "libx264", "crf": 28, "audio_kbps_per_channel": 48}),
         Producer("scenes", "scene-detect", "1", VIDEO, "Scenes",
-                 {"frame_width": 480, "fps": 1, "phash_threshold": 51, "phash_hash_size": 16,
+                 {"frame_width": 480, "frames": "keyframes", "phash_threshold": 51, "phash_hash_size": 16,
                   "temporal_ceiling_sec": 30.0, "debounce_sec": 3.0}),
         Producer("scene_vision", "scene-vision", "1", VIDEO, "Scene descriptions", vision,
                  from_account=("model",)),

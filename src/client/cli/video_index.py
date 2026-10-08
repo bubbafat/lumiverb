@@ -39,8 +39,10 @@ def index_video_scenes(
     asset_id: str,
     duration_sec: float,
     rel_path: str,
+    lineage: dict | None = None,
 ) -> dict:
     """Run scene detection on a single video and submit results to server.
+    lineage: how the scenes are found, recorded when the last chunk completes.
 
     Returns {"scenes": N, "chunks": N, "elapsed": float}.
     """
@@ -113,6 +115,7 @@ def index_video_scenes(
                     "scenes": scene_results,
                     "next_anchor_phash": segmenter.next_anchor_phash,
                     "next_scene_start_ms": segmenter.next_scene_start_ms,
+                    "lineage": lineage,
                 },
             )
 
@@ -148,6 +151,7 @@ def run_video_index(
     console: Console,
     progress: Progress,
     task_id: object,
+    lineage_for: "Callable[[dict], dict] | None" = None,
 ) -> tuple[int, int]:
     """Run scene detection on a batch of videos, updating progress.
 
@@ -178,6 +182,7 @@ def run_video_index(
                 asset_id=asset_id,
                 duration_sec=duration_sec,
                 rel_path=rel_path,
+                lineage=lineage_for(video) if lineage_for else None,
             )
             ok += 1
             logger.info(
@@ -208,8 +213,10 @@ def enrich_video_scenes(
     rel_path: str,
     vision_provider: object | None,
     vision_model_id: str | None,
+    lineage: dict | None = None,
 ) -> dict:
     """Extract rep frames, run vision AI, and sync scenes to search.
+    lineage: how the descriptions are made, recorded with each.
 
     Returns {"enriched": N, "skipped": N, "failed": N, "elapsed": float}.
     """
@@ -276,6 +283,7 @@ def enrich_video_scenes(
                             "model_version": "1",
                             "description": description,
                             "tags": tags,
+                            "lineage": lineage,
                         },
                     )
 
@@ -316,6 +324,7 @@ def run_video_enrich(
     console: Console,
     progress: Progress,
     task_id: object,
+    lineage_for: "Callable[[dict], dict] | None" = None,
 ) -> tuple[int, int]:
     """Run scene enrichment on a batch of videos, updating progress.
 
@@ -346,6 +355,7 @@ def run_video_enrich(
                 rel_path=rel_path,
                 vision_provider=vision_provider,
                 vision_model_id=vision_model_id,
+                lineage=lineage_for(video) if lineage_for else None,
             )
             ok += 1
             logger.info(
