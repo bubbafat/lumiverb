@@ -255,6 +255,22 @@ describe("AiSection", () => {
     expect(options).toEqual(["", QWEN]);
   });
 
+  it("a Whisper server isn't given descriptions just because they have no model yet", async () => {
+    model = "";
+    whisper = "small";
+    machines = [builtIn()];
+    offers = { [SPEACHES]: ["small"] };
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Add machine" }));
+    const form = screen.getByRole("form", { name: "Add a machine" });
+    fireEvent.change(within(form).getByLabelText("Endpoint URL"), { target: { value: SPEACHES } });
+    fireEvent.click(within(form).getByRole("button", { name: "Connect" }));
+    await within(form).findByText(/Connected: offers small/);
+    const vision = within(form).getByRole("checkbox", { name: /Descriptions & text/ }) as HTMLInputElement;
+    const transcripts = within(form).getByRole("checkbox", { name: /Transcripts/ }) as HTMLInputElement;
+    expect([vision.checked, transcripts.checked]).toEqual([false, true]);
+  });
+
   it("shows the built-in Whisper as this computer's, and it can't be removed", async () => {
     whisper = "small";
     machines = [builtIn(), machine({ name: "Brain" })];
