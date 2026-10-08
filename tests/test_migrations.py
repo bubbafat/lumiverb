@@ -353,6 +353,7 @@ TENANT_TABLES = [
     "faces",
     "people",
     "face_person_matches",
+    "library_changes",
 ]
 
 
@@ -389,7 +390,7 @@ def test_tenant_schema_upgrade_and_downgrade() -> None:
                     "('libraries', 'library_path_filters', 'tenant_path_filter_defaults', "
                     "'scans', 'assets', 'video_scenes', 'video_index_chunks', "
                     "'asset_metadata', 'worker_jobs', 'system_metadata', "
-                    "'faces', 'people', 'face_person_matches', 'pipeline_locks')"
+                    "'faces', 'people', 'face_person_matches', 'pipeline_locks', 'library_changes')"
                 )
             )
             tables = {row[0] for row in r}
@@ -455,7 +456,7 @@ def test_tenant_schema_upgrade_and_downgrade() -> None:
                     "('libraries', 'library_path_filters', 'tenant_path_filter_defaults', "
                     "'scans', 'assets', 'video_scenes', 'video_index_chunks', "
                     "'asset_metadata', 'worker_jobs', 'system_metadata', "
-                    "'faces', 'people', 'face_person_matches', 'pipeline_locks')"
+                    "'faces', 'people', 'face_person_matches', 'pipeline_locks', 'library_changes')"
                 )
             )
             tables = {row[0] for row in r}
