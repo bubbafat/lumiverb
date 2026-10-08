@@ -13,9 +13,11 @@ import logging
 import os
 import threading
 import unicodedata
+from collections.abc import Callable, Collection
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+from stat import S_ISREG
 
 from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, MofNCompleteColumn, TimeRemainingColumn, SpinnerColumn
@@ -23,6 +25,7 @@ from rich.progress import Progress, BarColumn, TextColumn, MofNCompleteColumn, T
 from src.client.cli.client import LumiverbClient
 from src.shared.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from src.shared.path_filter import PathFilter, is_path_included_merged
+from src.shared.io_utils import resolve_source_path, stat_if_present
 from src.client.workers.exif_extract import (
     compute_sha256,
     extract_exif,
@@ -238,6 +241,8 @@ def _generate_video_preview(source_path: Path) -> bytes:
         "-vf", f"scale=-2:'min({PREVIEW_MAX_HEIGHT},ih)',format=yuv420p",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
         "-c:a", "aac", "-ac", "2", "-b:a", "128k",
+        # No metadata: phones and drones write where they were (GPS) into the file.
+        "-map_metadata", "-1", "-map_chapters", "-1",
         "-movflags", "+faststart",
         str(preview_path),
     ]
@@ -252,7 +257,7 @@ def _generate_video_preview(source_path: Path) -> bytes:
             "-t", str(PREVIEW_DURATION_SEC),
             "-vf", f"scale=-2:'min({PREVIEW_MAX_HEIGHT},ih)',format=yuv420p",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
-            "-an", "-movflags", "+faststart",
+            "-an", "-map_metadata", "-1", "-map_chapters", "-1", "-movflags", "+faststart",
             str(preview_path),
         ]
         subprocess.run(no_audio_cmd, check=True, capture_output=True)
@@ -423,27 +428,42 @@ def _walk_library(
     path_prefix: str | None = None,
     tenant_filters: list[PathFilter] | None = None,
     library_filters: list[PathFilter] | None = None,
+    unlisted: list[str] | None = None,
 ) -> list[dict]:
     """Walk the library root and return a list of file descriptors.
 
     Each entry: {rel_path, file_size, file_mtime, media_type, ext}.
     Files that don't pass the merged tenant + library filters are silently skipped.
+    Hidden files are listed; linked folders aren't followed. Folders that
+    can't be listed, or that hold a media file that can't be checked, go in
+    `unlisted` as rel paths ("" is the library root), so the caller doesn't
+    take their files for deleted.
     """
     walk_root = root_path
     if path_prefix:
-        walk_root = root_path / path_prefix
+        walk_root = resolve_source_path(root_path, path_prefix)
 
-    if not walk_root.is_dir():
-        return []
+    def _unreadable(exc: OSError, folder: str | None = None) -> None:
+        folder = folder or exc.filename or str(walk_root)
+        logger.warning("Can't list %s: %s", folder, exc)
+        if unlisted is not None:
+            rel = os.path.relpath(folder, root_path)
+            rel = "" if rel == "." else unicodedata.normalize("NFC", rel)
+            if rel not in unlisted:
+                unlisted.append(rel)
 
     has_filters = bool(tenant_filters or library_filters)
     t_filters = tenant_filters or []
     l_filters = library_filters or []
 
+    found: list[Path] = []
+    for folder, _dirs, names in os.walk(walk_root, onerror=_unreadable):
+        found.extend(Path(folder, name) for name in names)
+
     results = []
-    for p in sorted(walk_root.rglob("*")):
-        if not p.is_file():
-            continue
+    for p in sorted(found):
+        # Only files the scan would take are stat'ed: one that can't be
+        # checked holds back deletions in its folder.
         ext = p.suffix.lower()
         if ext not in SUPPORTED_EXTENSIONS:
             continue
@@ -455,7 +475,14 @@ def _walk_library(
         if has_filters and not is_path_included_merged(rel_path, t_filters, l_filters):
             continue
 
-        stat = p.stat()
+        try:
+            stat = stat_if_present(p)
+        except OSError as exc:
+            _unreadable(exc, str(p.parent))
+            continue
+        if stat is None or not S_ISREG(stat.st_mode):
+            continue
+
         if stat.st_size == 0:
             continue
 
@@ -555,8 +582,16 @@ def run_backfill_vision(
     *,
     concurrency: int = 4,
     console: Console,
+    should_stop: Callable[[], bool] | None = None,
+    skip: Collection[str] = (),
+    on_take: Callable[[str], None] | None = None,
 ) -> _IngestStats:
-    """Backfill AI descriptions for assets that don't have them."""
+    """Backfill AI descriptions for assets that don't have them.
+
+    should_stop is asked before each asset; once it says stop, no more start.
+    Assets in skip are left for a later run; on_take(asset_id) hears of each
+    one taken.
+    """
     library_id = library["library_id"]
 
     # Resolve vision config (client > tenant > auto-discover)
@@ -590,8 +625,7 @@ def run_backfill_vision(
         items = data.get("items", [])
         if not items:
             break
-        for a in items:
-            to_backfill.append(a)
+        to_backfill.extend(a for a in items if a["asset_id"] not in skip)
         cursor = data.get("next_cursor")
         if not cursor:
             break
@@ -603,11 +637,8 @@ def run_backfill_vision(
         return stats
 
     from src.client.proxy.proxy_cache import ProxyCache
-    from pathlib import Path as _Path
-    root_path_str = library.get("root_path")
-    root_path = _Path(root_path_str).resolve() if root_path_str else None
-    if root_path and not root_path.is_dir():
-        root_path = None
+    from src.client.cli.roots import reachable_root
+    root_path = reachable_root(library)
     proxy_cache = ProxyCache(root_path=root_path, client=client)
 
     BATCH_SIZE = 25
@@ -653,6 +684,10 @@ def run_backfill_vision(
         pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="backfill")
         inflight: set[Future] = set()
         for a in to_backfill:
+            if should_stop is not None and should_stop():
+                break
+            if on_take is not None:
+                on_take(a["asset_id"])
             fut = pool.submit(
                 _backfill_one,
                 asset_id=a["asset_id"],

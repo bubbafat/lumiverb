@@ -83,6 +83,8 @@ def empty_trash(
             keys_to_remove.append(a.thumbnail_key)
         if getattr(a, "video_preview_key", None):
             keys_to_remove.append(a.video_preview_key)
+        if getattr(a, "analysis_proxy_key", None):
+            keys_to_remove.append(a.analysis_proxy_key)
     library_by_asset = {a.asset_id: a.library_id for a in to_delete}
     deleted_count = asset_repo.permanently_delete(asset_ids)
     storage = get_storage()
@@ -93,6 +95,15 @@ def empty_trash(
                 path.unlink()
         except OSError as e:
             logger.warning("Failed to remove file %s after empty trash: %s", key, e)
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if tenant_id:
+        # Playback cuts are copies of the start of each video.
+        from src.server.api.routers.playback import clear_cuts
+
+        try:
+            clear_cuts(tenant_id, asset_ids)
+        except OSError as e:
+            logger.warning("Failed to remove playback cuts after empty trash: %s", e)
     try:
         from src.server.search.quickwit_client import QuickwitClient
         qw = QuickwitClient()

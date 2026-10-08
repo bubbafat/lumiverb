@@ -67,6 +67,19 @@ def require_editor(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Editor access required")
 
 
+def require_signed_in(request: Request) -> None:
+    """Raise 401 for a signed-out request let through for a public library: the route isn't public."""
+    if getattr(request.state, "is_public_request", False) or not getattr(request.state, "role", None):
+        raise HTTPException(status_code=401, detail="Sign in required")
+
+
+def get_optional_user_id(request: Request) -> str | None:
+    """The caller's identity, or None on a public page (a visitor has none)."""
+    if getattr(request.state, "is_public_request", False):
+        return None
+    return get_current_user_id(request)
+
+
 def get_current_user_id(request: Request) -> str:
     """Return user_id from JWT or API key context. Raises 401 if not available."""
     user_id = getattr(request.state, "user_id", None)

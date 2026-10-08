@@ -18,7 +18,7 @@ from sqlalchemy import create_engine, text
 from src.server.database import _engines, get_control_session
 from src.server.repository.control_plane import TenantDbRoutingRepository
 from src.server.repository.tenant import AssetRepository, LibraryRepository
-from tests.conftest import _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
+from tests.conftest import PG_IMAGE, _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 
 @pytest.fixture(scope="module")
@@ -26,7 +26,7 @@ def face_client() -> Tuple[_AuthClient, str, str]:
     """Set up two Postgres containers, tenant, library. Yields (auth_client, library_id, tenant_url)."""
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-    with PostgresContainer("pgvector/pgvector:pg16") as control_postgres:
+    with PostgresContainer(PG_IMAGE) as control_postgres:
         control_url = _ensure_psycopg2(control_postgres.get_connection_url())
         _run_control_migrations(control_url)
 
@@ -50,7 +50,7 @@ def face_client() -> Tuple[_AuthClient, str, str]:
                 tenant_id = data["tenant_id"]
                 api_key = data["api_key"]
 
-        with PostgresContainer("pgvector/pgvector:pg16") as tenant_postgres:
+        with PostgresContainer(PG_IMAGE) as tenant_postgres:
             tenant_url = _ensure_psycopg2(tenant_postgres.get_connection_url())
             _provision_tenant_db(tenant_url, project_root)
 

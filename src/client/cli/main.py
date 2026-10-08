@@ -5,6 +5,7 @@ from typing import Annotated
 
 import json as _json
 import logging
+import os
 import sys
 import typer
 from rich.console import Console
@@ -16,6 +17,7 @@ from src.client.cli.config import get_admin_key, load_config, save_config
 from src.client.cli.commands.projects import projects_app
 from src.client.cli.commands.keys import keys_app
 from src.client.cli.commands.maintenance import maintenance_app
+from src.client.cli.commands.settings import settings_app
 from src.client.cli.commands.users import user_app
 from src.shared.io_utils import normalize_path_prefix
 from src.shared.logging_config import configure_logging
@@ -30,6 +32,7 @@ app.add_typer(library_app, name="library")
 app.add_typer(projects_app, name="project")
 app.add_typer(keys_app, name="keys")
 app.add_typer(user_app, name="user")
+app.add_typer(settings_app, name="settings")
 filter_app = typer.Typer(help="Manage path filters (include/exclude patterns).")
 app.add_typer(filter_app, name="filter")
 app.add_typer(maintenance_app, name="maintenance")
@@ -56,9 +59,19 @@ def config_set(
     vision_api_url: Annotated[str | None, typer.Option("--vision-api-url", help="Local vision API URL (overrides tenant default).")] = None,
     vision_api_key: Annotated[str | None, typer.Option("--vision-api-key", help="Local vision API key (overrides tenant default).")] = None,
     vision_model_id: Annotated[str | None, typer.Option("--vision-model-id", help="Vision model ID override (default: auto-discover from API).")] = None,
+    cache_home: Annotated[str | None, typer.Option("--cache-home", help="Where caches and the worker's lock go instead of ~/.cache, unless XDG_CACHE_HOME is set ('' to undo).")] = None,
 ) -> None:
     """Set API URL, API key, and/or admin key in ~/.lumiverb/config.json."""
     cfg = load_config()
+    if cache_home:
+        # Relative to wherever this ran, the worker would look somewhere else.
+        expanded = os.path.expanduser(cache_home)
+        if not os.path.isabs(expanded):
+            console.print(f"[red]--cache-home must be an absolute path (or '' to undo), not {escape(cache_home)}[/red]")
+            raise typer.Exit(1)
+        cache_home = os.path.normpath(expanded)
+    if cache_home is not None:
+        cfg.cache_home = cache_home
     if api_url is not None:
         cfg.api_url = api_url.rstrip("/")
     if api_key is not None:
@@ -88,7 +101,55 @@ def config_show() -> None:
     table.add_row("vision_api_url", cfg.vision_api_url or escape("[not set — will use tenant default]"))
     table.add_row("vision_api_key", escape("[set]") if cfg.vision_api_key else escape("[not set — will use tenant default]"))
     table.add_row("vision_model_id", cfg.vision_model_id or escape("[not set — will auto-discover from API]"))
+    table.add_row("cache_home", cfg.cache_home or escape("[not set — ~/.cache unless XDG_CACHE_HOME]"))
     console.print(table)
+    if cfg.root_map:
+        console.print("Library roots on this machine (server → here):")
+        for src, dst in sorted(cfg.root_map.items()):
+            console.print(f"  {escape(src)} → {escape(dst)}", soft_wrap=True)
+
+
+@config_app.command("map-root")
+def config_map_root(
+    server_prefix: Annotated[str, typer.Argument(help="Library root prefix as stored on the server, e.g. /Volumes/media-01.")],
+    local_prefix: Annotated[str, typer.Argument(help="Where that folder is on this machine, e.g. /mnt/media-01.")],
+) -> None:
+    """Map a library root prefix to where it is on this machine.
+
+    Libraries keep the root the editing machine sees, since exports point
+    editors there. Scan and enrich on this machine use the mapped path.
+    """
+    from src.client.cli.roots import _clean
+
+    if not server_prefix.startswith("/") or not local_prefix.startswith("/"):
+        console.print("[red]Both paths must be absolute.[/red]")
+        raise typer.Exit(1)
+    src, dst = _clean(server_prefix), _clean(local_prefix)
+    cfg = load_config()
+    cfg.root_map = {k: v for k, v in cfg.root_map.items() if _clean(k) != src}
+    cfg.root_map[src] = dst
+    save_config(cfg)
+    console.print(f"[green]Mapped[/green] {escape(src)} → {escape(dst)}")
+    if not Path(dst).is_dir():
+        console.print(f"[yellow]{escape(dst)} is not a folder right now. Is the volume mounted?[/yellow]")
+
+
+@config_app.command("unmap-root")
+def config_unmap_root(
+    server_prefix: Annotated[str, typer.Argument(help="A prefix added with map-root.")],
+) -> None:
+    """Remove a root mapping."""
+    from src.client.cli.roots import _clean
+
+    src = _clean(server_prefix)
+    cfg = load_config()
+    kept = {k: v for k, v in cfg.root_map.items() if _clean(k) != src}
+    if len(kept) == len(cfg.root_map):
+        console.print(f"[red]No mapping for {escape(src)}.[/red]")
+        raise typer.Exit(1)
+    cfg.root_map = kept
+    save_config(cfg)
+    console.print(f"[green]Unmapped[/green] {escape(src)}")
 
 
 # ---------------------------------------------------------------------------
@@ -120,16 +181,67 @@ def library_list() -> None:
     table = Table(title="Libraries")
     table.add_column("ID", style="dim")
     table.add_column("Name")
-    table.add_column("Root path")
+    table.add_column("Root path", overflow="fold")
+    from src.client.cli.roots import local_library_root
+
+    root_map = load_config().root_map
+    # Shown only when a mapping moves a root on this machine.
+    here = {lib.get("library_id"): local_library_root(lib, root_map) for lib in libraries}
+    mapped = any(str(p) != lib.get("root_path") for lib in libraries if (p := here[lib.get("library_id")]))
+    if mapped:
+        table.add_column("Here", overflow="fold")
     table.add_column("Last ingest")
     for lib in libraries:
-        table.add_row(
-            lib.get("library_id", ""),
-            lib.get("name", ""),
-            lib.get("root_path", ""),
-            lib.get("last_scan_at") or "—",
-        )
+        local = here[lib.get("library_id")]
+        row = [lib.get("library_id", ""), lib.get("name", ""), lib.get("root_path", "")]
+        if mapped:
+            row.append(str(local) if local is not None and str(local) != lib.get("root_path") else "")
+        row.append(lib.get("last_scan_at") or "—")
+        table.add_row(*row)
     console.print(table)
+
+
+@library_app.command("report-changes")
+def library_report_changes(
+    paths: Annotated[list[str] | None, typer.Argument(help="Files or folders that changed.")] = None,
+    stdin: Annotated[bool, typer.Option("--stdin", help="Also read paths from standard input, one per line.")] = False,
+) -> None:
+    """Tell the brain these paths changed on storage, so its worker scans them.
+
+    The machine holding the storage reports what it sees change; the brain
+    mounts it over the network and can't watch it. Paths under a root
+    mapped with `config map-root` are sent as the library stores them.
+    """
+    import os
+
+    from src.client.cli.roots import unmap_path
+
+    given = list(paths or [])
+    if stdin:
+        given += [line.strip() for line in sys.stdin if line.strip()]
+    if not given:
+        console.print("[red]No paths given.[/red]")
+        raise typer.Exit(1)
+    root_map = load_config().root_map
+    server_paths = [unmap_path(os.path.abspath(p), root_map) for p in given]
+
+    client = LumiverbClient()
+    accepted, libraries, unmatched, sample = 0, set(), 0, []
+    for i in range(0, len(server_paths), 10_000):
+        body = client.post("/v1/changes", json={"paths": server_paths[i:i + 10_000]}).json()
+        accepted += body["accepted"]
+        libraries |= set(body["libraries"])
+        unmatched += body["unmatched"]
+        sample += body["unmatched_sample"]
+    n_libs = len(libraries)
+    console.print(
+        f"Reported {accepted:,} change{'s' if accepted != 1 else ''} "
+        f"in {n_libs} librar{'ies' if n_libs != 1 else 'y'}."
+    )
+    if unmatched:
+        console.print(f"[yellow]{unmatched:,} path{'s are' if unmatched != 1 else ' is'} in no library:[/yellow]")
+        for p in sample[:10]:
+            console.print(f"  {escape(p)}", soft_wrap=True)
 
 
 @library_app.command("update")
@@ -871,6 +983,9 @@ def scan(
         console=console,
     )
 
+    if stats.root_unreachable:
+        raise typer.Exit(1)
+
     if not dry_run:
         console.print(
             f"\nDone: {stats.new:,} new, "
@@ -880,6 +995,8 @@ def scan(
             f"{stats.moved:,} moved"
             + (f", {stats.cache_populated:,} cache populated" if stats.cache_populated else "")
             + (f", {stats.failed:,} failed" if stats.failed else "")
+            + (f", {stats.settling:,} still being written" if stats.settling else "")
+            + (f", {len(stats.unlisted):,} folder(s) couldn't be listed" if stats.unlisted else "")
         )
 
         # Show what enrichment is pending
@@ -906,7 +1023,50 @@ def scan(
             raise typer.Exit(1)
 
 
-ENRICH_TYPES = ("probe", "embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all")
+ENRICH_TYPES = ("probe", "render", "embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all")
+
+
+@app.command("worker")
+def worker(
+    poll: Annotated[float, typer.Option("--poll", help="Seconds between cycles.")] = 60.0,
+    full_scan_hours: Annotated[float, typer.Option("--full-scan-hours", help="Scan each library in full this often, in case a change report was missed.")] = 24.0,
+    library: Annotated[list[str] | None, typer.Option("--library", "-l", help="Only these libraries (repeatable).")] = None,
+    once: Annotated[bool, typer.Option("--once", help="Run one cycle and exit.")] = False,
+) -> None:
+    """Scan what changed and enrich what's missing, forever (the brain's service).
+
+    \b
+    Each cycle, for each library:
+      - if its storage is reachable here and changes were reported (or a
+        full scan is due), scan the folder that covers them
+      - if anything is missing, enrich; videos are enriched from analysis
+        proxies, so this continues while the storage sleeps
+    """
+    import signal
+
+    from src.client.cli import worker as worker_mod
+
+    lock = worker_mod.WorkerLock()
+    if not lock.acquire():
+        console.print("[red]A worker is already running on this machine.[/red]")
+        raise typer.Exit(1)
+
+    def _stop(signum: int, frame: object) -> None:
+        raise SystemExit(0)
+
+    import contextlib
+
+    with contextlib.suppress(ValueError):  # not the main thread (tests)
+        signal.signal(signal.SIGTERM, _stop)
+    try:
+        worker_mod.run_forever(
+            poll=poll,
+            full_scan_every=full_scan_hours * 3600,
+            only=library or None,
+            once=once,
+        )
+    finally:
+        lock.release()
 
 
 @app.command("enrich")
@@ -920,16 +1080,20 @@ def enrich(
     """Run enrichment on assets with missing pipeline outputs.
 
     Reads proxies from the local cache (populated by scan) and runs
-    inference. On cache miss, downloads the proxy from the server.
+    inference. On cache miss, downloads the proxy from the server. Videos
+    are analyzed from their analysis proxies, so only probe and render need
+    the library's storage to be reachable.
 
     \b
     Job types:
+      probe           — Read frame rate, timecode and audio layout from videos (needs source files)
+      render          — Render full-length analysis proxies of videos (needs source files)
       embed           — Generate missing CLIP embeddings (similarity search)
       vision          — Generate missing AI descriptions and tags
       faces           — Detect faces using InsightFace (face recognition)
       redetect-faces  — Re-run face detection on ALL images with quality gates
       ocr             — Extract text from images via vision AI
-      transcribe      — Transcribe video audio via faster-whisper (needs source files)
+      transcribe      — Transcribe video audio via faster-whisper (from analysis proxies)
       video-scenes    — Run scene detection on unindexed videos
       scene-vision    — Extract rep frames + run vision AI on scenes
       search-sync     — Push stale assets to Quickwit search index

@@ -17,7 +17,7 @@ from testcontainers.postgres import PostgresContainer
 from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
-from tests.conftest import _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
+from tests.conftest import PG_IMAGE, _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 
 # ---------------------------------------------------------------------------
@@ -38,7 +38,7 @@ def state_check_env(tmp_path_factory):
     """
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-    with PostgresContainer("pgvector/pgvector:pg16") as control_pg:
+    with PostgresContainer(PG_IMAGE) as control_pg:
         control_url = _ensure_psycopg2(control_pg.get_connection_url())
         engine = create_engine(control_url)
         with engine.connect() as conn:
@@ -68,7 +68,7 @@ def state_check_env(tmp_path_factory):
                 tenant_id = r.json()["tenant_id"]
                 api_key = r.json()["api_key"]
 
-        with PostgresContainer("pgvector/pgvector:pg16") as tenant_pg:
+        with PostgresContainer(PG_IMAGE) as tenant_pg:
             tenant_url = _ensure_psycopg2(tenant_pg.get_connection_url())
             _provision_tenant_db(tenant_url, project_root)
 
@@ -273,7 +273,7 @@ def test_tenant_isolation(state_check_env, tmp_path_factory) -> None:
     orig_tenant_tpl = os.environ["TENANT_DATABASE_URL_TEMPLATE"]
 
     try:
-        with PostgresContainer("pgvector/pgvector:pg16") as ctrl_pg2:
+        with PostgresContainer(PG_IMAGE) as ctrl_pg2:
             ctrl_url2 = _ensure_psycopg2(ctrl_pg2.get_connection_url())
             engine2 = create_engine(ctrl_url2)
             with engine2.connect() as conn:
@@ -302,7 +302,7 @@ def test_tenant_isolation(state_check_env, tmp_path_factory) -> None:
                     api_key2 = r2.json()["api_key"]
                     tenant_id2 = r2.json()["tenant_id"]
 
-            with PostgresContainer("pgvector/pgvector:pg16") as tp2:
+            with PostgresContainer(PG_IMAGE) as tp2:
                 tenant_url2 = _ensure_psycopg2(tp2.get_connection_url())
                 _provision_tenant_db(tenant_url2, project_root)
 

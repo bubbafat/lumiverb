@@ -3,8 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getAsset, findSimilar, listFaces, listPeople, getNearestPeopleForFace, searchPeople, assignFace, unassignFace, uploadTranscript, deleteTranscript, updateNote, deleteNote } from "../api/client";
 import TranscriptViewer from "./TranscriptViewer";
+import VideoPlayer from "./VideoPlayer";
 import { useLocalStorage } from "../lib/useLocalStorage";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
+import { usePlayback } from "../api/usePlayback";
 import type { AssetPageItem, AssetRating, RatingColor, SimilarHit } from "../api/types";
 import { HeartButton, StarPicker, ColorPicker } from "./RatingControls";
 import { basename, formatFileSize, formatDate, formatExposure } from "../lib/format";
@@ -27,6 +29,8 @@ interface LightboxProps {
   libraryId?: string;
   isPublic?: boolean;
   publicLibraryId?: string;
+  /** On a public project's page: the project the clips are shown through. */
+  publicProjectId?: string;
   /** Highlight a specific face with a red border (e.g. the clustered face). */
   highlightFaceId?: string;
 }
@@ -74,6 +78,7 @@ function NoteSection({
   noteUpdatedAt,
   loading,
   queryClient,
+  readOnly = false,
 }: {
   asset: AssetPageItem;
   note: string | null;
@@ -81,6 +86,8 @@ function NoteSection({
   noteUpdatedAt: string | null;
   loading: boolean;
   queryClient: ReturnType<typeof useQueryClient>;
+  /** A public page's visitor: the note shows; nothing to edit. */
+  readOnly?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -113,7 +120,7 @@ function NoteSection({
               </span>
             )}
           </span>
-          {!editing && note && (
+          {!readOnly && !editing && note && (
             <div className="flex gap-2">
               <button
                 type="button"
@@ -166,12 +173,12 @@ function NoteSection({
           </div>
         ) : note ? (
           <p
-            className="text-sm text-gray-300 whitespace-pre-wrap cursor-pointer hover:text-gray-200"
-            onClick={startEdit}
+            className={`text-sm text-gray-300 whitespace-pre-wrap ${readOnly ? "" : "cursor-pointer hover:text-gray-200"}`}
+            onClick={readOnly ? undefined : startEdit}
           >
             {note}
           </p>
-        ) : (
+        ) : readOnly ? null : (
           <button
             type="button"
             className="rounded bg-gray-700/60 px-3 py-1.5 text-xs text-gray-300 hover:bg-indigo-600/40 hover:text-indigo-200 transition-colors"
@@ -238,14 +245,18 @@ export function Lightbox({
   onNearbyClick,
   onFilterClick,
   onPathClick,
-  onAddToProject,
+  onAddToProject: onAddToProjectProp,
   rating,
-  onRatingChange,
+  onRatingChange: onRatingChangeProp,
   libraryId,
   isPublic,
   publicLibraryId,
+  publicProjectId,
   highlightFaceId,
 }: LightboxProps) {
+  // A visitor can't rate, collect or edit: those are a signed-in person's.
+  const onRatingChange = isPublic ? undefined : onRatingChangeProp;
+  const onAddToProject = isPublic ? undefined : onAddToProjectProp;
   const navigate = useNavigate();
   const [showSimilar, setShowSimilar] = useState(false);
   const [showFaces, setShowFaces] = useLocalStorage("lv_show_faces", false);
@@ -323,18 +334,31 @@ export function Lightbox({
   const isVideo =
     asset.media_type === "video" || asset.media_type.startsWith("video/");
 
-  const {
-    url: mediaUrl,
-    isLoading: mediaLoading,
-    generating,
-  } = useAuthenticatedImage(asset.asset_id, isVideo ? "video-preview" : "proxy", {
+  const image = useAuthenticatedImage(asset.asset_id, "proxy", {
+    enabled: !isVideo,
     isPublic,
     publicLibraryId,
+    publicProjectId,
   });
+  const playback = usePlayback(asset.asset_id, { enabled: isVideo, isPublic, publicLibraryId, publicProjectId });
+  const mediaUrl = isVideo ? playback.src : image.url;
+  const mediaLoading = isVideo ? playback.isLoading : image.isLoading;
+  const generating = !isVideo && image.generating;
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const seekVideo =
+    isVideo && playback.source === "analysis_proxy"
+      ? (seconds: number) => {
+          const video = videoRef.current;
+          if (!video) return;
+          video.currentTime = seconds;
+          video.play().catch(() => {});
+        }
+      : undefined;
   const { data: detail, isLoading: detailLoading } = useQuery({
-    queryKey: ["asset", asset.asset_id, publicLibraryId ?? null],
-    queryFn: () => getAsset(asset.asset_id, isPublic ? publicLibraryId : undefined),
-    enabled: !isPublic || !!publicLibraryId,
+    queryKey: ["asset", asset.asset_id, publicLibraryId ?? null, publicProjectId ?? null],
+    queryFn: () =>
+      getAsset(asset.asset_id, isPublic ? publicLibraryId : undefined, isPublic ? publicProjectId : undefined),
+    enabled: !isPublic || !!publicLibraryId || !!publicProjectId,
     refetchInterval: 10_000,
   });
 
@@ -350,7 +374,8 @@ export function Lightbox({
   });
 
   const isImage = !isVideo;
-  const hasFaces = isImage && (asset.face_count ?? 0) > 0;
+  // Who's in a photo is for signed-in people: no faces button, key or overlay for visitors.
+  const hasFaces = !isPublic && isImage && (asset.face_count ?? 0) > 0;
 
   const queryClient = useQueryClient();
 
@@ -728,12 +753,14 @@ export function Lightbox({
                 <span className="text-sm">Preview generating…</span>
               </div>
             ) : mediaUrl && isVideo ? (
-              <video
+              <VideoPlayer
                 key={asset.asset_id}
                 src={mediaUrl}
-                controls
-                playsInline
-                className="max-h-[calc(100vh-4rem)] max-w-full"
+                source={playback.source}
+                maxSeconds={playback.maxSeconds}
+                videoRef={videoRef}
+                onRenew={playback.renew}
+                failed={playback.failed}
               />
             ) : mediaUrl ? (
               <div className="relative inline-block">
@@ -1040,10 +1067,14 @@ export function Lightbox({
               <span><kbd className="font-mono">Esc</kbd> Close</span>
               <span><kbd className="font-mono">Shift+F</kbd> Fullscreen</span>
               <span><kbd className="font-mono">Space</kbd> Slideshow</span>
-              <span><kbd className="font-mono">d</kbd> Faces</span>
-              <span><kbd className="font-mono">f</kbd> Favorite</span>
-              <span><kbd className="font-mono">1-5</kbd> Stars</span>
-              <span><kbd className="font-mono">6-9</kbd> Colors</span>
+              {!isPublic && <span><kbd className="font-mono">d</kbd> Faces</span>}
+              {onRatingChange && (
+                <>
+                  <span><kbd className="font-mono">f</kbd> Favorite</span>
+                  <span><kbd className="font-mono">1-5</kbd> Stars</span>
+                  <span><kbd className="font-mono">6-9</kbd> Colors</span>
+                </>
+              )}
               <span><kbd className="font-mono">?</kbd> Hints</span>
             </div>
           </div>
@@ -1125,10 +1156,10 @@ export function Lightbox({
                       endpoint only returns face_id + asset_id + rel_path
                       — the real bytes only come back via the detail
                       response, which now includes file_size. */}
-                  {formatFileSize(
-                    asset.file_size || detail?.file_size || 0,
-                  )}{" "}
-                  · {detail?.media_type ?? asset.media_type}
+                  {asset.file_size || detail?.file_size
+                    ? `${formatFileSize(asset.file_size || detail?.file_size || 0)} · `
+                    : null}
+                  {detail?.media_type ?? asset.media_type}
                 </div>
               </div>
 
@@ -1202,8 +1233,8 @@ export function Lightbox({
                 </>
               )}
 
-              {/* Section: Transcript (video only) */}
-              {detail?.media_type === "video" && (
+              {/* Section: Transcript (video only; a visitor sees one only if there's one to show) */}
+              {detail?.media_type === "video" && (!isPublic || !!detail.transcript_srt) && (
                 <>
                   <hr className="border-gray-700" />
                   <div>
@@ -1232,6 +1263,8 @@ export function Lightbox({
                           >
                             Download
                           </button>
+                          {!isPublic && (
+                          <>
                           <label className="cursor-pointer text-xs text-indigo-400 hover:text-indigo-300">
                             Replace
                             <input
@@ -1258,13 +1291,15 @@ export function Lightbox({
                           >
                             Remove
                           </button>
+                          </>
+                          )}
                         </div>
                       )}
                     </div>
                     {detailLoading ? (
                       <MetadataSkeleton />
                     ) : detail?.transcript_srt ? (
-                      <TranscriptViewer srt={detail.transcript_srt} />
+                      <TranscriptViewer srt={detail.transcript_srt} onSeek={seekVideo} seekableUntil={playback.maxSeconds} />
                     ) : (
                       <label className="inline-flex cursor-pointer items-center gap-1.5 rounded bg-gray-700/60 px-3 py-1.5 text-xs text-gray-300 hover:bg-indigo-600/40 hover:text-indigo-200 transition-colors">
                         Upload SRT
@@ -1314,8 +1349,10 @@ export function Lightbox({
                 </>
               )}
 
-              {/* Section: Notes */}
+              {/* Section: Notes (a visitor sees one only if there's one to show) */}
+              {(!isPublic || !!detail?.note) && (
               <NoteSection
+                readOnly={isPublic}
                 asset={asset}
                 note={detail?.note ?? null}
                 noteAuthor={detail?.note_author ?? null}
@@ -1323,6 +1360,7 @@ export function Lightbox({
                 loading={detailLoading}
                 queryClient={queryClient}
               />
+              )}
 
               {/* Section 4: Details */}
               <hr className="border-gray-700" />
@@ -1566,14 +1604,14 @@ export function Lightbox({
                           )}
                         </>
                       )}
-                    <div className="flex">
-                      <dt className="w-2/5 text-xs text-gray-500">File size</dt>
-                      <dd className="w-3/5 text-sm text-gray-300">
-                        {formatFileSize(
-                          asset.file_size || detail?.file_size || 0,
-                        )}
-                      </dd>
-                    </div>
+                    {(asset.file_size || detail?.file_size) ? (
+                      <div className="flex">
+                        <dt className="w-2/5 text-xs text-gray-500">File size</dt>
+                        <dd className="w-3/5 text-sm text-gray-300">
+                          {formatFileSize(asset.file_size || detail?.file_size || 0)}
+                        </dd>
+                      </div>
+                    ) : null}
                     {(detail?.sha256 || asset.sha256) && (
                       <div className="flex">
                         <dt className="w-2/5 text-xs text-gray-500">SHA256</dt>

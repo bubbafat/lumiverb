@@ -303,16 +303,45 @@ def test_ocr_one_returns_empty_text_on_none() -> None:
 
 # ---- _transcribe_one ------------------------------------------------------
 
+from src.client.video.audio import AudioTrack  # noqa: E402
+
 
 def test_transcribe_one_no_audio_track(tmp_path: Path) -> None:
     """When ffmpeg reports a stream-less file, the helper returns ('','')."""
     src = tmp_path / "silent.mov"
     src.write_bytes(b"\x00" * 16)
 
-    fake = MagicMock(returncode=1, stderr=b"Output file #0 does not contain any stream")
-    with patch("subprocess.run", return_value=fake):
+    with patch("src.client.cli.repair.audio_tracks", return_value=[]), \
+         patch("subprocess.run") as run:
         out = _transcribe_one(src)
     assert out == ("", "")
+    run.assert_not_called()
+
+
+def test_transcribe_one_hears_every_audio_track(tmp_path: Path) -> None:
+    """A lav on its own track is mixed in, not dropped."""
+    src = tmp_path / "two.mov"
+    src.write_bytes(b"\x00" * 16)
+
+    ffmpeg_ok = MagicMock(returncode=0, stderr=b"")
+    whisper_ok = MagicMock(returncode=0, stdout='{"srt": "", "language": ""}', stderr="")
+    with patch("src.client.cli.repair.audio_tracks", return_value=[AudioTrack(0, 2, "aac"), AudioTrack(1, 1, "aac")]), \
+         patch("subprocess.run", side_effect=[ffmpeg_ok, whisper_ok]) as run, \
+         patch("os.path.getsize", return_value=10_000), \
+         patch("os.unlink"):
+        _transcribe_one(src)
+    ffmpeg_cmd = " ".join(run.call_args_list[0].args[0])
+    assert "amix=inputs=2" in ffmpeg_cmd
+
+
+def test_transcribe_one_unreadable_audio_is_retried_later(tmp_path: Path) -> None:
+    """A failed probe isn't recorded as 'no speech': the next cycle tries again."""
+    import subprocess
+
+    src = tmp_path / "flaky.mov"
+    src.write_bytes(b"\x00" * 16)
+    with patch("src.client.cli.repair.audio_tracks", side_effect=subprocess.CalledProcessError(1, "ffprobe")):
+        assert _transcribe_one(src) is None
 
 
 def test_transcribe_one_returns_srt_on_success(tmp_path: Path) -> None:
@@ -328,7 +357,8 @@ def test_transcribe_one_returns_srt_on_success(tmp_path: Path) -> None:
     )
 
     # Make the temp wav report a non-trivial size so the early-empty branch is bypassed
-    with patch("subprocess.run", side_effect=[ffmpeg_ok, whisper_ok]), \
+    with patch("src.client.cli.repair.audio_tracks", return_value=[AudioTrack(0, 2, "aac")]), \
+         patch("subprocess.run", side_effect=[ffmpeg_ok, whisper_ok]), \
          patch("os.path.getsize", return_value=10_000), \
          patch("os.unlink"):
         out = _transcribe_one(src)
@@ -345,7 +375,8 @@ def test_transcribe_one_whisper_subprocess_failure(tmp_path: Path) -> None:
     ffmpeg_ok = MagicMock(returncode=0, stderr=b"")
     whisper_fail = MagicMock(returncode=1, stdout="", stderr="boom")
 
-    with patch("subprocess.run", side_effect=[ffmpeg_ok, whisper_fail]), \
+    with patch("src.client.cli.repair.audio_tracks", return_value=[AudioTrack(0, 2, "aac")]), \
+         patch("subprocess.run", side_effect=[ffmpeg_ok, whisper_fail]), \
          patch("os.path.getsize", return_value=10_000), \
          patch("os.unlink"):
         out = _transcribe_one(src)
@@ -359,7 +390,8 @@ def test_transcribe_one_invalid_whisper_json(tmp_path: Path) -> None:
     ffmpeg_ok = MagicMock(returncode=0, stderr=b"")
     whisper_garbage = MagicMock(returncode=0, stdout="not json", stderr="")
 
-    with patch("subprocess.run", side_effect=[ffmpeg_ok, whisper_garbage]), \
+    with patch("src.client.cli.repair.audio_tracks", return_value=[AudioTrack(0, 2, "aac")]), \
+         patch("subprocess.run", side_effect=[ffmpeg_ok, whisper_garbage]), \
          patch("os.path.getsize", return_value=10_000), \
          patch("os.unlink"):
         out = _transcribe_one(src)
@@ -371,7 +403,8 @@ def test_transcribe_one_short_wav_treated_as_empty(tmp_path: Path) -> None:
     src.write_bytes(b"\x00" * 16)
 
     ffmpeg_ok = MagicMock(returncode=0, stderr=b"")
-    with patch("subprocess.run", return_value=ffmpeg_ok), \
+    with patch("src.client.cli.repair.audio_tracks", return_value=[AudioTrack(0, 2, "aac")]), \
+         patch("subprocess.run", return_value=ffmpeg_ok), \
          patch("os.path.getsize", return_value=10), \
          patch("os.unlink"):
         out = _transcribe_one(src)

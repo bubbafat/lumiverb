@@ -15,6 +15,7 @@ from testcontainers.postgres import PostgresContainer
 from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
+from tests.conftest import PG_IMAGE
 
 
 def _ensure_psycopg2(url: str) -> str:
@@ -59,7 +60,7 @@ def _provision_tenant_db(tenant_url: str, project_root: str) -> None:
 def assets_client() -> tuple[TestClient, str]:
     """Two testcontainers Postgres; create tenant; yield (client, api_key)."""
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    with PostgresContainer("pgvector/pgvector:pg16") as control_postgres:
+    with PostgresContainer(PG_IMAGE) as control_postgres:
         control_url = _ensure_psycopg2(control_postgres.get_connection_url())
         engine = create_engine(control_url)
         with engine.connect() as conn:
@@ -86,7 +87,7 @@ def assets_client() -> tuple[TestClient, str]:
                 tenant_id = r.json()["tenant_id"]
                 api_key = r.json()["api_key"]
 
-        with PostgresContainer("pgvector/pgvector:pg16") as tenant_postgres:
+        with PostgresContainer(PG_IMAGE) as tenant_postgres:
             tenant_url = _ensure_psycopg2(tenant_postgres.get_connection_url())
             _provision_tenant_db(tenant_url, project_root)
             from src.server.database import get_control_session

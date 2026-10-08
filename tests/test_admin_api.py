@@ -13,6 +13,7 @@ from testcontainers.postgres import PostgresContainer
 from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
+from tests.conftest import PG_IMAGE
 
 
 def _ensure_psycopg2(url: str) -> str:
@@ -38,7 +39,7 @@ def _run_control_migrations(url: str) -> None:
 @pytest.fixture(scope="module")
 def admin_client() -> TestClient:
     """FastAPI TestClient with control plane DB and ADMIN_KEY set; provision_tenant_database mocked. One container per module."""
-    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
+    with PostgresContainer(PG_IMAGE) as postgres:
         url = postgres.get_connection_url()
         url = _ensure_psycopg2(url)
         engine = create_engine(url)

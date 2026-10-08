@@ -44,6 +44,22 @@ class Library(SQLModel, table=True):
     )
 
 
+class LibraryChange(SQLModel, table=True):
+    """A path the storage's own machine saw change, waiting to be scanned."""
+
+    __tablename__ = "library_changes"
+    __table_args__ = (UniqueConstraint("library_id", "rel_path", name="uq_library_changes_library_path"),)
+
+    change_id: str = Field(primary_key=True)
+    library_id: str = Field(foreign_key="libraries.library_id", nullable=False, index=True)
+    rel_path: str = Field(nullable=False)
+    reported_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+    version: int = Field(sa_column=Column(BigInteger, nullable=False))
+
+
 class LibraryPathFilter(SQLModel, table=True):
     __tablename__ = "library_path_filters"
 
@@ -124,6 +140,13 @@ class Asset(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
     video_preview_generated_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+    # Full-length low-resolution copy with audio, for analysis only.
+    analysis_proxy_key: str | None = Field(default=None, nullable=True)
+    analysis_proxy_sha256: str | None = Field(default=None, nullable=True)
+    analysis_proxy_generated_at: datetime | None = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )

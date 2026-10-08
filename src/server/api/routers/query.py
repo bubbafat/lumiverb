@@ -16,9 +16,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlmodel import Session
 
-from src.server.api.dependencies import get_current_user_id, get_tenant_session
+from src.server.api.dependencies import get_optional_user_id, get_tenant_session
 from src.server.models.filter_registry import parse_f_params
-from src.server.models.query_filter import LibraryScope, SearchTerm
+from src.server.models.query_filter import (
+    Combinator,
+    GroupFilter,
+    LibraryScope,
+    PersonFilter,
+    SearchTerm,
+)
 from src.server.repository.tenant import LibraryRepository, UnifiedBrowseRepository
 
 logger = logging.getLogger(__name__)
@@ -100,8 +106,13 @@ def _run_quickwit_search(
     search_terms: list[SearchTerm],
     library_ids: list[str] | None,
     limit: int,
+    public_cap_ms: int | None = None,
 ) -> tuple[dict[str, float], dict[str, SearchContext], str]:
     """Run text search through Quickwit (or Postgres fallback).
+
+    `public_cap_ms`: for a public page that plays only so much of each
+    video, search what it shows: no whole-transcript field, and no scene
+    or transcript hits from past that point.
 
     Returns:
       - scores: {asset_id: best_score}
@@ -144,10 +155,19 @@ def _run_quickwit_search(
             return ""
         return " AND ".join(f"({q})" for q in per_term)
 
-    asset_query = _build(ASSET_FIELDS, ASSET_PHRASE_FIELDS)
+    asset_fields = ASSET_FIELDS
+    if public_cap_ms is not None:
+        asset_fields = [f for f in ASSET_FIELDS if f != "transcript_text"]
+
+    def shown(hit: dict) -> bool:
+        """Within what a capped public page plays."""
+        start = hit.get("start_ms")
+        return public_cap_ms is None or (start is not None and start < public_cap_ms)
+
+    asset_query = _build(asset_fields, ASSET_PHRASE_FIELDS)
     scene_query = _build(SCENE_FIELDS, SCENE_PHRASE_FIELDS)
     transcript_query = _build(TRANSCRIPT_FIELDS, TRANSCRIPT_PHRASE_FIELDS)
-    asset_prefix_query = _build_prefix(ASSET_FIELDS)
+    asset_prefix_query = _build_prefix(asset_fields)
     scene_prefix_query = _build_prefix(SCENE_FIELDS)
 
     if not asset_query:
@@ -256,6 +276,8 @@ def _run_quickwit_search(
                 max_hits=limit,
             )
             for hit in scene_hits:
+                if not shown(hit):
+                    continue
                 aid = hit["asset_id"]
                 score = hit.get("score", 0.0)
                 ctx = SearchContext(
@@ -297,6 +319,8 @@ def _run_quickwit_search(
                 )
                 PREFIX_PENALTY = 0.5
                 for hit in scene_prefix_hits:
+                    if not shown(hit):
+                        continue
                     aid = hit["asset_id"]
                     raw_score = hit.get("score", 0.0)
                     score = raw_score * PREFIX_PENALTY
@@ -328,6 +352,8 @@ def _run_quickwit_search(
             )
             # Deduplicate: keep best per asset
             for hit in transcript_hits:
+                if not shown(hit):
+                    continue
                 aid = hit["asset_id"]
                 score = hit.get("score", 0.0)
                 ctx = SearchContext(
@@ -374,12 +400,13 @@ def _run_postgres_fallback(
     combined_query: str,
     library_ids: list[str] | None,
     limit: int,
+    include_transcripts: bool = True,
 ) -> tuple[dict[str, float], dict[str, SearchContext]]:
     """Postgres ILIKE fallback when Quickwit is unavailable."""
     from src.server.search.postgres_search import search_assets
 
     lib_id = library_ids[0] if library_ids and len(library_ids) == 1 else None
-    hits = search_assets(session, lib_id, combined_query, limit=limit)
+    hits = search_assets(session, lib_id, combined_query, limit=limit, include_transcripts=include_transcripts)
     scores: dict[str, float] = {}
     contexts: dict[str, SearchContext] = {}
     for hit in hits:
@@ -393,11 +420,46 @@ def _run_postgres_fallback(
 # Endpoint
 # ---------------------------------------------------------------------------
 
+
+def guard_public_spec(request: Request, session: Session, spec) -> int | None:
+    """For a public page's request, keep it to what the page shows.
+
+    The middleware authorized one public library (the first library:
+    filter). Require that every library in the filter is public, and
+    refuse what a visitor has no business filtering by: ratings are a
+    signed-in person's, and who's in a photo isn't for visitors to probe.
+    Returns the public playback cap in ms (None if whole videos play, or
+    the request isn't public): text search stays within it.
+    """
+    if not getattr(request.state, "is_public_request", False):
+        return None
+    # A plain AND only: an OR (at any depth) could widen scope past the library filter.
+    root = spec.root
+    if root.combinator != Combinator.AND or any(isinstance(c, GroupFilter) for c in root.children):
+        raise HTTPException(status_code=403, detail="Grouped filters aren't available on public pages")
+    if spec.needs_rating_join or any(isinstance(leaf, PersonFilter) for leaf in spec.leaves):
+        raise HTTPException(status_code=403, detail="That filter isn't available on public pages")
+    scoped_lib_ids: set[str] = set()
+    for leaf in spec.leaves:
+        if isinstance(leaf, LibraryScope):
+            scoped_lib_ids.update(leaf.library_ids)
+    if not scoped_lib_ids:
+        raise HTTPException(status_code=403, detail="Public access requires library scope")
+    lib_repo = LibraryRepository(session)
+    for lid in scoped_lib_ids:
+        lib = lib_repo.get_by_id(lid)
+        if lib is None or not lib.is_public:
+            raise HTTPException(status_code=404, detail="Not found")
+    from src.server.tenant_settings import playback_cap
+
+    cap = playback_cap(session, public=True)
+    return None if cap is None else cap * 1000
+
 @router.get("", response_model=QueryResponse)
 def unified_query(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
-    user_id: Annotated[str, Depends(get_current_user_id)],
+    user_id: Annotated[str | None, Depends(get_optional_user_id)],
     f: Annotated[list[str], Query(alias="f")] = [],  # noqa: B006
     sort: str = "taken_at",
     dir: str = "desc",
@@ -421,22 +483,9 @@ def unified_query(
     # would authorize the request for the public library while the
     # query handler returned content from the private one too.
     #
-    # Today this is also blocked by `get_current_user_id` 401-ing public
-    # requests, but that's a coincidental defense — this guard makes the
-    # endpoint safe even if the user_id requirement is later relaxed for
-    # anonymous public browsing.
-    if getattr(request.state, "is_public_request", False):
-        lib_repo = LibraryRepository(session)
-        scoped_lib_ids: set[str] = set()
-        for leaf in spec.leaves:
-            if isinstance(leaf, LibraryScope):
-                scoped_lib_ids.update(leaf.library_ids)
-        if not scoped_lib_ids:
-            raise HTTPException(status_code=403, detail="Public access requires library scope")
-        for lid in scoped_lib_ids:
-            lib = lib_repo.get_by_id(lid)
-            if lib is None or not lib.is_public:
-                raise HTTPException(status_code=404, detail="Not found")
+    # Visitors have no user: ratings are someone's, and who's in a photo
+    # isn't for them to probe, so those filters are refused.
+    public_cap_ms = guard_public_spec(request, session, spec)
 
     search_terms = spec.search_terms
     candidate_ids: list[str] | None = None
@@ -459,7 +508,7 @@ def unified_query(
                 break
 
         scores, contexts, source = _run_quickwit_search(
-            tenant_id, search_terms, library_ids, limit=MAX_CANDIDATE_IDS,
+            tenant_id, search_terms, library_ids, limit=MAX_CANDIDATE_IDS, public_cap_ms=public_cap_ms,
         )
         search_source = source
 
@@ -468,6 +517,7 @@ def unified_query(
             pg_query = " ".join(st.q for st in search_terms if st.q)
             scores, contexts = _run_postgres_fallback(
                 session, pg_query, library_ids, limit=MAX_CANDIDATE_IDS,
+                include_transcripts=public_cap_ms is None,
             )
 
         if not scores:

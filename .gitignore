@@ -17,6 +17,7 @@ MANIFEST
 # Virtual environments & package managers
 # =============================================================================
 .venv/
+.venv-next/
 venv/
 env/
 ENV/

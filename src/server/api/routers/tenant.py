@@ -7,10 +7,16 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import Session
 
-from src.server.api.dependencies import get_tenant_session, require_editor
+from src.server.api.dependencies import get_tenant_session, require_editor, require_tenant_admin
+from src.server.tenant_settings import (
+    get_public_video_preview_max_seconds,
+    get_video_preview_max_seconds,
+    set_public_video_preview_max_seconds,
+    set_video_preview_max_seconds,
+)
 from src.shared.path_filter import validate_pattern
 from src.server.repository.tenant import PathFilterRepository
 
@@ -22,6 +28,23 @@ class TenantContextResponse(BaseModel):
     vision_api_url: str = ""
     vision_api_key: str = ""
     vision_model_id: str = ""
+
+
+_Seconds = Annotated[int, Field(strict=True, ge=1, le=86_400)]
+
+
+class TenantSettingsResponse(BaseModel):
+    # Seconds of each video playback serves signed in; None means the whole video.
+    video_preview_max_seconds: int | None = None
+    # The same on public pages (never more than the above); 10 until set.
+    public_video_preview_max_seconds: int | None = 10
+
+
+class TenantSettingsUpdate(BaseModel):
+    """Fields left out stay as they are; null means the whole video."""
+
+    video_preview_max_seconds: _Seconds | None = None
+    public_video_preview_max_seconds: _Seconds | None = None
 
 
 class TenantFilterDefaultItem(BaseModel):
@@ -45,6 +68,45 @@ class TenantFilterDefaultsResponse(BaseModel):
 class CreateTenantFilterDefaultRequest(BaseModel):
     type: str  # "include" | "exclude"
     pattern: str
+
+
+@router.get("/settings", response_model=TenantSettingsResponse)
+def get_tenant_settings(
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> TenantSettingsResponse:
+    """Account-wide settings. Anyone signed in can read them."""
+    return _settings(session)
+
+
+def _settings(session: Session) -> TenantSettingsResponse:
+    return TenantSettingsResponse(
+        video_preview_max_seconds=get_video_preview_max_seconds(session),
+        public_video_preview_max_seconds=get_public_video_preview_max_seconds(session),
+    )
+
+
+@router.patch(
+    "/settings",
+    response_model=TenantSettingsResponse,
+    dependencies=[Depends(require_tenant_admin)],
+)
+def update_tenant_settings(
+    body: TenantSettingsUpdate,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> TenantSettingsResponse:
+    """Change account-wide settings (admins only). A new cap drops the cuts made for the old one."""
+    from src.server.api.routers.playback import clear_cuts
+
+    before = _settings(session)
+    if "video_preview_max_seconds" in body.model_fields_set:
+        set_video_preview_max_seconds(session, body.video_preview_max_seconds)
+    if "public_video_preview_max_seconds" in body.model_fields_set:
+        set_public_video_preview_max_seconds(session, body.public_video_preview_max_seconds)
+    after = _settings(session)
+    if after != before:
+        clear_cuts(request.state.tenant_id)
+    return after
 
 
 @router.get("/context", response_model=TenantContextResponse)

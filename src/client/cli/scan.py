@@ -18,8 +18,9 @@ import logging
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import datetime, timedelta, timezone
+from pathlib import Path, PurePosixPath
+from stat import S_ISDIR
 
 from rich.console import Console
 from rich.progress import (
@@ -32,6 +33,7 @@ from rich.progress import (
 )
 
 from src.client.cli.client import LumiverbClient
+from src.client.cli.roots import local_library_root, reachable_root
 from src.client.cli.ingest import (
     SUPPORTED_EXTENSIONS,
     _build_exif_payload,
@@ -47,9 +49,17 @@ from src.client.cli.ingest import (
 from src.client.proxy.proxy_cache import ProxyCache
 from src.client.workers.exif_extract import compute_sha256
 from src.client.video.probe import probe_video
-from src.shared.io_utils import resolve_source_path
+from src.shared.io_utils import is_within, resolve_source_path, stat_if_present
 
 logger = logging.getLogger(__name__)
+
+
+# The macOS scanner's quarantine: a file modified this recently may still be
+# copying.
+SETTLE_SEC = 30
+# A file stamped further ahead than this came from a camera whose clock runs
+# ahead, not from a copy in progress.
+FUTURE_MTIME_SEC = 300
 
 
 @dataclass
@@ -62,7 +72,15 @@ class ScanStats:
     moved: int = 0
     cache_populated: int = 0
     failed: int = 0
+    failed_paths: list[str] = field(default_factory=list)
     scanned_asset_ids: list[str] = field(default_factory=list)
+    # The library's root couldn't be read, so nothing was scanned.
+    root_unreachable: bool = False
+    # Files written too recently to trust: left for a later scan.
+    settling: int = 0
+    settling_paths: list[str] = field(default_factory=list)
+    # Folders that couldn't be listed, so nothing was taken for deleted.
+    unlisted: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -311,6 +329,19 @@ def _detect_moves(
     return moves, remaining
 
 
+def _existing_folder(root: Path, rel: str) -> str | None:
+    """The deepest folder on the way to rel that's on disk, its name in either
+    Unicode form. None is the library root. Raises OSError when a folder
+    can't be checked: it may well be there."""
+    parts = PurePosixPath(rel).parts
+    while parts:
+        st = stat_if_present(resolve_source_path(root, "/".join(parts)))
+        if st is not None and S_ISDIR(st.st_mode):
+            return "/".join(parts)
+        parts = parts[:-1]
+    return None
+
+
 def _detect_deletions(
     local_files: list[dict],
     existing: dict[str, _ServerAsset],
@@ -350,6 +381,7 @@ def _scan_one(
         logger.warning("Skipping %s: escapes library root", rel_path)
         with stats.lock:
             stats.failed += 1
+            stats.failed_paths.append(rel_path)
         return
 
     try:
@@ -401,6 +433,7 @@ def _scan_one(
         logger.exception("Failed to scan %s: %s", rel_path, e)
         with stats.lock:
             stats.failed += 1
+            stats.failed_paths.append(rel_path)
         progress.console.print(f"[red]scan \u2717[/red] {rel_path}: {e}")
         progress.advance(task_id)
 
@@ -424,6 +457,7 @@ def _scan_one_video(
         logger.warning("Skipping %s: escapes library root", rel_path)
         with stats.lock:
             stats.failed += 1
+            stats.failed_paths.append(rel_path)
         return
 
     try:
@@ -491,6 +525,7 @@ def _scan_one_video(
         logger.exception("Failed to scan video %s: %s", rel_path, e)
         with stats.lock:
             stats.failed += 1
+            stats.failed_paths.append(rel_path)
         progress.console.print(f"[red]scan \u2717[/red] {rel_path}: {e}")
         progress.advance(task_id)
 
@@ -561,6 +596,7 @@ def _apply_moves(
             logger.warning("Batch move failed: %s", e)
             # Fallback: skip these moves rather than crash
             stats.failed += len(batch)
+            stats.failed_paths.extend(m.new_rel_path for m in batch)
             continue
         stats.moved += len(batch)
 
@@ -614,12 +650,17 @@ def run_scan(
     enrich (Phase 2) operates on the proxy cache only.
     """
     library_id = library["library_id"]
-    root_path = Path(library["root_path"]).resolve()
+    root_path = reachable_root(library)
 
-    if not root_path.is_dir():
-        console.print(f"[red]Library root not accessible: {root_path}[/red]")
-        console.print("Is the volume mounted?")
-        return ScanStats()
+    if root_path is None:
+        here = local_library_root(library)
+        console.print(f"[red]Library root not accessible: {here}[/red]")
+        if here is not None and str(here) == library.get("root_path"):
+            console.print("Is the volume mounted? If it's mounted elsewhere on this machine, "
+                          "run `lumiverb config map-root`.")
+        else:
+            console.print("Is the volume mounted?")
+        return ScanStats(root_unreachable=True)
 
     stats = ScanStats()
 
@@ -630,9 +671,29 @@ def run_scan(
     if total_filters:
         console.print(f"Loaded {len(tenant_filters)} tenant + {len(library_filters)} library filter(s)")
 
+    # A folder that's gone is scanned from the nearest folder still there,
+    # which sees what was in it as deleted.
+    if path_prefix:
+        try:
+            found = _existing_folder(root_path, path_prefix)
+        except OSError as exc:
+            console.print(f"[yellow]Can't check {path_prefix} ({exc}), so this scan doesn't remove anything[/yellow]")
+            stats.unlisted.append(path_prefix)
+            return stats
+        if found != path_prefix:
+            console.print(f"{path_prefix} isn't on disk; scanning {found or 'the whole library'}")
+            path_prefix = found
+    if not path_prefix and not root_path.is_dir():
+        console.print(f"[red]Library root went away: {root_path}[/red]")
+        return ScanStats(root_unreachable=True)
+
     # Discover files
     console.print("[bold]Discovering files...[/bold]")
-    local_files = _walk_library(root_path, path_prefix, tenant_filters=tenant_filters, library_filters=library_filters)
+    local_files = _walk_library(root_path, path_prefix, tenant_filters=tenant_filters, library_filters=library_filters,
+                                unlisted=stats.unlisted)
+    if stats.unlisted:
+        console.print(f"[yellow]Couldn't list {len(stats.unlisted):,} folder(s), so this scan "
+                      "doesn't remove anything: {}[/yellow]".format(", ".join(stats.unlisted[:5]) or "/"))
 
     # Filter by media type
     if media_type_filter != "all":
@@ -640,7 +701,9 @@ def run_scan(
 
     console.print(f"Found {len(local_files):,} media files")
 
-    if not local_files and not force:
+    # An empty library is more likely an unmounted volume than a deleted
+    # one. An empty folder within it is just empty: its files are gone.
+    if not local_files and not force and not path_prefix:
         return stats
 
     # Fetch existing assets with SHA for change detection
@@ -655,10 +718,26 @@ def run_scan(
         if before > len(local_files):
             console.print(f"Skipping {before - len(local_files):,} file(s) you trashed")
 
+    # Files written in the last SETTLE_SEC may still be copying, so they wait
+    # for a later scan, as on the Mac. They still count as on disk, so they
+    # are never taken for deleted.
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(seconds=SETTLE_SEC)
+    ahead = now + timedelta(seconds=FUTURE_MTIME_SEC)
+    settled: list[dict] = []
+    for f in local_files:
+        if f.get("file_mtime") and cutoff < f["file_mtime"] <= ahead:
+            stats.settling_paths.append(f["rel_path"])
+        else:
+            settled.append(f)
+    stats.settling = len(stats.settling_paths)
+    if stats.settling:
+        console.print(f"{stats.settling:,} file(s) still being written; a later scan picks them up")
+
     # Split files: new (not on server by path) vs existing (need SHA check)
     # Default (fast): mtime+size match skips hashing. --thorough forces SHA on all.
     new_files, needs_hash, fast_unchanged = _split_files(
-        local_files, existing, thorough=thorough or force,
+        settled, existing, thorough=thorough or force,
     )
     local_rel_paths = {f["rel_path"] for f in local_files}
 
@@ -676,6 +755,11 @@ def run_scan(
 
     # Detect deletions first (needed to scope move detection)
     deleted_ids = _detect_deletions(local_files, scope, root_path, path_prefix)
+    if stats.unlisted:
+        # Files in a folder that couldn't be listed may well be there, so
+        # they're neither deleted nor the old half of a move.
+        unseen = {sa.asset_id for rp, sa in scope.items() if any(is_within(rp, u) for u in stats.unlisted)}
+        deleted_ids = [aid for aid in deleted_ids if aid not in unseen]
 
     # --- Move detection ---
     # Only check for moves when: there are new files, there are deletions
@@ -726,6 +810,10 @@ def run_scan(
 
     # --skip-moves suppresses deletions too: without move detection we can't
     # distinguish real deletes from the "old path" half of a move.
+    if stats.unlisted and deleted_ids:
+        console.print(f"[yellow]Skipping {len(deleted_ids):,} deletions: some folders couldn't be listed[/yellow]")
+        deleted_ids = []
+
     if skip_moves and deleted_ids:
         console.print(f"[dim]Skipping {len(deleted_ids):,} deletions (--skip-moves)[/dim]")
         deleted_ids = []

@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlmodel import Session
 
 from src.shared.io_utils import normalize_rel_path
-from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor
+from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor, require_signed_in
 from src.shared import asset_status
 from src.shared.io_utils import normalize_path_prefix
 from src.server.repository.tenant import AssetMetadataRepository, AssetRepository, LibraryRepository
@@ -138,6 +138,7 @@ class AssetPageItem(BaseModel):
     gps_lon: float | None = None
     face_count: int | None = None
     created_at: str | None = None  # ISO8601
+    has_analysis_proxy: bool = False
 
 
 class AssetPageResponse(BaseModel):
@@ -225,6 +226,7 @@ def page_assets(
     missing_scene_vision: bool = False,
     missing_transcription: bool = False,
     missing_probe: bool = False,
+    missing_analysis_proxy: bool = False,
     has_faces: bool | None = None,
     person_id: str | None = None,
     sort: str = "taken_at",
@@ -265,6 +267,9 @@ def page_assets(
         library = lib_repo.get_by_id(library_id)
         if library is None or not library.is_public:
             raise HTTPException(status_code=404, detail="Not found")
+        # Ratings are a signed-in person's; who's in a photo isn't for visitors to probe.
+        if person_id or any(v is not None for v in (favorite, star_min, star_max, color, has_rating)):
+            raise HTTPException(status_code=403, detail="That filter isn't available on public pages")
 
     sort_col = sort if sort in SORT_COLUMNS else "taken_at"
     direction = dir if dir in ("asc", "desc") else "desc"
@@ -312,6 +317,7 @@ def page_assets(
         missing_scene_vision=missing_scene_vision,
         missing_transcription=missing_transcription,
         missing_probe=missing_probe,
+        missing_analysis_proxy=missing_analysis_proxy,
         has_faces=has_faces,
         person_id=person_id,
         sort=sort_col,
@@ -366,6 +372,7 @@ def page_assets(
             gps_lon=a.gps_lon,
             face_count=a.face_count,
             created_at=a.created_at.isoformat() if a.created_at else None,
+            has_analysis_proxy=a.analysis_proxy_key is not None,
         )
         for a in assets
     ]
@@ -394,10 +401,11 @@ class RepairSummary(BaseModel):
     missing_scene_vision: int = 0
     missing_transcription: int = 0
     missing_probe: int = 0
+    missing_analysis_proxy: int = 0
     stale_search_sync: int = 0
 
 
-@router.get("/repair-summary", response_model=RepairSummary)
+@router.get("/repair-summary", response_model=RepairSummary, dependencies=[Depends(require_signed_in)])
 def repair_summary(
     session: Annotated[Session, Depends(get_tenant_session)],
     library_id: str,
@@ -423,6 +431,7 @@ def repair_summary(
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_scene_vision"]}) AS missing_scene_vision,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_transcription"]}) AS missing_transcription,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_probe"]}) AS missing_probe,
+                COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_analysis_proxy"]}) AS missing_analysis_proxy,
                 COUNT(*) FILTER (
                     WHERE EXISTS (
                         SELECT 1 FROM asset_metadata am
@@ -454,6 +463,7 @@ def repair_summary(
         missing_scene_vision=row.missing_scene_vision,
         missing_transcription=row.missing_transcription,
         missing_probe=row.missing_probe,
+        missing_analysis_proxy=row.missing_analysis_proxy,
         stale_search_sync=row.stale_search_sync,
     )
 
@@ -578,33 +588,47 @@ def _stream_file_with_range(
     path: Path,
     request: Request,
     media_type: str,
+    etag: str | None = None,
 ) -> StreamingResponse:
+    """Stream `path`, honoring a single Range: `bytes=a-b`, `bytes=a-` or `bytes=-n`.
+
+    A range starting past the end is a 416; a malformed one gets the whole
+    file, and so does one whose If-Range names another version (`etag`).
+    """
     file_size = path.stat().st_size
     range_header = request.headers.get("range")
     start = 0
     end = file_size - 1
     status_code = 200
     headers: dict[str, str] = {"Accept-Ranges": "bytes"}
+    if etag:
+        headers["ETag"] = etag
 
+    if_range = request.headers.get("if-range")
+    if range_header and if_range and etag and if_range.strip() != etag:
+        range_header = None  # the client holds another version: send this one whole
     if range_header:
-        # Format: bytes=start-end
+        units, _, range_spec = range_header.partition("=")
+        start_str, _, end_str = range_spec.split(",")[0].strip().partition("-")
         try:
-            units, _, range_spec = range_header.partition("=")
-            if units.strip().lower() == "bytes":
-                start_str, _, end_str = range_spec.partition("-")
-                if start_str:
-                    start = int(start_str)
+            if units.strip().lower() != "bytes":
+                raise ValueError(units)
+            if start_str:
+                start = int(start_str)
                 if end_str:
-                    end = int(end_str)
-                if end >= file_size:
-                    end = file_size - 1
-                if start > end:
-                    start = 0
-                    end = file_size - 1
-                status_code = 206
-        except Exception:
-            start = 0
-            end = file_size - 1
+                    end = min(int(end_str), file_size - 1)
+            else:  # the last n bytes
+                start = max(file_size - int(end_str), 0)
+            if start >= file_size:
+                return StreamingResponse(
+                    iter(()), status_code=416,
+                    headers={**headers, "Content-Range": f"bytes */{file_size}"},
+                )
+            if start > end:
+                raise ValueError(range_header)
+            status_code = 206
+        except ValueError:
+            start, end, status_code = 0, file_size - 1, 200
 
     content_length = end - start + 1
     headers["Content-Length"] = str(content_length)
@@ -630,6 +654,57 @@ def _stream_file_with_range(
         status_code=status_code,
         headers=headers,
     )
+
+
+def _check_public_request(request: Request, session: Session, asset) -> None:
+    """For a public page's request, raise unless its library or project shows this asset."""
+    if not getattr(request.state, "is_public_request", False):
+        return
+    from src.server.api.routers.playback import _check_public
+
+    q = request.query_params
+    _check_public(session, asset, q.get("public_library_id"),
+                  q.get("public_project_id") or q.get("public_collection_id"))
+
+
+def _project_visitor_view(response: AssetResponse) -> AssetResponse:
+    """What a public project's page may show of a clip: what its clip list gives
+    (shape, time, length) and what's seen or heard in it. Not where it lives,
+    where it was shot, what shot it, or the team's notes."""
+    return AssetResponse(
+        asset_id=response.asset_id,
+        library_id="",
+        rel_path="",
+        media_type=response.media_type,
+        status=response.status,
+        proxy_key=None,
+        thumbnail_key=None,
+        width=response.width,
+        height=response.height,
+        taken_at=response.taken_at,
+        duration_sec=response.duration_sec,
+        ai_description=response.ai_description,
+        ai_tags=response.ai_tags,
+        ocr_text=response.ocr_text,
+        transcript_srt=response.transcript_srt,
+        transcript_language=response.transcript_language,
+        video_facet=response.video_facet,
+    )
+
+
+def _trim_public_transcript(request: Request, session: Session, response: AssetResponse) -> None:
+    """A public page's transcript stops where its playback does, and doesn't say who wrote the note."""
+    if not getattr(request.state, "is_public_request", False):
+        return
+    response.note_author = None
+    if not response.transcript_srt:
+        return
+    from src.server.api.routers.playback import srt_before
+    from src.server.tenant_settings import playback_cap
+
+    cap = playback_cap(session, public=True)
+    if cap is not None:
+        response.transcript_srt = srt_before(response.transcript_srt, cap)
 
 
 def _to_asset_response(asset) -> AssetResponse:
@@ -732,6 +807,7 @@ def get_asset_by_path(
     facet = AssetRepository(session).get_video_facet(asset.asset_id)
     # Stored rows are returned as they are (validation is for writes).
     response.video_facet = VideoFacetModel.model_construct(**facet) if facet else None
+    _trim_public_transcript(request, session, response)
     return response
 
 
@@ -842,12 +918,10 @@ def get_asset(
     asset = asset_repo.get_by_id(asset_id)
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
-    if getattr(request.state, "is_public_request", False):
-        if not public_library_id or asset.library_id != public_library_id:
-            raise HTTPException(status_code=403, detail="Asset does not belong to the requested public library")
-        lib = LibraryRepository(session).get_by_id(public_library_id)
-        if lib is None or not lib.is_public:
-            raise HTTPException(status_code=404, detail="Not found")
+    _check_public_request(request, session, asset)
+    via_project = getattr(request.state, "is_public_request", False) and bool(
+        request.query_params.get("public_project_id") or request.query_params.get("public_collection_id")
+    )
     response = _to_asset_response(asset)
     ai_description: str | None = None
     ai_tags: list[str] = []
@@ -866,7 +940,8 @@ def get_asset(
     facet = AssetRepository(session).get_video_facet(asset.asset_id)
     # Stored rows are returned as they are (validation is for writes).
     response.video_facet = VideoFacetModel.model_construct(**facet) if facet else None
-    return response
+    _trim_public_transcript(request, session, response)
+    return _project_visitor_view(response) if via_project else response
 
 
 @router.put("/{asset_id}/video-facet", response_model=VideoFacetModel)
@@ -1469,13 +1544,7 @@ def stream_or_enqueue_preview(
     asset = asset_repo.get_by_id(asset_id)
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
-    if getattr(request.state, "is_public_request", False):
-        public_library_id = request.query_params.get("public_library_id")
-        if not public_library_id or asset.library_id != public_library_id:
-            raise HTTPException(status_code=403, detail="Asset does not belong to the requested public library")
-        lib = LibraryRepository(session).get_by_id(public_library_id)
-        if lib is None or not lib.is_public:
-            raise HTTPException(status_code=404, detail="Not found")
+    _check_public_request(request, session, asset)
 
     if not asset.media_type.startswith("video"):
         raise HTTPException(status_code=422, detail="Preview only supported for video assets")
@@ -1491,6 +1560,15 @@ def stream_or_enqueue_preview(
                 asset.video_preview_last_accessed_at = now
                 session.add(asset)
                 session.commit()
+            from src.server.api.routers.playback import capped
+            from src.server.tenant_settings import playback_cap
+
+            path = capped(
+                path, playback_cap(session, public=getattr(request.state, "is_public_request", False)),
+                storage=storage, tenant_id=request.state.tenant_id, asset_id=asset_id, source="preview",
+                version=f"{int(path.stat().st_mtime)}-{path.stat().st_size}",
+                strip=getattr(request.state, "is_public_request", False),
+            )
             return _stream_file_with_range(path, request, media_type="video/mp4")
 
         # File is missing on disk – clear key.
@@ -1810,7 +1888,7 @@ def submit_faces(
     return FaceSubmitResponse(face_count=asset.face_count or 0, face_ids=face_ids)
 
 
-@router.get("/{asset_id}/faces", response_model=FaceListResponse)
+@router.get("/{asset_id}/faces", response_model=FaceListResponse, dependencies=[Depends(require_signed_in)])
 def list_faces(
     asset_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],

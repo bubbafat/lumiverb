@@ -9,7 +9,7 @@
 #
 # What it does:
 #   1. git pull
-#   2. uv sync
+#   2. uv sync (if Python changes: built beside the running one, then a short stop to swap)
 #   3. Run migrations (control plane + tenants)
 #   4. Sync data directory
 #   5. Fix Quickwit sandbox
@@ -31,11 +31,22 @@ step()  { echo -e "\n${BOLD}=== $1 ===${NC}"; }
 ok()    { echo -e "${GREEN}  ✓${NC} $1"; }
 warn()  { echo -e "${YELLOW}  ⚠${NC} $1"; }
 fail()  { echo -e "${RED}  ✗ $1${NC}" >&2; exit 1; }
+# set -e stops at the first failed command; say which, so a stop is never silent.
+trap 'echo -e "${RED}  ✗ Stopped at line ${LINENO}: ${BASH_COMMAND}${NC}" >&2' ERR
 
 APP_DIR="/opt/lumiverb"
 ENV_FILE="/etc/lumiverb/env"
 SVC_USER="lumiverb"
 UV_BIN="/usr/local/bin/uv"
+
+# Adds a line to the env file, on a line of its own even when the file
+# doesn't end in a newline.
+env_append() {
+  if [[ -s "$ENV_FILE" && -n "$(tail -c1 "$ENV_FILE")" ]]; then
+    echo >> "$ENV_FILE"
+  fi
+  echo "$1" >> "$ENV_FILE"
+}
 
 [[ "$(id -u)" -eq 0 ]] || fail "Run as root"
 [[ -d "${APP_DIR}/.git" ]] || fail "${APP_DIR} is not a git repo — run deploy-api.sh first"
@@ -64,10 +75,40 @@ else
 fi
 ok "$(sudo -u "$SVC_USER" git log --oneline -1)"
 
+# bash keeps running the copy of this script it started with, and git pull
+# wrote a new one: run that, so steps this update adds apply now.
+if [[ "${LUMIVERB_UPDATE_REEXEC:-}" != "1" ]]; then
+  export LUMIVERB_UPDATE_REEXEC=1
+  exec bash "$APP_DIR/scripts/update-api.sh" "$@"
+fi
+
 # ---------------------------------------------------------------------------
 step "Updating Python dependencies"
-sudo -u "$SVC_USER" "$UV_BIN" sync --extra cli --extra embeddings --extra face_recognition
-ok "Python venv synced (server + cli + embeddings + face_recognition)"
+EXTRAS=(--extra cli --extra embeddings --extra face_recognition)
+# uv sync removes what the extras don't list, so keep the worker's.
+if systemctl is-enabled lumiverb-worker >/dev/null 2>&1; then
+  EXTRAS+=(--extra workers)
+fi
+# A new Python makes uv sync delete the venv and download it all again. So
+# download first, into a side venv, while the API and worker run; then stop
+# them only for the swap, which the warm cache makes quick.
+HAVE_PY="$(sed -n 's/^version_info *= *\([0-9]*\.[0-9]*\).*/\1/p' "$APP_DIR/.venv/pyvenv.cfg" 2>/dev/null || true)"
+WANT_PY="$(grep -oE '[0-9]+\.[0-9]+' "$APP_DIR/.python-version" 2>/dev/null | head -1 || true)"
+# From here a failure may leave Lumiverb stopped (now, or by an earlier run): say so.
+trap 'rc=$?; if [[ $rc -ne 0 ]] && ! systemctl is-active --quiet lumiverb-api; then echo -e "${RED}  ✗ Lumiverb isn'"'"'t running. Fix the error above, then run update-api.sh again: it carries on from here.${NC}" >&2; fi' EXIT
+if [[ -n "$HAVE_PY" && -n "$WANT_PY" && "$HAVE_PY" != "$WANT_PY" ]]; then
+  warn "Python changes from ${HAVE_PY} to ${WANT_PY}: building the new environment (a few GB) while Lumiverb keeps running"
+  sudo -u "$SVC_USER" "$UV_BIN" python install "$WANT_PY"
+  rm -rf "$APP_DIR/.venv-next"  # uv won't build into what an interrupted run left
+  sudo -u "$SVC_USER" env UV_PROJECT_ENVIRONMENT="$APP_DIR/.venv-next" "$UV_BIN" sync "${EXTRAS[@]}"
+  if systemctl is-enabled lumiverb-worker >/dev/null 2>&1; then
+    systemctl stop lumiverb-worker
+  fi
+  systemctl stop lumiverb-api
+fi
+sudo -u "$SVC_USER" "$UV_BIN" sync "${EXTRAS[@]}"
+rm -rf "$APP_DIR/.venv-next"
+ok "Python venv synced (${EXTRAS[*]})"
 
 # ---------------------------------------------------------------------------
 step "Running migrations"
@@ -88,10 +129,14 @@ ok "Tenant migrations applied"
 
 # ---------------------------------------------------------------------------
 step "Ensuring data directory"
-DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2-)"
+DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2- || true)"
 if [[ -n "$DATA_DIR" ]]; then
-  mkdir -p "$DATA_DIR"/quickwit
+  mkdir -p "$DATA_DIR"/quickwit "$DATA_DIR"/tmp "$DATA_DIR"/worker-tmp
   chown -R "$SVC_USER":"$SVC_USER" "$DATA_DIR"
+  # Caches, and the worker's lock and state, on the data disk for manual
+  # runs as the service user too, so one never runs beside the service.
+  grep -q '^XDG_CACHE_HOME=' "$ENV_FILE" || env_append "XDG_CACHE_HOME=${DATA_DIR}/cache"
+  sudo -u "$SVC_USER" -H "$APP_DIR/.venv/bin/lumiverb" config set --cache-home "${DATA_DIR}/cache" >/dev/null
   ok "Data dir: $DATA_DIR"
 fi
 
@@ -105,6 +150,60 @@ if [[ -f "$QW_UNIT" ]] && grep -qE '^(PrivateTmp|ProtectSystem|ReadWritePaths|Re
 fi
 
 # ---------------------------------------------------------------------------
+step "Ports"
+# Installs from before ports were configurable run the API on 8000.
+grep -q '^API_PORT=' "$ENV_FILE" || env_append "API_PORT=8000"
+API_PORT="$(grep '^API_PORT=' "$ENV_FILE" | cut -d= -f2-)"
+ok "API on port ${API_PORT}"
+
+# ---------------------------------------------------------------------------
+step "Updating the API unit"
+API_UNIT="/etc/systemd/system/lumiverb-api.service"
+if [[ -f "$API_UNIT" ]]; then
+  # Large uploads (analysis proxies) are spooled to TMPDIR; PrivateTmp's /tmp
+  # can be RAM (tmpfs), so they go on the data disk (inside ReadWritePaths).
+  if [[ -z "$DATA_DIR" ]]; then
+    warn "No DATA_DIR in ${ENV_FILE}; API uploads stay in /tmp"
+  else
+    if ! grep -q "^Environment=TMPDIR=" "$API_UNIT"; then
+      sed -i "/^Environment=PYTHONUNBUFFERED=1$/a Environment=TMPDIR=${DATA_DIR}/tmp" "$API_UNIT"
+      ok "API uploads spool to ${DATA_DIR}/tmp"
+    fi
+    # PrivateTmp emptied /tmp on each start; do the same for uploads a killed API left.
+    if ! grep -q "^ExecStartPre=-/usr/bin/find ${DATA_DIR}/tmp " "$API_UNIT"; then
+      sed -i "/^Environment=TMPDIR=/a ExecStartPre=-/usr/bin/find ${DATA_DIR}/tmp -mindepth 1 -delete" "$API_UNIT"
+    fi
+    systemctl daemon-reload
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+step "Updating the worker unit"
+WORKER_UNIT="/etc/systemd/system/lumiverb-worker.service"
+if [[ -f "$WORKER_UNIT" ]]; then
+  # The old unit ran 'lumiverb pipeline', which no longer exists.
+  sed -i "s|^ExecStart=.*/lumiverb pipeline$|ExecStart=${APP_DIR}/.venv/bin/lumiverb worker|" "$WORKER_UNIT"
+  grep -q "^Environment=HOME=" "$WORKER_UNIT" || sed -i "/^Environment=PYTHONUNBUFFERED=1$/a Environment=HOME=${SVC_HOME}" "$WORKER_UNIT"
+  sed -i "s|^ReadWritePaths=\([^ ]*\)$|ReadWritePaths=\1 ${SVC_HOME}|" "$WORKER_UNIT"
+  # Proxy caches on the data disk, not the root disk with Postgres.
+  DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2- || true)"
+  if [[ -z "$DATA_DIR" ]]; then
+    warn "No DATA_DIR in ${ENV_FILE}; the worker's caches stay in its home"
+  else
+    grep -q "^Environment=XDG_CACHE_HOME=" "$WORKER_UNIT" \
+      || sed -i "/^Environment=HOME=/a Environment=XDG_CACHE_HOME=${DATA_DIR}/cache" "$WORKER_UNIT"
+    # Temp files (Whisper's WAVs) too: PrivateTmp's /tmp can be RAM. Not the
+    # API's tmp, which each API start empties; this one each worker start.
+    grep -q "^Environment=TMPDIR=" "$WORKER_UNIT" \
+      || sed -i "/^ExecStart=/i Environment=TMPDIR=${DATA_DIR}/worker-tmp" "$WORKER_UNIT"
+    grep -q "^ExecStartPre=-/usr/bin/find ${DATA_DIR}/worker-tmp " "$WORKER_UNIT" \
+      || sed -i "/^Environment=TMPDIR=/a ExecStartPre=-/usr/bin/find ${DATA_DIR}/worker-tmp -mindepth 1 -delete" "$WORKER_UNIT"
+  fi
+  systemctl daemon-reload
+  ok "$(grep '^ExecStart=' "$WORKER_UNIT")"
+fi
+
+# ---------------------------------------------------------------------------
 step "Installing upkeep timers"
 cat > /etc/systemd/system/lumiverb-upkeep.service <<UPKEEP_SVC
 [Unit]
@@ -115,7 +214,7 @@ Type=oneshot
 User=${SVC_USER}
 Group=${SVC_USER}
 EnvironmentFile=${ENV_FILE}
-ExecStart=/usr/bin/curl -sf -X POST http://127.0.0.1:8000/v1/upkeep -H "Authorization: Bearer \${ADMIN_KEY}" -H "Content-Type: application/json"
+ExecStart=/usr/bin/curl -sf -X POST http://127.0.0.1:\${API_PORT}/v1/upkeep -H "Authorization: Bearer \${ADMIN_KEY}" -H "Content-Type: application/json"
 TimeoutSec=120
 UPKEEP_SVC
 
@@ -141,7 +240,7 @@ Type=oneshot
 User=${SVC_USER}
 Group=${SVC_USER}
 EnvironmentFile=${ENV_FILE}
-ExecStart=/usr/bin/curl -sf -X POST "http://127.0.0.1:8000/v1/upkeep/cleanup?dry_run=false" -H "Authorization: Bearer \${ADMIN_KEY}" -H "Content-Type: application/json"
+ExecStart=/usr/bin/curl -sf -X POST "http://127.0.0.1:\${API_PORT}/v1/upkeep/cleanup?dry_run=false" -H "Authorization: Bearer \${ADMIN_KEY}" -H "Content-Type: application/json"
 TimeoutSec=300
 DAILY_SVC
 
@@ -167,9 +266,12 @@ step "Restarting services"
 systemctl restart lumiverb-api
 systemctl is-enabled lumiverb-worker >/dev/null 2>&1 && systemctl restart lumiverb-worker
 systemctl is-enabled lumiverb-quickwit >/dev/null 2>&1 && systemctl restart lumiverb-quickwit
+# uv's cache: an old Python's packages stay in it for good (prune keeps
+# them), and the venv doesn't need it. Every update, so a rerun gets there.
+sudo -u "$SVC_USER" "$UV_BIN" cache clean || warn "Couldn't clear uv's cache"
 
 for i in {1..10}; do
-  if curl -sf http://127.0.0.1:8000/health >/dev/null 2>&1; then
+  if curl -sf http://127.0.0.1:${API_PORT}/health >/dev/null 2>&1; then
     break
   fi
   sleep 1
@@ -179,7 +281,7 @@ systemctl status --no-pager lumiverb-api || true
 systemctl is-enabled lumiverb-quickwit >/dev/null 2>&1 && systemctl status --no-pager lumiverb-quickwit || true
 systemctl is-enabled lumiverb-worker >/dev/null 2>&1 && systemctl status --no-pager lumiverb-worker || true
 
-if curl -sf http://127.0.0.1:8000/health >/dev/null 2>&1; then
+if curl -sf http://127.0.0.1:${API_PORT}/health >/dev/null 2>&1; then
   ok "API server healthy"
 else
   fail "API server not responding — check: journalctl -u lumiverb-api -n 50"

@@ -7,17 +7,25 @@ import io
 import json
 import logging
 import multiprocessing as mp
+from collections.abc import Callable, Collection, Iterable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor, wait, FIRST_COMPLETED
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, MofNCompleteColumn, TimeRemainingColumn, SpinnerColumn
 from rich.table import Table
 
 from src.client.cli.client import LumiverbClient
+from src.client.video.analysis_proxy import AnalysisProxySettings, RenderError, render_analysis_proxy, render_timeout
+from src.client.video.audio import audio_tracks, speech_wav_command
 from src.client.video.probe import probe_video
 from src.client.workers.faces.insightface_provider import InsightFaceProvider
 from src.shared.io_utils import resolve_source_path
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from src.client.proxy.analysis_cache import AnalysisProxyCache
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +46,23 @@ def _drain(inflight: set[Future]) -> set[Future]:
     return inflight
 
 
-REPAIR_TYPES = ("probe", "embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all")
-RepairType = Literal["probe", "embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all"]
+# Faces run in batches of this many when a run may be told to stop, so it
+# can stop between them (each batch starts its own detection processes).
+FACE_CHUNK = 500
+
+
+def _until[T](stop: Callable[[], bool], items: Iterable[T], taken: Callable[[T], None] | None = None) -> Iterator[T]:
+    """items, one at a time, until stop() says to stop. taken(item) hears of each before it's worked."""
+    for item in items:
+        if stop():
+            return
+        if taken is not None:
+            taken(item)
+        yield item
+
+
+REPAIR_TYPES = ("probe", "render", "embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all")
+RepairType = Literal["probe", "render", "embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all"]
 
 
 class _RepairStats:
@@ -125,6 +148,41 @@ def _probe_one(client: LumiverbClient, lib_root: "Path", asset: dict) -> str:
     return "ok"
 
 
+def _render_one(
+    client: LumiverbClient,
+    lib_root: Path,
+    asset: dict,
+    settings: AnalysisProxySettings,
+    cache: AnalysisProxyCache,
+) -> str:
+    """Render, upload and cache one video's analysis proxy. Returns "ok", "missing" or "failed"."""
+    source = resolve_source_path(lib_root, asset["rel_path"])
+    if not source.is_file():
+        logger.warning("Source file not found for %s: %s", asset["asset_id"], asset["rel_path"])
+        return "missing"
+    # Rendered beside the cache (same filesystem, so put() is a rename),
+    # under a name eviction ignores.
+    work = cache.path_for(asset["asset_id"]).with_suffix(".rendering")
+    work.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        render_analysis_proxy(source, work, settings, timeout=render_timeout(asset.get("duration_sec")))
+        with open(work, "rb") as f:
+            client.post(
+                f"/v1/assets/{asset['asset_id']}/artifacts/analysis_proxy",
+                files={"file": ("analysis.mp4", f, "video/mp4")},
+            )
+        cache.put(asset["asset_id"], work)
+        return "ok"
+    except RenderError as exc:
+        logger.warning("Rendering the analysis proxy for %s failed: %s", asset["rel_path"], exc)
+        return "failed"
+    except Exception as exc:  # noqa: BLE001 — e.g. the upload failed or the asset was trashed
+        logger.warning("Storing the analysis proxy for %s failed: %s", asset["rel_path"], exc)
+        return "failed"
+    finally:
+        work.unlink(missing_ok=True)
+
+
 def _transcribe_one(
     source_path: "Path",
     whisper_model: str = "small",
@@ -138,19 +196,24 @@ def _transcribe_one(
     import subprocess
     import sys
     import tempfile
+    from pathlib import Path
 
     try:
-        # Extract audio to temp WAV (16kHz mono)
+        tracks = audio_tracks(source_path)
+    except (subprocess.SubprocessError, OSError, ValueError) as exc:
+        logger.warning("Couldn't read the audio tracks of %s; trying again later: %s", source_path, exc)
+        return None
+    if not tracks:
+        logger.info("No audio track in %s", source_path)
+        return ("", "")
+
+    try:
+        # Every audio track mixed into a 16 kHz mono WAV: a lav may be on any track.
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             wav_path = tmp.name
 
-        cmd = [
-            "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-i", str(source_path),
-            "-vn", "-ar", "16000", "-ac", "1", "-f", "wav",
-            "-y", wav_path,
-        ]
-        result = subprocess.run(cmd, capture_output=True, timeout=300)
+        cmd = speech_wav_command(source_path, Path(wav_path), tracks)
+        result = subprocess.run(cmd, capture_output=True, timeout=1800)
         if result.returncode != 0:
             stderr = result.stderr.decode(errors="replace") if result.stderr else ""
             if "does not contain any stream" in stderr or "Output file #0 does not contain" in stderr:
@@ -256,6 +319,7 @@ def _page_missing(
     missing_scene_vision: bool = False,
     missing_transcription: bool = False,
     missing_probe: bool = False,
+    missing_analysis_proxy: bool = False,
 ) -> list[dict]:
     """Page through assets matching the given missing filter."""
     results: list[dict] = []
@@ -283,6 +347,8 @@ def _page_missing(
             params["missing_transcription"] = "true"
         if missing_probe:
             params["missing_probe"] = "true"
+        if missing_analysis_proxy:
+            params["missing_analysis_proxy"] = "true"
         if cursor:
             params["after"] = cursor
         resp = client.get("/v1/assets/page", params=params)
@@ -736,6 +802,13 @@ def _run_face_pipeline(
         proxy_pool.shutdown(wait=False)
 
 
+def _here(library: dict) -> str:
+    """The library's root as this machine sees it, for messages."""
+    from src.client.cli.roots import local_library_root
+
+    return str(local_library_root(library) or library.get("root_path") or "")
+
+
 def get_repair_summary(client: LumiverbClient, library_id: str) -> dict:
     """Fetch repair summary counts from the API."""
     resp = client.get("/v1/assets/repair-summary", params={"library_id": library_id})
@@ -753,6 +826,9 @@ def run_repair(
     console: Console,
     asset_ids: list[str] | None = None,
     skip_types: set[str] | None = None,
+    should_stop: Callable[[], bool] | None = None,
+    skip_items: Collection[tuple[str, str]] = (),
+    on_take: Callable[[str, str], None] | None = None,
 ) -> None:
     """Detect and fix missing pipeline outputs.
 
@@ -763,6 +839,14 @@ def run_repair(
     If skip_types is provided, those enrichment types are excluded from the
     plan even when job_type="all". Used by ingest to honor --skip-vision
     and --skip-embeddings.
+
+    If should_stop is provided, it's asked between items: once it says
+    stop, the current step ends after the item in hand and no other starts.
+    The brain's worker uses it to give enrichment a time budget.
+
+    skip_items are (step, asset_id) pairs left for a later run, and
+    on_take(step, asset_id) hears of each item a step takes. The worker
+    uses them so an item that keeps failing doesn't hold up the rest.
     """
     library_id = library["library_id"]
     library_name = library["name"]
@@ -787,6 +871,9 @@ def run_repair(
     # Probe first: its duration makes videos eligible for transcription and scenes.
     if job_type in ("probe", "all") and summary.get("missing_probe", 0) > 0:
         plan.append(("probe", summary["missing_probe"], "missing video probe"))
+    # Then the analysis proxies that transcription, scenes and vision read.
+    if job_type in ("render", "all") and summary.get("missing_analysis_proxy", 0) > 0:
+        plan.append(("render", summary["missing_analysis_proxy"], "missing analysis proxy"))
 
     if job_type in ("embed", "all") and summary.get("missing_embeddings", 0) > 0:
         plan.append(("embed", summary["missing_embeddings"], "missing CLIP embeddings"))
@@ -829,6 +916,7 @@ def run_repair(
 
     for label, key, needs_repair in [
         ("Video probe", "missing_probe", job_type in ("probe", "all")),
+        ("Analysis proxy", "missing_analysis_proxy", job_type in ("render", "all")),
         ("Proxy", "missing_proxy", job_type in ("proxy", "all")),
         ("EXIF", "missing_exif", job_type in ("exif", "all")),
         ("Embeddings", "missing_embeddings", job_type in ("embed", "all")),
@@ -874,18 +962,54 @@ def run_repair(
     # to 1 worker; concurrency applies to proxy generation threads instead.
     face_conc = 1
 
-    # Resolve library root path for local proxy generation
-    from pathlib import Path as _Path
-    _root_path_str = library.get("root_path")
-    root_path = _Path(_root_path_str).resolve() if _root_path_str else None
-    if root_path and not root_path.is_dir():
-        root_path = None
+    # The library's root on this machine (mapped by `lumiverb config
+    # map-root`), or None when it can't be read now. Checked again before
+    # each step that reads source files: storage can go to sleep mid-run.
+    from src.client.cli.roots import reachable_root
+    root_path = reachable_root(library)
 
     # Shared proxy cache: generates from local source → server download → cached at configured size
     from src.client.proxy.proxy_cache import ProxyCache
     proxy_cache = ProxyCache(max_edge=_cfg.proxy_max_edge, root_path=root_path, client=client)
+    # Videos are analyzed from their analysis proxies, never the originals.
+    from src.client.proxy.analysis_cache import AnalysisProxyCache
+    analysis_cache = AnalysisProxyCache(client)
+
+    def _waiting_for_proxy(assets: list[dict]) -> list[dict]:
+        """Split off videos without an analysis proxy yet, and say so."""
+        waiting = [a for a in assets if not a.get("has_analysis_proxy")]
+        if waiting:
+            console.print(
+                f"  {len(waiting):,} wait for an analysis proxy "
+                f"(rendered while the library's storage is reachable)."
+            )
+        return [a for a in assets if a.get("has_analysis_proxy")]
+
+    stop = should_stop or (lambda: False)
+
+    def _due(step: str, assets: list[dict]) -> list[dict]:
+        """assets, less those skip_items leaves for a later run."""
+        left = [a for a in assets if (step, a["asset_id"]) not in skip_items]
+        if len(left) < len(assets):
+            console.print(f"  {len(assets) - len(left):,} tried recently; they wait for a later run.")
+        return left
+
+    def _taking(step: str) -> Callable[[dict], None] | None:
+        """For _until: tells on_take of each asset a step takes."""
+        return None if on_take is None else lambda a: on_take(step, a["asset_id"])
+
+    def _asleep() -> bool:
+        """After a missing file: is the storage gone, rather than the file?"""
+        if reachable_root(library, require_entries=True) is not None:
+            return False
+        console.print(f"[yellow]Library root stopped answering: {_here(library)}. "
+                      "The rest waits until it's reachable.[/yellow]")
+        return True
 
     for repair_type, count, desc in plan:
+        if stop():
+            console.print("[yellow]Stopping here; the rest waits for the next run.[/yellow]")
+            break
         if repair_type == "embed":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
             try:
@@ -900,6 +1024,7 @@ def run_repair(
             if not assets:
                 console.print("No assets found (already repaired?).")
                 continue
+            assets = _due("embed", assets)
 
             EMBED_BATCH_SIZE = 50
             embed_batch: list[dict] = []
@@ -945,7 +1070,7 @@ def run_repair(
                 tid = progress.add_task("Embeddings", total=len(assets), ok=0, fail=0)
                 pool = ThreadPoolExecutor(max_workers=embed_conc, thread_name_prefix="embed")
                 inflight: set[Future] = set()
-                for a in assets:
+                for a in _until(stop, assets, _taking("embed")):
                     fut = pool.submit(
                         _repair_embed_one,
                         asset_id=a["asset_id"],
@@ -966,7 +1091,11 @@ def run_repair(
         elif repair_type == "vision":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
             from src.client.cli.ingest import run_backfill_vision
-            run_backfill_vision(client, library, concurrency=vision_conc, console=console)
+            run_backfill_vision(
+                client, library, concurrency=vision_conc, console=console, should_stop=should_stop,
+                skip={asset_id for step, asset_id in skip_items if step == "vision"},
+                on_take=None if on_take is None else lambda asset_id: on_take("vision", asset_id),
+            )
 
         elif repair_type == "ocr":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
@@ -983,6 +1112,7 @@ def run_repair(
             if not assets:
                 console.print("No assets found (already repaired?).")
                 continue
+            assets = _due("ocr", assets)
 
             import time as _time
             ocr_batch_size = _cfg.ocr_batch_size
@@ -1009,7 +1139,7 @@ def run_repair(
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("OCR", total=len(assets), ok=0, fail=0)
-                for a in assets:
+                for a in _until(stop, assets, _taking("ocr")):
                     result = _ocr_one(
                         asset_id=a["asset_id"],
                         rel_path=a["rel_path"],
@@ -1041,33 +1171,40 @@ def run_repair(
             if not assets:
                 console.print("No assets found (already repaired?).")
                 continue
+            assets = _due("faces", assets)
+            if not assets:
+                continue
 
-            from pathlib import Path
-            root_path_str = library.get("root_path")
-            _face_root = Path(root_path_str).resolve() if root_path_str else None
-            if _face_root and not _face_root.is_dir():
-                _face_root = None
+            def _take_chunk(chunk: list[dict]) -> None:
+                for a in chunk:
+                    on_take("faces", a["asset_id"])
+
+            _face_root = reachable_root(library)
 
             from src.client.cli.config import load_config
             cfg = load_config()
 
+            chunks = [assets] if should_stop is None else [
+                assets[i:i + FACE_CHUNK] for i in range(0, len(assets), FACE_CHUNK)
+            ]
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Faces", total=len(assets), ok=0, fail=0)
-                _run_face_pipeline(
-                    assets=assets,
-                    client=client,
-                    proxy_cache=proxy_cache,
-                    root_path=_face_root,
-                    face_conc=face_conc,
-                    batch_size=cfg.face_batch_size,
-                    batch_limit=cfg.face_batch_limit,
-                    stats=stats,
-                    progress=progress,
-                    tid=tid,
-                    console=console,
-                    label="faces",
-                )
+                for chunk in _until(stop, chunks, _take_chunk if on_take else None):
+                    _run_face_pipeline(
+                        assets=chunk,
+                        client=client,
+                        proxy_cache=proxy_cache,
+                        root_path=_face_root,
+                        face_conc=face_conc,
+                        batch_size=cfg.face_batch_size,
+                        batch_limit=cfg.face_batch_limit,
+                        stats=stats,
+                        progress=progress,
+                        tid=tid,
+                        console=console,
+                        label="faces",
+                    )
 
         elif repair_type == "redetect-faces":
             console.print(f"\n[bold]Re-detecting faces on all images ({count})[/bold]")
@@ -1075,11 +1212,7 @@ def run_repair(
 
             assets = all_images  # noqa: F821 — bound in plan phase above
 
-            from pathlib import Path
-            root_path_str = library.get("root_path")
-            _face_root = Path(root_path_str).resolve() if root_path_str else None
-            if _face_root and not _face_root.is_dir():
-                _face_root = None
+            _face_root = reachable_root(library)
 
             from src.client.cli.config import load_config
             cfg = load_config()
@@ -1118,20 +1251,19 @@ def run_repair(
             if not assets:
                 console.print("No assets found (already probed?).")
                 continue
+            assets = _due("probe", assets)
 
             # Probing reads source files, not proxies
-            from pathlib import Path as _Path
-            root_path_str = library.get("root_path")
-            lib_root = _Path(root_path_str).resolve() if root_path_str else None
-            if lib_root is None or not lib_root.is_dir():
-                console.print(f"[yellow]Library root not accessible: {lib_root}[/yellow]")
+            lib_root = reachable_root(library)
+            if lib_root is None:
+                console.print(f"[yellow]Library root not accessible: {_here(library)}[/yellow]")
                 console.print("[yellow]Probing requires source video files. Skipping.[/yellow]")
                 continue
 
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Probe", total=len(assets), ok=0, fail=0)
-                for a in assets:
+                for a in _until(stop, assets, _taking("probe")):
                     outcome = _probe_one(client, lib_root, a)
                     with stats.lock:
                         if outcome == "ok":
@@ -1142,6 +1274,42 @@ def run_repair(
                             stats.failed += 1
                     progress.advance(tid, 1)
                     progress.update(tid, ok=stats.processed, fail=stats.failed)
+                    if outcome == "missing" and _asleep():
+                        break
+
+        elif repair_type == "render":
+            console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
+
+            # Rendering reads the originals, so it waits for their storage.
+            lib_root = reachable_root(library)
+            if lib_root is None:
+                console.print(f"[yellow]Library root not accessible: {_here(library)}[/yellow]")
+                console.print("[yellow]Analysis proxies are rendered once it's reachable. Skipping.[/yellow]")
+                continue
+
+            assets = _filter(_page_missing(client, library_id, missing_analysis_proxy=True))
+            if not assets:
+                console.print("No assets found (already rendered?).")
+                continue
+            assets = _due("render", assets)
+
+            settings = AnalysisProxySettings.from_config()
+            progress = _make_progress(console)
+            with progress:
+                tid = progress.add_task("Render", total=len(assets), ok=0, fail=0)
+                for a in _until(stop, assets, _taking("render")):
+                    outcome = _render_one(client, lib_root, a, settings, analysis_cache)
+                    with stats.lock:
+                        if outcome == "ok":
+                            stats.processed += 1
+                        elif outcome == "missing":
+                            stats.skipped += 1
+                        else:
+                            stats.failed += 1
+                    progress.advance(tid, 1)
+                    progress.update(tid, ok=stats.processed, fail=stats.failed)
+                    if outcome == "missing" and _asleep():
+                        break
 
         elif repair_type == "transcribe":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
@@ -1150,28 +1318,23 @@ def run_repair(
             if not assets:
                 console.print("No assets found (already transcribed?).")
                 continue
-
-            # Transcription needs source files (for audio extraction)
-            from pathlib import Path as _Path
-            from src.shared.io_utils import resolve_source_path
-            root_path_str = library.get("root_path")
-            lib_root = _Path(root_path_str).resolve() if root_path_str else None
-            if lib_root and not lib_root.is_dir():
-                console.print(f"[yellow]Library root not accessible: {lib_root}[/yellow]")
-                console.print("[yellow]Transcription requires source video files. Skipping.[/yellow]")
+            assets = _due("transcribe", assets)
+            # Transcription reads the analysis proxy, so it runs while the
+            # originals' storage sleeps.
+            assets = _waiting_for_proxy(assets)
+            if not assets:
                 continue
 
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Transcribe", total=len(assets), ok=0, fail=0)
-                for a in assets:
+                for a in _until(stop, assets, _taking("transcribe")):
                     rel_path = a["rel_path"]
                     asset_id = a["asset_id"]
 
-                    # Resolve source file
-                    source_path = resolve_source_path(lib_root, rel_path) if lib_root else None
-                    if source_path is None or not source_path.exists():
-                        logger.warning("Source file not found for %s: %s", asset_id, rel_path)
+                    source_path = analysis_cache.get(asset_id)
+                    if source_path is None:
+                        logger.warning("No analysis proxy for %s: %s", asset_id, rel_path)
                         with stats.lock:
                             stats.skipped += 1
                         progress.advance(tid, 1)
@@ -1209,16 +1372,15 @@ def run_repair(
         elif repair_type == "video-scenes":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
 
-            from pathlib import Path
-            root_path_str = library.get("root_path")
-            root_path = Path(root_path_str).resolve() if root_path_str else None
-            if root_path is None or not root_path.is_dir():
-                console.print("[red]Library root not accessible — cannot run scene detection[/red]")
-                continue
-
             assets = _filter(_page_missing(client, library_id, missing_video_scenes=True))
             if not assets:
                 console.print("No assets found (already repaired?).")
+                continue
+            assets = _due("video-scenes", assets)
+            # Scenes are found in the analysis proxy, so this runs while the
+            # originals' storage sleeps.
+            assets = _waiting_for_proxy(assets)
+            if not assets:
                 continue
 
             videos = [
@@ -1234,24 +1396,20 @@ def run_repair(
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Scenes", total=len(indexable), ok=0, fail=0)
-                run_video_index(
+                done, failed = run_video_index(
                     client=client,
-                    root_path=root_path,
-                    videos=indexable,
+                    source_for=lambda v: analysis_cache.get(v["asset_id"]),
+                    videos=_until(stop, indexable, _taking("video-scenes")),
                     console=console,
                     progress=progress,
                     task_id=tid,
                 )
+            with stats.lock:
+                stats.processed += done
+                stats.failed += failed
 
         elif repair_type == "scene-vision":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
-
-            from pathlib import Path as _Path
-            root_path_str = library.get("root_path")
-            root_path = _Path(root_path_str).resolve() if root_path_str else None
-            if root_path is None or not root_path.is_dir():
-                console.print("[red]Library root not accessible — cannot run scene vision[/red]")
-                continue
 
             # Resolve vision config
             from src.client.cli.ingest import _resolve_vision_config
@@ -1268,6 +1426,11 @@ def run_repair(
             if not assets:
                 console.print("No assets found (already repaired?).")
                 continue
+            assets = _due("scene-vision", assets)
+            # Representative frames come from the analysis proxy.
+            assets = _waiting_for_proxy(assets)
+            if not assets:
+                continue
 
             videos = [{"asset_id": a["asset_id"], "rel_path": a["rel_path"]} for a in assets]
 
@@ -1275,16 +1438,19 @@ def run_repair(
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Scene vision", total=len(videos), ok=0, fail=0)
-                run_video_enrich(
+                done, failed = run_video_enrich(
                     client=client,
-                    root_path=root_path,
-                    videos=videos,
+                    source_for=lambda v: analysis_cache.get(v["asset_id"]),
+                    videos=_until(stop, videos, _taking("scene-vision")),
                     vision_provider=scene_vision_provider,
                     vision_model_id=vision_model_id,
                     console=console,
                     progress=progress,
                     task_id=tid,
                 )
+            with stats.lock:
+                stats.processed += done
+                stats.failed += failed
 
         elif repair_type == "search-sync":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")

@@ -426,6 +426,12 @@ async def create_and_ingest(
         if existing.deleted_at is not None:
             AssetRepository(session).clear_trash(existing)
             reappeared = existing
+        # The file was replaced: its analysis proxy shows the old content.
+        new_sha = (exif_data or {}).get("sha256")
+        if new_sha and existing.sha256 and new_sha != existing.sha256:
+            existing.analysis_proxy_key = None
+            existing.analysis_proxy_sha256 = None
+            existing.analysis_proxy_generated_at = None
         session.add(existing)
 
     result = _do_ingest(

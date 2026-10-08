@@ -4,8 +4,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import PublicProjectPage from "./PublicProjectPage";
 
+const imageCalls: Array<Record<string, unknown> | undefined> = [];
 vi.mock("../api/useAuthenticatedImage", () => ({
-  useAuthenticatedImage: () => ({ url: "blob:thumb", isLoading: false, error: null }),
+  useAuthenticatedImage: (_id: string, _type: string, opts?: Record<string, unknown>) => {
+    imageCalls.push(opts);
+    return { url: "blob:thumb", isLoading: false, error: null };
+  },
 }));
 
 // jsdom has no layout: give every element a size and a ResizeObserver that
@@ -66,6 +70,17 @@ function renderPage() {
 const thumbs = (root: HTMLElement) => root.querySelectorAll('img[src="blob:thumb"]');
 
 describe("PublicProjectPage", () => {
+  it("asks for each clip's media through the project, not as a library", async () => {
+    imageCalls.length = 0;
+    const { findAllByRole } = renderPage();
+    await findAllByRole("img").catch(() => []);
+    await waitFor(() => expect(imageCalls.length).toBeGreaterThan(0));
+    for (const opts of imageCalls) {
+      expect(opts).toMatchObject({ isPublic: true, publicProjectId: "prj_1" });
+      expect(opts?.publicLibraryId).toBeUndefined();
+    }
+  });
+
   it("shows the clips when the project loads after the first render", async () => {
     // A cold load renders "Loading..." first, so the grid mounts later.
     const { container } = renderPage();
