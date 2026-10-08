@@ -377,10 +377,14 @@ export function Lightbox({
   // machine's values stay underneath ("Use the AI's" brings them back).
   const canCorrect = useCanEdit(!isPublic) && !isPublic;
   const correctionClient = useQueryClient();
+  // The clip rides with each save: a save that returns after moving on
+  // refreshes the clip it changed, not the one shown by then.
   const correct = useMutation({
-    mutationFn: (body: { description?: string | null; ocr_text?: string | null; tags?: string[] | null }) =>
-      correctAsset(asset.asset_id, body),
-    onSuccess: () => correctionClient.invalidateQueries({ queryKey: ["asset", asset.asset_id] }),
+    mutationFn: ({ assetId, body }: {
+      assetId: string;
+      body: { description?: string | null; ocr_text?: string | null; tags?: string[] | null };
+    }) => correctAsset(assetId, body),
+    onSuccess: (_detail, { assetId }) => correctionClient.invalidateQueries({ queryKey: ["asset", assetId] }),
   });
   const corrected = detail?.corrected ?? [];
 
@@ -1203,7 +1207,7 @@ export function Lightbox({
                   canEdit={canCorrect}
                   emptyText="No description yet"
                   saving={correct.isPending}
-                  onSave={(value) => correct.mutateAsync({ description: value })}
+                  onSave={(value) => correct.mutateAsync({ assetId: asset.asset_id, body: { description: value } })}
                   render={(value) => <p className="italic text-gray-300">{value}</p>}
                 />
               )}
@@ -1221,7 +1225,7 @@ export function Lightbox({
                     canEdit={canCorrect}
                     emptyText="No text found"
                     saving={correct.isPending}
-                    onSave={(value) => correct.mutateAsync({ ocr_text: value })}
+                    onSave={(value) => correct.mutateAsync({ assetId: asset.asset_id, body: { ocr_text: value } })}
                   />
                 </>
               )}
@@ -1243,7 +1247,7 @@ export function Lightbox({
                         corrected={corrected.includes("tags")}
                         canEdit={canCorrect}
                         saving={correct.isPending}
-                        onSave={(tags) => correct.mutateAsync({ tags })}
+                        onSave={(tags) => correct.mutateAsync({ assetId: asset.asset_id, body: { tags } })}
                         renderTag={(tag) =>
                           onTagClick ? (
                             <button

@@ -95,6 +95,9 @@ class CorrectionsRepository:
         removed stays removed until they put it back, even while the
         machine leaves it out. An empty description or OCR is a correction
         too (there's none); None removes it."""
+        # One editor's save at a time per clip: each changes only its fields,
+        # from what the other saved.
+        self._session.execute(text("SELECT 1 FROM assets WHERE asset_id = :a FOR UPDATE"), {"a": asset_id})
         current = self.get(asset_id) or {"description": None, "ocr_text": None,
                                           "tags_added": [], "tags_removed": []}
         description = current["description"]

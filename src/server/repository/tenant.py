@@ -3598,11 +3598,14 @@ class FaceRepository:
         # Confirmed faces found again by a new face model carry its embedding:
         # their people's centroids follow (this is how a name teaches the new
         # model what that person looks like). The same model's embedding
-        # barely moves, so only a switch, or a centroid still of another
-        # model, recomputes; in person order, so two workers can't deadlock.
+        # barely moves, so only a switch, a face's first embedding, or a
+        # centroid still of another model recomputes; in person order, so two
+        # workers can't deadlock.
         if reused_ids:
+            # A switch, or a face given its first embedding (named on a Mac without the model).
             switched = [r.face_id for r in old_rows
-                        if r.face_id in reused_ids and (r.embedding_model or "buffalo_l") != embedding_model]
+                        if r.face_id in reused_ids
+                        and (r.emb is None or (r.embedding_model or "buffalo_l") != embedding_model)]
             for (pid,) in self._session.execute(
                 text("SELECT DISTINCT m.person_id FROM face_person_matches m"
                      " JOIN people p ON p.person_id = m.person_id"

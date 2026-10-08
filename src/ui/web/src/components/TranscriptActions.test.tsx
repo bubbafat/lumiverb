@@ -45,6 +45,13 @@ describe("TranscriptActions", () => {
     await waitFor(() => expect(remove).toHaveBeenCalledWith("ast_1", "manual"));
   });
 
+  it("a transcript from before sources were kept is the machine's", async () => {
+    remove.mockResolvedValue(undefined);
+    actions({ source: null });
+    fireEvent.click(screen.getByRole("button", { name: "Remove the machine's transcript" }));
+    await waitFor(() => expect(remove).toHaveBeenCalledWith("ast_1", "machine"));
+  });
+
   it("a person's alone is just removed", () => {
     actions({ source: "manual" });
     expect(screen.getByRole("button", { name: "Remove your transcript" }).textContent).toBe("Remove");

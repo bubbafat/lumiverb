@@ -38,14 +38,18 @@ def upgrade() -> None:
     )
     op.execute(sa.text(
         "INSERT INTO machine_transcripts (asset_id, srt, text, language, source, lineage, transcribed_at)"
-        " SELECT a.asset_id, a.transcript_srt, a.transcript_text, a.transcript_language, a.transcript_source,"
+        " SELECT a.asset_id, a.transcript_srt, a.transcript_text, a.transcript_language,"
+        "   COALESCE(a.transcript_source, 'unknown'),"
         "   (SELECT jsonb_build_object('producer', l.producer, 'version', l.producer_version,"
         "                              'settings_hash', l.settings_hash, 'source_sha256', l.source_sha256)"
         "    FROM artifact_lineage l WHERE l.asset_id = a.asset_id AND l.artifact = 'transcript'"
         "      AND l.producer NOT IN ('', 'person')),"
         "   COALESCE(a.transcribed_at, now())"
         " FROM assets a"
-        " WHERE a.transcript_source IS NOT NULL AND a.transcript_source <> 'manual' AND a.has_transcript IS NOT NULL"
+        # Transcripts from before transcript_source existed have none: the machine's too.
+        " WHERE COALESCE(a.transcript_source, '') <> 'manual'"
+        "   AND (a.transcript_srt IS NOT NULL OR a.transcribed_at IS NOT NULL"
+        "        OR (a.transcript_source IS NOT NULL AND a.has_transcript IS NOT NULL))"
     ))
 
 

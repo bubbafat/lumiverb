@@ -761,6 +761,18 @@ def _fill_described(session: Session, asset_id: str, response: AssetResponse) ->
     response.machine_ocr_text = machine_ocr if "ocr_text" in corrected else None
 
 
+def _asset_detail(session: Session, request: Request, asset: Asset) -> AssetResponse:
+    """A clip's whole detail, as GET /v1/assets/{id} returns it (trimmed for a public page)."""
+    response = _to_asset_response(asset)
+    _fill_described(session, asset.asset_id, response)
+    response.machine_transcript = asset.transcript_source == "manual" and _machine_transcript(session, asset.asset_id) is not None
+    facet = AssetRepository(session).get_video_facet(asset.asset_id)
+    # Stored rows are returned as they are (validation is for writes).
+    response.video_facet = VideoFacetModel.model_construct(**facet) if facet else None
+    _trim_public_transcript(request, session, response)
+    return response
+
+
 def _project_visitor_view(response: AssetResponse) -> AssetResponse:
     """What a public project's page may show of a clip: what its clip list gives
     (shape, time, length) and what's seen or heard in it. Not where it lives,
@@ -894,13 +906,7 @@ def get_asset_by_path(
     asset = asset_repo.get_by_library_and_rel_path(library_id, rel_path)
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail=f"Asset not found: {rel_path}")
-    response = _to_asset_response(asset)
-    _fill_described(session, asset.asset_id, response)
-    response.machine_transcript = asset.transcript_source == "manual" and _machine_transcript(session, asset.asset_id) is not None
-    facet = AssetRepository(session).get_video_facet(asset.asset_id)
-    # Stored rows are returned as they are (validation is for writes).
-    response.video_facet = VideoFacetModel.model_construct(**facet) if facet else None
-    _trim_public_transcript(request, session, response)
+    response = _asset_detail(session, request, asset)
     return response
 
 
@@ -1077,13 +1083,7 @@ def get_asset(
     via_project = getattr(request.state, "is_public_request", False) and bool(
         request.query_params.get("public_project_id") or request.query_params.get("public_collection_id")
     )
-    response = _to_asset_response(asset)
-    _fill_described(session, asset.asset_id, response)
-    response.machine_transcript = asset.transcript_source == "manual" and _machine_transcript(session, asset.asset_id) is not None
-    facet = AssetRepository(session).get_video_facet(asset.asset_id)
-    # Stored rows are returned as they are (validation is for writes).
-    response.video_facet = VideoFacetModel.model_construct(**facet) if facet else None
-    _trim_public_transcript(request, session, response)
+    response = _asset_detail(session, request, asset)
     return _project_visitor_view(response) if via_project else response
 
 
@@ -1489,9 +1489,7 @@ def correct_asset(
     try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
     LibraryRepository(session).bump_revision(asset.library_id)
 
-    response = _to_asset_response(asset)
-    _fill_described(session, asset_id, response)
-    return response
+    return _asset_detail(session, request, asset)
 
 
 class TranscriptSubmitRequest(BaseModel):
@@ -1524,6 +1522,32 @@ def _machine_transcript(session: Session, asset_id: str):
     return session.execute(sa_text(
         "SELECT srt, text, language, source, lineage, transcribed_at FROM machine_transcripts WHERE asset_id = :a"
     ), {"a": asset_id}).first()
+
+
+def _shown_transcript(asset: Asset) -> str | None:
+    """Whose transcript a clip shows: "manual" (a person's), "machine", or None.
+    One from before transcript_source existed has none: it's the machine's."""
+    if asset.transcript_source == "manual":
+        return "manual"
+    if asset.transcript_source or asset.transcript_srt or asset.transcribed_at:
+        return "machine"
+    return None
+
+
+def _keep_shown_machine_transcript(session: Session, asset: Asset) -> None:
+    """Keep the machine transcript a clip shows before a person's goes on top,
+    when none is kept yet (one from before machine transcripts were kept)."""
+    from sqlalchemy import text as sa_text
+
+    if _shown_transcript(asset) != "machine" or _machine_transcript(session, asset.asset_id) is not None:
+        return
+    session.execute(sa_text(
+        "INSERT INTO machine_transcripts (asset_id, srt, text, language, source, lineage, transcribed_at)"
+        " VALUES (:a, :srt, :text, :lang, :source, NULL, :at) ON CONFLICT (asset_id) DO NOTHING"
+    ), {"a": asset.asset_id, "srt": asset.transcript_srt, "text": asset.transcript_text,
+        "lang": asset.transcript_language, "source": asset.transcript_source or "unknown",
+        "at": asset.transcribed_at or utcnow()})
+    session.commit()
 
 
 def _keep_machine_transcript(session: Session, asset_id: str, body: TranscriptSubmitRequest,
@@ -1575,6 +1599,8 @@ def submit_transcript(
     # A person's transcript is human data: machine output goes under it, never over it.
     if machine and asset.transcript_source == "manual":
         return TranscriptSubmitResponse(asset_id=asset_id, status="kept_manual")
+    if not machine:
+        _keep_shown_machine_transcript(session, asset)
 
     # Empty SRT = "checked, no speech" (e.g., silent video processed by Whisper)
     if not body.srt or not body.srt.strip():
@@ -1674,9 +1700,9 @@ def delete_transcript(
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
 
-    if asset.transcript_source is None:
+    shown = _shown_transcript(asset)
+    if shown is None:
         return
-    shown = "manual" if asset.transcript_source == "manual" else "machine"
     if shown != which:
         raise ConflictError(
             "transcript_changed",

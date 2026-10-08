@@ -1205,6 +1205,29 @@ def test_faces_of_another_model_are_never_matched_to_this_ones_people(env) -> No
 
 
 @pytest.mark.slow
+def test_a_named_face_given_its_first_embedding_teaches_its_person(env) -> None:
+    """A Mac without the face model named a face it couldn't embed; the CLI
+    finds it again with an embedding (same model): the person's centroid is
+    built from it, so they're suggested elsewhere."""
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    person_id = _seed_person(tenant_url, emb=13)
+    with _db(tenant_url) as s:
+        s.execute(text("UPDATE people SET centroid_vector = NULL WHERE person_id = :p"), {"p": person_id})
+        s.commit()
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=None)
+    _seed_match(tenant_url, face_id, person_id, confirmed=True, confidence=None)
+
+    result = _redetect_with(client, headers, asset_id, [(_box(0.10, 0.10), 13)], "buffalo_l")
+
+    assert result["face_ids"] == [face_id]
+    with _db(tenant_url) as s:
+        has_centroid = s.execute(text("SELECT centroid_vector IS NOT NULL FROM people WHERE person_id = :p"),
+                                 {"p": person_id}).scalar()
+    assert has_centroid
+
+
+@pytest.mark.slow
 def test_mid_switch_a_face_the_new_model_hasnt_seen_gets_no_ranked_suggestions(env) -> None:
     """After the account switches, a face the new model hasn't found again
     is in another space than the people's centroids: ranking people by

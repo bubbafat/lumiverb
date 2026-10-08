@@ -131,6 +131,29 @@ def test_removing_twice_never_removes_both(env):
 
 
 @pytest.mark.slow
+def test_a_transcript_from_before_sources_is_the_machines(env):
+    # Transcripts made before transcript_source existed have none.
+    lib, vid, sha = _video(env, "CorrNullSource")
+    _transcribe(env, vid, SRT_MACHINE, sha)
+    with _db(env) as s:
+        s.execute(text("UPDATE assets SET transcript_source = NULL WHERE asset_id = :a"), {"a": vid})
+        s.execute(text("DELETE FROM machine_transcripts WHERE asset_id = :a"), {"a": vid})
+        s.commit()
+    r = _remove(env, vid, "manual", status=409)
+    assert r.json()["error"]["details"] == {"shown": "machine"}
+
+    # A person's goes on top of it, and it's kept underneath.
+    _transcribe(env, vid, SRT_PERSON, source="manual")
+    assert _shown(env, vid) == {"srt": SRT_PERSON, "source": "manual", "underneath": True}
+    _remove(env, vid, "manual")
+    assert _shown(env, vid)["srt"] == SRT_MACHINE
+
+    # And removed as the machine's, it's gone.
+    _remove(env, vid, "machine")
+    assert _shown(env, vid) == {"srt": None, "source": None, "underneath": False}
+
+
+@pytest.mark.slow
 def test_removing_a_transcript_says_whose(env):
     client, headers, *_ = env
     lib, vid, sha = _video(env, "CorrRemoveWhose")
@@ -356,6 +379,19 @@ def test_a_clip_with_no_description_can_be_given_one(env):
     d = _detail(env, clip)
     assert d["ai_description"] == "The old station" and d["ai_tags"] == ["station"]
     assert d["machine_description"] is None
+
+
+@pytest.mark.slow
+def test_a_correction_returns_the_clips_whole_detail(env):
+    client, headers, *_ = env
+    lib, vid, sha = _video(env, "CorrPatchDetail")
+    _transcribe(env, vid, SRT_MACHINE, sha)
+    _transcribe(env, vid, SRT_PERSON, source="manual")
+    r = _correct(env, vid, description="The ship's horn")
+    assert r.status_code == 200, r.text
+    detail = client.get(f"/v1/assets/{vid}", headers=headers).json()
+    assert r.json() == detail
+    assert detail["machine_transcript"] is True and detail["ai_description"] == "The ship's horn"
 
 
 @pytest.mark.slow
