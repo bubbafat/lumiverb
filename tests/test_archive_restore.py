@@ -12,6 +12,8 @@ searched (Robert's call, Oct 8).
 from __future__ import annotations
 
 import os
+import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 
 import pytest
@@ -181,6 +183,9 @@ def _sessions(env, n: int = 2):
     tenant_url = env[-1]
     engine = create_engine(tenant_url)
     sessions = [Session(engine) for _ in range(n)]
+    for s in sessions:
+        s.execute(text("SET lock_timeout = '5s'"))  # a locking regression fails, not hangs
+        s.commit()
     try:
         yield [(s, AssetRepository(s)) for s in sessions]
     finally:
@@ -190,16 +195,32 @@ def _sessions(env, n: int = 2):
         engine.dispose()
 
 
+def _waiting(fn, *args):
+    """Run fn in another thread; it should block on a row lock."""
+    pool = ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(fn, *args)
+    time.sleep(0.5)
+    assert not future.done(), "didn't wait for the lock"
+    pool.shutdown(wait=False)
+    return future
+
+
 @pytest.mark.slow
 def test_two_ingests_cant_claim_the_same_archived_asset(env):
     library_id = env[2]
     sha = _sha()
     asset = _ingest(env, "race/G001.mov", sha=sha)
     _archive(env, asset)
-    with _sessions(env) as [(_, first), (_, second)]:
-        assert first.find_archived_by_sha(library_id, sha).asset_id == asset
-        # Locked by the first: skipped, not waited on.
-        assert second.find_archived_by_sha(library_id, sha) is None
+    with _sessions(env) as [(first_session, first), (_, second)]:
+        claimed = first.find_archived_by_sha(library_id, sha)
+        assert claimed.asset_id == asset
+        claimed.rel_path = "race/copy of G001.mov"
+        first.clear_trash(claimed)
+        first_session.flush()
+        waiting = _waiting(second.find_archived_by_sha, library_id, sha)
+        first_session.commit()
+        # Claimed meanwhile: the second file gets an asset of its own.
+        assert waiting.result(timeout=10) is None
 
 
 @pytest.mark.slow
@@ -208,10 +229,28 @@ def test_a_file_back_at_its_path_locks_out_a_copy_claiming_it_by_content(env):
     sha = _sha()
     asset = _ingest(env, "race/H001.mov", sha=sha)
     _archive(env, asset)
-    with _sessions(env) as [(_, by_path), (_, by_content)]:
+    with _sessions(env) as [(path_session, by_path), (_, by_content)]:
         found = by_path.get_by_library_and_rel_path(library_id, "race/H001.mov")
         assert by_path.lock_for_restore(found, "race/H001.mov")
-        assert by_content.find_archived_by_sha(library_id, sha) is None
+        waiting = _waiting(by_content.find_archived_by_sha, library_id, sha)
+        by_path.clear_trash(found)
+        path_session.commit()
+        assert waiting.result(timeout=10) is None
+
+
+@pytest.mark.slow
+def test_a_lock_from_other_work_doesnt_split_the_asset(env):
+    """Upkeep's re-index (or an OCR batch, a face insert) may hold the archived
+    row: the restore waits for it rather than skipping to a new asset."""
+    library_id = env[2]
+    sha = _sha()
+    asset = _ingest(env, "race/Q001.mov", sha=sha)
+    _archive(env, asset)
+    with _sessions(env) as [(other_session, _), (_, ingest)]:
+        other_session.execute(text("UPDATE assets SET search_synced_at = NULL WHERE asset_id = :a"), {"a": asset})
+        waiting = _waiting(ingest.find_archived_by_sha, library_id, sha)
+        other_session.commit()
+        assert waiting.result(timeout=10).asset_id == asset
 
 
 @pytest.mark.slow
@@ -250,6 +289,31 @@ def test_a_purge_leaves_alone_an_asset_restored_since_it_was_listed(env):
         session.commit()
     ratings = client.post("/v1/assets/ratings/lookup", json={"asset_ids": [asset]}, headers=headers).json()["ratings"]
     assert ratings[asset]["stars"] == 5
+
+
+@pytest.mark.slow
+def test_a_purge_keeps_the_files_of_an_asset_restored_since_it_was_listed(env):
+    """The file side too: proxy and thumbnail of the restored asset stay."""
+    from types import SimpleNamespace
+
+    from src.server.api.routers.trash import purge_assets
+
+    client, headers, library_id, storage, tenant_id, _ = env
+    sha = _sha()
+    asset = _ingest(env, "purge/R001.mov", sha=sha)
+    _archive(env, asset)
+    with _sessions(env, 1) as [(session, repo)]:
+        listed = repo.list_trashed(asset_ids=[asset], include_missing=True)
+        session.commit()
+        assert _ingest(env, "purge/R001.mov", sha=sha) == asset  # a scan restores it
+        keys = session.execute(text("SELECT proxy_key, thumbnail_key FROM assets WHERE asset_id = :a"),
+                               {"a": asset}).one()
+        assert all(k and storage.abs_path(k).exists() for k in keys)
+        request = SimpleNamespace(state=SimpleNamespace(tenant_id=tenant_id))
+        assert purge_assets(session, request, listed, "usr_test", remove_from_projects=True) == 0
+        session.commit()
+    assert all(storage.abs_path(k).exists() for k in keys)
+    assert _get(env, asset)["rel_path"] == "purge/R001.mov"
 
 
 @pytest.mark.slow

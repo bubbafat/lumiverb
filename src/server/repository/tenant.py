@@ -937,8 +937,10 @@ class AssetRepository:
 
     def find_archived_by_sha(self, library_id: str, sha256: str | None) -> Asset | None:
         """The library's most recently archived (missing) asset with this content,
-        locked for restoring. One another ingest has locked is skipped, so two
-        files with this content can't both claim it."""
+        locked for restoring. A row someone else holds is waited for, not
+        skipped: if another ingest claimed it meanwhile, it no longer matches
+        and this file gets its own asset; if other work held it (a re-index, an
+        OCR batch), it's still here to restore."""
         if not sha256:
             return None
         stmt = (
@@ -946,7 +948,7 @@ class AssetRepository:
             .where(Asset.library_id == library_id, Asset.sha256 == sha256, _archived())
             .order_by(Asset.deleted_at.desc())
             .limit(1)
-            .with_for_update(skip_locked=True)
+            .with_for_update()
         )
         return self._session.exec(stmt).first()
 
