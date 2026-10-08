@@ -186,10 +186,7 @@ def update_tenant(
     """Update a tenant's vision endpoint and model. Only provided fields are
     changed. The endpoint is its first machine doing vision (/v1/ai): an
     empty URL removes that machine; another makes or moves it."""
-    from ulid import ULID
-
-    from src.server.api.routers.ai import first_vision_machine
-    from src.server.models.control_plane import AiMachine
+    from src.server.repository.ai_machines import first_vision_machine, new_vision_machine
 
     tenant_repo = TenantRepository(session)
     tenant = tenant_repo.get_by_id(tenant_id)
@@ -203,8 +200,7 @@ def update_tenant(
                 session.delete(machine)
             machine = None
         elif machine is None:
-            machine = AiMachine(machine_id=f"aim_{ULID()}", tenant_id=tenant_id, name=url.split("://")[-1].split("/")[0],
-                                api_url=url, jobs=["vision"])
+            machine = new_vision_machine(session, tenant_id, url)
         else:
             machine.api_url = url
     if body.vision_api_key is not None and machine is not None:

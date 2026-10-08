@@ -207,3 +207,77 @@ def test_one_provider_per_machine():
     for _ in range(5):
         provider.describe("a.jpg")
     assert sorted(set(made)) == sorted(made)
+
+
+def test_an_item_tries_each_machine_once_then_its_the_endpoints_fault():
+    """Machines that list the model but fail every request (a hung GPU) come
+    back online after their recheck: the item must not go round forever."""
+    client = _client()
+    clock = {"now": 0.0}
+    with _offering({"http://brain/v1": (QWEN,), "http://studio/v1": (QWEN,)}):
+        pool = MachinePool(client, "vision", clock=lambda: clock["now"])
+        pool.check()
+        calls = []
+
+        def make(machine):
+            p = MagicMock()
+
+            def describe(path):
+                calls.append(machine.name)
+                assert len(calls) < 10, "an item went round the machines forever"
+                clock["now"] += 61.0  # each failure takes a while: the others are due a recheck
+                raise CaptionError("timed out", endpoint_fault=True)
+            p.describe.side_effect = describe
+            return p
+
+        with pytest.raises(CaptionError) as e:
+            PooledCaptionProvider(pool, make).describe("a.jpg")
+    assert e.value.endpoint_fault is True
+    assert sorted(calls) == ["Brain", "Studio"]
+
+
+def test_while_a_machine_is_being_checked_the_job_isnt_given_up():
+    """One thread checks the only machine again; another wanting a slot waits
+    for that check instead of declaring the job down."""
+    client = _client((BRAIN,))
+    clock = {"now": 0.0}
+    with _offering({"http://brain/v1": (QWEN,)}):
+        pool = MachinePool(client, "vision", clock=lambda: clock["now"])
+        pool.check()
+    brain = pool.machines[0]
+    pool.fault(brain, "timed out")
+    clock["now"] = 61.0
+    gate = threading.Event()
+
+    def slow_models(*_a, **_k):
+        gate.wait(5)
+        return [QWEN]
+
+    got: list = []
+    with patch("src.client.cli.ai_pool.list_models", side_effect=slow_models):
+        first = threading.Thread(target=lambda: got.append(pool.acquire()))
+        first.start()
+        for _ in range(50):
+            if brain.checking:
+                break
+            time.sleep(0.01)
+        second = threading.Thread(target=lambda: got.append(pool.acquire()))
+        second.start()
+        time.sleep(0.3)
+        assert got == []  # waiting for the check, not giving up
+        gate.set()
+        first.join(5)
+        second.join(5)
+    assert [m.name if m else None for m in got] == ["Brain", "Brain"]
+
+
+def test_a_failed_item_says_which_machine_served_it():
+    client = _client((BRAIN,))
+    with _offering({"http://brain/v1": (QWEN,)}):
+        pool = MachinePool(client, "vision")
+        pool.check()
+    bad = MagicMock()
+    bad.describe.side_effect = CaptionError("unparseable answer", endpoint_fault=False)
+    with pytest.raises(CaptionError) as e:
+        PooledCaptionProvider(pool, lambda m: bad).describe("a.jpg")
+    assert e.value.machine is pool.machines[0]

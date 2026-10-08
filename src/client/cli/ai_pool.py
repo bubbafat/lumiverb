@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -97,14 +97,19 @@ class MachinePool:
         off = [f"{m.name}: {m.error}" for m in self.machines if not m.online]
         return f"{self.model} on {', '.join(on) or 'no machine'}" + (f"; offline: {'; '.join(off)}" if off else "")
 
-    def acquire(self) -> Machine | None:
-        """A slot on an online machine (waiting for one to free), or None when
-        no machine is online. Release it when the request is done."""
+    def acquire(self, exclude: Collection[Machine] = ()) -> Machine | None:
+        """A slot on an online machine not in exclude (waiting for one to free,
+        or for a check under way), or None when none is left. Release it when
+        the request is done."""
         while True:
             self._recheck_due()
             with self._cond:
-                online = [m for m in self.machines if m.online]
+                left = [m for m in self.machines if m not in exclude]
+                online = [m for m in left if m.online]
                 if not online:
+                    if any(m.checking for m in left):
+                        self._cond.wait(WAIT_SEC)  # it may be back in a moment
+                        continue
                     self._why()
                     return None
                 free = [m for m in online if m.busy < m.at_once]
@@ -204,15 +209,26 @@ class PooledCaptionProvider(CaptionProvider):
             return self._providers[machine.machine_id]
 
     def _on_a_machine(self, call: Callable[[CaptionProvider], Any]) -> Any:
+        """Each machine at most once per item: machines that list the model but
+        fail every request come back after their recheck, and an item mustn't
+        go round them forever. A failure that isn't the machine's says which
+        machine served it (the guard charges the clip only if it's still fine)."""
+        tried: list[Machine] = []
+        last: CaptionError | None = None
         while True:
-            machine = self._pool.acquire()
+            machine = self._pool.acquire(exclude=tried)
             if machine is None:
-                raise CaptionError(self._pool.error or "No machine is online.", endpoint_fault=True)
+                why = self._pool.error if self._pool.down else None
+                raise CaptionError(why or (f"Every machine failed it; the last: {last}" if last else "No machine is online."),
+                                   endpoint_fault=True)
+            tried.append(machine)
             try:
                 return call(self._provider(machine))
             except CaptionError as e:
                 if not e.endpoint_fault:
+                    e.machine = machine
                     raise
+                last = e
                 self._pool.fault(machine, e)
             finally:
                 self._pool.release(machine)

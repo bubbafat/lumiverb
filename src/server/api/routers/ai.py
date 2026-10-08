@@ -18,11 +18,13 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, StrictBool, field_validator
-from sqlmodel import Session, select
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import Session
 
 from src.server.api.dependencies import require_editor, require_signed_in, require_tenant_admin
 from src.server.api.errors import ConflictError, DecisionRequiredError, UpstreamError
 from src.server.models.control_plane import AiMachine, Tenant
+from src.server.repository.ai_machines import first_vision_machine, machines
 from src.shared.ai_jobs import JOBS
 from src.shared.utils import utcnow
 from src.shared.vision_endpoint import VisionEndpointError, list_models
@@ -159,8 +161,7 @@ def _set_job_model(tenant: Tenant, job: str, model: str) -> None:
 
 
 def _machines(ctrl: Session, tenant_id: str) -> list[AiMachine]:
-    return list(ctrl.exec(select(AiMachine).where(AiMachine.tenant_id == tenant_id)
-                          .order_by(AiMachine.created_at, AiMachine.machine_id)).all())
+    return machines(ctrl, tenant_id)
 
 
 def _machine(ctrl: Session, request: Request, machine_id: str) -> AiMachine:
@@ -298,8 +299,17 @@ def add_machine(body: MachineIn, request: Request) -> AiSettings:
                             api_key=body.api_key, jobs=body.jobs, at_once=body.at_once, enabled=body.enabled)
         _record(machine, models, "")
         ctrl.add(machine)
-        ctrl.commit()
+        _commit_named(ctrl, body.name)
         return _settings(ctrl, tenant_id)
+
+
+def _commit_named(ctrl: Session, name: str | None) -> None:
+    """Commit; two saves taking one name at once: 409 name_taken, not a 500."""
+    try:
+        ctrl.commit()
+    except IntegrityError:
+        ctrl.rollback()
+        raise ConflictError("name_taken", f"There's already a machine called {name}.", {"name": name}) from None
 
 
 @router.patch("/machines/{machine_id}", response_model=AiSettings, dependencies=[Depends(require_tenant_admin)])
@@ -309,15 +319,16 @@ def update_machine(machine_id: str, body: MachinePatch, request: Request, leave_
     added). Turning off the last machine doing a job, or taking the job from
     it, asks first (409 job_left_without_machine) unless leave_jobs."""
     tenant_id = request.state.tenant_id
-    fields = body.model_fields_set
     with _control() as ctrl:
         machine = _machine(ctrl, request, machine_id)
+        was = (machine.api_url, machine.api_key, set(machine.jobs), machine.enabled)
         if body.name is not None:
             _name_free(ctrl, tenant_id, body.name, machine_id)
             machine.name = body.name
-        if body.api_url is not None:
+        if body.api_url is not None and _url(body.api_url) != machine.api_url:
             machine.api_url = _url(body.api_url)
-        if "api_key" in fields and body.api_key is not None:
+            machine.api_key = ""  # a key never goes along to another host unless given again
+        if body.api_key is not None:
             machine.api_key = body.api_key
         if body.jobs is not None:
             machine.jobs = body.jobs
@@ -326,12 +337,15 @@ def update_machine(machine_id: str, body: MachinePatch, request: Request, leave_
         if body.enabled is not None:
             machine.enabled = body.enabled
         _ask_before_leaving_jobs(ctrl, tenant_id, machine, leave_jobs)
-        if machine.enabled and fields & {"api_url", "api_key", "jobs", "enabled"}:
+        # Asked again only for what needs it: where it is or its key changed,
+        # a job it hadn't, or turned back on. A rename or a new limit doesn't.
+        moved = (machine.api_url, machine.api_key) != was[:2]
+        if machine.enabled and (moved or set(machine.jobs) - was[2] or not was[3]):
             models = _models_or_502(machine.api_url, machine.api_key)
             _check_jobs(ctrl.get(Tenant, tenant_id), machine.jobs, models)
             _record(machine, models, "")
         ctrl.add(machine)
-        ctrl.commit()
+        _commit_named(ctrl, body.name)
         return _settings(ctrl, tenant_id)
 
 
@@ -405,6 +419,4 @@ def report_status(machine_id: str, body: StatusIn, request: Request) -> Response
     return Response(status_code=204)
 
 
-def first_vision_machine(ctrl: Session, tenant_id: str) -> AiMachine | None:
-    """For clients that know one endpoint (the Mac app, /v1/tenant/context)."""
-    return next((m for m in _machines(ctrl, tenant_id) if m.enabled and "vision" in m.jobs), None)
+__all__ = ["router", "first_vision_machine"]

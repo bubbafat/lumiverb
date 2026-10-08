@@ -372,3 +372,67 @@ def test_changing_the_model_makes_descriptions_stale(env, none):
     with fake:
         _model(env, "vision", LLAVA)
     assert _counts(lib, "vision")["stale"] == 1
+
+
+@pytest.mark.slow
+def test_a_machine_moved_to_another_url_leaves_its_key_behind(env, none):
+    client, headers, *_ = env
+    fake, seen = _machines({BRAIN: (QWEN,), STUDIO: (QWEN,)})
+    with fake:
+        _add(env, name="Box", api_key="sk-brain")
+        box = _ai(env)["machines"][0]["machine_id"]
+        r = client.patch(f"/v1/ai/machines/{box}", json={"api_url": STUDIO}, headers=headers)
+    assert r.status_code == 200, r.text
+    assert "Authorization" not in seen[-1]["headers"]  # never sent to the new host
+    assert _machine(r.json(), "Box")["has_key"] is False
+
+
+@pytest.mark.slow
+def test_a_machine_that_cant_answer_can_still_be_renamed_or_given_another_limit(env, none):
+    """The web form sends every field; only real changes to where it is, its
+    key, the jobs it's given, or turning it on, ask it again."""
+    client, headers, *_ = env
+    fake, _ = _machines({STUDIO: (QWEN,)})
+    with fake:
+        _add(env, name="Studio", api_url=STUDIO, at_once=4)
+        _model(env, "vision", QWEN)
+    studio = _ai(env)["machines"][0]["machine_id"]
+    asleep, _ = _machines({})
+    with asleep:
+        r = client.patch(f"/v1/ai/machines/{studio}", json={
+            "name": "Mac Studio", "api_url": STUDIO + "/", "jobs": ["vision"], "at_once": 2, "enabled": True},
+            headers=headers)
+        assert r.status_code == 200, r.text
+        assert (_machine(r.json(), "Mac Studio")["at_once"]) == 2
+        # Giving it a job it hasn't got, or turning it back on, needs it to answer.
+        client.patch(f"/v1/ai/machines/{studio}?leave_jobs=true", json={"enabled": False}, headers=headers)
+        r = client.patch(f"/v1/ai/machines/{studio}", json={"enabled": True}, headers=headers)
+        assert r.status_code == 502 and r.json()["error"]["code"] == "machine_unreachable"
+
+
+@pytest.mark.slow
+def test_a_tenant_made_with_a_vision_url_gets_its_first_machine(env, none):
+    from src.server.api.routers.ai import first_vision_machine
+    from src.server.database import get_control_session
+
+    client, *_ = env
+    with patch("src.server.api.routers.admin.provision_tenant_database"):
+        r = client.post("/v1/admin/tenants", json={"name": "WithVision", "vision_api_url": BRAIN + "/",
+                                                   "vision_api_key": "sk-v"},
+                        headers={"Authorization": "Bearer test-admin-analysis"})
+    assert r.status_code == 200, r.text
+    with get_control_session() as ctrl:
+        machine = first_vision_machine(ctrl, r.json()["tenant_id"])
+        assert (machine.api_url, machine.api_key, machine.jobs, machine.name) == (BRAIN, "sk-v", ["vision"], "172.18.0.6:11434")
+
+
+@pytest.mark.slow
+def test_the_admin_vision_url_never_clashes_with_a_machines_name(env, none):
+    client, headers, _lib, _storage, tenant_id, _url = env
+    fake, _ = _machines({BRAIN: (QWEN,)})
+    with fake:
+        assert _add(env, name="172.18.0.6:11434", jobs=[]).status_code == 201  # not doing vision
+    r = client.patch(f"/v1/admin/tenants/{tenant_id}", json={"vision_api_url": BRAIN},
+                     headers={"Authorization": "Bearer test-admin-analysis"})
+    assert r.status_code == 200, r.text
+    assert sorted(m["name"] for m in _ai(env)["machines"]) == ["172.18.0.6:11434", "172.18.0.6:11434 (2)"]

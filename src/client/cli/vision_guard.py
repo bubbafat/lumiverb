@@ -97,6 +97,10 @@ class VisionGuard:
                     self.error = self.pool.error
             if self.down:
                 return
+            # The machine that served it, found down since: its doing, not the clip's.
+            served_by = getattr(error, "machine", None)
+            if served_by is not None and not served_by.online:
+                return
             if self._failures is not None:
                 self._failures.add(artifact, asset_id, error)
         return fail

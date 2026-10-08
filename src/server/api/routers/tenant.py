@@ -167,7 +167,7 @@ def get_tenant_context(request: Request) -> TenantContextResponse:
     from src.server.database import get_control_session
     from src.server.repository.control_plane import TenantRepository
 
-    from src.server.api.routers.ai import first_vision_machine
+    from src.server.repository.ai_machines import first_vision_machine
 
     tenant_id = request.state.tenant_id
     with get_control_session() as session:

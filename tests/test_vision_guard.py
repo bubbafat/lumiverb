@@ -130,6 +130,26 @@ def test_no_machine_left_stops_vision_without_asking_or_charging():
     assert not _charged(client)
 
 
+@pytest.mark.parametrize(("served_by_after", "charged"), [("online", True), ("offline", False)])
+def test_a_clip_isnt_charged_when_the_machine_that_served_it_turns_out_down(served_by_after, charged):
+    """Two machines; Brain gave an empty answer. If Brain is found unreachable
+    when checked again, that was Brain's doing, not the clip's, even with the
+    Studio still fine."""
+    studio = {**BRAIN, "machine_id": "aim_studio", "name": "Studio", "api_url": "http://studio/v1"}
+    client = _client((BRAIN, studio))
+    clock, guard, failures = _guard(client)
+    brain_again = (QWEN,) if served_by_after == "online" else VisionEndpointError("no answer")
+    with _offers((QWEN,), (QWEN,), brain_again, (QWEN,)):
+        guard.check()
+        clock["now"] = 1.0
+        error = CaptionError("Empty completion content", endpoint_fault=False)
+        error.machine = guard.pool.machines[0]
+        guard.on_fail("vision")("ast_a", error)
+    failures.flush()
+    assert bool(_charged(client)) is charged
+    assert not guard.down
+
+
 def test_a_clip_is_charged_only_after_a_check_that_started_after_its_failure():
     client = _client()
     clock, guard, _ = _guard(client)
