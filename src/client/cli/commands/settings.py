@@ -46,6 +46,11 @@ def show() -> None:
     public = _public(settings.get("video_preview_max_seconds"), settings.get("public_video_preview_max_seconds"))
     console.print(f"On public pages: {_describe(public)}")
     console.print(f"Follow moves and renames: {_on_off(settings.get('follow_moves', True))}")
+    console.print(f"Trash: {_trash(settings.get('trash_days', 30))}")
+
+
+def _trash(days: int | None) -> str:
+    return "emptied by hand only" if days is None else f"deleted for good after {days} {'day' if days == 1 else 'days'}"
 
 
 def _on_off(value: object) -> str:
@@ -83,3 +88,22 @@ def follow_moves(state: Annotated[str, typer.Argument(help="'on' or 'off'")]) ->
     console.print(f"Follow moves and renames: {_on_off(settings.get('follow_moves', True))}")
     if settings.get("follow_moves") is False:
         console.print("A file at a new path is now a new asset; nothing is matched by content.")
+
+
+MAX_TRASH_DAYS = 3650
+
+
+@settings_app.command("trash-days")
+def trash_days(days: Annotated[str, typer.Argument(help="Days, or 'off' to empty the trash by hand only")]) -> None:
+    """How long clips, libraries and projects stay in the trash before they're
+    deleted for good: 30 until changed (admins only). Archived clips are never deleted."""
+    text = days.strip().lower()
+    if text == "off":
+        value = None
+    elif re.fullmatch(r"[0-9]+", text) and 1 <= int(text) <= MAX_TRASH_DAYS:
+        value = int(text)
+    else:
+        console.print(f"[red]Give 'off' or a whole number of days from 1 to {MAX_TRASH_DAYS:,}.[/red]")
+        raise typer.Exit(2)
+    settings = LumiverbClient().patch("/v1/tenant/settings", json={"trash_days": value}).json()
+    console.print(f"Trash: {_trash(settings.get('trash_days'))}")

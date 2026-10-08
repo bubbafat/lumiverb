@@ -156,28 +156,29 @@ def _decision(code: str, details: dict) -> MagicMock:
 
 
 _DONE = MagicMock(status_code=204)
-_ARCHIVED = {"archived_clips": 3}
+_USAGE = {"assets_in_projects": 2, "projects": [{"name": "Promo", "clips": 2, "status": "active"}],
+          "other_projects": 0}
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize("answer,choice", [("d", "delete"), ("k", "keep")])
-def test_library_delete_asks_about_archived_clips(answer, choice) -> None:
-    client = _archived_client(_decision("archived_clips", _ARCHIVED), _DONE)
+def test_library_delete_asks_about_clips_in_projects() -> None:
+    """The trash deletes the library for good on its own later, so the projects question comes now."""
+    client = _archived_client(_decision("in_projects", _USAGE), _DONE)
     with patch("src.client.cli.main.LumiverbClient", return_value=client):
-        result = runner.invoke(app, ["library", "delete", "--name", "Media"], input=f"y\n{answer}\n")
+        result = runner.invoke(app, ["library", "delete", "--name", "Media"], input="y\ny\n")
     assert result.exit_code == 0, result.output
-    assert "3 clips in Media are archived" in result.output
-    assert client.raw.call_args_list[-1].kwargs["json"] == {"archived": choice, "remove_from_projects": False}
+    assert "2 clips are in projects" in result.output and "Promo: 2" in result.output
+    assert client.raw.call_args_list[0].kwargs["json"] == {"remove_from_projects": False}
+    assert client.raw.call_args_list[-1].kwargs["json"] == {"remove_from_projects": True}
     assert "moved to trash" in result.output
 
 
 @pytest.mark.fast
-def test_library_delete_cancelled_at_the_archived_question_changes_nothing() -> None:
-    client = _archived_client(_decision("archived_clips", _ARCHIVED))
+def test_library_delete_cancelled_at_the_projects_question_changes_nothing() -> None:
+    client = _archived_client(_decision("in_projects", _USAGE))
     with patch("src.client.cli.main.LumiverbClient", return_value=client):
-        result = runner.invoke(app, ["library", "delete", "--name", "Media"], input="y\nc\n")
+        result = runner.invoke(app, ["library", "delete", "--name", "Media"], input="y\nn\n")
     assert result.exit_code == 0
-    assert "Aborted" in result.output
     assert client.raw.call_count == 1
 
 
@@ -185,29 +186,19 @@ def test_library_delete_cancelled_at_the_archived_question_changes_nothing() -> 
 def test_library_delete_with_flags_asks_nothing() -> None:
     client = _archived_client(_DONE)
     with patch("src.client.cli.main.LumiverbClient", return_value=client):
-        result = runner.invoke(app, ["library", "delete", "--name", "Media", "--yes", "--archived", "keep"])
+        result = runner.invoke(app, ["library", "delete", "--name", "Media", "--yes", "--remove-from-projects"])
     assert result.exit_code == 0, result.output
-    assert client.raw.call_args.kwargs["json"] == {"archived": "keep", "remove_from_projects": False}
+    assert client.raw.call_args.kwargs["json"] == {"remove_from_projects": True}
 
 
 @pytest.mark.fast
-def test_library_delete_yes_without_a_choice_stops_when_clips_are_archived() -> None:
-    client = _archived_client(_decision("archived_clips", _ARCHIVED))
+def test_library_delete_yes_without_the_flag_stops_when_clips_are_in_projects() -> None:
+    client = _archived_client(_decision("in_projects", _USAGE))
     with patch("src.client.cli.main.LumiverbClient", return_value=client):
         result = runner.invoke(app, ["library", "delete", "--name", "Media", "--yes"])
     assert result.exit_code == 2
-    assert "--archived keep" in result.output and "--archived delete" in result.output
-
-
-@pytest.mark.fast
-def test_library_delete_asks_again_when_archived_clips_are_in_projects() -> None:
-    usage = {"assets_in_projects": 2, "projects": [], "other_projects": 0}
-    client = _archived_client(_decision("archived_clips", _ARCHIVED), _decision("in_projects", usage), _DONE)
-    with patch("src.client.cli.main.LumiverbClient", return_value=client):
-        result = runner.invoke(app, ["library", "delete", "--name", "Media"], input="y\nd\ny\n")
-    assert result.exit_code == 0, result.output
-    assert "2 of them are in projects" in result.output
-    assert client.raw.call_args.kwargs["json"] == {"archived": "delete", "remove_from_projects": True}
+    assert "--remove-from-projects" in result.output
+    assert client.raw.call_count == 1
 
 
 @pytest.mark.fast

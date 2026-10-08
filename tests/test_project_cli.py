@@ -292,7 +292,7 @@ def test_emptying_the_library_trash_says_which_projects_lose_clips() -> None:
         result = runner.invoke(app, ["library", "empty-trash"], input="y\n")
     assert result.exit_code == 0, result.output
     empty = [c for c in client.post.call_args_list if c.args[0] == "/v1/libraries/empty-trash"]
-    assert empty[-1].kwargs["json"] == {"remove_from_projects": True}
+    assert empty[-1].kwargs["json"] == {"library_ids": ["lib_1"], "remove_from_projects": True}
 
 
 def test_restore_says_it_for_one_clip() -> None:
@@ -344,10 +344,12 @@ def test_export_reports_trashed_and_missing_clips(tmp_path) -> None:
         "x-lumiverb-skipped-trashed": "2",
         "x-lumiverb-skipped-missing": "1",
         "x-lumiverb-skipped-library-trashed": "3",
+        "x-lumiverb-skipped-archived": "4",
     }
     result = _run(client, "export", "--id", "prj_1", "--format", "fcp7", "--output", str(tmp_path / "Job.xml"))
     assert result.exit_code == 0, result.output
     out = " ".join(result.output.split())
     assert "2 clips in the trash weren't included" in out
     assert "1 clip missing from disk wasn't included" in out
-    assert "3 clips in a deleted library weren't included" in out
+    assert "3 clips in a deleted library weren't included; restoring the library brings them back" in out
+    assert "4 archived clips weren't included" in out and "lumiverb archive restore" in out

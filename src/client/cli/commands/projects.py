@@ -362,7 +362,13 @@ def project_export(
     if library_trashed:
         console.print(
             f"[yellow]{_plural(library_trashed, 'clip in a deleted library wasn', 'clips in a deleted library weren')}"
-            "'t included.[/yellow]"
+            "'t included; restoring the library brings them back.[/yellow]"
+        )
+    archived = int(resp.headers.get("x-lumiverb-skipped-archived", "0") or 0)
+    if archived:
+        console.print(
+            f"[yellow]{_plural(archived, 'archived clip wasn', 'archived clips weren')}'t included; "
+            "bring them back with: lumiverb archive restore <clip ids>[/yellow]"
         )
     unprobed = int(resp.headers.get("x-lumiverb-unprobed", "0") or 0)
     if unprobed:
