@@ -121,6 +121,39 @@ def test_env_file_remembers_the_rerun_settings():
         assert f"\n{key}=${{" in env_block, f"{key} isn't written to /etc/lumiverb/env"
 
 
+def _write_env(env: Path) -> None:
+    """Run deploy-api.sh's env-file writing against `env`."""
+    text = DEPLOY_API.read_text()
+    start = text.index("# Settings added by hand")
+    block = text[start:text.index('chmod 600 "$ENV_FILE"', start)]
+    script = (
+        f'ENV_FILE="{env}"; DB_URL=postgresql://app:pw@127.0.0.1:5434; PG_DB=control_plane\n'
+        "ADMIN_KEY=a; API_SECRET_KEY=b; JWT_SECRET=c; DATA_DIR=/mnt/ssd2/lumiverb; QW_PORT=7290\n"
+        "API_LISTEN_HOST=127.0.0.1; API_PORT=8100; PG_PORT=5434; PG_VERSION=18; BRANCH=feat/brain\n"
+        "NO_FIREWALL=true; APP_HOST=http://192.168.86.166; DOMAIN=\n"
+        + block
+    )
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stdout + out.stderr
+
+
+def test_a_rerun_keeps_settings_added_to_the_env_file_by_hand(tmp_path):
+    # Forgot-password needs SMTP_* filled in by hand; a rerun dropped them.
+    env = tmp_path / "env"
+    env.write_text("ADMIN_KEY=a\nAPI_PORT=8000\nSMTP_HOST=smtp.fastmail.com\n# a note\nSMTP_PASSWORD=s3cret=x\n")
+    _write_env(env)
+    _write_env(env)  # reruns add nothing
+    lines = env.read_text().splitlines()
+    assert lines.count("SMTP_HOST=smtp.fastmail.com") == 1
+    assert lines.count("SMTP_PASSWORD=s3cret=x") == 1
+    # What the script writes isn't kept twice, and its values win.
+    assert [line for line in lines if line.startswith("API_PORT=")] == ["API_PORT=8100"]
+    assert [line for line in lines if line.startswith("ADMIN_KEY=")] == ["ADMIN_KEY=a"]
+    fresh = tmp_path / "fresh"
+    _write_env(fresh)
+    assert "kept" not in fresh.read_text()
+
+
 def test_worker_caches_live_in_the_data_dir():
     # The worker's home is on the root disk, beside Postgres and Docker; its
     # proxy caches belong on the data disk.
