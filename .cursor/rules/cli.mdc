@@ -16,7 +16,7 @@ alwaysApply: false
 - Proxy: JPEG, max 2048px longest side, quality 85, sRGB, generated in-memory (never written to disk as an intermediate).
 - Thumbnail: JPEG, max 400px, quality 80, in-memory.
 - SHA256 dedup: check local SQLite cache before uploading — skip if already known to server.
-- Source files never leave the local machine.
+- Source files are never uploaded to the API or object storage; only proxies and derived data are (ADR-016).
 
 ## Command Design
 - All commands log at INFO level by default. No `--verbose` or `--quiet` flags.

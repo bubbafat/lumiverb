@@ -1,6 +1,8 @@
 # Lumiverb — Architecture Document
 *Version 1.0 | Working document — name TBD*
 
+> **Direction:** [ADR-016: Operating Model](adr/016-operating-model.md) sets where Lumiverb is going. This document describes the system as built. Where the two disagree, ADR-016 wins.
+
 ---
 
 ## 1. Product Overview
@@ -33,10 +35,10 @@ This follows the Immich model: fully open source, no open-core, with a hosted op
 ## 2. Architectural Principles
 
 1. **API-first.** Every capability is exposed via the REST API. The CLI, web UI, and Mac agent are all API clients. Nothing bypasses the API.
-2. **Local agents stay local.** Anything that touches source files (scanning, proxy generation) runs on the machine where files live. The API never receives source files.
+2. **Originals are read-only.** Anything that reads source files (scanning, probing, proxy generation) runs on a machine that can read them: today the CLI or macOS app on the machine that holds them, and under ADR-016 the brain through a read-only mount. Originals are never written, moved, renamed or uploaded; the API never receives source files.
 3. **Stateless API server.** The API server holds no local state. It can be replaced, scaled, or moved without data loss.
 4. **Per-tenant isolation.** Each tenant has a dedicated database. Cross-tenant data leakage is architecturally impossible.
-5. **Regenerable caches.** Proxies, thumbnails, and search indexes are all regenerable from source. Only Postgres is irreplaceable.
+5. **Regenerable caches.** Proxies, thumbnails, search indexes and AI outputs are all regenerable from source. Human data in Postgres (person names, corrections, trash, projects, filters, settings) is irreplaceable and is never overwritten automatically by derived data (ADR-016).
 6. **Storage abstraction.** All object storage access goes through an abstraction layer supporting Cloud Storage, S3, Backblaze B2, and MinIO (for self-hosted).
 
 ---
@@ -154,7 +156,7 @@ Responsibilities:
 
 ### 3.4 Local Agent (CLI first, then Mac app)
 
-Runs on the machine where source files live. Communicates only via the API.
+Runs on a machine that can read the source files. Communicates only via the API. Under ADR-016 the brain runs scan and enrichment as a service against a read-only mount of storage, and the macOS app's built-in AI retires (ADR-016 phase 2).
 
 Responsibilities:
 - Filesystem scanning (recursive, respects path filters)
@@ -170,7 +172,7 @@ The local agent has no direct Postgres, Quickwit, or object storage access. The 
 
 ### 3.5 Processing Model
 
-There are no server-side worker queues. All processing happens client-side via the CLI `ingest` command, which is the single entry point for assets.
+Today there are no server-side worker queues. Processing runs in API clients (the CLI's `lumiverb scan` and `lumiverb enrich`, or the macOS app), which POST results to the API. ADR-016 moves scheduling to the brain (phase 2) and replaces enqueueing with desired-state reconciliation (phase 3).
 
 **Image ingest (client-side):**
 The CLI scans the filesystem, then for each image:

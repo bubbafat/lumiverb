@@ -10,7 +10,7 @@
 - **Natural language search** — "golden hour portraits on the beach" just works
 - **Video scene understanding** — every shot in every video is indexed and searchable
 - **Visual similarity** — find images that look like this one
-- **Privacy-first** — source files never leave your machine; only JPEG proxies are processed
+- **Privacy-first** — originals stay on your own storage, read in place and never modified or uploaded
 
 Supports JPEG, PNG, TIFF, HEIC, HEIF, WebP, RAW (CR2/CR3/NEF/ARW/DNG/ORF/RW2), and video (MP4/MOV/AVI/MKV/MTS/M2TS).
 
