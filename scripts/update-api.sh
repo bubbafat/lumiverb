@@ -31,6 +31,8 @@ step()  { echo -e "\n${BOLD}=== $1 ===${NC}"; }
 ok()    { echo -e "${GREEN}  ✓${NC} $1"; }
 warn()  { echo -e "${YELLOW}  ⚠${NC} $1"; }
 fail()  { echo -e "${RED}  ✗ $1${NC}" >&2; exit 1; }
+# set -e stops at the first failed command; say which, so a stop is never silent.
+trap 'echo -e "${RED}  ✗ Stopped at line ${LINENO}: ${BASH_COMMAND}${NC}" >&2' ERR
 
 APP_DIR="/opt/lumiverb"
 ENV_FILE="/etc/lumiverb/env"
@@ -63,6 +65,13 @@ else
   warn "Detached HEAD detected — skipping git pull"
 fi
 ok "$(sudo -u "$SVC_USER" git log --oneline -1)"
+
+# bash keeps running the copy of this script it started with, and git pull
+# wrote a new one: run that, so steps this update adds apply now.
+if [[ "${LUMIVERB_UPDATE_REEXEC:-}" != "1" ]]; then
+  export LUMIVERB_UPDATE_REEXEC=1
+  exec bash "$APP_DIR/scripts/update-api.sh" "$@"
+fi
 
 # ---------------------------------------------------------------------------
 step "Updating Python dependencies"

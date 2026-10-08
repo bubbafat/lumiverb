@@ -35,6 +35,8 @@ step()  { echo -e "\n${BOLD}=== $1 ===${NC}"; }
 ok()    { echo -e "${GREEN}  ✓${NC} $1"; }
 warn()  { echo -e "${YELLOW}  ⚠${NC} $1"; }
 fail()  { echo -e "${RED}  ✗ $1${NC}" >&2; exit 1; }
+# set -e stops at the first failed command; say which, so a stop is never silent.
+trap 'echo -e "${RED}  ✗ Stopped at line ${LINENO}: ${BASH_COMMAND}${NC}" >&2' ERR
 
 # ---------------------------------------------------------------------------
 # Args

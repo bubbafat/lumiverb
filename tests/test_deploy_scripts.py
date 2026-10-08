@@ -214,3 +214,42 @@ def test_web_on_its_own_machine_uses_defaults_and_flags(tmp_path):
     s = _web_settings(tmp_path, "--branch", "x", "--no-firewall", env_file=REMEMBERED.replace("BRANCH=feat/brain", "BRANCH=y"))
     assert s["BRANCH"] == "x"
     assert s["NO_FIREWALL"] == "true"
+
+
+@pytest.mark.parametrize("name,next_step", [("update-api.sh", 'step "Updating Python dependencies"'),
+                                            ("update-web.sh", 'step "Rebuilding web UI"')])
+def test_update_scripts_rerun_themselves_after_pulling(name, next_step):
+    # bash keeps executing the copy of the script it started with; git pull
+    # writes a new file. Without a re-exec, steps added by the update only
+    # run on the update after it.
+    text = (REPO / "scripts" / name).read_text()
+    pull = text.index("git pull")
+    reexec = text.index(f'exec bash "$APP_DIR/scripts/{name}" "$@"')
+    assert pull < reexec < text.index(next_step)
+    guard = text[pull:reexec]
+    assert "LUMIVERB_UPDATE_REEXEC" in guard
+
+
+def test_update_reexec_runs_the_pulled_copy_once(tmp_path):
+    """The guard re-execs into the new copy exactly once."""
+    text = UPDATE_API.read_text()
+    start = text.index('if [[ "${LUMIVERB_UPDATE_REEXEC:-}"')
+    block = text[start:text.index("fi\n", start) + 3]
+    new_copy = tmp_path / "scripts" / "update-api.sh"
+    new_copy.parent.mkdir()
+    new_copy.write_text('echo "new copy, reexec=$LUMIVERB_UPDATE_REEXEC"; ' + block.replace("exec", "echo would-exec") + "\n")
+    script = f'APP_DIR={tmp_path}\nset -- --flag\n' + block + 'echo "old copy kept going"\n'
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.splitlines() == ["new copy, reexec=1"]
+
+
+@pytest.mark.parametrize("name", ["deploy-api.sh", "deploy-web.sh", "update-api.sh", "update-web.sh"])
+def test_a_failed_step_says_where_it_stopped(name, tmp_path):
+    text = (REPO / "scripts" / name).read_text()
+    trap = next(line for line in text.splitlines() if line.startswith("trap ") and line.endswith(" ERR"))
+    script = "set -euo pipefail\nRED=''; NC=''\n" + trap + "\necho before\nfalse\necho after\n"
+    out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode != 0
+    assert "after" not in out.stdout
+    assert "Stopped" in out.stderr and "false" in out.stderr
