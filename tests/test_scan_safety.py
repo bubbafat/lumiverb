@@ -96,7 +96,7 @@ def _scan_with(
     split: MagicMock | None = None,
     local: list[dict] | None = None,
     walk=None,
-    settings: dict | None = None,
+    settings: dict | str | None = None,
     **kwargs,
 ) -> MagicMock:
     """run_scan with `on_server` images on the server, of which `on_disk` are on disk unchanged."""
@@ -114,7 +114,9 @@ def _scan_with(
     }
     existing.update(extra_server or {})
     client = MagicMock()
-    if settings is not None:
+    if settings == "unreadable":
+        client.get.side_effect = RuntimeError("the server didn't answer")
+    elif settings is not None:
         client.get.return_value.json.return_value = settings
     with (
         patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
@@ -254,6 +256,63 @@ def test_moves_off_skip_moves_doesnt_hold_back_deletions(tmp_path: Path) -> None
     # --skip-moves skips deletions only because a delete might be half a move.
     client, _, _ = _moved_file_scan(tmp_path, follow_moves=False, skip_moves=True)
     assert _deleted_ids(client) == ["ast_1"]
+
+
+@pytest.mark.fast
+def test_settings_it_cant_read_mean_no_move_detection(tmp_path: Path) -> None:
+    """Unsure whether the account follows moves, the scan looks for none: the
+    old path is archived and the new one ingested, and a server that follows
+    moves restores the asset there by content anyway."""
+    client, detect, scan_one = _moved_file_scan_unreadable(tmp_path)
+    detect.assert_not_called()
+    assert _deleted_ids(client) == ["ast_1"]
+    assert [c.kwargs["f"]["rel_path"] for c in scan_one.call_args_list] == ["moved/f1.jpg"]
+
+
+def _moved_file_scan_unreadable(tmp_path: Path):
+    moved = {"rel_path": "moved/f1.jpg", "file_size": 4, "file_mtime": None, "media_type": "image", "ext": ".jpg"}
+    local = [{"rel_path": "f0.jpg", "file_size": 4, "file_mtime": None, "media_type": "image", "ext": ".jpg"}, moved]
+    with (
+        patch("src.client.cli.scan._detect_moves", return_value=([], [moved])) as detect,
+        patch("src.client.cli.scan._scan_one") as scan_one,
+        patch("src.client.cli.scan.ProxyCache"),
+    ):
+        client = _scan_with(tmp_path, on_disk=1, on_server=2, local=local,
+                            split=MagicMock(return_value=([moved], [], [local[0]])), settings="unreadable")
+    return client, detect, scan_one
+
+
+@pytest.mark.fast
+def test_an_archive_that_moved_to_a_copy_counts_as_moved(tmp_path: Path) -> None:
+    """The server moved one of the two to an empty copy of its file (copy, then delete)."""
+    client = MagicMock()
+    client.delete.return_value.json.return_value = {"trashed": ["ast_1", "ast_2"], "not_found": [],
+                                                    "handed_over": ["ast_2"]}
+    stats = _scan_counting(tmp_path, client)
+    assert (stats.deleted, stats.moved) == (1, 1)
+
+
+def _scan_counting(tmp_path: Path, client: MagicMock):
+    from src.client.cli.scan import run_scan
+
+    root = tmp_path / "lib"
+    root.mkdir(exist_ok=True)
+    (root / "f0.jpg").touch()
+    local = [{"rel_path": "f0.jpg", "file_size": 4, "file_mtime": None, "media_type": "image", "ext": ".jpg"}]
+    existing = {f"f{i}.jpg": _ServerAsset(asset_id=f"ast_{i}", sha256="x", file_size=4, media_type="image")
+                for i in range(3)}
+    client.get.return_value.json.return_value = {"follow_moves": True}
+    with (
+        patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
+        patch("src.client.cli.scan._load_library_filters", return_value=[]),
+        patch("src.client.cli.scan._walk_library", return_value=local),
+        patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value=existing),
+        patch("src.client.cli.scan._fetch_ignored_paths", return_value=set()),
+        patch("src.client.cli.scan._split_files", MagicMock(return_value=([], [], local))),
+        patch("src.client.cli.scan._populate_cache_for_unchanged"),
+    ):
+        return run_scan(client, {"library_id": "lib_1", "root_path": str(root)}, console=Console(quiet=True),
+                        allow_moves=True, allow_mass_delete=True)
 
 
 @pytest.mark.fast

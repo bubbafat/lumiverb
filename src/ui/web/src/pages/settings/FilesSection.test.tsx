@@ -68,6 +68,13 @@ describe("FilesSection: follow moves and renames", () => {
     expect(patches).toEqual([{ follow_moves: false }]);
   });
 
+  it("names each choice by its title and describes it with its explanation", async () => {
+    renderSection();
+    const off = await screen.findByRole("radio", { name: "Every path is its own file" });
+    expect(off.getAttribute("aria-describedby")).toBe("follow-moves-false");
+    expect(document.getElementById("follow-moves-false")?.textContent).toMatch(/starts fresh/);
+  });
+
   it("Save waits for a change", async () => {
     renderSection();
     await screen.findByRole("radio", { name: /Follow moves and renames/ });

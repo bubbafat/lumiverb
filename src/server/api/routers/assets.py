@@ -171,6 +171,9 @@ class BatchTrashRequest(BaseModel):
 class BatchTrashResponse(BaseModel):
     trashed: list[str]
     not_found: list[str]
+    # Of the trashed, those that moved to an empty copy of their file instead
+    # (copy, then delete the original): active again, at the copy's path.
+    handed_over: list[str] = []
 
 
 class StateCheckRequest(BaseModel):
@@ -907,14 +910,15 @@ def batch_trash_assets(
                     qw.delete_tenant_documents_by_asset_id(tenant_id, aid)
         except Exception as e:
             logger.warning("Quickwit delete after batch trash failed: %s", e)
+    handed_over: list[str] = []
     if trashed_ids and body.reason != "user":
         # Copy, then delete the original: the asset moves to its empty copy.
         from src.server.api.routers.trash import hand_over_to_copies
         from src.server.tenant_settings import get_follow_moves
 
         if get_follow_moves(session):
-            hand_over_to_copies(session, request, trashed_ids)
-    return BatchTrashResponse(trashed=trashed_ids, not_found=not_found_ids)
+            handed_over = hand_over_to_copies(session, request, trashed_ids)
+    return BatchTrashResponse(trashed=trashed_ids, not_found=not_found_ids, handed_over=handed_over)
 
 
 @router.get("/{asset_id}", response_model=AssetResponse)

@@ -70,10 +70,11 @@ function FilesForm({ settings, isAdmin }: { settings: TenantSettings; isAdmin: b
                   className="mt-1"
                   checked={follow === option.value}
                   onChange={() => choose(option.value)}
+                  aria-labelledby={`follow-moves-${option.value}-title`}
                   aria-describedby={`follow-moves-${option.value}`}
                 />
                 <span>
-                  <span className="font-medium">{option.title}</span>
+                  <span id={`follow-moves-${option.value}-title`} className="font-medium">{option.title}</span>
                   {option.value && <span className="text-gray-500"> (default)</span>}
                   <span id={`follow-moves-${option.value}`} className="mt-0.5 block text-gray-400">
                     {option.text}
@@ -90,8 +91,10 @@ function FilesForm({ settings, isAdmin }: { settings: TenantSettings; isAdmin: b
             >
               Save
             </button>
-            {saved && !save.isPending && <span className="text-sm text-emerald-300">Saved</span>}
-            {save.isError && <span className="text-sm text-red-300">Couldn't save. Try again.</span>}
+            <span role="status" className="text-sm">
+              {saved && !save.isPending && <span className="text-emerald-300">Saved</span>}
+              {save.isError && <span className="text-red-300">Couldn't save. Try again.</span>}
+            </span>
           </div>
         </form>
       ) : (
