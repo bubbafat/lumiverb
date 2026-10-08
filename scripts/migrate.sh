@@ -78,15 +78,18 @@ echo ""
 echo "=== Step 3: Tenant migrations ==="
 failed=0
 current=0
+# A private log: a fixed /tmp path made by another user can't be written.
+log="$(mktemp)"
+trap 'rm -f "$log"' EXIT
 while IFS=$'\t' read -r tenant_id conn_str; do
   current=$((current + 1))
   echo -n "  [$current/$tenant_count] $tenant_id ... "
   if ALEMBIC_TENANT_URL="$conn_str" $UV run alembic -c alembic-tenant.ini upgrade head \
-      > /tmp/lumiverb_alembic_tenant.log 2>&1; then
+      > "$log" 2>&1; then
     echo -e "${GREEN}✓${NC}"
   else
     echo -e "${RED}✗ FAILED${NC}"
-    cat /tmp/lumiverb_alembic_tenant.log >&2
+    cat "$log" >&2
     failed=$((failed + 1))
   fi
 done <<< "$tenant_urls"

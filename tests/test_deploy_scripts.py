@@ -548,3 +548,13 @@ def test_a_failed_step_says_where_it_stopped(name, tmp_path):
     assert out.returncode != 0
     assert "after" not in out.stdout
     assert "Stopped" in out.stderr and "false" in out.stderr
+
+
+def test_tenant_migrations_log_to_a_private_temp_file():
+    # A fixed /tmp path made by another user (a dev run as robert) can't be
+    # written by the lumiverb user, so every tenant migration "failed" and
+    # update-api.sh stopped before restarting anything.
+    text = (REPO / "scripts" / "migrate.sh").read_text()
+    assert "/tmp/lumiverb_alembic_tenant.log" not in text
+    assert "mktemp" in text
+    assert "trap" in text and "rm -f" in text
