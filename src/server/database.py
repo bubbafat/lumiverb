@@ -7,7 +7,7 @@ import sys
 from contextlib import contextmanager
 from typing import Generator
 
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.engine import create_engine, make_url
 from sqlalchemy.engine.base import Engine
 from sqlalchemy.pool import NullPool
@@ -26,12 +26,28 @@ def _engine_kwargs() -> dict:
     return {"pool_pre_ping": True}
 
 
+def _create_engine(url: str) -> Engine:
+    """An engine whose sessions run in UTC, whatever the server's default:
+    Ubuntu's Postgres takes the machine's timezone (the brain's is New York),
+    and timestamps should read the same from every install."""
+    engine = create_engine(url, **_engine_kwargs())
+
+    @event.listens_for(engine, "connect")
+    def _utc(dbapi_conn, _record) -> None:
+        cur = dbapi_conn.cursor()
+        cur.execute("SET TIME ZONE 'UTC'")
+        cur.close()
+        dbapi_conn.commit()
+
+    return engine
+
+
 def get_control_engine() -> Engine:
     """Return a cached SQLAlchemy engine for the control plane DB."""
     settings = get_settings()
     url = settings.control_plane_database_url
     if url not in _engines:
-        _engines[url] = create_engine(url, **_engine_kwargs())
+        _engines[url] = _create_engine(url)
     return _engines[url]
 
 
@@ -45,7 +61,7 @@ def get_tenant_engine(tenant_id: str) -> Engine:
 def get_engine_for_url(url: str) -> Engine:
     """Return a cached engine for the given database URL (e.g. from tenant_db_routing)."""
     if url not in _engines:
-        _engines[url] = create_engine(url, **_engine_kwargs())
+        _engines[url] = _create_engine(url)
     return _engines[url]
 
 

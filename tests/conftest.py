@@ -15,6 +15,9 @@ import sys
 # This prevents "server closed the connection unexpectedly" errors that occur
 # when testcontainer Postgres stops before SQLAlchemy's pool flushes idle connections.
 os.environ.setdefault("SQLALCHEMY_NULLPOOL", "1")
+# Sessions default to a timezone that isn't UTC, as on the brain (Ubuntu's
+# Postgres takes the machine's), so code that leans on UTC fails here first.
+os.environ.setdefault("PGTZ", "America/New_York")
 
 # pyvips imports libvips via cffi.dlopen, which on macOS only searches the
 # system dyld paths. uv's standalone Python builds do not have
