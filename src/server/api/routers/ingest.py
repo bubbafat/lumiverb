@@ -352,6 +352,10 @@ async def create_and_ingest(
     library = lib_repo.get_by_id(library_id)
     if library is None:
         raise HTTPException(status_code=404, detail="Library not found")
+    # A trashed library takes no new clips and doesn't get its clips back
+    # from a scan already under way (or a client still holding its id).
+    if library.status == "trashed":
+        raise HTTPException(status_code=409, detail="Library is in the trash")
 
     # Enforce path filters (merged tenant + library)
     filter_repo = PathFilterRepository(session)
@@ -382,6 +386,7 @@ async def create_and_ingest(
     # Create or find existing asset
     asset_repo = AssetRepository(session)
     existing = asset_repo.get_by_library_and_rel_path(library_id, rel_path)
+    reappeared = None  # set when a file the scanner marked missing is back
     created = False
 
     if existing is None:
@@ -414,11 +419,13 @@ async def create_and_ingest(
         if file_mtime_dt is not None:
             existing.file_mtime = file_mtime_dt
         existing.media_type = media_type
-        # A file the scanner marked missing has reappeared: restore it.
+        # A file the scanner marked missing has reappeared: restore it, and
+        # put it back in search (trashing deleted its search documents).
         # Without this, the asset stays invisible (active_assets filters
         # deleted_at) and the scanner re-discovers it every cycle.
-        existing.deleted_at = None
-        existing.deleted_reason = None
+        if existing.deleted_at is not None:
+            AssetRepository(session).clear_trash(existing)
+            reappeared = existing
         session.add(existing)
 
     result = _do_ingest(
@@ -436,6 +443,10 @@ async def create_and_ingest(
     )
     if facet_data is not None:
         asset_repo.upsert_video_facet(asset_id, facet_data)
+    if reappeared is not None and reappeared.transcript_srt:
+        from src.server.search.sync import index_transcript_segments
+
+        index_transcript_segments(tenant_id, reappeared)
     result.created = created
     return result
 

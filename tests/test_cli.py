@@ -167,13 +167,15 @@ def test_library_empty_trash_requires_confirmation() -> None:
     ]
     mock_client = MagicMock()
     mock_client.get.return_value = mock_response
+    # The read-only project-usage lookup runs before the question.
+    mock_client.post.return_value.json.return_value = {"assets_in_projects": 0, "projects": [], "other_projects": 0}
 
     with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(app, ["library", "empty-trash"], input="n")
 
     assert result.exit_code == 0
     assert "Aborted" in result.output
-    mock_client.post.assert_not_called()
+    assert [c.args[0] for c in mock_client.post.call_args_list] == ["/v1/assets/project-usage"]
 
 
 @pytest.mark.fast

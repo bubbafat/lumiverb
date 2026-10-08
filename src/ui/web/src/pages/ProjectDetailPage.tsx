@@ -6,7 +6,8 @@ import {
   getProject,
   listProjectAssets,
   updateProject,
-  deleteProject,
+  trashProject,
+  restoreProjectClips,
   removeAssetsFromProject,
   ApiError,
 } from "../api/client";
@@ -61,8 +62,6 @@ export default function ProjectDetailPage() {
   const [editVisibility, setEditVisibility] = useState("private");
   const [settingsError, setSettingsError] = useState("");
 
-  // Delete state
-  const [deleteConfirm, setDeleteConfirm] = useState(false);
 
   // Grid state
   const [zoomLevel, setZoomLevel] = useLocalStorage("lv_grid_zoom", 2);
@@ -210,9 +209,22 @@ export default function ProjectDetailPage() {
     onError: (err: ApiError) => setSettingsError(err.message),
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: () => deleteProject(projectId!),
-    onSuccess: () => navigate("/projects"),
+  // To the trash, then to the list, which offers an undo.
+  const trashMutation = useMutation({
+    mutationFn: () => trashProject(projectId!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      navigate("/projects", { state: { justTrashed: project } });
+    },
+  });
+
+  const restoreClipsMutation = useMutation({
+    mutationFn: () => restoreProjectClips(projectId!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+      queryClient.invalidateQueries({ queryKey: ["project-assets", projectId] });
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+    },
   });
 
   const removeMutation = useMutation({
@@ -246,6 +258,12 @@ export default function ProjectDetailPage() {
       visibility: editVisibility,
     });
   };
+
+  const trashedClips = project?.trashed_asset_count ?? 0;
+  const missingClips = project?.missing_asset_count ?? 0;
+  const libraryTrashedClips = project?.library_trashed_asset_count ?? 0;
+  // A project from before ownership belongs to everyone.
+  const isOwner = project?.ownership !== "shared" || project?.owner_user_id == null;
 
   if (isProjectLoading) {
     return (
@@ -319,6 +337,43 @@ export default function ProjectDetailPage() {
       {project.description && (
         <div className="shrink-0 border-b border-gray-800/50 px-4 py-2">
           <p className="text-sm text-gray-400">{project.description}</p>
+        </div>
+      )}
+
+      {/* Clips still in the project but not shown: trashed, or files missing */}
+      {(trashedClips > 0 || missingClips > 0 || libraryTrashedClips > 0) && (
+        <div
+          role="status"
+          className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-amber-900/40 bg-amber-950/30 px-4 py-2 text-sm text-amber-200/90"
+        >
+          {trashedClips > 0 && (
+            <span>
+              {trashedClips === 1 ? "1 clip is" : `${trashedClips} clips are`} in the trash, so
+              {trashedClips === 1 ? " it isn't" : " they aren't"} shown or exported.
+            </span>
+          )}
+          {missingClips > 0 && (
+            <span>
+              {missingClips === 1 ? "1 clip is" : `${missingClips} clips are`} missing from disk and will
+              come back when {missingClips === 1 ? "its file does" : "their files do"}.
+            </span>
+          )}
+          {libraryTrashedClips > 0 && (
+            <span>
+              {libraryTrashedClips === 1 ? "1 clip is" : `${libraryTrashedClips} clips are`} in a deleted
+              library and can&apos;t come back from here.
+            </span>
+          )}
+          {trashedClips > 0 && (
+            <button
+              type="button"
+              onClick={() => restoreClipsMutation.mutate()}
+              disabled={restoreClipsMutation.isPending}
+              className="rounded-md border border-amber-700/60 px-2.5 py-1 text-xs font-medium text-amber-100 hover:bg-amber-900/40 disabled:opacity-50"
+            >
+              {trashedClips === 1 ? "Restore it" : "Restore them"}
+            </button>
+          )}
         </div>
       )}
 
@@ -545,13 +600,18 @@ export default function ProjectDetailPage() {
                 )}
               </div>
               <div className="flex items-center justify-between pt-2">
-                <button
-                  type="button"
-                  onClick={() => setDeleteConfirm(true)}
-                  className="text-sm text-red-400 hover:text-red-300"
-                >
-                  Delete project
-                </button>
+                {isOwner ? (
+                  <button
+                    type="button"
+                    onClick={() => trashMutation.mutate()}
+                    disabled={trashMutation.isPending}
+                    className="text-sm text-red-400 hover:text-red-300 disabled:opacity-50"
+                  >
+                    Move to trash
+                  </button>
+                ) : (
+                  <span />
+                )}
                 <div className="flex gap-2">
                   <button
                     type="button"
@@ -571,30 +631,6 @@ export default function ProjectDetailPage() {
               </div>
             </form>
 
-            {deleteConfirm && (
-              <div className="mt-4 rounded-lg border border-red-800/50 bg-red-900/20 p-4">
-                <p className="mb-3 text-sm text-red-400">
-                  Delete &quot;{project.name}&quot;? Source assets will not be affected.
-                </p>
-                <div className="flex justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setDeleteConfirm(false)}
-                    className="rounded px-3 py-1.5 text-sm text-gray-400 hover:text-gray-300"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => deleteMutation.mutate()}
-                    disabled={deleteMutation.isPending}
-                    className="rounded bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-50"
-                  >
-                    {deleteMutation.isPending ? "Deleting..." : "Delete"}
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
         </div>
       )}

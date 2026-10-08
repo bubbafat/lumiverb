@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
+from src.server.api.errors import DecisionRequiredError, decision_required_handler
 from src.server.api.middleware import TenantResolutionMiddleware
 
 
@@ -64,6 +65,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Lumiverb API", version="0.1.0", lifespan=lifespan)
+
+
+app.add_exception_handler(DecisionRequiredError, decision_required_handler)
 
 
 @app.exception_handler(RequestValidationError)

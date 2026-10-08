@@ -28,6 +28,10 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    /** The envelope's error code, e.g. "in_projects" for a 409 that needs the user's say. */
+    public code?: string,
+    /** The facts behind the code, e.g. which projects would lose clips. */
+    public details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "ApiError";
@@ -172,13 +176,19 @@ async function apiFetch<T>(
       handleUnauthorized();
     }
     let message = res.statusText;
+    let code: string | undefined;
+    let details: Record<string, unknown> | undefined;
     try {
-      const json = (await res.json()) as { error?: { message?: string } };
+      const json = (await res.json()) as {
+        error?: { code?: string; message?: string; details?: Record<string, unknown> };
+      };
       message = json?.error?.message ?? message;
+      code = json?.error?.code;
+      details = json?.error?.details;
     } catch {
       // ignore
     }
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, code, details);
   }
   if (res.status === 204) {
     return null as T;
@@ -238,10 +248,21 @@ export async function updateLibraryVisibility(
   });
 }
 
-export async function emptyTrash(): Promise<EmptyTrashResponse> {
+/** Delete trashed libraries for good. If their clips are in projects, the
+ * server refuses (409 in_projects, with the projects) unless
+ * removeFromProjects says the user agreed. */
+export async function emptyTrash(removeFromProjects = false): Promise<EmptyTrashResponse> {
   return apiFetch<EmptyTrashResponse>("/libraries/empty-trash", {
     method: "POST",
+    body: { remove_from_projects: removeFromProjects },
   });
+}
+
+/** What deleting clips for good would take them out of (a 409 in_projects's details). */
+export interface ProjectUsage {
+  assets_in_projects: number;
+  projects: { project_id: string; name: string; status: string; in_trash: boolean; clips: number }[];
+  other_projects: number;
 }
 
 export async function listDirectories(
@@ -755,10 +776,13 @@ export async function revokeApiKey(keyId: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export type ProjectStatus = "active" | "archived";
+/** "all" is active and archived; "trashed" is your own trash. */
+export type ProjectView = ProjectStatus | "all" | "trashed";
 
-/** Active projects by default; archived ones leave the sidebar and pickers. */
+/** Active projects by default; archived ones leave the sidebar and pickers,
+ * and trashed ones appear only in the trash. */
 export async function listProjects(
-  status: ProjectStatus | "all" = "active",
+  status: ProjectView = "active",
 ): Promise<ProjectItem[]> {
   const qs = status === "active" ? "" : `?status=${status}`;
   const res = await apiFetch<ProjectListResponse>(`/projects${qs}`);
@@ -816,10 +840,41 @@ export async function updateProject(
   });
 }
 
-export async function deleteProject(
-  projectId: string,
-): Promise<void> {
+/** Move a project to the trash. Restore brings it back as it was. */
+export async function trashProject(projectId: string): Promise<void> {
   return apiFetch<void>(`/projects/${projectId}`, { method: "DELETE" });
+}
+
+/** Take a project out of the trash, back to active or archived as it was.
+ * withClips says what to do with its clips in the trash; the server refuses
+ * (409 clips_in_trash) without it when there are some. */
+export async function restoreProject(
+  projectId: string,
+  withClips?: boolean,
+): Promise<{ restored_clips: number; trashed_clips: number; missing_clips: number }> {
+  return apiFetch<{ restored_clips: number; trashed_clips: number; missing_clips: number }>(`/projects/${projectId}/restore`, {
+    method: "POST",
+    body: withClips === undefined ? {} : { with_clips: withClips },
+  });
+}
+
+/** Delete trashed projects for good: these ones, or the whole trash. Their
+ * clips stay in the library. */
+export async function emptyProjectTrash(projectIds?: string[]): Promise<{ deleted: number }> {
+  return apiFetch<{ deleted: number }>("/projects/empty-trash", {
+    method: "POST",
+    body: projectIds ? { project_ids: projectIds } : {},
+  });
+}
+
+/** Restore the clips in a project that someone trashed. They come back
+ * everywhere; clips whose files went missing are only counted. */
+export async function restoreProjectClips(
+  projectId: string,
+): Promise<{ restored: number; missing: number }> {
+  return apiFetch<{ restored: number; missing: number }>(`/projects/${projectId}/restore-clips`, {
+    method: "POST",
+  });
 }
 
 export async function listProjectAssets(
@@ -1010,6 +1065,12 @@ export interface ProjectExportFile {
   skippedNoDuration: number;
   /** Videos exported at a fallback frame rate because they haven't been probed. */
   unprobed: number;
+  /** Clips someone trashed, left out until restored. */
+  skippedTrashed: number;
+  /** Clips whose files went missing, left out until they're back. */
+  skippedMissing: number;
+  /** Clips whose library is in the trash, left out. */
+  skippedLibraryTrashed: number;
 }
 
 function filenameFromDisposition(header: string | null): string | null {
@@ -1055,6 +1116,9 @@ export async function exportProject(
     skippedStills: Number(res.headers.get("X-Lumiverb-Skipped-Stills") ?? 0) || 0,
     skippedNoDuration: Number(res.headers.get("X-Lumiverb-Skipped-No-Duration") ?? 0) || 0,
     unprobed: Number(res.headers.get("X-Lumiverb-Unprobed") ?? 0) || 0,
+    skippedTrashed: Number(res.headers.get("X-Lumiverb-Skipped-Trashed") ?? 0) || 0,
+    skippedMissing: Number(res.headers.get("X-Lumiverb-Skipped-Missing") ?? 0) || 0,
+    skippedLibraryTrashed: Number(res.headers.get("X-Lumiverb-Skipped-Library-Trashed") ?? 0) || 0,
   };
 }
 

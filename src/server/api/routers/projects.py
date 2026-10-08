@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, model_validator
 from sqlmodel import Session, select
 
 from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor
+from src.server.api.errors import DecisionRequiredError
 from src.server.database import get_control_session
 from src.server.repository.control_plane import PublicProjectRepository
 from src.server.repository.tenant import AssetRepository, ProjectRepository
@@ -61,10 +62,20 @@ class ProjectItem(BaseModel):
     type: str = "static"
     saved_query: dict | None = None
     asset_count: int
+    # Clips still in the project but in the trash: hidden and not exported
+    # until restored. Always 0 for smart projects, which are a search.
+    trashed_asset_count: int = 0
+    # Clips a scan trashed because their file went missing; they come back
+    # when the file does. Always 0 for smart projects.
+    missing_asset_count: int = 0
+    # Clips whose library is in the trash: libraries have no restore, so
+    # these don't come back. Always 0 for smart projects.
+    library_trashed_asset_count: int = 0
     created_at: str
     updated_at: str
     status: str = "active"  # active | archived
     archived_at: str | None = None
+    deleted_at: str | None = None  # in the trash when set
     # Pre-rename name of project_id, for macOS/iOS builds that still read it.
     collection_id: str | None = None
 
@@ -76,6 +87,32 @@ class ProjectItem(BaseModel):
 
 class ProjectListResponse(BaseModel):
     items: list[ProjectItem]
+
+
+class EmptyTrashRequest(BaseModel):
+    # Which trashed projects to delete for good; all of the caller's when omitted.
+    project_ids: list[str] | None = None
+
+
+class EmptyTrashResponse(BaseModel):
+    deleted: int
+
+
+class RestoreProjectRequest(BaseModel):
+    # Required when the project has clips someone trashed: restore them too
+    # (they come back everywhere), or leave them in the trash.
+    with_clips: bool | None = None
+
+
+class RestoreProjectResponse(BaseModel):
+    restored_clips: int
+    trashed_clips: int  # still in the trash: the request said to leave them
+    missing_clips: int  # files missing from disk; back when the files are
+
+
+class RestoreClipsResponse(BaseModel):
+    restored: int  # clips you trashed, now back everywhere
+    missing: int  # clips whose files went missing; back when the files are
 
 
 class AssetIdsRequest(BaseModel):
@@ -145,8 +182,10 @@ def _project_to_item(
             limit=10000,
         )
         count = len(live_assets)
+        hidden = {"trashed": 0, "missing": 0, "library_trashed": 0}
     else:
         count = repo.asset_count(col.project_id)
+        hidden = repo.hidden_clip_counts(col.project_id)
 
     return ProjectItem(
         project_id=col.project_id,
@@ -160,11 +199,30 @@ def _project_to_item(
         type=col_type,
         saved_query=getattr(col, "saved_query", None),
         asset_count=count,
+        trashed_asset_count=hidden["trashed"],
+        missing_asset_count=hidden["missing"],
+        library_trashed_asset_count=hidden["library_trashed"],
         created_at=col.created_at.isoformat(),
         updated_at=col.updated_at.isoformat(),
         status=col.status,
         archived_at=col.archived_at.isoformat() if col.archived_at else None,
+        deleted_at=col.deleted_at.isoformat() if col.deleted_at else None,
     )
+
+
+def _sync_public_index(request: Request, project_id: str, *, public: bool) -> None:
+    """Keep the control plane's public_projects index, which routes
+    unauthenticated public links to this tenant, in step with visibility."""
+    tenant_id = getattr(request.state, "tenant_id", None)
+    connection_string = getattr(request.state, "connection_string", None)
+    if not (tenant_id and connection_string):
+        return
+    with get_control_session() as ctrl_session:
+        pub_repo = PublicProjectRepository(ctrl_session)
+        if public:
+            pub_repo.upsert(project_id, tenant_id, connection_string)
+        else:
+            pub_repo.delete(project_id)
 
 
 def _get_project_or_404(repo: ProjectRepository, project_id: str):
@@ -206,6 +264,7 @@ def _require_static(col) -> None:
 @router.post("", response_model=ProjectItem, status_code=201)
 def create_project(
     body: CreateProjectRequest,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
     user_id: Annotated[str, Depends(get_current_user_id)],
@@ -232,6 +291,8 @@ def create_project(
         type=body.type,
         saved_query=body.saved_query,
     )
+    if col.visibility == "public":
+        _sync_public_index(request, col.project_id, public=True)
 
     if body.asset_ids:
         asset_repo = AssetRepository(session)
@@ -249,15 +310,43 @@ def list_projects(
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
     user_id: Annotated[str, Depends(get_current_user_id)],
-    status: Literal["active", "archived", "all"] = "active",
+    status: Literal["active", "archived", "all", "trashed"] = "active",
 ) -> ProjectListResponse:
-    """List projects owned by user + shared projects. Active only unless status says otherwise."""
+    """List projects owned by user + shared projects. Active only unless status
+    says otherwise; "all" is active and archived. "trashed" is the caller's
+    own trash, and trashed projects appear nowhere else."""
     repo = ProjectRepository(session)
-    statuses = ("active", "archived") if status == "all" else (status,)
-    projects = repo.list_for_user(user_id, statuses=statuses)
+    if status == "trashed":
+        projects = repo.list_trashed(user_id)
+    else:
+        statuses = ("active", "archived") if status == "all" else (status,)
+        projects = repo.list_for_user(user_id, statuses=statuses)
     return ProjectListResponse(
         items=[_project_to_item(c, repo, user_id, session=session) for c in projects]
     )
+
+
+@router.post("/empty-trash", response_model=EmptyTrashResponse)
+def empty_project_trash(
+    session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
+    body: EmptyTrashRequest | None = None,
+) -> EmptyTrashResponse:
+    """Delete trashed projects for good: the named ones, or the caller's whole
+    trash. Only the caller's own trash; active projects are never touched.
+    The clips stay in their libraries."""
+    repo = ProjectRepository(session)
+    doomed = repo.list_trashed(user_id)
+    if body is not None and body.project_ids is not None:
+        wanted = set(body.project_ids)
+        doomed = [c for c in doomed if c.project_id in wanted]
+    for col in doomed:
+        if col.visibility == "public":
+            with get_control_session() as ctrl_session:
+                PublicProjectRepository(ctrl_session).delete(col.project_id)
+        repo.delete(col.project_id)
+    return EmptyTrashResponse(deleted=len(doomed))
 
 
 @router.get("/{project_id}", response_model=ProjectItem)
@@ -320,17 +409,8 @@ def update_project(
 
     col = repo.update(project_id, **kwargs)
 
-    # Maintain public_projects control plane index
     if body.visibility is not None and body.visibility != old_visibility:
-        tenant_id = getattr(request.state, "tenant_id", None)
-        connection_string = getattr(request.state, "connection_string", None)
-        if tenant_id and connection_string:
-            with get_control_session() as ctrl_session:
-                pub_repo = PublicProjectRepository(ctrl_session)
-                if col.visibility == "public":
-                    pub_repo.upsert(project_id, tenant_id, connection_string)
-                else:
-                    pub_repo.delete(project_id)
+        _sync_public_index(request, project_id, public=col.visibility == "public")
 
     return _project_to_item(col, repo, user_id, session=session)
 
@@ -343,16 +423,93 @@ def delete_project(
     _: Annotated[None, Depends(require_editor)],
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> None:
-    """Delete a project. Only the owner can delete."""
+    """Move a project to the trash. Only the owner can. It disappears
+    everywhere, its public link included, until restored; emptying the trash
+    deletes it for good."""
     repo = ProjectRepository(session)
     col = _get_project_or_404(repo, project_id)
     _require_owner(col, user_id)
-    was_public = col.visibility == "public"
-    repo.delete(project_id)
+    # The public_projects row stays, so a restored public project's link
+    # works again; the public routes treat a trashed project as missing.
+    repo.trash(project_id)
 
-    if was_public:
-        with get_control_session() as ctrl_session:
-            PublicProjectRepository(ctrl_session).delete(project_id)
+
+@router.post("/{project_id}/restore", response_model=RestoreProjectResponse)
+def restore_project(
+    project_id: str,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
+    body: RestoreProjectRequest | None = None,
+) -> RestoreProjectResponse:
+    """Take a project out of the trash, back to active or archived as it
+    was. 404 unless it's in the caller's trash.
+
+    If clips in it are in the trash, the request must say what to do with
+    them (with_clips), or it's refused with 409 clips_in_trash and the
+    counts: restoring them brings them back everywhere, so the user decides.
+    """
+    repo = ProjectRepository(session)
+    col = repo.get_by_id(project_id, include_trashed=True)
+    if col is None or col.deleted_at is None:
+        raise HTTPException(status_code=404, detail="Project not in the trash")
+    if col.owner_user_id is not None and col.owner_user_id != user_id:
+        raise HTTPException(status_code=404, detail="Project not in the trash")
+    with_clips = body.with_clips if body else None
+    hidden = repo.hidden_clip_counts(project_id)
+    trashed, missing = hidden["trashed"], hidden["missing"]
+    if trashed and with_clips is None:
+        raise DecisionRequiredError(
+            "clips_in_trash",
+            f"{trashed} {'clip' if trashed == 1 else 'clips'} in this project "
+            f"{'is' if trashed == 1 else 'are'} in the trash. Send with_clips: true to restore "
+            f"{'it' if trashed == 1 else 'them'} too (everywhere), or false to leave "
+            f"{'it' if trashed == 1 else 'them'}.",
+            {"trashed_clips": trashed, "missing_clips": missing},
+        )
+    repo.restore(project_id)
+    if col.visibility == "public":
+        _sync_public_index(request, project_id, public=True)
+    restored = _restore_trashed_clips(request, session, repo, project_id) if with_clips and trashed else 0
+    return RestoreProjectResponse(
+        restored_clips=restored, trashed_clips=max(0, trashed - restored), missing_clips=missing
+    )
+
+
+def _restore_trashed_clips(request: Request, session: Session, repo: ProjectRepository, project_id: str) -> int:
+    """Restore the project's clips that a person trashed, everywhere. Returns how many."""
+    from src.server.api.routers.assets import reindex_restored_asset
+
+    asset_repo = AssetRepository(session)
+    restored = 0
+    for asset_id in repo.trashed_asset_ids(project_id):
+        if asset_repo.restore(asset_id):
+            restored += 1
+            asset = asset_repo.get_by_id(asset_id)
+            if asset is not None:
+                reindex_restored_asset(request, asset)
+    return restored
+
+
+@router.post("/{project_id}/restore-clips", response_model=RestoreClipsResponse)
+def restore_project_clips(
+    project_id: str,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> RestoreClipsResponse:
+    """Restore the project's clips that a person trashed. They come back
+    everywhere: the library, search, and every other project holding them.
+    Clips a scan trashed because their file went missing are only counted;
+    they come back when the file does."""
+    repo = ProjectRepository(session)
+    col = _get_project_or_404(repo, project_id)
+    if not _can_view(col, user_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    restored = _restore_trashed_clips(request, session, repo, project_id)
+    return RestoreClipsResponse(restored=restored, missing=repo.hidden_clip_counts(project_id)["missing"])
 
 
 # ---------------------------------------------------------------------------
@@ -677,8 +834,12 @@ def export_project(
     in place of the libraries' common parent folder, plus rel_path. Video
     only for now. Headers count what needs the user's attention:
     X-Lumiverb-Skipped-Stills (photos left out), X-Lumiverb-Skipped-No-Duration
-    (videos with no known length, left out) and X-Lumiverb-Unprobed (videos
-    exported at a fallback frame rate). Archived projects export too.
+    (videos with no known length, left out), X-Lumiverb-Unprobed (videos
+    exported at a fallback frame rate), X-Lumiverb-Skipped-Trashed (clips
+    someone trashed, left out until restored), X-Lumiverb-Skipped-Missing
+    (clips whose files went missing) and X-Lumiverb-Skipped-Library-Trashed
+    (clips whose library is in the trash); these count videos only.
+    Archived projects export too.
     """
     import posixpath
 
@@ -700,6 +861,13 @@ def export_project(
     assets = _all_project_assets(col, request, session, user_id)
     videos = [a for a in assets if a.media_type == "video"]
     skipped_stills = len(assets) - len(videos)
+    # Hidden clips are still in a static project but never exported; only
+    # videos count, since photos aren't exported anyway.
+    is_smart = getattr(col, "type", "static") == "smart"
+    hidden = (
+        {"trashed": 0, "missing": 0, "library_trashed": 0}
+        if is_smart else repo.hidden_clip_counts(col.project_id, videos_only=True)
+    )
 
     roots = {
         lib.library_id: lib.root_path
@@ -752,9 +920,14 @@ def export_project(
             "X-Lumiverb-Skipped-Stills": str(skipped_stills),
             "X-Lumiverb-Skipped-No-Duration": str(skipped_no_duration),
             "X-Lumiverb-Unprobed": str(unprobed),
+            "X-Lumiverb-Skipped-Trashed": str(hidden["trashed"]),
+            "X-Lumiverb-Skipped-Missing": str(hidden["missing"]),
+            "X-Lumiverb-Skipped-Library-Trashed": str(hidden["library_trashed"]),
             "Access-Control-Expose-Headers": (
                 "Content-Disposition, X-Lumiverb-Skipped-Stills, "
-                "X-Lumiverb-Skipped-No-Duration, X-Lumiverb-Unprobed"
+                "X-Lumiverb-Skipped-No-Duration, X-Lumiverb-Unprobed, "
+                "X-Lumiverb-Skipped-Trashed, X-Lumiverb-Skipped-Missing, "
+                "X-Lumiverb-Skipped-Library-Trashed"
             ),
         },
     )

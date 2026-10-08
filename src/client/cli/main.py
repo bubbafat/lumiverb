@@ -179,7 +179,7 @@ def library_delete(
         raise typer.Exit(1)
     library_id = match["library_id"]
     confirm = typer.confirm(
-        f"Delete library '{name}'? This moves it to trash. [y/N]",
+        f"Delete library '{name}'? This moves it to trash.",
         default=False,
     )
     if not confirm:
@@ -202,17 +202,43 @@ def library_empty_trash() -> None:
         raise typer.Exit(0)
     for lib in trashed:
         console.print(f"  {lib.get('name', '')} ({lib.get('library_id', '')})")
+    # Deleting the clips for good takes them out of every project.
+    usage = client.post(
+        "/v1/assets/project-usage", json={"library_ids": [lib["library_id"] for lib in trashed]}
+    ).json()
+    in_projects = usage.get("assets_in_projects", 0)
+    if in_projects:
+        named = usage.get("projects", [])
+        total = len(named) + usage.get("other_projects", 0)
+        one = in_projects == 1
+        console.print(
+            f"[yellow]{in_projects} {'clip' if one else 'clips'} from "
+            f"{'this library' if len(trashed) == 1 else 'these libraries'} "
+            f"{'is' if one else 'are'} in {total} {'project' if total == 1 else 'projects'}; "
+            f"deleting {'it' if one else 'them'} for good removes {'it' if one else 'them'} from "
+            f"{'that project' if total == 1 else 'those projects'}:[/yellow]"
+        )
+        for p in named:
+            notes = ", ".join(n for n in (
+                "archived" if p.get("status") == "archived" else "",
+                "in the trash" if p.get("in_trash") else "",
+            ) if n)
+            console.print(f"  {p.get('name', '')}: {p.get('clips', 0)}" + (f" ({notes})" if notes else ""))
+        if usage.get("other_projects"):
+            console.print(f"  and {usage['other_projects']} more you can't see")
     confirm = typer.confirm(
-        f"Permanently delete {len(trashed)} libraries and all their assets? [y/N]",
+        f"Permanently delete {len(trashed)} "
+        f"{'library and all its' if len(trashed) == 1 else 'libraries and all their'} assets?",
         default=False,
     )
     if not confirm:
         console.print("Aborted.")
         raise typer.Exit(0)
-    empty_resp = client.post("/v1/libraries/empty-trash")
+    # The user has seen which projects lose clips and said yes.
+    empty_resp = client.post("/v1/libraries/empty-trash", json={"remove_from_projects": bool(in_projects)})
     data = empty_resp.json()
     n = data.get("deleted", 0)
-    console.print(f"Deleted {n} libraries.")
+    console.print(f"Deleted {n} {'library' if n == 1 else 'libraries'}.")
 
 
 # ---------------------------------------------------------------------------

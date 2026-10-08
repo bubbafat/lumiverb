@@ -158,10 +158,12 @@ class LibraryRepository:
             raise ValueError(f"Library not found: {library_id}")
         if library.status == "trashed":
             raise ValueError(f"Library already trashed: {library_id}")
-        # Soft-delete all assets in this library
+        # Soft-delete all assets in this library. The reason says the clip
+        # went with its library, not that its file went missing.
         self._session.execute(
             text(
-                "UPDATE assets SET deleted_at = :now WHERE library_id = :library_id AND deleted_at IS NULL"
+                "UPDATE assets SET deleted_at = :now, deleted_reason = 'library'"
+                " WHERE library_id = :library_id AND deleted_at IS NULL"
             ),
             {"library_id": library_id, "now": utcnow()},
         )
@@ -842,15 +844,31 @@ class AssetRepository:
         return (trashed, not_found)
 
     def restore(self, asset_id: str) -> bool:
-        """Clear deleted_at. Returns False if not found or not trashed."""
+        """Clear deleted_at. Returns False if not found or not trashed.
+
+        Trashing deleted the asset's search documents, so the asset and its
+        scenes go back in the queue for the next search sync. Transcript
+        segments aren't swept; callers re-index them (reindex_restored_asset).
+        """
         asset = self._session.get(Asset, asset_id)
         if asset is None or asset.deleted_at is None:
             return False
-        asset.deleted_at = None
-        asset.deleted_reason = None
-        self._session.add(asset)
+        self.clear_trash(asset)
         self._session.commit()
         return True
+
+    def clear_trash(self, asset: Asset) -> None:
+        """Take an asset out of the trash and queue it and its scenes for the
+        next search sync (trashing deleted their search documents). No
+        commit. Transcript segments aren't swept: callers re-index them."""
+        asset.deleted_at = None
+        asset.deleted_reason = None
+        asset.search_synced_at = None
+        self._session.add(asset)
+        self._session.execute(
+            text("UPDATE video_scenes SET search_synced_at = NULL WHERE asset_id = :a"),
+            {"a": asset.asset_id},
+        )
 
     def page_ignored_paths(
         self, library_id: str, *, after: str | None = None, limit: int = 500
@@ -1824,10 +1842,12 @@ class ProjectRepository:
         self._session.refresh(project)
         return project
 
-    def get_by_id(self, project_id: str) -> Project | None:
-        return self._session.exec(
-            select(Project).where(Project.project_id == project_id)
-        ).first()
+    def get_by_id(self, project_id: str, *, include_trashed: bool = False) -> Project | None:
+        """A project by id. A trashed one counts as gone unless include_trashed."""
+        stmt = select(Project).where(Project.project_id == project_id)
+        if not include_trashed:
+            stmt = stmt.where(Project.deleted_at.is_(None))  # type: ignore[union-attr]
+        return self._session.exec(stmt).first()
 
     def list_for_user(self, user_id: str, *, statuses: tuple[str, ...] = ("active",)) -> list[Project]:
         """Return projects owned by user + shared projects, in the given lifecycle states."""
@@ -1841,10 +1861,49 @@ class ProjectRepository:
                         Project.visibility.in_(["shared", "public"]),  # type: ignore[union-attr]
                     ),
                     Project.status.in_(statuses),  # type: ignore[attr-defined]
+                    Project.deleted_at.is_(None),  # type: ignore[union-attr]
                 )
                 .order_by(Project.created_at.desc())  # type: ignore[attr-defined]
             ).all()
         )
+
+    def list_trashed(self, user_id: str) -> list[Project]:
+        """The user's trash: projects they own (or nobody owns) that were
+        deleted, most recently deleted first."""
+        return list(
+            self._session.exec(
+                select(Project)
+                .where(
+                    or_(
+                        Project.owner_user_id == user_id,
+                        Project.owner_user_id.is_(None),  # type: ignore[union-attr]
+                    ),
+                    Project.deleted_at.is_not(None),  # type: ignore[union-attr]
+                )
+                .order_by(Project.deleted_at.desc())  # type: ignore[union-attr]
+            ).all()
+        )
+
+    def trash(self, project_id: str) -> bool:
+        """Move a project to the trash. False if it's missing or already there."""
+        col = self.get_by_id(project_id)
+        if col is None:
+            return False
+        col.deleted_at = col.updated_at = utcnow()
+        self._session.add(col)
+        self._session.commit()
+        return True
+
+    def restore(self, project_id: str) -> bool:
+        """Take a project out of the trash. False if it isn't in the trash."""
+        col = self.get_by_id(project_id, include_trashed=True)
+        if col is None or col.deleted_at is None:
+            return False
+        col.deleted_at = None
+        col.updated_at = utcnow()
+        self._session.add(col)
+        self._session.commit()
+        return True
 
     def update(
         self,
@@ -1883,7 +1942,8 @@ class ProjectRepository:
         return col
 
     def delete(self, project_id: str) -> bool:
-        col = self.get_by_id(project_id)
+        """Delete a project for good, trashed or not. Its clips stay."""
+        col = self.get_by_id(project_id, include_trashed=True)
         if col is None:
             return False
         self._session.delete(col)
@@ -1903,6 +1963,77 @@ class ProjectRepository:
             )
         )
         return int(result.scalar() or 0)
+
+    # Clips still linked to a project but hidden, in three kinds that need
+    # different actions: a person trashed them (restorable), a scan found
+    # the file missing (back when the file is), or their library is in the
+    # trash (libraries have no restore; never brought back from a project).
+    _HIDDEN_CLIPS_SQL = (
+        "SELECT"
+        " count(*) FILTER (WHERE l.status <> 'trashed' AND a.deleted_reason = 'user') AS trashed,"
+        " count(*) FILTER (WHERE l.status <> 'trashed'"
+        "   AND a.deleted_reason IS DISTINCT FROM 'user') AS missing,"
+        " count(*) FILTER (WHERE l.status = 'trashed') AS library_trashed"
+        " FROM project_assets pa"
+        " JOIN assets a ON a.asset_id = pa.asset_id"
+        " JOIN libraries l ON l.library_id = a.library_id"
+        " WHERE pa.project_id = :pid AND a.deleted_at IS NOT NULL"
+    )
+
+    def hidden_clip_counts(self, project_id: str, *, videos_only: bool = False) -> dict[str, int]:
+        """{"trashed", "missing", "library_trashed"} for the project's hidden
+        clips, in one query. videos_only for what an export leaves out."""
+        sql = self._HIDDEN_CLIPS_SQL
+        if videos_only:
+            sql += " AND a.media_type = 'video'"  # as export decides what's a video
+        row = self._session.execute(text(sql), {"pid": project_id}).one()
+        return {"trashed": int(row[0]), "missing": int(row[1]), "library_trashed": int(row[2])}
+
+    def trashed_asset_ids(self, project_id: str) -> list[str]:
+        """The clips in the project that a person trashed, whose library
+        isn't in the trash: the ones restoring with the project brings back."""
+        return list(self._session.execute(
+            text(
+                "SELECT a.asset_id FROM project_assets pa"
+                " JOIN assets a ON a.asset_id = pa.asset_id"
+                " JOIN libraries l ON l.library_id = a.library_id"
+                " WHERE pa.project_id = :pid AND a.deleted_at IS NOT NULL"
+                "   AND a.deleted_reason = 'user' AND l.status <> 'trashed'"
+            ),
+            {"pid": project_id},
+        ).scalars().all())
+
+    def _usage_filter(self, asset_ids: list[str], library_ids: list[str]):
+        """Membership rows for these clips, or for any clip in these libraries."""
+        conds = []
+        if asset_ids:
+            conds.append(ProjectAsset.asset_id.in_(asset_ids))  # type: ignore[attr-defined]
+        if library_ids:
+            conds.append(ProjectAsset.asset_id.in_(  # type: ignore[attr-defined]
+                select(Asset.asset_id).where(Asset.library_id.in_(library_ids))  # type: ignore[attr-defined]
+            ))
+        return or_(*conds) if conds else None
+
+    def usage(
+        self, asset_ids: list[str], library_ids: list[str] | None = None
+    ) -> tuple[list[tuple[Project, int]], int]:
+        """Every project (trashed or not) holding any of these clips, or any
+        clip in these libraries, with how many it holds; and how many of the
+        clips are in any project."""
+        cond = self._usage_filter(asset_ids, library_ids or [])
+        if cond is None:
+            return [], 0
+        rows = self._session.execute(
+            select(Project, func.count(ProjectAsset.asset_id))
+            .join(ProjectAsset, ProjectAsset.project_id == Project.project_id)
+            .where(cond)
+            .group_by(Project.project_id)
+            .order_by(Project.name)
+        ).all()
+        in_any = self._session.execute(
+            select(func.count(func.distinct(ProjectAsset.asset_id))).where(cond)
+        ).scalar()
+        return [(row[0], int(row[1])) for row in rows], int(in_any or 0)
 
     # ---- Batch add / remove ----
 
@@ -1945,6 +2076,14 @@ class ProjectRepository:
                 ProjectAsset.project_id == project_id,
                 ProjectAsset.asset_id.in_(asset_ids),  # type: ignore[attr-defined]
             )
+        )
+        # A chosen cover that leaves the project is no longer a choice.
+        self._session.execute(
+            text(
+                "UPDATE projects SET cover_asset_id = NULL"
+                " WHERE project_id = :pid AND cover_asset_id = ANY(:ids)"
+            ),
+            {"pid": project_id, "ids": list(asset_ids)},
         )
         self._session.commit()
         return result.rowcount  # type: ignore[return-value]
@@ -2062,14 +2201,14 @@ class ProjectRepository:
     # ---- Cover resolution ----
 
     def resolve_cover(self, project: Project) -> str | None:
-        """Return the effective cover asset_id, applying lazy self-healing.
+        """The cover to show: the chosen one if it's in the project and not
+        in the trash, else the first clip by position.
 
-        If cover_asset_id is set and the asset is active and in the project,
-        return it. Otherwise fall back to first-by-position, and null out the
-        stale cover_asset_id.
+        Reading never clears the choice: a chosen cover whose clip is only in
+        the trash comes back with it. The choice is cleared where the clip
+        really leaves, in remove_assets and when the clip is deleted for good.
         """
         if project.cover_asset_id:
-            # Check if cover asset is still active and in project
             row = self._session.execute(
                 select(ProjectAsset.asset_id)
                 .join(Asset, ProjectAsset.asset_id == Asset.asset_id)
@@ -2081,12 +2220,6 @@ class ProjectRepository:
             ).first()
             if row:
                 return project.cover_asset_id
-
-            # Stale — null it out (lazy self-healing)
-            project.cover_asset_id = None
-            project.updated_at = utcnow()
-            self._session.add(project)
-            self._session.commit()
 
         # Fallback: first active asset by position
         row = self._session.execute(

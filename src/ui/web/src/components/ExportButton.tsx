@@ -63,6 +63,21 @@ export function ExportButton({ projectId }: { projectId: string }) {
           `${plural(file.skippedNoDuration, "video with no known length wasn't", "videos with no known length weren't")} included.`,
         );
       }
+      if (file.skippedTrashed > 0) {
+        notes.push(
+          `${plural(file.skippedTrashed, "clip in the trash wasn't", "clips in the trash weren't")} included.`,
+        );
+      }
+      if (file.skippedMissing > 0) {
+        notes.push(
+          `${plural(file.skippedMissing, "clip missing from disk wasn't", "clips missing from disk weren't")} included.`,
+        );
+      }
+      if (file.skippedLibraryTrashed > 0) {
+        notes.push(
+          `${plural(file.skippedLibraryTrashed, "clip in a deleted library wasn't", "clips in a deleted library weren't")} included.`,
+        );
+      }
       if (file.unprobed > 0) {
         notes.push(
           `${plural(file.unprobed, "video hasn't", "videos haven't")} been probed and use a default frame rate; run lumiverb enrich --job-type probe.`,

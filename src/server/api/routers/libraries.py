@@ -5,7 +5,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlmodel import Session
-from src.server.api.dependencies import get_tenant_session, require_editor
+from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor
+from src.server.api.errors import DecisionRequiredError
 from src.server.database import get_control_session
 from src.shared.io_utils import normalize_path_prefix
 from src.shared.utils import utcnow
@@ -47,6 +48,12 @@ class LibraryListItem(BaseModel):
 
 class EmptyTrashResponse(BaseModel):
     deleted: int
+
+
+class EmptyLibraryTrashRequest(BaseModel):
+    # Required when clips in the trashed libraries are in projects: deleting
+    # them for good takes them out of those projects.
+    remove_from_projects: bool = False
 
 
 class IgnoredPathItem(BaseModel):
@@ -185,11 +192,28 @@ def empty_trash(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
+    body: EmptyLibraryTrashRequest | None = None,
 ) -> EmptyTrashResponse:
-    """Hard delete all trashed libraries for this tenant. Returns count of libraries deleted."""
+    """Hard delete all trashed libraries for this tenant. Returns count of
+    libraries deleted. 409 in_projects, with the projects in details, when
+    their clips are in projects and remove_from_projects isn't set."""
     tenant_id = getattr(request.state, "tenant_id", None)
     repo = LibraryRepository(session)
     trashed = repo.get_trashed()
+    if trashed and not (body and body.remove_from_projects):
+        from src.server.api.routers.assets import project_usage_summary
+
+        usage = project_usage_summary(session, user_id, library_ids=[lib.library_id for lib in trashed])
+        if usage.assets_in_projects:
+            n = usage.assets_in_projects
+            raise DecisionRequiredError(
+                "in_projects",
+                f"{n} {'clip' if n == 1 else 'clips'} from the trashed libraries "
+                f"{'is' if n == 1 else 'are'} in projects; deleting them for good removes them from "
+                "those projects. Send remove_from_projects: true to go ahead.",
+                usage.model_dump(),
+            )
     deleted = 0
     for lib in trashed:
         purge_library_from_quickwit(lib.library_id, tenant_id=tenant_id)

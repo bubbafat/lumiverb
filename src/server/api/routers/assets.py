@@ -13,10 +13,11 @@ from pydantic import BaseModel, Field, field_validator
 from sqlmodel import Session
 
 from src.shared.io_utils import normalize_rel_path
-from src.server.api.dependencies import get_current_user_id, get_tenant_session
+from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor
 from src.shared import asset_status
 from src.shared.io_utils import normalize_path_prefix
 from src.server.repository.tenant import AssetMetadataRepository, AssetRepository, LibraryRepository
+from src.server.models.tenant import Asset
 from src.server.storage.local import get_storage
 from src.shared.utils import utcnow
 
@@ -745,13 +746,75 @@ def list_assets(
     return [_to_asset_response(a) for a in assets]
 
 
+class ProjectUsageRequest(BaseModel):
+    asset_ids: list[str] = []
+    # Every clip in these libraries, e.g. before emptying the library trash.
+    library_ids: list[str] = []
+
+
+class ProjectUsageItem(BaseModel):
+    project_id: str
+    name: str
+    status: str  # active | archived
+    in_trash: bool
+    clips: int  # how many of the asked-about clips it holds
+
+
+class ProjectUsageResponse(BaseModel):
+    assets_in_projects: int  # how many of the clips are in any project
+    projects: list[ProjectUsageItem]  # the ones the caller can see
+    other_projects: int  # the rest: counted, not named
+
+
+@router.post("/project-usage", response_model=ProjectUsageResponse)
+def project_usage(
+    body: ProjectUsageRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> ProjectUsageResponse:
+    """Which projects hold these clips, or any clip in these libraries: what
+    deleting them for good would take them out of. Every project counts,
+    archived, trashed and other people's included; names only for those the
+    caller can see."""
+    return project_usage_summary(session, user_id, asset_ids=body.asset_ids, library_ids=body.library_ids)
+
+
+def project_usage_summary(
+    session: Session, user_id: str | None, *, asset_ids: list[str] = (), library_ids: list[str] = ()  # type: ignore[assignment]
+) -> ProjectUsageResponse:
+    """See project_usage. Also what a permanent delete refuses with until
+    the request says remove_from_projects."""
+    from src.server.repository.tenant import ProjectRepository
+
+    rows, in_any = ProjectRepository(session).usage(list(asset_ids), list(library_ids))
+    visible: list[ProjectUsageItem] = []
+    other = 0
+    for project, clips in rows:
+        mine = project.owner_user_id in (None, user_id)
+        shown = mine or (project.deleted_at is None and project.visibility in ("shared", "public"))
+        if not shown:
+            other += 1
+            continue
+        visible.append(ProjectUsageItem(
+            project_id=project.project_id, name=project.name, status=project.status,
+            in_trash=project.deleted_at is not None, clips=clips,
+        ))
+    return ProjectUsageResponse(assets_in_projects=in_any, projects=visible, other_projects=other)
+
+
 @router.delete("", response_model=BatchTrashResponse)
 def batch_trash_assets(
     body: BatchTrashRequest,
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> BatchTrashResponse:
-    """Soft-delete multiple assets. Returns trashed and not_found lists. Quickwit delete is best-effort."""
+    """Soft-delete multiple assets. Returns trashed and not_found lists. Quickwit delete is best-effort.
+
+    A person's trash ("user") needs an editor. Marking files the scanner no
+    longer finds ("missing", or no reason) stays open to whoever can scan.
+    """
+    if body.reason == "user":
+        require_editor(request)
     asset_repo = AssetRepository(session)
     trashed_ids, not_found_ids = asset_repo.trash_many(body.asset_ids, reason=body.reason)
     if trashed_ids:
@@ -829,6 +892,7 @@ def trash_asset(
     asset_id: str,
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
 ) -> None:
     """Trash a single asset for the user; it stays trashed through rescans.
 
@@ -847,16 +911,31 @@ def trash_asset(
             logger.warning("Quickwit delete after trash failed for %s: %s", asset_id, e)
 
 
+def reindex_restored_asset(request: Request, asset: Asset) -> None:
+    """Put a restored asset's transcript segments back in search; the sync
+    sweep re-indexes the asset and its scenes (restore queued them)."""
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if tenant_id and asset.transcript_srt:
+        from src.server.search.sync import index_transcript_segments
+
+        index_transcript_segments(tenant_id, asset)
+
+
 @router.post("/{asset_id}/restore", status_code=204)
 def restore_asset(
     asset_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
 ) -> None:
     """Restore a single trashed asset. 404 if not found or not trashed."""
     asset_repo = AssetRepository(session)
     ok = asset_repo.restore(asset_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Asset not found or not trashed")
+    asset = asset_repo.get_by_id(asset_id)
+    if asset is not None:
+        reindex_restored_asset(request, asset)
 
 
 @router.post("/{asset_id}/vision", response_model=VisionSubmitResponse)
@@ -1133,37 +1212,11 @@ def submit_transcript(
     meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
     try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
 
-    # Index transcript segments into Quickwit
     _tid = getattr(request.state, "tenant_id", None)
     if _tid:
-        try:
-            from src.server.srt import parse_srt_segments
-            from src.server.search.quickwit_client import QuickwitClient
-            from src.shared.utils import utcnow as _utcnow
+        from src.server.search.sync import index_transcript_segments
 
-            qw = QuickwitClient()
-            qw.ensure_tenant_transcript_index(_tid)
-            qw.delete_tenant_transcript_documents(_tid, asset_id)
-            segments = parse_srt_segments(body.srt)
-            if segments:
-                docs = [
-                    {
-                        "id": f"{asset_id}_{seg.start_ms}_{seg.end_ms}",
-                        "asset_id": asset_id,
-                        "library_id": asset.library_id,
-                        "rel_path": asset.rel_path,
-                        "media_type": asset.media_type,
-                        "start_ms": seg.start_ms,
-                        "end_ms": seg.end_ms,
-                        "text": seg.text,
-                        "language": asset.transcript_language or "",
-                        "indexed_at": int(_utcnow().timestamp()),
-                    }
-                    for seg in segments
-                ]
-                qw.ingest_tenant_transcript_documents(_tid, docs)
-        except Exception as exc:
-            logger.warning("Transcript segment indexing failed for %s: %s", asset_id, exc)
+        index_transcript_segments(_tid, asset, body.srt)
 
     LibraryRepository(session).bump_revision(asset.library_id)
 

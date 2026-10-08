@@ -136,6 +136,21 @@ describe("ExportButton remembered location and reports", () => {
     expect(screen.getByText(/5 videos haven't been probed/)).toBeTruthy();
   });
 
+  it("says when trashed clips or clips with missing files were left out", async () => {
+    api.getDefaultExportFormat.mockReturnValue("fcp7");
+    api.exportProject.mockResolvedValue({
+      blob: new Blob(["x"]), filename: "a.xml", skippedStills: 0, skippedNoDuration: 0, unprobed: 0,
+      skippedTrashed: 2, skippedMissing: 1, skippedLibraryTrashed: 3,
+    });
+    renderButton();
+
+    fireEvent.click(screen.getByRole("button", { name: "Export" }));
+
+    expect(await screen.findByText(/2 clips in the trash weren't included/)).toBeTruthy();
+    expect(screen.getByText(/1 clip missing from disk wasn't included/)).toBeTruthy();
+    expect(screen.getByText(/3 clips in a deleted library weren't included/)).toBeTruthy();
+  });
+
   it("frees the download link only after the browser has it", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     api.getDefaultExportFormat.mockReturnValue("fcp7");
