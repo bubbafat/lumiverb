@@ -128,6 +128,15 @@ def _parse_optional_json_list(field: str | None, field_name: str) -> list[dict] 
         raise HTTPException(status_code=400, detail=f"{field_name} must be a JSON array")
 
 
+def _per_kind(raw: str | None) -> dict:
+    """The lineage form field: a JSON object by artifact kind, or {}."""
+    try:
+        value = json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 def _do_ingest(
     *,
     asset_id: str,
@@ -141,8 +150,15 @@ def _do_ingest(
     vision_data: dict | None,
     embeddings_data: list[dict] | None,
     session: Session,
+    lineage_by_kind: dict | None = None,
 ) -> IngestResponse:
-    """Core ingest logic shared by both endpoints."""
+    """Core ingest logic shared by both endpoints. Records how the proxy (and
+    any vision or embeddings sent along) were made: lineage_by_kind maps an
+    artifact kind to its lineage; one not given is an unknown producer's."""
+    from src.server.api.routers.producers import lineage_dict
+    from src.server.repository.lineage import record as record_lineage
+
+    lineage_by_kind = lineage_by_kind or {}
     storage: LocalStorage = get_storage()
     asset_repo = AssetRepository(session)
 
@@ -248,6 +264,12 @@ def _do_ingest(
     # --- Bump library revision for UI polling ---
     LibraryRepository(session).bump_revision(library_id)
 
+    record_lineage(session, asset_id, "proxy", lineage_dict(lineage_by_kind.get("proxy")), commit=False)
+    if vision_data is not None:
+        record_lineage(session, asset_id, "vision", lineage_dict(lineage_by_kind.get("vision")), commit=False)
+    if embeddings_data is not None:
+        record_lineage(session, asset_id, "clip", lineage_dict(lineage_by_kind.get("clip")), commit=False)
+
     # Commit all changes atomically. The tenant session does NOT auto-commit
     # (SQLModel's `with Session` rolls back on exit), so every write path
     # must commit explicitly. The update-existing branch in create_and_ingest
@@ -308,6 +330,8 @@ async def create_and_ingest(
     vision: str | None = Form(default=None),
     embeddings: str | None = Form(default=None),
     video_facet: str | None = Form(default=None),
+    # JSON {"proxy": {...}, "probe": {...}}: how each artifact sent was made (see LineageIn)
+    lineage: str | None = Form(default=None),
 ) -> IngestResponse:
     """Create an asset record and ingest proxy + metadata in one atomic request.
 
@@ -461,9 +485,14 @@ async def create_and_ingest(
         vision_data=vision_data,
         embeddings_data=embeddings_data,
         session=session,
+        lineage_by_kind=_per_kind(lineage),
     )
     if facet_data is not None:
         asset_repo.upsert_video_facet(asset_id, facet_data)
+        from src.server.api.routers.producers import lineage_dict
+        from src.server.repository.lineage import record as record_lineage
+
+        record_lineage(session, asset_id, "probe", lineage_dict(_per_kind(lineage).get("probe")))
     if reappeared is not None and reappeared.transcript_srt:
         from src.server.search.sync import index_transcript_segments
 
@@ -488,6 +517,7 @@ async def ingest_asset(
     exif: str | None = Form(default=None),
     vision: str | None = Form(default=None),
     embeddings: str | None = Form(default=None),
+    lineage: str | None = Form(default=None),  # JSON by artifact kind, as for POST /v1/ingest
 ) -> IngestResponse:
     """Ingest proxy + metadata into an existing asset record."""
     raw_proxy = await proxy.read()
@@ -519,4 +549,5 @@ async def ingest_asset(
         vision_data=vision_data,
         embeddings_data=embeddings_data,
         session=session,
+        lineage_by_kind=_per_kind(lineage),
     )

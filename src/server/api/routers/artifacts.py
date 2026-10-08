@@ -11,6 +11,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session
 
+from src.server.api.routers.producers import lineage_dict
+from src.server.repository.lineage import record as record_lineage
+
 from src.server.api.dependencies import get_tenant_session
 from src.server.repository.tenant import AssetRepository, LibraryRepository
 from src.server.storage.local import LocalStorage, get_storage
@@ -41,6 +44,17 @@ CONTENT_TYPES: dict[str, str] = {
 }
 
 
+def _per_kind(raw: str | None) -> dict:
+    """A JSON object of lineage by artifact kind, or {} when absent or unreadable."""
+    import json
+
+    try:
+        value = json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 class ArtifactUploadResponse(BaseModel):
     key: str
     sha256: str
@@ -56,6 +70,7 @@ async def upload_artifact(
     width: int | None = Form(default=None),
     height: int | None = Form(default=None),
     rep_frame_ms: int | None = Form(default=None),
+    lineage: str | None = Form(default=None),  # JSON: how it was made (see LineageIn)
 ) -> ArtifactUploadResponse:
     """Upload a proxy, thumbnail, video_preview, scene_rep or analysis_proxy artifact for an asset.
 
@@ -140,6 +155,8 @@ async def upload_artifact(
         asset_repo.set_video_preview(asset_id, video_preview_key=key)
     elif artifact_type == "analysis_proxy":
         asset_repo.set_analysis_proxy(asset_id, key, sha256)
+    if artifact_type in ("proxy", "video_preview", "analysis_proxy"):
+        record_lineage(session, asset_id, artifact_type, lineage_dict(lineage))
     # scene_rep: no asset-level column to update. The on-disk path is derived
     # from (tenant_id, library_id, asset_id, rep_frame_ms) on download via
     # storage.scene_rep_key(), so the file is fully addressable from
@@ -169,6 +186,8 @@ async def upload_artifacts_batch(
     video_preview: UploadFile | None = File(default=None),
     width: int | None = Form(default=None),
     height: int | None = Form(default=None),
+    # JSON: {"proxy": {...}, "video_preview": {...}}, how each was made (see LineageIn)
+    lineage: str | None = Form(default=None),
 ) -> BatchArtifactUploadResponse:
     """Upload multiple artifacts for an asset in a single request.
 
@@ -239,6 +258,8 @@ async def upload_artifacts_batch(
             asset_repo.set_thumbnail_artifact(asset_id, key, sha256)
         elif artifact_type == "video_preview":
             asset_repo.set_video_preview(asset_id, video_preview_key=key)
+        if artifact_type in ("proxy", "video_preview"):
+            record_lineage(session, asset_id, artifact_type, lineage_dict(_per_kind(lineage).get(artifact_type)))
 
         items.append(BatchArtifactItem(artifact_type=artifact_type, key=key, sha256=sha256))
 
