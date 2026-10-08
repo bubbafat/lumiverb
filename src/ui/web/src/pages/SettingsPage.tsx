@@ -1,6 +1,7 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { getCurrentUser } from "../api/client";
+import { getCurrentUser, getVisionSettings } from "../api/client";
+import { visionHasProblem } from "./settings/AiSection";
 
 interface NavItem {
   to: string;
@@ -12,6 +13,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/settings/account", label: "Account" },
   { to: "/settings/preferences", label: "Preferences" },
   { to: "/settings/playback", label: "Playback" },
+  { to: "/settings/ai", label: "AI" },
   { to: "/settings/files", label: "Files" },
   { to: "/settings/security", label: "Security" },
   { to: "/settings/keys", label: "API Keys", requireEditor: true },
@@ -22,6 +24,10 @@ export default function SettingsPage() {
     queryKey: ["settings", "me"],
     queryFn: getCurrentUser,
   });
+
+  // The worker couldn't use the vision model: flag the AI page until it's fixed.
+  const { data: vision } = useQuery({ queryKey: ["vision-settings"], queryFn: getVisionSettings });
+  const aiProblem = visionHasProblem(vision);
 
   // Don't hide editor-only items until we know the role (avoids flicker)
   const isEditorOrAbove =
@@ -47,6 +53,13 @@ export default function SettingsPage() {
                 }
               >
                 {item.label}
+                {item.to === "/settings/ai" && aiProblem && (
+                  <span
+                    role="img"
+                    aria-label="Vision AI is paused"
+                    className="ml-2 inline-block h-2 w-2 rounded-full bg-red-500 align-middle"
+                  />
+                )}
               </NavLink>
             );
           })}

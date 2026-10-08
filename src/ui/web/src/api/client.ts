@@ -768,6 +768,43 @@ export async function updateTenantSettings(
   return apiFetch<TenantSettings>("/tenant/settings", { method: "PATCH", body: update });
 }
 
+/** The worker's last check of the vision endpoint, for the saved settings. */
+export interface VisionStatus {
+  ok: boolean;
+  error: string;
+  model: string;
+  api_url: string;
+  checked_at: string | null;
+}
+
+/** The account's vision AI: the one place it lives (workers keep none). */
+export interface VisionSettings {
+  api_url: string;
+  /** Whether a key is saved; the key itself is never sent back. */
+  has_key: boolean;
+  model: string;
+  /** null until the worker has checked these settings. */
+  status: VisionStatus | null;
+}
+
+export async function getVisionSettings(): Promise<VisionSettings> {
+  return apiFetch<VisionSettings>("/tenant/vision");
+}
+
+/** Ask the endpoint which models it offers (admins). api_key undefined:
+ * the saved key, when the URL is the saved one. 502 vision_unreachable
+ * says why when it can't. */
+export async function connectVision(body: { api_url: string; api_key?: string }): Promise<string[]> {
+  return (await apiFetch<{ models: string[] }>("/tenant/vision/connect", { method: "POST", body })).models;
+}
+
+/** Save the endpoint, key and model (admins); the endpoint is asked again.
+ * 409 vision_model_unavailable (details.models) when it doesn't offer the
+ * model. api_url "" turns vision AI off. api_key undefined keeps the saved key. */
+export async function saveVisionSettings(body: { api_url: string; api_key?: string; model: string }): Promise<VisionSettings> {
+  return apiFetch<VisionSettings>("/tenant/vision", { method: "PUT", body });
+}
+
 export async function findSimilar(params: {
   assetId: string;
   libraryId: string;
