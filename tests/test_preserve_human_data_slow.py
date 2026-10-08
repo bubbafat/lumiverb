@@ -1138,3 +1138,51 @@ def test_one_and_one_with_the_same_model_still_listens_to_the_embeddings(env) ->
     result = _redetect_with(client, headers, asset_id, [(_box(0.15, 0.15, 0.08, 0.08), 303)], "buffalo_l")
 
     assert face_id not in result["face_ids"]
+
+
+@pytest.mark.slow
+def test_a_name_carried_across_a_switch_teaches_the_new_model_that_person(env) -> None:
+    """Robert's idea, end to end. The account switches its face model. A
+    picture whose one face was named is found again by the new model: the
+    face keeps the name and the person's centroid is rebuilt from the new
+    model's embedding of it. Then the new model finds that person in a
+    picture nobody has named, and suggests them."""
+    client, headers, library_id, tenant_url = env
+    with _db(tenant_url) as s:
+        s.execute(text("INSERT INTO system_metadata (key, value, updated_at)"
+                       " VALUES ('producer.faces', '{\"model\": \"antelopev2\"}', now())"
+                       " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"))
+        s.commit()
+    try:
+        named = _seed_asset(tenant_url, library_id)
+        person_id = _seed_person(tenant_url, emb=10)
+        face_id = _seed_face(tenant_url, named, _box(0.10, 0.10), emb=10)
+        _seed_match(tenant_url, face_id, person_id, confirmed=True, confidence=None)
+
+        # The new model sees the same face as _unit(400): another space.
+        _redetect_with(client, headers, named, [(_box(0.12, 0.11), 400)], "antelopev2")
+        with _db(tenant_url) as s:
+            model = s.execute(text("SELECT centroid_model FROM people WHERE person_id = :p"),
+                              {"p": person_id}).scalar()
+        assert model == "antelopev2"
+
+        # A picture nobody named: the new model finds a face close to that one.
+        other = _seed_asset(tenant_url, library_id)
+        result = _redetect_with(client, headers, other, [(_box(0.40, 0.40), _near(400))], "antelopev2")
+        assert _match(tenant_url, result["face_ids"][0]) == (person_id, False)  # suggested, not confirmed
+    finally:
+        with _db(tenant_url) as s:
+            s.execute(text("DELETE FROM system_metadata WHERE key = 'producer.faces'"))
+            s.commit()
+
+
+@pytest.mark.slow
+def test_faces_of_another_model_are_never_matched_to_this_ones_people(env) -> None:
+    """Before the account switches, a face from another model isn't
+    compared with people's centroids (another space)."""
+    client, headers, library_id, tenant_url = env
+    person_id = _seed_person(tenant_url, emb=11)
+    other = _seed_asset(tenant_url, library_id)
+    result = _redetect_with(client, headers, other, [(_box(0.40, 0.40), _near(11))], "antelopev2")
+    assert _match(tenant_url, result["face_ids"][0]) is None
+    assert person_id

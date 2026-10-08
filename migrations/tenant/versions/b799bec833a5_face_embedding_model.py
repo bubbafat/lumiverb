@@ -26,7 +26,10 @@ depends_on = None
 
 def upgrade() -> None:
     op.add_column("faces", sa.Column("embedding_model", sa.Text(), nullable=False, server_default="buffalo_l"))
+    # A person's centroid averages one model's embeddings: which one.
+    op.add_column("people", sa.Column("centroid_model", sa.Text(), nullable=False, server_default="buffalo_l"))
 
 
 def downgrade() -> None:
+    op.drop_column("people", "centroid_model")
     op.drop_column("faces", "embedding_model")

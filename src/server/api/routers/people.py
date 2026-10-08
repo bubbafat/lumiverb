@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_tenant_session
+from src.server.repository.tenant import current_face_model
 
 logger = logging.getLogger(__name__)
 
@@ -282,7 +283,7 @@ def nearest_people_for_person(
 
     repo = PersonRepository(session)
     person = repo.get_by_id(person_id)
-    if person is None or person.centroid_vector is None:
+    if person is None or person.centroid_vector is None or person.centroid_model != current_face_model(session):
         return []
 
     centroid = np.array(person.centroid_vector, dtype=np.float32)
@@ -297,10 +298,11 @@ def nearest_people_for_person(
             FROM people p
             LEFT JOIN face_person_matches m ON m.person_id = p.person_id
             WHERE p.dismissed = false AND p.centroid_vector IS NOT NULL
+                  AND p.centroid_model = :model
                   AND p.person_id != :exclude_id
             GROUP BY p.person_id
         """),
-        {"exclude_id": person_id},
+        {"exclude_id": person_id, "model": current_face_model(session)},
     ).all()
 
     if not people_rows:
@@ -768,8 +770,9 @@ def nearest_people_for_cluster(
     # Sample up to 100 faces for centroid computation
     sample_ids = face_ids[:100]
     rows = session.execute(
-        sa_text("SELECT embedding_vector::text FROM faces WHERE face_id = ANY(:fids) AND embedding_vector IS NOT NULL"),
-        {"fids": sample_ids},
+        sa_text("SELECT embedding_vector::text FROM faces WHERE face_id = ANY(:fids) AND embedding_vector IS NOT NULL"
+                " AND embedding_model = :model"),
+        {"fids": sample_ids, "model": current_face_model(session)},
     ).all()
     if not rows:
         return []
@@ -791,8 +794,10 @@ def nearest_people_for_cluster(
             FROM people p
             LEFT JOIN face_person_matches m ON m.person_id = p.person_id
             WHERE p.dismissed = false AND p.centroid_vector IS NOT NULL
+                  AND p.centroid_model = :model
             GROUP BY p.person_id
         """),
+        {"model": current_face_model(session)},
     ).all()
 
     if not people_rows:
@@ -868,8 +873,10 @@ def nearest_people_for_face(
             LEFT JOIN assets a
                 ON a.asset_id = f.asset_id AND a.deleted_at IS NULL
             WHERE p.dismissed = false AND p.centroid_vector IS NOT NULL
+                  AND p.centroid_model = :model
             GROUP BY p.person_id
         """),
+        {"model": current_face_model(session)},
     ).all()
 
     if not people_rows:

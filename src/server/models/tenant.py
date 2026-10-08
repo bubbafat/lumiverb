@@ -490,6 +490,8 @@ class Person(SQLModel, table=True):
         default=None,
         sa_column=Column(Vector(512), nullable=True),
     )
+    # The face model whose embeddings the centroid averages.
+    centroid_model: str = Field(default="buffalo_l", nullable=False)
     confirmation_count: int = Field(default=0, nullable=False)
     dismissed: bool = Field(default=False, nullable=False)
     representative_face_id: str | None = Field(

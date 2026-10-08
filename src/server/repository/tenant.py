@@ -3402,6 +3402,14 @@ def _bbox_iou(a: dict | None, b: dict | None) -> float:
     return inter / union if union > 0 else 0.0
 
 
+def current_face_model(session: Session) -> str:
+    """The model that embeds faces now (the faces producer's setting):
+    centroids, auto-assignment and clustering use only its embeddings."""
+    from src.server.repository import lineage
+
+    return str(lineage.desired(session, "faces")["settings"].get("model") or "buffalo_l")
+
+
 class FaceRepository:
     """CRUD for detected faces. Operates within a tenant session."""
 
@@ -3414,8 +3422,10 @@ class FaceRepository:
         vector: list[float],
         limit: int,
         exclude_asset_id: str | None = None,
+        embedding_model: str = "buffalo_l",
     ) -> list[tuple[str, float]]:
-        """Find assets whose faces are nearest to the given face embedding.
+        """Find assets whose faces are nearest to the given face embedding
+        (made by embedding_model: other models' faces can't be compared).
 
         Used by hybrid similarity search to retrieve identity matches.
         Multiple faces on the same asset are aggregated by best (lowest)
@@ -3429,11 +3439,13 @@ class FaceRepository:
             "a.library_id = :library_id",
             "a.availability = 'online'",
             "f.embedding_vector IS NOT NULL",
+            "f.embedding_model = :embedding_model",
         ]
         params: dict = {
             "vec": str(vector),
             "library_id": library_id,
             "limit": limit,
+            "embedding_model": embedding_model,
         }
         if exclude_asset_id is not None:
             conditions.append("f.asset_id != :exclude_id")
@@ -3604,6 +3616,16 @@ class FaceRepository:
             {"count": len(faces) + len(kept_ids), "aid": asset_id},
         )
 
+        # Confirmed faces found again carry the new embedding: their people's
+        # centroids follow (after a face-model switch, this is how a name
+        # teaches the new model what that person looks like).
+        if reused_ids:
+            for (pid,) in self._session.execute(
+                text("SELECT DISTINCT person_id FROM face_person_matches WHERE face_id = ANY(:fids) AND confirmed"),
+                {"fids": list(reused_ids)},
+            ).all():
+                PersonRepository(self._session)._recompute_centroid(pid)
+
         # Auto-assign the faces that don't carry a confirmed assignment.
         assigned = {
             row[0]
@@ -3613,9 +3635,10 @@ class FaceRepository:
             ).fetchall()
         }
         unassigned = [(fid, f) for fid, f in zip(face_ids, faces) if fid not in assigned]
-        self._auto_assign_by_centroid(
-            [fid for fid, _ in unassigned], [f for _, f in unassigned]
-        )
+        if embedding_model == current_face_model(self._session):
+            self._auto_assign_by_centroid(
+                [fid for fid, _ in unassigned], [f for _, f in unassigned]
+            )
 
         # A re-found face that lost its machine match and wasn't re-assigned
         # to the same person can't stay that person's representative.
@@ -3781,9 +3804,11 @@ class FaceRepository:
         if not faces_with_emb:
             return
 
-        # Get all people with centroids
+        # Get all people with centroids (of the current face model)
         rows = self._session.execute(
-            text("SELECT person_id, centroid_vector::text FROM people WHERE centroid_vector IS NOT NULL")
+            text("SELECT person_id, centroid_vector::text FROM people"
+                 " WHERE centroid_vector IS NOT NULL AND centroid_model = :model"),
+            {"model": current_face_model(self._session)},
         ).all()
         if not rows:
             return
@@ -3844,9 +3869,13 @@ class FaceRepository:
         """
         import numpy as np
 
-        # Get all people with centroids
+        # Get all people with centroids, and below their unassigned faces: of
+        # the current face model only (another model's can't be compared).
+        model = current_face_model(self._session)
         people_rows = self._session.execute(
-            text("SELECT person_id, centroid_vector::text FROM people WHERE centroid_vector IS NOT NULL")
+            text("SELECT person_id, centroid_vector::text FROM people"
+                 " WHERE centroid_vector IS NOT NULL AND centroid_model = :model"),
+            {"model": model},
         ).all()
         if not people_rows:
             return {"assigned": 0, "scanned": 0}
@@ -3873,11 +3902,12 @@ class FaceRepository:
                 JOIN assets a ON a.asset_id = f.asset_id
                 WHERE m.match_id IS NULL
                   AND f.embedding_vector IS NOT NULL
+                  AND f.embedding_model = :model
                   AND a.deleted_at IS NULL
                 ORDER BY f.detection_confidence DESC NULLS LAST
                 LIMIT :limit
             """),
-            {"limit": batch_size},
+            {"limit": batch_size, "model": model},
         ).all()
 
         if not rows:
@@ -3992,11 +4022,13 @@ class FaceRepository:
             JOIN assets a ON a.asset_id = f.asset_id
             WHERE m.match_id IS NULL
               AND f.embedding_vector IS NOT NULL
+              AND f.embedding_model = :model
               AND a.deleted_at IS NULL
             ORDER BY f.detection_confidence DESC NULLS LAST
             LIMIT :max_faces
         """
-        rows = self._session.execute(text(sql).bindparams(max_faces=max_faces)).all()
+        rows = self._session.execute(text(sql).bindparams(
+            max_faces=max_faces, model=current_face_model(self._session))).all()
         truncated = len(rows) == max_faces
 
         if len(rows) < min_cluster_size:
@@ -4522,9 +4554,13 @@ class PersonRepository:
         — that drift would feed back into ``propagate_assignments`` and
         snowball more trashed-asset matches into the same person.
         """
+        # Only the current face model's embeddings: another model's live in
+        # another space. With none yet (mid-switch), no centroid: nothing is
+        # auto-assigned to them until a face of theirs is found again.
+        model = current_face_model(self._session)
         self._session.execute(
             text("""
-                UPDATE people SET centroid_vector = sub.avg_vec
+                UPDATE people SET centroid_vector = sub.avg_vec, centroid_model = :model
                 FROM (
                     SELECT AVG(f.embedding_vector) AS avg_vec
                     FROM faces f
@@ -4532,11 +4568,12 @@ class PersonRepository:
                     JOIN assets a ON a.asset_id = f.asset_id
                     WHERE m.person_id = :pid
                       AND f.embedding_vector IS NOT NULL
+                      AND f.embedding_model = :model
                       AND a.deleted_at IS NULL
                 ) sub
                 WHERE person_id = :pid
             """),
-            {"pid": person_id},
+            {"pid": person_id, "model": model},
         )
         # Update confirmation_count
         count = self._session.execute(
