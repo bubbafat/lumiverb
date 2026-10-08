@@ -5,6 +5,8 @@ export interface LibraryListItem {
   last_scan_at: string | null;
   status: string;
   is_public: boolean;
+  /** In the trash since (status "trashed"); older servers leave it out. */
+  trashed_at?: string | null;
 }
 
 export interface DirectoryNode {
@@ -248,8 +250,10 @@ export interface ProjectItem {
   trashed_asset_count?: number;
   /** Clips whose files went missing: back when the files are. */
   missing_asset_count?: number;
-  /** Clips whose library is in the trash: libraries have no restore. */
+  /** Clips whose library is in the trash: back if the library is restored. */
   library_trashed_asset_count?: number;
+  /** Clips a person archived: hidden and not exported until unarchived. */
+  archived_asset_count?: number;
 }
 
 export interface ProjectListResponse {

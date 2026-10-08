@@ -19,7 +19,139 @@ export default function FilesSection() {
     return <div className="h-32 rounded-lg border border-gray-700/50 bg-gray-900/50 animate-pulse" />;
   }
   // Built once the settings are here, so the choice starts from them.
-  return <FilesForm settings={settings} isAdmin={user?.role === "admin"} />;
+  return (
+    <div className="space-y-6">
+      <FilesForm settings={settings} isAdmin={user?.role === "admin"} />
+      <TrashForm settings={settings} isAdmin={user?.role === "admin"} />
+    </div>
+  );
+}
+
+const MAX_TRASH_DAYS = 3650;
+
+/** How long the trash keeps clips, libraries and projects before deleting them for good. */
+function TrashForm({ settings, isAdmin }: { settings: TenantSettings; isAdmin: boolean }) {
+  const queryClient = useQueryClient();
+  const savedDays = settings.trash_days === undefined ? 30 : settings.trash_days; // older servers: 30
+  const [auto, setAuto] = useState(savedDays !== null);
+  const [days, setDays] = useState(String(savedDays ?? 30));
+  const [saved, setSaved] = useState(false);
+
+  const save = useMutation({
+    mutationFn: (value: number | null) => updateTenantSettings({ trash_days: value }),
+    onSuccess: (next) => {
+      queryClient.setQueryData(["tenant-settings"], next);
+      setSaved(true);
+    },
+  });
+
+  const parsed = /^[0-9]+$/.test(days.trim()) ? Number(days.trim()) : NaN;
+  const valid = !auto || (parsed >= 1 && parsed <= MAX_TRASH_DAYS);
+  const value = auto ? parsed : null;
+  const canSave = isAdmin && valid && value !== savedDays && !save.isPending;
+  const describe = (d: number | null) =>
+    d === null ? "Kept until someone deletes it for good." : `Deleted for good after ${d} ${d === 1 ? "day" : "days"}.`;
+
+  return (
+    <div className="rounded-lg border border-gray-700/50 bg-gray-900/50 p-6 space-y-5">
+      <div>
+        <h2 className="text-lg font-semibold text-gray-100">Trash</h2>
+        <p className="mt-1 text-sm text-gray-400">
+          What happens to clips, libraries and projects in the trash. Archived clips are never deleted.
+        </p>
+      </div>
+      {isAdmin ? (
+        <form
+          aria-label="Trash"
+          className="space-y-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (canSave) save.mutate(value);
+          }}
+        >
+          <fieldset className="space-y-3">
+            <legend className="sr-only">Emptying the trash</legend>
+            <label className="flex items-start gap-3 text-sm text-gray-200">
+              <input
+                type="radio"
+                name="trash-days"
+                className="mt-1"
+                checked={auto}
+                onChange={() => {
+                  setAuto(true);
+                  setSaved(false);
+                }}
+                aria-labelledby="trash-auto-title"
+              />
+              <span>
+                <span id="trash-auto-title" className="font-medium">Delete for good after</span>{" "}
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  aria-label="Days in the trash"
+                  value={days}
+                  disabled={!auto}
+                  onChange={(e) => {
+                    setDays(e.target.value);
+                    setSaved(false);
+                  }}
+                  className="mx-1 w-16 rounded border border-gray-700 bg-gray-800 px-2 py-0.5 text-gray-100 disabled:opacity-50"
+                />{" "}
+                days <span className="text-gray-500">(30 by default)</span>
+                <span className="mt-0.5 block text-gray-400">
+                  Anything in the trash longer is deleted for good, with its previews and analysis. Until then it
+                  can be restored.
+                </span>
+              </span>
+            </label>
+            <label className="flex items-start gap-3 text-sm text-gray-200">
+              <input
+                type="radio"
+                name="trash-days"
+                className="mt-1"
+                checked={!auto}
+                onChange={() => {
+                  setAuto(false);
+                  setSaved(false);
+                }}
+                aria-labelledby="trash-manual-title"
+                aria-describedby="trash-manual"
+              />
+              <span>
+                <span id="trash-manual-title" className="font-medium">Only when emptied by hand</span>
+                <span id="trash-manual" className="mt-0.5 block text-gray-400">
+                  The trash keeps everything until someone deletes it for good.
+                </span>
+              </span>
+            </label>
+          </fieldset>
+          {auto && !valid && (
+            <p role="alert" className="text-sm text-red-300">
+              Give a whole number of days from 1 to {MAX_TRASH_DAYS.toLocaleString()}.
+            </p>
+          )}
+          <div className="flex items-center gap-3">
+            <button
+              type="submit"
+              disabled={!canSave}
+              className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Save
+            </button>
+            <span role="status" className="text-sm">
+              {saved && !save.isPending && <span className="text-emerald-300">Saved</span>}
+              {save.isError && <span className="text-red-300">Couldn&apos;t save. Try again.</span>}
+            </span>
+          </div>
+        </form>
+      ) : (
+        <div className="space-y-1">
+          <p className="text-sm text-gray-200">{describe(savedDays)}</p>
+          <p className="text-sm text-gray-500">Only admins can change this.</p>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function FilesForm({ settings, isAdmin }: { settings: TenantSettings; isAdmin: boolean }) {
@@ -51,6 +183,7 @@ function FilesForm({ settings, isAdmin }: { settings: TenantSettings; isAdmin: b
 
       {isAdmin ? (
         <form
+          aria-label="Moves and renames"
           className="space-y-4"
           onSubmit={(e) => {
             e.preventDefault();

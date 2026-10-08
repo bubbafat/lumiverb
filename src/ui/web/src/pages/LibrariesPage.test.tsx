@@ -5,7 +5,14 @@ import { MemoryRouter } from "react-router-dom";
 import { ApiError } from "../api/client";
 import LibrariesPage from "./LibrariesPage";
 
-const api = vi.hoisted(() => ({ listLibraries: vi.fn(), emptyTrash: vi.fn(), deleteLibrary: vi.fn() }));
+const api = vi.hoisted(() => ({
+  listLibraries: vi.fn(),
+  emptyTrash: vi.fn(),
+  deleteLibrary: vi.fn(),
+  restoreLibrary: vi.fn(),
+  getTenantSettings: vi.fn(),
+  listLibraryHealth: vi.fn(),
+}));
 vi.mock("../api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/client")>()),
   ...api,
@@ -22,8 +29,12 @@ const usage = {
 
 beforeEach(() => {
   api.listLibraries.mockResolvedValue([
-    { library_id: "lib_1", name: "Old card", root_path: "/old", status: "trashed", is_public: false, last_scan_at: null },
+    { library_id: "lib_1", name: "Old card", root_path: "/old", status: "trashed", is_public: false, last_scan_at: null,
+      trashed_at: "2026-10-01T12:00:00Z" },
   ]);
+  api.getTenantSettings.mockResolvedValue({ video_preview_max_seconds: null, public_video_preview_max_seconds: 10,
+                                           trash_days: 30 });
+  api.listLibraryHealth.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -53,7 +64,7 @@ describe("LibrariesPage empty trash", () => {
     renderPage();
     const dialog = await openEmptyTrash();
     fireEvent.click(within(dialog).getByRole("button", { name: "Empty trash" }));
-    await waitFor(() => expect(api.emptyTrash).toHaveBeenCalledWith(false));
+    await waitFor(() => expect(api.emptyTrash).toHaveBeenCalledWith(false, undefined));
   });
 
   it("names the projects that would lose clips and asks again", async () => {
@@ -70,7 +81,7 @@ describe("LibrariesPage empty trash", () => {
     expect(within(dialog).getByText(/Old reel/)).toBeTruthy();
     expect(within(dialog).getByText(/1 more you can't see/)).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete and remove from projects" }));
-    await waitFor(() => expect(api.emptyTrash).toHaveBeenLastCalledWith(true));
+    await waitFor(() => expect(api.emptyTrash).toHaveBeenLastCalledWith(true, undefined));
   });
 
   it("says why when emptying the trash fails", async () => {
@@ -95,7 +106,33 @@ describe("LibrariesPage empty trash", () => {
   });
 });
 
-describe("LibrariesPage delete with archived clips", () => {
+describe("LibrariesPage a library in the trash", () => {
+  it("says when it's deleted for good, and restores it", async () => {
+    api.restoreLibrary.mockResolvedValue({});
+    renderPage();
+    expect(await screen.findByText(/Deleted for good on Oct 31 unless restored\./)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    await waitFor(() => expect(api.restoreLibrary).toHaveBeenCalledWith("lib_1"));
+  });
+
+  it("says it stays when the trash is emptied by hand only", async () => {
+    api.getTenantSettings.mockResolvedValue({ trash_days: null });
+    renderPage();
+    expect(await screen.findByText(/In the trash until you delete it for good\./)).toBeTruthy();
+  });
+
+  it("deletes just that one for good", async () => {
+    api.emptyTrash.mockResolvedValue({ deleted: 1 });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Delete for good" }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete Old card for good" });
+    expect(dialog.textContent).toMatch(/permanently delete Old card and all its assets/);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete for good" }));
+    await waitFor(() => expect(api.emptyTrash).toHaveBeenCalledWith(false, ["lib_1"]));
+  });
+});
+
+describe("LibrariesPage delete asks about projects", () => {
   beforeEach(() => {
     api.listLibraries.mockResolvedValue([
       { library_id: "lib_2", name: "Media", root_path: "/media", status: "active", is_public: false, last_scan_at: null },
@@ -105,56 +142,41 @@ describe("LibrariesPage delete with archived clips", () => {
   async function startDelete() {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    expect(screen.getByText(/moves to the trash with everything in it and is deleted for good after 30 days/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
   }
 
-  const archived = () => new ApiError(409, "archived", "archived_clips", { archived_clips: 3 });
-
-  it("asks what happens to archived clips, and deletes them for good when told to", async () => {
-    api.deleteLibrary.mockImplementation(async (_id: string, opts?: { archived?: string }) => {
-      if (!opts?.archived) throw archived();
-    });
+  it("a library no project uses goes to the trash straight away", async () => {
+    api.deleteLibrary.mockResolvedValue(undefined);
     await startDelete();
-    await screen.findByText(/3 clips in Media are archived/);
-    fireEvent.click(screen.getByRole("button", { name: "Delete them for good" }));
-    await waitFor(() => expect(api.deleteLibrary).toHaveBeenLastCalledWith("lib_2", { archived: "delete" }));
+    await waitFor(() => expect(api.deleteLibrary).toHaveBeenCalledWith("lib_2", false));
+    expect(screen.queryByText(/in projects/)).toBeNull();
   });
 
-  it("keeps them with the library when told to", async () => {
-    api.deleteLibrary.mockImplementation(async (_id: string, opts?: { archived?: string }) => {
-      if (!opts?.archived) throw archived();
+  it("names the projects that use its clips, then moves it to the trash when told to", async () => {
+    api.deleteLibrary.mockImplementation(async (_id: string, removeFromProjects: boolean) => {
+      if (!removeFromProjects) throw new ApiError(409, "in projects", "in_projects", usage as unknown as Record<string, unknown>);
     });
     await startDelete();
-    fireEvent.click(await screen.findByRole("button", { name: "Keep them" }));
-    await waitFor(() => expect(api.deleteLibrary).toHaveBeenLastCalledWith("lib_2", { archived: "keep" }));
+    const ask = await screen.findByRole("alertdialog", { name: "Delete Media" });
+    expect(ask.textContent).toMatch(/4 clips in Media are in projects/);
+    expect(within(ask).getByText(/Customer Video/)).toBeTruthy();
+    fireEvent.click(within(ask).getByRole("button", { name: "Move to trash anyway" }));
+    await waitFor(() => expect(api.deleteLibrary).toHaveBeenLastCalledWith("lib_2", true));
   });
 
-  it("asks again when deleting them would take them out of projects", async () => {
-    api.deleteLibrary.mockImplementation(async (_id: string, opts?: { archived?: string; removeFromProjects?: boolean }) => {
-      if (!opts?.archived) throw archived();
-      if (opts.archived === "delete" && !opts.removeFromProjects) {
-        throw new ApiError(409, "in projects", "in_projects", usage as unknown as Record<string, unknown>);
-      }
-    });
+  it("changes nothing when cancelled at the projects question", async () => {
+    api.deleteLibrary.mockRejectedValue(new ApiError(409, "in projects", "in_projects", usage as unknown as Record<string, unknown>));
     await startDelete();
-    fireEvent.click(await screen.findByRole("button", { name: "Delete them for good" }));
-    await screen.findByText(/in projects/i);
-    fireEvent.click(screen.getByRole("button", { name: "Delete anyway" }));
-    await waitFor(() =>
-      expect(api.deleteLibrary).toHaveBeenLastCalledWith("lib_2", { archived: "delete", removeFromProjects: true }),
-    );
+    const ask = await screen.findByRole("alertdialog", { name: "Delete Media" });
+    fireEvent.click(within(ask).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(api.deleteLibrary).toHaveBeenCalledTimes(1);
   });
 
   it("says why when a delete fails", async () => {
     api.deleteLibrary.mockRejectedValue(new ApiError(403, "Only an admin can delete libraries", "forbidden"));
     await startDelete();
     expect((await screen.findByRole("alert")).textContent).toContain("Only an admin can delete libraries");
-  });
-
-  it("a library without archived clips deletes straight away", async () => {
-    api.deleteLibrary.mockResolvedValue(undefined);
-    await startDelete();
-    await waitFor(() => expect(api.deleteLibrary).toHaveBeenCalledWith("lib_2", undefined));
-    expect(screen.queryByText(/archived/)).toBeNull();
   });
 });

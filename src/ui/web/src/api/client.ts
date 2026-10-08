@@ -231,19 +231,21 @@ export async function createLibrary(
 }
 
 /**
- * Move a library to the trash. If it holds archived clips (files that went
- * missing and haven't come back) the API answers 409 archived_clips until
- * `archived` says whether to delete them for good or keep them; deleting them
- * may answer 409 in_projects until `removeFromProjects` is set.
+ * Move a library to the trash with everything in it; it's deleted for good
+ * after the trash days. When its clips are in projects the API answers 409
+ * in_projects (with the projects) until `removeFromProjects` says the user
+ * agreed: hidden there now, and gone from them once deleted for good.
  */
-export async function deleteLibrary(
-  libraryId: string,
-  opts?: { archived?: "keep" | "delete"; removeFromProjects?: boolean },
-): Promise<void> {
+export async function deleteLibrary(libraryId: string, removeFromProjects = false): Promise<void> {
   return apiFetch<void>(`/libraries/${libraryId}`, {
     method: "DELETE",
-    body: opts ? { archived: opts.archived, remove_from_projects: opts.removeFromProjects ?? false } : undefined,
+    body: { remove_from_projects: removeFromProjects },
   });
+}
+
+/** Take a library out of the trash with the clips that went with it. It comes back private. */
+export async function restoreLibrary(libraryId: string): Promise<LibraryResponse> {
+  return apiFetch<LibraryResponse>(`/libraries/${libraryId}/restore`, { method: "POST" });
 }
 
 export async function getLibrary(libraryId: string): Promise<LibraryResponse> {
@@ -260,14 +262,114 @@ export async function updateLibraryVisibility(
   });
 }
 
-/** Delete trashed libraries for good. If their clips are in projects, the
- * server refuses (409 in_projects, with the projects) unless
- * removeFromProjects says the user agreed. */
-export async function emptyTrash(removeFromProjects = false): Promise<EmptyTrashResponse> {
+/** Delete trashed libraries for good: these ones, or all of them. If their
+ * clips are in projects, the server refuses (409 in_projects, with the
+ * projects) unless removeFromProjects says the user agreed. */
+export async function emptyTrash(removeFromProjects = false, libraryIds?: string[]): Promise<EmptyTrashResponse> {
   return apiFetch<EmptyTrashResponse>("/libraries/empty-trash", {
     method: "POST",
-    body: { remove_from_projects: removeFromProjects },
+    body: { remove_from_projects: removeFromProjects, ...(libraryIds ? { library_ids: libraryIds } : {}) },
   });
+}
+
+// ---------------------------------------------------------------------------
+// Archive and trash for clips (Robert's model, Oct 8). Archive: out of sight,
+// kept forever. Trash: restorable until it's deleted for good after the
+// trash days. A clip whose file went missing is archived, and comes back by
+// itself when the file does.
+// ---------------------------------------------------------------------------
+
+/** Clips by id, or every clip under a folder of a library ("" = the whole library). */
+export type PickClips = { asset_ids: string[] } | { library_id: string; path: string };
+
+/** Archive clips in sight. Those not in sight (already archived, in the trash) come back as skipped. */
+export async function archiveClips(pick: PickClips): Promise<{ archived: string[]; skipped: string[] }> {
+  return apiFetch("/assets/archive", { method: "POST", body: pick });
+}
+
+/** Bring back clips a person archived. A missing file's clip is skipped: it returns with its file. */
+export async function unarchiveClips(pick: PickClips): Promise<{ unarchived: string[]; skipped: string[] }> {
+  return apiFetch("/assets/unarchive", { method: "POST", body: pick });
+}
+
+/** Move clips (in sight or archived) to the trash. When projects use them the
+ * API answers 409 in_projects until removeFromProjects says the user agreed. */
+export async function trashClips(
+  assetIds: string[],
+  removeFromProjects = false,
+): Promise<{ trashed: string[]; not_found: string[] }> {
+  return apiFetch("/assets", {
+    method: "DELETE",
+    body: { asset_ids: assetIds, reason: "user", remove_from_projects: removeFromProjects },
+  });
+}
+
+/** Take clips out of the trash; anything else asked for is skipped. */
+export async function restoreClips(assetIds: string[]): Promise<{ restored: string[]; skipped: string[] }> {
+  return apiFetch("/assets/restore", { method: "POST", body: { asset_ids: assetIds } });
+}
+
+/** Delete clips in the trash for good now: these, or all of them (admins).
+ * 409 in_projects until removeFromProjects. Never reaches archived clips. */
+export async function emptyClipTrash(assetIds?: string[], removeFromProjects = false): Promise<{ deleted: number }> {
+  return apiFetch("/trash/empty", {
+    method: "DELETE",
+    body: { ...(assetIds ? { asset_ids: assetIds } : {}), remove_from_projects: removeFromProjects },
+  });
+}
+
+export interface HiddenClip {
+  asset_id: string;
+  library_id: string;
+  library_name: string;
+  rel_path: string;
+  media_type: string;
+}
+
+export interface TrashedClip extends HiddenClip {
+  trashed_at: string;
+  /** When it's deleted for good; null when the trash is emptied by hand only. */
+  expires_at: string | null;
+}
+
+export interface ArchivedClip extends HiddenClip {
+  archived_at: string;
+  /** Archived because the file went missing: it comes back with the file, not with Unarchive. */
+  file_missing: boolean;
+}
+
+export interface HiddenPage<T> {
+  items: T[];
+  next_cursor: string | null;
+  total: number;
+}
+
+export interface HiddenFilter {
+  libraryId?: string;
+  path?: string;
+  after?: string;
+  limit?: number;
+}
+
+function hiddenQuery(f: HiddenFilter, extra: Record<string, string> = {}): string {
+  const qs = new URLSearchParams(extra);
+  if (f.libraryId) qs.set("library_id", f.libraryId);
+  if (f.path) qs.set("path", f.path);
+  if (f.after) qs.set("after", f.after);
+  if (f.limit) qs.set("limit", String(f.limit));
+  return qs.toString();
+}
+
+/** Clips in the trash, most recently trashed first. */
+export async function listTrash(f: HiddenFilter = {}): Promise<HiddenPage<TrashedClip> & { trash_days: number | null }> {
+  return apiFetch(`/trash?${hiddenQuery(f)}`);
+}
+
+/** Archived clips, most recently archived first. */
+export async function listArchive(
+  f: HiddenFilter & { kind?: "all" | "by_hand" | "missing" } = {},
+): Promise<HiddenPage<ArchivedClip>> {
+  return apiFetch(`/archive?${hiddenQuery(f, { kind: f.kind ?? "all" })}`);
 }
 
 /** What deleting clips for good would take them out of (a 409 in_projects's details). */
@@ -632,6 +734,8 @@ export interface TenantSettings {
   public_video_preview_max_seconds: number | null;
   /** The same content is the same asset (moves, renames, copy then delete). On unless turned off; older servers leave it out. */
   follow_moves?: boolean;
+  /** Days things stay in the trash before they're deleted for good; null when that's off. 30 unless changed. */
+  trash_days?: number | null;
 }
 
 export async function getTenantSettings(): Promise<TenantSettings> {
@@ -1118,6 +1222,7 @@ export interface ProjectExportFile {
   skippedMissing: number;
   /** Clips whose library is in the trash, left out. */
   skippedLibraryTrashed: number;
+  skippedArchived: number;
 }
 
 function filenameFromDisposition(header: string | null): string | null {
@@ -1166,6 +1271,7 @@ export async function exportProject(
     skippedTrashed: Number(res.headers.get("X-Lumiverb-Skipped-Trashed") ?? 0) || 0,
     skippedMissing: Number(res.headers.get("X-Lumiverb-Skipped-Missing") ?? 0) || 0,
     skippedLibraryTrashed: Number(res.headers.get("X-Lumiverb-Skipped-Library-Trashed") ?? 0) || 0,
+    skippedArchived: Number(res.headers.get("X-Lumiverb-Skipped-Archived") ?? 0) || 0,
   };
 }
 

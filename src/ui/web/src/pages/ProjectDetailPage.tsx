@@ -262,6 +262,7 @@ export default function ProjectDetailPage() {
   const trashedClips = project?.trashed_asset_count ?? 0;
   const missingClips = project?.missing_asset_count ?? 0;
   const libraryTrashedClips = project?.library_trashed_asset_count ?? 0;
+  const archivedClips = project?.archived_asset_count ?? 0;
   // A project from before ownership belongs to everyone.
   const isOwner = project?.ownership !== "shared" || project?.owner_user_id == null;
 
@@ -341,7 +342,7 @@ export default function ProjectDetailPage() {
       )}
 
       {/* Clips still in the project but not shown: trashed, or files missing */}
-      {(trashedClips > 0 || missingClips > 0 || libraryTrashedClips > 0) && (
+      {(trashedClips > 0 || missingClips > 0 || libraryTrashedClips > 0 || archivedClips > 0) && (
         <div
           role="status"
           className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-amber-900/40 bg-amber-950/30 px-4 py-2 text-sm text-amber-200/90"
@@ -360,8 +361,17 @@ export default function ProjectDetailPage() {
           )}
           {libraryTrashedClips > 0 && (
             <span>
-              {libraryTrashedClips === 1 ? "1 clip is" : `${libraryTrashedClips} clips are`} in a deleted
-              library and can&apos;t come back from here.
+              {libraryTrashedClips === 1 ? "1 clip is" : `${libraryTrashedClips} clips are`} in a library in the
+              trash, and {libraryTrashedClips === 1 ? "comes" : "come"} back if the library is restored.
+            </span>
+          )}
+          {archivedClips > 0 && (
+            <span>
+              {archivedClips === 1 ? "1 clip is" : `${archivedClips} clips are`} archived, so
+              {archivedClips === 1 ? " it isn't" : " they aren't"} shown or exported.{" "}
+              <Link to="/archive?kind=by_hand" className="underline hover:text-amber-100">
+                Go to Archive
+              </Link>
             </span>
           )}
           {trashedClips > 0 && (

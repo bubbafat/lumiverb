@@ -24,6 +24,10 @@ interface LightboxProps {
   onFilterClick?: (params: Record<string, string>) => void;
   onPathClick?: (path: string) => void;
   onAddToProject?: (assetId: string) => void;
+  /** Archive this clip (out of sight, kept forever). Left out for people who can't. */
+  onArchive?: (assetId: string) => void;
+  /** Move this clip to the trash. Left out for people who can't. */
+  onTrash?: (assetId: string) => void;
   rating?: AssetRating;
   onRatingChange?: (assetId: string, update: { favorite?: boolean; stars?: number; color?: RatingColor | null }) => void;
   libraryId?: string;
@@ -246,6 +250,8 @@ export function Lightbox({
   onFilterClick,
   onPathClick,
   onAddToProject: onAddToProjectProp,
+  onArchive: onArchiveProp,
+  onTrash: onTrashProp,
   rating,
   onRatingChange: onRatingChangeProp,
   libraryId,
@@ -257,6 +263,8 @@ export function Lightbox({
   // A visitor can't rate, collect or edit: those are a signed-in person's.
   const onRatingChange = isPublic ? undefined : onRatingChangeProp;
   const onAddToProject = isPublic ? undefined : onAddToProjectProp;
+  const onArchive = isPublic ? undefined : onArchiveProp;
+  const onTrash = isPublic ? undefined : onTrashProp;
   const navigate = useNavigate();
   const [showSimilar, setShowSimilar] = useState(false);
   const [showFaces, setShowFaces] = useLocalStorage("lv_show_faces", false);
@@ -1639,6 +1647,33 @@ export function Lightbox({
                   >
                     Add to project
                   </button>
+                </>
+              )}
+
+              {(onArchive || onTrash) && (
+                <>
+                  <hr className="border-gray-700" />
+                  <div className="flex gap-2">
+                    {onArchive && (
+                      <button
+                        type="button"
+                        onClick={() => onArchive(asset.asset_id)}
+                        title="Out of sight, kept forever with everything it has"
+                        className="flex-1 rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-700 hover:text-gray-100"
+                      >
+                        Archive
+                      </button>
+                    )}
+                    {onTrash && (
+                      <button
+                        type="button"
+                        onClick={() => onTrash(asset.asset_id)}
+                        className="flex-1 rounded-lg border border-red-900/60 bg-red-950/20 px-3 py-2 text-sm text-red-300 transition-colors hover:bg-red-900/40 hover:text-red-200"
+                      >
+                        Move to trash
+                      </button>
+                    )}
+                  </div>
                 </>
               )}
 

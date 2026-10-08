@@ -31,6 +31,8 @@ import type { LeafFilter } from "../lib/queryFilter";
 import { useScrollContainer } from "../context/ScrollContainerContext";
 import { groupAssetsByDate } from "../lib/groupByDate";
 import { useSelection } from "../lib/useSelection";
+import { useCanEdit } from "../lib/useCanEdit";
+import { useClipActions } from "../lib/useClipActions";
 import { buildVirtualRows, buildFixedGridRows } from "../lib/virtualRows";
 import { useLocalStorage } from "../lib/useLocalStorage";
 // parseSearchQuery available for future prefix query support
@@ -404,6 +406,8 @@ export default function BrowsePage() {
     [orderedAssets],
   );
   const selection = useSelection(orderedAssetIds);
+  const canEdit = useCanEdit(isAuthenticated);
+  const clipActions = useClipActions(selection.clear);
 
   // Auto-select new arrivals for dates the user has already selected.
   const prevAssetCountRef = useRef(0);
@@ -703,6 +707,14 @@ export default function BrowsePage() {
                 `/libraries/${libraryId}/settings?tab=filters&exclude=${encodeURIComponent(path + "/**")}`,
               );
             }}
+            onArchiveFolder={
+              canEdit
+                ? (path, count) => {
+                    setDrawerOpen(false);
+                    clipActions.archiveFolder(libraryId, path, count);
+                  }
+                : undefined
+            }
           />
         </div>
       </DrawerOverlay>
@@ -957,6 +969,14 @@ export default function BrowsePage() {
           }}
           onDateClick={handleLightboxDateClick}
           onAddToProject={(assetId) => setPickerAssetIds([assetId])}
+          onArchive={canEdit ? (assetId) => {
+            setLightboxAsset(null);
+            void clipActions.archive([assetId]);
+          } : undefined}
+          onTrash={canEdit ? (assetId) => {
+            setLightboxAsset(null);
+            clipActions.trash([assetId]);
+          } : undefined}
           rating={lightboxAsset ? ratingsMap[lightboxAsset.asset_id] : undefined}
           onRatingChange={handleRatingChange}
           libraryId={libraryId}
@@ -1018,6 +1038,27 @@ export default function BrowsePage() {
         >
           Add to project
         </button>
+        {canEdit && (
+          <>
+            <button
+              type="button"
+              disabled={clipActions.busy}
+              onClick={() => void clipActions.archive(selection.toArray())}
+              title="Out of sight, kept forever with everything they have"
+              className="rounded-lg border border-gray-600 px-3 py-1.5 text-sm font-medium text-gray-200 transition-colors hover:bg-gray-800 disabled:opacity-50"
+            >
+              Archive
+            </button>
+            <button
+              type="button"
+              disabled={clipActions.busy}
+              onClick={() => clipActions.trash(selection.toArray())}
+              className="rounded-lg border border-red-900/60 px-3 py-1.5 text-sm font-medium text-red-300 transition-colors hover:bg-red-950/50 disabled:opacity-50"
+            >
+              Move to trash
+            </button>
+          </>
+        )}
       </SelectionToolbar>
 
       {/* Project picker */}
@@ -1028,6 +1069,7 @@ export default function BrowsePage() {
           onDone={selection.clear}
         />
       )}
+      {clipActions.ui}
     </div>
   );
 }

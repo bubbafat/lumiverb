@@ -13,6 +13,8 @@ import {
 import type { QueryItem } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
 import { ProjectPicker } from "../components/ProjectPicker";
+import { useCanEdit } from "../lib/useCanEdit";
+import { useClipActions } from "../lib/useClipActions";
 import { Lightbox } from "../components/Lightbox";
 import { FilterBar } from "../components/FilterBar";
 import { SelectionToolbar } from "../components/SelectionToolbar";
@@ -283,6 +285,8 @@ export default function UnifiedBrowsePage() {
     [orderedAssets],
   );
   const selection = useSelection(orderedAssetIds);
+  const canEdit = useCanEdit();
+  const clipActions = useClipActions(selection.clear);
   const [pickerAssetIds, setPickerAssetIds] = useState<string[] | null>(null);
   const [showSmartColModal, setShowSmartColModal] = useState(false);
 
@@ -727,6 +731,14 @@ export default function UnifiedBrowsePage() {
           onNavigate={handleLightboxNavigate}
           onDateClick={handleLightboxDateClick}
           onAddToProject={(assetId) => setPickerAssetIds([assetId])}
+          onArchive={canEdit ? (assetId) => {
+            setLightboxAsset(null);
+            void clipActions.archive([assetId]);
+          } : undefined}
+          onTrash={canEdit ? (assetId) => {
+            setLightboxAsset(null);
+            clipActions.trash([assetId]);
+          } : undefined}
           rating={lightboxAsset ? ratingsMap[lightboxAsset.asset_id] : undefined}
           onRatingChange={handleRatingChange}
           onTagClick={(tag) => {
@@ -791,6 +803,27 @@ export default function UnifiedBrowsePage() {
         >
           Add to project
         </button>
+        {canEdit && (
+          <>
+            <button
+              type="button"
+              disabled={clipActions.busy}
+              onClick={() => void clipActions.archive(selection.toArray())}
+              title="Out of sight, kept forever with everything they have"
+              className="rounded-lg border border-gray-600 px-3 py-1.5 text-sm font-medium text-gray-200 transition-colors hover:bg-gray-800 disabled:opacity-50"
+            >
+              Archive
+            </button>
+            <button
+              type="button"
+              disabled={clipActions.busy}
+              onClick={() => clipActions.trash(selection.toArray())}
+              className="rounded-lg border border-red-900/60 px-3 py-1.5 text-sm font-medium text-red-300 transition-colors hover:bg-red-950/50 disabled:opacity-50"
+            >
+              Move to trash
+            </button>
+          </>
+        )}
       </SelectionToolbar>
 
       {/* Project picker */}
@@ -801,6 +834,7 @@ export default function UnifiedBrowsePage() {
           onDone={selection.clear}
         />
       )}
+      {clipActions.ui}
     </div>
   );
 }

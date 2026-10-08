@@ -33,3 +33,17 @@ export function mediaCount(n: number, media?: string | null, ofTotal?: number | 
   const of = ofTotal != null ? ` of ${ofTotal.toLocaleString()}` : "";
   return `${n.toLocaleString()}${of} ${noun}${n === 1 && ofTotal == null ? "" : "s"}`;
 }
+
+/** When something in the trash is deleted for good: `days` after it went in.
+ * Null when the trash is emptied by hand only (days null) or the time is unknown. */
+export function deletedForGoodOn(trashedAt: string | null | undefined, days: number | null | undefined): Date | null {
+  if (!trashedAt || days == null) return null;
+  const t = new Date(trashedAt).getTime();
+  return Number.isNaN(t) ? null : new Date(t + days * 86_400_000);
+}
+
+/** "Oct 31", or "Oct 31, 2027" outside this year. */
+export function shortDate(d: Date): string {
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(sameYear ? {} : { year: "numeric" }) });
+}

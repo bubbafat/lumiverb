@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { ScrollContainerContext } from "../context/ScrollContainerContext";
@@ -161,10 +161,21 @@ describe("ProjectDetailPage", () => {
     expect(screen.queryByRole("button", { name: /^Restore/ })).toBeNull();
   });
 
-  it("says when clips went with a deleted library", async () => {
+  it("says when clips went with a library in the trash, and that restoring it brings them back", async () => {
     withProject({ library_trashed_asset_count: 1 });
     renderPage();
-    expect((await screen.findByRole("status")).textContent).toMatch(/1 clip is in a deleted library/);
+    expect((await screen.findByRole("status")).textContent).toMatch(
+      /1 clip is in a library in the trash, and comes back if the library is restored/,
+    );
+  });
+
+  it("says when clips are archived, and where to find them", async () => {
+    withProject({ archived_asset_count: 3 });
+    renderPage();
+    const status = await screen.findByRole("status");
+    expect(status.textContent).toMatch(/3 clips are archived, so they aren't shown or exported/);
+    expect(within(status).getByRole("link", { name: "Go to Archive" }).getAttribute("href")).toBe("/archive?kind=by_hand");
+    expect(screen.queryByRole("button", { name: /^Restore/ })).toBeNull();
   });
 
   it("offers no move to trash on someone else's project", async () => {
