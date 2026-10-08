@@ -159,7 +159,7 @@ sudo bash /opt/lumiverb/scripts/update-api.sh
 sudo bash /opt/lumiverb/scripts/update-web.sh
 ```
 
-`update-api.sh` keeps the worker's packages and restarts it.
+`update-api.sh` keeps the worker's packages and restarts it. `update-web.sh` brings the nginx site up to date: playback streams go straight through, unbuffered, and their links (good for hours) stay out of the access logs, nginx's and the API's.
 
 The repo pins Python 3.12 (`.python-version`), the version the tests run on; this box's own Python is 3.14. The first update after the pin rebuilds `/opt/lumiverb/.venv` on 3.12, which uv downloads for the `lumiverb` user, so that update's dependency step takes a few minutes. Later updates reuse it.
 

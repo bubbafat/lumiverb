@@ -207,6 +207,23 @@ server {
     add_header X-Frame-Options DENY always;
     add_header Referrer-Policy no-referrer-when-downgrade always;
 
+    # Playback: a multi-GB proxy streams straight through instead of being
+    # spooled to disk, and the link (a bearer token good for hours) stays
+    # out of the access log. Range requests pass through as they are.
+    location /v1/stream/ {
+        proxy_pass ${API_UPSTREAM};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        access_log off;
+        proxy_connect_timeout 60s;
+        proxy_read_timeout 300s;
+    }
+
     location /v1/ {
         proxy_pass ${API_UPSTREAM};
         proxy_http_version 1.1;

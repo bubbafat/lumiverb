@@ -14,6 +14,10 @@ from starlette.requests import Request
 
 from src.server.api.errors import DecisionRequiredError, decision_required_handler
 from src.server.api.middleware import TenantResolutionMiddleware
+from src.shared.logging_config import hide_stream_links
+
+# uvicorn has set up its loggers by the time it imports the app.
+hide_stream_links()
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):

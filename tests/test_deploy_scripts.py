@@ -308,6 +308,97 @@ def test_web_on_its_own_machine_uses_defaults_and_flags(tmp_path):
     assert s["NO_FIREWALL"] == "true"
 
 
+def _deploy_web_site(tmp_path: Path, upstream: str = "http://127.0.0.1:8100") -> str:
+    """The nginx site deploy-web.sh writes for --domain _."""
+    text = DEPLOY_WEB.read_text()
+    start = text.index("cat > /etc/nginx/sites-available/lumiverb <<NGINX")
+    end = text.index("\nNGINX\n", start) + len("\nNGINX\n")
+    site = tmp_path / "fresh-site"
+    script = (f'API_UPSTREAM={upstream}; LISTEN="listen 80 default_server;"; DOMAIN=_; APP_DIR=/opt/lumiverb\n'
+              + text[start:end].replace("/etc/nginx/sites-available/lumiverb", str(site)))
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    return site.read_text()
+
+
+def _location(site: str, prefix: str) -> list[str]:
+    lines = site.splitlines()
+    start = lines.index(f"    location {prefix} {{")
+    return [line.strip() for line in lines[start + 1:lines.index("    }", start)]]
+
+
+def test_playback_streams_straight_through_and_stays_out_of_the_access_log(tmp_path):
+    # Buffered, a bytes=0- request for a multi-GB proxy spooled up to 1 GB to
+    # /var/lib/nginx on the root disk; logged, its bearer token (good for
+    # hours) sat in /var/log/nginx.
+    site = _deploy_web_site(tmp_path)
+    stream = _location(site, "/v1/stream/")
+    for directive in ("proxy_buffering off;", "proxy_request_buffering off;", "access_log off;"):
+        assert directive in stream
+    same = ("proxy_pass ", "proxy_http_version ", "proxy_set_header ", "proxy_connect_timeout ", "proxy_read_timeout ")
+    assert [d for d in _location(site, "/v1/") if d.startswith(same)] == [d for d in stream if d.startswith(same)]
+
+
+# What deploy-web.sh wrote before playback streams had their own location.
+OLD_SITE = """\
+server {
+    listen 80 default_server;
+    server_name _;
+
+    root /opt/lumiverb/src/ui/web/dist;
+    index index.html;
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy no-referrer-when-downgrade always;
+
+    location /v1/ {
+        proxy_pass http://127.0.0.1:8100;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        client_max_body_size 100m;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+"""
+
+UPDATE_WEB = REPO / "scripts" / "update-web.sh"
+
+
+def _update_web_site(site: Path) -> None:
+    """Run update-web.sh's nginx-site step against `site`."""
+    text = UPDATE_WEB.read_text()
+    block = text.split('step "Updating the nginx site"', 1)[1].split("# ----", 1)[0]
+    script = 'step() { :; }; ok() { :; }; warn() { :; }\n' + block.replace("/etc/nginx/sites-available/lumiverb", str(site))
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stdout + out.stderr
+
+
+def test_update_gives_an_existing_site_the_playback_location_once(tmp_path):
+    site = tmp_path / "lumiverb"
+    site.write_text(OLD_SITE)
+    _update_web_site(site)
+    _update_web_site(site)  # reruns change nothing
+    assert site.read_text() == _deploy_web_site(tmp_path)
+
+
+def test_update_leaves_a_site_without_the_api_location_alone(tmp_path):
+    site = tmp_path / "lumiverb"
+    site.write_text("server {\n    listen 80;\n}\n")
+    _update_web_site(site)
+    assert site.read_text() == "server {\n    listen 80;\n}\n"
+    _update_web_site(tmp_path / "missing")  # no site, nothing to do
+
+
 @pytest.mark.parametrize("name,next_step", [("update-api.sh", 'step "Updating Python dependencies"'),
                                             ("update-web.sh", 'step "Rebuilding web UI"')])
 def test_update_scripts_rerun_themselves_after_pulling(name, next_step):
