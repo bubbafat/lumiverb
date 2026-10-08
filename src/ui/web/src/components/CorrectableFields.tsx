@@ -13,6 +13,30 @@ function EditedBadge() {
   );
 }
 
+/** Runs a save; a failure becomes a message, and the form stays as it was. */
+function useSave() {
+  const [error, setError] = useState<string | null>(null);
+  const run = async (save: () => Promise<unknown> | void): Promise<boolean> => {
+    setError(null);
+    try {
+      await save();
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      return false;
+    }
+  };
+  return { error, run, clear: () => setError(null) };
+}
+
+function SaveError({ error }: { error: string | null }) {
+  return error ? (
+    <p role="alert" className="mt-1 text-xs text-red-400">
+      Couldn't save: {error}
+    </p>
+  ) : null;
+}
+
 interface TextProps {
   label: string;
   /** What's shown: the person's correction, else the machine's. */
@@ -32,6 +56,7 @@ interface TextProps {
 export function CorrectableText({ label, value, machine, corrected, canEdit, emptyText, saving, onSave, render }: TextProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  const { error, run, clear } = useSave();
 
   return (
     <div>
@@ -41,7 +66,13 @@ export function CorrectableText({ label, value, machine, corrected, canEdit, emp
         {canEdit && !editing && (
           <span className="ml-auto flex gap-3">
             {corrected && (
-              <button type="button" className={linkClass} disabled={saving} onClick={() => onSave(null)}>
+              <button
+                type="button"
+                className={linkClass}
+                disabled={saving}
+                aria-label={`Use the AI's ${label.toLowerCase()}`}
+                onClick={() => run(() => onSave(null))}
+              >
                 Use the AI's
               </button>
             )}
@@ -64,8 +95,7 @@ export function CorrectableText({ label, value, machine, corrected, canEdit, emp
           className="space-y-2"
           onSubmit={async (e) => {
             e.preventDefault();
-            await onSave(draft);
-            setEditing(false);
+            if (await run(() => onSave(draft))) setEditing(false);
           }}
         >
           <textarea
@@ -80,7 +110,14 @@ export function CorrectableText({ label, value, machine, corrected, canEdit, emp
             <button type="submit" disabled={saving} className={`${buttonClass} bg-indigo-600 text-white hover:bg-indigo-500`}>
               Save
             </button>
-            <button type="button" onClick={() => setEditing(false)} className={`${buttonClass} text-gray-300 hover:bg-gray-800`}>
+            <button
+              type="button"
+              onClick={() => {
+                clear();
+                setEditing(false);
+              }}
+              className={`${buttonClass} text-gray-300 hover:bg-gray-800`}
+            >
               Cancel
             </button>
           </div>
@@ -95,6 +132,7 @@ export function CorrectableText({ label, value, machine, corrected, canEdit, emp
           The AI's: <span className="italic">{machine}</span>
         </p>
       )}
+      <SaveError error={error} />
     </div>
   );
 }
@@ -115,10 +153,15 @@ export function CorrectableTags({ tags, machineTags, corrected, canEdit, saving,
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<string[]>([]);
   const [adding, setAdding] = useState("");
+  const { error, run, clear } = useSave();
 
-  const add = () => {
+  /** The draft with the tag being typed, if any. */
+  const withTyped = () => {
     const tag = adding.trim();
-    if (tag && !draft.includes(tag)) setDraft([...draft, tag]);
+    return tag && !draft.includes(tag) ? [...draft, tag] : draft;
+  };
+  const add = () => {
+    setDraft(withTyped());
     setAdding("");
   };
 
@@ -130,7 +173,13 @@ export function CorrectableTags({ tags, machineTags, corrected, canEdit, saving,
         {canEdit && !editing && (
           <span className="ml-auto flex gap-3">
             {corrected && (
-              <button type="button" className={linkClass} disabled={saving} onClick={() => onSave(null)}>
+              <button
+                type="button"
+                className={linkClass}
+                disabled={saving}
+                aria-label="Use the AI's tags"
+                onClick={() => run(() => onSave(null))}
+              >
                 Use the AI's
               </button>
             )}
@@ -153,8 +202,10 @@ export function CorrectableTags({ tags, machineTags, corrected, canEdit, saving,
           className="space-y-2"
           onSubmit={async (e) => {
             e.preventDefault();
-            await onSave(draft);
-            setEditing(false);
+            const tags = withTyped();
+            setDraft(tags);
+            setAdding("");
+            if (await run(() => onSave(tags))) setEditing(false);
           }}
         >
           <div className="flex flex-wrap gap-1.5">
@@ -189,7 +240,14 @@ export function CorrectableTags({ tags, machineTags, corrected, canEdit, saving,
             <button type="submit" disabled={saving} className={`${buttonClass} bg-indigo-600 text-white hover:bg-indigo-500`}>
               Save
             </button>
-            <button type="button" onClick={() => setEditing(false)} className={`${buttonClass} text-gray-300 hover:bg-gray-800`}>
+            <button
+              type="button"
+              onClick={() => {
+                clear();
+                setEditing(false);
+              }}
+              className={`${buttonClass} text-gray-300 hover:bg-gray-800`}
+            >
               Cancel
             </button>
           </div>
@@ -202,6 +260,7 @@ export function CorrectableTags({ tags, machineTags, corrected, canEdit, saving,
       {corrected && machineTags && !editing && (
         <p className="mt-1 text-xs text-gray-500">The AI's: {machineTags.length ? machineTags.join(", ") : "none"}</p>
       )}
+      <SaveError error={error} />
     </div>
   );
 }

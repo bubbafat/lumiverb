@@ -157,6 +157,10 @@ export interface AssetDetail {
   machine_ocr_text?: string | null;
   transcript_srt?: string | null;
   transcript_language?: string | null;
+  /** Whose transcript is shown: "manual" (a person's) or the machine that made it. */
+  transcript_source?: string | null;
+  /** A person's transcript is shown with the machine's kept under it: removing theirs brings it back. */
+  machine_transcript?: boolean;
   transcribed_at?: string | null;
   note?: string | null;
   note_author?: string | null;

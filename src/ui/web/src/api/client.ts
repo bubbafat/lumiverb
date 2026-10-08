@@ -1249,9 +1249,10 @@ export async function uploadTranscript(
   );
 }
 
-/** Remove a transcript from a video asset. */
-export async function deleteTranscript(assetId: string): Promise<void> {
-  await apiFetch<void>(`/assets/${assetId}/transcript`, { method: "DELETE" });
+/** Remove the transcript a video asset shows: a person's ("manual") or the
+ * machine's. 409 transcript_changed when it shows the other one. */
+export async function deleteTranscript(assetId: string, which: "manual" | "machine"): Promise<void> {
+  await apiFetch<void>(`/assets/${assetId}/transcript?which=${which}`, { method: "DELETE" });
 }
 
 /** Add or update a note on an asset. */

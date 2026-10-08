@@ -1,8 +1,9 @@
 import { useEffect, useCallback, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getAsset, findSimilar, listFaces, listPeople, getNearestPeopleForFace, searchPeople, assignFace, unassignFace, uploadTranscript, deleteTranscript, updateNote, deleteNote, correctAsset } from "../api/client";
+import { getAsset, findSimilar, listFaces, listPeople, getNearestPeopleForFace, searchPeople, assignFace, unassignFace, updateNote, deleteNote, correctAsset } from "../api/client";
 import { CorrectableTags, CorrectableText } from "./CorrectableFields";
+import { NoTranscript, TranscriptActions } from "./TranscriptActions";
 import { useCanEdit } from "../lib/useCanEdit";
 import TranscriptViewer from "./TranscriptViewer";
 import VideoPlayer from "./VideoPlayer";
@@ -1194,6 +1195,7 @@ export function Lightbox({
                 </div>
               ) : (
                 <CorrectableText
+                  key={asset.asset_id}
                   label="Description"
                   value={detail?.ai_description}
                   machine={detail?.machine_description}
@@ -1211,6 +1213,7 @@ export function Lightbox({
                 <>
                   <hr className="border-gray-700" />
                   <CorrectableText
+                    key={asset.asset_id}
                     label="Text in Image"
                     value={detail?.ocr_text}
                     machine={detail?.machine_ocr_text}
@@ -1234,6 +1237,7 @@ export function Lightbox({
                       <MetadataSkeleton />
                     ) : (
                       <CorrectableTags
+                        key={asset.asset_id}
                         tags={detail?.ai_tags ?? []}
                         machineTags={detail?.machine_tags}
                         corrected={corrected.includes("tags")}
@@ -1281,54 +1285,24 @@ export function Lightbox({
                         )}
                       </span>
                       {detail.transcript_srt && (
-                        <div className="flex gap-2">
-                          <button
-                            type="button"
-                            className="text-xs text-indigo-400 hover:text-indigo-300"
-                            onClick={() => {
-                              const blob = new Blob([detail.transcript_srt!], { type: "text/srt" });
-                              const url = URL.createObjectURL(blob);
-                              const a = document.createElement("a");
-                              const stem = asset.rel_path.replace(/\.[^.]+$/, "").split("/").pop() || "transcript";
-                              a.href = url;
-                              a.download = `${stem}.srt`;
-                              a.click();
-                              URL.revokeObjectURL(url);
-                            }}
-                          >
-                            Download
-                          </button>
-                          {!isPublic && (
-                          <>
-                          <label className="cursor-pointer text-xs text-indigo-400 hover:text-indigo-300">
-                            Replace
-                            <input
-                              type="file"
-                              accept=".srt"
-                              className="hidden"
-                              onChange={async (e) => {
-                                const file = e.target.files?.[0];
-                                if (!file) return;
-                                const text = await file.text();
-                                await uploadTranscript(asset.asset_id, text);
-                                queryClient.invalidateQueries({ queryKey: ["asset", asset.asset_id] });
-                                e.target.value = "";
-                              }}
-                            />
-                          </label>
-                          <button
-                            type="button"
-                            className="text-xs text-red-400 hover:text-red-300"
-                            onClick={async () => {
-                              await deleteTranscript(asset.asset_id);
-                              queryClient.invalidateQueries({ queryKey: ["asset", asset.asset_id] });
-                            }}
-                          >
-                            Remove
-                          </button>
-                          </>
-                          )}
-                        </div>
+                        <TranscriptActions
+                          key={asset.asset_id}
+                          assetId={asset.asset_id}
+                          source={detail.transcript_source}
+                          machineUnderneath={!!detail.machine_transcript}
+                          canEdit={canCorrect}
+                          onChanged={() => queryClient.invalidateQueries({ queryKey: ["asset", asset.asset_id] })}
+                          onDownload={() => {
+                            const blob = new Blob([detail.transcript_srt!], { type: "text/srt" });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement("a");
+                            const stem = asset.rel_path.replace(/\.[^.]+$/, "").split("/").pop() || "transcript";
+                            a.href = url;
+                            a.download = `${stem}.srt`;
+                            a.click();
+                            URL.revokeObjectURL(url);
+                          }}
+                        />
                       )}
                     </div>
                     {detailLoading ? (
@@ -1336,22 +1310,12 @@ export function Lightbox({
                     ) : detail?.transcript_srt ? (
                       <TranscriptViewer srt={detail.transcript_srt} onSeek={seekVideo} seekableUntil={playback.maxSeconds} />
                     ) : (
-                      <label className="inline-flex cursor-pointer items-center gap-1.5 rounded bg-gray-700/60 px-3 py-1.5 text-xs text-gray-300 hover:bg-indigo-600/40 hover:text-indigo-200 transition-colors">
-                        Upload SRT
-                        <input
-                          type="file"
-                          accept=".srt"
-                          className="hidden"
-                          onChange={async (e) => {
-                            const file = e.target.files?.[0];
-                            if (!file) return;
-                            const text = await file.text();
-                            await uploadTranscript(asset.asset_id, text);
-                            queryClient.invalidateQueries({ queryKey: ["asset", asset.asset_id] });
-                            e.target.value = "";
-                          }}
-                        />
-                      </label>
+                      <NoTranscript
+                        key={asset.asset_id}
+                        assetId={asset.asset_id}
+                        canEdit={canCorrect}
+                        onChanged={() => queryClient.invalidateQueries({ queryKey: ["asset", asset.asset_id] })}
+                      />
                     )}
                   </div>
                 </>
