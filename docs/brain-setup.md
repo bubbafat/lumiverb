@@ -83,7 +83,7 @@ sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb library list
 
 ### 6. AI machines
 
-Descriptions, OCR and scene descriptions run on the account's **AI machines** (Settings → AI): GPU boxes, each an OpenAI-compatible endpoint such as Ollama, with the jobs it does and how many requests it takes at once. The job's one model must be on every machine doing it; until a model is chosen and a machine offers it, those steps wait rather than fail. The worker reads all of this from the server and keeps none of its own (a `vision_*` key left in an older worker config is ignored).
+Descriptions, OCR, scene descriptions and transcripts run on the account's **AI machines** (Settings → AI): GPU boxes, each an OpenAI-compatible endpoint such as Ollama, with the jobs it does and how many requests it takes at once. The job's one model must be on every machine doing it; until a model is chosen and a machine offers it, those steps wait rather than fail. The worker reads all of this from the server and keeps none of its own (a `vision_*` key left in an older worker config is ignored).
 
 The model is `qwen3-vl:8b-instruct`. Plain `qwen3-vl:8b` is the thinking variant: its reasoning used up the 500-token answer budget, so most descriptions came back empty or cut off (Oct 8). Every machine doing descriptions needs it pulled (`ollama pull qwen3-vl:8b-instruct`).
 
@@ -99,6 +99,12 @@ On Oct 8 there are two:
 To add a machine, as an admin: **Settings → AI → Add machine**, a name, the URL, **Connect** (it lists the models the machine offers), tick **Descriptions & text**, how many at once, **Add**. "At once" is how many images it works on together; more needs more GPU memory. It only helps if that Ollama runs that many in parallel (`OLLAMA_NUM_PARALLEL`); otherwise the rest wait there. A request is about 2k tokens (a 1280 px image, the prompt, a 500-token answer), so any context of 8k or more is plenty.
 
 Before each round of vision work the worker checks every machine, and sends work only to those online and offering the model, spread by how many each takes. One that stops answering (asleep, out of memory, the model gone) is skipped and its work goes to the others; it's checked again a minute later. Settings → AI shows each machine's state, offline ones in red, with a red dot on AI in the Settings menu. Only when no machine is left does vision work wait, and no clip is charged a failure.
+
+**Transcripts** are a job too, with one model (`small` until changed in Settings → AI → Models). Every account has a **Built in** machine: the worker's own Whisper (faster-whisper, on the 3080 here), doing transcripts one clip at a time, with nothing to set up. It has no URL; it can be renamed, given more at once (each one loads the model on the GPU beside Ollama: `small` takes about 1 GB, `large-v3` about 4 GB) or turned off, not removed. The worker checks it before transcribing (faster-whisper installed, the model one it knows), and a model that won't load moves its clips to another machine.
+
+To transcribe on another GPU as well, run an OpenAI-compatible Whisper server there and add it like any machine, ticking **Transcripts**. [speaches](https://speaches.ai) is the one that fits: it serves faster-whisper with `GET /v1/models` and `POST /v1/audio/transcriptions`, and lists the same models by their Hugging Face names (`Systran/faster-whisper-small` is `small`). Download the job's model into it first (speaches: `POST /v1/models/Systran/faster-whisper-small`), or Connect won't list it. On a Mac, speaches runs on the CPU only; LocalAI's whisper backend (whisper.cpp, Metal) works if its model is named like the job's (`name: small`). A bare whisper.cpp server lists no models, so Lumiverb can't check it has the right one: not supported.
+
+Whichever machine hears a clip, the worker finds its speech first (faster-whisper's VAD, skipping silences of 500 ms or more, the transcript producer's setting) and sends only the speech, then puts the times back onto the clip. That's why a transcript says it was made with those settings on any machine. speaches also always skips silences over 160 ms within what it's sent; that, like which GPU it ran on, isn't tracked.
 
 ### 7. The Mac app
 
