@@ -28,5 +28,6 @@ class VisionGuard(JobGuard):
         """Describes and reads images on whichever online machine is free."""
         from src.client.workers.captions.factory import get_caption_provider
 
+        # Each machine is asked for the model by the name it lists it as.
         return PooledCaptionProvider(self.pool, lambda m: get_caption_provider(
-            self.pool.model, m.api_url, m.api_key, settings=settings, ocr_settings=ocr_settings))
+            m.serves or self.pool.model, m.api_url, m.api_key, settings=settings, ocr_settings=ocr_settings))

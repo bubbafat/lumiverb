@@ -266,8 +266,8 @@ def _transcribe_one(
         wav, speech = Path(tmp) / "audio.wav", Path(tmp) / "speech.wav"
         try:
             result = subprocess.run(speech_wav_command(source_path, wav, tracks), capture_output=True, timeout=1800)
-        except subprocess.TimeoutExpired:
-            logger.warning("Reading the audio of %s timed out", source_path)
+        except (subprocess.TimeoutExpired, OSError) as e:
+            logger.warning("Reading the audio of %s failed; trying again later: %s", source_path, e)
             return None
         if result.returncode != 0:
             stderr = result.stderr.decode(errors="replace") if result.stderr else ""
@@ -1492,6 +1492,9 @@ def run_repair(
                     return a, _transcribe_one(source_path, transcriber, vad_ms), None
                 except TranscriptError as e:
                     return a, None, e
+                except Exception:  # noqa: BLE001 — one clip's surprise doesn't stop the step
+                    logger.exception("Transcribing %s failed", a["rel_path"])
+                    return a, None, None
 
             def _heard(fut: Future) -> None:
                 a, result, error = fut.result()
@@ -1536,9 +1539,11 @@ def run_repair(
                 progress.advance(tid, 1)
                 progress.update(tid, ok=ok_count, fail=fail_count)
 
-            # As many at once as the online machines take together (Settings → AI);
-            # results are posted from here, one at a time.
-            transcribe_conc = transcripts.capacity()
+            # Twice as many as the online machines take together (Settings → AI): each
+            # clip's audio and speech are got ready while the machines work on others
+            # (the pool holds each machine to its own limit). Results are posted from
+            # here, one at a time.
+            transcribe_conc = 2 * transcripts.capacity()
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Transcribe", total=len(assets), ok=0, fail=0)

@@ -29,12 +29,15 @@ class TranscriptGuard(JobGuard):
     def check(self) -> bool:
         from src.client.workers.transcripts.local import unavailable
 
+        # Checked and reported either way: without faster-whisper here, Settings
+        # shows the built-in Whisper offline, saying why.
+        ok = super().check()
         why = unavailable()
         if why:
             # Every machine hears only the speech, and it's found here.
             self.error = f"This worker can't find the speech in clips: {why}"
             return False
-        return super().check()
+        return ok
 
     def transcriber(self) -> Transcriber:
         """Transcribes speech on whichever online machine is free, by the name it knows the model by."""

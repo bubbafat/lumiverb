@@ -290,8 +290,13 @@ function MachineForm({ ai, machine, onDone }: { ai: AiSettings; machine?: AiMach
     onMutate: () => setProblem(null),
     onSuccess: (offered) => {
       setModels(offered);
-      // A new machine does the jobs whose model it offers, until jobs are picked by hand.
-      if (!picked) setJobs(ai.jobs.filter((j) => j.model && offered.includes(j.model)).map((j) => j.job));
+      // A new machine does the jobs whose model it offers, and a job only servers do
+      // that has no model or machine yet (it's the first), until jobs are picked by hand.
+      // (Nothing doing transcripts means the built-in was turned off on purpose.)
+      const first = (j: AiJob) => !j.built_in && !ai.machines.some((m) => m.enabled && m.jobs.includes(j.job));
+      if (!picked) {
+        setJobs(ai.jobs.filter((j) => (j.model ? offered.includes(j.model) : first(j))).map((j) => j.job));
+      }
     },
     onError: (e) => {
       setModels(null);

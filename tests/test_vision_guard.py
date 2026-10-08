@@ -285,3 +285,15 @@ def test_the_endpoint_failing_mid_video_stops_the_video_for_the_guard(tmp_path):
         enrich_video_scenes(client=client, source_path=tmp_path / "a.mp4", asset_id="ast_v", rel_path="v.mov",
                             vision_provider=provider, vision_model_id="m")
     assert provider.describe.call_count == 1
+
+
+def test_each_machine_is_asked_for_the_model_by_its_own_name():
+    client = _client()
+    guard = VisionGuard(client)
+    with _offers((QWEN,)):
+        assert guard.check()
+    guard.pool.machines[0].serves = "qwen3-vl:8b-q4"  # what that machine lists it as
+    with patch("src.client.workers.captions.factory.get_caption_provider") as make:
+        make.return_value.describe.return_value = {"description": "a cat", "tags": []}
+        guard.provider().describe("a.jpg")
+    assert make.call_args.args[0] == "qwen3-vl:8b-q4"

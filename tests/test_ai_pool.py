@@ -358,13 +358,52 @@ def test_transcripts_go_to_each_machine_as_it_names_the_model_and_move_on_when_o
     assert [m.name for m in pool.machines if m.online] == ["Speaches"]
     assert _statuses(client)["aim_self"][-1]["error"] == "Couldn't load small: no space left"
 
-    # A clip's own failure says which machine heard it, and isn't moved.
+    # A clip's own failure says which machine heard it (with the built-in out, no other to try).
     made["Speaches"][1].transcribe.side_effect = TranscriptError("audio too short", endpoint_fault=False)
     with pytest.raises(TranscriptError) as e:
         transcriber.transcribe("b.wav")
     assert e.value.endpoint_fault is False and e.value.machine.name == "Speaches"
+    assert [m.name for m in pool.machines if m.online] == ["Speaches"]  # not held against it
     # None left: the machines' fault.
     made["Speaches"][1].transcribe.side_effect = TranscriptError("connection refused", endpoint_fault=True)
     with pytest.raises(TranscriptError) as e:
         transcriber.transcribe("c.wav")
     assert e.value.endpoint_fault is True and pool.down
+
+
+def test_a_clip_one_server_refuses_goes_to_the_others_first():
+    """A server may refuse what another takes (nginx's body limit in front of
+    it, say); the clip is the clip's only once every machine has refused it."""
+    from src.client.cli.ai_pool import PooledTranscriber
+    from src.client.workers.transcripts.base import Heard, TranscriptError
+
+    client = _transcripts()
+    with _offering({"http://speaches/v1": ("Systran/faster-whisper-small",)}):
+        pool = MachinePool(client, "transcripts")
+        pool.check()
+    calls = []
+
+    def make(machine):
+        t = MagicMock()
+
+        def transcribe(wav):
+            calls.append(machine.name)
+            if machine.name == "Speaches" or wav == "bad.wav":
+                raise TranscriptError(f"{machine.name} answered 413", endpoint_fault=False)
+            return Heard()
+        t.transcribe.side_effect = transcribe
+        return t
+
+    transcriber = PooledTranscriber(pool, make)
+    pool.machines[0].busy = 1  # the built-in is busy: the server is asked first
+    got = []
+    worker = threading.Thread(target=lambda: got.append(transcriber.transcribe("big.wav")))
+    worker.start()
+    time.sleep(0.2)
+    pool.release(pool.machines[0])
+    worker.join(5)
+    assert got == [Heard()] and calls == ["Speaches", "Built in"]
+    assert all(m.online for m in pool.machines)
+    with pytest.raises(TranscriptError) as e:
+        transcriber.transcribe("bad.wav")
+    assert e.value.endpoint_fault is False and sorted(calls[2:]) == ["Built in", "Speaches"]

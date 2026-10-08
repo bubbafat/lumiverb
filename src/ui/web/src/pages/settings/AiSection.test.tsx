@@ -232,6 +232,29 @@ describe("AiSection", () => {
     expect((lastSent("POST", "/ai/machines")!.body as { jobs: string[] }).jobs).toEqual(["transcripts"]);
   });
 
+  it("the first machine for a job with no model yet is given it, so its models can be picked", async () => {
+    model = "";
+    whisper = "small";
+    machines = [builtIn()];
+    offers = { [BRAIN]: [QWEN] };
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Add machine" }));
+    const form = screen.getByRole("form", { name: "Add a machine" });
+    fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Brain 3080" } });
+    fireEvent.change(within(form).getByLabelText("Endpoint URL"), { target: { value: BRAIN } });
+    fireEvent.click(within(form).getByRole("button", { name: "Connect" }));
+    await within(form).findByText(/Connected: offers/);
+    const vision = within(form).getByRole("checkbox", { name: /Descriptions & text/ }) as HTMLInputElement;
+    const transcripts = within(form).getByRole("checkbox", { name: /Transcripts/ }) as HTMLInputElement;
+    // Descriptions have no model and no machine; transcripts' small isn't offered there.
+    expect([vision.checked, transcripts.checked]).toEqual([true, false]);
+    fireEvent.click(within(form).getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(screen.queryByRole("form", { name: "Add a machine" })).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Change the model for Descriptions & text" }));
+    const options = [...(screen.getByLabelText("Model for Descriptions & text") as HTMLSelectElement).options].map((o) => o.value);
+    expect(options).toEqual(["", QWEN]);
+  });
+
   it("shows the built-in Whisper as this computer's, and it can't be removed", async () => {
     whisper = "small";
     machines = [builtIn(), machine({ name: "Brain" })];

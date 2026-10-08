@@ -11,9 +11,8 @@ from pathlib import Path
 
 from src.client.workers.transcripts import child
 from src.client.workers.transcripts.base import Heard, Segment, Transcriber, TranscriptError
+from src.client.workers.transcripts.speech import speech_seconds, time_allowed
 
-# An hour of speech takes minutes on a GPU; an hour means it's stuck.
-TIMEOUT_SEC = 3600
 # Failures mid-transcription that are the computer's, not the clip's.
 _MACHINE_TROUBLE = ("out of memory", "cuda", "cublas", "cudnn", "no space left")
 
@@ -26,17 +25,18 @@ def unavailable() -> str:
 
 
 class BuiltInWhisper(Transcriber):
-    def __init__(self, model: str, *, device: str = "auto", timeout: float = TIMEOUT_SEC) -> None:
+    def __init__(self, model: str, *, device: str = "auto", timeout: float | None = None) -> None:
         self._model = model
         self._device = device
         self._timeout = timeout
 
     def transcribe(self, speech_wav: Path) -> Heard:
+        allowed = self._timeout or time_allowed(speech_seconds(speech_wav))
         try:
             proc = subprocess.run([sys.executable, child.__file__, "transcribe", str(speech_wav), self._model,
-                                   self._device], capture_output=True, text=True, timeout=self._timeout)
+                                   self._device], capture_output=True, text=True, timeout=allowed)
         except subprocess.TimeoutExpired as e:
-            raise TranscriptError(f"Whisper didn't finish within {int(self._timeout)} s.", endpoint_fault=False) from e
+            raise TranscriptError(f"Whisper didn't finish within {int(allowed)} s.", endpoint_fault=False) from e
         except OSError as e:
             raise TranscriptError(f"Whisper couldn't start: {e}", endpoint_fault=True) from e
         try:
@@ -44,9 +44,11 @@ class BuiltInWhisper(Transcriber):
         except ValueError:
             out = None
         if not isinstance(out, dict):
-            # It died without a word (killed, or crashed in the GPU code): the computer's trouble.
+            # It died without a word (killed for memory, a crash): this clip's doing as far as
+            # anyone can tell, so it's charged once a check finds the machine fine, and
+            # tried again later, rather than stopping transcription every time it comes up.
             why = (proc.stderr or "").strip()[-300:] or f"exit {proc.returncode}"
-            raise TranscriptError(f"Whisper stopped: {why}", endpoint_fault=True)
+            raise TranscriptError(f"Whisper stopped: {why}", endpoint_fault=False)
         if proc.returncode != 0 or "error" in out:
             error = str(out.get("error") or "Whisper failed.")
             machine = out.get("stage") == "load" or any(t in error.lower() for t in _MACHINE_TROUBLE)

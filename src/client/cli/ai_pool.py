@@ -214,6 +214,9 @@ class _OnAMachine:
     says whether a failure was the machine's (endpoint_fault)."""
 
     error: type[CaptionError] | type[TranscriptError]
+    # A failure that's the item's, not the machine's: try the other machines
+    # before giving up on it (a server may refuse what another takes).
+    move_item_faults = False
 
     def __init__(self, pool: MachinePool, make: Callable[[Machine], Any]) -> None:
         self._pool = pool
@@ -234,9 +237,12 @@ class _OnAMachine:
         machine served it (the guard charges the clip only if it's still fine)."""
         tried: list[Machine] = []
         last: Exception | None = None
+        item_fault: Exception | None = None
         while True:
             machine = self._pool.acquire(exclude=tried)
             if machine is None:
+                if item_fault is not None:
+                    raise item_fault
                 why = self._pool.error if self._pool.down else None
                 raise self.error(why or (f"Every machine failed it; the last: {last}" if last else "No machine is online."),
                                  endpoint_fault=True)
@@ -246,7 +252,10 @@ class _OnAMachine:
             except self.error as e:
                 if not e.endpoint_fault:
                     e.machine = machine
-                    raise
+                    if not self.move_item_faults:
+                        raise
+                    item_fault = e
+                    continue
                 last = e
                 self._pool.fault(machine, e)
             finally:
@@ -270,9 +279,11 @@ class PooledCaptionProvider(_OnAMachine, CaptionProvider):
 
 
 class PooledTranscriber(_OnAMachine, Transcriber):
-    """Transcribes speech on whichever of the pool's machines is free."""
+    """Transcribes speech on whichever of the pool's machines is free; a
+    clip one machine refuses (too big for it, say) goes to the others first."""
 
     error = TranscriptError
+    move_item_faults = True
 
     def transcribe(self, speech_wav: Path) -> Heard:
         return self._on_a_machine(lambda t: t.transcribe(speech_wav))

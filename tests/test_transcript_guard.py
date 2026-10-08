@@ -120,23 +120,41 @@ def test_without_faster_whisper_here_the_speech_cant_be_found_so_nothing_starts(
 
 
 def test_clips_go_to_every_online_machine_as_many_at_once_as_they_take(library):
+    """Each machine up to its own limit; meanwhile more clips get their speech ready."""
+    from src.client.workers.transcripts.base import Heard
+    from src.client.workers.transcripts.local import BuiltInWhisper
+    from src.client.workers.transcripts.openai_compatible import OpenAITranscriber
+
     client = _client([BUILT_IN, _speaches(at_once=2)])
-    busy, most, lock = [0], [0], threading.Lock()
+    lock = threading.Lock()
+    busy = {"all": 0, BuiltInWhisper: 0, OpenAITranscriber: 0}
+    most = dict.fromkeys(busy, 0)
+    preparing = [0]
+
+    def hear(self, wav):
+        with lock:
+            for k in ("all", type(self)):
+                busy[k] += 1
+                most[k] = max(most[k], busy[k])
+        time.sleep(0.15)
+        with lock:
+            for k in ("all", type(self)):
+                busy[k] -= 1
+        return Heard()
 
     def transcribe_one(source, transcriber, vad_ms):
         with lock:
-            busy[0] += 1
-            most[0] = max(most[0], busy[0])
-        time.sleep(0.15)
-        with lock:
-            busy[0] -= 1
-        return ("", "")
+            preparing[0] += 1
+        return ("", "") if transcriber.transcribe(source) == Heard() else None
 
+    clips = [f"ast_{c}" for c in "abcdefgh"]
     with patch("src.client.cli.ai_pool.list_models", return_value=["Systran/faster-whisper-small"]), \
+            patch.object(BuiltInWhisper, "transcribe", hear), patch.object(OpenAITranscriber, "transcribe", hear), \
             patch("src.client.cli.repair._transcribe_one", side_effect=transcribe_one):
-        _run(client, library, _clips("ast_a", "ast_b", "ast_c", "ast_d"))
-    assert most[0] == 3  # the built-in's one and the server's two
-    assert set(_transcripts(client)) == {"ast_a", "ast_b", "ast_c", "ast_d"}
+        _run(client, library, _clips(*clips))
+    assert most["all"] == 3  # the built-in's one and the server's two
+    assert most[BuiltInWhisper] == 1 and most[OpenAITranscriber] == 2
+    assert set(_transcripts(client)) == set(clips) and preparing[0] == len(clips)
 
 
 def test_no_machine_left_stops_transcription_without_charging_a_clip(library):
@@ -149,9 +167,32 @@ def test_no_machine_left_stops_transcription_without_charging_a_clip(library):
                               endpoint_fault=True)
 
     with patch("src.client.cli.repair._transcribe_one", side_effect=transcribe_one):
-        _run(client, library, _clips("ast_a", "ast_b", "ast_c"))
-    assert calls == ["ast_a.mp4"]  # one at a time: the rest wait
+        _run(client, library, _clips("ast_a", "ast_b", "ast_c", "ast_d", "ast_e"))
+    # Those already under way end too; the rest wait.
+    assert 1 <= len(calls) <= 2 and "ast_e.mp4" not in calls
     assert _charged(client) == [] and _transcripts(client) == {}
+
+
+def test_a_surprise_on_one_clip_charges_it_and_the_rest_go_on(library):
+    client = _client([BUILT_IN])
+
+    def transcribe_one(source, transcriber, vad_ms):
+        if source.name == "ast_a.mp4":
+            raise OSError(28, "No space left on device")
+        return ("1\n00:00:00,000 --> 00:00:01,000\nhi\n", "en")
+
+    with patch("src.client.cli.repair._transcribe_one", side_effect=transcribe_one):
+        _run(client, library, _clips("ast_a", "ast_b"))
+    assert [(c["asset_id"], c["artifact"]) for c in _charged(client)] == [("ast_a", "transcript")]
+    assert set(_transcripts(client)) == {"ast_b"}
+
+
+def test_without_faster_whisper_here_settings_says_so(library):
+    client = _client([BUILT_IN])
+    with patch("src.client.workers.transcripts.local.unavailable", return_value="faster-whisper isn't installed."):
+        assert TranscriptGuard(client).check() is False
+    [status] = _statuses(client, "aim_self")
+    assert status["online"] is False and "faster-whisper isn't installed" in status["error"]
 
 
 def test_a_clip_the_machine_couldnt_make_sense_of_is_charged_once_the_machine_checks_out(library):

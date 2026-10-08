@@ -103,8 +103,8 @@ def test_the_speech_goes_to_the_server_with_the_model_as_it_names_it(server, spe
     assert fields["model"][2] == b"Systran/faster-whisper-small"
     assert fields["response_format"][2] == b"verbose_json"
     assert fields["timestamp_granularities[]"][2] == b"segment"
-    # Nothing asks it to skip silences: the worker already did.
-    assert not {k for k in fields if "vad" in k}
+    # It's asked not to skip silences (the worker already did) and to time its segments.
+    assert fields["vad_filter"][2] == b"false" and fields["without_timestamps"][2] == b"false"
 
 
 def test_no_key_no_authorization(server, speech):
@@ -130,6 +130,7 @@ def test_nothing_said_is_no_segments(server, speech):
     # It isn't speaking the API this needs.
     ((200, b"<html>hello</html>"), True, "OpenAI's JSON"),
     ((200, {"text": "said without times"}), True, "without times"),
+    ((200, {"segments": [], "text": "said without times"}), True, "without times"),
     ((200, {"segments": [{"text": "no times"}]}), True, "without times"),
 ])
 def test_a_failure_says_whose_it_is(server, speech, answer, fault, says):
@@ -139,14 +140,50 @@ def test_a_failure_says_whose_it_is(server, speech, answer, fault, says):
     assert e.value.endpoint_fault is fault and says in str(e.value)
 
 
-def test_a_server_that_isnt_there_or_doesnt_answer_is_the_machines_fault(speech):
+def test_a_server_that_isnt_there_or_breaks_off_is_the_machines_fault(speech):
     with pytest.raises(TranscriptError) as e:
         OpenAITranscriber("http://127.0.0.1:9/v1", None, "small").transcribe(speech)
     assert e.value.endpoint_fault and "Couldn't reach" in str(e.value)
-    with patch("src.client.workers.transcripts.openai_compatible.requests.post", side_effect=requests.ReadTimeout()):
+    for error, says in ((requests.ConnectTimeout(), "didn't answer"),
+                        (requests.exceptions.ChunkedEncodingError(), "broke off")):
+        with patch("src.client.workers.transcripts.openai_compatible.requests.post", side_effect=error):
+            with pytest.raises(TranscriptError) as e:
+                OpenAITranscriber("http://brain/v1", None, "small").transcribe(speech)
+        assert e.value.endpoint_fault and says in str(e.value)
+
+
+def _real_wav(path: Path, seconds: float) -> Path:
+    import wave
+
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16_000)
+        w.writeframes(b"\x00\x00" * int(16_000 * seconds))
+    return path
+
+
+def test_a_server_gets_time_for_the_speech_it_was_sent_and_running_out_is_the_clips(tmp_path):
+    """Ten minutes and four times the speech; a server reached but not done in
+    that time is stuck on this clip, which is charged once the machine checks out."""
+    wav = _real_wav(tmp_path / "speech.wav", 100)
+    with patch("src.client.workers.transcripts.openai_compatible.requests.post",
+               side_effect=requests.ReadTimeout()) as post:
         with pytest.raises(TranscriptError) as e:
-            OpenAITranscriber("http://brain/v1", None, "small").transcribe(speech)
-    assert e.value.endpoint_fault and "didn't answer" in str(e.value)
+            OpenAITranscriber("http://brain/v1", None, "small").transcribe(wav)
+    assert post.call_args.kwargs["timeout"] == (10, 1000.0)
+    assert e.value.endpoint_fault is False and "100 s of speech within 1000 s" in str(e.value)
+
+
+def test_times_that_cant_be_seconds_are_the_machines_fault(server, tmp_path):
+    """A server whose times aren't seconds (old LocalAI sent nanoseconds) can't make a transcript."""
+    wav = _real_wav(tmp_path / "speech.wav", 2)
+    s = server((200, {"language": "en", "segments": [{"start": 0, "end": 2_000_000_000, "text": " hi"}]}))
+    with pytest.raises(TranscriptError) as e:
+        OpenAITranscriber(s.url, None, "small").transcribe(wav)
+    assert e.value.endpoint_fault and "aren't seconds" in str(e.value)
+    s = server((200, {"language": "en", "segments": [{"start": 0, "end": 2.3, "text": " hi"}]}))
+    assert OpenAITranscriber(s.url, None, "small").transcribe(wav).segments == [Segment(0, 2.3, " hi")]
 
 
 # ---------------------------------------------------------------------------
@@ -171,10 +208,11 @@ def test_the_built_in_whisper_runs_the_model_on_the_speech_in_a_subprocess(speec
     # The model won't load (not downloaded, no room): the computer's trouble.
     (_ran(1, json.dumps({"error": "Couldn't load small: no space left", "stage": "load"})), True),
     (_ran(1, json.dumps({"error": "CUDA failed with error out of memory", "stage": "transcribe"})), True),
-    # Died without a word (killed, a crash in the GPU code).
-    (_ran(-9, "", "Killed"), True),
     # Whisper itself failed on this audio.
     (_ran(1, json.dumps({"error": "Invalid data found when processing input", "stage": "transcribe"})), False),
+    # Died without a word (killed for memory, a crash): charged once the machine checks out,
+    # so a clip that kills it every time isn't tried forever without showing as failing.
+    (_ran(-9, "", "Killed"), False),
 ])
 def test_a_built_in_failure_says_whose_it_is(speech, ran, fault):
     with patch("subprocess.run", return_value=ran):
@@ -183,10 +221,12 @@ def test_a_built_in_failure_says_whose_it_is(speech, ran, fault):
     assert e.value.endpoint_fault is fault
 
 
-def test_a_built_in_transcription_that_never_ends_is_the_clips(speech):
-    with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("python", 3600)):
+def test_a_built_in_transcription_that_never_ends_is_the_clips(tmp_path):
+    wav = _real_wav(tmp_path / "speech.wav", 30)
+    with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("python", 720)) as run:
         with pytest.raises(TranscriptError) as e:
-            BuiltInWhisper("small").transcribe(speech)
+            BuiltInWhisper("small").transcribe(wav)
+    assert run.call_args.kwargs["timeout"] == 720.0  # ten minutes and four times the speech
     assert e.value.endpoint_fault is False
 
 

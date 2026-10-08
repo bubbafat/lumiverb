@@ -29,6 +29,24 @@ RATE = child.RATE
 FIND_TIMEOUT_SEC = 1800
 
 
+def speech_seconds(wav: Path) -> float:
+    """How long a WAV is, in seconds (0 when it can't be read)."""
+    import wave
+
+    try:
+        with wave.open(str(wav)) as w:
+            return w.getnframes() / float(w.getframerate() or RATE)
+    except (OSError, EOFError, wave.Error):
+        return 0.0
+
+
+def time_allowed(seconds: float) -> float:
+    """How long a machine gets to transcribe that much speech before it's
+    taken as stuck on the clip: ten minutes, and four times the speech
+    (a CPU server can be slower than real time)."""
+    return 600.0 + 4.0 * seconds
+
+
 class SpeechError(Exception):
     """The speech couldn't be found (the audio couldn't be read, or the VAD failed)."""
 
