@@ -95,6 +95,15 @@ def empty_trash(
                 path.unlink()
         except OSError as e:
             logger.warning("Failed to remove file %s after empty trash: %s", key, e)
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if tenant_id:
+        # Playback cuts are copies of the start of each video.
+        from src.server.api.routers.playback import clear_cuts
+
+        try:
+            clear_cuts(tenant_id, asset_ids)
+        except OSError as e:
+            logger.warning("Failed to remove playback cuts after empty trash: %s", e)
     try:
         from src.server.search.quickwit_client import QuickwitClient
         qw = QuickwitClient()

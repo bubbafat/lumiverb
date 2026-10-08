@@ -585,33 +585,43 @@ def _stream_file_with_range(
     path: Path,
     request: Request,
     media_type: str,
+    etag: str | None = None,
 ) -> StreamingResponse:
+    """Stream `path`, honoring a single Range: `bytes=a-b`, `bytes=a-` or `bytes=-n`.
+
+    A range starting past the end is a 416; a malformed one gets the whole file.
+    """
     file_size = path.stat().st_size
     range_header = request.headers.get("range")
     start = 0
     end = file_size - 1
     status_code = 200
     headers: dict[str, str] = {"Accept-Ranges": "bytes"}
+    if etag:
+        headers["ETag"] = etag
 
     if range_header:
-        # Format: bytes=start-end
+        units, _, range_spec = range_header.partition("=")
+        start_str, _, end_str = range_spec.split(",")[0].strip().partition("-")
         try:
-            units, _, range_spec = range_header.partition("=")
-            if units.strip().lower() == "bytes":
-                start_str, _, end_str = range_spec.partition("-")
-                if start_str:
-                    start = int(start_str)
+            if units.strip().lower() != "bytes":
+                raise ValueError(units)
+            if start_str:
+                start = int(start_str)
                 if end_str:
-                    end = int(end_str)
-                if end >= file_size:
-                    end = file_size - 1
-                if start > end:
-                    start = 0
-                    end = file_size - 1
-                status_code = 206
-        except Exception:
-            start = 0
-            end = file_size - 1
+                    end = min(int(end_str), file_size - 1)
+            else:  # the last n bytes
+                start = max(file_size - int(end_str), 0)
+            if start >= file_size:
+                return StreamingResponse(
+                    iter(()), status_code=416,
+                    headers={**headers, "Content-Range": f"bytes */{file_size}"},
+                )
+            if start > end:
+                raise ValueError(range_header)
+            status_code = 206
+        except ValueError:
+            start, end, status_code = 0, file_size - 1, 200
 
     content_length = end - start + 1
     headers["Content-Length"] = str(content_length)
@@ -637,6 +647,18 @@ def _stream_file_with_range(
         status_code=status_code,
         headers=headers,
     )
+
+
+def _trim_public_transcript(request: Request, session: Session, response: AssetResponse) -> None:
+    """A public page's transcript stops where its playback does."""
+    if not getattr(request.state, "is_public_request", False) or not response.transcript_srt:
+        return
+    from src.server.api.routers.playback import srt_before
+    from src.server.tenant_settings import playback_cap
+
+    cap = playback_cap(session, public=True)
+    if cap is not None:
+        response.transcript_srt = srt_before(response.transcript_srt, cap)
 
 
 def _to_asset_response(asset) -> AssetResponse:
@@ -739,6 +761,7 @@ def get_asset_by_path(
     facet = AssetRepository(session).get_video_facet(asset.asset_id)
     # Stored rows are returned as they are (validation is for writes).
     response.video_facet = VideoFacetModel.model_construct(**facet) if facet else None
+    _trim_public_transcript(request, session, response)
     return response
 
 
@@ -873,6 +896,7 @@ def get_asset(
     facet = AssetRepository(session).get_video_facet(asset.asset_id)
     # Stored rows are returned as they are (validation is for writes).
     response.video_facet = VideoFacetModel.model_construct(**facet) if facet else None
+    _trim_public_transcript(request, session, response)
     return response
 
 
@@ -1498,13 +1522,14 @@ def stream_or_enqueue_preview(
                 asset.video_preview_last_accessed_at = now
                 session.add(asset)
                 session.commit()
-            from src.server.api.routers.playback import capped
-            from src.server.tenant_settings import get_video_preview_max_seconds
+            from src.server.api.routers.playback import capped, preview_duration
+            from src.server.tenant_settings import playback_cap
 
             path = capped(
-                path, get_video_preview_max_seconds(session), storage=storage,
-                tenant_id=request.state.tenant_id, asset_id=asset_id, source="preview",
+                path, playback_cap(session, public=getattr(request.state, "is_public_request", False)),
+                storage=storage, tenant_id=request.state.tenant_id, asset_id=asset_id, source="preview",
                 version=f"{int(path.stat().st_mtime)}-{path.stat().st_size}",
+                duration=preview_duration(asset),
             )
             return _stream_file_with_range(path, request, media_type="video/mp4")
 

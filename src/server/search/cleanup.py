@@ -243,6 +243,15 @@ def run_cleanup_for_tenant(
             result.orphan_files += 1
             result.bytes_freed += size
 
+    # Playback cuts (copies of each video's start) of assets that are gone.
+    try:
+        from src.server.api.routers.playback import sweep_cuts
+
+        known_assets = {r[0] for r in session.execute(text("SELECT asset_id FROM assets")).fetchall()}
+        result.orphan_files += sweep_cuts(tenant_dir / "playback", known_assets, dry_run=dry_run)
+    except Exception as exc:  # noqa: BLE001 — never fail the rest of cleanup over a cache
+        result.errors.append(f"Playback cut sweep failed for tenant {tenant_id}: {exc}")
+
     return result
 
 

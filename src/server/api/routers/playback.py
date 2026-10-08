@@ -5,17 +5,21 @@ A <video> element can't send an Authorization header, so GET
 its credential. The link plays the video's analysis proxy (full length,
 every audio track), or the 10-second preview scan makes until the proxy
 exists. When the account caps playback at N seconds, the server serves only
-the first N, cut without re-encoding and kept for the next request.
+the first N, cut without re-encoding and kept for the next request. Public
+pages have their own cap (10 seconds unless an admin changes it), and their
+transcripts stop where it does.
 """
 
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import hmac
 import json
 import logging
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -33,15 +37,17 @@ from src.server.config import get_settings
 from src.server.models.tenant import Asset
 from src.server.repository.tenant import AssetRepository, LibraryRepository
 from src.server.storage.local import LocalStorage, get_storage
-from src.server.tenant_settings import get_video_preview_max_seconds
+from src.server.tenant_settings import playback_cap
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["playback"])
 
-# Long enough to watch a long recording with pauses; short enough that a
-# copied link stops working the same day.
-STREAM_TTL_SECONDS = 6 * 3600
+# A copied link stops working within the hour; the player asks for a new
+# one when a link fails mid-play.
+STREAM_TTL_SECONDS = 3600
+# Half-written cuts a killed API left behind.
+_STALE_TEMP_SEC = 600
 # A cut within this of the whole video isn't worth making.
 _CAP_SLACK_SEC = 0.5
 
@@ -52,7 +58,7 @@ class PlaybackResponse(BaseModel):
     url: str
     expires_at: str
     source: Source
-    # Seconds the link plays; None means the whole video.
+    # Seconds the link plays for this viewer; None means the whole video.
     max_seconds: int | None
 
 
@@ -168,6 +174,10 @@ def _duration(path: Path) -> float | None:
         return None
 
 
+def _playback_dir(storage: LocalStorage, tenant_id: str) -> Path:
+    return storage.abs_path(f"{tenant_id}/playback")
+
+
 def capped(
     path: Path,
     max_seconds: int | None,
@@ -177,48 +187,113 @@ def capped(
     asset_id: str,
     source: Source,
     version: str,
+    duration: float | None = None,
 ) -> Path:
     """`path`, or a copy of its first `max_seconds` when it runs longer.
 
     Cuts are made with stream copy (no re-encoding, every track kept) and
     stored under {tenant}/playback, outside the library folders cleanup
-    walks. A newer cut for the same asset replaces older ones.
+    walks. `duration`, when known, saves an ffprobe per request.
     """
     if max_seconds is None:
         return path
-    duration = _duration(path)
-    if duration is not None and duration <= max_seconds + _CAP_SLACK_SEC:
-        return path
-    cut = storage.abs_path(f"{tenant_id}/playback/{asset_id}_{source}_{version}_{max_seconds}s.mp4")
+    cut = _playback_dir(storage, tenant_id) / f"{asset_id}_{source}_{version}_{max_seconds}s.mp4"
     if cut.is_file():
         return cut
+    if duration is None:
+        duration = _duration(path)
+    if duration is not None and duration <= max_seconds + _CAP_SLACK_SEC:
+        return path
     cut.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=cut.parent, prefix=f".{asset_id}_", suffix=".mp4")
     os.close(fd)
     tmp = Path(tmp_name)
+    failed = HTTPException(status_code=503, detail={"code": "playback_cut_failed",
+                                                    "message": "Couldn't prepare the capped video"})
     try:
         result = subprocess.run(
             ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(path),
-             "-map", "0", "-dn", "-sn", "-c", "copy", "-t", str(max_seconds),
+             "-map", "0:v", "-map", "0:a?", "-c", "copy", "-t", str(max_seconds),
              "-movflags", "+faststart", "-f", "mp4", str(tmp)],
             capture_output=True, timeout=300, check=False,
         )
         if result.returncode != 0 or tmp.stat().st_size == 0:
             logger.warning("Couldn't cut %s to %ss: %s", path, max_seconds,
                            result.stderr.decode(errors="replace")[-300:])
-            raise HTTPException(status_code=503, detail={"code": "playback_cut_failed",
-                                                         "message": "Couldn't prepare the capped video"})
+            raise failed
         tmp.replace(cut)
     except (subprocess.SubprocessError, OSError) as exc:
         logger.warning("Couldn't cut %s to %ss: %s", path, max_seconds, exc)
-        raise HTTPException(status_code=503, detail={"code": "playback_cut_failed",
-                                                     "message": "Couldn't prepare the capped video"}) from exc
+        raise failed from exc
     finally:
         tmp.unlink(missing_ok=True)
-    for old in cut.parent.glob(f"{asset_id}_*.mp4"):
+    # Older versions of this cut, and temp files a killed API left.
+    for old in cut.parent.glob(f"{asset_id}_{source}_*_{max_seconds}s.mp4"):
         if old != cut:
             old.unlink(missing_ok=True)
+    for tmp_old in cut.parent.glob(f".{asset_id}_*.mp4"):
+        with contextlib.suppress(OSError):
+            if time.time() - tmp_old.stat().st_mtime > _STALE_TEMP_SEC:
+                tmp_old.unlink(missing_ok=True)
     return cut
+
+
+def clear_cuts(tenant_id: str, asset_ids: list[str] | None = None) -> None:
+    """Delete cuts: every one (a cap changed), or those of `asset_ids` (deleted for good)."""
+    folder = _playback_dir(get_storage(), tenant_id)
+    if not folder.is_dir():
+        return
+    for f in folder.iterdir():
+        name = f.name.lstrip(".")
+        if asset_ids is None or any(name.startswith(f"{a}_") for a in asset_ids):
+            with contextlib.suppress(OSError):
+                f.unlink(missing_ok=True)
+
+
+_CUT_NAME = re.compile(r"^(ast_[0-9A-Z]{26})_")
+
+
+def sweep_cuts(folder: Path, known_asset_ids: set[str], *, dry_run: bool) -> int:
+    """Daily cleanup: cuts of assets that no longer exist, and stale temp files. Returns files removed."""
+    if not folder.is_dir():
+        return 0
+    removed = 0
+    for f in folder.iterdir():
+        try:
+            if f.name.startswith("."):
+                gone = time.time() - f.stat().st_mtime > _STALE_TEMP_SEC
+            else:
+                m = _CUT_NAME.match(f.name)
+                gone = m is None or m.group(1) not in known_asset_ids
+            if gone:
+                if not dry_run:
+                    f.unlink(missing_ok=True)
+                removed += 1
+        except OSError as exc:
+            logger.warning("Playback cut sweep: %s: %s", f, exc)
+    return removed
+
+
+_SRT_START = re.compile(r"^\s*(\d+):(\d{2}):(\d{2})[,.](\d{1,3})\s*-->")
+
+
+def srt_before(srt: str, seconds: int) -> str:
+    """The SRT's entries that start before `seconds`."""
+    kept = []
+    for block in re.split(r"\n\s*\n", srt.strip()):
+        for line in block.splitlines():
+            m = _SRT_START.match(line)
+            if m:
+                h, mi, se, ms = (int(g) for g in m.groups())
+                if h * 3600 + mi * 60 + se + ms / 1000 < seconds:
+                    kept.append(block)
+                break
+    return "\n\n".join(kept) + ("\n" if kept else "")
+
+
+def preview_duration(asset: Asset) -> float | None:
+    """Scan's preview is the first 10 seconds."""
+    return min(10.0, asset.duration_sec) if asset.duration_sec else None
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +317,8 @@ def get_playback(
         public_project_id = request.query_params.get("public_project_id") or request.query_params.get(
             "public_collection_id"
         )
+        if public_library_id and public_project_id:
+            raise HTTPException(status_code=400, detail="Give a public library or a public project, not both")
         _check_public(session, asset, public_library_id, public_project_id)
     if not asset.media_type.startswith("video"):
         raise HTTPException(status_code=422, detail="Playback is only for videos")
@@ -252,7 +329,7 @@ def get_playback(
                                                      "message": "This video has no preview or proxy yet"})
     token = mint_stream_token(
         request.state.tenant_id, asset_id,
-        public_library_id=public_library_id if not public_project_id else None,
+        public_library_id=public_library_id,
         public_project_id=public_project_id,
     )
     expires = datetime.fromtimestamp(read_stream_token(token)["e"], tz=UTC)
@@ -260,7 +337,7 @@ def get_playback(
         url=f"/v1/stream/{token}",
         expires_at=expires.isoformat(),
         source=playable[0],
-        max_seconds=get_video_preview_max_seconds(session),
+        max_seconds=playback_cap(session, public=bool(public_library_id or public_project_id)),
     )
 
 
@@ -299,10 +376,13 @@ def stream(token: str, request: Request) -> StreamingResponse:
         if playable is None:
             raise HTTPException(status_code=404, detail="Nothing to play")
         source, path, version = playable
-        max_seconds = get_video_preview_max_seconds(session)
+        max_seconds = playback_cap(session, public=bool(claims.get("pl") or claims.get("pp")))
+        duration = asset.duration_sec if source == "analysis_proxy" else preview_duration(asset)
 
     path = capped(path, max_seconds, storage=storage, tenant_id=tenant_id, asset_id=asset_id,
-                  source=source, version=version)
-    response = _stream_file_with_range(path, request, media_type="video/mp4")
+                  source=source, version=version, duration=duration)
+    # Names the bytes: a cap change or a new proxy mid-play mustn't splice two files.
+    etag = f'"{source}-{version}-{max_seconds or "whole"}"'
+    response = _stream_file_with_range(path, request, media_type="video/mp4", etag=etag)
     response.headers["Cache-Control"] = "private, max-age=3600"
     return response

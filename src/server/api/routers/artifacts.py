@@ -283,9 +283,15 @@ def download_artifact(
     elif artifact_type == "video_preview":
         key = asset.video_preview_key
     elif artifact_type == "analysis_proxy":
-        # The whole video: public pages play it through /playback, within the account's cap.
+        # The whole video. Public pages and, while the account caps playback,
+        # viewers play it through /playback; editors and the brain's tools need it whole.
         if getattr(request.state, "is_public_request", False):
             raise HTTPException(status_code=403, detail="Analysis proxies aren't public")
+        if getattr(request.state, "role", None) == "viewer":
+            from src.server.tenant_settings import playback_cap
+
+            if playback_cap(session, public=False) is not None:
+                raise HTTPException(status_code=403, detail="Playback is capped for viewers; use /playback")
         key = asset.analysis_proxy_key
     else:  # scene_rep
         if rep_frame_ms is None:
@@ -313,10 +319,22 @@ def download_artifact(
     if artifact_type == "analysis_proxy":
         from src.server.api.routers.assets import _stream_file_with_range
 
-        response = _stream_file_with_range(path, request, media_type=CONTENT_TYPES[artifact_type])
-        if asset.analysis_proxy_sha256:
-            response.headers["ETag"] = f'"{asset.analysis_proxy_sha256}"'
-        return response
+        etag = f'"{asset.analysis_proxy_sha256}"' if asset.analysis_proxy_sha256 else None
+        return _stream_file_with_range(path, request, media_type=CONTENT_TYPES[artifact_type], etag=etag)
+
+    if artifact_type == "video_preview":
+        # Within the playback cap for whoever is asking, like /preview.
+        from src.server.api.routers.assets import _stream_file_with_range
+        from src.server.api.routers.playback import capped, preview_duration
+        from src.server.tenant_settings import playback_cap
+
+        st = path.stat()
+        path = capped(
+            path, playback_cap(session, public=getattr(request.state, "is_public_request", False)),
+            storage=storage, tenant_id=request.state.tenant_id, asset_id=asset_id, source="preview",
+            version=f"{int(st.st_mtime)}-{st.st_size}", duration=preview_duration(asset),
+        )
+        return _stream_file_with_range(path, request, media_type=CONTENT_TYPES[artifact_type])
 
     def _iter():
         with open(path, "rb") as f:
