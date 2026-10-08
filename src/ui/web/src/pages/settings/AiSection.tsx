@@ -2,19 +2,28 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiError,
-  connectVision,
+  addMachine,
+  connectMachine,
+  getAiSettings,
   getCurrentUser,
-  getVisionSettings,
-  saveVisionSettings,
-  type VisionSettings,
+  removeMachine,
+  setJobModel,
+  updateMachine,
+  type AiJob,
+  type AiMachine,
+  type AiSettings,
+  type MachineFields,
 } from "../../api/client";
 
 const inputClass =
   "w-full rounded-md border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-100 disabled:opacity-50";
 const buttonClass =
   "rounded-md px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50";
+const linkClass = "text-sm text-indigo-300 hover:text-indigo-200 disabled:opacity-50";
 
-/** "3 minutes ago", for when the worker last checked. */
+export const AI_QUERY_KEY = ["ai-settings"];
+
+/** "3 minutes ago", for when a machine was last checked. */
 export function ago(iso: string | null | undefined, now: number = Date.now()): string {
   if (!iso) return "";
   const seconds = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
@@ -26,99 +35,246 @@ export function ago(iso: string | null | undefined, now: number = Date.now()): s
   return new Date(iso).toLocaleString();
 }
 
-/** Whether Settings should flag the AI page: the worker couldn't use the model. */
-export function visionHasProblem(settings: VisionSettings | undefined): boolean {
-  return !!settings?.status && !settings.status.ok;
+/** A job that has a model but can't run: no machine does it, or none doing it is online. */
+function jobDown(ai: AiSettings, job: AiJob): boolean {
+  if (!job.model) return false;
+  if (job.machines === 0) return true;
+  const doing = ai.machines.filter((m) => m.enabled && m.jobs.includes(job.job));
+  return job.offering === 0 && doing.some((m) => m.status);
+}
+
+/** Whether Settings should flag the AI page: a job can't run, or a machine doing one is offline. */
+export function aiHasProblem(ai: AiSettings | undefined): boolean {
+  if (!ai) return false;
+  return (
+    ai.jobs.some((j) => jobDown(ai, j)) ||
+    ai.machines.some((m) => m.enabled && m.jobs.length > 0 && m.status !== null && !m.status.online)
+  );
 }
 
 function message(error: unknown): string {
   return error instanceof ApiError ? error.message : "Couldn't reach the server. Try again.";
 }
 
-/** What the worker found last time it checked these settings. */
-function Status({ settings }: { settings: VisionSettings }) {
-  const { status } = settings;
-  if (!settings.api_url || !settings.model) {
-    return (
-      <div role="status" className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
-        Vision AI is off. Descriptions, OCR and scene descriptions wait until a model is chosen.
-      </div>
-    );
-  }
-  if (!status) {
-    return <p role="status" className="text-sm text-gray-400">Saved. The worker hasn't checked it yet.</p>;
-  }
-  if (status.ok) {
-    return (
-      <p role="status" className="text-sm text-emerald-300">
-        Working: {settings.model} answered {ago(status.checked_at)}.
-      </p>
-    );
-  }
-  return (
-    <div role="alert" className="rounded-md border border-red-500/60 bg-red-500/15 px-4 py-3 text-sm text-red-100">
-      <p className="font-semibold text-red-200">Vision AI is paused</p>
-      <p className="mt-1">{status.error}</p>
-      <p className="mt-1 text-red-200/80">
-        Checked {ago(status.checked_at)}. Descriptions, OCR and scene descriptions wait until this is fixed; no
-        clip is marked as failed for it.
-      </p>
-    </div>
-  );
+/** What leaving a job without a machine would stop, from a 409 job_left_without_machine. */
+function leftJobs(error: unknown): string | null {
+  if (!(error instanceof ApiError) || error.code !== "job_left_without_machine") return null;
+  const jobs = (error.details?.jobs as { label: string }[] | undefined) ?? [];
+  return jobs.map((j) => j.label.toLowerCase()).join(" and ") || "a job";
 }
 
-/** Account-wide: the vision AI endpoint, its key and the model. Admins change it. */
+/** Account-wide: the GPU machines AI work runs on, and each job's model. Admins change them. */
 export default function AiSection() {
   const { data: user } = useQuery({ queryKey: ["settings", "me"], queryFn: getCurrentUser });
-  const { data: settings, isLoading } = useQuery({ queryKey: ["vision-settings"], queryFn: getVisionSettings });
-  if (isLoading || !settings) {
+  const { data: ai, isLoading } = useQuery({ queryKey: AI_QUERY_KEY, queryFn: getAiSettings, refetchInterval: 30_000 });
+  const [adding, setAdding] = useState(false);
+  if (isLoading || !ai) {
     return <div className="h-32 rounded-lg border border-gray-700/50 bg-gray-900/50 animate-pulse" />;
   }
+  const admin = user?.role === "admin";
   return (
-    <div className="rounded-lg border border-gray-700/50 bg-gray-900/50 p-6 space-y-5">
+    <div className="rounded-lg border border-gray-700/50 bg-gray-900/50 p-6 space-y-6">
       <div>
         <h2 className="text-lg font-semibold text-gray-100">AI</h2>
         <p className="mt-1 text-sm text-gray-400">
-          The vision model that writes descriptions, reads text (OCR) and describes video scenes. Any
-          OpenAI-compatible endpoint, such as Ollama.
+          The GPU machines that write descriptions, read text in images and describe video scenes: any
+          OpenAI-compatible endpoint, such as Ollama. Work is spread across the machines that are online.
         </p>
       </div>
-      <Status settings={settings} />
-      {user?.role === "admin" ? (
-        // Rebuilt when the saved settings change, so the form starts from them.
-        <AiForm key={`${settings.api_url}|${settings.model}|${settings.has_key}`} settings={settings} />
-      ) : (
-        <div className="space-y-1 text-sm text-gray-200">
-          <p>Endpoint: {settings.api_url || "none"}</p>
-          <p>Model: {settings.model || "none"}</p>
-          <p className="text-gray-500">Only admins can change this.</p>
+
+      {ai.jobs.map((job) => (
+        <JobBanner key={job.job} ai={ai} job={job} />
+      ))}
+
+      <section className="space-y-3" aria-labelledby="ai-machines">
+        <div className="flex items-center justify-between gap-3">
+          <h3 id="ai-machines" className="text-sm font-semibold uppercase tracking-wide text-gray-400">
+            Machines
+          </h3>
+          {admin && !adding && (
+            <button type="button" className={linkClass} onClick={() => setAdding(true)}>
+              Add machine
+            </button>
+          )}
         </div>
-      )}
+        {ai.machines.length === 0 && !adding && <p className="text-sm text-gray-500">No machines yet.</p>}
+        <ul className="space-y-3">
+          {ai.machines.map((m) => (
+            <MachineRow key={m.machine_id} ai={ai} machine={m} admin={admin} />
+          ))}
+        </ul>
+        {adding && <MachineForm ai={ai} onDone={() => setAdding(false)} />}
+      </section>
+
+      <section className="space-y-3" aria-labelledby="ai-models">
+        <h3 id="ai-models" className="text-sm font-semibold uppercase tracking-wide text-gray-400">
+          Models
+        </h3>
+        <p className="text-sm text-gray-500">One per job. Every machine doing a job must offer its model.</p>
+        {ai.jobs.map((job) => (
+          <JobModel key={`${job.job}|${job.model}`} ai={ai} job={job} admin={admin} />
+        ))}
+      </section>
+      {!admin && <p className="text-sm text-gray-500">Only admins can change these.</p>}
     </div>
   );
 }
 
-function AiForm({ settings }: { settings: VisionSettings }) {
+function JobBanner({ ai, job }: { ai: AiSettings; job: AiJob }) {
+  if (!job.model) {
+    return (
+      <div role="status" className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+        {job.label} {job.label.endsWith("s") || job.label.includes("&") ? "are" : "is"} off: no model is chosen.
+      </div>
+    );
+  }
+  if (!jobDown(ai, job)) return null;
+  return (
+    <div role="alert" className="rounded-md border border-red-500/60 bg-red-500/15 px-4 py-3 text-sm text-red-100">
+      <p className="font-semibold text-red-200">{job.label}: paused</p>
+      <p className="mt-1">
+        {job.machines === 0
+          ? `No machine does ${job.label.toLowerCase()}. Add one, or give the job to a machine.`
+          : `No machine doing ${job.label.toLowerCase()} is online. Each machine below says why.`}
+      </p>
+      <p className="mt-1 text-red-200/80">The work waits until it's fixed; no clip is marked as failed for it.</p>
+    </div>
+  );
+}
+
+function MachineStatusLine({ machine }: { machine: AiMachine }) {
+  const { status } = machine;
+  if (!machine.enabled) return <p className="text-sm text-gray-500">Turned off: gets no work.</p>;
+  if (!status) return <p role="status" className="text-sm text-gray-400">Not checked yet.</p>;
+  if (status.online) {
+    return (
+      <p role="status" className="text-sm text-emerald-300">
+        Online · checked {ago(status.checked_at)}
+      </p>
+    );
+  }
+  return (
+    <p role="alert" className="text-sm text-red-300">
+      Offline: {status.error} · checked {ago(status.checked_at)}
+    </p>
+  );
+}
+
+function MachineRow({ ai, machine, admin }: { ai: AiSettings; machine: AiMachine; admin: boolean }) {
   const queryClient = useQueryClient();
-  const [url, setUrl] = useState(settings.api_url);
+  const [editing, setEditing] = useState(false);
+  const [confirm, setConfirm] = useState<string | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const labels = ai.jobs.filter((j) => machine.jobs.includes(j.job)).map((j) => j.label);
+  const remove = useMutation({
+    mutationFn: (leaveJobs: boolean) => removeMachine(machine.machine_id, leaveJobs),
+    onMutate: () => setProblem(null),
+    onSuccess: (next) => queryClient.setQueryData(AI_QUERY_KEY, next),
+    onError: (e) => {
+      const left = leftJobs(e);
+      if (left) setConfirm(left);
+      else setProblem(message(e));
+    },
+  });
+  const offline = machine.enabled && machine.jobs.length > 0 && machine.status && !machine.status.online;
+
+  if (editing) {
+    return (
+      <li>
+        <MachineForm ai={ai} machine={machine} onDone={() => setEditing(false)} />
+      </li>
+    );
+  }
+  return (
+    <li
+      className={`rounded-md border px-4 py-3 space-y-1 ${
+        offline ? "border-red-500/60 bg-red-500/10" : "border-gray-700/60 bg-gray-950/40"
+      }`}
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <p className="font-medium text-gray-100">{machine.name}</p>
+        {admin && (
+          <span className="flex gap-3">
+            <button type="button" className={linkClass} aria-label={`Edit ${machine.name}`} onClick={() => setEditing(true)}>
+              Edit
+            </button>
+            <button
+              type="button"
+              className="text-sm text-red-300 hover:text-red-200 disabled:opacity-50"
+              aria-label={`Remove ${machine.name}`}
+              disabled={remove.isPending}
+              onClick={() => remove.mutate(false)}
+            >
+              Remove
+            </button>
+          </span>
+        )}
+      </div>
+      <p className="break-all font-mono text-xs text-gray-400">{machine.api_url}</p>
+      <p className="text-sm text-gray-300">
+        {labels.length ? `Does: ${labels.join(", ")}` : "Does nothing yet"} · {machine.at_once} at once
+      </p>
+      <MachineStatusLine machine={machine} />
+      {confirm && (
+        <div role="alert" className="mt-2 space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">
+          <p>
+            No other machine does {confirm}: without {machine.name}, {confirm} wait{confirm.includes(" and ") ? "" : "s"}.
+          </p>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              className={`${buttonClass} bg-red-600 text-white hover:bg-red-500`}
+              onClick={() => {
+                setConfirm(null);
+                remove.mutate(true);
+              }}
+            >
+              Remove anyway
+            </button>
+            <button type="button" className={`${buttonClass} text-gray-200 hover:bg-gray-800`} onClick={() => setConfirm(null)}>
+              Keep it
+            </button>
+          </div>
+        </div>
+      )}
+      {problem && (
+        <p role="alert" className="text-sm text-red-300">
+          {problem}
+        </p>
+      )}
+    </li>
+  );
+}
+
+/** Add a machine, or change one. Connect asks it which models it offers. */
+function MachineForm({ ai, machine, onDone }: { ai: AiSettings; machine?: AiMachine; onDone: () => void }) {
+  const queryClient = useQueryClient();
+  const [name, setName] = useState(machine?.name ?? "");
+  const [url, setUrl] = useState(machine?.api_url ?? "");
   const [key, setKey] = useState("");
   const [forgetKey, setForgetKey] = useState(false);
-  // What the endpoint offered at the last Connect; null until connected (again).
+  const [jobs, setJobs] = useState<string[]>(machine?.jobs ?? ai.jobs.map((j) => j.job));
+  const [atOnce, setAtOnce] = useState(machine?.at_once ?? 2);
+  const [enabled, setEnabled] = useState(machine?.enabled ?? true);
+  // What it offered at the last Connect; null until connected (again).
   const [models, setModels] = useState<string[] | null>(null);
-  const [model, setModel] = useState(settings.model);
   const [problem, setProblem] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<string | null>(null);
 
+  const sameUrl = !!machine && url.trim().replace(/\/+$/, "") === machine.api_url;
   // A key typed now; "" to save none; undefined keeps the saved one.
-  const keyToSend = key ? key : forgetKey ? "" : undefined;
-  const sameUrl = url.trim().replace(/\/+$/, "") === settings.api_url;
+  const keyToSend = key ? key : forgetKey ? "" : machine ? undefined : "";
+  const moved = !machine || !sameUrl || keyToSend !== undefined;
+  const edited = () => {
+    setModels(null);
+    setProblem(null);
+  };
 
   const connect = useMutation({
-    mutationFn: () => connectVision({ api_url: url.trim(), api_key: keyToSend }),
+    mutationFn: () =>
+      connectMachine({ api_url: url.trim(), api_key: keyToSend, machine_id: sameUrl ? machine?.machine_id : undefined }),
     onMutate: () => setProblem(null),
-    onSuccess: (offered) => {
-      setModels(offered);
-      if (!offered.includes(model)) setModel("");
-    },
+    onSuccess: setModels,
     onError: (e) => {
       setModels(null);
       setProblem(message(e));
@@ -126,42 +282,45 @@ function AiForm({ settings }: { settings: VisionSettings }) {
   });
 
   const save = useMutation({
-    mutationFn: (body: { api_url: string; api_key?: string; model: string }) => saveVisionSettings(body),
+    mutationFn: ({ leaveJobs }: { leaveJobs: boolean }) => {
+      const fields: MachineFields = { name: name.trim(), api_url: url.trim(), jobs, at_once: atOnce, enabled };
+      if (keyToSend !== undefined) fields.api_key = keyToSend;
+      return machine ? updateMachine(machine.machine_id, fields, leaveJobs) : addMachine(fields);
+    },
     onMutate: () => setProblem(null),
     onSuccess: (next) => {
-      // A typed key is saved now: it's never shown again.
-      setKey("");
-      setForgetKey(false);
-      setModels(null);
-      queryClient.setQueryData(["vision-settings"], next);
+      queryClient.setQueryData(AI_QUERY_KEY, next);
+      onDone();
     },
     onError: (e) => {
-      if (e instanceof ApiError && e.code === "vision_model_unavailable") {
-        const offered = (e.details?.models as string[] | undefined) ?? [];
-        setModels(offered);
-        setModel("");
-      }
-      setProblem(message(e));
+      const left = leftJobs(e);
+      if (left) setConfirm(left);
+      else setProblem(message(e));
     },
   });
 
-  const edited = () => {
-    setModels(null);
-    setProblem(null);
-  };
-  const changed = !sameUrl || model !== settings.model || keyToSend !== undefined;
-  const canSave = !!models && models.includes(model) && changed && !save.isPending;
-  const modelChange = !!settings.model && !!model && model !== settings.model;
-  const busy = connect.isPending || save.isPending;
+  // A job whose model this machine doesn't offer can't be given to it.
+  const missing = (job: AiJob) => !!models && !!job.model && !models.includes(job.model);
+  const canSave = !!name.trim() && !!url.trim() && (!moved || !!models) && !jobs.some((j) => {
+    const job = ai.jobs.find((x) => x.job === j);
+    return job ? missing(job) : false;
+  }) && !save.isPending;
+  const title = machine ? `Edit ${machine.name}` : "Add a machine";
 
   return (
     <form
-      className="space-y-4"
+      aria-label={title}
+      className="space-y-4 rounded-md border border-indigo-500/40 bg-gray-950/60 p-4"
       onSubmit={(e) => {
         e.preventDefault();
-        if (canSave) save.mutate({ api_url: url.trim(), api_key: keyToSend, model });
+        if (canSave) save.mutate({ leaveJobs: false });
       }}
     >
+      <p className="font-medium text-gray-100">{title}</p>
+      <label className="block space-y-1 text-sm text-gray-300">
+        <span>Name</span>
+        <input aria-label="Name" placeholder="Brain 3080" value={name} className={inputClass} onChange={(e) => setName(e.target.value)} />
+      </label>
       <label className="block space-y-1 text-sm text-gray-300">
         <span>Endpoint URL</span>
         <input
@@ -182,7 +341,7 @@ function AiForm({ settings }: { settings: VisionSettings }) {
           type="password"
           aria-label="API key"
           autoComplete="off"
-          placeholder={settings.has_key && sameUrl && !forgetKey ? "Saved — leave blank to keep it" : "None"}
+          placeholder={machine?.has_key && sameUrl && !forgetKey ? "Saved — leave blank to keep it" : "None"}
           value={key}
           className={inputClass}
           onChange={(e) => {
@@ -191,7 +350,7 @@ function AiForm({ settings }: { settings: VisionSettings }) {
           }}
         />
       </label>
-      {settings.has_key && sameUrl && !key && (
+      {machine?.has_key && sameUrl && !key && (
         <label className="flex items-center gap-2 text-sm text-gray-300">
           <input
             type="checkbox"
@@ -204,11 +363,10 @@ function AiForm({ settings }: { settings: VisionSettings }) {
           Remove the saved key
         </label>
       )}
-
       <div className="flex flex-wrap items-center gap-3">
         <button
           type="button"
-          disabled={!url.trim() || busy}
+          disabled={!url.trim() || connect.isPending}
           className={`${buttonClass} bg-gray-700 text-gray-100 hover:bg-gray-600`}
           onClick={() => connect.mutate()}
         >
@@ -216,62 +374,186 @@ function AiForm({ settings }: { settings: VisionSettings }) {
         </button>
         {models && (
           <span role="status" className="text-sm text-emerald-300">
-            Connected: {models.length} model{models.length === 1 ? "" : "s"}
+            Connected: offers {models.join(", ")}
           </span>
         )}
+        {!models && moved && <span className="text-sm text-gray-500">Connect to check it before saving.</span>}
       </div>
 
-      {models && (
-        <label className="block space-y-1 text-sm text-gray-300">
-          <span>Model</span>
-          <select
-            aria-label="Model"
-            value={model}
-            className={inputClass}
-            onChange={(e) => {
-              setModel(e.target.value);
-              setProblem(null);
-            }}
-          >
-            <option value="" disabled>
-              Pick a model…
-            </option>
-            {models.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
+      <fieldset className="space-y-2">
+        <legend className="text-sm text-gray-300">Does</legend>
+        {ai.jobs.map((job) => (
+          <label key={job.job} className="flex items-center gap-2 text-sm text-gray-200">
+            <input
+              type="checkbox"
+              checked={jobs.includes(job.job)}
+              onChange={(e) =>
+                setJobs(e.target.checked ? [...jobs, job.job] : jobs.filter((j) => j !== job.job))
+              }
+            />
+            {job.label}
+            {job.model && <span className="text-gray-500">({job.model})</span>}
+            {missing(job) && jobs.includes(job.job) && (
+              <span role="alert" className="text-red-300">
+                It doesn't offer {job.model}.
+              </span>
+            )}
+          </label>
+        ))}
+      </fieldset>
+      <label className="block space-y-1 text-sm text-gray-300">
+        <span>Requests at once</span>
+        <input
+          type="number"
+          aria-label="Requests at once"
+          min={1}
+          max={32}
+          value={atOnce}
+          className={`${inputClass} max-w-[8rem]`}
+          onChange={(e) => setAtOnce(Math.max(1, Math.min(32, Number(e.target.value) || 1)))}
+        />
+        <span className="block text-xs text-gray-500">How many images it works on together; more needs more GPU memory.</span>
+      </label>
+      {machine && (
+        <label className="flex items-center gap-2 text-sm text-gray-300">
+          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+          Use this machine
         </label>
       )}
-      {!models && settings.model && <p className="text-sm text-gray-400">Model: {settings.model}. Connect to change it.</p>}
-
-      {modelChange && (
-        <p className="text-sm text-amber-300">
-          Changing the model marks existing descriptions, OCR and scene descriptions as made with the old one.
-        </p>
+      {confirm && (
+        <div role="alert" className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">
+          <p>No other machine does {confirm}: without this one, it waits.</p>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              className={`${buttonClass} bg-amber-600 text-white hover:bg-amber-500`}
+              onClick={() => {
+                setConfirm(null);
+                save.mutate({ leaveJobs: true });
+              }}
+            >
+              Save anyway
+            </button>
+            <button type="button" className={`${buttonClass} text-gray-200 hover:bg-gray-800`} onClick={() => setConfirm(null)}>
+              Go back
+            </button>
+          </div>
+        </div>
       )}
       {problem && (
         <p role="alert" className="text-sm text-red-300">
           {problem}
         </p>
       )}
-
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap gap-3">
         <button type="submit" disabled={!canSave} className={`${buttonClass} bg-indigo-600 text-white hover:bg-indigo-500`}>
-          {save.isPending ? "Saving…" : "Save"}
+          {save.isPending ? "Saving…" : machine ? "Save" : "Add"}
         </button>
-        {settings.api_url && (
-          <button
-            type="button"
-            disabled={busy}
-            className={`${buttonClass} text-gray-300 hover:bg-gray-800`}
-            onClick={() => save.mutate({ api_url: "", model: "" })}
-          >
-            Turn off vision AI
+        <button type="button" className={`${buttonClass} text-gray-300 hover:bg-gray-800`} onClick={onDone}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function JobModel({ ai, job, admin }: { ai: AiSettings; job: AiJob; admin: boolean }) {
+  const queryClient = useQueryClient();
+  const [changing, setChanging] = useState(false);
+  const [model, setModel] = useState(job.model);
+  const [problem, setProblem] = useState<string | null>(null);
+  const doing = ai.machines.filter((m) => m.enabled && m.jobs.includes(job.job));
+  // What the machines doing it offered when last checked.
+  const offered = [...new Set(doing.flatMap((m) => m.status?.models ?? []))].sort();
+  const save = useMutation({
+    mutationFn: (next: string) => setJobModel(job.job, next),
+    onMutate: () => setProblem(null),
+    onSuccess: (next) => {
+      queryClient.setQueryData(AI_QUERY_KEY, next);
+      setChanging(false);
+    },
+    onError: (e) => {
+      if (e instanceof ApiError && e.code === "model_not_offered") {
+        const machines = (e.details?.machines as { name: string; models: string[]; error: string }[] | undefined) ?? [];
+        setProblem(
+          `${e.message} ` +
+            machines.map((m) => `${m.name}: ${m.error || (m.models.length ? m.models.join(", ") : "no models")}`).join("; "),
+        );
+      } else setProblem(message(e));
+    },
+  });
+  return (
+    <div className="rounded-md border border-gray-700/60 bg-gray-950/40 px-4 py-3 space-y-2">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <p className="text-sm text-gray-200">
+          <span className="font-medium">{job.label}:</span> {job.model || "off"}
+          {job.model && (
+            <span className="ml-2 text-gray-400">
+              offered by {job.offering} of {job.machines} machine{job.machines === 1 ? "" : "s"}
+            </span>
+          )}
+        </p>
+        {admin && !changing && (
+          <button type="button" className={linkClass} aria-label={`Change the model for ${job.label}`} onClick={() => setChanging(true)}>
+            Change
           </button>
         )}
       </div>
-    </form>
+      {changing && (
+        <form
+          className="space-y-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (model && model !== job.model) save.mutate(model);
+          }}
+        >
+          <select aria-label={`Model for ${job.label}`} value={model} className={inputClass} onChange={(e) => setModel(e.target.value)}>
+            <option value="" disabled>
+              {offered.length ? "Pick a model…" : "No machine doing it has been checked yet"}
+            </option>
+            {offered.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+          {job.model && model && model !== job.model && (
+            <p className="text-sm text-amber-300">
+              Changing the model marks what was made with {job.model} as made with an old model.
+            </p>
+          )}
+          {problem && (
+            <p role="alert" className="text-sm text-red-300">
+              {problem}
+            </p>
+          )}
+          <div className="flex flex-wrap gap-3">
+            <button
+              type="submit"
+              disabled={!model || model === job.model || save.isPending}
+              className={`${buttonClass} bg-indigo-600 text-white hover:bg-indigo-500`}
+            >
+              {save.isPending ? "Saving…" : "Save"}
+            </button>
+            {job.model && (
+              <button type="button" disabled={save.isPending} className={`${buttonClass} text-gray-300 hover:bg-gray-800`} onClick={() => save.mutate("")}>
+                Turn off {job.label.toLowerCase()}
+              </button>
+            )}
+            <button
+              type="button"
+              className={`${buttonClass} text-gray-300 hover:bg-gray-800`}
+              onClick={() => {
+                setChanging(false);
+                setModel(job.model);
+                setProblem(null);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
   );
 }

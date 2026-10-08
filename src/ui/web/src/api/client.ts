@@ -768,41 +768,86 @@ export async function updateTenantSettings(
   return apiFetch<TenantSettings>("/tenant/settings", { method: "PATCH", body: update });
 }
 
-/** The worker's last check of the vision endpoint, for the saved settings. */
-export interface VisionStatus {
-  ok: boolean;
+/** The latest check of an AI machine (the worker's, or Connect's when it was saved). */
+export interface MachineStatus {
+  online: boolean;
   error: string;
-  model: string;
-  api_url: string;
+  models: string[];
   checked_at: string | null;
 }
 
-/** The account's vision AI: the one place it lives (workers keep none). */
-export interface VisionSettings {
+/** A GPU machine the account's AI work runs on (Settings → AI). */
+export interface AiMachine {
+  machine_id: string;
+  name: string;
   api_url: string;
   /** Whether a key is saved; the key itself is never sent back. */
   has_key: boolean;
+  jobs: string[];
+  /** Requests it takes at once. */
+  at_once: number;
+  enabled: boolean;
+  /** null until it has been checked. */
+  status: MachineStatus | null;
+}
+
+/** A job and its one model; `machines` do it (enabled), `offering` offered the model when last checked. */
+export interface AiJob {
+  job: string;
+  label: string;
   model: string;
-  /** null until the worker has checked these settings. */
-  status: VisionStatus | null;
+  machines: number;
+  offering: number;
 }
 
-export async function getVisionSettings(): Promise<VisionSettings> {
-  return apiFetch<VisionSettings>("/tenant/vision");
+export interface AiSettings {
+  machines: AiMachine[];
+  jobs: AiJob[];
 }
 
-/** Ask the endpoint which models it offers (admins). api_key undefined:
- * the saved key, when the URL is the saved one. 502 vision_unreachable
- * says why when it can't. */
-export async function connectVision(body: { api_url: string; api_key?: string }): Promise<string[]> {
-  return (await apiFetch<{ models: string[] }>("/tenant/vision/connect", { method: "POST", body })).models;
+export async function getAiSettings(): Promise<AiSettings> {
+  return apiFetch<AiSettings>("/ai");
 }
 
-/** Save the endpoint, key and model (admins); the endpoint is asked again.
- * 409 vision_model_unavailable (details.models) when it doesn't offer the
- * model. api_url "" turns vision AI off. api_key undefined keeps the saved key. */
-export async function saveVisionSettings(body: { api_url: string; api_key?: string; model: string }): Promise<VisionSettings> {
-  return apiFetch<VisionSettings>("/tenant/vision", { method: "PUT", body });
+/** Ask a machine which models it offers (admins). api_key undefined: a saved
+ * machine's key (machine_id), when it's that machine's URL. 502
+ * machine_unreachable says why when it can't. */
+export async function connectMachine(body: { api_url: string; api_key?: string; machine_id?: string }): Promise<string[]> {
+  return (await apiFetch<{ models: string[] }>("/ai/connect", { method: "POST", body })).models;
+}
+
+export interface MachineFields {
+  name: string;
+  api_url: string;
+  /** undefined keeps the saved key (edits); "" none. */
+  api_key?: string;
+  jobs: string[];
+  at_once: number;
+  enabled?: boolean;
+}
+
+/** Add a machine (admins); it's asked for its models. 502 machine_unreachable,
+ * 409 model_not_offered (details: job, model, models), 409 name_taken. */
+export async function addMachine(body: MachineFields): Promise<AiSettings> {
+  return apiFetch<AiSettings>("/ai/machines", { method: "POST", body });
+}
+
+/** Change a machine (admins): only the fields sent. 409
+ * job_left_without_machine (details.jobs) unless leaveJobs, when it's the last
+ * machine doing a job; otherwise as addMachine. */
+export async function updateMachine(machineId: string, body: Partial<MachineFields>, leaveJobs = false): Promise<AiSettings> {
+  return apiFetch<AiSettings>(`/ai/machines/${machineId}${leaveJobs ? "?leave_jobs=true" : ""}`, { method: "PATCH", body });
+}
+
+/** Remove a machine (admins). 409 job_left_without_machine unless leaveJobs. */
+export async function removeMachine(machineId: string, leaveJobs = false): Promise<AiSettings> {
+  return apiFetch<AiSettings>(`/ai/machines/${machineId}${leaveJobs ? "?leave_jobs=true" : ""}`, { method: "DELETE" });
+}
+
+/** Set a job's model (admins); "" turns the job off. Every machine doing it is
+ * asked: 409 model_not_offered (details.machines: name, models, error) when none offers it. */
+export async function setJobModel(job: string, model: string): Promise<AiSettings> {
+  return apiFetch<AiSettings>(`/ai/jobs/${job}`, { method: "PUT", body: { model } });
 }
 
 export async function findSimilar(params: {
