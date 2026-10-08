@@ -1,10 +1,17 @@
 """Producers API (ADR-016 phase 3): each producer, the settings it makes its
 artifact with now, and how many clips' artifacts are current, stale, missing
 or failing. The worker reads the settings here and makes artifacts with
-them, so what it records in lineage is what's current."""
+them, so what it records in lineage is what's current.
+
+Upgrades (piece 5): an admin approves making a producer's stale artifacts
+again, in everything, one library or one project. The API asks first, with
+a 409 the request answers: what to do with clips a person edited
+(edited_clips), and for producers that must stay one model across the
+library, a confirmation naming the count (redo_everything)."""
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -13,10 +20,13 @@ from sqlalchemy import text
 from sqlmodel import Session
 
 from src.server.api.dependencies import (
+    get_current_user_id,
     get_tenant_session,
     require_editor,
     require_signed_in,
+    require_tenant_admin,
 )
+from src.server.api.errors import ConflictError, DecisionRequiredError, InvalidChoiceError
 from src.server.repository import lineage
 from src.shared.producers import PRODUCERS
 
@@ -72,6 +82,25 @@ class ProducerCounts(BaseModel):
     failing: int  # the last try failed (whether or not an older artifact exists)
 
 
+class UpgradeScope(BaseModel):
+    kind: Literal["all", "library", "project"]
+    id: str | None = None  # the library's or project's
+    name: str | None = None
+
+
+class Upgrade(BaseModel):
+    """Stale artifacts an admin approved making again: the clips stale in its
+    scope then, each until it's made again."""
+
+    upgrade_id: str
+    scope: UpgradeScope
+    edits: Literal["keep", "replace", "skip"]
+    approved_by: str | None = None
+    approved_at: datetime
+    total: int  # clips it took on
+    remaining: int  # not made again yet
+
+
 class ProducerItem(BaseModel):
     artifact: str
     producer: str
@@ -83,6 +112,12 @@ class ProducerItem(BaseModel):
     settings: dict[str, Any]
     settings_hash: str
     counts: ProducerCounts | None = None
+    # Whether its stale artifacts can be made again now, and if not why.
+    upgradable: bool = True
+    why_not: str | None = None
+    # Stale clips (in the counts' scope) with a person's edits on top.
+    edited: int = 0
+    upgrades: list[Upgrade] = Field(default_factory=list)
 
 
 class ProducerList(BaseModel):
@@ -106,21 +141,157 @@ def tenant_vision_model(request: Request) -> str:
 def list_producers(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
     library_id: str | None = None,
+    project_id: str | None = None,
     counts: bool = True,
 ) -> ProducerList:
-    """Every producer with its settings now; counts (in one library when given)
-    unless counts=false, as the worker asks."""
+    """Every producer with its settings now and its upgrades; counts (in one
+    library or project when given) unless counts=false, as the worker asks."""
     vision_model = tenant_vision_model(request)
+    asset_ids = _project_clips(request, session, user_id, project_id) if counts and project_id else None
+    if counts:
+        lineage.retire_outdated(session, vision_model)
     items = []
     for artifact, p in PRODUCERS.items():
         want = lineage.desired(session, artifact, vision_model)
-        items.append(ProducerItem(
+        item = ProducerItem(
             artifact=artifact, producer=p.producer, version=p.version, title=p.title, media=list(p.media),
             uniform=p.uniform, settings=want["settings"], settings_hash=want["settings_hash"],
-            counts=ProducerCounts(**lineage.counts(session, artifact, want, library_id)) if counts else None,
-        ))
+            upgradable=artifact not in lineage.CANT_UPGRADE, why_not=lineage.CANT_UPGRADE.get(artifact),
+        )
+        if counts:
+            item.counts = ProducerCounts(**lineage.counts(session, artifact, want, library_id, asset_ids))
+            if item.counts.stale and artifact in lineage.EDITED:
+                item.edited = len(lineage.stale_ids(session, artifact, want, library_id, asset_ids)[1])
+            item.upgrades = [Upgrade(**u) for u in lineage.upgrades(session, artifact)]
+        items.append(item)
     return ProducerList(producers=items)
+
+
+def _project_clips(request: Request, session: Session, user_id: str, project_id: str) -> list[str]:
+    """Every clip in a project the caller can see (a smart project's live results too); 404 otherwise."""
+    from src.server.api.routers.projects import _all_project_assets, _can_view
+    from src.server.repository.tenant import ProjectRepository
+
+    project = ProjectRepository(session).get_by_id(project_id)
+    if project is None or getattr(project, "deleted_at", None) is not None or not _can_view(project, user_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    return [a.asset_id for a in _all_project_assets(project, request, session, user_id)]
+
+
+class UpgradeIn(BaseModel):
+    """Make the producer's stale artifacts again: everywhere, or in one
+    library or project. edits answers 409 edited_clips; confirm answers 409
+    redo_everything."""
+
+    library_id: str | None = Field(default=None, max_length=64)
+    project_id: str | None = Field(default=None, max_length=64)
+    edits: Literal["keep", "replace", "skip"] | None = None
+    confirm: bool = False
+
+
+class UpgradeOut(BaseModel):
+    upgrade_id: str | None  # None when every stale clip was skipped
+    artifact: str
+    scope: UpgradeScope
+    edits: Literal["keep", "replace", "skip"]
+    upgrading: int  # clips handed to the worker to make again
+    skipped_edited: int = 0  # left as they are: a person edited them
+    replaced_edits: int = 0  # edits moved to history
+
+
+@router.post("/{artifact}/upgrade", response_model=UpgradeOut, dependencies=[Depends(require_tenant_admin)])
+def approve_upgrade(
+    artifact: str,
+    body: UpgradeIn,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> UpgradeOut:
+    """Approve making the producer's stale artifacts again, in scope. Takes
+    the clips stale there now; the worker makes them after anything missing.
+    Approving the same scope again replaces the earlier approval."""
+    p = producer_or_404(artifact)
+    if body.library_id and body.project_id:
+        raise InvalidChoiceError("one_scope", "Narrow an upgrade to a library or a project, not both.")
+    if artifact in lineage.CANT_UPGRADE:
+        raise ConflictError("cant_upgrade", f"{p.title} can't be made again yet. {lineage.CANT_UPGRADE[artifact]}")
+    narrowed = body.library_id or body.project_id
+    if p.uniform and narrowed:
+        raise InvalidChoiceError(
+            "all_or_nothing",
+            f"{p.title} must come from one model across the library, so it's upgraded everywhere or not at all.")
+
+    scope = UpgradeScope(kind="all")
+    asset_ids: list[str] | None = None
+    if body.library_id:
+        from src.server.repository.tenant import LibraryRepository
+
+        lib = LibraryRepository(session).get_by_id(body.library_id)
+        if lib is None or getattr(lib, "status", "active") == "trashed":
+            raise HTTPException(status_code=404, detail="Library not found")
+        scope = UpgradeScope(kind="library", id=lib.library_id, name=lib.name)
+    elif body.project_id:
+        asset_ids = _project_clips(request, session, user_id, body.project_id)
+        from src.server.repository.tenant import ProjectRepository
+
+        scope = UpgradeScope(kind="project", id=body.project_id,
+                             name=ProjectRepository(session).get_by_id(body.project_id).name)
+
+    vision_model = tenant_vision_model(request)
+    lineage.retire_outdated(session, vision_model)
+    want = lineage.desired(session, artifact, vision_model)
+    stale, edited = lineage.stale_ids(session, artifact, want, body.library_id, asset_ids)
+    where = {"all": "", "library": f" in {scope.name}", "project": f" in {scope.name}"}[scope.kind]
+    if not stale:
+        raise ConflictError("nothing_stale", f"Nothing{where} was made with older {p.title.lower()} settings.")
+    if p.uniform and not body.confirm:
+        raise DecisionRequiredError(
+            "redo_everything",
+            f"All {len(stale):,} clips' {p.title.lower()} will be made again. Until it finishes, results mix "
+            "the old and the new.",
+            {"artifact": artifact, "title": p.title, "stale": len(stale)},
+        )
+    if edited and body.edits is None:
+        raise DecisionRequiredError(
+            "edited_clips",
+            f"{len(edited):,} of the {len(stale):,} clips have your edits. Keep them on top, replace them "
+            "(they're kept in history) or skip those clips?",
+            {"artifact": artifact, "stale": len(stale), "edited": len(edited),
+             "choices": ["keep", "replace", "skip"]},
+        )
+    edits = body.edits or "keep"
+    items = [a for a in stale if a not in edited] if edits == "skip" else stale
+    skipped = len(stale) - len(items)
+    if not items:
+        return UpgradeOut(upgrade_id=None, artifact=artifact, scope=scope, edits=edits, upgrading=0,
+                          skipped_edited=skipped)
+    replaced = 0
+    if edits == "replace" and edited:
+        replaced = lineage.replace_edits(session, artifact, sorted(edited), by=user_id)
+    upgrade_id = lineage.approve(session, artifact, want, scope=scope.kind, library_id=body.library_id,
+                                 project_id=body.project_id, edits=edits, asset_ids=items, by=user_id)
+    session.commit()
+    return UpgradeOut(upgrade_id=upgrade_id, artifact=artifact, scope=scope, edits=edits, upgrading=len(items),
+                      skipped_edited=skipped, replaced_edits=replaced)
+
+
+@router.delete("/{artifact}/upgrade", status_code=204, dependencies=[Depends(require_tenant_admin)])
+def cancel_upgrade(
+    artifact: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    upgrade_id: str | None = None,
+) -> None:
+    """Stop an upgrade (or every upgrade of the producer): what it hasn't made
+    again yet stays stale. Edits it already replaced stay in history."""
+    producer_or_404(artifact)
+    r = session.execute(text(
+        "DELETE FROM producer_upgrades WHERE artifact = :artifact AND (CAST(:u AS text) IS NULL OR upgrade_id = :u)"
+    ), {"artifact": artifact, "u": upgrade_id})
+    if upgrade_id and r.rowcount == 0:
+        raise HTTPException(status_code=404, detail="No such upgrade")
+    session.commit()
 
 
 class Failure(BaseModel):

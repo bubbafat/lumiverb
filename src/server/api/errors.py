@@ -31,6 +31,13 @@ class DecisionRequiredError(ConflictError):
     """409: the request must state the user's choice (see details)."""
 
 
+class InvalidChoiceError(ConflictError):
+    """422 in the standard envelope: the request asks for something that can't
+    be done as asked (narrowing an all-or-nothing upgrade, say). code names it."""
+
+    status_code = 422
+
+
 class UpstreamError(ConflictError):
     """502 in the standard envelope: a service the request needed (the vision
     AI endpoint, say) didn't do its part. code names what; message says why."""

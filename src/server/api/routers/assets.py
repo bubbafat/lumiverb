@@ -366,8 +366,19 @@ def page_assets(
         if color is not None:
             color_list = [c.strip() for c in color.split(",") if c.strip()]
 
+    flags = [f for f, on in (("missing_vision", missing_vision), ("missing_embeddings", missing_embeddings),
+                             ("missing_faces", missing_faces), ("missing_video_scenes", missing_video_scenes),
+                             ("missing_ocr", missing_ocr), ("missing_scene_vision", missing_scene_vision),
+                             ("missing_transcription", missing_transcription), ("missing_probe", missing_probe),
+                             ("missing_analysis_proxy", missing_analysis_proxy)) if on]
+    work = None
+    if flags:
+        from src.server.api.routers.producers import tenant_vision_model
+
+        work = lineage.work_conditions(session, flags, library_id, tenant_vision_model(request))
     assets = asset_repo.page_by_library(
         library_id=library_id,
+        work=work,
         after=after,
         limit=limit,
         path_prefix=normalized_prefix,
@@ -471,28 +482,42 @@ class RepairSummary(BaseModel):
     waiting_failures: int = 0
 
 
-def _waiting_failures_sql() -> str:
+def _waiting_failures_sql(upgrading: set[str] = frozenset()) -> str:
     """Clip-steps the missing_* counts leave out because their last try
-    failed and their turn hasn't come."""
+    failed and their turn hasn't come (an upgrade's too, for artifacts in one)."""
     from src.server.repository import lineage
     from src.shared.producers import MISSING_FLAGS
 
+    def work(a: str) -> str:
+        return f"({lineage.outstanding(a)} OR {lineage.upgrading(a)})" if a in upgrading else lineage.outstanding(a)
+
     # waiting() first: cheap, and false for nearly every clip, so the rest is rarely looked at.
-    return " + ".join(f"COUNT(*) FILTER (WHERE {lineage.waiting(a)} AND {lineage.outstanding(a)})"
+    return " + ".join(f"COUNT(*) FILTER (WHERE {lineage.waiting(a)} AND {work(a)})"
                       for a in MISSING_FLAGS.values())
 
 
 @router.get("/repair-summary", response_model=RepairSummary, dependencies=[Depends(require_signed_in)])
 def repair_summary(
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     library_id: str,
 ) -> RepairSummary:
-    """Count assets missing various pipeline outputs for a library."""
+    """Count assets missing various pipeline outputs for a library. Each
+    step's count includes an approved upgrade's clips not made again yet."""
     from sqlalchemy import text
     lib = LibraryRepository(session).get_by_id(library_id)
     if lib is None:
         raise HTTPException(status_code=404, detail="Library not found")
+    from src.server.api.routers.producers import tenant_vision_model
     from src.server.repository.tenant import MISSING_CONDITIONS
+    from src.shared.producers import MISSING_FLAGS
+
+    lineage.retire_outdated(session, tenant_vision_model(request))
+    live = lineage.upgrading_artifacts(session)
+    c = dict(MISSING_CONDITIONS)
+    for flag, artifact in MISSING_FLAGS.items():
+        if artifact in live:
+            c[flag] = f"({MISSING_CONDITIONS[flag]} OR {lineage.upgrade_due(artifact)})"
     from src.server.search.sync import STALE_SEARCH  # the search sweep's own rule
     row = session.execute(
         text(f"""
@@ -500,18 +525,18 @@ def repair_summary(
                 COUNT(*) AS total,
                 COUNT(*) FILTER (WHERE proxy_key IS NULL) AS missing_proxy,
                 COUNT(*) FILTER (WHERE exif_extracted_at IS NULL AND media_type = 'image') AS missing_exif,
-                COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_vision"]}) AS missing_vision,
-                COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_embeddings"]}) AS missing_embeddings,
-                COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_faces"]}) AS missing_faces,
-                COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_face_embeddings"]}) AS missing_face_embeddings,
-                COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_ocr"]}) AS missing_ocr,
-                COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_video_scenes"]}) AS missing_video_scenes,
-                COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_scene_vision"]}) AS missing_scene_vision,
-                COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_transcription"]}) AS missing_transcription,
-                COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_probe"]}) AS missing_probe,
-                COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_analysis_proxy"]}) AS missing_analysis_proxy,
+                COUNT(*) FILTER (WHERE {c["missing_vision"]}) AS missing_vision,
+                COUNT(*) FILTER (WHERE {c["missing_embeddings"]}) AS missing_embeddings,
+                COUNT(*) FILTER (WHERE {c["missing_faces"]}) AS missing_faces,
+                COUNT(*) FILTER (WHERE {c["missing_face_embeddings"]}) AS missing_face_embeddings,
+                COUNT(*) FILTER (WHERE {c["missing_ocr"]}) AS missing_ocr,
+                COUNT(*) FILTER (WHERE {c["missing_video_scenes"]}) AS missing_video_scenes,
+                COUNT(*) FILTER (WHERE {c["missing_scene_vision"]}) AS missing_scene_vision,
+                COUNT(*) FILTER (WHERE {c["missing_transcription"]}) AS missing_transcription,
+                COUNT(*) FILTER (WHERE {c["missing_probe"]}) AS missing_probe,
+                COUNT(*) FILTER (WHERE {c["missing_analysis_proxy"]}) AS missing_analysis_proxy,
                 COUNT(*) FILTER (WHERE {STALE_SEARCH}) AS stale_search_sync,
-                {_waiting_failures_sql()} AS waiting_failures
+                {_waiting_failures_sql(live)} AS waiting_failures
             FROM active_assets a
             {lineage.LINEAGE_JOIN}
             WHERE library_id = :library_id
