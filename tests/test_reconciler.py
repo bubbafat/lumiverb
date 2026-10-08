@@ -207,16 +207,6 @@ def test_a_persons_transcript_stays_when_the_file_changes(env):
     assert _due(lib, "missing_transcription") == []
 
 
-@pytest.mark.slow
-def test_ocr_waits_for_a_description(env):
-    lib = _library(env, "RecOcr")
-    sha = _sha()
-    clip = _ingest_with(lib, "a.jpg", sha, None)
-    assert _due(lib, "missing_ocr") == []  # OCR is kept with the description, until piece 3
-    _describe(lib, clip, sha)
-    assert _due(lib, "missing_ocr") == [clip]
-
-
 # ---------------------------------------------------------------------------
 # Failures wait their turn
 # ---------------------------------------------------------------------------

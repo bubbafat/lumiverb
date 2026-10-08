@@ -1739,6 +1739,28 @@ class AssetRepository:
         }
 
 
+class AssetOcrRepository:
+    """The text read in each clip's image (one row per clip)."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def upsert(self, asset_id: str, text: str, model_id: str = "", *, commit: bool = True) -> None:
+        self._session.execute(sa_text(
+            "INSERT INTO asset_ocr (asset_id, text, has_text, model_id, generated_at)"
+            " VALUES (:a, :t, :h, :m, :now)"
+            " ON CONFLICT (asset_id) DO UPDATE SET text = EXCLUDED.text, has_text = EXCLUDED.has_text,"
+            "   model_id = EXCLUDED.model_id, generated_at = EXCLUDED.generated_at"
+        ), {"a": asset_id, "t": text, "h": bool(text), "m": model_id, "now": utcnow()})
+        if commit:
+            self._session.commit()
+
+    def text_for(self, asset_id: str) -> str:
+        row = self._session.execute(sa_text("SELECT text FROM asset_ocr WHERE asset_id = :a"),
+                                    {"a": asset_id}).first()
+        return row[0] if row else ""
+
+
 class AssetMetadataRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
