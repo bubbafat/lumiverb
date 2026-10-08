@@ -12,6 +12,7 @@ from src.server.api.dependencies import (
     get_tenant_session,
     require_editor,
     require_signed_in,
+    require_tenant_admin,
 )
 from src.server.api.errors import ConflictError, DecisionRequiredError
 from src.server.database import get_control_session
@@ -204,11 +205,13 @@ def list_library_health(
 def empty_trash(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
-    _: Annotated[None, Depends(require_editor)],
+    _: Annotated[None, Depends(require_tenant_admin)],
     user_id: Annotated[str, Depends(get_current_user_id)],
     body: EmptyLibraryTrashRequest | None = None,
 ) -> EmptyTrashResponse:
     """Delete trashed libraries for good: those in library_ids, or all of them.
+    Admins only: deleting media for good right away is theirs (Robert's call,
+    Oct 8); editors trash and restore, and the trash deletes on its own day.
     Returns how many. 409 in_projects, with the projects in details, when
     their clips are in projects and remove_from_projects isn't set."""
     tenant_id = getattr(request.state, "tenant_id", None)

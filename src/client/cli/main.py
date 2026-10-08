@@ -350,7 +350,7 @@ def library_restore(
 def library_empty_trash(
     name: Annotated[str | None, typer.Option("--name", "-n", help="Only this library (default: all in the trash).")] = None,
 ) -> None:
-    """Permanently delete libraries in the trash and their assets: one, or all of them."""
+    """Permanently delete libraries in the trash and their assets: one, or all of them (admins only)."""
     client = LumiverbClient()
     resp = client.get("/v1/libraries", params={"include_trashed": True})
     libraries = resp.json()

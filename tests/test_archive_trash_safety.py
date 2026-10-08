@@ -413,3 +413,51 @@ def test_restoring_a_projects_clips_counts_those_back_in_the_archive_apart(env):
     assert r.status_code == 200, r.text
     assert (r.json()["restored"], r.json()["archived"]) == (1, 1)
     assert _reason(env, shelved) == "archived" and _reason(env, live) == "active"
+
+
+# ---------------------------------------------------------------------------
+# Who deletes media for good right away (Robert's call, Oct 8): an admin
+# ---------------------------------------------------------------------------
+
+
+def _key_with_role(env, role: str) -> dict:
+    import hashlib
+
+    from sqlmodel import text as sql_text
+
+    from src.server.database import get_control_session
+
+    client, headers, *_ = env
+    plaintext = client.post("/v1/keys", json={"label": f"{role}-delete"}, headers=headers).json()["plaintext"]
+    with get_control_session() as session:
+        session.exec(sql_text("UPDATE api_keys SET role = :r WHERE key_hash = :h"),
+                     params={"r": role, "h": hashlib.sha256(plaintext.encode()).hexdigest()})
+        session.commit()
+    return {"Authorization": f"Bearer {plaintext}"}
+
+
+@pytest.mark.slow
+def test_only_an_admin_deletes_a_library_for_good(env):
+    """Editors trash and restore libraries; deleting one for good right away is an admin's."""
+    client, headers, *_ = env
+    editor = _key_with_role(env, "editor")
+    lib_env = _library(env, "AdminOnlyEmpty")
+    assert client.delete(f"/v1/libraries/{lib_env[2]}", headers=editor).status_code == 204
+    r = client.post("/v1/libraries/empty-trash", json={"library_ids": [lib_env[2]]}, headers=editor)
+    assert r.status_code == 403, r.text
+    assert _exists(env, "libraries", "library_id", lib_env[2])
+    assert client.post(f"/v1/libraries/{lib_env[2]}/restore", headers=editor).status_code == 200
+    client.delete(f"/v1/libraries/{lib_env[2]}", headers=editor)
+    r = client.post("/v1/libraries/empty-trash", json={"library_ids": [lib_env[2]]}, headers=headers)
+    assert r.status_code == 200 and r.json()["deleted"] == 1
+
+
+@pytest.mark.slow
+def test_an_editor_still_empties_their_own_projects_trash(env):
+    """A project holds no media, only a list."""
+    client, _headers, *_ = env
+    editor = _key_with_role(env, "editor")
+    project_id = client.post("/v1/projects", json={"name": "Editor's own"}, headers=editor).json()["project_id"]
+    client.delete(f"/v1/projects/{project_id}", headers=editor)
+    r = client.post("/v1/projects/empty-trash", json={"project_ids": [project_id]}, headers=editor)
+    assert r.status_code == 200 and r.json()["deleted"] == 1

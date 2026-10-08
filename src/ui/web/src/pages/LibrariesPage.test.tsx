@@ -128,6 +128,16 @@ describe("LibrariesPage a library in the trash", () => {
     }
   });
 
+  it("editors restore but don't delete for good", async () => {
+    api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role: "editor" });
+    api.restoreLibrary.mockResolvedValue({});
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Restore" }));
+    await waitFor(() => expect(api.restoreLibrary).toHaveBeenCalledWith("lib_1"));
+    expect(screen.queryByRole("button", { name: "Delete for good" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Empty trash/ })).toBeNull();
+  });
+
   it("says it stays when the trash is emptied by hand only", async () => {
     api.getTenantSettings.mockResolvedValue({ trash_days: null });
     renderPage();
