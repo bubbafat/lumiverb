@@ -346,6 +346,17 @@ def project_export(
     no_duration = int(resp.headers.get("x-lumiverb-skipped-no-duration", "0") or 0)
     if no_duration:
         console.print(f"[yellow]{no_duration} videos with no known length weren't included.[/yellow]")
+    trashed = int(resp.headers.get("x-lumiverb-skipped-trashed", "0") or 0)
+    if trashed:
+        console.print(
+            f"[yellow]{_plural(trashed, 'clip in the trash wasn', 'clips in the trash weren')}'t included; "
+            f"restore {'it' if trashed == 1 else 'them'} with: lumiverb project restore-clips --id {project_id}[/yellow]"
+        )
+    missing = int(resp.headers.get("x-lumiverb-skipped-missing", "0") or 0)
+    if missing:
+        console.print(
+            f"[yellow]{_plural(missing, 'clip missing from disk wasn', 'clips missing from disk weren')}'t included.[/yellow]"
+        )
     unprobed = int(resp.headers.get("x-lumiverb-unprobed", "0") or 0)
     if unprobed:
         console.print(

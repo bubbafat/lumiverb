@@ -333,3 +333,17 @@ def test_deleting_a_library_asks_once() -> None:
         result = runner.invoke(app, ["library", "delete", "--name", "Old card"], input="y\n")
     assert result.exit_code == 0, result.output
     assert "[y/N] [y/N]" not in result.output
+
+
+def test_export_reports_trashed_and_missing_clips(tmp_path) -> None:
+    client = _export_client()
+    client.get.return_value.headers = {
+        "content-disposition": 'attachment; filename="Job.xml"',
+        "x-lumiverb-skipped-trashed": "2",
+        "x-lumiverb-skipped-missing": "1",
+    }
+    result = _run(client, "export", "--id", "prj_1", "--format", "fcp7", "--output", str(tmp_path / "Job.xml"))
+    assert result.exit_code == 0, result.output
+    out = " ".join(result.output.split())
+    assert "2 clips in the trash weren't included" in out
+    assert "1 clip missing from disk wasn't included" in out

@@ -46,19 +46,21 @@ Entry point: `lumiverb = "src.client.cli:main"` (setuptools); `main()` invokes t
 - `lumiverb library create --name <name> --path <path>` — Create a library.
 - `lumiverb library list` — List libraries.
 - `lumiverb library update <name> [--name <new>] [--root-path <path>]` — Update library.
-- `lumiverb library delete <name>` — Soft delete (trash).
-- `lumiverb library empty-trash` — Permanently delete trashed libraries.
+- `lumiverb library delete --name <name>` — Soft delete (trash).
+- `lumiverb library empty-trash` — Permanently delete trashed libraries. First lists the projects their clips are in (deleting removes the clips from those projects) and asks.
 
 #### Project
-- `lumiverb project list [--json] [--archived | --all]` — List projects (active unless `--archived` or `--all`).
+- `lumiverb project list [--json] [--archived | --all | --trashed]` — List projects (active unless `--archived`, `--all` or `--trashed`).
 - `lumiverb project create --name <name> [--description <desc>] [--visibility private|shared|public]` — Create project.
 - `lumiverb project show --id <project_id> [--json]` — Show project details.
 - `lumiverb project add --id <project_id> --asset-id <id> [...]` — Add assets.
 - `lumiverb project remove --id <project_id> --asset-id <id> [...]` — Remove assets.
-- `lumiverb project delete --id <project_id>` — Delete project.
+- `lumiverb project delete --id <project_id>` — Move a project to the trash (no prompt: it's reversible). Prints the undo command.
 - `lumiverb project archive --id <project_id>` — Archive: it leaves the sidebar and pickers but keeps its clips.
-- `lumiverb project restore --id <project_id>` — Restore an archived project.
-- `lumiverb project export --id <project_id> --format fcp7|fcpxml [--prefix <path>] [--output <file>]` — Export a bin of master clips for DaVinci Resolve / Premiere Pro (`fcp7`) or Final Cut Pro (`fcpxml`). Writes `<project name>.xml|.fcpxml` unless `--output` is given; `--prefix` points clips at another location of the originals (e.g. a travel SSD). Reports what was left out or approximated: photos (video only for now), videos with no known length, and unprobed videos exported at the fallback rate.
+- `lumiverb project restore --id <project_id> [--with-clips | --without-clips]` — Take a project out of the trash, back to active or archived as it was; a project that isn't in the trash is un-archived. If clips in it are in the trash, asks whether to restore them too (they come back everywhere) unless a flag says.
+- `lumiverb project restore-clips --id <project_id>` — Restore the project's clips that someone trashed. Clips whose files went missing come back when the files do.
+- `lumiverb project empty-trash [--id <project_id> ...] [--yes]` — Delete trashed projects for good (the named ones, or the whole trash) after a confirmation. Their clips stay in the libraries.
+- `lumiverb project export --id <project_id> --format fcp7|fcpxml [--prefix <path>] [--output <file>]` — Export a bin of master clips for DaVinci Resolve / Premiere Pro (`fcp7`) or Final Cut Pro (`fcpxml`). Writes `<project name>.xml|.fcpxml` unless `--output` is given; `--prefix` points clips at another location of the originals (e.g. a travel SSD). Reports what was left out or approximated: photos (video only for now), videos with no known length, clips in the trash, clips whose files are missing, and unprobed videos exported at the fallback rate.
 
 #### User
 - `lumiverb user create --email <email> [--role admin|editor|viewer]` — Create user (prompts for password).
