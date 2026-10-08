@@ -1324,3 +1324,18 @@ def test_project_usage_lists_every_project_deleting_would_touch(projects_env):
     assert by_id[trashed]["in_trash"] is True
     # Projects the caller can't see are counted, not named.
     assert body["other_projects"] == 1
+
+
+@pytest.mark.slow
+def test_project_usage_by_library(projects_env):
+    client, api_key, _ = projects_env
+    lib = client.post(
+        "/v1/libraries", json={"name": "Usage by library", "root_path": "/usage-lib"}, headers=_headers(api_key),
+    ).json()["library_id"]
+    a1, a2 = (_ingest_asset(client, api_key, lib, f"u/lib-{i}.jpg") for i in range(2))
+    project_id = _project(client, api_key, "Uses the library", [a1, a2])
+
+    r = client.post("/v1/assets/project-usage", json={"library_ids": [lib]}, headers=_headers(api_key))
+    assert r.status_code == 200, r.text
+    assert r.json()["assets_in_projects"] == 2
+    assert [(p["project_id"], p["clips"]) for p in r.json()["projects"]] == [(project_id, 2)]

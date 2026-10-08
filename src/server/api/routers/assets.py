@@ -747,7 +747,9 @@ def list_assets(
 
 
 class ProjectUsageRequest(BaseModel):
-    asset_ids: list[str]
+    asset_ids: list[str] = []
+    # Every clip in these libraries, e.g. before emptying the library trash.
+    library_ids: list[str] = []
 
 
 class ProjectUsageItem(BaseModel):
@@ -770,14 +772,13 @@ def project_usage(
     session: Annotated[Session, Depends(get_tenant_session)],
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> ProjectUsageResponse:
-    """Which projects hold these clips: what deleting them for good would
-    take them out of. Every project counts, archived, trashed and other
-    people's included; names only for those the caller can see."""
-    from sqlalchemy import select as sa_select
+    """Which projects hold these clips, or any clip in these libraries: what
+    deleting them for good would take them out of. Every project counts,
+    archived, trashed and other people's included; names only for those the
+    caller can see."""
+    from src.server.repository.tenant import ProjectRepository
 
-    from src.server.repository.tenant import ProjectAsset, ProjectRepository
-
-    rows = ProjectRepository(session).usage(body.asset_ids)
+    rows, in_any = ProjectRepository(session).usage(body.asset_ids, body.library_ids)
     visible: list[ProjectUsageItem] = []
     other = 0
     for project, clips in rows:
@@ -790,11 +791,6 @@ def project_usage(
             project_id=project.project_id, name=project.name, status=project.status,
             in_trash=project.deleted_at is not None, clips=clips,
         ))
-    in_any = 0
-    if body.asset_ids:
-        in_any = len(set(session.execute(
-            sa_select(ProjectAsset.asset_id).where(ProjectAsset.asset_id.in_(body.asset_ids))  # type: ignore[attr-defined]
-        ).scalars().all()))
     return ProjectUsageResponse(assets_in_projects=in_any, projects=visible, other_projects=other)
 
 

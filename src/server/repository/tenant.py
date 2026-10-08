@@ -1987,19 +1987,37 @@ class ProjectRepository:
         """The clips in the project that a person trashed."""
         return list(self._session.execute(self._trashed_members(project_id, by_user=True)).scalars().all())
 
-    def usage(self, asset_ids: list[str]) -> list[tuple[Project, int]]:
-        """Every project (trashed or not) holding any of these clips, with
-        how many of them it holds."""
-        if not asset_ids:
-            return []
+    def _usage_filter(self, asset_ids: list[str], library_ids: list[str]):
+        """Membership rows for these clips, or for any clip in these libraries."""
+        conds = []
+        if asset_ids:
+            conds.append(ProjectAsset.asset_id.in_(asset_ids))  # type: ignore[attr-defined]
+        if library_ids:
+            conds.append(ProjectAsset.asset_id.in_(  # type: ignore[attr-defined]
+                select(Asset.asset_id).where(Asset.library_id.in_(library_ids))  # type: ignore[attr-defined]
+            ))
+        return or_(*conds) if conds else None
+
+    def usage(
+        self, asset_ids: list[str], library_ids: list[str] | None = None
+    ) -> tuple[list[tuple[Project, int]], int]:
+        """Every project (trashed or not) holding any of these clips, or any
+        clip in these libraries, with how many it holds; and how many of the
+        clips are in any project."""
+        cond = self._usage_filter(asset_ids, library_ids or [])
+        if cond is None:
+            return [], 0
         rows = self._session.execute(
             select(Project, func.count(ProjectAsset.asset_id))
             .join(ProjectAsset, ProjectAsset.project_id == Project.project_id)
-            .where(ProjectAsset.asset_id.in_(asset_ids))  # type: ignore[attr-defined]
+            .where(cond)
             .group_by(Project.project_id)
             .order_by(Project.name)
         ).all()
-        return [(row[0], int(row[1])) for row in rows]
+        in_any = self._session.execute(
+            select(func.count(func.distinct(ProjectAsset.asset_id))).where(cond)
+        ).scalar()
+        return [(row[0], int(row[1])) for row in rows], int(in_any or 0)
 
     # ---- Batch add / remove ----
 

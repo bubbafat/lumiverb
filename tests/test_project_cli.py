@@ -13,15 +13,16 @@ pytestmark = pytest.mark.fast
 runner = CliRunner()
 
 
-def _run(client: MagicMock, *args: str):
+def _run(client: MagicMock, *args: str, input: str | None = None):
     with patch("src.client.cli.commands.projects.LumiverbClient", return_value=client):
-        return runner.invoke(app, ["project", *args])
+        return runner.invoke(app, ["project", *args], input=input)
 
 
 def _client() -> MagicMock:
     client = MagicMock()
     client.get.return_value.json.return_value = {"items": []}
     client.patch.return_value.json.return_value = {"project_id": "prj_1", "name": "Job", "status": "archived"}
+    client.raw.return_value.status_code = 404  # not in the trash
     return client
 
 
@@ -131,3 +132,138 @@ def test_export_uses_the_real_name_and_reports_what_was_left_out(tmp_path) -> No
     assert (tmp_path / "東京.xml").exists()
     assert "2 videos with no known length" in result.output
     assert "3 videos haven't been probed" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Trash: delete -> trash -> restore | delete forever
+# ---------------------------------------------------------------------------
+
+
+def _response(status: int, body: dict | None = None) -> MagicMock:
+    r = MagicMock()
+    r.status_code = status
+    r.json.return_value = body or {}
+    return r
+
+
+def _trash_client(*, in_trash: bool = True, trashed_clips: int = 0) -> MagicMock:
+    client = _client()
+
+    def raw(method: str, path: str, **_: object) -> MagicMock:
+        if path.endswith("/restore"):
+            return _response(204 if in_trash else 404)
+        return _response(204)
+
+    client.raw.side_effect = raw
+    client.get.return_value.json.return_value = {
+        "project_id": "prj_1", "name": "Job", "status": "active", "trashed_asset_count": trashed_clips,
+        "items": [{"project_id": "prj_1", "name": "Job", "asset_count": 3}],
+    }
+    client.post.return_value.json.return_value = {"restored": 2, "missing": 1, "deleted": 1}
+    return client
+
+
+def test_list_trashed() -> None:
+    client = _client()
+    result = _run(client, "list", "--trashed")
+    assert result.exit_code == 0, result.output
+    assert client.get.call_args[1].get("params") == {"status": "trashed"}
+
+
+def test_list_trashed_excludes_the_other_views() -> None:
+    assert _run(_client(), "list", "--trashed", "--archived").exit_code == 1
+
+
+def test_delete_moves_to_the_trash_without_asking() -> None:
+    client = _trash_client()
+    result = _run(client, "delete", "--id", "prj_1")
+    assert result.exit_code == 0, result.output
+    client.raw.assert_called_once_with("DELETE", "/v1/projects/prj_1")
+    assert "trash" in result.output and "project restore --id prj_1" in result.output
+
+
+def test_restore_takes_a_project_out_of_the_trash() -> None:
+    client = _trash_client(in_trash=True)
+    result = _run(client, "restore", "--id", "prj_1")
+    assert result.exit_code == 0, result.output
+    client.raw.assert_any_call("POST", "/v1/projects/prj_1/restore")
+    client.patch.assert_not_called()
+    assert "out of the trash" in result.output
+
+
+def test_restore_unarchives_a_project_that_isnt_in_the_trash() -> None:
+    client = _trash_client(in_trash=False)
+    result = _run(client, "restore", "--id", "prj_1")
+    assert result.exit_code == 0, result.output
+    client.patch.assert_called_once_with("/v1/projects/prj_1", json={"status": "active"})
+
+
+def test_restore_mentions_trashed_clips() -> None:
+    client = _trash_client(trashed_clips=2)
+    result = _run(client, "restore", "--id", "prj_1")
+    assert result.exit_code == 0, result.output
+    assert "2 clips" in result.output and "--with-clips" in result.output
+    client.post.assert_not_called()
+
+
+def test_restore_with_clips() -> None:
+    client = _trash_client(trashed_clips=2)
+    result = _run(client, "restore", "--id", "prj_1", "--with-clips")
+    assert result.exit_code == 0, result.output
+    client.post.assert_called_once_with("/v1/projects/prj_1/restore-clips")
+    assert "Restored 2 clips" in result.output and "1 clip is missing from disk" in result.output
+
+
+def test_restore_clips() -> None:
+    client = _trash_client()
+    result = _run(client, "restore-clips", "--id", "prj_1")
+    assert result.exit_code == 0, result.output
+    client.post.assert_called_once_with("/v1/projects/prj_1/restore-clips")
+
+
+def test_empty_trash_asks_first() -> None:
+    client = _trash_client()
+    result = _run(client, "empty-trash", input="n\n")
+    assert result.exit_code == 0, result.output
+    client.post.assert_not_called()
+    result = _run(client, "empty-trash", input="y\n")
+    client.post.assert_called_once_with("/v1/projects/empty-trash", json={})
+
+
+def test_empty_trash_named_projects_without_asking() -> None:
+    client = _trash_client()
+    result = _run(client, "empty-trash", "--id", "prj_1", "--yes")
+    assert result.exit_code == 0, result.output
+    client.post.assert_called_once_with("/v1/projects/empty-trash", json={"project_ids": ["prj_1"]})
+
+
+def test_empty_trash_when_empty() -> None:
+    client = _trash_client()
+    client.get.return_value.json.return_value = {"items": []}
+    result = _run(client, "empty-trash", "--yes")
+    assert "The trash is empty" in result.output
+    client.post.assert_not_called()
+
+
+def test_emptying_the_library_trash_says_which_projects_lose_clips() -> None:
+    client = MagicMock()
+    client.get.return_value.json.return_value = [
+        {"library_id": "lib_1", "name": "Old card", "status": "trashed"},
+    ]
+
+    def post(path: str, **kwargs: object) -> MagicMock:
+        if path == "/v1/assets/project-usage":
+            assert kwargs["json"] == {"library_ids": ["lib_1"]}
+            return _response(200, {
+                "assets_in_projects": 4,
+                "projects": [{"project_id": "prj_1", "name": "Customer Video", "status": "active",
+                              "in_trash": False, "clips": 4}],
+                "other_projects": 1,
+            })
+        return _response(200, {"deleted": 1})
+
+    client.post.side_effect = post
+    with patch("src.client.cli.main.LumiverbClient", return_value=client):
+        result = runner.invoke(app, ["library", "empty-trash"], input="n\n")
+    assert result.exit_code == 0, result.output
+    assert "4 clips" in result.output and "2 projects" in result.output and "Customer Video" in result.output
