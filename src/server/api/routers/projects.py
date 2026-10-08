@@ -61,6 +61,9 @@ class ProjectItem(BaseModel):
     type: str = "static"
     saved_query: dict | None = None
     asset_count: int
+    # Clips still in the project but in the trash: hidden and not exported
+    # until restored. Always 0 for smart projects, which are a search.
+    trashed_asset_count: int = 0
     created_at: str
     updated_at: str
     status: str = "active"  # active | archived
@@ -155,8 +158,10 @@ def _project_to_item(
             limit=10000,
         )
         count = len(live_assets)
+        trashed_count = 0
     else:
         count = repo.asset_count(col.project_id)
+        trashed_count = repo.trashed_asset_count(col.project_id)
 
     return ProjectItem(
         project_id=col.project_id,
@@ -170,6 +175,7 @@ def _project_to_item(
         type=col_type,
         saved_query=getattr(col, "saved_query", None),
         asset_count=count,
+        trashed_asset_count=trashed_count,
         created_at=col.created_at.isoformat(),
         updated_at=col.updated_at.isoformat(),
         status=col.status,
@@ -742,8 +748,9 @@ def export_project(
     in place of the libraries' common parent folder, plus rel_path. Video
     only for now. Headers count what needs the user's attention:
     X-Lumiverb-Skipped-Stills (photos left out), X-Lumiverb-Skipped-No-Duration
-    (videos with no known length, left out) and X-Lumiverb-Unprobed (videos
-    exported at a fallback frame rate). Archived projects export too.
+    (videos with no known length, left out), X-Lumiverb-Unprobed (videos
+    exported at a fallback frame rate) and X-Lumiverb-Skipped-Trashed (clips
+    in the trash, left out until restored). Archived projects export too.
     """
     import posixpath
 
@@ -765,6 +772,8 @@ def export_project(
     assets = _all_project_assets(col, request, session, user_id)
     videos = [a for a in assets if a.media_type == "video"]
     skipped_stills = len(assets) - len(videos)
+    # Trashed clips are still in a static project but never exported.
+    skipped_trashed = 0 if getattr(col, "type", "static") == "smart" else repo.trashed_asset_count(col.project_id)
 
     roots = {
         lib.library_id: lib.root_path
@@ -817,9 +826,11 @@ def export_project(
             "X-Lumiverb-Skipped-Stills": str(skipped_stills),
             "X-Lumiverb-Skipped-No-Duration": str(skipped_no_duration),
             "X-Lumiverb-Unprobed": str(unprobed),
+            "X-Lumiverb-Skipped-Trashed": str(skipped_trashed),
             "Access-Control-Expose-Headers": (
                 "Content-Disposition, X-Lumiverb-Skipped-Stills, "
-                "X-Lumiverb-Skipped-No-Duration, X-Lumiverb-Unprobed"
+                "X-Lumiverb-Skipped-No-Duration, X-Lumiverb-Unprobed, "
+                "X-Lumiverb-Skipped-Trashed"
             ),
         },
     )

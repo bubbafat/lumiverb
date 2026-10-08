@@ -1946,6 +1946,20 @@ class ProjectRepository:
         )
         return int(result.scalar() or 0)
 
+    def trashed_asset_count(self, project_id: str) -> int:
+        """Clips still linked to the project but in the trash: hidden until
+        restored, and left out of exports."""
+        result = self._session.execute(
+            select(func.count())
+            .select_from(ProjectAsset)
+            .join(Asset, ProjectAsset.asset_id == Asset.asset_id)
+            .where(
+                ProjectAsset.project_id == project_id,
+                Asset.deleted_at.is_not(None),  # type: ignore[union-attr]
+            )
+        )
+        return int(result.scalar() or 0)
+
     # ---- Batch add / remove ----
 
     def add_assets(self, project_id: str, asset_ids: list[str]) -> int:
@@ -1987,6 +2001,14 @@ class ProjectRepository:
                 ProjectAsset.project_id == project_id,
                 ProjectAsset.asset_id.in_(asset_ids),  # type: ignore[attr-defined]
             )
+        )
+        # A chosen cover that leaves the project is no longer a choice.
+        self._session.execute(
+            text(
+                "UPDATE projects SET cover_asset_id = NULL"
+                " WHERE project_id = :pid AND cover_asset_id = ANY(:ids)"
+            ),
+            {"pid": project_id, "ids": list(asset_ids)},
         )
         self._session.commit()
         return result.rowcount  # type: ignore[return-value]
@@ -2104,14 +2126,14 @@ class ProjectRepository:
     # ---- Cover resolution ----
 
     def resolve_cover(self, project: Project) -> str | None:
-        """Return the effective cover asset_id, applying lazy self-healing.
+        """The cover to show: the chosen one if it's in the project and not
+        in the trash, else the first clip by position.
 
-        If cover_asset_id is set and the asset is active and in the project,
-        return it. Otherwise fall back to first-by-position, and null out the
-        stale cover_asset_id.
+        Reading never clears the choice: a chosen cover whose clip is only in
+        the trash comes back with it. The choice is cleared where the clip
+        really leaves, in remove_assets and when the clip is deleted for good.
         """
         if project.cover_asset_id:
-            # Check if cover asset is still active and in project
             row = self._session.execute(
                 select(ProjectAsset.asset_id)
                 .join(Asset, ProjectAsset.asset_id == Asset.asset_id)
@@ -2123,12 +2145,6 @@ class ProjectRepository:
             ).first()
             if row:
                 return project.cover_asset_id
-
-            # Stale — null it out (lazy self-healing)
-            project.cover_asset_id = None
-            project.updated_at = utcnow()
-            self._session.add(project)
-            self._session.commit()
 
         # Fallback: first active asset by position
         row = self._session.execute(
