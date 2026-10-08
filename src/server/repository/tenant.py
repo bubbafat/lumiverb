@@ -1956,19 +1956,50 @@ class ProjectRepository:
         )
         return int(result.scalar() or 0)
 
-    def trashed_asset_count(self, project_id: str) -> int:
-        """Clips still linked to the project but in the trash: hidden until
-        restored, and left out of exports."""
-        result = self._session.execute(
-            select(func.count())
-            .select_from(ProjectAsset)
+    def _trashed_members(self, project_id: str, *, by_user: bool):
+        """Clips still linked to the project but in the trash: those a person
+        trashed (by_user), or those a scan trashed because the file went
+        missing (every other reason, including the legacy NULL)."""
+        reason = Asset.deleted_reason == "user"
+        return (
+            select(ProjectAsset.asset_id)
             .join(Asset, ProjectAsset.asset_id == Asset.asset_id)
             .where(
                 ProjectAsset.project_id == project_id,
                 Asset.deleted_at.is_not(None),  # type: ignore[union-attr]
+                reason if by_user else or_(Asset.deleted_reason.is_(None), ~reason),  # type: ignore[union-attr]
             )
         )
-        return int(result.scalar() or 0)
+
+    def trashed_asset_count(self, project_id: str) -> int:
+        """Clips in the project that a person trashed: hidden and left out
+        of exports until restored."""
+        sub = self._trashed_members(project_id, by_user=True).subquery()
+        return int(self._session.execute(select(func.count()).select_from(sub)).scalar() or 0)
+
+    def missing_asset_count(self, project_id: str) -> int:
+        """Clips in the project a scan trashed because the file went
+        missing; they come back when the file does."""
+        sub = self._trashed_members(project_id, by_user=False).subquery()
+        return int(self._session.execute(select(func.count()).select_from(sub)).scalar() or 0)
+
+    def trashed_asset_ids(self, project_id: str) -> list[str]:
+        """The clips in the project that a person trashed."""
+        return list(self._session.execute(self._trashed_members(project_id, by_user=True)).scalars().all())
+
+    def usage(self, asset_ids: list[str]) -> list[tuple[Project, int]]:
+        """Every project (trashed or not) holding any of these clips, with
+        how many of them it holds."""
+        if not asset_ids:
+            return []
+        rows = self._session.execute(
+            select(Project, func.count(ProjectAsset.asset_id))
+            .join(ProjectAsset, ProjectAsset.project_id == Project.project_id)
+            .where(ProjectAsset.asset_id.in_(asset_ids))  # type: ignore[attr-defined]
+            .group_by(Project.project_id)
+            .order_by(Project.name)
+        ).all()
+        return [(row[0], int(row[1])) for row in rows]
 
     # ---- Batch add / remove ----
 

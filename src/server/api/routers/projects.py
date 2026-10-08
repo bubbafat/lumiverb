@@ -64,6 +64,9 @@ class ProjectItem(BaseModel):
     # Clips still in the project but in the trash: hidden and not exported
     # until restored. Always 0 for smart projects, which are a search.
     trashed_asset_count: int = 0
+    # Clips a scan trashed because their file went missing; they come back
+    # when the file does. Always 0 for smart projects.
+    missing_asset_count: int = 0
     created_at: str
     updated_at: str
     status: str = "active"  # active | archived
@@ -89,6 +92,11 @@ class EmptyTrashRequest(BaseModel):
 
 class EmptyTrashResponse(BaseModel):
     deleted: int
+
+
+class RestoreClipsResponse(BaseModel):
+    restored: int  # clips you trashed, now back everywhere
+    missing: int  # clips whose files went missing; back when the files are
 
 
 class AssetIdsRequest(BaseModel):
@@ -158,10 +166,11 @@ def _project_to_item(
             limit=10000,
         )
         count = len(live_assets)
-        trashed_count = 0
+        trashed_count = missing_count = 0
     else:
         count = repo.asset_count(col.project_id)
         trashed_count = repo.trashed_asset_count(col.project_id)
+        missing_count = repo.missing_asset_count(col.project_id)
 
     return ProjectItem(
         project_id=col.project_id,
@@ -176,6 +185,7 @@ def _project_to_item(
         saved_query=getattr(col, "saved_query", None),
         asset_count=count,
         trashed_asset_count=trashed_count,
+        missing_asset_count=missing_count,
         created_at=col.created_at.isoformat(),
         updated_at=col.updated_at.isoformat(),
         status=col.status,
@@ -424,6 +434,35 @@ def restore_project(
     if col.owner_user_id is not None and col.owner_user_id != user_id:
         raise HTTPException(status_code=404, detail="Project not in the trash")
     repo.restore(project_id)
+
+
+@router.post("/{project_id}/restore-clips", response_model=RestoreClipsResponse)
+def restore_project_clips(
+    project_id: str,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> RestoreClipsResponse:
+    """Restore the project's clips that a person trashed. They come back
+    everywhere: the library, search, and every other project holding them.
+    Clips a scan trashed because their file went missing are only counted;
+    they come back when the file does."""
+    from src.server.api.routers.assets import reindex_restored_asset
+
+    repo = ProjectRepository(session)
+    col = _get_project_or_404(repo, project_id)
+    if not _can_view(col, user_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    asset_repo = AssetRepository(session)
+    restored = 0
+    for asset_id in repo.trashed_asset_ids(project_id):
+        if asset_repo.restore(asset_id):
+            restored += 1
+            asset = asset_repo.get_by_id(asset_id)
+            if asset is not None:
+                reindex_restored_asset(request, asset)
+    return RestoreClipsResponse(restored=restored, missing=repo.missing_asset_count(project_id))
 
 
 # ---------------------------------------------------------------------------
@@ -749,8 +788,9 @@ def export_project(
     only for now. Headers count what needs the user's attention:
     X-Lumiverb-Skipped-Stills (photos left out), X-Lumiverb-Skipped-No-Duration
     (videos with no known length, left out), X-Lumiverb-Unprobed (videos
-    exported at a fallback frame rate) and X-Lumiverb-Skipped-Trashed (clips
-    in the trash, left out until restored). Archived projects export too.
+    exported at a fallback frame rate), X-Lumiverb-Skipped-Trashed (clips you
+    trashed, left out until restored) and X-Lumiverb-Skipped-Missing (clips
+    whose files went missing). Archived projects export too.
     """
     import posixpath
 
@@ -773,7 +813,9 @@ def export_project(
     videos = [a for a in assets if a.media_type == "video"]
     skipped_stills = len(assets) - len(videos)
     # Trashed clips are still in a static project but never exported.
-    skipped_trashed = 0 if getattr(col, "type", "static") == "smart" else repo.trashed_asset_count(col.project_id)
+    is_smart = getattr(col, "type", "static") == "smart"
+    skipped_trashed = 0 if is_smart else repo.trashed_asset_count(col.project_id)
+    skipped_missing = 0 if is_smart else repo.missing_asset_count(col.project_id)
 
     roots = {
         lib.library_id: lib.root_path
@@ -827,10 +869,11 @@ def export_project(
             "X-Lumiverb-Skipped-No-Duration": str(skipped_no_duration),
             "X-Lumiverb-Unprobed": str(unprobed),
             "X-Lumiverb-Skipped-Trashed": str(skipped_trashed),
+            "X-Lumiverb-Skipped-Missing": str(skipped_missing),
             "Access-Control-Expose-Headers": (
                 "Content-Disposition, X-Lumiverb-Skipped-Stills, "
                 "X-Lumiverb-Skipped-No-Duration, X-Lumiverb-Unprobed, "
-                "X-Lumiverb-Skipped-Trashed"
+                "X-Lumiverb-Skipped-Trashed, X-Lumiverb-Skipped-Missing"
             ),
         },
     )

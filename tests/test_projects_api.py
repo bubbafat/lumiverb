@@ -1091,8 +1091,11 @@ def _item(client, api_key, project_id) -> dict:
     return r.json()
 
 
-def _trash_clips(client, api_key, *asset_ids):
-    r = client.request("DELETE", "/v1/assets", json={"asset_ids": list(asset_ids)}, headers=_headers(api_key))
+def _trash_clips(client, api_key, *asset_ids, reason="user"):
+    """reason "user": you trashed it. "missing": a scan found its file gone."""
+    r = client.request(
+        "DELETE", "/v1/assets", json={"asset_ids": list(asset_ids), "reason": reason}, headers=_headers(api_key),
+    )
     assert r.status_code == 200, r.text
 
 
@@ -1105,10 +1108,10 @@ def _delete_clips_for_good(client, api_key, *asset_ids):
     assert r.status_code == 200, r.text
 
 
-def _export_trashed_header(client, api_key, project_id) -> str | None:
+def _export_trashed_header(client, api_key, project_id, which="Trashed") -> str | None:
     r = client.get(f"/v1/projects/{project_id}/export", params={"format": "fcp7"}, headers=_headers(api_key))
     assert r.status_code == 200, r.text
-    return r.headers.get("X-Lumiverb-Skipped-Trashed")
+    return r.headers.get(f"X-Lumiverb-Skipped-{which}")
 
 
 @pytest.mark.slow
@@ -1224,3 +1227,100 @@ def test_a_project_whose_clips_are_all_deleted_for_good_stays_empty(projects_env
     item = _item(client, api_key, project_id)
     assert (item["asset_count"], item["trashed_asset_count"], item["cover_asset_id"]) == (0, 0, None)
     assert _clip_ids(client, api_key, project_id) == []
+
+
+@pytest.mark.slow
+def test_clips_whose_files_went_missing_are_counted_apart_from_trashed_ones(projects_env):
+    client, api_key, library_id = projects_env
+    a1, a2, a3 = (_ingest_asset(client, api_key, library_id, f"links/missing-{i}.jpg") for i in range(3))
+    project_id = _project(client, api_key, "Drive offline", [a1, a2, a3])
+
+    _trash_clips(client, api_key, a1)
+    _trash_clips(client, api_key, a2, reason="missing")
+    item = _item(client, api_key, project_id)
+    assert (item["asset_count"], item["trashed_asset_count"], item["missing_asset_count"]) == (1, 1, 1)
+    assert _export_trashed_header(client, api_key, project_id, "Trashed") == "1"
+    assert _export_trashed_header(client, api_key, project_id, "Missing") == "1"
+
+
+# ---------------------------------------------------------------------------
+# Restoring a project's trashed clips, live or just restored from the trash
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_restore_clips_brings_back_the_ones_you_trashed(projects_env):
+    client, api_key, library_id = projects_env
+    a1, a2, a3, outside = (_ingest_asset(client, api_key, library_id, f"links/rc-{i}.jpg") for i in range(4))
+    project_id = _project(client, api_key, "Restore clips", [a1, a2, a3])
+    _trash_clips(client, api_key, a1, outside)
+    _trash_clips(client, api_key, a2, reason="missing")
+
+    r = client.post(f"/v1/projects/{project_id}/restore-clips", headers=_headers(api_key))
+    assert r.status_code == 200, r.text
+    assert r.json() == {"restored": 1, "missing": 1}
+
+    assert _clip_ids(client, api_key, project_id) == [a1, a3]
+    item = _item(client, api_key, project_id)
+    assert (item["trashed_asset_count"], item["missing_asset_count"]) == (0, 1)
+    # A clip outside the project stays in the trash.
+    assert client.get(f"/v1/assets/{outside}", headers=_headers(api_key)).status_code == 404
+    # The restored clip is back in the library too.
+    assert client.get(f"/v1/assets/{a1}", headers=_headers(api_key)).status_code == 200
+
+
+@pytest.mark.slow
+def test_restore_clips_after_restoring_the_project(projects_env):
+    client, api_key, library_id = projects_env
+    a1, a2 = (_ingest_asset(client, api_key, library_id, f"links/rc-after-{i}.jpg") for i in range(2))
+    project_id = _project(client, api_key, "Restore both", [a1, a2])
+    client.delete(f"/v1/projects/{project_id}", headers=_headers(api_key))
+    _trash_clips(client, api_key, a1, a2)
+
+    # Not while the project itself is in the trash.
+    assert client.post(f"/v1/projects/{project_id}/restore-clips", headers=_headers(api_key)).status_code == 404
+    client.post(f"/v1/projects/{project_id}/restore", headers=_headers(api_key))
+    assert _item(client, api_key, project_id)["trashed_asset_count"] == 2
+    r = client.post(f"/v1/projects/{project_id}/restore-clips", headers=_headers(api_key))
+    assert r.json() == {"restored": 2, "missing": 0}
+    assert _clip_ids(client, api_key, project_id) == [a1, a2]
+
+
+@pytest.mark.slow
+def test_restore_clips_needs_someone_who_can_see_the_project(projects_env):
+    client, api_key, library_id = projects_env
+    other_key = _other_user_key(client, api_key)
+    clip = _ingest_asset(client, api_key, library_id, "links/rc-private.jpg")
+    project_id = _project(client, api_key, "Private", [clip])
+    _trash_clips(client, api_key, clip)
+    assert client.post(f"/v1/projects/{project_id}/restore-clips", headers=_headers(other_key)).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Which projects use these clips: what deleting them for good would touch
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_project_usage_lists_every_project_deleting_would_touch(projects_env):
+    client, api_key, library_id = projects_env
+    other_key = _other_user_key(client, api_key)
+    a1, a2, unused = (_ingest_asset(client, api_key, library_id, f"links/usage-{i}.jpg") for i in range(3))
+    active = _project(client, api_key, "Usage active", [a1, a2])
+    archived = _project(client, api_key, "Usage archived", [a1])
+    client.patch(f"/v1/projects/{archived}", json={"status": "archived"}, headers=_headers(api_key))
+    trashed = _project(client, api_key, "Usage trashed", [a2])
+    client.delete(f"/v1/projects/{trashed}", headers=_headers(api_key))
+    _project(client, other_key, "Someone else's private one", [a1])
+
+    r = client.post("/v1/assets/project-usage", json={"asset_ids": [a1, a2, unused]}, headers=_headers(api_key))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["assets_in_projects"] == 2
+    by_id = {p["project_id"]: p for p in body["projects"]}
+    assert set(by_id) == {active, archived, trashed}
+    assert (by_id[active]["clips"], by_id[active]["status"], by_id[active]["in_trash"]) == (2, "active", False)
+    assert (by_id[archived]["clips"], by_id[archived]["status"]) == (1, "archived")
+    assert by_id[trashed]["in_trash"] is True
+    # Projects the caller can't see are counted, not named.
+    assert body["other_projects"] == 1

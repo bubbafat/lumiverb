@@ -746,6 +746,58 @@ def list_assets(
     return [_to_asset_response(a) for a in assets]
 
 
+class ProjectUsageRequest(BaseModel):
+    asset_ids: list[str]
+
+
+class ProjectUsageItem(BaseModel):
+    project_id: str
+    name: str
+    status: str  # active | archived
+    in_trash: bool
+    clips: int  # how many of the asked-about clips it holds
+
+
+class ProjectUsageResponse(BaseModel):
+    assets_in_projects: int  # how many of the clips are in any project
+    projects: list[ProjectUsageItem]  # the ones the caller can see
+    other_projects: int  # the rest: counted, not named
+
+
+@router.post("/project-usage", response_model=ProjectUsageResponse)
+def project_usage(
+    body: ProjectUsageRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> ProjectUsageResponse:
+    """Which projects hold these clips: what deleting them for good would
+    take them out of. Every project counts, archived, trashed and other
+    people's included; names only for those the caller can see."""
+    from sqlalchemy import select as sa_select
+
+    from src.server.repository.tenant import ProjectAsset, ProjectRepository
+
+    rows = ProjectRepository(session).usage(body.asset_ids)
+    visible: list[ProjectUsageItem] = []
+    other = 0
+    for project, clips in rows:
+        mine = project.owner_user_id in (None, user_id)
+        shown = mine or (project.deleted_at is None and project.visibility in ("shared", "public"))
+        if not shown:
+            other += 1
+            continue
+        visible.append(ProjectUsageItem(
+            project_id=project.project_id, name=project.name, status=project.status,
+            in_trash=project.deleted_at is not None, clips=clips,
+        ))
+    in_any = 0
+    if body.asset_ids:
+        in_any = len(set(session.execute(
+            sa_select(ProjectAsset.asset_id).where(ProjectAsset.asset_id.in_(body.asset_ids))  # type: ignore[attr-defined]
+        ).scalars().all()))
+    return ProjectUsageResponse(assets_in_projects=in_any, projects=visible, other_projects=other)
+
+
 @router.delete("", response_model=BatchTrashResponse)
 def batch_trash_assets(
     body: BatchTrashRequest,
