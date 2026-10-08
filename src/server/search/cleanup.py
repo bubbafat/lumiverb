@@ -28,7 +28,7 @@ _MIN_AGE_SECONDS = 3600  # 1 hour
 _MAX_DELETE_FRACTION = 0.25
 
 # Subdirectories under a library dir that contain artifacts.
-_ARTIFACT_SUBDIRS = ("proxies", "thumbnails", "previews", "scenes")
+_ARTIFACT_SUBDIRS = ("proxies", "thumbnails", "previews", "scenes", "analysis")
 
 
 @dataclass
@@ -90,7 +90,7 @@ def _get_expected_keys_for_library(
     Returns None on DB error (caller should skip this library).
 
     Includes:
-      - assets.{proxy_key, thumbnail_key, video_preview_key}
+      - assets.{proxy_key, thumbnail_key, video_preview_key, analysis_proxy_key}
       - video_scenes.{proxy_key, thumbnail_key} (per-scene WebP artifacts)
       - scene_rep JPG paths derived from (tenant, library, asset_id, rep_frame_ms)
         — these are NOT stored in any column; they live at the deterministic
@@ -98,9 +98,9 @@ def _get_expected_keys_for_library(
         cleanup would flag every scene_rep JPG on disk as orphaned.
     """
     try:
-        # Asset artifacts: proxy_key, thumbnail_key, video_preview_key
+        # Asset artifacts: proxy_key, thumbnail_key, video_preview_key, analysis_proxy_key
         rows = session.execute(text("""
-            SELECT proxy_key, thumbnail_key, video_preview_key
+            SELECT proxy_key, thumbnail_key, video_preview_key, analysis_proxy_key
             FROM assets
             WHERE library_id = :lib_id
         """), {"lib_id": library_id}).fetchall()

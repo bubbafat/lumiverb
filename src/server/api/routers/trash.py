@@ -83,6 +83,8 @@ def empty_trash(
             keys_to_remove.append(a.thumbnail_key)
         if getattr(a, "video_preview_key", None):
             keys_to_remove.append(a.video_preview_key)
+        if getattr(a, "analysis_proxy_key", None):
+            keys_to_remove.append(a.analysis_proxy_key)
     library_by_asset = {a.asset_id: a.library_id for a in to_delete}
     deleted_count = asset_repo.permanently_delete(asset_ids)
     storage = get_storage()

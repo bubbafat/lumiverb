@@ -127,6 +127,13 @@ class Asset(SQLModel, table=True):
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
+    # Full-length low-resolution copy with audio, for analysis only.
+    analysis_proxy_key: str | None = Field(default=None, nullable=True)
+    analysis_proxy_sha256: str | None = Field(default=None, nullable=True)
+    analysis_proxy_generated_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
     error_message: str | None = Field(default=None, nullable=True)
     created_at: datetime = Field(
         default_factory=utcnow,

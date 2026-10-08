@@ -15,6 +15,7 @@ class LocalStorage:
     Path structure:
       {data_dir}/{tenant_id}/{library_id}/proxies/{bucket}/{asset_id}_{filename}.webp
       {data_dir}/{tenant_id}/{library_id}/thumbnails/{bucket}/{asset_id}_{filename}.webp
+      {data_dir}/{tenant_id}/{library_id}/analysis/{bucket}/{asset_id}_{filename}.mp4
 
     bucket = int(asset_id_ulid_timestamp) % 100, zero-padded to 2 digits.
     """
@@ -66,6 +67,17 @@ class LocalStorage:
         original_stem = Path(rel_path).stem
         return (
             f"{tenant_id}/{library_id}/previews/{bucket:02d}/"
+            f"{asset_id}_{original_stem}.mp4"
+        )
+
+    def analysis_proxy_key(
+        self, tenant_id: str, library_id: str, asset_id: str, rel_path: str
+    ) -> str:
+        """Storage key for a video's full-length analysis proxy (MP4)."""
+        bucket = self._bucket_from_asset_id(asset_id)
+        original_stem = Path(rel_path).stem
+        return (
+            f"{tenant_id}/{library_id}/analysis/{bucket:02d}/"
             f"{asset_id}_{original_stem}.mp4"
         )
 

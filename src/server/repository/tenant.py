@@ -76,6 +76,7 @@ MISSING_CONDITIONS = {
         "a.media_type = 'video'"
         " AND NOT EXISTS (SELECT 1 FROM video_facets vf WHERE vf.asset_id = a.asset_id)"
     ),
+    "missing_analysis_proxy": "a.media_type = 'video' AND a.analysis_proxy_key IS NULL",
 }
 
 
@@ -495,6 +496,7 @@ class AssetRepository:
         has_faces: bool | None = None,
         person_id: str | None = None,
         *,
+        missing_analysis_proxy: bool = False,
         sort: str = "taken_at",
         direction: str = "desc",
         media_types: list[str] | None = None,
@@ -613,6 +615,8 @@ class AssetRepository:
             conditions.append(MISSING_CONDITIONS["missing_transcription"])
         if missing_probe:
             conditions.append(MISSING_CONDITIONS["missing_probe"])
+        if missing_analysis_proxy:
+            conditions.append(MISSING_CONDITIONS["missing_analysis_proxy"])
         if has_faces is True:
             conditions.append("a.face_count > 0")
         elif has_faces is False:
@@ -1146,6 +1150,17 @@ class AssetRepository:
             raise ValueError(f"Asset not found: {asset_id}")
         asset.video_preview_key = video_preview_key
         asset.video_preview_generated_at = utcnow()
+        self._session.add(asset)
+        self._session.commit()
+
+    def set_analysis_proxy(self, asset_id: str, key: str, sha256: str) -> None:
+        """Record a video's analysis proxy."""
+        asset = self._session.get(Asset, asset_id)
+        if asset is None:
+            raise ValueError(f"Asset not found: {asset_id}")
+        asset.analysis_proxy_key = key
+        asset.analysis_proxy_sha256 = sha256
+        asset.analysis_proxy_generated_at = utcnow()
         self._session.add(asset)
         self._session.commit()
 

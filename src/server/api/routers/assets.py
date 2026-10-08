@@ -138,6 +138,7 @@ class AssetPageItem(BaseModel):
     gps_lon: float | None = None
     face_count: int | None = None
     created_at: str | None = None  # ISO8601
+    has_analysis_proxy: bool = False
 
 
 class AssetPageResponse(BaseModel):
@@ -225,6 +226,7 @@ def page_assets(
     missing_scene_vision: bool = False,
     missing_transcription: bool = False,
     missing_probe: bool = False,
+    missing_analysis_proxy: bool = False,
     has_faces: bool | None = None,
     person_id: str | None = None,
     sort: str = "taken_at",
@@ -312,6 +314,7 @@ def page_assets(
         missing_scene_vision=missing_scene_vision,
         missing_transcription=missing_transcription,
         missing_probe=missing_probe,
+        missing_analysis_proxy=missing_analysis_proxy,
         has_faces=has_faces,
         person_id=person_id,
         sort=sort_col,
@@ -366,6 +369,7 @@ def page_assets(
             gps_lon=a.gps_lon,
             face_count=a.face_count,
             created_at=a.created_at.isoformat() if a.created_at else None,
+            has_analysis_proxy=a.analysis_proxy_key is not None,
         )
         for a in assets
     ]
@@ -394,6 +398,7 @@ class RepairSummary(BaseModel):
     missing_scene_vision: int = 0
     missing_transcription: int = 0
     missing_probe: int = 0
+    missing_analysis_proxy: int = 0
     stale_search_sync: int = 0
 
 
@@ -423,6 +428,7 @@ def repair_summary(
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_scene_vision"]}) AS missing_scene_vision,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_transcription"]}) AS missing_transcription,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_probe"]}) AS missing_probe,
+                COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_analysis_proxy"]}) AS missing_analysis_proxy,
                 COUNT(*) FILTER (
                     WHERE EXISTS (
                         SELECT 1 FROM asset_metadata am
@@ -454,6 +460,7 @@ def repair_summary(
         missing_scene_vision=row.missing_scene_vision,
         missing_transcription=row.missing_transcription,
         missing_probe=row.missing_probe,
+        missing_analysis_proxy=row.missing_analysis_proxy,
         stale_search_sync=row.stale_search_sync,
     )
 
