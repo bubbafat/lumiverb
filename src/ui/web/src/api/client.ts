@@ -318,7 +318,7 @@ export async function restoreClips(
 export async function emptyClipTrash(
   assetIds?: string[],
   removeFromProjects = false,
-  scope: { libraryId?: string; path?: string } = {},
+  scope: { libraryId?: string; path?: string; trashedBefore?: string } = {},
 ): Promise<{ deleted: number }> {
   return apiFetch("/trash/empty", {
     method: "DELETE",
@@ -326,6 +326,8 @@ export async function emptyClipTrash(
       ...(assetIds ? { asset_ids: assetIds } : {}),
       ...(scope.libraryId ? { library_id: scope.libraryId } : {}),
       ...(scope.path ? { path: scope.path } : {}),
+      // Only what was there when the view listed it: nothing trashed since.
+      ...(scope.trashedBefore ? { trashed_before: scope.trashedBefore } : {}),
       remove_from_projects: removeFromProjects,
     },
   });
@@ -374,7 +376,9 @@ function hiddenQuery(f: HiddenFilter, extra: Record<string, string> = {}): strin
 }
 
 /** Clips in the trash, most recently trashed first. */
-export async function listTrash(f: HiddenFilter = {}): Promise<HiddenPage<TrashedClip> & { trash_days: number | null }> {
+export async function listTrash(
+  f: HiddenFilter = {},
+): Promise<HiddenPage<TrashedClip> & { trash_days: number | null; listed_at?: string }> {
   return apiFetch(`/trash?${hiddenQuery(f)}`);
 }
 

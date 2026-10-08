@@ -78,7 +78,11 @@ export default function TrashPage() {
     setBusy(true);
     try {
       // Everything shown: this library's trash when filtered, never more.
-      const r = await emptyClipTrash(deleting.ids ?? undefined, removeFromProjects, deleting.ids ? {} : { libraryId });
+      const r = await emptyClipTrash(
+        deleting.ids ?? undefined,
+        removeFromProjects,
+        deleting.ids ? {} : { libraryId, trashedBefore: first?.listed_at },
+      );
       setDeleting(null);
       refresh();
       setNotice({ text: `Deleted ${clipCount(r.deleted)} for good.` });

@@ -102,15 +102,23 @@ function FilterSection({
       }
     }
 
-    await onAdd(trimmed);
-    setPattern("");
+    await add(trimmed);
+  };
+
+  // A failed add keeps what was typed; the page shows why.
+  const add = async (value: string) => {
+    try {
+      await onAdd(value);
+      setPattern("");
+    } catch {
+      // shown by the page (addError)
+    }
   };
 
   const handleConfirm = async () => {
     if (!confirmState) return;
     setConfirmState(null);
-    await onAdd(confirmState.pattern);
-    setPattern("");
+    await add(confirmState.pattern);
   };
 
   return (
@@ -407,8 +415,10 @@ export default function LibrarySettingsPage() {
                 onAdd={(pattern) => {
                   setExcludeAddError(null);
                   setProjectsAsk(null);
-                  // A refusal (the projects question) is shown below, not thrown.
-                  return addExcludeMutation.mutateAsync({ pattern, trashMatching: true }).catch(() => undefined);
+                  // The projects question is shown below, not thrown; any other error keeps the typed pattern.
+                  return addExcludeMutation.mutateAsync({ pattern, trashMatching: true }).catch((err) => {
+                    if (!(err instanceof ApiError && err.code === "in_projects")) throw err;
+                  });
                 }}
                 onDelete={(filterId) => deleteMutation.mutate(filterId)}
                 isAdding={addExcludeMutation.isPending}

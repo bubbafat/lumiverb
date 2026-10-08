@@ -193,10 +193,19 @@ def _plural(n: int, one: str, many: str) -> str:
     return f"{n} {one if n == 1 else many}"
 
 
+def _archived_note(archived: int) -> None:
+    """Clips taken out of the trash that went back to the archive, where they were before."""
+    if archived:
+        console.print(f"{_plural(archived, 'clip', 'clips')} went back to the archive, where "
+                      f"{'it was' if archived == 1 else 'they were'}; bring {'it' if archived == 1 else 'them'} "
+                      "back with: lumiverb archive restore <clip ids>")
+
+
 def _restore_clips(client: LumiverbClient, project_id: str) -> None:
     data = client.post(f"/v1/projects/{project_id}/restore-clips").json()
     restored, missing = data.get("restored", 0), data.get("missing", 0)
     console.print(f"[green]Restored {_plural(restored, 'clip', 'clips')} from the trash.[/green]")
+    _archived_note(data.get("archived", 0))
     if missing:
         console.print(
             f"{_plural(missing, 'clip is', 'clips are')} missing from disk and will come back "
@@ -251,6 +260,7 @@ def project_restore(
     left = data.get("trashed_clips", 0)
     if restored:
         console.print(f"[green]Restored {_plural(restored, 'clip', 'clips')} from the trash.[/green]")
+    _archived_note(data.get("archived_clips", 0))
     if left:
         console.print(
             f"Left {_plural(left, 'clip', 'clips')} in the trash; restore later with: "

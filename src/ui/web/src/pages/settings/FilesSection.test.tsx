@@ -181,6 +181,26 @@ describe("FilesSection: the trash", () => {
     expect(patches).toEqual([{ trash_days: 7 }, { trash_days: 7, confirm_purge: true }]);
   });
 
+  it("cancelling the question isn't an error", async () => {
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        return new Response(JSON.stringify({ error: { code: "trash_days_shortened", message: "m",
+          details: { trash_days: 7, clips: 1, libraries: 0, projects: 0 } } }), { status: 409 });
+      }
+      return base(url, init);
+    });
+    renderSection();
+    await screen.findByRole("radio", { name: /Delete for good after/ });
+    fireEvent.change(within(trash()).getByRole("textbox", { name: "Days in the trash" }), { target: { value: "7" } });
+    fireEvent.click(within(trash()).getByRole("button", { name: "Save" }));
+    const ask = await within(trash()).findByRole("alertdialog", { name: "Delete them now?" });
+    expect(ask.textContent).toMatch(/1 clip has been in the trash longer than 7 days/);
+    fireEvent.click(within(ask).getByRole("button", { name: "Cancel" }));
+    expect(within(trash()).queryByRole("alertdialog")).toBeNull();
+    expect(within(trash()).queryByText(/Couldn't save/)).toBeNull();
+  });
+
   it("people who aren't admins see how long, but can't change it", async () => {
     role = "editor";
     trashDays = null;

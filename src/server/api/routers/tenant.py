@@ -118,6 +118,9 @@ def update_tenant_settings(
     from src.server.api.routers.playback import clear_cuts
 
     before = _settings(session)
+    # Asked before anything is saved: a 409 changes nothing.
+    if "trash_days" in body.model_fields_set:
+        _ask_before_shortening(session, before.trash_days, body.trash_days, body.confirm_purge)
     if "video_preview_max_seconds" in body.model_fields_set:
         set_video_preview_max_seconds(session, body.video_preview_max_seconds)
     if "public_video_preview_max_seconds" in body.model_fields_set:
@@ -125,7 +128,6 @@ def update_tenant_settings(
     if "follow_moves" in body.model_fields_set:
         set_follow_moves(session, body.follow_moves)
     if "trash_days" in body.model_fields_set:
-        _ask_before_shortening(session, before.trash_days, body.trash_days, body.confirm_purge)
         set_trash_days(session, body.trash_days)
     after = _settings(session)
     caps = ("video_preview_max_seconds", "public_video_preview_max_seconds")

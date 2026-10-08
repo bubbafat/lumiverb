@@ -25,7 +25,8 @@ const clip = (id: string, path: string) => ({
 
 beforeEach(() => {
   api.listLibraries.mockResolvedValue([{ library_id: "lib_1", name: "Media", root_path: "/m", status: "active", is_public: false, last_scan_at: null }]);
-  api.listTrash.mockResolvedValue({ items: [clip("a1", "Day 1/A001.mov"), clip("a2", "Day 1/A002.mov")], next_cursor: null, total: 2, trash_days: 30 });
+  api.listTrash.mockResolvedValue({ items: [clip("a1", "Day 1/A001.mov"), clip("a2", "Day 1/A002.mov")], next_cursor: null, total: 2, trash_days: 30,
+                                   listed_at: "2026-10-08T12:00:00+00:00" });
   api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role: "admin" });
 });
 
@@ -88,7 +89,9 @@ describe("TrashPage", () => {
     const dialog = await screen.findByRole("dialog", { name: "Empty the trash?" });
     expect(dialog.textContent).toMatch(/Every clip in the trash \(2 clips\)/);
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete 2 clips for good" }));
-    await waitFor(() => expect(api.emptyClipTrash).toHaveBeenCalledWith(undefined, false, { libraryId: undefined }));
+    // Only what was listed: nothing trashed since it loaded.
+    await waitFor(() => expect(api.emptyClipTrash).toHaveBeenCalledWith(undefined, false,
+      { libraryId: undefined, trashedBefore: "2026-10-08T12:00:00+00:00" }));
   });
 
   it("empties only the library it's filtered to, and says so", async () => {
@@ -104,7 +107,8 @@ describe("TrashPage", () => {
     const dialog = await screen.findByRole("dialog", { name: "Empty Media's trash?" });
     expect(dialog.textContent).toMatch(/Every clip in the trash of Media \(2 clips\)/);
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete 2 clips for good" }));
-    await waitFor(() => expect(api.emptyClipTrash).toHaveBeenCalledWith(undefined, false, { libraryId: "lib_1" }));
+    await waitFor(() => expect(api.emptyClipTrash).toHaveBeenCalledWith(undefined, false,
+      { libraryId: "lib_1", trashedBefore: "2026-10-08T12:00:00+00:00" }));
   });
 
   it("says which restored clips went back to the archive", async () => {

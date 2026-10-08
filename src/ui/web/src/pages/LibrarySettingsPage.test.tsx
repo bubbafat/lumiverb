@@ -81,3 +81,16 @@ describe("LibrarySettingsPage exclude filter that trashes clips", () => {
     expect(api.addLibraryFilter).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("LibrarySettingsPage exclude filter errors", () => {
+  it("keeps the typed pattern when adding fails", async () => {
+    api.previewLibraryFilter.mockResolvedValue({ matching_asset_count: 0 });
+    api.addLibraryFilter.mockRejectedValue(new ApiError(400, "Invalid pattern", "bad_pattern"));
+    renderPage();
+    const add = await screen.findAllByRole("button", { name: "Add" });
+    fireEvent.click(add[add.length - 1]);
+    expect(await screen.findByText("Invalid pattern")).toBeTruthy();
+    const inputs = screen.getAllByRole("textbox") as HTMLInputElement[];
+    expect(inputs.some((i) => i.value === "Rejects/**")).toBe(true);
+  });
+});

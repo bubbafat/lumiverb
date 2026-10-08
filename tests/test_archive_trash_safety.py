@@ -346,3 +346,70 @@ def test_a_public_page_never_shows_a_hidden_clips_picture(env):
         assert r.status_code == 404
     finally:
         client.patch(f"/v1/libraries/{library_id}", json={"is_public": False}, headers=headers)
+
+
+# ---------------------------------------------------------------------------
+# Review round 2
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_emptying_what_was_listed_leaves_what_was_trashed_since(env):
+    client, headers, *_ = env
+    lib_env = _library(env, "ListedAt")
+    shown = _ingest(lib_env, "shown.mov", sha=_sha())
+    _trash(env, shown)
+    page = client.get("/v1/trash", params={"library_id": lib_env[2]}, headers=headers).json()
+    time.sleep(0.05)
+    later = _ingest(lib_env, "later.mov", sha=_sha())
+    _trash(env, later)  # trashed after the view loaded: never shown
+    r = client.request("DELETE", "/v1/trash/empty", json={"library_id": lib_env[2], "trashed_before": page["listed_at"]},
+                       headers=headers)
+    assert r.json()["deleted"] == 1
+    assert not _exists(env, "assets", "asset_id", shown) and _reason(env, later) == "user"
+
+
+@pytest.mark.slow
+def test_a_409_about_trash_days_saves_nothing_else(env):
+    client, headers, *_ = env
+    clip = _ingest(env, "short/both.mov", sha=_sha())
+    _trash(env, clip)
+    _age(env, "assets", "deleted_at", "asset_id", clip, 10)
+    before = client.get("/v1/tenant/settings", headers=headers).json()
+    r = _settings(env, trash_days=7, video_preview_max_seconds=42)
+    assert r.status_code == 409
+    assert client.get("/v1/tenant/settings", headers=headers).json() == before
+
+
+@pytest.mark.slow
+def test_a_restored_librarys_trashed_clips_get_their_days_again(env):
+    """Out of the trash's sight with the library: back in it, a full clock."""
+    client, headers, *_ = env
+    lib_env = _library(env, "ClockAgain")
+    clip = _ingest(lib_env, "binned.mov", sha=_sha())
+    _trash(env, clip)
+    _age(env, "assets", "deleted_at", "asset_id", clip, 40)
+    client.delete(f"/v1/libraries/{lib_env[2]}", headers=headers)
+    assert client.post(f"/v1/libraries/{lib_env[2]}/restore", headers=headers).status_code == 200
+    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=MagicMock()):
+        client.post("/v1/upkeep", headers=headers)
+    assert _reason(env, clip) == "user"
+    item = client.get("/v1/trash", params={"library_id": lib_env[2]}, headers=headers).json()["items"][0]
+    from datetime import datetime
+
+    assert datetime.fromisoformat(item["trashed_at"]) > utcnow() - timedelta(minutes=5)
+
+
+@pytest.mark.slow
+def test_restoring_a_projects_clips_counts_those_back_in_the_archive_apart(env):
+    client, headers, *_ = env
+    shelved = _ingest(env, "projback/shelved.mov", sha=_sha())
+    live = _ingest(env, "projback/live.mov", sha=_sha())
+    project_id = client.post("/v1/projects", json={"name": "Back apart", "asset_ids": [shelved, live]},
+                             headers=headers).json()["project_id"]
+    client.post("/v1/assets/archive", json={"asset_ids": [shelved]}, headers=headers)
+    _trash(env, shelved, live)
+    r = client.post(f"/v1/projects/{project_id}/restore-clips", headers=headers)
+    assert r.status_code == 200, r.text
+    assert (r.json()["restored"], r.json()["archived"]) == (1, 1)
+    assert _reason(env, shelved) == "archived" and _reason(env, live) == "active"

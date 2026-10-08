@@ -167,7 +167,10 @@ function TrashForm({ settings, isAdmin }: { settings: TenantSettings; isAdmin: b
                 </button>
                 <button
                   type="button"
-                  onClick={() => setAsk(null)}
+                  onClick={() => {
+                    setAsk(null);
+                    save.reset();
+                  }}
                   className="rounded-md px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-800"
                 >
                   Cancel

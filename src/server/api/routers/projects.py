@@ -108,14 +108,16 @@ class RestoreProjectRequest(BaseModel):
 
 
 class RestoreProjectResponse(BaseModel):
-    restored_clips: int
+    restored_clips: int  # back in sight
     trashed_clips: int  # still in the trash: the request said to leave them
     missing_clips: int  # files missing from disk; back when the files are
+    archived_clips: int = 0  # out of the trash, back in the archive where they were
 
 
 class RestoreClipsResponse(BaseModel):
-    restored: int  # clips you trashed, now back everywhere
+    restored: int  # clips you trashed, now back in sight everywhere
     missing: int  # clips whose files went missing; back when the files are
+    archived: int = 0  # out of the trash, back in the archive where they were (still hidden here)
 
 
 class AssetIdsRequest(BaseModel):
@@ -491,14 +493,18 @@ def restore_project(
         raise HTTPException(status_code=404, detail="Project not in the trash")
     if col.visibility == "public":
         _sync_public_index(request, project_id, public=True)
-    restored = _restore_trashed_clips(request, session, repo, project_id) if with_clips and trashed else 0
+    restored, archived = _restore_trashed_clips(request, session, repo, project_id) if with_clips and trashed else (0, 0)
     return RestoreProjectResponse(
-        restored_clips=restored, trashed_clips=max(0, trashed - restored), missing_clips=missing
+        restored_clips=restored, trashed_clips=max(0, trashed - restored - archived), missing_clips=missing,
+        archived_clips=archived,
     )
 
 
-def _restore_trashed_clips(request: Request, session: Session, repo: ProjectRepository, project_id: str) -> int:
-    """Restore the project's clips that a person trashed, everywhere. Returns how many."""
+def _restore_trashed_clips(
+    request: Request, session: Session, repo: ProjectRepository, project_id: str,
+) -> tuple[int, int]:
+    """Restore the project's clips that a person trashed, everywhere, back to
+    where they were. Returns (back in sight, back in the archive)."""
     from src.server.api.routers.assets import reindex_restored_asset
 
     asset_repo = AssetRepository(session)
@@ -511,7 +517,7 @@ def _restore_trashed_clips(request: Request, session: Session, repo: ProjectRepo
             reindex_restored_asset(request, asset)
     for library_id in asset_repo.library_ids_of(restored):
         LibraryRepository(session).bump_revision(library_id)
-    return len(restored)
+    return len(restored) - len(to_archive), len(to_archive)
 
 
 @router.post("/{project_id}/restore-clips", response_model=RestoreClipsResponse)
@@ -530,8 +536,9 @@ def restore_project_clips(
     col = _get_project_or_404(repo, project_id)
     if not _can_view(col, user_id):
         raise HTTPException(status_code=404, detail="Project not found")
-    restored = _restore_trashed_clips(request, session, repo, project_id)
-    return RestoreClipsResponse(restored=restored, missing=repo.hidden_clip_counts(project_id)["missing"])
+    restored, archived = _restore_trashed_clips(request, session, repo, project_id)
+    return RestoreClipsResponse(restored=restored, missing=repo.hidden_clip_counts(project_id)["missing"],
+                                archived=archived)
 
 
 # ---------------------------------------------------------------------------

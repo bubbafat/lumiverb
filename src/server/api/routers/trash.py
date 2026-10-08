@@ -47,6 +47,9 @@ class TrashPage(BaseModel):
     items: list[TrashedClip]
     next_cursor: str | None = None
     total: int
+    # When this was listed (server time): send it back as trashed_before when
+    # emptying, so nothing trashed since (never shown) goes with it.
+    listed_at: str
     # The account's trash days; None when the trash is emptied only by hand.
     trash_days: int | None
 
@@ -67,6 +70,7 @@ def list_trash(
     from src.server.tenant_settings import get_trash_days
 
     days = get_trash_days(session)
+    listed_at = utcnow()
     rows, total = AssetRepository(session).page_hidden(
         ("user",), library_id=library_id, folder=path, after=decode_cursor(after), limit=limit,
     )
@@ -82,6 +86,7 @@ def list_trash(
         next_cursor=encode_cursor(rows[-1]) if len(rows) == limit else None,
         total=total,
         trash_days=days,
+        listed_at=listed_at.isoformat(),
     )
 
 

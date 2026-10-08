@@ -261,6 +261,12 @@ class LibraryRepository:
             ),
             {"lib": library_id},
         )
+        # Clips a person trashed before the library went were out of the trash's
+        # sight with it: back in the trash, they get their full trash days again.
+        self._session.execute(
+            text("UPDATE assets SET deleted_at = :now WHERE library_id = :lib AND deleted_reason = 'user'"),
+            {"lib": library_id, "now": utcnow()},
+        )
         self._session.execute(
             text(
                 "UPDATE video_scenes SET search_synced_at = NULL WHERE asset_id IN"
