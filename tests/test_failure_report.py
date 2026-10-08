@@ -41,6 +41,13 @@ def library(home: Path, tmp_path: Path) -> dict:
     return {"library_id": "lib_1", "name": "Footage", "root_path": f"{MAC}/Footage"}
 
 
+@pytest.fixture(autouse=True)
+def endpoint_offers_the_model():
+    """The vision endpoint answers (vision_guard asks it before vision steps)."""
+    with patch("src.client.cli.vision_guard.check_model", return_value=None):
+        yield
+
+
 def _cached(home: Path, asset_id: str) -> None:
     path = home / ".cache" / "lumiverb" / "analysis" / f"{asset_id}.mp4"
     path.parent.mkdir(parents=True, exist_ok=True)

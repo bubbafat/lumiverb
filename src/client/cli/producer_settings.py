@@ -43,21 +43,3 @@ class ProducerSettings:
         settings actually used (the server's unless `used` says otherwise),
         and the source file's SHA-256."""
         return lineage(artifact, self.settings(artifact) if used is None else used, source_sha256)
-
-    def vision_model(self, configured: str) -> str:
-        """The vision model to use: the account's. When it has none yet, the
-        worker's configured one becomes it (once; an admin key can record it)."""
-        model = self._settings["vision"].get("model") or ""
-        if model:
-            if configured and configured != model:
-                logger.warning("vision: using the account's model %s, not the configured %s", model, configured)
-            return model
-        if configured and self._client is not None:
-            try:
-                self._client.post("/v1/producers/vision-model", json={"model": configured})
-                self.refresh()
-            except Exception as e:  # noqa: BLE001 — not an admin, or an older server
-                logger.info("vision: couldn't record %s as the account's model (%s)", configured, e)
-                for a in ("vision", "ocr", "scene_vision"):
-                    self._settings[a]["model"] = configured
-        return self._settings["vision"].get("model") or configured

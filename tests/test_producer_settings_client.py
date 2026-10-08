@@ -44,8 +44,13 @@ def test_the_workers_constants_are_the_registrys_settings():
         faces["min_relative_size"], faces["min_sharpness"])
     clip = P.PRODUCERS["clip"].defaults
     assert clip_provider.MODEL_VERSION == f"{clip['model']}-{clip['pretrained']}"
-    assert cli_config.CLIConfig().proxy_max_edge == clip["input_edge"]
-    assert cli_config.CLIConfig().whisper_model == P.PRODUCERS["transcript"].defaults["model"]
+    from src.client.cli import repair
+    from src.client.proxy import proxy_cache
+
+    assert repair.PROXY_CACHE_EDGE == proxy_cache._DEFAULT_MAX_EDGE == clip["input_edge"]
+    # What changes the output lives only on the server: the worker's config has none of it.
+    assert not {"whisper_model", "proxy_max_edge", "analysis_proxy_max_edge", "vision_api_url",
+                "vision_api_key", "vision_model_id"} & set(cli_config.CLIConfig.model_fields)
 
 
 def test_the_previews_settings_are_what_the_scan_renders():
@@ -101,36 +106,6 @@ def test_settings_actually_used_are_what_lineage_hashes():
     used = {**ps.settings("clip"), "input_edge": 2048}
     assert ps.lineage("clip", None, used=used)["settings_hash"] == P.settings_hash(used)
     assert ps.lineage("clip", None, used=used)["settings_hash"] != ps.lineage("clip", None)["settings_hash"]
-
-
-def test_the_accounts_vision_model_wins_over_the_configured_one():
-    from src.client.cli.producer_settings import ProducerSettings
-
-    model = "qwen3-vl:8b"
-    client = _client({a: {"model": model} for a in ("vision", "ocr", "scene_vision")})
-    assert ProducerSettings(client).vision_model("llava:13b") == model
-    client.post.assert_not_called()
-
-
-def test_with_no_account_model_the_configured_one_is_recorded_once():
-    from src.client.cli.producer_settings import ProducerSettings
-
-    client = _client()
-    ps = ProducerSettings(client)
-    assert ps.vision_model("qwen3-vl:8b") == "qwen3-vl:8b"
-    client.post.assert_called_once_with("/v1/producers/vision-model", json={"model": "qwen3-vl:8b"})
-
-
-def test_when_it_cant_record_the_model_it_still_says_which_it_used():
-    from src.client.cli.producer_settings import ProducerSettings
-
-    client = _client()
-    client.post.side_effect = RuntimeError("403")
-    ps = ProducerSettings(client)
-    assert ps.vision_model("qwen3-vl:8b") == "qwen3-vl:8b"
-    assert ps.settings("ocr")["model"] == "qwen3-vl:8b"
-    assert ps.lineage("vision", None)["settings_hash"] == P.settings_hash(
-        P.effective_settings("vision", account={"model": "qwen3-vl:8b"}))
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +202,7 @@ def test_descriptions_say_which_file_each_came_from(tmp_path, monkeypatch):
     producers = ProducerSettings(client)
     client.get.return_value.json.return_value = {"items": [{"asset_id": "ast_a", "rel_path": "a.jpg", "sha256": SHA}]}
     with (
-        patch.object(ingest, "_resolve_vision_config", return_value=("http://vision", None, "llava", "test")),
+        patch.object(ingest, "_resolve_vision_config", return_value=("http://vision", None, model, "account settings")),
         patch("src.client.workers.captions.factory.get_caption_provider") as provider,
         patch.object(ingest, "_backfill_one", return_value={"asset_id": "ast_a", "model_id": model,
                                                             "description": "a dog", "tags": []}),

@@ -44,6 +44,13 @@ def asleep(home: Path) -> dict:
     return {"library_id": "lib_1", "name": "Footage", "root_path": f"{MAC}/Footage"}
 
 
+@pytest.fixture(autouse=True)
+def endpoint_offers_the_model():
+    """The vision endpoint answers (vision_guard asks it before vision steps)."""
+    with patch("src.client.cli.vision_guard.check_model", return_value=None):
+        yield
+
+
 def _cached(home: Path, asset_id: str, body: bytes = b"proxy") -> Path:
     path = home / ".cache" / "lumiverb" / "analysis" / f"{asset_id}.mp4"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -204,12 +211,28 @@ def test_scene_vision_reads_the_proxy_while_storage_sleeps(home: Path, asleep: d
         {"asset_id": "ast_b", "rel_path": "b.mov", "has_analysis_proxy": False},
     ]}
     with (
-        patch("src.client.cli.ingest._resolve_vision_config", return_value=(None, None, None, "none")),
+        patch("src.client.cli.ingest._resolve_vision_config", return_value=VISION),
+        patch("src.client.workers.captions.factory.get_caption_provider"),
         patch("src.client.cli.video_index.enrich_video_scenes",
               return_value={"enriched": 1, "skipped": 0, "failed": 0, "elapsed": 0.1}) as enr,
     ):
         _run(client, asleep, "scene-vision", {"missing_scene_vision": 2}, pages)
     assert [c.kwargs["source_path"] for c in enr.call_args_list] == [proxy]
+
+
+@pytest.mark.fast
+def test_without_a_usable_vision_model_scene_vision_waits(home: Path, asleep: dict) -> None:
+    _cached(home, "ast_a")
+    client = MagicMock()
+    pages = {"missing_scene_vision": [{"asset_id": "ast_a", "rel_path": "a.mov", "has_analysis_proxy": True}]}
+    with (
+        patch("src.client.cli.vision_guard.check_model", return_value="no model chosen"),
+        patch("src.client.cli.ingest._resolve_vision_config", return_value=VISION),
+        patch("src.client.cli.video_index.enrich_video_scenes") as enr,
+    ):
+        _run(client, asleep, "scene-vision", {"missing_scene_vision": 1}, pages)
+    enr.assert_not_called()
+    assert not _sent(client, "/v1/producers/failures")
 
 
 @pytest.mark.fast
@@ -277,7 +300,8 @@ STEPS = [
     ("transcribe", "missing_transcription", "src.client.cli.repair._transcribe_one", {}),
     ("video-scenes", "missing_video_scenes", "src.client.cli.video_index.index_video_scenes", {}),
     ("scene-vision", "missing_scene_vision", "src.client.cli.video_index.enrich_video_scenes",
-     {"src.client.cli.ingest._resolve_vision_config": MagicMock(return_value=(None, None, None, "none"))}),
+     {"src.client.cli.ingest._resolve_vision_config": MagicMock(return_value=VISION),
+      "src.client.workers.captions.factory.get_caption_provider": MagicMock()}),
 ]
 
 
@@ -522,47 +546,6 @@ def test_the_encoder_is_this_machines_and_doesnt_make_a_proxy_stale(home: Path, 
 
 
 @pytest.mark.fast
-def test_a_local_setting_the_account_now_decides_is_said_once_and_ignored(
-        home: Path, library: dict, caplog: pytest.LogCaptureFixture) -> None:
-    import logging
-
-    from src.client.cli import repair
-
-    repair._SUPERSEDED_SAID.clear()
-    cfg = CLIConfig.model_validate_json((home / ".lumiverb" / "config.json").read_text())
-    save_config(cfg.model_copy(update={"whisper_model": "large-v3"}))
-    _cached(home, "ast_a")
-    _cached(home, "ast_b")
-    client = _with_producers()
-    pages = {"missing_transcription": [{"asset_id": x, "rel_path": f"{x}.mov", "duration_sec": 4.0,
-                                        "has_analysis_proxy": True} for x in ("ast_a", "ast_b")]}
-    with caplog.at_level(logging.WARNING, logger="src.client.cli.repair"), \
-            patch("src.client.cli.repair._transcribe_one", return_value=("", "")) as tr:
-        _run(client, library, "transcribe", {"missing_transcription": 2}, pages)
-
-    assert {c.args[1] for c in tr.call_args_list} == {"small"}
-    assert [r.getMessage() for r in caplog.records if "whisper_model" in r.getMessage()] == [
-        "config whisper_model=large-v3 is ignored: the account's producer settings say small"]
-
-
-@pytest.mark.fast
-def test_probe_says_how_it_was_made(library: dict, tmp_path: Path) -> None:
-    from src.client.cli.repair import _probe_one
-    from src.client.cli.producer_settings import ProducerSettings
-    from src.shared import producers as P
-
-    client = _with_producers()
-    facet = MagicMock()
-    facet.to_dict.return_value = {"frame_rate": 25.0}
-    with patch("src.client.cli.repair.probe_video", return_value=facet):
-        assert _probe_one(client, tmp_path / "mnt" / "Footage", {"asset_id": "ast_a", "rel_path": "a.mov", "sha256": SHA},
-                          ProducerSettings(client)) == "ok"
-    body = client.put.call_args.kwargs["json"]
-    assert body["frame_rate"] == 25.0
-    assert body["lineage"] == P.lineage("probe", {}, SHA)
-
-
-@pytest.mark.fast
 def test_transcription_uses_the_servers_whisper_settings_and_says_so(home: Path, library: dict) -> None:
     from src.shared import producers as P
 
@@ -596,7 +579,7 @@ def test_embeddings_say_which_file_each_came_from_and_what_clip_saw(home: Path, 
     [call] = _sent(client, "/batch-embeddings")
     body = call.kwargs["json"]
     assert body["items"][0]["source_sha256"] == SHA and "lineage" not in body["items"][0]
-    used = {**P.effective_settings("clip"), "input_edge": CLIConfig().proxy_max_edge}
+    used = P.effective_settings("clip")  # the proxy cache gives CLIP its input size
     assert body["lineage"] == P.lineage("clip", used, None)
 
 
@@ -607,7 +590,8 @@ def test_ocr_says_which_file_each_came_from(home: Path, library: dict) -> None:
     client = _with_producers({a: {"model": "qwen3-vl:8b"} for a in ("vision", "ocr", "scene_vision")})
     pages = {"missing_ocr": [{"asset_id": "ast_a", "rel_path": "a.jpg", "sha256": SHA}]}
     with (
-        patch("src.client.cli.ingest._resolve_vision_config", return_value=VISION),
+        patch("src.client.cli.ingest._resolve_vision_config",
+              return_value=("http://vision", None, "qwen3-vl:8b", "account settings")),
         patch("src.client.workers.captions.factory.get_caption_provider") as provider,
         patch("src.client.cli.repair._ocr_one", return_value={"asset_id": "ast_a", "ocr_text": "EXIT"}),
     ):

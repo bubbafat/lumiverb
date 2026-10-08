@@ -141,31 +141,14 @@ def _call_vision_ai(
 def _resolve_vision_config(
     client: "LumiverbClient",
 ) -> tuple[str, str | None, str, str]:
-    """Resolve vision API URL, key, model ID, and source label.
+    """The account's vision endpoint URL, key and model, chosen in Settings → AI
+    (the one place they live), and where they came from.
 
-    Resolution order: client config > tenant config > auto-discover.
     Returns (vision_api_url, vision_api_key, vision_model_id, source_label).
     """
-    from src.client.cli.config import load_config as _load_cli_config
-    from src.client.workers.captions.model_discovery import resolve_vision_model_id
-
-    cli_cfg = _load_cli_config()
     ctx = client.get("/v1/tenant/context").json()
-
-    vision_api_url = cli_cfg.vision_api_url or ctx.get("vision_api_url", "")
-    vision_api_key = cli_cfg.vision_api_key or ctx.get("vision_api_key") or None
-    vision_source = "client config" if cli_cfg.vision_api_url else "tenant config"
-
-    vision_model_id = ""
-    if vision_api_url:
-        vision_model_id = resolve_vision_model_id(
-            client_model_id=cli_cfg.vision_model_id,
-            tenant_model_id=ctx.get("vision_model_id", ""),
-            api_url=vision_api_url,
-            api_key=vision_api_key,
-        )
-
-    return vision_api_url, vision_api_key, vision_model_id, vision_source
+    return (ctx.get("vision_api_url") or "", ctx.get("vision_api_key") or None,
+            ctx.get("vision_model_id") or "", "account settings")
 
 
 def _detect_media_type(ext: str) -> str:
@@ -601,19 +584,15 @@ def run_backfill_vision(
     """
     library_id = library["library_id"]
 
-    # Resolve vision config (client > tenant > auto-discover)
     vision_api_url, vision_api_key, vision_model_id, vision_source = _resolve_vision_config(client)
-
-    if not vision_api_url:
-        console.print("[red]Vision AI: not configured.[/red]")
-        console.print("  Set it via: lumiverb config set --vision-api-url <url>")
+    if not vision_api_url or not vision_model_id:
+        console.print("[red]Vision AI: no model chosen.[/red] An admin picks one in Settings → AI.")
         raise SystemExit(1)
 
     from src.client.cli.producer_settings import ProducerSettings
     from src.client.workers.captions.factory import get_caption_provider
 
     producers = producers or ProducerSettings(client)
-    vision_model_id = producers.vision_model(vision_model_id)
     vision_provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key,
                                            settings=producers.settings("vision"),
                                            ocr_settings=producers.settings("ocr"))

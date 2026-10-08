@@ -21,6 +21,7 @@ from src.client.video.audio import audio_tracks, speech_wav_command
 from src.client.video.probe import probe_video
 from src.client.workers.faces.insightface_provider import InsightFaceProvider
 from src.shared.io_utils import resolve_source_path
+from src.shared.producers import PRODUCERS
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -29,6 +30,9 @@ if TYPE_CHECKING:
     from src.client.proxy.analysis_cache import AnalysisProxyCache
 
 logger = logging.getLogger(__name__)
+
+# The proxy cache's long edge: the images CLIP, faces and vision AI are given.
+PROXY_CACHE_EDGE: int = PRODUCERS["clip"].defaults["input_edge"]
 
 
 def _silence_subprocess_stdout() -> None:
@@ -128,19 +132,6 @@ def _ocr_one(
     except Exception as e:
         logger.exception("Failed OCR for %s: %s", rel_path, e)
         return None
-
-
-_SUPERSEDED_SAID: set[str] = set()
-
-
-def _superseded(key: str, local: object, account: object) -> None:
-    """A local config value the account's producer settings now decide: say
-    so once, when it was changed from its default and differs."""
-    from src.client.cli.config import CLIConfig
-
-    if key not in _SUPERSEDED_SAID and local != getattr(CLIConfig(), key) and local != account:
-        _SUPERSEDED_SAID.add(key)
-        logger.warning("config %s=%s is ignored: the account's producer settings say %s", key, local, account)
 
 
 def _probe_one(client: LumiverbClient, lib_root: "Path", asset: dict,
@@ -1009,7 +1000,17 @@ def run_repair(
     # What a step couldn't make goes to the server, which waits before
     # handing it out again (5 minutes, doubling up to a day).
     from src.client.cli.failure_report import FailureReport
+    from src.client.cli.vision_guard import VisionGuard
     failures = FailureReport(client)
+    # Vision steps run only while the account's endpoint offers its model.
+    vision = VisionGuard(client, failures)
+
+    def _vision_ready() -> bool:
+        if vision.check():
+            console.print(f"  Vision AI: {vision.model} via {vision.api_url}")
+            return True
+        console.print(f"[yellow]  Vision AI can't be used: {vision.error}[/yellow]")
+        return False
     max_conc = min(concurrency, _cfg.max_concurrency)
     embed_conc = min(max_conc, concurrency)  # embed is CPU-bound (CLIP), full concurrency
     vision_conc = min(max_conc, _cfg.vision_concurrency)
@@ -1027,7 +1028,8 @@ def run_repair(
 
     # Shared proxy cache: generates from local source → server download → cached at configured size
     from src.client.proxy.proxy_cache import ProxyCache
-    proxy_cache = ProxyCache(max_edge=_cfg.proxy_max_edge, root_path=root_path, client=client)
+    # The images CLIP, faces and vision see: CLIP's input size (the registry's).
+    proxy_cache = ProxyCache(max_edge=PROXY_CACHE_EDGE, root_path=root_path, client=client)
     # Videos are analyzed from their analysis proxies, never the originals.
     from src.client.proxy.analysis_cache import AnalysisProxyCache
     analysis_cache = AnalysisProxyCache(client)
@@ -1075,7 +1077,7 @@ def run_repair(
                 clip_set = producers.settings("clip")
                 clip_provider = CLIPEmbeddingProvider(model_name=clip_set["model"], pretrained=clip_set["pretrained"])
                 # The images CLIP sees are the proxy cache's: its size is what was used.
-                clip_used = {**clip_set, "input_edge": _cfg.proxy_max_edge}
+                clip_used = {**clip_set, "input_edge": PROXY_CACHE_EDGE}
                 console.print(f"CLIP model: {clip_provider.model_version}")
             except Exception as e:
                 console.print(f"[red]Cannot load CLIP model: {e}[/red]")
@@ -1164,28 +1166,27 @@ def run_repair(
 
         elif repair_type == "vision":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
+            if not _vision_ready():
+                continue
             from src.client.cli.ingest import run_backfill_vision
             run_backfill_vision(
-                client, library, concurrency=vision_conc, console=console, should_stop=should_stop,
+                client, library, concurrency=vision_conc, console=console,
+                should_stop=lambda: stop() or vision.down,
                 skip={asset_id for step, asset_id in skip_items if step == "vision"},
                 on_take=None if on_take is None else lambda asset_id: on_take("vision", asset_id),
                 producers=producers,
-                on_fail=failures.for_artifact("vision"),
+                on_fail=vision.on_fail("vision"),
             )
 
         elif repair_type == "ocr":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
-            from src.client.cli.ingest import _resolve_vision_config
-            vision_api_url, vision_api_key, vision_model_id, vision_source = _resolve_vision_config(client)
-            if not vision_api_url:
-                console.print("[red]Vision AI: not configured.[/red]")
+            if not _vision_ready():
                 continue
             from src.client.workers.captions.factory import get_caption_provider
-            vision_model_id = producers.vision_model(vision_model_id)
-            ocr_provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key,
+            ocr_provider = get_caption_provider(vision.model, vision.api_url, vision.api_key,
                                                 settings=producers.settings("vision"),
                                                 ocr_settings=producers.settings("ocr"))
-            console.print(f"  Vision AI: {vision_model_id} via {vision_api_url} ({vision_source})")
+            ocr_fail = vision.on_fail("ocr")
 
             assets = _filter(_page_missing(client, library_id, missing_ocr=True))
             if not assets:
@@ -1224,7 +1225,7 @@ def run_repair(
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("OCR", total=len(assets), ok=0, fail=0)
-                for a in _until(stop, assets, _taking("ocr")):
+                for a in _until(lambda: stop() or vision.down, assets, _taking("ocr")):
                     result = _ocr_one(
                         asset_id=a["asset_id"],
                         rel_path=a["rel_path"],
@@ -1236,7 +1237,7 @@ def run_repair(
                         with stats.lock:
                             stats.processed += 1
                     else:
-                        failures.add("ocr", a["asset_id"], "no OCR result (no proxy, or the model failed: see the log)")
+                        ocr_fail(a["asset_id"], "no OCR result (no proxy, or the model failed: see the log)")
                         with stats.lock:
                             stats.skipped += 1
 
@@ -1385,9 +1386,8 @@ def run_repair(
 
             # The account's settings, so what's recorded as current is what's
             # rendered; the encoder is this machine's.
-            server = producers.settings("analysis_proxy")
-            _superseded("analysis_proxy_max_edge", _cfg.analysis_proxy_max_edge, server["max_edge"])
-            settings = AnalysisProxySettings.for_producer(server, _cfg.analysis_proxy_encoder)
+            settings = AnalysisProxySettings.for_producer(producers.settings("analysis_proxy"),
+                                                          _cfg.analysis_proxy_encoder)
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Render", total=len(assets), ok=0, fail=0)
@@ -1436,7 +1436,6 @@ def run_repair(
                         continue
 
                     whisper = producers.settings("transcript")
-                    _superseded("whisper_model", _cfg.whisper_model, whisper["model"])
                     result = _transcribe_one(source_path, whisper["model"], whisper["vad_min_silence_ms"])
 
                     if result is None:
@@ -1514,18 +1513,11 @@ def run_repair(
         elif repair_type == "scene-vision":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
 
-            # Resolve vision config
-            from src.client.cli.ingest import _resolve_vision_config
-            vision_api_url, vision_api_key, vision_model_id, vision_source = _resolve_vision_config(client)
-            scene_vision_provider = None
-            if vision_api_url and vision_model_id:
-                from src.client.workers.captions.factory import get_caption_provider
-                vision_model_id = producers.vision_model(vision_model_id)
-                scene_vision_provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key,
-                                                             settings=producers.settings("scene_vision"))
-                console.print(f"  Vision AI: {vision_model_id} via {vision_api_url} ({vision_source})")
-            else:
-                console.print("  Vision AI: not configured — extracting rep frames only")
+            if not _vision_ready():
+                continue
+            from src.client.workers.captions.factory import get_caption_provider
+            scene_vision_provider = get_caption_provider(vision.model, vision.api_url, vision.api_key,
+                                                         settings=producers.settings("scene_vision"))
 
             assets = _filter(_page_missing(client, library_id, missing_scene_vision=True))
             if not assets:
@@ -1547,14 +1539,14 @@ def run_repair(
                 done, failed = run_video_enrich(
                     client=client,
                     source_for=lambda v: analysis_cache.get(v["asset_id"]),
-                    videos=_until(stop, videos, _taking("scene-vision")),
+                    videos=_until(lambda: stop() or vision.down, videos, _taking("scene-vision")),
                     vision_provider=scene_vision_provider,
-                    vision_model_id=vision_model_id,
+                    vision_model_id=vision.model,
                     console=console,
                     progress=progress,
                     task_id=tid,
                     lineage_for=lambda v: producers.lineage("scene_vision", v.get("sha256")),
-                    on_fail=failures.for_artifact("scene_vision"),
+                    on_fail=vision.on_fail("scene_vision"),
                 )
             with stats.lock:
                 stats.processed += done
