@@ -12,7 +12,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlmodel import Session
 
-from src.server.api.dependencies import get_tenant_session, require_editor, require_signed_in, require_tenant_admin
+from src.server.api.dependencies import (
+    get_tenant_session,
+    require_editor,
+    require_signed_in,
+)
 from src.server.repository import lineage
 from src.shared.producers import PRODUCERS
 
@@ -33,7 +37,7 @@ class LineageIn(BaseModel):
     source_sha256: str | None = Field(default=None, max_length=128)
 
 
-def lineage_dict(value: "LineageIn | dict | str | None", source_sha256: str | None = None) -> dict | None:
+def lineage_dict(value: LineageIn | dict | str | None, source_sha256: str | None = None) -> dict | None:
     """A request's lineage as a plain dict (a multipart form sends JSON text);
     a per-item source SHA-256 fills in the batch's. None when absent or unreadable."""
     import json

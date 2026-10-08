@@ -24,7 +24,14 @@ from typing import Any
 from sqlalchemy import text
 from sqlmodel import Session
 
-from src.shared.producers import CLIP_MODEL_ID, PERSON, PRODUCERS, UNKNOWN, effective_settings, settings_hash
+from src.shared.producers import (
+    CLIP_MODEL_ID,
+    PERSON,
+    PRODUCERS,
+    UNKNOWN,
+    effective_settings,
+    settings_hash,
+)
 from src.shared.utils import utcnow
 
 # Which clips each producer applies to (SQL on active_assets a).

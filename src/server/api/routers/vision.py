@@ -18,7 +18,12 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field, StrictBool
 from sqlmodel import Session
 
-from src.server.api.dependencies import get_tenant_session, require_editor, require_signed_in, require_tenant_admin
+from src.server.api.dependencies import (
+    get_tenant_session,
+    require_editor,
+    require_signed_in,
+    require_tenant_admin,
+)
 from src.server.api.errors import ConflictError, UpstreamError
 from src.server.tenant_settings import get_vision_status, set_vision_status
 from src.shared.utils import utcnow
