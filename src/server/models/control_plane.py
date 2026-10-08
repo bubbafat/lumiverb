@@ -17,9 +17,34 @@ class Tenant(SQLModel, table=True):
     name: str = Field(nullable=False)
     plan: str = Field(default="free", nullable=False)
     status: str = Field(default="active", nullable=False)
-    vision_api_url: str = Field(default="", nullable=False)
-    vision_api_key: str = Field(default="", nullable=False)
+    # The vision job's model (one model per job; the machines that run it are ai_machines).
     vision_model_id: str = Field(default="", nullable=False)
+    created_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
+class AiMachine(SQLModel, table=True):
+    """A GPU machine the account's AI work runs on: an OpenAI-compatible
+    endpoint, the jobs it does (src/shared/ai_jobs.py), and how many requests
+    it takes at once. Its status is the latest check of it (the worker's, or
+    Connect's when it was saved)."""
+
+    __tablename__ = "ai_machines"
+
+    machine_id: str = Field(primary_key=True)
+    tenant_id: str = Field(foreign_key="tenants.tenant_id", nullable=False, index=True)
+    name: str = Field(nullable=False)
+    api_url: str = Field(nullable=False)
+    api_key: str = Field(default="", nullable=False)
+    jobs: list[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
+    at_once: int = Field(default=2, nullable=False)
+    enabled: bool = Field(default=True, nullable=False)
+    online: bool | None = Field(default=None, nullable=True)
+    status_error: str = Field(default="", nullable=False)
+    models: list[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
+    checked_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),

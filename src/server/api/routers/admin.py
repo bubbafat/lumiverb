@@ -183,15 +183,34 @@ def update_tenant(
     _: Annotated[None, Depends(require_admin)],
     session: Annotated[Session, Depends(get_db_session)],
 ) -> UpdateTenantResponse:
-    """Update tenant vision API config. Only provided fields are changed."""
+    """Update a tenant's vision endpoint and model. Only provided fields are
+    changed. The endpoint is its first machine doing vision (/v1/ai): an
+    empty URL removes that machine; another makes or moves it."""
+    from ulid import ULID
+
+    from src.server.api.routers.ai import first_vision_machine
+    from src.server.models.control_plane import AiMachine
+
     tenant_repo = TenantRepository(session)
     tenant = tenant_repo.get_by_id(tenant_id)
     if tenant is None or tenant.status == "deleted":
         raise HTTPException(status_code=404, detail="Tenant not found")
+    machine = first_vision_machine(session, tenant_id)
     if body.vision_api_url is not None:
-        tenant.vision_api_url = body.vision_api_url
-    if body.vision_api_key is not None:
-        tenant.vision_api_key = body.vision_api_key
+        url = body.vision_api_url.strip().rstrip("/")
+        if not url:
+            if machine is not None:
+                session.delete(machine)
+            machine = None
+        elif machine is None:
+            machine = AiMachine(machine_id=f"aim_{ULID()}", tenant_id=tenant_id, name=url.split("://")[-1].split("/")[0],
+                                api_url=url, jobs=["vision"])
+        else:
+            machine.api_url = url
+    if body.vision_api_key is not None and machine is not None:
+        machine.api_key = body.vision_api_key
+    if machine is not None:
+        session.add(machine)
     if body.vision_model_id is not None:
         tenant.vision_model_id = body.vision_model_id
     session.add(tenant)
@@ -199,7 +218,7 @@ def update_tenant(
     session.refresh(tenant)
     return UpdateTenantResponse(
         tenant_id=tenant.tenant_id,
-        vision_api_url=tenant.vision_api_url,
+        vision_api_url=machine.api_url if machine is not None else "",
         vision_model_id=tenant.vision_model_id,
     )
 
