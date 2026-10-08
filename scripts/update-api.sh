@@ -95,7 +95,7 @@ ok "Tenant migrations applied"
 step "Ensuring data directory"
 DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2-)"
 if [[ -n "$DATA_DIR" ]]; then
-  mkdir -p "$DATA_DIR"/quickwit
+  mkdir -p "$DATA_DIR"/quickwit "$DATA_DIR"/tmp
   chown -R "$SVC_USER":"$SVC_USER" "$DATA_DIR"
   ok "Data dir: $DATA_DIR"
 fi
@@ -115,6 +115,21 @@ step "Ports"
 grep -q '^API_PORT=' "$ENV_FILE" || echo "API_PORT=8000" >> "$ENV_FILE"
 API_PORT="$(grep '^API_PORT=' "$ENV_FILE" | cut -d= -f2-)"
 ok "API on port ${API_PORT}"
+
+# ---------------------------------------------------------------------------
+step "Updating the API unit"
+API_UNIT="/etc/systemd/system/lumiverb-api.service"
+if [[ -f "$API_UNIT" ]]; then
+  # Large uploads (analysis proxies) are spooled to TMPDIR; PrivateTmp's /tmp
+  # can be RAM (tmpfs), so they go on the data disk (inside ReadWritePaths).
+  if [[ -z "$DATA_DIR" ]]; then
+    warn "No DATA_DIR in ${ENV_FILE}; API uploads stay in /tmp"
+  elif ! grep -q "^Environment=TMPDIR=" "$API_UNIT"; then
+    sed -i "/^Environment=PYTHONUNBUFFERED=1$/a Environment=TMPDIR=${DATA_DIR}/tmp" "$API_UNIT"
+    systemctl daemon-reload
+    ok "API uploads spool to ${DATA_DIR}/tmp"
+  fi
+fi
 
 # ---------------------------------------------------------------------------
 step "Updating the worker unit"

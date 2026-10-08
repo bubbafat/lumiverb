@@ -129,6 +129,58 @@ def test_worker_caches_live_in_the_data_dir():
     assert "Environment=XDG_CACHE_HOME=${DATA_DIR}/cache" in worker_unit
 
 
+def test_api_buffers_uploads_on_the_data_disk():
+    # Starlette spools large uploads (analysis proxies) to TMPDIR; the API's
+    # PrivateTmp /tmp is RAM on the brain.
+    text = DEPLOY_API.read_text()
+    api_unit = text.split("Description=Lumiverb API Server", 1)[1].split("UNIT", 1)[0]
+    assert "Environment=TMPDIR=${DATA_DIR}/tmp" in api_unit
+    assert "ReadWritePaths=${DATA_DIR}" in api_unit
+    assert '"$DATA_DIR"/tmp' in text.split('step "Creating service user and directories"', 1)[1].split("ok ", 1)[0]
+
+
+UPDATE_API = REPO / "scripts" / "update-api.sh"
+
+API_UNIT = """\
+[Service]
+EnvironmentFile=/etc/lumiverb/env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/lumiverb/.venv/bin/uvicorn src.server.api.main:app
+PrivateTmp=true
+ReadWritePaths=/mnt/ssd2/lumiverb
+"""
+
+
+def _update_api_unit(tmp_path: Path, unit: Path) -> None:
+    """Run update-api.sh's API-unit step against `unit`."""
+    text = UPDATE_API.read_text()
+    block = text.split('step "Updating the API unit"', 1)[1].split("# ----", 1)[0]
+    script = (
+        'step() { :; }; ok() { :; }; warn() { :; }; systemctl() { :; }\n'
+        "DATA_DIR=/mnt/ssd2/lumiverb\n"
+        + block.replace("/etc/systemd/system/lumiverb-api.service", str(unit))
+    )
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stdout + out.stderr
+
+
+def test_update_moves_an_existing_api_unit_s_tmpdir_to_the_data_disk(tmp_path):
+    unit = tmp_path / "lumiverb-api.service"
+    unit.write_text(API_UNIT)
+    _update_api_unit(tmp_path, unit)
+    _update_api_unit(tmp_path, unit)  # reruns change nothing
+    lines = unit.read_text().splitlines()
+    assert lines.count("Environment=TMPDIR=/mnt/ssd2/lumiverb/tmp") == 1
+    assert lines.index("Environment=TMPDIR=/mnt/ssd2/lumiverb/tmp") == lines.index("Environment=PYTHONUNBUFFERED=1") + 1
+
+
+def test_update_makes_the_api_tmpdir():
+    text = UPDATE_API.read_text()
+    data_step = text.split('step "Ensuring data directory"', 1)[1].split("# ----", 1)[0]
+    assert '"$DATA_DIR"/tmp' in data_step
+    assert 'chown -R "$SVC_USER":"$SVC_USER" "$DATA_DIR"' in data_step
+
+
 DEPLOY_WEB = REPO / "scripts" / "deploy-web.sh"
 
 

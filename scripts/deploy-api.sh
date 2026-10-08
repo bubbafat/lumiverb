@@ -240,7 +240,7 @@ step "Creating service user and directories"
 SVC_HOME="/var/lib/lumiverb"
 id -u "$SVC_USER" >/dev/null 2>&1 || useradd --system --shell /usr/sbin/nologin --home "$SVC_HOME" "$SVC_USER"
 
-mkdir -p "$SVC_HOME" "$CONF_DIR" "$DATA_DIR"/quickwit "$BACKUP_DIR"
+mkdir -p "$SVC_HOME" "$CONF_DIR" "$DATA_DIR"/quickwit "$DATA_DIR"/tmp "$BACKUP_DIR"
 chown "$SVC_USER":"$SVC_USER" "$SVC_HOME"
 chown root:"$SVC_USER" "$CONF_DIR"
 chmod 750 "$CONF_DIR"
@@ -490,6 +490,9 @@ Group=${SVC_USER}
 WorkingDirectory=${APP_DIR}
 EnvironmentFile=${ENV_FILE}
 Environment=PYTHONUNBUFFERED=1
+# Large uploads (analysis proxies) are spooled to TMPDIR; PrivateTmp's /tmp
+# can be RAM (tmpfs), so they go on the data disk.
+Environment=TMPDIR=${DATA_DIR}/tmp
 ExecStart=${APP_DIR}/.venv/bin/uvicorn src.server.api.main:app --host \${API_LISTEN_HOST} --port \${API_PORT} --workers 2
 Restart=on-failure
 RestartSec=5s
