@@ -236,11 +236,13 @@ def project_restore(
         # Clips in the trash: the server wants the user's choice.
         details = resp.json().get("error", {}).get("details", {})
         trashed = details.get("trashed_clips", 0)
+        one = trashed == 1
         console.print(
-            f"{_plural(trashed, 'clip', 'clips')} in this project {'is' if trashed == 1 else 'are'} in the trash. "
-            "Restoring them brings them back everywhere: the library, search and other projects."
+            f"{_plural(trashed, 'clip', 'clips')} in this project {'is' if one else 'are'} in the trash. "
+            f"Restoring {'it brings it' if one else 'them brings them'} back everywhere: "
+            "the library, search and other projects."
         )
-        with_clips = typer.confirm("Restore them too?", default=False)
+        with_clips = typer.confirm(f"Restore {'it' if one else 'them'} too?", default=False)
         resp = client.raw("POST", path, json={"with_clips": with_clips})
     client._handle_response(resp)  # type: ignore[attr-defined]
     data = resp.json()

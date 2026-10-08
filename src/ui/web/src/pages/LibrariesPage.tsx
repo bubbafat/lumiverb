@@ -426,17 +426,19 @@ export default function LibrariesPage() {
             </h2>
             <p className="mb-4 text-sm text-gray-400">
               This will permanently delete {trashedCount} trashed
-              {trashedCount === 1 ? " library" : " libraries"} and all their
+              {trashedCount === 1 ? " library and all its" : " libraries and all their"}{" "}
               assets. This cannot be undone.
             </p>
             {trashUsage && (
               <div className="mb-4 rounded-lg border border-amber-800/50 bg-amber-950/30 p-3 text-sm text-amber-100/90">
                 <p className="mb-2">
-                  {trashUsage.assets_in_projects}{" "}
-                  {trashUsage.assets_in_projects === 1 ? "clip" : "clips"} from these libraries{" "}
-                  {trashUsage.assets_in_projects === 1 ? "is" : "are"} in {usageTotal}{" "}
-                  {usageTotal === 1 ? "project" : "projects"}. Deleting them for good removes them from
-                  those projects.
+                  {trashUsage.assets_in_projects === 1 ? "1 clip" : `${trashUsage.assets_in_projects} clips`} from{" "}
+                  {trashedCount === 1 ? "this library" : "these libraries"}{" "}
+                  {trashUsage.assets_in_projects === 1 ? "is" : "are"} in{" "}
+                  {usageTotal === 1 ? "1 project" : `${usageTotal} projects`}. Deleting{" "}
+                  {trashUsage.assets_in_projects === 1 ? "it" : "them"} for good removes{" "}
+                  {trashUsage.assets_in_projects === 1 ? "it" : "them"} from{" "}
+                  {usageTotal === 1 ? "that project" : "those projects"}.
                 </p>
                 <ul className="space-y-0.5 text-amber-200/80">
                   {trashUsage.projects.map((p) => (

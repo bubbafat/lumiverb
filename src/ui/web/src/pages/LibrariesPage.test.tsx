@@ -65,11 +65,24 @@ describe("LibrariesPage empty trash", () => {
     const dialog = await openEmptyTrash();
     fireEvent.click(within(dialog).getByRole("button", { name: "Empty trash" }));
 
-    expect(await within(dialog).findByText(/4 clips from these libraries are in 3 projects/)).toBeTruthy();
+    expect(await within(dialog).findByText(/4 clips from this library are in 3 projects\. Deleting them for good removes them from those projects\./)).toBeTruthy();
     expect(within(dialog).getByText(/Customer Video/)).toBeTruthy();
     expect(within(dialog).getByText(/Old reel/)).toBeTruthy();
     expect(within(dialog).getByText(/1 more you can't see/)).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete and remove from projects" }));
     await waitFor(() => expect(api.emptyTrash).toHaveBeenLastCalledWith(true));
+  });
+
+  it("says it, not them, for one clip in one project", async () => {
+    api.emptyTrash.mockRejectedValue(new ApiError(409, "in projects", "in_projects", {
+      assets_in_projects: 1,
+      projects: [{ project_id: "prj_1", name: "Customer Video", status: "active", in_trash: false, clips: 1 }],
+      other_projects: 0,
+    }));
+    renderPage();
+    const dialog = await openEmptyTrash();
+    expect(dialog.textContent).toMatch(/1 trashed library and all its assets/);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Empty trash" }));
+    expect(await within(dialog).findByText(/1 clip from this library is in 1 project\. Deleting it for good removes it from that project\./)).toBeTruthy();
   });
 });

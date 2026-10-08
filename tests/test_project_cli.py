@@ -292,3 +292,44 @@ def test_emptying_the_library_trash_says_which_projects_lose_clips() -> None:
     assert result.exit_code == 0, result.output
     empty = [c for c in client.post.call_args_list if c.args[0] == "/v1/libraries/empty-trash"]
     assert empty[-1].kwargs["json"] == {"remove_from_projects": True}
+
+
+def test_restore_says_it_for_one_clip() -> None:
+    client = _trash_client(trashed_clips=1)
+    result = _run(client, "restore", "--id", "prj_1", input="y\n")
+    assert result.exit_code == 0, result.output
+    assert "1 clip in this project is in the trash. Restoring it brings it back" in result.output
+    assert "Restore it too?" in result.output
+
+
+def test_emptying_the_library_trash_reads_right_for_one() -> None:
+    client = MagicMock()
+    client.get.return_value.json.return_value = [{"library_id": "lib_1", "name": "Old card", "status": "trashed"}]
+
+    def post(path: str, **kwargs: object) -> MagicMock:
+        if path == "/v1/assets/project-usage":
+            return _response(200, {
+                "assets_in_projects": 1,
+                "projects": [{"project_id": "prj_1", "name": "Reel", "status": "active", "in_trash": False, "clips": 1}],
+                "other_projects": 0,
+            })
+        return _response(200, {"deleted": 1})
+
+    client.post.side_effect = post
+    with patch("src.client.cli.main.LumiverbClient", return_value=client):
+        result = runner.invoke(app, ["library", "empty-trash"], input="y\n")
+    assert result.exit_code == 0, result.output
+    out = " ".join(result.output.split())
+    assert "1 clip from this library is in 1 project; deleting it for good removes it from that project" in out
+    assert "Permanently delete 1 library and all its assets?" in out
+    assert "[y/N] [y/N]" not in out
+    assert "Deleted 1 library." in out
+
+
+def test_deleting_a_library_asks_once() -> None:
+    client = MagicMock()
+    client.get.return_value.json.return_value = [{"library_id": "lib_1", "name": "Old card"}]
+    with patch("src.client.cli.main.LumiverbClient", return_value=client):
+        result = runner.invoke(app, ["library", "delete", "--name", "Old card"], input="y\n")
+    assert result.exit_code == 0, result.output
+    assert "[y/N] [y/N]" not in result.output
