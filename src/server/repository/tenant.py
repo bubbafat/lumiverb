@@ -842,13 +842,23 @@ class AssetRepository:
         return (trashed, not_found)
 
     def restore(self, asset_id: str) -> bool:
-        """Clear deleted_at. Returns False if not found or not trashed."""
+        """Clear deleted_at. Returns False if not found or not trashed.
+
+        Trashing deleted the asset's search documents, so the asset and its
+        scenes go back in the queue for the next search sync. Transcript
+        segments aren't swept; callers re-index them (reindex_restored_asset).
+        """
         asset = self._session.get(Asset, asset_id)
         if asset is None or asset.deleted_at is None:
             return False
         asset.deleted_at = None
         asset.deleted_reason = None
+        asset.search_synced_at = None
         self._session.add(asset)
+        self._session.execute(
+            text("UPDATE video_scenes SET search_synced_at = NULL WHERE asset_id = :a"),
+            {"a": asset_id},
+        )
         self._session.commit()
         return True
 

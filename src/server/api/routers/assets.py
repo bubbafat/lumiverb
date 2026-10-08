@@ -17,6 +17,7 @@ from src.server.api.dependencies import get_current_user_id, get_tenant_session
 from src.shared import asset_status
 from src.shared.io_utils import normalize_path_prefix
 from src.server.repository.tenant import AssetMetadataRepository, AssetRepository, LibraryRepository
+from src.server.models.tenant import Asset
 from src.server.storage.local import get_storage
 from src.shared.utils import utcnow
 
@@ -847,9 +848,20 @@ def trash_asset(
             logger.warning("Quickwit delete after trash failed for %s: %s", asset_id, e)
 
 
+def reindex_restored_asset(request: Request, asset: Asset) -> None:
+    """Put a restored asset's transcript segments back in search; the sync
+    sweep re-indexes the asset and its scenes (restore queued them)."""
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if tenant_id and asset.transcript_srt:
+        from src.server.search.sync import index_transcript_segments
+
+        index_transcript_segments(tenant_id, asset)
+
+
 @router.post("/{asset_id}/restore", status_code=204)
 def restore_asset(
     asset_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> None:
     """Restore a single trashed asset. 404 if not found or not trashed."""
@@ -857,6 +869,9 @@ def restore_asset(
     ok = asset_repo.restore(asset_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Asset not found or not trashed")
+    asset = asset_repo.get_by_id(asset_id)
+    if asset is not None:
+        reindex_restored_asset(request, asset)
 
 
 @router.post("/{asset_id}/vision", response_model=VisionSubmitResponse)
@@ -1133,37 +1148,11 @@ def submit_transcript(
     meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
     try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
 
-    # Index transcript segments into Quickwit
     _tid = getattr(request.state, "tenant_id", None)
     if _tid:
-        try:
-            from src.server.srt import parse_srt_segments
-            from src.server.search.quickwit_client import QuickwitClient
-            from src.shared.utils import utcnow as _utcnow
+        from src.server.search.sync import index_transcript_segments
 
-            qw = QuickwitClient()
-            qw.ensure_tenant_transcript_index(_tid)
-            qw.delete_tenant_transcript_documents(_tid, asset_id)
-            segments = parse_srt_segments(body.srt)
-            if segments:
-                docs = [
-                    {
-                        "id": f"{asset_id}_{seg.start_ms}_{seg.end_ms}",
-                        "asset_id": asset_id,
-                        "library_id": asset.library_id,
-                        "rel_path": asset.rel_path,
-                        "media_type": asset.media_type,
-                        "start_ms": seg.start_ms,
-                        "end_ms": seg.end_ms,
-                        "text": seg.text,
-                        "language": asset.transcript_language or "",
-                        "indexed_at": int(_utcnow().timestamp()),
-                    }
-                    for seg in segments
-                ]
-                qw.ingest_tenant_transcript_documents(_tid, docs)
-        except Exception as exc:
-            logger.warning("Transcript segment indexing failed for %s: %s", asset_id, exc)
+        index_transcript_segments(_tid, asset, body.srt)
 
     LibraryRepository(session).bump_revision(asset.library_id)
 
