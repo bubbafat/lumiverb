@@ -113,7 +113,7 @@ class FakeServer:
 
 @pytest.fixture(autouse=True)
 def vision_on(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("src.client.cli.worker._vision_configured", lambda client: True)
+    monkeypatch.setattr("src.client.cli.worker._vision_ready", lambda client: True)
 
 
 @pytest.fixture
@@ -790,7 +790,7 @@ def test_a_library_is_not_started_with_almost_no_time_left(das: Path) -> None:
 @pytest.mark.fast
 def test_enrich_is_not_repeated_while_nothing_changes(das: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # A clip that fails every time shouldn't be retried every minute.
-    monkeypatch.setattr("src.client.cli.worker._vision_configured", lambda client: True)
+    monkeypatch.setattr("src.client.cli.worker._vision_ready", lambda client: True)
     server = FakeServer([LIB], summaries={"lib_1": WORK})
     state = WorkerState(last_full_scan={"lib_1": 100 * HOUR})
     _, enrich, state = _cycle(server, state, now=100 * HOUR)
@@ -801,7 +801,7 @@ def test_enrich_is_not_repeated_while_nothing_changes(das: Path, monkeypatch: py
 
 @pytest.mark.fast
 def test_enrich_runs_again_when_the_counts_change(das: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("src.client.cli.worker._vision_configured", lambda client: True)
+    monkeypatch.setattr("src.client.cli.worker._vision_ready", lambda client: True)
     server = FakeServer([LIB], summaries={"lib_1": WORK})
     state = WorkerState(last_full_scan={"lib_1": 100 * HOUR})
     _, _, state = _cycle(server, state, now=100 * HOUR)
@@ -812,7 +812,7 @@ def test_enrich_runs_again_when_the_counts_change(das: Path, monkeypatch: pytest
 
 @pytest.mark.fast
 def test_failures_are_retried_hourly(das: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("src.client.cli.worker._vision_configured", lambda client: True)
+    monkeypatch.setattr("src.client.cli.worker._vision_ready", lambda client: True)
     server = FakeServer([LIB], summaries={"lib_1": WORK})
     state = WorkerState(last_full_scan={"lib_1": 100 * HOUR})
     _, _, state = _cycle(server, state, now=100 * HOUR)
@@ -823,7 +823,7 @@ def test_failures_are_retried_hourly(das: Path, monkeypatch: pytest.MonkeyPatch)
 @pytest.mark.fast
 def test_enrich_runs_when_storage_wakes(home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Rendering waited for the storage; it can go as soon as it's back.
-    monkeypatch.setattr("src.client.cli.worker._vision_configured", lambda client: True)
+    monkeypatch.setattr("src.client.cli.worker._vision_ready", lambda client: True)
     mount = tmp_path / "mnt"
     save_config(CLIConfig(root_map={MAC: str(mount)}))
     server = FakeServer([LIB], summaries={"lib_1": {"total_assets": 1, "missing_analysis_proxy": 1}})
@@ -837,7 +837,7 @@ def test_enrich_runs_when_storage_wakes(home: Path, tmp_path: Path, monkeypatch:
 
 @pytest.mark.fast
 def test_without_vision_ai_its_steps_are_skipped(das: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("src.client.cli.worker._vision_configured", lambda client: False)
+    monkeypatch.setattr("src.client.cli.worker._vision_ready", lambda client: False)
     server = FakeServer([LIB], summaries={"lib_1": {"total_assets": 3, "missing_scene_vision": 3,
                                                     "missing_vision": 2, "missing_ocr": 1}})
     _, enrich, _ = _cycle(server, WorkerState(last_full_scan={"lib_1": 100 * HOUR}))

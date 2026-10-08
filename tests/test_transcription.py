@@ -125,7 +125,7 @@ class TestMissingTranscriptionCondition:
     def test_condition_checks_has_transcript(self):
         from src.server.repository.tenant import MISSING_CONDITIONS
         cond = MISSING_CONDITIONS["missing_transcription"]
-        assert "has_transcript IS NULL" in cond
+        assert "NOT (a.has_transcript IS NOT NULL)" in cond  # missing: the reconciler's MADE, negated
         assert "media_type = 'video'" in cond
         assert "duration_sec IS NOT NULL" in cond
 
@@ -152,10 +152,11 @@ class TestTranscriptionTypes:
 class TestCliConfig:
     """Verify new CLI config fields."""
 
-    def test_whisper_model_default(self):
+    def test_the_whisper_model_is_the_accounts_not_the_workers(self):
         from src.client.cli.config import CLIConfig
-        cfg = CLIConfig()
-        assert cfg.whisper_model == "small"
+        from src.shared.producers import PRODUCERS
+        assert "whisper_model" not in CLIConfig.model_fields
+        assert PRODUCERS["transcript"].defaults["model"] == "small"
 
     def test_transcribe_concurrency_default(self):
         from src.client.cli.config import CLIConfig

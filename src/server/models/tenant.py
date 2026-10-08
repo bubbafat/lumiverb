@@ -512,6 +512,37 @@ class VideoFacetRow(SQLModel, table=True):
     )
 
 
+class ArtifactLineage(SQLModel, table=True):
+    """How one clip's artifact of one kind was made (ADR-016 phase 3): the
+    producer, its version, the hash of the settings that change its output,
+    and the source file's SHA-256 it was made from. When any of them differs
+    from what's registered now (src/shared/producers.py), the artifact is
+    stale. Faces and scenes count as one set per clip.
+
+    outcome: "ok"; "empty" (made, and there was nothing: no audio, no faces,
+    no text); "failed" (tried and failed: error, attempts, retry_at)."""
+
+    __tablename__ = "artifact_lineage"
+
+    asset_id: str = Field(foreign_key="assets.asset_id", primary_key=True)
+    artifact: str = Field(primary_key=True)
+    producer: str = Field(nullable=False)
+    producer_version: str = Field(nullable=False)
+    settings_hash: str = Field(nullable=False)
+    source_sha256: str | None = Field(default=None, nullable=True)
+    produced_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+    outcome: str = Field(default="ok", nullable=False)
+    error: str | None = Field(default=None, nullable=True)
+    attempts: int = Field(default=0, nullable=False)
+    retry_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+
+
 class IgnoredFile(SQLModel, table=True):
     """A file whose trash the user emptied. Its asset row is gone, but scans
     and ingest keep skipping the path while the file is still on disk."""

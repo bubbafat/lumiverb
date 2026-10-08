@@ -7,9 +7,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
+from sqlalchemy import text
 from sqlmodel import Session, select
 
 from src.server.api.dependencies import get_tenant_session
+from src.server.api.routers.producers import LineageIn, lineage_dict
+from src.server.repository.lineage import record as record_lineage
 from src.server.models.tenant import VideoIndexChunk
 from src.server.repository.tenant import (
     AssetMetadataRepository,
@@ -128,6 +131,8 @@ class ChunkCompleteRequest(BaseModel):
     scenes: list[SceneResult]
     next_anchor_phash: str | None
     next_scene_start_ms: int | None
+    # How the scenes were found; recorded when the clip's last chunk completes.
+    lineage: LineageIn | None = None
 
 
 class ChunkCompleteResponse(BaseModel):
@@ -165,6 +170,7 @@ def complete_chunk(
         asset_repo = AssetRepository(session)
         asset_repo.set_video_indexed(asset_id)
         session.commit()
+        record_lineage(session, asset_id, "scenes", lineage_dict(body.lineage))
         # Inline search sync (best-effort)
         asset_obj = asset_repo.get_by_id(asset_id)
         if asset_obj:
@@ -260,6 +266,7 @@ class SceneVisionUpdateRequest(BaseModel):
     model_version: str
     description: str
     tags: list[str]
+    lineage: LineageIn | None = None
 
 
 class SceneVisionUpdateResponse(BaseModel):
@@ -282,6 +289,11 @@ def update_scene_vision(
         description=body.description,
         tags=body.tags,
     )
+    # One record for the clip's scene descriptions: missing until every scene has one.
+    asset_id = session.execute(text("SELECT asset_id FROM video_scenes WHERE scene_id = :s"),
+                               {"s": scene_id}).scalar()
+    if asset_id:
+        record_lineage(session, asset_id, "scene_vision", lineage_dict(body.lineage))
     return SceneVisionUpdateResponse(scene_id=scene_id, status="updated")
 
 
@@ -345,6 +357,11 @@ def reset_video_pipeline(
     chunk_repo = VideoIndexChunkRepository(session)
     asset_repo = AssetRepository(session)
 
+    # Scenes and their descriptions are gone: missing again, for the whole library.
+    session.execute(text(
+        "DELETE FROM artifact_lineage WHERE artifact IN ('scenes', 'scene_vision')"
+        " AND asset_id IN (SELECT asset_id FROM assets WHERE library_id = :lib)"
+    ), {"lib": library_id})
     scenes_deleted = scene_repo.delete_for_library(library_id)
     chunks_deleted = chunk_repo.delete_for_library(library_id)
     assets_reset = asset_repo.reset_video_indexed_for_library(library_id)

@@ -13,7 +13,7 @@ This ADR sets the direction for Lumiverb. Where another doc in this repo disagre
 | 0 | Groundwork and safety: this ADR, doc updates, stop overwriting human data, safe scanning | Built, in review |
 | 1 | Projects and send to editor (v1) | Built, in review, with project trash. Left: real editor imports on a Mac; the macOS and iOS rename |
 | 2 | The brain: one machine schedules all processing and reads storage read-only | Built; installed on the brain and ingesting. In review (PR #9). Left: the macOS app's change reports and retiring its AI (Swift), finishing the fresh ingest |
-| 3 | Lineage and reconciliation | Not started |
+| 3 | Lineage and reconciliation | In progress: lineage and the reconciler built (in review); the vision model is chosen in Settings → AI. Next: one producer per artifact (OCR apart from descriptions) |
 | 4 | Producers and endpoints | Not started |
 
 ## Overview
@@ -243,6 +243,8 @@ Every derived artifact says how it was made, and the system works out what is mi
 - Per-producer counts of current, missing and stale, with the upgrade flow above
 
 **Done when:** changing one producer setting marks exactly the artifacts it affects as stale, approving rebuilds them at low priority, no human data changes, and named faces keep their names through a face-model switch.
+
+**Where it stands:** lineage is built. The registry (`src/shared/producers.py`) names one producer per artifact kind with its version and the settings that affect its output; the account's settings live on the server, and the worker reads them and makes artifacts with them. Every write records its lineage (`artifact_lineage`); a write that doesn't say (the macOS app today) counts as an unknown producer's, so it's stale. The migration fills lineage in from what existing artifacts already say. Settings that are a machine's way of working (the analysis proxy's encoder, like an endpoint) stay out of the hash, and a worker keeps no setting that changes output: the vision endpoint and model are chosen in Settings → AI, which lists what the endpoint offers. The reconciler hands the worker what's missing (judged by whether the artifact exists) and what was made from a file whose content has since changed; stale from a settings change waits for approval. Failures back off on the server (5 minutes, doubling to a day); a vision endpoint that can't be used pauses vision work without charging any clip, and Settings shows why. Next: one producer per artifact (OCR stored apart from descriptions), then corrections, then the producers page and its upgrade flow.
 
 ### Phase 4 — Producers and endpoints
 

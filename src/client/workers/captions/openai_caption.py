@@ -21,7 +21,7 @@ from pathlib import Path
 import requests
 from PIL import Image
 
-from src.client.workers.captions.base import CaptionProvider
+from src.client.workers.captions.base import CaptionError, CaptionProvider, is_endpoint_fault
 
 logger = logging.getLogger(__name__)
 
@@ -36,10 +36,24 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
     The model ID is passed at construction time (auto-discovered or from config).
     """
 
-    def __init__(self, base_url: str, model: str, api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        api_key: str | None = None,
+        *,
+        settings: dict | None = None,
+        ocr_settings: dict | None = None,
+    ) -> None:
+        from src.shared.producers import effective_settings
+
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._api_key = api_key
+        # Output-affecting settings (prompt, image size, sampling): the server's,
+        # so what's recorded in lineage is what was sent. Defaults otherwise.
+        self._vision = settings or effective_settings("vision")
+        self._ocr = ocr_settings or effective_settings("ocr")
 
     @property
     def provider_id(self) -> str:
@@ -152,20 +166,21 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
 
     def describe(self, proxy_path: Path) -> dict:
         """
-        Returns {} on failure.
+        {"description", "tags"}. Raises CaptionError when it can't, saying
+        whether the endpoint was at fault (then vision work stops, and the
+        clip isn't charged).
 
         Retries with exponential backoff + jitter to reduce pressure on the
         inference server under load.
         """
         if not proxy_path.exists():
-            logger.warning("Proxy not found: %s", proxy_path)
-            return {}
+            raise CaptionError(f"Proxy not found: {proxy_path.name}", endpoint_fault=False)
 
         # Precompute request inputs once; on retry we only re-call the API.
         try:
             img = Image.open(proxy_path)
             try:
-                max_edge = 1280
+                max_edge = int(self._vision["max_edge"])
                 if max(img.width, img.height) > max_edge:
                     img.thumbnail((max_edge, max_edge), Image.LANCZOS)
                 buf = io.BytesIO()
@@ -175,21 +190,15 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             finally:
                 img.close()
         except Exception as e:  # noqa: BLE001
-            logger.warning("OpenAI-compatible caption failed for %s: %s", proxy_path, e)
-            return {}
+            raise CaptionError(f"Couldn't read the image: {e}", endpoint_fault=False) from e
 
-        prompt = (
-            "Describe this image in 2-3 sentences, being specific about "
-            "the subject, setting, and mood. Then provide 5-10 descriptive "
-            "tags. Respond only with valid JSON in this exact format:\n"
-            '{"description": "...", "tags": ["tag1", "tag2", ...]}'
-        )
+        prompt = self._vision["prompt"]
 
         last_error: Exception | None = None
         last_raw: str = ""
         for attempt in range(1, self.MAX_ATTEMPTS + 1):
             try:
-                raw = self._chat(data_url, prompt)
+                raw = self._chat(data_url, prompt, self._vision)
                 last_raw = raw
 
                 # Strip markdown code fences if present
@@ -231,23 +240,25 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                     "OpenAI-compatible caption failed for %s after %d attempts: %s\n  Last raw response: %s",
                     proxy_path, self.MAX_ATTEMPTS, e, last_raw[:500] if last_raw else "(empty)",
                 )
-                return {}
+                raise CaptionError(str(e) or type(e).__name__, endpoint_fault=is_endpoint_fault(e)) from e
 
-        return {}
+        raise CaptionError(str(last_error), endpoint_fault=False)
 
     def extract_text(self, proxy_path: Path) -> str:
         """Extract visible text from an image via OCR prompt.
 
         Returns the extracted text as a string, or empty string if none found.
+        Raises CaptionError when it can't tell (as describe() does): "" is
+        only ever "no text".
         Uses the same retry logic as describe().
         """
         if not proxy_path.exists():
-            return ""
+            raise CaptionError(f"Proxy not found: {proxy_path.name}", endpoint_fault=False)
 
         try:
             img = Image.open(proxy_path)
             try:
-                max_edge = 1280
+                max_edge = int(self._ocr["max_edge"])
                 if max(img.width, img.height) > max_edge:
                     img.thumbnail((max_edge, max_edge), Image.LANCZOS)
                 buf = io.BytesIO()
@@ -257,14 +268,9 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             finally:
                 img.close()
         except Exception as e:
-            logger.warning("OCR image prep failed for %s: %s", proxy_path, e)
-            return ""
+            raise CaptionError(f"Couldn't read the image: {e}", endpoint_fault=False) from e
 
-        prompt = (
-            "What text is visible in this image? "
-            "Include text from signs, labels, products, screens, documents, or watermarks. "
-            "If none, say NONE."
-        )
+        prompt = self._ocr["prompt"]
 
         # Words from the prompt that should not appear in OCR results
         _prompt_noise = {
@@ -275,7 +281,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
 
         for attempt in range(1, self.MAX_ATTEMPTS + 1):
             try:
-                raw = self._chat(data_url, prompt)
+                raw = self._chat(data_url, prompt, self._ocr)
                 text = raw.strip()
                 logger.info("OCR raw response (%d chars): %s", len(text), text[:200] if text else "(empty)")
                 if not text or text.upper() == "NONE" or text == "<none>":
@@ -303,7 +309,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                     self._sleep_with_countdown(sleep_time)
                     continue
                 logger.warning("OCR failed for %s after %d attempts: %s", proxy_path, self.MAX_ATTEMPTS, e)
-                return ""
+                raise CaptionError(str(e) or type(e).__name__, endpoint_fault=is_endpoint_fault(e)) from e
 
         return ""
 
@@ -423,7 +429,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                 i += 1
         return out
 
-    def _chat(self, data_url: str, prompt: str) -> str:
+    def _chat(self, data_url: str, prompt: str, settings: dict) -> str:
         payload = {
             "model": self._model,
             "messages": [
@@ -435,8 +441,8 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                     ],
                 }
             ],
-            "max_tokens": 500,
-            "temperature": 0.2,
+            "max_tokens": int(settings["max_tokens"]),
+            "temperature": float(settings["temperature"]),
         }
         headers = {}
         if self._api_key:

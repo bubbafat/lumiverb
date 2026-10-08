@@ -18,6 +18,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from stat import S_ISREG
+from typing import TYPE_CHECKING
 
 from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, MofNCompleteColumn, TimeRemainingColumn, SpinnerColumn
@@ -52,6 +53,9 @@ def _silence_subprocess_stdout() -> None:
 
 
 from src.client.proxy.proxy_gen import PROXY_LONG_EDGE, PROXY_JPEG_QUALITY
+
+if TYPE_CHECKING:
+    from src.client.cli.producer_settings import ProducerSettings
 
 PROXY_WEBP_QUALITY = 80
 SUPPORTED_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
@@ -137,31 +141,14 @@ def _call_vision_ai(
 def _resolve_vision_config(
     client: "LumiverbClient",
 ) -> tuple[str, str | None, str, str]:
-    """Resolve vision API URL, key, model ID, and source label.
+    """The account's vision endpoint URL, key and model, chosen in Settings → AI
+    (the one place they live), and where they came from.
 
-    Resolution order: client config > tenant config > auto-discover.
     Returns (vision_api_url, vision_api_key, vision_model_id, source_label).
     """
-    from src.client.cli.config import load_config as _load_cli_config
-    from src.client.workers.captions.model_discovery import resolve_vision_model_id
-
-    cli_cfg = _load_cli_config()
     ctx = client.get("/v1/tenant/context").json()
-
-    vision_api_url = cli_cfg.vision_api_url or ctx.get("vision_api_url", "")
-    vision_api_key = cli_cfg.vision_api_key or ctx.get("vision_api_key") or None
-    vision_source = "client config" if cli_cfg.vision_api_url else "tenant config"
-
-    vision_model_id = ""
-    if vision_api_url:
-        vision_model_id = resolve_vision_model_id(
-            client_model_id=cli_cfg.vision_model_id,
-            tenant_model_id=ctx.get("vision_model_id", ""),
-            api_url=vision_api_url,
-            api_key=vision_api_key,
-        )
-
-    return vision_api_url, vision_api_key, vision_model_id, vision_source
+    return (ctx.get("vision_api_url") or "", ctx.get("vision_api_key") or None,
+            ctx.get("vision_model_id") or "", "account settings")
 
 
 def _detect_media_type(ext: str) -> str:
@@ -585,25 +572,32 @@ def run_backfill_vision(
     should_stop: Callable[[], bool] | None = None,
     skip: Collection[str] = (),
     on_take: Callable[[str], None] | None = None,
+    producers: "ProducerSettings | None" = None,
+    on_fail: Callable[[str, object], None] | None = None,
 ) -> _IngestStats:
-    """Backfill AI descriptions for assets that don't have them.
+    """Backfill AI descriptions for assets that don't have them, made with the
+    server's vision settings and sent with their lineage.
 
     should_stop is asked before each asset; once it says stop, no more start.
     Assets in skip are left for a later run; on_take(asset_id) hears of each
-    one taken.
+    one taken, on_fail(asset_id, error) of each it couldn't describe.
     """
     library_id = library["library_id"]
 
-    # Resolve vision config (client > tenant > auto-discover)
     vision_api_url, vision_api_key, vision_model_id, vision_source = _resolve_vision_config(client)
-
-    if not vision_api_url:
-        console.print("[red]Vision AI: not configured.[/red]")
-        console.print("  Set it via: lumiverb config set --vision-api-url <url>")
+    if not vision_api_url or not vision_model_id:
+        console.print("[red]Vision AI: no model chosen.[/red] An admin picks one in Settings → AI.")
         raise SystemExit(1)
 
+    from src.client.cli.producer_settings import ProducerSettings
     from src.client.workers.captions.factory import get_caption_provider
-    vision_provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key)
+
+    producers = producers or ProducerSettings(client)
+    # The model read just now, which may be newer than the settings read at the run's start.
+    vision_settings = producers.with_model("vision", vision_model_id)
+    vision_provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key,
+                                           settings=vision_settings,
+                                           ocr_settings=producers.with_model("ocr", vision_model_id))
     console.print(f"Vision AI: {vision_model_id} via {vision_api_url} ({vision_source})")
 
     # Page through assets missing vision
@@ -644,11 +638,18 @@ def run_backfill_vision(
     BATCH_SIZE = 25
     batch_buf: list[dict] = []
 
+    vision_sha = {a["asset_id"]: a.get("sha256") for a in to_backfill}
+
     def _flush_vision_batch() -> None:
         if not batch_buf:
             return
+        for item in batch_buf:
+            item["source_sha256"] = vision_sha.get(item["asset_id"])
+            item["lineage"] = producers.lineage("vision", item["source_sha256"], used=vision_settings)
         try:
-            client.post("/v1/assets/batch-vision", json={"items": list(batch_buf)})
+            client.post("/v1/assets/batch-vision", json={
+                "items": [{k: v for k, v in item.items() if k != "lineage"} for item in batch_buf],
+                "lineage": producers.lineage("vision", None, used=vision_settings)})
             logger.info("vision batch POST: %d items", len(batch_buf))
         except Exception as e:
             logger.warning("vision batch POST failed (%d items): %s", len(batch_buf), e)
@@ -659,17 +660,23 @@ def run_backfill_vision(
                     pass
         batch_buf.clear()
 
+    vision_of: dict[Future, str] = {}
+
     def _collect(done: set[Future]) -> None:
         for f in done:
+            asset_id = vision_of.pop(f)
             try:
                 result = f.result()
-            except Exception:
-                result = None
+                error: object = "no description (no proxy, or the model returned nothing)"
+            except Exception as e:
+                result, error = None, e
             if result is not None:
                 batch_buf.append(result)
                 with stats.lock:
                     stats.processed += 1
             else:
+                if on_fail is not None:
+                    on_fail(asset_id, error)
                 with stats.lock:
                     stats.failed += 1
             progress.advance(tid, 1)
@@ -697,6 +704,7 @@ def run_backfill_vision(
                 proxy_cache=proxy_cache,
                 client=client,
             )
+            vision_of[fut] = a["asset_id"]
             inflight.add(fut)
             if len(inflight) >= concurrency * 2:
                 done, inflight = _wait_first(inflight)

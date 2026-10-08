@@ -131,7 +131,8 @@ def test_index_video_scenes_all_complete(mock_segmenter_cls, mock_scanner_cls):
 @patch("src.client.cli.video_index.VideoScanner")
 @patch("src.client.cli.video_index.SceneSegmenter")
 def test_index_video_scenes_chunk_failure(mock_segmenter_cls, mock_scanner_cls):
-    """Failed chunks are reported to server and processing continues."""
+    """Failed chunks are reported to the server and the rest go on; then the
+    video's failure is raised, so the worker reports it (and waits its turn)."""
     from src.client.video.video_scanner import SyncError
 
     client = MagicMock()
@@ -151,16 +152,14 @@ def test_index_video_scenes_chunk_failure(mock_segmenter_cls, mock_scanner_cls):
     # Scanner raises SyncError
     mock_scanner_cls.return_value.scan.side_effect = SyncError("FFmpeg hung")
 
-    result = index_video_scenes(
-        client=client,
-        source_path=Path("/fake/video.mp4"),
-        asset_id="asset_1",
-        duration_sec=30.0,
-        rel_path="video.mp4",
-    )
-
-    assert result["scenes"] == 0
-    assert result["chunks"] == 0
+    with pytest.raises(RuntimeError, match="1 of 1 chunks failed: FFmpeg hung"):
+        index_video_scenes(
+            client=client,
+            source_path=Path("/fake/video.mp4"),
+            asset_id="asset_1",
+            duration_sec=30.0,
+            rel_path="video.mp4",
+        )
 
     # Verify fail was posted
     fail_calls = [c for c in client.post.call_args_list if "fail" in str(c)]

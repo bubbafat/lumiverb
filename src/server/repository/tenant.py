@@ -42,43 +42,26 @@ from ulid import ULID
 # Canonical view for non-trashed assets. Use in raw SQL (e.g. FROM active_assets).
 ACTIVE_ASSETS = "active_assets"
 
-# Single source of truth for "missing pipeline output" SQL conditions.
-# Used by both repair-summary (counting) and page endpoints (filtering).
-# All image-only filters include the media_type check.
-MISSING_CONDITIONS = {
-    "missing_vision": (
-        "NOT EXISTS (SELECT 1 FROM asset_metadata am WHERE am.asset_id = a.asset_id)"
-        " AND a.media_type = 'image'"
-    ),
-    "missing_embeddings": (
-        "NOT EXISTS (SELECT 1 FROM asset_embeddings ae WHERE ae.asset_id = a.asset_id)"
-        " AND a.media_type = 'image'"
-    ),
-    "missing_faces": "a.face_count IS NULL AND a.media_type = 'image'",
-    "missing_face_embeddings": (
+# What the worker is handed for each enrich step (repair-summary counts and
+# the page filters), from the reconciler (repository/lineage.py): missing,
+# or made from a file whose content has since changed, less failures
+# waiting their turn. OUTSTANDING includes those failures (the library
+# health dot). missing_face_embeddings repairs faces found without one.
+def _reconciled() -> tuple[dict[str, str], dict[str, str]]:
+    from src.server.repository import lineage
+    from src.shared.producers import MISSING_FLAGS
+
+    face_embeddings = (
         "a.face_count > 0 AND a.media_type = 'image'"
         " AND EXISTS (SELECT 1 FROM faces f WHERE f.asset_id = a.asset_id AND f.embedding_vector IS NULL)"
-    ),
-    "missing_video_scenes": "a.video_indexed = false AND a.media_type = 'video' AND a.duration_sec IS NOT NULL",
-    "missing_ocr": (
-        "EXISTS (SELECT 1 FROM asset_metadata am WHERE am.asset_id = a.asset_id AND (am.data->>'has_text') IS NULL)"
-        " AND a.media_type = 'image'"
-    ),
-    "missing_scene_vision": (
-        "a.video_indexed = true AND a.media_type = 'video'"
-        " AND EXISTS (SELECT 1 FROM video_scenes vs WHERE vs.asset_id = a.asset_id AND vs.description IS NULL)"
-    ),
-    "missing_transcription": (
-        "a.has_transcript IS NULL"
-        " AND a.media_type = 'video'"
-        " AND a.duration_sec IS NOT NULL"
-    ),
-    "missing_probe": (
-        "a.media_type = 'video'"
-        " AND NOT EXISTS (SELECT 1 FROM video_facets vf WHERE vf.asset_id = a.asset_id)"
-    ),
-    "missing_analysis_proxy": "a.media_type = 'video' AND a.analysis_proxy_key IS NULL",
-}
+    )
+    due = {flag: lineage.due(artifact) for flag, artifact in MISSING_FLAGS.items()}
+    outstanding = {flag: lineage.outstanding(artifact) for flag, artifact in MISSING_FLAGS.items()}
+    return ({**due, "missing_face_embeddings": face_embeddings},
+            {**outstanding, "missing_face_embeddings": face_embeddings})
+
+
+MISSING_CONDITIONS, OUTSTANDING_CONDITIONS = _reconciled()
 
 
 def _active_assets_subquery():
@@ -864,7 +847,6 @@ class AssetRepository:
 
         # --- Build query ---
         # Lateral join only needed for tag filtering (m.tags reference).
-        # missing_vision/embeddings/faces use self-contained subqueries.
         join_metadata = tag is not None
         where_sql = " AND ".join(conditions)
 
@@ -879,6 +861,13 @@ class AssetRepository:
                 LIMIT 1
             ) m ON TRUE
             """
+
+        # The reconciler's missing_* rules read each clip's lineage (as `la`).
+        if any((missing_vision, missing_embeddings, missing_faces, missing_video_scenes, missing_ocr,
+                missing_scene_vision, missing_transcription, missing_probe, missing_analysis_proxy)):
+            from src.server.repository.lineage import LINEAGE_JOIN
+
+            lateral_join += f"\n            {LINEAGE_JOIN}\n"
 
         rating_join = ""
         if join_ratings:

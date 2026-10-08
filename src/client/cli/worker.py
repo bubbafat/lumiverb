@@ -15,7 +15,8 @@ enriches them:
    rendering wait for it. Enrichment runs again only when a library's
    counts change, its storage comes back, or an hour has passed, so a
    file that fails every time isn't retried every minute. Steps that need
-   vision AI are skipped while none is configured. Enrichment gets 15
+   vision AI wait while the endpoint chosen in Settings → AI doesn't offer
+   its model (the server is told, and Settings shows it). Enrichment gets 15
    minutes a cycle (a first ingest's can take days), stopping between
    items so change reports are scanned next cycle; it goes on from there,
    least recently enriched library first. An item enrichment took isn't
@@ -202,15 +203,13 @@ class WorkerLock:
             self._fd = None
 
 
-def _vision_configured(client: LumiverbClient) -> bool:
-    from src.client.cli.ingest import _resolve_vision_config
+def _vision_ready(client: LumiverbClient) -> bool:
+    """Whether the account's vision endpoint offers its model now (the server
+    is told either way, and Settings → AI shows a problem). When it doesn't,
+    vision steps wait; no clip is charged a failure for it."""
+    from src.client.cli.vision_guard import VisionGuard
 
-    try:
-        url, _key, model, _source = _resolve_vision_config(client)
-    except Exception:  # noqa: BLE001 — e.g. the endpoint is down; its steps would fail anyway
-        logger.warning("worker: couldn't resolve the vision AI endpoint; skipping its steps this cycle")
-        return False
-    return bool(url and model)
+    return VisionGuard(client).check()
 
 
 def _is_dir(root: Path, rel: str) -> bool:
@@ -339,7 +338,7 @@ def run_cycle(
     libraries = client.get("/v1/libraries").json()
     if only:
         libraries = [lib for lib in libraries if lib["name"] in only]
-    skip = set() if _vision_configured(client) else set(VISION_STEPS)
+    skip = set() if _vision_ready(client) else set(VISION_STEPS)
 
     reachable: dict[str, bool] = {}
     for library in libraries:

@@ -60,12 +60,12 @@ def config_set(
     api_url: Annotated[str | None, typer.Option("--api-url")] = None,
     api_key: Annotated[str | None, typer.Option("--api-key")] = None,
     admin_key: Annotated[str | None, typer.Option("--admin-key")] = None,
-    vision_api_url: Annotated[str | None, typer.Option("--vision-api-url", help="Local vision API URL (overrides tenant default).")] = None,
-    vision_api_key: Annotated[str | None, typer.Option("--vision-api-key", help="Local vision API key (overrides tenant default).")] = None,
-    vision_model_id: Annotated[str | None, typer.Option("--vision-model-id", help="Vision model ID override (default: auto-discover from API).")] = None,
     cache_home: Annotated[str | None, typer.Option("--cache-home", help="Where caches and the worker's lock go instead of ~/.cache, unless XDG_CACHE_HOME is set ('' to undo).")] = None,
 ) -> None:
-    """Set API URL, API key, and/or admin key in ~/.lumiverb/config.json."""
+    """Set API URL, API key, and/or admin key in ~/.lumiverb/config.json.
+
+    The vision AI endpoint and model, and everything else that changes what
+    gets made, are the account's: Settings → AI in the web app."""
     cfg = load_config()
     if cache_home:
         # Relative to wherever this ran, the worker would look somewhere else.
@@ -82,12 +82,6 @@ def config_set(
         cfg.api_key = api_key
     if admin_key is not None:
         cfg.admin_key = admin_key
-    if vision_api_url is not None:
-        cfg.vision_api_url = vision_api_url.rstrip("/")
-    if vision_api_key is not None:
-        cfg.vision_api_key = vision_api_key
-    if vision_model_id is not None:
-        cfg.vision_model_id = vision_model_id
     save_config(cfg)
     console.print("[green]Config saved.[/green]")
 
@@ -102,9 +96,6 @@ def config_show() -> None:
     table.add_row("api_url", cfg.api_url)
     table.add_row("api_key", escape("[set]") if cfg.api_key else escape("[not set]"))
     table.add_row("admin_key", escape("[set]") if cfg.admin_key else escape("[not set]"))
-    table.add_row("vision_api_url", cfg.vision_api_url or escape("[not set — will use tenant default]"))
-    table.add_row("vision_api_key", escape("[set]") if cfg.vision_api_key else escape("[not set — will use tenant default]"))
-    table.add_row("vision_model_id", cfg.vision_model_id or escape("[not set — will auto-discover from API]"))
     table.add_row("cache_home", cfg.cache_home or escape("[not set — ~/.cache unless XDG_CACHE_HOME]"))
     console.print(table)
     if cfg.root_map:
@@ -677,7 +668,7 @@ def admin_tenant_set_vision(
     tenant_id: Annotated[str, typer.Option("--tenant-id", "-t", help="Tenant ID.")],
     vision_api_url: Annotated[str | None, typer.Option("--vision-api-url", help="OpenAI-compatible vision API base URL.")] = None,
     vision_api_key: Annotated[str | None, typer.Option("--vision-api-key", help="API key for the vision endpoint.")] = None,
-    vision_model_id: Annotated[str | None, typer.Option("--vision-model-id", help="Vision model ID (default: auto-discover from API).")] = None,
+    vision_model_id: Annotated[str | None, typer.Option("--vision-model-id", help="Vision model ID; one the endpoint offers (Settings → AI lists them).")] = None,
     admin_key: Annotated[str | None, typer.Option("--admin-key", envvar="LUMIVERB_ADMIN_KEY", help="Admin key for API auth.")] = None,
 ) -> None:
     """Set the vision API URL, key, and/or model ID for a tenant."""
@@ -792,18 +783,20 @@ def admin_vision_test(
     for i, img_path in enumerate(images, 1):
         console.print(f"[dim][{i}/{len(images)}][/dim] {img_path.name} ... ", end="")
 
-        # Describe (description + tags)
-        desc_result = provider.describe(img_path)
-        description = desc_result.get("description", "")
-        tags = desc_result.get("tags", [])
+        from src.client.workers.captions.base import CaptionError
 
-        # OCR
-        ocr_text = provider.extract_text(img_path)
+        try:
+            desc_result = provider.describe(img_path)  # description + tags
+            ocr_text = provider.extract_text(img_path)
+        except CaptionError as e:
+            results.append({"filename": img_path.name, "error": str(e)})
+            console.print(f"[red]failed[/red] {escape(str(e))}")
+            continue
 
         results.append({
             "filename": img_path.name,
-            "description": description,
-            "tags": tags,
+            "description": desc_result.get("description", ""),
+            "tags": desc_result.get("tags", []),
             "ocr": ocr_text,
         })
         console.print("[green]done[/green]")

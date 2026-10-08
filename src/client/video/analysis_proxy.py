@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import logging
 import subprocess
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
+from typing import Any
 
 from src.client.video.audio import MIX_HANDLER, AudioTrack, audio_tracks, mix_filter
 
@@ -46,11 +48,16 @@ class AnalysisProxySettings:
     audio_kbps_per_channel: int = 48
 
     @classmethod
-    def from_config(cls) -> AnalysisProxySettings:
-        from src.client.cli.config import load_config
+    def for_producer(cls, settings: Mapping[str, Any], encoder: str) -> AnalysisProxySettings:
+        """The account's settings (GET /v1/producers), rendered with this
+        machine's encoder. Settings this version doesn't know are left out."""
+        known = {f.name for f in fields(cls)} - {"encoder"}
+        return cls(**{k: v for k, v in settings.items() if k in known}, encoder=encoder)
 
-        cfg = load_config()
-        return cls(max_edge=cfg.analysis_proxy_max_edge, encoder=cfg.analysis_proxy_encoder)
+    def output(self) -> dict[str, Any]:
+        """What lineage hashes: everything but the encoder, which is this
+        machine's way of rendering, like an endpoint."""
+        return {k: v for k, v in asdict(self).items() if k != "encoder"}
 
 
 def _video_codec_args(settings: AnalysisProxySettings) -> list[str]:

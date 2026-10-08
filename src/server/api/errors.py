@@ -31,9 +31,16 @@ class DecisionRequiredError(ConflictError):
     """409: the request must state the user's choice (see details)."""
 
 
+class UpstreamError(ConflictError):
+    """502 in the standard envelope: a service the request needed (the vision
+    AI endpoint, say) didn't do its part. code names what; message says why."""
+
+    status_code = 502
+
+
 async def decision_required_handler(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, ConflictError)
     return JSONResponse(
-        status_code=409,
+        status_code=getattr(exc, "status_code", 409),
         content={"error": {"code": exc.code, "message": exc.message, "details": exc.details}},
     )

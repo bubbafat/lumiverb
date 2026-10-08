@@ -83,11 +83,9 @@ sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb library list
 
 ### 6. Vision AI
 
-Descriptions, OCR and scene descriptions need a vision endpoint; without one, the worker skips those steps rather than failing them. For now the brain uses `qwen3-vl:8b` in the Ollama container of the ResourceSpace stack (`~/dam-stack/resourcespace`), on the RTX 3080, reached at its internal address:
+Descriptions, OCR and scene descriptions need a vision model; until one is chosen, those steps wait rather than fail. For now the brain uses `qwen3-vl:8b` in the Ollama container of the ResourceSpace stack (`~/dam-stack/resourcespace`), on the RTX 3080, reached at its internal address. In the web app, as an admin: **Settings → AI**, enter `http://172.18.0.6:11434/v1`, press **Connect**, pick `qwen3-vl:8b`, **Save**. That is the one place the endpoint and model live: the worker reads them from the server and keeps none of its own (a `vision_*` key left in an older worker config is ignored).
 
-```bash
-sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb config set --vision-api-url http://172.18.0.6:11434/v1 --vision-model-id qwen3-vl:8b
-```
+Before each round of vision work the worker asks the endpoint whether it still offers the model. When it doesn't (the container was recreated at another address, the model was removed), vision work waits, no clip is charged a failure, and Settings → AI shows the problem in red, with a red dot on AI in the Settings menu, until it's fixed.
 
 That address changes if the container is recreated, and the endpoint goes with ResourceSpace: give Lumiverb its own Ollama before switching ResourceSpace off.
 

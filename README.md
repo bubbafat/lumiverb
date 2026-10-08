@@ -145,7 +145,7 @@ uv run lumiverb enrich --library "My Photos"
 `scan` discovers files, extracts EXIF, generates proxies and uploads them. `enrich` runs AI over the proxies: CLIP embeddings, faces, vision descriptions and OCR, and video transcription.
 
 > **Note:** Vision descriptions and OCR need an OpenAI-compatible endpoint:
-> `uv run lumiverb config set --vision-api-url <url> --vision-model-id <model>`.
+> In the web app, as an admin: Settings → AI, enter the endpoint URL, Connect, pick the model, Save.
 
 ### 8. Search
 

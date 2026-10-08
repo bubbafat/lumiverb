@@ -51,6 +51,7 @@ from src.client.proxy.proxy_cache import ProxyCache
 from src.client.workers.exif_extract import compute_sha256
 from src.client.video.probe import probe_video
 from src.shared.io_utils import is_within, resolve_source_path, stat_if_present
+from src.shared.producers import effective_settings, lineage as producer_lineage
 
 logger = logging.getLogger(__name__)
 
@@ -389,6 +390,13 @@ def _detect_deletions(
     return [sa.asset_id for rp, sa in scope.items() if rp not in local_rel_paths]
 
 
+def _made(artifact: str, source_sha256: str | None) -> dict:
+    """Lineage for what the scan makes: proxies, probes and previews come out
+    of its own constants, which are the registry's settings (a test holds
+    them together)."""
+    return producer_lineage(artifact, effective_settings(artifact), source_sha256)
+
+
 def _scan_one(
     *,
     client: LumiverbClient,
@@ -441,6 +449,7 @@ def _scan_one(
         }
         if f.get("file_mtime") is not None:
             data["file_mtime"] = f["file_mtime"].isoformat()
+        data["lineage"] = json.dumps({"proxy": _made("proxy", f.get("source_sha256"))})
 
         resp = client.post("/v1/ingest", files=files, data=data)
         result = resp.json()
@@ -522,10 +531,13 @@ def _scan_one_video(
         # Frame rate, timecode, audio layout for editor exports. A failed
         # probe doesn't block ingest; `lumiverb enrich --job-type probe`
         # backfills it.
+        made = {"proxy": _made("proxy", f.get("source_sha256"))}
         try:
             data["video_facet"] = json.dumps(probe_video(source_path).to_dict())
+            made["probe"] = _made("probe", f.get("source_sha256"))
         except Exception as exc:  # noqa: BLE001 — any ffprobe failure
             logger.warning("Probe failed for %s: %s", rel_path, exc)
+        data["lineage"] = json.dumps(made)
 
         resp = client.post("/v1/ingest", files=files, data=data)
         asset_id = resp.json().get("asset_id")
@@ -535,6 +547,7 @@ def _scan_one_video(
             client.post(
                 f"/v1/assets/{asset_id}/artifacts/video_preview",
                 files={"file": ("preview.mp4", io.BytesIO(preview_bytes), "video/mp4")},
+                data={"lineage": json.dumps(_made("video_preview", f.get("source_sha256")))},
             )
         del preview_bytes
 

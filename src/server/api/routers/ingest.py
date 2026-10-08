@@ -128,6 +128,27 @@ def _parse_optional_json_list(field: str | None, field_name: str) -> list[dict] 
         raise HTTPException(status_code=400, detail=f"{field_name} must be a JSON array")
 
 
+def _per_kind(raw: str | None) -> dict:
+    """The lineage form field: a JSON object by artifact kind, or {}."""
+    try:
+        value = json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _forget_scenes(session: Session, asset_id: str) -> None:
+    """A clip's scenes, their chunks and descriptions are gone: found again
+    from the new content. (Their search documents go once this commits;
+    rep-frame files are left for the orphan cleanup.)"""
+    from sqlalchemy import text as sa_text
+
+    session.execute(sa_text("DELETE FROM video_scenes WHERE asset_id = :a"), {"a": asset_id})
+    session.execute(sa_text("DELETE FROM video_index_chunks WHERE asset_id = :a"), {"a": asset_id})
+    session.execute(sa_text("DELETE FROM artifact_lineage WHERE asset_id = :a AND artifact IN ('scenes', 'scene_vision')"),
+                    {"a": asset_id})
+
+
 def _do_ingest(
     *,
     asset_id: str,
@@ -141,8 +162,16 @@ def _do_ingest(
     vision_data: dict | None,
     embeddings_data: list[dict] | None,
     session: Session,
+    lineage_by_kind: dict | None = None,
 ) -> IngestResponse:
-    """Core ingest logic shared by both endpoints."""
+    """Core ingest logic shared by both endpoints. Records how the proxy (and
+    any vision or embeddings sent along) were made: lineage_by_kind maps an
+    artifact kind to its lineage; one not given is an unknown producer's."""
+    from src.server.api.routers.producers import lineage_dict
+    from src.server.repository.lineage import record as record_lineage
+    from src.shared.producers import CLIP_MODEL_ID
+
+    lineage_by_kind = lineage_by_kind or {}
     storage: LocalStorage = get_storage()
     asset_repo = AssetRepository(session)
 
@@ -177,6 +206,23 @@ def _do_ingest(
     asset_repo.set_thumbnail_artifact(asset_id, thumb_key, thumb_sha256)
 
     final_status = asset_status.PROXY_READY
+
+    # The file was replaced: its analysis proxy and scenes show the old
+    # content, so they're made again. Everything else made from it is handed
+    # out again by the reconciler (its lineage names the old file). Both
+    # ingest endpoints come through here, before the new SHA-256 is stored.
+    scenes_forgotten = False
+    new_sha = (exif_data or {}).get("sha256")
+    current = asset_repo.get_by_id(asset_id) if new_sha else None
+    if current is not None and current.sha256 and new_sha != current.sha256:
+        current.analysis_proxy_key = None
+        current.analysis_proxy_sha256 = None
+        current.analysis_proxy_generated_at = None
+        if current.video_indexed or current.media_type == "video":
+            _forget_scenes(session, asset_id)
+            current.video_indexed = False
+            scenes_forgotten = True
+        session.add(current)
 
     # --- Store EXIF if provided ---
     if exif_data is not None:
@@ -248,12 +294,24 @@ def _do_ingest(
     # --- Bump library revision for UI polling ---
     LibraryRepository(session).bump_revision(library_id)
 
+    record_lineage(session, asset_id, "proxy", lineage_dict(lineage_by_kind.get("proxy")), commit=False)
+    # Only what was stored: a description with no model is dropped above,
+    # and only the CLIP producer's vectors are its artifact.
+    if vision_data is not None and vision_data.get("model_id"):
+        record_lineage(session, asset_id, "vision", lineage_dict(lineage_by_kind.get("vision")), commit=False)
+    if embeddings_data and any(e.get("model_id") == CLIP_MODEL_ID for e in embeddings_data):
+        record_lineage(session, asset_id, "clip", lineage_dict(lineage_by_kind.get("clip")), commit=False)
+
     # Commit all changes atomically. The tenant session does NOT auto-commit
     # (SQLModel's `with Session` rolls back on exit), so every write path
     # must commit explicitly. The update-existing branch in create_and_ingest
     # already commits; this covers the new-asset branch and the standalone
     # /v1/assets/{id}/ingest endpoint.
     session.commit()
+    if scenes_forgotten:
+        from src.server.search.quickwit_client import QuickwitClient
+
+        QuickwitClient().delete_scene_index_documents_by_asset_ids(tenant_id, [asset_id])
 
     return IngestResponse(
         asset_id=asset_id,
@@ -308,6 +366,8 @@ async def create_and_ingest(
     vision: str | None = Form(default=None),
     embeddings: str | None = Form(default=None),
     video_facet: str | None = Form(default=None),
+    # JSON {"proxy": {...}, "probe": {...}}: how each artifact sent was made (see LineageIn)
+    lineage: str | None = Form(default=None),
 ) -> IngestResponse:
     """Create an asset record and ingest proxy + metadata in one atomic request.
 
@@ -441,12 +501,6 @@ async def create_and_ingest(
         if existing.deleted_at is not None:
             AssetRepository(session).clear_trash(existing)
             reappeared = existing
-        # The file was replaced: its analysis proxy shows the old content.
-        new_sha = (exif_data or {}).get("sha256")
-        if new_sha and existing.sha256 and new_sha != existing.sha256:
-            existing.analysis_proxy_key = None
-            existing.analysis_proxy_sha256 = None
-            existing.analysis_proxy_generated_at = None
         session.add(existing)
 
     result = _do_ingest(
@@ -461,9 +515,14 @@ async def create_and_ingest(
         vision_data=vision_data,
         embeddings_data=embeddings_data,
         session=session,
+        lineage_by_kind=_per_kind(lineage),
     )
     if facet_data is not None:
         asset_repo.upsert_video_facet(asset_id, facet_data)
+        from src.server.api.routers.producers import lineage_dict
+        from src.server.repository.lineage import record as record_lineage
+
+        record_lineage(session, asset_id, "probe", lineage_dict(_per_kind(lineage).get("probe")))
     if reappeared is not None and reappeared.transcript_srt:
         from src.server.search.sync import index_transcript_segments
 
@@ -488,6 +547,7 @@ async def ingest_asset(
     exif: str | None = Form(default=None),
     vision: str | None = Form(default=None),
     embeddings: str | None = Form(default=None),
+    lineage: str | None = Form(default=None),  # JSON by artifact kind, as for POST /v1/ingest
 ) -> IngestResponse:
     """Ingest proxy + metadata into an existing asset record."""
     raw_proxy = await proxy.read()
@@ -519,4 +579,5 @@ async def ingest_asset(
         vision_data=vision_data,
         embeddings_data=embeddings_data,
         session=session,
+        lineage_by_kind=_per_kind(lineage),
     )

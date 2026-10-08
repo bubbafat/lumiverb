@@ -18,6 +18,9 @@ from src.server.api.errors import ConflictError, DecisionRequiredError
 from src.shared import asset_status
 from src.shared.io_utils import normalize_path_prefix
 from src.server.repository.tenant import AssetMetadataRepository, AssetRepository, LibraryRepository
+from src.server.repository import lineage
+from src.shared.producers import CLIP_MODEL_ID
+from src.server.api.routers.producers import LineageIn, lineage_dict
 from src.server.models.tenant import Asset
 from src.server.storage.local import get_storage
 from src.shared.utils import utcnow
@@ -251,6 +254,7 @@ class VisionSubmitRequest(BaseModel):
     description: str
     tags: list[str] = []
     client_proxy_sha256: str | None = None
+    lineage: LineageIn | None = None
 
 
 class VisionSubmitResponse(BaseModel):
@@ -453,6 +457,19 @@ class RepairSummary(BaseModel):
     missing_probe: int = 0
     missing_analysis_proxy: int = 0
     stale_search_sync: int = 0
+    # Items whose last try failed, waiting their turn (not in the counts above).
+    waiting_failures: int = 0
+
+
+def _waiting_failures_sql() -> str:
+    """Clip-steps the missing_* counts leave out because their last try
+    failed and their turn hasn't come."""
+    from src.server.repository import lineage
+    from src.shared.producers import MISSING_FLAGS
+
+    # waiting() first: cheap, and false for nearly every clip, so the rest is rarely looked at.
+    return " + ".join(f"COUNT(*) FILTER (WHERE {lineage.waiting(a)} AND {lineage.outstanding(a)})"
+                      for a in MISSING_FLAGS.values())
 
 
 @router.get("/repair-summary", response_model=RepairSummary, dependencies=[Depends(require_signed_in)])
@@ -494,8 +511,10 @@ def repair_summary(
                             WHERE am2.asset_id = a.asset_id
                         )
                     )
-                ) AS stale_search_sync
+                ) AS stale_search_sync,
+                {_waiting_failures_sql()} AS waiting_failures
             FROM active_assets a
+            {lineage.LINEAGE_JOIN}
             WHERE library_id = :library_id
         """),
         {"library_id": library_id},
@@ -514,6 +533,7 @@ def repair_summary(
         missing_transcription=row.missing_transcription,
         missing_probe=row.missing_probe,
         missing_analysis_proxy=row.missing_analysis_proxy,
+        waiting_failures=row.waiting_failures,
         stale_search_sync=row.stale_search_sync,
     )
 
@@ -1062,10 +1082,16 @@ def get_asset(
     return _project_visitor_view(response) if via_project else response
 
 
+class VideoFacetSubmit(VideoFacetModel):
+    """A probe result, with how it was made."""
+
+    lineage: LineageIn | None = None
+
+
 @router.put("/{asset_id}/video-facet", response_model=VideoFacetModel)
 def put_video_facet(
     asset_id: str,
-    body: VideoFacetModel,
+    body: VideoFacetSubmit,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> VideoFacetModel:
     """Store a video's probe result (replaces any earlier one). Sets duration_sec."""
@@ -1075,9 +1101,11 @@ def put_video_facet(
         raise HTTPException(status_code=404, detail="Asset not found")
     if asset.media_type != "video":
         raise HTTPException(status_code=400, detail="Video facets are only for video assets")
-    asset_repo.upsert_video_facet(asset_id, body.model_dump())
+    facet = body.model_dump(exclude={"lineage"})
+    asset_repo.upsert_video_facet(asset_id, facet)
+    lineage.record(session, asset_id, "probe", lineage_dict(body.lineage))
     LibraryRepository(session).bump_revision(asset.library_id)
-    return body
+    return VideoFacetModel(**facet)
 
 
 @router.delete("/{asset_id}", status_code=204)
@@ -1250,6 +1278,7 @@ def submit_vision(
         data={"description": body.description, "tags": body.tags},
     )
     AssetRepository(session).set_status(asset_id, asset_status.DESCRIBED)
+    lineage.record(session, asset_id, "vision", lineage_dict(body.lineage))
 
     # Inline search sync (best-effort)
     meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
@@ -1265,6 +1294,7 @@ def submit_vision(
 
 class OcrSubmitRequest(BaseModel):
     ocr_text: str
+    lineage: LineageIn | None = None
 
 
 @router.post("/{asset_id}/ocr", status_code=200)
@@ -1294,6 +1324,7 @@ def submit_ocr(
         model_version=meta.model_version,
         data=data,
     )
+    lineage.record(session, asset_id, "ocr", lineage_dict(body.lineage), outcome="ok" if body.ocr_text else "empty")
 
     # Re-sync search
     meta = meta_repo.get_latest(asset_id=asset_id)
@@ -1308,10 +1339,12 @@ def submit_ocr(
 class BatchOcrItem(BaseModel):
     asset_id: str
     ocr_text: str
+    source_sha256: str | None = None  # the file it was made from; the batch's lineage otherwise
 
 
 class BatchOcrRequest(BaseModel):
     items: list[BatchOcrItem]
+    lineage: LineageIn | None = None
 
 
 @router.post("/batch-ocr", status_code=200)
@@ -1344,6 +1377,8 @@ def submit_batch_ocr(
             model_version=meta.model_version,
             data=data,
         )
+        lineage.record(session, item.asset_id, "ocr", lineage_dict(body.lineage, item.source_sha256),
+                       outcome="ok" if item.ocr_text else "empty")
         updated += 1
 
     # Clear search_synced_at so the sweep picks these up for re-indexing.
@@ -1372,10 +1407,12 @@ class BatchVisionItem(BaseModel):
     model_version: str = "1"
     description: str
     tags: list[str] = []
+    source_sha256: str | None = None  # the file it was made from; the batch's lineage otherwise
 
 
 class BatchVisionRequest(BaseModel):
     items: list[BatchVisionItem]
+    lineage: LineageIn | None = None
 
 
 @router.post("/batch-vision", status_code=200)
@@ -1402,6 +1439,7 @@ def submit_batch_vision(
             data={"description": item.description, "tags": item.tags},
         )
         asset_repo.set_status(item.asset_id, asset_status.DESCRIBED)
+        lineage.record(session, item.asset_id, "vision", lineage_dict(body.lineage, item.source_sha256))
         updated += 1
 
     if updated > 0:
@@ -1427,11 +1465,21 @@ class TranscriptSubmitRequest(BaseModel):
     # "manual" for a person's transcript; a provider id (e.g. "whisper") for
     # machine output, which never replaces a manual one.
     source: str = "manual"
+    # How a machine transcript was made (a person's needs none).
+    lineage: LineageIn | None = None
 
 
 class TranscriptSubmitResponse(BaseModel):
     asset_id: str
     status: str
+
+
+def _transcript_lineage(body: TranscriptSubmitRequest) -> dict:
+    """record() arguments: a person's transcript is a person's (current,
+    never regenerated over); a machine's says how it was made."""
+    if body.source == "manual":
+        return {"lineage": None, "person": True}
+    return {"lineage": lineage_dict(body.lineage)}
 
 
 @router.post("/{asset_id}/transcript", response_model=TranscriptSubmitResponse)
@@ -1466,6 +1514,7 @@ def submit_transcript(
         asset.updated_at = utcnow()
         session.add(asset)
         session.commit()
+        lineage.record(session, asset_id, "transcript", **_transcript_lineage(body), outcome="empty")
         return TranscriptSubmitResponse(asset_id=asset_id, status="no_speech")
 
     if not validate_srt(body.srt):
@@ -1482,6 +1531,8 @@ def submit_transcript(
     asset.updated_at = utcnow()
     session.add(asset)
     session.commit()
+    lineage.record(session, asset_id, "transcript", **_transcript_lineage(body),
+                   outcome="ok" if asset.has_transcript else "empty")
 
     # Sync to search (works with or without vision metadata)
     from src.server.search.sync import try_sync_asset
@@ -1520,6 +1571,8 @@ def delete_transcript(
     asset.updated_at = utcnow()
     session.add(asset)
     session.commit()
+    # A person removed it: their choice stands, nothing regenerates it.
+    lineage.record(session, asset_id, "transcript", None, person=True, outcome="empty")
 
     # Sync to search
     from src.server.search.sync import try_sync_asset
@@ -1624,6 +1677,7 @@ class EmbeddingSubmitRequest(BaseModel):
     model_id: str
     model_version: str
     vector: list[float]
+    lineage: LineageIn | None = None
 
 
 @router.post("/{asset_id}/embeddings", status_code=201)
@@ -1644,6 +1698,8 @@ def submit_embedding(
         model_version=body.model_version,
         vector=[float(x) for x in body.vector],
     )
+    if body.model_id == CLIP_MODEL_ID:  # another model's vectors aren't the CLIP producer's artifact
+        lineage.record(session, asset_id, "clip", lineage_dict(body.lineage))
     return {"ok": True}
 
 
@@ -1652,10 +1708,12 @@ class BatchEmbeddingItem(BaseModel):
     model_id: str
     model_version: str
     vector: list[float]
+    source_sha256: str | None = None  # the file it was made from; the batch's lineage otherwise
 
 
 class BatchEmbeddingRequest(BaseModel):
     items: list[BatchEmbeddingItem]
+    lineage: LineageIn | None = None
 
 
 @router.post("/batch-embeddings", status_code=200)
@@ -1682,6 +1740,9 @@ def submit_batch_embeddings(
             model_version=item.model_version,
             vector=[float(x) for x in item.vector],
         )
+        if item.model_id == CLIP_MODEL_ID:
+            lineage.record(session, item.asset_id, "clip", lineage_dict(body.lineage, item.source_sha256),
+                           commit=False)
         updated += 1
 
     if updated > 0:
@@ -1897,6 +1958,7 @@ class FaceSubmitRequest(BaseModel):
     detection_model: str = "insightface"
     detection_model_version: str = "buffalo_l"
     faces: list[FaceDetectionItem]
+    lineage: LineageIn | None = None
 
 
 class FaceSubmitResponse(BaseModel):
@@ -1996,10 +2058,12 @@ class BatchFaceItem(BaseModel):
     detection_model: str = "insightface"
     detection_model_version: str = "buffalo_l"
     faces: list[FaceDetectionItem]
+    source_sha256: str | None = None  # the file it was made from; the batch's lineage otherwise
 
 
 class BatchFaceRequest(BaseModel):
     items: list[BatchFaceItem]
+    lineage: LineageIn | None = None
 
 
 @router.post("/batch-faces", status_code=200)
@@ -2038,6 +2102,8 @@ def submit_batch_faces(
             detection_model_version=item.detection_model_version,
             faces=faces_data,
         )
+        lineage.record(session, item.asset_id, "faces", lineage_dict(body.lineage, item.source_sha256),
+                       outcome="ok" if faces_data else "empty")
 
         if tenant_id and asset.proxy_key:
             _generate_face_crops(tenant_id, asset, face_ids, faces_data, session)
@@ -2086,6 +2152,7 @@ def submit_faces(
         detection_model_version=body.detection_model_version,
         faces=faces_data,
     )
+    lineage.record(session, asset_id, "faces", lineage_dict(body.lineage), outcome="ok" if faces_data else "empty")
 
     # Generate face crop thumbnails
     tenant_id = getattr(request.state, "tenant_id", None)
