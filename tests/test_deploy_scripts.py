@@ -692,3 +692,12 @@ def test_tenant_migrations_log_to_a_private_temp_file():
     assert "/tmp/lumiverb_alembic_tenant.log" not in text
     assert "mktemp" in text
     assert "trap" in text and "rm -f" in text
+
+
+def test_update_restarts_the_worker_only_once_the_api_answers():
+    """Else the worker's first cycle meets a refused connection mid-restart."""
+    text = UPDATE_API.read_text()
+    step = text[text.index('step "Restarting services"'):]
+    api, health, worker = (step.index("systemctl restart lumiverb-api"), step.index("/health"),
+                           step.index("systemctl restart lumiverb-worker"))
+    assert api < health < worker

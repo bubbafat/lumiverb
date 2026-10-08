@@ -263,9 +263,8 @@ ok "Upkeep timers installed and started"
 
 # ---------------------------------------------------------------------------
 step "Restarting services"
-systemctl restart lumiverb-api
-systemctl is-enabled lumiverb-worker >/dev/null 2>&1 && systemctl restart lumiverb-worker
 systemctl is-enabled lumiverb-quickwit >/dev/null 2>&1 && systemctl restart lumiverb-quickwit
+systemctl restart lumiverb-api
 # uv's cache: an old Python's packages stay in it for good (prune keeps
 # them), and the venv doesn't need it. Every update, so a rerun gets there.
 sudo -u "$SVC_USER" "$UV_BIN" cache clean || warn "Couldn't clear uv's cache"
@@ -276,6 +275,8 @@ for i in {1..10}; do
   fi
   sleep 1
 done
+# The worker last, once the API answers: its first cycle asks the API for work.
+systemctl is-enabled lumiverb-worker >/dev/null 2>&1 && systemctl restart lumiverb-worker
 
 systemctl status --no-pager lumiverb-api || true
 systemctl is-enabled lumiverb-quickwit >/dev/null 2>&1 && systemctl status --no-pager lumiverb-quickwit || true

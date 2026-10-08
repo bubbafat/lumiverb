@@ -39,6 +39,8 @@ from pathlib import Path, PurePosixPath
 from stat import S_ISDIR
 from typing import TYPE_CHECKING
 
+import httpx
+
 from rich.console import Console
 
 from src.client.cache_dir import cache_dir
@@ -53,6 +55,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEFAULT_POLL_SEC = 60.0
+# While the API doesn't answer (restarting after an update), try again this soon.
+API_RETRY_SEC = 10.0
 DEFAULT_FULL_SCAN_EVERY_SEC = 24 * 3600.0
 DEFAULT_RETRY_EVERY_SEC = 3600.0
 # Files that failed to scan are tried again after this, doubling up to a day.
@@ -457,9 +461,14 @@ def run_forever(
     saved = _saved_form(state)
     client = LumiverbClient()
     while True:
+        wait = poll
         try:
             run_cycle(client, state=state, console=console, full_scan_every=full_scan_every, only=only)
-        except Exception:  # noqa: BLE001 — e.g. the API is restarting
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            # The API is restarting (an update restarts both): expected, back in seconds.
+            wait = min(poll, API_RETRY_SEC)
+            logger.warning("worker: the API isn't answering yet (restarting?); trying again in %.0fs", wait)
+        except Exception:  # noqa: BLE001 — anything else is worth its traceback
             logger.exception("worker: cycle failed; trying again in %.0fs", poll)
         finally:
             # Also when stopped mid-cycle (SIGTERM), so a full scan just done isn't done again.
@@ -468,6 +477,6 @@ def run_forever(
                 saved = now_saved
         if once or stop():
             return
-        sleep(poll)
+        sleep(wait)
         if stop():
             return
