@@ -27,6 +27,7 @@ A library is skipped, never failed: the next cycle tries again.
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import json
 import logging
@@ -119,8 +120,9 @@ class Retry:
 
 @dataclass
 class WorkerState:
-    """What the worker remembers between cycles. Only full-scan times outlive
-    the process (save_full_scans), so a restart doesn't rescan everything."""
+    """What the worker remembers between cycles. Full-scan times and retries
+    outlive the process (save_state), so a restart doesn't rescan everything,
+    nor forget what's waiting to be tried again."""
 
     last_full_scan: dict[str, float] = field(default_factory=dict)
     # library_id -> (what the library looked like after the last enrich, when).
@@ -132,23 +134,41 @@ class WorkerState:
     taken: dict[str, dict[tuple[str, str], float]] = field(default_factory=dict)
 
 
-def load_full_scans(path: Path) -> dict[str, float]:
-    """When each library was last scanned in full, as an earlier run saved it; {} if unreadable."""
+def load_state(path: Path) -> WorkerState:
+    """Full-scan times and retries as an earlier run saved them; each empty if unreadable."""
+    state = WorkerState()
     try:
-        saved = json.loads(path.read_text())["last_full_scan"]
-        return {str(library_id): float(when) for library_id, when in saved.items()}
-    except (OSError, ValueError, TypeError, KeyError, AttributeError):
-        return {}
+        saved = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return state
+    unreadable = (TypeError, KeyError, AttributeError, ValueError)
+    with contextlib.suppress(*unreadable):
+        state.last_full_scan = {str(lib): float(when) for lib, when in saved["last_full_scan"].items()}
+    with contextlib.suppress(*unreadable):
+        state.retries = {
+            str(lib): Retry({str(p) for p in r["paths"]}, float(r["delay"]), float(r["due"]),
+                            {str(c): int(v) for c, v in r["held"].items()})
+            for lib, r in saved.get("retries", {}).items()
+        }
+    return state
 
 
-def save_full_scans(path: Path, scans: dict[str, float]) -> None:
+def _saved_form(state: WorkerState) -> dict:
+    return {
+        "last_full_scan": dict(state.last_full_scan),
+        "retries": {lib: {"paths": sorted(r.paths), "delay": r.delay, "due": r.due, "held": dict(r.held)}
+                    for lib, r in state.retries.items()},
+    }
+
+
+def save_state(path: Path, saved: dict) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         part = path.with_name(path.name + ".part")
-        part.write_text(json.dumps({"last_full_scan": scans}))
+        part.write_text(json.dumps(saved))
         part.replace(path)
     except OSError as exc:
-        logger.warning("worker: couldn't save full-scan times to %s: %s", path, exc)
+        logger.warning("worker: couldn't save its state to %s: %s", path, exc)
 
 
 class WorkerLock:
@@ -418,17 +438,19 @@ def run_forever(
         logger.info("worker: removed %d half-made analysis proxies left by an earlier run", removed)
     # Beside the worker lock.
     state_path = cache_dir("worker-state.json")
-    state = WorkerState(last_full_scan=load_full_scans(state_path))
-    saved = dict(state.last_full_scan)
+    state = load_state(state_path)
+    saved = _saved_form(state)
     client = LumiverbClient()
     while True:
         try:
             run_cycle(client, state=state, console=console, full_scan_every=full_scan_every, only=only)
         except Exception:  # noqa: BLE001 — e.g. the API is restarting
             logger.exception("worker: cycle failed; trying again in %.0fs", poll)
-        if state.last_full_scan != saved:
-            save_full_scans(state_path, state.last_full_scan)
-            saved = dict(state.last_full_scan)
+        finally:
+            # Also when stopped mid-cycle (SIGTERM), so a full scan just done isn't done again.
+            if (now_saved := _saved_form(state)) != saved:
+                save_state(state_path, now_saved)
+                saved = now_saved
         if once or stop():
             return
         sleep(poll)

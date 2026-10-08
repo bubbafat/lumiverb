@@ -462,7 +462,49 @@ def test_full_scan_times_survive_a_restart(home: Path, monkeypatch: pytest.Monke
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize("content", ["not json", '["a list"]', '{"last_full_scan": {"lib_1": "soon"}}'])
+def test_a_full_scan_time_survives_a_stop_mid_cycle(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A stop (SIGTERM: systemctl stop, a deploy) during the enrichment that
+    # follows a full scan mustn't mean a second full scan on the next start.
+    from src.client.cli import worker
+
+    def scanned_then_stopped(client, *, state, **kw):
+        state.last_full_scan["lib_1"] = 123.0
+        raise SystemExit(0)
+
+    seen: list[dict] = []
+    monkeypatch.setattr(worker, "LumiverbClient", MagicMock())
+    monkeypatch.setattr(worker, "run_cycle", scanned_then_stopped)
+    with pytest.raises(SystemExit):
+        worker.run_forever(once=True, console=Console(quiet=True))
+    monkeypatch.setattr(worker, "run_cycle", lambda client, *, state, **kw: seen.append(dict(state.last_full_scan)))
+    worker.run_forever(once=True, console=Console(quiet=True))
+    assert seen == [{"lib_1": 123.0}]
+
+
+@pytest.mark.fast
+def test_files_waiting_for_a_retry_survive_a_restart(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Otherwise they'd wait for the next full scan, up to a day, and the
+    # changes held for them would be rescanned at once.
+    from src.client.cli import worker
+    from src.client.cli.worker import Retry
+
+    waiting = Retry({"Day 1/A001.mov", "Locked"}, 600.0, 1234.5, {"chg_1": 7})
+
+    def failed(client, *, state, **kw):
+        state.retries["lib_1"] = waiting
+
+    seen: list[dict] = []
+    monkeypatch.setattr(worker, "LumiverbClient", MagicMock())
+    monkeypatch.setattr(worker, "run_cycle", failed)
+    worker.run_forever(once=True, console=Console(quiet=True))
+    monkeypatch.setattr(worker, "run_cycle", lambda client, *, state, **kw: seen.append(dict(state.retries)))
+    worker.run_forever(once=True, console=Console(quiet=True))
+    assert seen == [{"lib_1": waiting}]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("content", ["not json", '["a list"]', '{"last_full_scan": {"lib_1": "soon"}}',
+                                     '{"last_full_scan": {}, "retries": {"lib_1": {"paths": 3}}}'])
 def test_an_unreadable_state_file_means_full_scans(home: Path, monkeypatch: pytest.MonkeyPatch, content: str) -> None:
     from src.client.cli import worker
 
