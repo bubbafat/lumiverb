@@ -19,7 +19,7 @@ import { Modal } from "../components/Modal";
 import { ProjectUsageList, clipCount } from "../components/ProjectUsageList";
 import { SkeletonRow } from "../components/SkeletonRow";
 import { deletedForGoodOn, shortDate } from "../lib/format";
-import { useCanEdit } from "../lib/useCanEdit";
+import { useCanEdit, useRole } from "../lib/useCanEdit";
 
 function formatLastIngest(lastScanAt: string | null): string {
   if (!lastScanAt) return "Never ingested";
@@ -93,6 +93,8 @@ export default function LibrariesPage() {
   const { data: settings } = useQuery({ queryKey: ["tenant-settings"], queryFn: getTenantSettings, staleTime: 60_000 });
   const trashDays = settings?.trash_days === undefined ? 30 : settings.trash_days;
   const canEdit = useCanEdit();
+  // Deleting media for good right away is an admin's; editors trash and restore.
+  const isAdmin = useRole() === "admin";
   // Archived clips aren't deleted on their own, but they go with their library: say how many.
   const { data: archivedInDeleting } = useQuery({
     queryKey: ["archive", deleteConfirmId, null, "all", "count"],
@@ -208,7 +210,7 @@ export default function LibrariesPage() {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <h1 className="text-2xl font-semibold">Libraries</h1>
           <div className="flex items-center gap-3">
-            {canEdit && trashedCount > 0 && (
+            {isAdmin && trashedCount > 0 && (
               <button
                 type="button"
                 onClick={() => setEmptyTrashConfirm(true)}
@@ -391,13 +393,15 @@ export default function LibrariesPage() {
                           >
                             Restore
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => setEmptyTrashConfirm(lib.library_id)}
-                            className="rounded px-3 py-1.5 text-sm font-medium text-red-400 transition-colors duration-150 hover:bg-red-900/30"
-                          >
-                            Delete for good
-                          </button>
+                          {isAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => setEmptyTrashConfirm(lib.library_id)}
+                              className="rounded px-3 py-1.5 text-sm font-medium text-red-400 transition-colors duration-150 hover:bg-red-900/30"
+                            >
+                              Delete for good
+                            </button>
+                          )}
                         </div>
                       )}
                       {canEdit && lib.status !== "trashed" && (
