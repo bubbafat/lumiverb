@@ -1,0 +1,173 @@
+# The brain: setup and operation
+
+The brain is the Linux box `media` (LAN 192.168.86.166, Tailscale 100.94.35.123). It runs Lumiverb, reads the DAS, and does all scanning and enrichment (ADR-016 phase 2). The Mac Studio keeps the DAS and editing; it reports file changes and browses.
+
+```
+Mac Studio ── DAS (media-01, media-02)
+    │  SMB over 10GbE (10.10.10.1)          reports changes: POST /v1/changes
+    ▼
+media: /mnt/media-01, /mnt/media-02  ──►  lumiverb-worker  ──►  API :8100  ◄── nginx :80 ◄── web, Mac, iOS
+                                           (scan, render,        Postgres 18 :5434
+                                            enrich)              Quickwit :7290
+```
+
+## Ports on this box
+
+Settled so prod and dev run side by side. Don't use other ports without updating this table.
+
+| What | Dev (unchanged) | Brain (prod) |
+|---|---|---|
+| Postgres | 5433 (Docker, pgvector:pg18) | **5434** (Ubuntu postgresql-18 + pgvector) |
+| Quickwit | 7280 (Docker) | **7290** REST, 7291 gRPC |
+| API | 8000 (uvicorn --reload) | **8100**, 127.0.0.1 only |
+| Web | 5173 (Vite) | **80** (nginx, any address, HTTP) |
+
+Already taken by other things: 5432 (DaVinci Resolve's Postgres), 8080 (ResourceSpace), 3001 (Resolve pgAdmin), 9000 (thelounge). This box gets no firewall from the scripts (`--no-firewall`): ufw would cut those off.
+
+## Setup (your steps: sudo and the Mac)
+
+### 1. Tell me where the DAS is on the Mac
+
+Libraries keep the root the Mac sees, because exports point Resolve, Premiere and Final Cut there. The brain maps it to its own mount. I've assumed:
+
+| On the Mac | On the brain |
+|---|---|
+| `/Volumes/media-01` | `/mnt/media-01` |
+| `/Volumes/media-02` | `/mnt/media-02` |
+
+If the Mac's paths differ, use them in the `--root-map` flags below.
+
+### 2. Install the API and the worker
+
+From this checkout (`~/src/lumiverb`), on `feat/brain` until the stack is merged:
+
+```bash
+sudo bash scripts/deploy-api.sh --app-host http://192.168.86.166 --pg-port 5434 --api-port 8100 --quickwit-port 7290 --no-firewall --data-dir /mnt/ssd2/lumiverb --worker --root-map /Volumes/media-01=/mnt/media-01 --root-map /Volumes/media-02=/mnt/media-02 --branch feat/brain
+```
+
+- **Data dir** `/mnt/ssd2/lumiverb` (proposed): 3.4 TB free. Previews, stills and analysis proxies live there. Analysis proxies take about 0.4 GB per hour of footage.
+- **Postgres 18** comes from Ubuntu's own packages, and the cluster is created on 5434. Resolve's database on 5432 is never touched.
+- **The worker** runs as the `lumiverb` user. Everything outside the data dir and its home is read-only to it, the DAS mounts included, whatever the mount options say.
+- **Reruns are safe.** They keep the ports, the tenant and the keys from the first run.
+
+### 3. Install the web UI
+
+```bash
+sudo bash scripts/deploy-web.sh --domain _ --api-upstream http://127.0.0.1:8100 --no-firewall --branch feat/brain
+```
+
+Lumiverb is then at http://192.168.86.166 and http://100.94.35.123.
+
+### 4. Create your user
+
+```bash
+sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb user create --email robert.horvick@gmail.com --role admin
+```
+
+### 5. Create libraries with the Mac's paths
+
+One per top-level area you want searchable, for example:
+
+```bash
+sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb library create --name "Media 01" --path "/Volumes/media-01/Media"
+```
+
+```bash
+sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb library list
+```
+
+`library list` shows a **Here** column with the mapped path. Within a minute the worker starts the first full scan. That is the fresh ingest of the DAS: probe, poster and preview, then analysis proxies, transcripts and scenes.
+
+### 6. Vision AI (optional)
+
+Descriptions, OCR and scene descriptions need a vision endpoint. Without one, the worker skips those steps; it doesn't fail them.
+
+```bash
+sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb admin tenants set-vision --help
+```
+
+### 7. The Mac app
+
+Point it at `http://192.168.86.166`. The Swift changes it needs are under "Mac app changes" below.
+
+### 8. Read-only mount (later)
+
+`/mnt/media-01` and `/mnt/media-02` are mounted read-write from `/etc/fstab`, and ResourceSpace may rely on that. Lumiverb can't write there anyway (the worker's sandbox). Once ResourceSpace is off, add `ro` to those two fstab lines and remount:
+
+```bash
+sudo sed -i 's|^\(//10.10.10.1/media-0[12] .* cifs \)|\1ro,|' /etc/fstab
+```
+
+```bash
+sudo mount -o remount,ro /mnt/media-01
+```
+
+```bash
+sudo mount -o remount,ro /mnt/media-02
+```
+
+Keep `soft`: when the Mac Studio sleeps, reads fail instead of hanging forever.
+
+## How it runs
+
+- **Changes.** The Mac reports paths it sees change: `POST /v1/changes`. Each cycle (every 60 s), the worker scans the one folder that covers a library's reported changes, then acknowledges them. A file modified in the last 30 seconds may still be copying, so it waits for the next cycle.
+- **Safety net.** Each library is scanned in full once a day, in case a report was missed.
+- **The Mac Studio asleep.** The worker doesn't scan its libraries: an unmounted share looks empty, and an empty mount point is never scanned. It keeps enriching from analysis proxies. Only probing and rendering wait, and they start as soon as the storage is back.
+- **Pacing.** Enrichment runs again when a library's counts change, when its storage comes back, or hourly, so a clip that fails every time isn't retried every minute.
+- **Analysis proxies** are full-length copies at most 960 px on the long side, at most 30 fps, with the first audio track. Transcription, scenes and scene vision read these, never the originals. They are not edit proxies.
+- **Library health.** The libraries page shows a library as pending until its videos have analysis proxies.
+
+Useful:
+
+```bash
+journalctl -u lumiverb-worker -f
+```
+
+```bash
+sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb library report-changes /mnt/media-01/Media/New\ shoot
+```
+
+`report-changes` takes paths as this machine sees them; the root map turns them back into the Mac's.
+
+## Updating
+
+```bash
+sudo bash /opt/lumiverb/scripts/update-api.sh
+```
+
+```bash
+sudo bash /opt/lumiverb/scripts/update-web.sh
+```
+
+`update-api.sh` keeps the worker's packages and restarts it.
+
+## Mac app changes (Swift, not built yet)
+
+1. **Report changes.** `LibraryWatcher` already gets FSEvents for each library root. After its debounce and the 30-second quarantine, send the changed paths, as the Mac sees them, to `POST /v1/changes` with body `{"paths": [...]}`.
+   - Files or folders, up to 10,000 per request.
+   - Retry on failure.
+   - The response says how many matched a library (`accepted`) and how many didn't (`unmatched`).
+2. **Stop scanning and enriching.** The brain does both now. Keep browsing.
+   - Retire Apple Vision faces and OCR, CoreML ArcFace, FeaturePrint and whisper.cpp.
+   - A Mac can still serve a model as an ordinary endpoint, such as Ollama, as long as the model isn't Mac-specific.
+3. Until then, nothing breaks. If the Mac and the brain both transcribe a clip, the last write wins; phase 3 makes each artifact have one producer.
+
+## Moving the dev database to Postgres 18
+
+Tests run on pgvector:pg18, and `docker-compose.yml` now starts it on a new volume (`postgres18_data`). An existing pg16 volume is left alone. To bring its data over, dump it with the old image running:
+
+```bash
+docker exec lumiverb-postgres pg_dumpall -U app > /tmp/lumiverb-pg16.sql
+```
+
+Then start the new one and load the dump:
+
+```bash
+docker compose up -d postgres
+```
+
+```bash
+docker exec -i lumiverb-postgres psql -U app -d postgres -q < /tmp/lumiverb-pg16.sql
+```
+
+"Already exists" errors for the role, the `control_plane` database and the `vector` extension are expected.

@@ -12,7 +12,7 @@ This ADR sets the direction for Lumiverb. Where another doc in this repo disagre
 |-------|-------------|--------|
 | 0 | Groundwork and safety: this ADR, doc updates, stop overwriting human data, safe scanning | Built, in review |
 | 1 | Projects and send to editor (v1) | Built, in review, with project trash. Left: real editor imports on a Mac; the macOS and iOS rename |
-| 2 | The brain: one machine schedules all processing and reads storage read-only | Not started |
+| 2 | The brain: one machine schedules all processing and reads storage read-only | Code built, in review. Left: the install (sudo), the macOS app's change reports and retiring its AI (Swift), the fresh ingest |
 | 3 | Lineage and reconciliation | Not started |
 | 4 | Producers and endpoints | Not started |
 
@@ -228,6 +228,8 @@ The brain reads storage, schedules all rendering and enrichment, and is where Lu
 - Ingest the whole library fresh
 
 **Done when:** footage copied to storage becomes searchable and transcribed without starting anything on an edit station, and enrichment continues from proxies while storage sleeps.
+
+**Where it stands:** the code is built and checked on the dev stack. A clip copied into a mapped library and reported the way the macOS app will report it was transcribed and searchable 12 seconds later. With the storage unreachable, the worker scanned nothing, kept the report, and still transcribed and found scenes in a clip from its analysis proxy. When the storage came back, it scanned the reported folder. Production, dev and tests run Postgres 18, which Ubuntu 26.04 ships with pgvector. `docs/brain-setup.md` has the install, which needs sudo, and the Swift changes for the macOS app, which can't be built here.
 
 ### Phase 3 — Lineage and reconciliation
 
