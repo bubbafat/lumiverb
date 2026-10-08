@@ -15,6 +15,9 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
       onClick={onClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
         className="w-[calc(100vw-2rem)] max-w-md rounded-xl bg-gray-900 p-4 sm:p-6 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >

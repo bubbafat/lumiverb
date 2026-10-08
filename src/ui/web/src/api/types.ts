@@ -242,6 +242,12 @@ export interface ProjectItem {
   updated_at: string;
   status?: "active" | "archived";
   archived_at?: string | null;
+  /** Set while the project is in the trash. */
+  deleted_at?: string | null;
+  /** Clips someone trashed: hidden and not exported until restored. */
+  trashed_asset_count?: number;
+  /** Clips whose files went missing: back when the files are. */
+  missing_asset_count?: number;
 }
 
 export interface ProjectListResponse {
