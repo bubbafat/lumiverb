@@ -189,7 +189,7 @@ export function DirectoryTree({
                 {hasMenu ? (
                   <button
                     type="button"
-                    aria-label={`${node.name}: ${node.asset_count} clips, folder actions`}
+                    aria-label={`${node.name}: ${node.asset_count === 1 ? "1 clip" : `${node.asset_count} clips`}, folder actions`}
                     aria-haspopup="menu"
                     aria-expanded={isDropdownOpen}
                     onClick={(e) => {

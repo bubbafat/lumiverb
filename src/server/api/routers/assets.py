@@ -549,7 +549,8 @@ def _stream_asset_file(
     # pictures: the archive and trash views need them. Public pages never do.
     asset = session.get(Asset, asset_id)
     is_public = getattr(request.state, "is_public_request", False)
-    if asset is None or (asset.deleted_at is not None and (is_public or not getattr(request.state, "role", None))):
+    signed_in = getattr(request.state, "role", None) in ("admin", "editor", "viewer")
+    if asset is None or (asset.deleted_at is not None and (is_public or not signed_in)):
         raise HTTPException(status_code=404, detail="Asset not found")
     if is_public:
         public_library_id = request.query_params.get("public_library_id")

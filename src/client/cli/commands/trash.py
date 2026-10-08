@@ -12,10 +12,9 @@ from typing import Annotated
 import typer
 from rich.console import Console
 from rich.markup import escape
-from rich.table import Table
 
 from src.client.cli.client import LumiverbClient
-from src.client.cli.commands.archive import clips, day, library_id_for
+from src.client.cli.commands.archive import clips, day, hidden_table, library_id_for
 
 trash_app = typer.Typer(help="Move clips to the trash, list it, restore from it, or delete for good.")
 console = Console()
@@ -108,7 +107,7 @@ def trash_list(
     if not items:
         console.print("The trash is empty.")
         return
-    table = Table("Clip", "Library", "Path", "Trashed", "Deleted for good")
+    table = hidden_table("Trashed", "Deleted for good")
     for item in items:
         table.add_row(item["asset_id"], escape(item["library_name"]), escape(item["rel_path"]),
                       day(item["trashed_at"]), day(item.get("expires_at")) or "when emptied")

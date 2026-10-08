@@ -48,6 +48,18 @@ def pick(client: LumiverbClient, asset_ids: list[str] | None, library: str | Non
     return {"library_id": library_id_for(client, library), "path": folder}
 
 
+def hidden_table(*more: str) -> Table:
+    """Clip, Library, Path and `more`: ids never cut short (they're what the
+    other commands take), paths wrap instead."""
+    table = Table()
+    table.add_column("Clip", no_wrap=True, min_width=30)
+    table.add_column("Library", overflow="fold")
+    table.add_column("Path", overflow="fold")
+    for name in more:
+        table.add_column(name, no_wrap=True)
+    return table
+
+
 def day(iso: str | None) -> str:
     return datetime.fromisoformat(iso).astimezone().strftime("%Y-%m-%d") if iso else ""
 
@@ -108,7 +120,7 @@ def archive_list(
     if not items:
         console.print("Nothing archived here.")
         return
-    table = Table("Clip", "Library", "Path", "Archived", "")
+    table = hidden_table("Archived", "")
     for item in items:
         table.add_row(item["asset_id"], escape(item["library_name"]), escape(item["rel_path"]),
                       day(item["archived_at"]), "file missing" if item.get("file_missing") else "")
