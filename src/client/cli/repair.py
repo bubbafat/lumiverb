@@ -1215,7 +1215,7 @@ def run_repair(
                 for item in batch_buf:
                     item["source_sha256"] = ocr_sha.get(item["asset_id"])
                 try:
-                    client.post("/v1/assets/batch-ocr", json={"items": list(batch_buf),
+                    client.post("/v1/assets/batch-ocr", json={"items": list(batch_buf), "model_id": vision.model,
                                                               "lineage": producers.lineage("ocr", None,
                                                                                            used=ocr_settings)})
                     t_post = _time.perf_counter() - t0
@@ -1226,7 +1226,7 @@ def run_repair(
                     for item in batch_buf:
                         try:
                             client.post(f"/v1/assets/{item['asset_id']}/ocr", json={
-                                "ocr_text": item["ocr_text"],
+                                "ocr_text": item["ocr_text"], "model_id": vision.model,
                                 "lineage": producers.lineage("ocr", item.get("source_sha256"), used=ocr_settings)})
                         except Exception:
                             pass

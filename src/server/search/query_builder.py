@@ -318,11 +318,11 @@ def postgres_rank_clauses(
     token_pattern = r"\m(" + token_alt + r")\M"
 
     # Concatenate the searchable text fields once so the regex is cheap
-    # — we already JOIN asset_metadata in the fallback query.
+    # — the fallback query already joins asset_metadata (m) and asset_ocr (o).
     haystack = (
         "COALESCE(m.data->>'description','') || ' ' || "
         "COALESCE(CAST(m.data->'tags' AS TEXT),'') || ' ' || "
-        "COALESCE(m.data->>'ocr_text','')"
+        "COALESCE(o.text,'')"
         + (" || ' ' || COALESCE(a.note,'')" if include_notes else "")
         + (" || ' ' || COALESCE(a.transcript_text,'')" if include_transcripts else "")
     )

@@ -174,8 +174,8 @@ def test_submit_vision_404(submission_client) -> None:
 
 
 @pytest.mark.slow
-def test_submit_ocr_requires_vision_metadata_first(submission_client) -> None:
-    """OCR submission for an asset with no prior vision metadata returns 400."""
+def test_submit_ocr_needs_no_description_first(submission_client) -> None:
+    """OCR is its own artifact (asset_ocr): it doesn't wait for a description."""
     client, auth, _, image_asset_ids, _ = submission_client
     # sub_b has not had vision submitted
     asset_id = image_asset_ids[1]
@@ -185,7 +185,8 @@ def test_submit_ocr_requires_vision_metadata_first(submission_client) -> None:
         json={"ocr_text": "hello"},
         headers=auth,
     )
-    assert r.status_code == 400
+    assert r.status_code == 200
+    assert client.get(f"/v1/assets/{asset_id}", headers=auth).json()["ocr_text"] == "hello"
 
 
 @pytest.mark.slow
@@ -218,7 +219,7 @@ def test_submit_ocr_404(submission_client) -> None:
 
 @pytest.mark.slow
 def test_batch_ocr_mixed_present_and_missing(submission_client) -> None:
-    """Batch OCR updates assets that already have vision metadata, skips others."""
+    """Batch OCR updates every asset that exists, described or not; skips the rest."""
     client, auth, _, image_asset_ids, _ = submission_client
 
     # Make sure sub_c has vision metadata so we can update it
@@ -233,8 +234,8 @@ def test_batch_ocr_mixed_present_and_missing(submission_client) -> None:
         "items": [
             {"asset_id": image_asset_ids[0], "ocr_text": "BATCH ONE"},
             {"asset_id": image_asset_ids[2], "ocr_text": "BATCH THREE"},
-            # asset without vision metadata → skipped
-            {"asset_id": image_asset_ids[1], "ocr_text": "BATCH TWO SKIPPED"},
+            # no description: OCR doesn't need one
+            {"asset_id": image_asset_ids[1], "ocr_text": "BATCH TWO"},
             # nonexistent → skipped
             {"asset_id": "ast_nonex0000000000000000000", "ocr_text": "skip"},
         ]
@@ -242,8 +243,8 @@ def test_batch_ocr_mixed_present_and_missing(submission_client) -> None:
     r = client.post("/v1/assets/batch-ocr", json=payload, headers=auth)
     assert r.status_code == 200
     body = r.json()
-    assert body["updated"] == 2
-    assert body["skipped"] == 2
+    assert body["updated"] == 3
+    assert body["skipped"] == 1
 
 
 # ---- batch vision ---------------------------------------------------------

@@ -63,7 +63,7 @@ def search_assets(
                OR a.camera_model   ILIKE :{name}
                OR m.data->>'description' ILIKE :{name}
                OR CAST(m.data->'tags' AS TEXT) ILIKE :{name}
-               OR m.data->>'ocr_text' ILIKE :{name}
+               OR o.text ILIKE :{name}
                {note_or.format(name=name)}
                {transcript_or.format(name=name)}
               )"""
@@ -80,7 +80,7 @@ def search_assets(
            OR a.camera_model   ILIKE :like_0
            OR m.data->>'description' ILIKE :like_0
            OR CAST(m.data->'tags' AS TEXT) ILIKE :like_0
-           OR m.data->>'ocr_text' ILIKE :like_0
+           OR o.text ILIKE :like_0
            {note_or.format(name='like_0')}
            {transcript_or.format(name='like_0')}
           )"""
@@ -107,6 +107,7 @@ def search_assets(
             ORDER BY generated_at DESC
             LIMIT 1
         ) m ON true
+        LEFT JOIN asset_ocr o ON o.asset_id = a.asset_id
         WHERE {lib_condition}
               a.availability = 'online'
           AND {groups}
