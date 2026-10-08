@@ -314,3 +314,26 @@ def test_enrich_probes_files_under_the_mapped_root(home: Path, tmp_path: Path) -
     ):
         run_repair(client, library, job_type="probe", console=Console(quiet=True))
     assert probe.call_args.args[1] == here
+
+
+@pytest.mark.fast
+def test_scan_command_says_the_root_is_unreachable_and_fails(home: Path, tmp_path: Path,
+                                                             monkeypatch: pytest.MonkeyPatch) -> None:
+    import importlib
+
+    main = importlib.import_module("src.client.cli.main")
+    save_config(CLIConfig(root_map={MAC: str(tmp_path / "asleep")}))
+
+    class FakeResp:
+        def json(self) -> list[dict]:
+            return [{"library_id": "lib_1", "name": "Footage", "root_path": f"{MAC}/Footage"}]
+
+    class FakeClient:
+        def get(self, url: str, **kw: object) -> FakeResp:
+            return FakeResp()
+
+    monkeypatch.setattr(main, "LumiverbClient", FakeClient)
+    result = CliRunner().invoke(main.app, ["scan", "--library", "Footage"])
+    assert result.exit_code == 1
+    assert "not accessible" in result.output
+    assert "Done:" not in result.output

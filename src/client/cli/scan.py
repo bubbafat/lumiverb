@@ -64,6 +64,8 @@ class ScanStats:
     cache_populated: int = 0
     failed: int = 0
     scanned_asset_ids: list[str] = field(default_factory=list)
+    # The library's root couldn't be read, so nothing was scanned.
+    root_unreachable: bool = False
 
 
 @dataclass
@@ -625,7 +627,7 @@ def run_scan(
                           "run `lumiverb config map-root`.")
         else:
             console.print("Is the volume mounted?")
-        return ScanStats()
+        return ScanStats(root_unreachable=True)
 
     stats = ScanStats()
 

@@ -1314,7 +1314,7 @@ def run_repair(
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Scenes", total=len(indexable), ok=0, fail=0)
-                run_video_index(
+                done, failed = run_video_index(
                     client=client,
                     source_for=lambda v: analysis_cache.get(v["asset_id"]),
                     videos=indexable,
@@ -1322,6 +1322,9 @@ def run_repair(
                     progress=progress,
                     task_id=tid,
                 )
+            with stats.lock:
+                stats.processed += done
+                stats.failed += failed
 
         elif repair_type == "scene-vision":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
@@ -1352,7 +1355,7 @@ def run_repair(
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Scene vision", total=len(videos), ok=0, fail=0)
-                run_video_enrich(
+                done, failed = run_video_enrich(
                     client=client,
                     source_for=lambda v: analysis_cache.get(v["asset_id"]),
                     videos=videos,
@@ -1362,6 +1365,9 @@ def run_repair(
                     progress=progress,
                     task_id=tid,
                 )
+            with stats.lock:
+                stats.processed += done
+                stats.failed += failed
 
         elif repair_type == "search-sync":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")

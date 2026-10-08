@@ -926,6 +926,9 @@ def scan(
         console=console,
     )
 
+    if stats.root_unreachable:
+        raise typer.Exit(1)
+
     if not dry_run:
         console.print(
             f"\nDone: {stats.new:,} new, "

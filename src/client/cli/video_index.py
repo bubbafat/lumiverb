@@ -148,11 +148,12 @@ def run_video_index(
     console: Console,
     progress: Progress,
     task_id: object,
-) -> None:
+) -> tuple[int, int]:
     """Run scene detection on a batch of videos, updating progress.
 
     Each video dict must have: asset_id, rel_path, duration_sec.
     Videos are processed sequentially (FFmpeg is CPU/IO heavy).
+    Returns (ok, failed).
     """
     ok = 0
     fail = 0
@@ -190,6 +191,8 @@ def run_video_index(
 
         progress.advance(task_id, 1)
         progress.update(task_id, ok=ok, fail=fail)
+
+    return ok, fail
 
 
 # ---------------------------------------------------------------------------
@@ -313,11 +316,12 @@ def run_video_enrich(
     console: Console,
     progress: Progress,
     task_id: object,
-) -> None:
+) -> tuple[int, int]:
     """Run scene enrichment on a batch of videos, updating progress.
 
     Each video dict must have: asset_id, rel_path.
     Videos are processed sequentially (vision API is the bottleneck).
+    Returns (ok, failed).
     """
     ok = 0
     fail = 0
@@ -356,3 +360,5 @@ def run_video_enrich(
 
         progress.advance(task_id, 1)
         progress.update(task_id, ok=ok, fail=fail)
+
+    return ok, fail

@@ -232,3 +232,25 @@ def test_all_renders_before_reading_proxies(home: Path, library: dict) -> None:
         run_repair(client, library, job_type="all", console=Console(quiet=True))
     assert order.index("missing_probe") < order.index("missing_analysis_proxy") < order.index("missing_transcription")
     assert order.index("missing_analysis_proxy") < order.index("missing_video_scenes")
+
+
+@pytest.mark.fast
+def test_scene_steps_count_what_they_did(home: Path, asleep: dict) -> None:
+    _cached(home, "ast_a")
+    client = MagicMock()
+    pages = {"missing_video_scenes": [
+        {"asset_id": "ast_a", "rel_path": "a.mov", "duration_sec": 4.0, "has_analysis_proxy": True},
+    ]}
+    console = Console(record=True, width=200)
+
+    def page_missing(_client, _library_id, **flags):
+        [flag] = [k for k, v in flags.items() if v]
+        return pages.get(flag, [])
+
+    with (
+        patch("src.client.cli.repair.get_repair_summary", return_value={"total_assets": 1, "missing_video_scenes": 1}),
+        patch("src.client.cli.repair._page_missing", side_effect=page_missing),
+        patch("src.client.cli.video_index.index_video_scenes", return_value={"scenes": 1, "chunks": 1, "elapsed": 0.1}),
+    ):
+        run_repair(client, asleep, job_type="video-scenes", console=console)
+    assert "1 fixed" in console.export_text()
