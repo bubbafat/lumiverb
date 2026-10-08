@@ -11,13 +11,15 @@ import logging
 import os
 from pathlib import Path
 
+from src.client.cache_dir import cache_dir
+
 logger = logging.getLogger(__name__)
 
 _CHUNK = 1024 * 1024
 
 
 def default_cache_dir() -> Path:
-    return Path.home() / ".cache" / "lumiverb" / "analysis"
+    return cache_dir("analysis")
 
 
 class AnalysisProxyCache:

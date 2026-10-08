@@ -27,6 +27,7 @@ from pathlib import Path, PurePosixPath
 
 from rich.console import Console
 
+from src.client.cache_dir import cache_dir
 from src.client.cli.client import LumiverbClient
 from src.client.cli.roots import reachable_root
 
@@ -92,7 +93,7 @@ class WorkerLock:
     """One worker per machine: two would scan and render the same files."""
 
     def __init__(self, path: Path | None = None) -> None:
-        self._path = path or Path.home() / ".cache" / "lumiverb" / "worker.lock"
+        self._path = path or cache_dir("worker.lock")
         self._fd: int | None = None
 
     def acquire(self) -> bool:

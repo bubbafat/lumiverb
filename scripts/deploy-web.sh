@@ -37,11 +37,12 @@ fail()  { echo -e "${RED}  ✗ $1${NC}" >&2; exit 1; }
 DOMAIN=""
 API_UPSTREAM=""
 REPO_URL="https://github.com/bubbafat/lumiverb.git"
-BRANCH="main"
+BRANCH=""
 CERTBOT_EMAIL=""
 SKIP_CERTBOT=false
 CERTIFICATE_ARCHIVE=""
 NO_FIREWALL=false
+DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -53,8 +54,9 @@ while [[ $# -gt 0 ]]; do
     --certificate)    CERTIFICATE_ARCHIVE="${2:?Missing value for --certificate}"; shift 2 ;;
     --skip-certbot)   SKIP_CERTBOT=true; shift ;;
     --no-firewall)    NO_FIREWALL=true; shift ;;
+    --dry-run)        DRY_RUN=true; shift ;;
     -h|--help)
-      echo "Usage: $0 --domain <FQDN|_> --api-upstream <URL> [--email <certbot-email>] [--certificate <letsencrypt.tar.gz>] [--repo <url>] [--branch <ref>] [--skip-certbot] [--no-firewall]"
+      echo "Usage: $0 --domain <FQDN|_> --api-upstream <URL> [--email <certbot-email>] [--certificate <letsencrypt.tar.gz>] [--repo <url>] [--branch <ref>] [--skip-certbot] [--no-firewall] [--dry-run]"
       echo "  --domain _      Answer on any host name or address, over HTTP (no certificate)"
       echo "  --no-firewall   Leave ufw alone (the host runs other services)"
       exit 0
@@ -81,6 +83,22 @@ if [[ "$DOMAIN" == "_" ]]; then
   ANY_HOST=true
   SKIP_CERTBOT=true
   [[ -z "$CERTIFICATE_ARCHIVE" ]] || fail "--certificate needs a real --domain"
+fi
+
+# On the API's machine, follow what deploy-api.sh remembered: both deploy
+# /opt/lumiverb, so another branch here would switch the API's code too.
+API_ENV="${LUMIVERB_CONF_DIR:-/etc/lumiverb}/env"
+_api_val() { grep "^${1}=" "$API_ENV" 2>/dev/null | head -1 | cut -d= -f2- || true; }
+BRANCH="${BRANCH:-$(_api_val BRANCH)}"; BRANCH="${BRANCH:-main}"
+[[ "$NO_FIREWALL" == "true" ]] || NO_FIREWALL="$(_api_val NO_FIREWALL)"
+[[ "$NO_FIREWALL" == "true" ]] || NO_FIREWALL=false
+
+if [[ "$DRY_RUN" == "true" ]]; then
+  echo "DOMAIN=${DOMAIN}"
+  echo "API_UPSTREAM=${API_UPSTREAM}"
+  echo "BRANCH=${BRANCH}"
+  echo "NO_FIREWALL=${NO_FIREWALL}"
+  exit 0
 fi
 
 [[ "$(id -u)" -eq 0 ]] || fail "This script must be run as root (try: sudo bash ...)"

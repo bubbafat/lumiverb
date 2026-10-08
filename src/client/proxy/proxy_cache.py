@@ -22,9 +22,10 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from src.client.cache_dir import cache_dir
+
 logger = logging.getLogger(__name__)
 
-_PERSISTENT_DIR = Path.home() / ".cache" / "lumiverb" / "proxies"
 _DEFAULT_MAX_EDGE = 1280
 _JPEG_QUALITY = 75
 
@@ -52,7 +53,7 @@ class ProxyCache:
             root_path: Library root for local source file generation.
             client: LumiverbClient for server download fallback.
         """
-        self._dir = _PERSISTENT_DIR
+        self._dir = cache_dir("proxies")
         self._dir.mkdir(parents=True, exist_ok=True)
         self._max_edge = max_edge
         self._root_path = root_path

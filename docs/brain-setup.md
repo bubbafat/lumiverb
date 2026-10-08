@@ -26,29 +26,30 @@ Already taken by other things: 5432 (DaVinci Resolve's Postgres), 8080 (Resource
 
 ## Setup (your steps: sudo and the Mac)
 
-### 1. Tell me where the DAS is on the Mac
+### 1. Where the DAS is on the Mac
 
-Libraries keep the root the Mac sees, because exports point Resolve, Premiere and Final Cut there. The brain maps it to its own mount. I've assumed:
+Libraries keep the root the Mac sees, because exports point Resolve, Premiere and Final Cut there. The brain maps it to its own mount:
 
 | On the Mac | On the brain |
 |---|---|
 | `/Volumes/media-01` | `/mnt/media-01` |
-| `/Volumes/media-02` | `/mnt/media-02` |
 
-If the Mac's paths differ, use them in the `--root-map` flags below.
+The first library is `/Volumes/media-01/Media`: about 14,400 photos and videos, 4,400 of them videos. Paths match case-sensitively, so use the folder names as the Mac shows them (`Media`, not `media`). To add `media-02` later, rerun the install with another `--root-map`, or run `lumiverb config map-root` as the `lumiverb` user.
 
 ### 2. Install the API and the worker
 
 From this checkout (`~/src/lumiverb`), on `feat/brain` until the stack is merged:
 
 ```bash
-sudo bash scripts/deploy-api.sh --app-host http://192.168.86.166 --pg-port 5434 --api-port 8100 --quickwit-port 7290 --no-firewall --data-dir /mnt/ssd2/lumiverb --worker --root-map /Volumes/media-01=/mnt/media-01 --root-map /Volumes/media-02=/mnt/media-02 --branch feat/brain
+sudo bash scripts/deploy-api.sh --app-host http://192.168.86.166 --pg-port 5434 --api-port 8100 --quickwit-port 7290 --no-firewall --data-dir /mnt/ssd2/lumiverb --worker --root-map /Volumes/media-01=/mnt/media-01 --branch feat/brain
 ```
 
-- **Data dir** `/mnt/ssd2/lumiverb` (proposed): 3.4 TB free. Previews, stills and analysis proxies live there. Analysis proxies take about 0.4 GB per hour of footage.
+Add `--dry-run` (no sudo needed) to see the settings it will use without changing anything.
+
+- **Data dir** `/mnt/ssd2/lumiverb` (proposed): 3.4 TB free. Previews, stills and analysis proxies live there. Analysis proxies take about 0.4 GB per hour of footage. The worker's caches go there too (`cache/`), not on the root disk.
 - **Postgres 18** comes from Ubuntu's own packages, and the cluster is created on 5434. Resolve's database on 5432 is never touched.
 - **The worker** runs as the `lumiverb` user. Everything outside the data dir and its home is read-only to it, the DAS mounts included, whatever the mount options say.
-- **Reruns are safe.** They keep the ports, the tenant and the keys from the first run.
+- **Reruns are safe.** They keep the ports, the data dir, the branch, the Postgres version, `--no-firewall`, the tenant and the keys from the first run, so `sudo bash scripts/deploy-api.sh` alone is enough. `deploy-web.sh` follows the same branch and firewall setting.
 
 ### 3. Install the web UI
 
@@ -60,16 +61,18 @@ Lumiverb is then at http://192.168.86.166 and http://100.94.35.123.
 
 ### 4. Create your user
 
+It asks for a password (12 characters or more).
+
 ```bash
 sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb user create --email you@example.com --role admin
 ```
 
 ### 5. Create libraries with the Mac's paths
 
-One per top-level area you want searchable, for example:
+One per top-level area you want searchable:
 
 ```bash
-sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb library create --name "Media 01" --path "/Volumes/media-01/Media"
+sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb library create --name "Media" --path "/Volumes/media-01/Media"
 ```
 
 ```bash

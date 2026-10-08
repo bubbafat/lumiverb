@@ -124,6 +124,10 @@ if [[ -f "$WORKER_UNIT" ]]; then
   sed -i "s|^ExecStart=.*/lumiverb pipeline$|ExecStart=${APP_DIR}/.venv/bin/lumiverb worker|" "$WORKER_UNIT"
   grep -q "^Environment=HOME=" "$WORKER_UNIT" || sed -i "/^Environment=PYTHONUNBUFFERED=1$/a Environment=HOME=${SVC_HOME}" "$WORKER_UNIT"
   sed -i "s|^ReadWritePaths=\([^ ]*\)$|ReadWritePaths=\1 ${SVC_HOME}|" "$WORKER_UNIT"
+  # Proxy caches on the data disk, not the root disk with Postgres.
+  DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2-)"
+  grep -q "^Environment=XDG_CACHE_HOME=" "$WORKER_UNIT" \
+    || sed -i "/^Environment=HOME=/a Environment=XDG_CACHE_HOME=${DATA_DIR}/cache" "$WORKER_UNIT"
   systemctl daemon-reload
   ok "$(grep '^ExecStart=' "$WORKER_UNIT")"
 fi

@@ -15,8 +15,10 @@
 #     --data-dir /mnt/ssd2/lumiverb --worker \
 #     --root-map /Volumes/media-01=/mnt/media-01 --branch feat/brain
 #
-# Idempotent: safe to run again to update an existing install. Ports and
-# the app host given once are remembered in /etc/lumiverb/env.
+# Idempotent: safe to run again to update an existing install. Ports, the
+# app host, the data dir, the branch, the Postgres version and --no-firewall
+# given once are remembered in /etc/lumiverb/env. --dry-run prints what a
+# run would use and changes nothing.
 #
 set -euo pipefail
 
@@ -39,7 +41,7 @@ fail()  { echo -e "${RED}  ✗ $1${NC}" >&2; exit 1; }
 # ---------------------------------------------------------------------------
 DOMAIN=""
 REPO_URL="https://github.com/bubbafat/lumiverb.git"
-BRANCH="main"
+BRANCH=""
 CERTBOT_EMAIL=""
 TENANT_NAME="Lumiverb"
 DATA_DIR_OVERRIDE=""
@@ -54,6 +56,7 @@ API_PORT=""
 QW_PORT=""
 NO_FIREWALL=false
 WITH_WORKER=false
+DRY_RUN=false
 ROOT_MAPS=()
 
 while [[ $# -gt 0 ]]; do
@@ -76,16 +79,19 @@ while [[ $# -gt 0 ]]; do
     --no-firewall)      NO_FIREWALL=true; shift ;;
     --worker)           WITH_WORKER=true; shift ;;
     --root-map)         ROOT_MAPS+=("${2:?Missing value for --root-map}"); shift 2 ;;
+    --dry-run)          DRY_RUN=true; shift ;;
     -h|--help)
       echo "Usage: $0 (--domain <FQDN> | --app-host <URL>) [--email <email>] [--tenant <name>] [--data-dir <path>]"
       echo "          [--api-listen-host <ip>] [--api-allow-from <cidr>] [--vision-api-url <url>] [--vision-api-key <key>]"
       echo "          [--pg-port <port>] [--pg-version <major>] [--api-port <port>] [--quickwit-port <port>]"
-      echo "          [--no-firewall] [--worker] [--root-map <server-prefix>=<local-prefix>]... [--repo <url>] [--branch <ref>]"
+      echo "          [--no-firewall] [--worker] [--root-map <server-prefix>=<local-prefix>]... [--repo <url>] [--branch <ref>] [--dry-run]"
       echo ""
       echo "  --app-host       Base URL people reach Lumiverb at, instead of https://<domain> (e.g. http://192.168.86.166)"
       echo "  --no-firewall    Leave ufw alone (the host runs other services)"
       echo "  --worker         Install and start lumiverb-worker: scan and enrich on this machine (ffmpeg, Whisper, ...)"
       echo "  --root-map       Where a library root prefix is on this machine, e.g. /Volumes/media-01=/mnt/media-01"
+      echo "  --dry-run        Print the settings this run would use (flags, else values remembered from"
+      echo "                   an earlier run, else defaults) and stop. Changes nothing."
       exit 0
       ;;
     *) fail "Unknown option: $1" ;;
@@ -95,8 +101,6 @@ done
 # ---------------------------------------------------------------------------
 # Validate
 # ---------------------------------------------------------------------------
-[[ -n "$DOMAIN" || -n "$APP_HOST" ]] || fail "Required: --domain <FQDN> (e.g. --domain api.example.com) or --app-host <URL>"
-
 if [[ "$DOMAIN" == *"example.com"* ]]; then
   fail "Replace example.com with your actual domain"
 fi
@@ -104,18 +108,11 @@ for map in "${ROOT_MAPS[@]}"; do
   [[ "$map" == /*=/* ]] || fail "--root-map takes <server-prefix>=<local-prefix>, both absolute: $map"
 done
 
-[[ "$(id -u)" -eq 0 ]] || fail "This script must be run as root (try: sudo bash ...)"
-
-if [[ -n "$DATA_DIR_OVERRIDE" ]]; then
-  mkdir -p "$DATA_DIR_OVERRIDE" || fail "Cannot create data directory: $DATA_DIR_OVERRIDE"
-fi
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 APP_DIR="/opt/lumiverb"
-CONF_DIR="/etc/lumiverb"
-DATA_DIR="${DATA_DIR_OVERRIDE:-/var/lib/lumiverb}"
+CONF_DIR="${LUMIVERB_CONF_DIR:-/etc/lumiverb}"
 BACKUP_DIR="/var/backups/lumiverb"
 ENV_FILE="${CONF_DIR}/env"
 SVC_USER="lumiverb"
@@ -132,14 +129,41 @@ _existing_val() {
 PG_PORT="${PG_PORT:-$(_existing_val PG_PORT)}";        PG_PORT="${PG_PORT:-5432}"
 API_PORT="${API_PORT:-$(_existing_val API_PORT)}";     API_PORT="${API_PORT:-8000}"
 QW_PORT="${QW_PORT:-$(_existing_val QUICKWIT_PORT)}";  QW_PORT="${QW_PORT:-7280}"
-APP_HOST="${APP_HOST:-$(_existing_val APP_HOST)}";     APP_HOST="${APP_HOST:-https://${DOMAIN}}"
+APP_HOST="${APP_HOST:-$(_existing_val APP_HOST)}"
+[[ -n "$DOMAIN" || -n "$APP_HOST" ]] || fail "Required: --domain <FQDN> (e.g. --domain api.example.com) or --app-host <URL>"
+APP_HOST="${APP_HOST:-https://${DOMAIN}}"
 QW_GRPC_PORT=$((QW_PORT + 1))
-# Postgres: keep the version an earlier install uses; new installs get 18,
-# which Ubuntu 26.04 ships with pgvector (tests run against it too).
-if [[ -z "$PG_VERSION" ]]; then
-  PG_VERSION="$(ls /etc/postgresql 2>/dev/null | sort -n | tail -1)"
-  PG_VERSION="${PG_VERSION:-18}"
+# A rerun without --data-dir must not move storage back to the default:
+# search would come up empty and every artifact would 404.
+DATA_DIR="${DATA_DIR_OVERRIDE:-$(_existing_val DATA_DIR)}"; DATA_DIR="${DATA_DIR:-/var/lib/lumiverb}"
+BRANCH="${BRANCH:-$(_existing_val BRANCH)}";             BRANCH="${BRANCH:-main}"
+[[ "$NO_FIREWALL" == "true" ]] || NO_FIREWALL="$(_existing_val NO_FIREWALL)"
+[[ "$NO_FIREWALL" == "true" ]] || NO_FIREWALL=false
+# Postgres: the version an earlier install uses; new installs get 18, which
+# Ubuntu 26.04 ships with pgvector (tests run against it too). Installs from
+# before the version was remembered use the cluster on their port.
+PG_VERSION="${PG_VERSION:-$(_existing_val PG_VERSION)}"
+if [[ -z "$PG_VERSION" && -f "$ENV_FILE" ]]; then
+  PG_VERSION="$(pg_lsclusters -h 2>/dev/null | awk -v p="$PG_PORT" '$3 == p { print $1; exit }' || true)"
 fi
+PG_VERSION="${PG_VERSION:-18}"
+
+if [[ "$DRY_RUN" == "true" ]]; then
+  echo "APP_HOST=${APP_HOST}"
+  echo "DATA_DIR=${DATA_DIR}"
+  echo "BRANCH=${BRANCH}"
+  echo "NO_FIREWALL=${NO_FIREWALL}"
+  echo "PG_VERSION=${PG_VERSION}"
+  echo "PG_PORT=${PG_PORT}"
+  echo "API_PORT=${API_PORT}"
+  echo "QUICKWIT_PORT=${QW_PORT}"
+  echo "WORKER=${WITH_WORKER}"
+  echo "ROOT_MAPS=${ROOT_MAPS[*]-}"
+  exit 0
+fi
+
+[[ "$(id -u)" -eq 0 ]] || fail "This script must be run as root (try: sudo bash ...)"
+mkdir -p "$DATA_DIR" || fail "Cannot create data directory: $DATA_DIR"
 
 ARCH="$(uname -m)"
 case "$ARCH" in
@@ -333,9 +357,12 @@ QUICKWIT_ENABLED=true
 API_LISTEN_HOST=${API_LISTEN_HOST}
 API_PORT=${API_PORT}
 
-# Ports this install uses (remembered for reruns)
+# What this install uses (remembered for reruns)
 PG_PORT=${PG_PORT}
+PG_VERSION=${PG_VERSION}
 QUICKWIT_PORT=${QW_PORT}
+BRANCH=${BRANCH}
+NO_FIREWALL=${NO_FIREWALL}
 
 # App
 APP_ENV=production
@@ -406,6 +433,9 @@ UNIT
 step "Deploying application to ${APP_DIR}"
 
 if [[ -d "${APP_DIR}/.git" ]]; then
+  # The checkout belongs to $SVC_USER; tell git it's safe for root.
+  git config --system --replace-all safe.directory "$APP_DIR" "$APP_DIR" 2>/dev/null \
+    || git config --global --add safe.directory "$APP_DIR"
   cd "$APP_DIR"
   git fetch --all --prune
   git checkout "$BRANCH"
@@ -489,6 +519,8 @@ WorkingDirectory=${APP_DIR}
 EnvironmentFile=${ENV_FILE}
 Environment=PYTHONUNBUFFERED=1
 Environment=HOME=${SVC_HOME}
+# Proxy caches go on the data disk, not the root disk with Postgres.
+Environment=XDG_CACHE_HOME=${DATA_DIR}/cache
 ExecStart=${APP_DIR}/.venv/bin/lumiverb worker
 Restart=on-failure
 RestartSec=30s
