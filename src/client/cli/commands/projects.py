@@ -204,3 +204,57 @@ def project_restore(
 ) -> None:
     """Restore an archived project."""
     _set_status(project_id, "active")
+
+
+_EXPORT_FORMATS = ("fcp7", "fcpxml")
+
+
+@projects_app.command("export")
+def project_export(
+    project_id: Annotated[str, typer.Option("--id", help="Project ID.")],
+    format: Annotated[str, typer.Option("--format", "-f", help="fcp7 (DaVinci Resolve / Premiere Pro) or fcpxml (Final Cut Pro).")],
+    prefix: Annotated[str | None, typer.Option("--prefix", help="Where the originals live on the editing machine (default: each library's root).")] = None,
+    output: Annotated[str | None, typer.Option("--output", "-o", help="File to write (default: the project name, in the current directory).")] = None,
+) -> None:
+    """Export a project as a bin of master clips for an editor."""
+    import re
+    from pathlib import Path
+
+    if format not in _EXPORT_FORMATS:
+        console.print(f"[red]--format must be one of: {', '.join(_EXPORT_FORMATS)}[/red]")
+        raise typer.Exit(1)
+
+    params = {"format": format}
+    if prefix:
+        params["prefix"] = prefix
+    client = LumiverbClient()
+    resp = client.get(f"/v1/projects/{project_id}/export", params=params)
+
+    if output is None:
+        from urllib.parse import unquote
+
+        disposition = resp.headers.get("content-disposition", "")
+        utf8 = re.search(r"filename\*=UTF-8''([^;]+)", disposition)
+        plain = re.search(r'filename="([^"]+)"', disposition)
+        if utf8:
+            output = unquote(utf8.group(1))
+        elif plain:
+            output = plain.group(1)
+        else:
+            output = f"{project_id}.{'xml' if format == 'fcp7' else 'fcpxml'}"
+    path = Path(output)
+    path.write_bytes(resp.content)
+    console.print(f"[green]Exported to {path}[/green]")
+
+    skipped = int(resp.headers.get("x-lumiverb-skipped-stills", "0") or 0)
+    if skipped:
+        console.print(f"[yellow]{skipped} photos weren't included: exports are video only for now.[/yellow]")
+    no_duration = int(resp.headers.get("x-lumiverb-skipped-no-duration", "0") or 0)
+    if no_duration:
+        console.print(f"[yellow]{no_duration} videos with no known length weren't included.[/yellow]")
+    unprobed = int(resp.headers.get("x-lumiverb-unprobed", "0") or 0)
+    if unprobed:
+        console.print(
+            f"[yellow]{unprobed} videos haven't been probed and use a default frame rate; "
+            "run lumiverb enrich --job-type probe.[/yellow]"
+        )

@@ -58,6 +58,7 @@ Entry point: `lumiverb = "src.client.cli:main"` (setuptools); `main()` invokes t
 - `lumiverb project delete --id <project_id>` — Delete project.
 - `lumiverb project archive --id <project_id>` — Archive: it leaves the sidebar and pickers but keeps its clips.
 - `lumiverb project restore --id <project_id>` — Restore an archived project.
+- `lumiverb project export --id <project_id> --format fcp7|fcpxml [--prefix <path>] [--output <file>]` — Export a bin of master clips for DaVinci Resolve / Premiere Pro (`fcp7`) or Final Cut Pro (`fcpxml`). Writes `<project name>.xml|.fcpxml` unless `--output` is given; `--prefix` points clips at another location of the originals (e.g. a travel SSD). Reports what was left out or approximated: photos (video only for now), videos with no known length, and unprobed videos exported at the fallback rate.
 
 #### User
 - `lumiverb user create --email <email> [--role admin|editor|viewer]` — Create user (prompts for password).

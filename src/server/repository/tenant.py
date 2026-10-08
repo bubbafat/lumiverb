@@ -471,7 +471,7 @@ class AssetRepository:
     # Columns allowed for sorting.
     SORTABLE_COLUMNS = {
         "asset_id", "taken_at", "created_at", "file_size",
-        "iso", "aperture", "focal_length", "rel_path",
+        "iso", "exposure_time_us", "aperture", "focal_length", "rel_path",
     }
 
     def page_by_library(
@@ -574,12 +574,14 @@ class AssetRepository:
                 # Row-value comparison for composite cursor.
                 # NULLs sort last: rows with NULL sort_col come after non-NULL rows.
                 conditions.append(f"""(
+                    -- Rows are ordered NULLS LAST: after an undated cursor only
+                    -- undated rows follow; after a dated one, later dated rows
+                    -- and every undated row.
                     CASE
                         WHEN :cursor_value IS NULL THEN
-                            a.{sort_col} IS NOT NULL
-                            OR (a.{sort_col} IS NULL AND a.asset_id {cmp_op} :cursor_id)
+                            a.{sort_col} IS NULL AND a.asset_id {cmp_op} :cursor_id
                         WHEN a.{sort_col} IS NULL THEN
-                            FALSE
+                            TRUE
                         ELSE
                             (a.{sort_col}, a.asset_id) {cmp_op} (:cursor_value, :cursor_id)
                     END
@@ -1963,22 +1965,24 @@ class ProjectRepository:
         """
         import base64 as _b64
 
+        if sort_order == "added_at":
+            order_col = ProjectAsset.added_at
+        elif sort_order == "taken_at":
+            # Capture time, never NULL so the cursor can compare it: assets
+            # without EXIF fall back to file mtime, then to when they were
+            # added (the same rule as the date filter).
+            order_col = func.coalesce(Asset.taken_at, Asset.file_mtime, Asset.created_at)
+        else:  # manual
+            order_col = ProjectAsset.position
+
         query = (
-            select(Asset, ProjectAsset.position, ProjectAsset.added_at)
+            select(Asset, order_col.label("sort_value"))
             .join(ProjectAsset, ProjectAsset.asset_id == Asset.asset_id)
             .where(
                 ProjectAsset.project_id == project_id,
                 Asset.deleted_at.is_(None),  # type: ignore[union-attr]
             )
         )
-
-        if sort_order == "added_at":
-            order_col = ProjectAsset.added_at
-        elif sort_order == "taken_at":
-            order_col = Asset.taken_at
-        else:  # manual
-            order_col = ProjectAsset.position
-
         query = query.order_by(order_col.asc(), Asset.asset_id.asc())  # type: ignore[union-attr]
 
         if after_cursor:
@@ -1987,6 +1991,8 @@ class ProjectRepository:
                 decoded = json.loads(_b64.urlsafe_b64decode(padded))
                 cursor_val = decoded["v"]
                 cursor_id = decoded["id"]
+                if sort_order in ("added_at", "taken_at"):
+                    cursor_val = datetime.fromisoformat(cursor_val)
                 query = query.where(
                     or_(
                         order_col > cursor_val,  # type: ignore[operator]
@@ -2002,11 +2008,13 @@ class ProjectRepository:
         next_cursor: str | None = None
         for i, row in enumerate(rows):
             if i >= limit:
-                # Encode cursor from last returned row
+                # Encode cursor from the last returned row's sort value
                 last_asset = assets[-1]
-                last_row = rows[i - 1]
+                sort_value = rows[i - 1][1]
+                if hasattr(sort_value, "isoformat"):
+                    sort_value = sort_value.isoformat()
                 cursor_payload = json.dumps(
-                    {"v": str(last_row[1] if sort_order == "manual" else last_row[2]), "id": last_asset.asset_id},
+                    {"v": sort_value, "id": last_asset.asset_id},
                     default=str,
                 )
                 next_cursor = _b64.urlsafe_b64encode(cursor_payload.encode()).decode().rstrip("=")
@@ -2274,7 +2282,7 @@ class UnifiedBrowseRepository:
 
     SORTABLE_COLUMNS = {
         "asset_id", "taken_at", "created_at", "file_size",
-        "iso", "aperture", "focal_length", "rel_path",
+        "iso", "exposure_time_us", "aperture", "focal_length", "rel_path",
     }
 
     def __init__(self, session: Session) -> None:
@@ -2334,12 +2342,14 @@ class UnifiedBrowseRepository:
                 params["cursor_id"] = cursor_id
             else:
                 conditions.append(f"""(
+                    -- Rows are ordered NULLS LAST: after an undated cursor only
+                    -- undated rows follow; after a dated one, later dated rows
+                    -- and every undated row.
                     CASE
                         WHEN :cursor_value IS NULL THEN
-                            a.{sort_col} IS NOT NULL
-                            OR (a.{sort_col} IS NULL AND a.asset_id {cmp_op} :cursor_id)
+                            a.{sort_col} IS NULL AND a.asset_id {cmp_op} :cursor_id
                         WHEN a.{sort_col} IS NULL THEN
-                            FALSE
+                            TRUE
                         ELSE
                             (a.{sort_col}, a.asset_id) {cmp_op} (:cursor_value, :cursor_id)
                     END
@@ -2479,12 +2489,14 @@ class UnifiedBrowseRepository:
                 params["cursor_id"] = cursor_id
             else:
                 conditions.append(f"""(
+                    -- Rows are ordered NULLS LAST: after an undated cursor only
+                    -- undated rows follow; after a dated one, later dated rows
+                    -- and every undated row.
                     CASE
                         WHEN :cursor_value IS NULL THEN
-                            a.{sort_col} IS NOT NULL
-                            OR (a.{sort_col} IS NULL AND a.asset_id {cmp_op} :cursor_id)
+                            a.{sort_col} IS NULL AND a.asset_id {cmp_op} :cursor_id
                         WHEN a.{sort_col} IS NULL THEN
-                            FALSE
+                            TRUE
                         ELSE
                             (a.{sort_col}, a.asset_id) {cmp_op} (:cursor_value, :cursor_id)
                     END

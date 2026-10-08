@@ -985,3 +985,108 @@ export async function deleteNote(assetId: string): Promise<void> {
   await apiFetch<void>(`/assets/${assetId}/note`, { method: "DELETE" });
 }
 
+
+// ---------------------------------------------------------------------------
+// Send to editor
+// ---------------------------------------------------------------------------
+
+export interface ExportFormat {
+  id: string;
+  label: string;
+  file_extension: string;
+}
+
+export async function listExportFormats(): Promise<ExportFormat[]> {
+  const res = await apiFetch<{ items: ExportFormat[] }>("/export/formats");
+  return res.items;
+}
+
+export interface ProjectExportFile {
+  blob: Blob;
+  filename: string;
+  /** Photos in the project that the export left out (video only for now). */
+  skippedStills: number;
+  /** Videos with no known length, left out (a zero-length clip breaks Final Cut). */
+  skippedNoDuration: number;
+  /** Videos exported at a fallback frame rate because they haven't been probed. */
+  unprobed: number;
+}
+
+function filenameFromDisposition(header: string | null): string | null {
+  if (!header) return null;
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(header);
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded[1]);
+    } catch {
+      /* fall through to the plain form */
+    }
+  }
+  const plain = /filename="([^"]+)"/i.exec(header);
+  return plain ? plain[1] : null;
+}
+
+/** Export a project as a bin of master clips for an editor. */
+export async function exportProject(
+  projectId: string,
+  format: string,
+  prefix?: string,
+): Promise<ProjectExportFile> {
+  const qs = new URLSearchParams({ format });
+  if (prefix) qs.set("prefix", prefix);
+  const url = `/v1/projects/${projectId}/export?${qs.toString()}`;
+  let res = await fetch(url, { headers: authHeaders() });
+  if (res.status === 401 && (await tryRefresh())) {
+    res = await fetch(url, { headers: authHeaders() });
+  }
+  if (!res.ok) {
+    let message = `Export failed (${res.status})`;
+    try {
+      const body = await res.json();
+      message = body?.error?.message ?? body?.detail ?? message;
+    } catch {
+      /* not JSON */
+    }
+    throw new ApiError(res.status, message);
+  }
+  return {
+    blob: await res.blob(),
+    filename: filenameFromDisposition(res.headers.get("Content-Disposition")) ?? "project-export",
+    skippedStills: Number(res.headers.get("X-Lumiverb-Skipped-Stills") ?? 0) || 0,
+    skippedNoDuration: Number(res.headers.get("X-Lumiverb-Skipped-No-Duration") ?? 0) || 0,
+    unprobed: Number(res.headers.get("X-Lumiverb-Unprobed") ?? 0) || 0,
+  };
+}
+
+const DEFAULT_EXPORT_FORMAT_KEY = "lumiverb.defaultExportFormat";
+const DEFAULT_EXPORT_PREFIX_KEY = "lumiverb.defaultExportPrefix";
+
+/** The format the Export button uses without asking; null until the user picks one. */
+export function getDefaultExportFormat(): string | null {
+  try {
+    return localStorage.getItem(DEFAULT_EXPORT_FORMAT_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** The media location saved with the default format, if any. */
+export function getDefaultExportPrefix(): string | null {
+  try {
+    return localStorage.getItem(DEFAULT_EXPORT_PREFIX_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Remember a format (and the media location to use with it) for one-click Export. */
+export function setDefaultExportFormat(format: string | null, prefix?: string): void {
+  try {
+    if (format) localStorage.setItem(DEFAULT_EXPORT_FORMAT_KEY, format);
+    else localStorage.removeItem(DEFAULT_EXPORT_FORMAT_KEY);
+    if (format && prefix) localStorage.setItem(DEFAULT_EXPORT_PREFIX_KEY, prefix);
+    else localStorage.removeItem(DEFAULT_EXPORT_PREFIX_KEY);
+  } catch {
+    /* storage unavailable: the chooser just opens each time */
+  }
+}

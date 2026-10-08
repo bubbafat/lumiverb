@@ -12,6 +12,7 @@ import {
 } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
 import { ProjectPicker } from "../components/ProjectPicker";
+import { ExportButton } from "../components/ExportButton";
 import { Lightbox } from "../components/Lightbox";
 import { SelectionToolbar } from "../components/SelectionToolbar";
 import { ZoomControl } from "../components/ZoomControl";
@@ -66,7 +67,9 @@ export default function ProjectDetailPage() {
   // Grid state
   const [zoomLevel, setZoomLevel] = useLocalStorage("lv_grid_zoom", 2);
   const [containerWidth, setContainerWidth] = useState(0);
-  const gridRef = useRef<HTMLDivElement>(null);
+  // State, not a ref: the grid mounts only after the project loads, and
+  // measuring has to start then.
+  const [gridEl, setGridEl] = useState<HTMLDivElement | null>(null);
   const [lightboxAsset, setLightboxAsset] = useState<AssetPageItem | null>(null);
 
   // Fetch project assets with infinite query
@@ -121,14 +124,13 @@ export default function ProjectDetailPage() {
 
   // Measure container width
   useLayoutEffect(() => {
-    const el = gridRef.current;
-    if (!el) return;
+    if (!gridEl) return;
     const ro = new ResizeObserver((entries) => {
       setContainerWidth(entries[0]?.contentRect.width ?? 0);
     });
-    ro.observe(el);
+    ro.observe(gridEl);
     return () => ro.disconnect();
-  }, []);
+  }, [gridEl]);
 
   const zoom = ZOOM_LEVELS[zoomLevel] ?? ZOOM_LEVELS[2];
 
@@ -267,8 +269,8 @@ export default function ProjectDetailPage() {
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
-      <div className="flex shrink-0 items-center justify-between border-b border-gray-800 px-4 py-3">
-        <div className="flex items-center gap-3 min-w-0">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-gray-800 px-4 py-3">
+        <div className="flex w-full min-w-0 items-center gap-3 sm:w-auto">
           <Link
             to="/projects"
             className="text-sm text-gray-500 hover:text-gray-300"
@@ -302,6 +304,7 @@ export default function ProjectDetailPage() {
         )}
         <div className="flex items-center gap-2">
           <ZoomControl value={zoomLevel} onChange={setZoomLevel} />
+          <ExportButton projectId={project.project_id} />
           <button
             type="button"
             onClick={openSettings}
@@ -320,7 +323,7 @@ export default function ProjectDetailPage() {
       )}
 
       {/* Grid */}
-      <div ref={gridRef} className="flex-1 min-h-0 px-2 py-2">
+      <div ref={setGridEl} className="flex-1 min-h-0 px-2 py-2">
         {isAssetsLoading ? (
           <div className="flex h-32 items-center justify-center text-gray-500">
             Loading assets...

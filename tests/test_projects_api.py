@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 from unittest.mock import patch
 
@@ -725,3 +726,160 @@ def test_invalid_status_rejected(projects_env):
     assert r.status_code in (400, 422)
     r = client.get("/v1/projects", params={"status": "nope"}, headers=_headers(api_key))
     assert r.status_code in (400, 422)
+
+
+# ---------------------------------------------------------------------------
+# Paging: every clip is reachable (the export depends on it)
+# ---------------------------------------------------------------------------
+
+
+def _ingest_taken(client, api_key, library_id, rel_path, taken_at) -> str:
+    """Ingest an image with an EXIF capture time (None = no capture time)."""
+    from PIL import Image as PILImage
+
+    buf = io.BytesIO()
+    PILImage.new("RGB", (64, 64), color=(10, 20, 30)).save(buf, format="JPEG")
+    buf.seek(0)
+    data = {"library_id": library_id, "rel_path": rel_path, "file_size": "1000",
+            "media_type": "image"}
+    if taken_at:
+        data["exif"] = json.dumps({"taken_at": taken_at})
+    r = client.post(
+        "/v1/ingest", data=data, files={"proxy": ("p.jpg", buf, "image/jpeg")},
+        headers=_headers(api_key),
+    )
+    assert r.status_code == 200, r.text
+    return r.json()["asset_id"]
+
+
+def _all_pages(client, api_key, project_id, limit) -> list[str]:
+    ids: list[str] = []
+    cursor = None
+    for _ in range(50):
+        params = {"limit": limit}
+        if cursor:
+            params["after"] = cursor
+        r = client.get(f"/v1/projects/{project_id}/assets", params=params, headers=_headers(api_key))
+        assert r.status_code == 200, r.text
+        ids += [a["asset_id"] for a in r.json()["items"]]
+        cursor = r.json()["next_cursor"]
+        if not cursor:
+            return ids
+    raise AssertionError("pagination did not end")
+
+
+@pytest.mark.slow
+def test_static_project_pages_by_capture_time(projects_env):
+    client, api_key, library_id = projects_env
+    late = _ingest_taken(client, api_key, library_id, "paging/late.jpg", "2024-06-01T10:00:00+00:00")
+    early = _ingest_taken(client, api_key, library_id, "paging/early.jpg", "2023-01-01T10:00:00+00:00")
+    undated = _ingest_taken(client, api_key, library_id, "paging/undated.jpg", None)
+    project_id = client.post(
+        "/v1/projects",
+        json={"name": "By capture time", "sort_order": "taken_at", "asset_ids": [late, undated, early]},
+        headers=_headers(api_key),
+    ).json()["project_id"]
+
+    ids = _all_pages(client, api_key, project_id, limit=1)
+
+    assert sorted(ids) == sorted([late, early, undated])
+    assert ids.index(early) < ids.index(late)
+
+
+@pytest.mark.slow
+def test_smart_project_pages_past_one_page(projects_env):
+    client, api_key, _ = projects_env
+    lib = client.post(
+        "/v1/libraries", json={"name": "SmartPaging", "root_path": "/smart-paging"},
+        headers=_headers(api_key),
+    ).json()["library_id"]
+    expected = {_ingest_asset(client, api_key, lib, f"s/{i}.jpg") for i in range(5)}
+    project_id = client.post(
+        "/v1/projects",
+        json={"name": "Smart paging", "type": "smart",
+              "saved_query": {"filters": [{"type": "library", "value": lib}]}},
+        headers=_headers(api_key),
+    ).json()["project_id"]
+
+    ids = _all_pages(client, api_key, project_id, limit=2)
+
+    assert len(ids) == len(set(ids)) == 5
+    assert set(ids) == expected
+
+
+@pytest.mark.slow
+def test_shared_smart_project_uses_owner_ratings(projects_env):
+    client, api_key, _ = projects_env
+    lib = client.post(
+        "/v1/libraries", json={"name": "OwnerRatings", "root_path": "/owner-ratings"},
+        headers=_headers(api_key),
+    ).json()["library_id"]
+    favorite = _ingest_asset(client, api_key, lib, "r/fav.jpg")
+    _ingest_asset(client, api_key, lib, "r/other.jpg")
+    client.put(f"/v1/assets/{favorite}/rating", json={"favorite": True}, headers=_headers(api_key))
+    project_id = client.post(
+        "/v1/projects",
+        json={"name": "Owner favorites", "type": "smart", "visibility": "shared",
+              "saved_query": {"filters": [{"type": "library", "value": lib},
+                                          {"type": "favorite", "value": "yes"}]}},
+        headers=_headers(api_key),
+    ).json()["project_id"]
+    viewer_key = client.post(
+        "/v1/keys", json={"label": "viewer", "role": "editor"}, headers=_headers(api_key)
+    ).json()["plaintext"]
+
+    as_owner = _all_pages(client, api_key, project_id, limit=50)
+    as_viewer = _all_pages(client, viewer_key, project_id, limit=50)
+
+    assert as_owner == as_viewer == [favorite]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("direction", ["desc", "asc"])
+def test_paging_with_undated_clips_returns_each_clip_once(projects_env, direction):
+    """Clips without a capture time sort last; paging across the boundary
+    between dated and undated clips must neither drop nor repeat any."""
+    client, api_key, _ = projects_env
+    lib = client.post(
+        "/v1/libraries", json={"name": f"Mixed-{direction}", "root_path": f"/mixed-{direction}"},
+        headers=_headers(api_key),
+    ).json()["library_id"]
+    dated = [
+        _ingest_taken(client, api_key, lib, f"m/d{i}.jpg", f"2024-0{i + 1}-01T10:00:00+00:00")
+        for i in range(3)
+    ]
+    undated = [_ingest_taken(client, api_key, lib, f"m/u{i}.jpg", None) for i in range(3)]
+    expected = sorted(dated + undated)
+
+    def pages(path: str, params: dict) -> list[str]:
+        ids, cursor = [], None
+        for _ in range(20):
+            p = dict(params, limit=2)
+            if cursor:
+                p["after"] = cursor
+            r = client.get(path, params=p, headers=_headers(api_key))
+            assert r.status_code == 200, r.text
+            ids += [a["asset_id"] for a in r.json()["items"]]
+            cursor = r.json()["next_cursor"]
+            if not cursor:
+                return ids
+        raise AssertionError("pagination did not end")
+
+    # Smart project (the export path)
+    project_id = client.post(
+        "/v1/projects",
+        json={"name": f"Mixed {direction}", "type": "smart",
+              "saved_query": {"filters": [{"type": "library", "value": lib}],
+                              "sort": "taken_at", "direction": direction}},
+        headers=_headers(api_key),
+    ).json()["project_id"]
+    smart = _all_pages(client, api_key, project_id, limit=2)
+    assert sorted(smart) == expected
+    # Unified query and the asset page endpoint share the cursor logic
+    query = pages("/v1/query", {"f": f"library:{lib}", "sort": "taken_at", "dir": direction})
+    assert sorted(query) == expected
+    page = pages("/v1/assets/page", {"library_id": lib, "sort": "taken_at", "dir": direction})
+    assert sorted(page) == expected
+    # Every advertised sort column pages too (exposure: all NULL here)
+    exposure = pages("/v1/query", {"f": f"library:{lib}", "sort": "exposure_time_us", "dir": direction})
+    assert sorted(exposure) == expected

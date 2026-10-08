@@ -95,7 +95,7 @@ Standard incantations work (`uvicorn src.server.api.main:app --reload`,
 
 - Python: `uv run pytest -m fast` (no DB/AI), `-m slow` (testcontainers Postgres), `ai` (real inference, opt-in). Bare `pytest` runs fast + slow.
 - Swift: XCTest in `LumiverbKit`. **No macOS-target test bundle** — testable code must live in LumiverbKit.
-- Web UI: no component render tests yet.
+- Web UI: `npx vitest run` in `src/ui/web` (Testing Library component tests sit beside their components), plus `npx tsc --noEmit -p .`.
 
 ---
 

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, model_validator, Field
-from sqlmodel import Session
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from pydantic import BaseModel, Field, model_validator
+from sqlmodel import Session, select
 
 from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor
 from src.server.database import get_control_session
@@ -140,7 +141,7 @@ def _project_to_item(
         browse_repo = UnifiedBrowseRepository(session)
         live_assets = browse_repo.query_page(
             spec=spec,
-            rating_user_id=user_id if spec.needs_rating_join else None,
+            rating_user_id=_rating_user(col, user_id) if spec.needs_rating_join else None,
             limit=10000,
         )
         count = len(live_assets)
@@ -400,6 +401,82 @@ def remove_assets_from_project(
     return BatchRemoveResponse(removed=removed)
 
 
+def _rating_user(col, viewer_id: str) -> str:
+    """Whose ratings a smart project's rating filters read: the owner's.
+
+    A shared smart project such as "my favorites" must show everyone the
+    same clips, not each viewer's own favorites. Legacy projects without
+    an owner fall back to the viewer.
+    """
+    return col.owner_user_id or viewer_id
+
+
+def _smart_project_page(
+    col, request: Request, session: Session, user_id: str, *, after: str | None, limit: int
+) -> tuple[list, str | None]:
+    """One page of a smart project's live results, and the cursor for the next.
+
+    With a text filter, results come from a capped candidate set ordered
+    by relevance and aren't paginated (the caller asks for up to
+    MAX_CANDIDATE_IDS); otherwise they page by (sort column, asset_id) like
+    GET /v1/query.
+    """
+    from src.server.api.routers.query import (
+        MAX_CANDIDATE_IDS,
+        SORT_COLUMNS,
+        _encode_cursor,
+        _run_postgres_fallback,
+        _run_quickwit_search,
+    )
+    from src.server.models.filter_registry import from_json
+    from src.server.models.query_filter import LibraryScope
+    from src.server.repository.tenant import UnifiedBrowseRepository
+
+    spec = from_json(col.saved_query)
+
+    candidate_ids: list[str] | None = None
+    candidate_scores: dict[str, float] | None = None
+    if spec.search_terms:
+        tenant_id = getattr(request.state, "tenant_id", None)
+        library_ids: list[str] | None = None
+        for leaf in spec.leaves:
+            if isinstance(leaf, LibraryScope):
+                library_ids = list(leaf.library_ids)
+                break
+        if tenant_id:
+            scores, _contexts, source = _run_quickwit_search(
+                tenant_id, spec.search_terms, library_ids, limit=MAX_CANDIDATE_IDS,
+            )
+            if source == "postgres_fallback":
+                pg_query = " ".join(st.q for st in spec.search_terms if st.q)
+                scores, _contexts = _run_postgres_fallback(
+                    session, pg_query, library_ids, limit=MAX_CANDIDATE_IDS,
+                )
+            if not scores:
+                return [], None
+            candidate_ids = list(scores.keys())
+            candidate_scores = scores
+
+    assets = UnifiedBrowseRepository(session).query_page(
+        spec=spec,
+        candidate_ids=candidate_ids,
+        candidate_scores=candidate_scores,
+        rating_user_id=_rating_user(col, user_id) if spec.needs_rating_join else None,
+        after=after if candidate_ids is None else None,
+        limit=limit,
+    )
+
+    next_cursor: str | None = None
+    if candidate_ids is None and len(assets) == limit:
+        sort_col = spec.sort if spec.sort in SORT_COLUMNS else "taken_at"
+        last = assets[-1]
+        sort_value = getattr(last, sort_col, None)
+        if sort_value is not None and hasattr(sort_value, "isoformat"):
+            sort_value = sort_value.isoformat()
+        next_cursor = _encode_cursor(sort_col, sort_value, last.asset_id)
+    return assets, next_cursor
+
+
 @router.get("/{project_id}/assets", response_model=ProjectAssetsResponse)
 def list_project_assets(
     project_id: str,
@@ -420,48 +497,9 @@ def list_project_assets(
         raise HTTPException(status_code=404, detail="Project not found")
 
     if getattr(col, "type", "static") == "smart" and col.saved_query:
-        # Smart project: execute saved query via filter algebra + query_page
-        from src.server.models.filter_registry import from_json
-        from src.server.models.query_filter import LibraryScope
-        from src.server.repository.tenant import UnifiedBrowseRepository
-
-        spec = from_json(col.saved_query)
-
-        # Candidate-set pattern for text search (SearchTerm filters)
-        candidate_ids: list[str] | None = None
-        candidate_scores: dict[str, float] | None = None
-        if spec.search_terms:
-            tenant_id = getattr(request.state, "tenant_id", None)
-            library_ids: list[str] | None = None
-            for leaf in spec.leaves:
-                if isinstance(leaf, LibraryScope):
-                    library_ids = list(leaf.library_ids)
-                    break
-            if tenant_id:
-                from src.server.api.routers.query import _run_quickwit_search, _run_postgres_fallback, MAX_CANDIDATE_IDS
-                scores, contexts, source = _run_quickwit_search(
-                    tenant_id, spec.search_terms, library_ids, limit=MAX_CANDIDATE_IDS,
-                )
-                if source == "postgres_fallback":
-                    pg_query = " ".join(st.q for st in spec.search_terms if st.q)
-                    scores, contexts = _run_postgres_fallback(
-                        session, pg_query, library_ids, limit=MAX_CANDIDATE_IDS,
-                    )
-                if not scores:
-                    return ProjectAssetsResponse(items=[], next_cursor=None)
-                candidate_ids = list(scores.keys())
-                candidate_scores = scores
-
-        browse_repo = UnifiedBrowseRepository(session)
-        assets = browse_repo.query_page(
-            spec=spec,
-            candidate_ids=candidate_ids,
-            candidate_scores=candidate_scores,
-            rating_user_id=user_id if spec.needs_rating_join else None,
-            after=after,
-            limit=limit,
+        assets, next_cursor = _smart_project_page(
+            col, request, session, user_id, after=after, limit=limit
         )
-
         items = [
             ProjectAssetItem(
                 asset_id=a.asset_id,
@@ -478,7 +516,7 @@ def list_project_assets(
             )
             for a in assets
         ]
-        return ProjectAssetsResponse(items=items, next_cursor=None)
+        return ProjectAssetsResponse(items=items, next_cursor=next_cursor)
 
     # Static project: list manual assets
     assets, next_cursor = repo.list_assets(
@@ -527,6 +565,196 @@ def reorder_project(
     try:
         repo.reorder(project_id, body.asset_ids)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Send to editor (ADR-016 phase 1)
+# ---------------------------------------------------------------------------
+
+_EXPORT_PAGE = 500
+_UNSAFE_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f\x7f]')
+
+
+def _all_project_assets(col, request: Request, session: Session, user_id: str) -> list:
+    """Every live clip in a project, paging through to the end (no 1,000 cap)."""
+    if getattr(col, "type", "static") == "smart" and col.saved_query:
+        from src.server.api.routers.query import MAX_CANDIDATE_IDS
+
+        assets, cursor = _smart_project_page(
+            col, request, session, user_id, after=None, limit=MAX_CANDIDATE_IDS
+        )
+        while cursor:
+            page, cursor = _smart_project_page(
+                col, request, session, user_id, after=cursor, limit=MAX_CANDIDATE_IDS
+            )
+            assets += page
+        return assets
+
+    repo = ProjectRepository(session)
+    assets, cursor = repo.list_assets(col.project_id, sort_order=col.sort_order, limit=_EXPORT_PAGE)
+    while cursor:
+        page, cursor = repo.list_assets(
+            col.project_id, sort_order=col.sort_order, after_cursor=cursor, limit=_EXPORT_PAGE
+        )
+        assets += page
+    return assets
+
+
+def _export_filename(name: str, extension: str) -> str:
+    return (_UNSAFE_FILENAME_CHARS.sub("_", name).strip() or "project") + extension
+
+
+def _content_disposition(filename: str) -> str:
+    """attachment; ASCII filename for old clients, the real one in filename*.
+
+    HTTP headers are Latin-1: a raw "Mike’s wedding" or "東京" would fail.
+    """
+    import unicodedata
+    from urllib.parse import quote
+
+    stem, dot, extension = filename.rpartition(".")
+    ascii_stem = unicodedata.normalize("NFKD", stem).encode("ascii", "ignore").decode()
+    ascii_stem = ascii_stem.replace('"', "_").replace("\\", "_").strip()
+    if not any(ch.isalnum() for ch in ascii_stem):
+        ascii_stem = "project-export"
+    ascii_name = f"{ascii_stem}{dot}{extension}"
+    return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(filename)}'
+
+
+def _media_bases(roots: dict[str, str], prefix: str | None) -> dict[str, str]:
+    """Where each library's files are, as the editing machine sees them.
+
+    Without a prefix, each library's root. With one, the prefix replaces
+    the libraries' common parent folder, so a project spanning
+    /mnt/das/2024 and /mnt/das/2025 exported to /Volumes/DAS points at
+    /Volumes/DAS/2024/... and /Volumes/DAS/2025/... (one library: the
+    prefix replaces its root).
+    """
+    import posixpath
+
+    if not prefix:
+        return dict(roots)
+    if not roots:
+        return {}
+    # A relative root (a library created that way) is taken as relative to "/".
+    clean = {lid: posixpath.normpath(posixpath.join("/", root)) for lid, root in roots.items()}
+    common = posixpath.commonpath(list(clean.values())) if len(set(clean.values())) > 1 else next(iter(clean.values()))
+    base = posixpath.normpath(prefix)
+    return {
+        lid: posixpath.join(base, posixpath.relpath(root, common)) if root != common else base
+        for lid, root in clean.items()
+    }
+
+
+def _validate_prefix(prefix: str | None) -> None:
+    if prefix is None or prefix == "":
+        return
+    if not prefix.startswith("/") or "\\" in prefix or ".." in prefix.split("/"):
+        raise HTTPException(
+            status_code=400,
+            detail="Media location must be an absolute path on the editing machine, e.g. /Volumes/DAS",
+        )
+
+
+@router.get("/{project_id}/export")
+def export_project(
+    project_id: str,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
+    format: str = Query(..., description="Export provider id: fcp7 or fcpxml"),  # noqa: A002
+    prefix: str | None = Query(
+        None, description="Path the originals live under on the editing machine; default: each library's root"
+    ),
+) -> Response:
+    """Export a project as a bin of master clips for an editor.
+
+    Clips point at the originals: each library's ingest root, or `prefix`
+    in place of the libraries' common parent folder, plus rel_path. Video
+    only for now. Headers count what needs the user's attention:
+    X-Lumiverb-Skipped-Stills (photos left out), X-Lumiverb-Skipped-No-Duration
+    (videos with no known length, left out) and X-Lumiverb-Unprobed (videos
+    exported at a fallback frame rate). Archived projects export too.
+    """
+    import posixpath
+
+    from src.server.export import EXPORT_PROVIDERS, ExportBin, ExportClip
+    from src.server.models.tenant import Library, VideoFacetRow
+
+    provider = EXPORT_PROVIDERS.get(format)
+    if provider is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown format. Must be one of: {', '.join(EXPORT_PROVIDERS)}",
+        )
+    _validate_prefix(prefix)
+    repo = ProjectRepository(session)
+    col = _get_project_or_404(repo, project_id)
+    if not _can_view(col, user_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    assets = _all_project_assets(col, request, session, user_id)
+    videos = [a for a in assets if a.media_type == "video"]
+    skipped_stills = len(assets) - len(videos)
+
+    roots = {
+        lib.library_id: lib.root_path
+        for lib in session.exec(
+            select(Library).where(Library.library_id.in_({a.library_id for a in videos}))  # type: ignore[attr-defined]
+        ).all()
+    }
+    facets = {
+        f.asset_id: f
+        for f in session.exec(
+            select(VideoFacetRow).where(VideoFacetRow.asset_id.in_([a.asset_id for a in videos]))  # type: ignore[attr-defined]
+        ).all()
+    } if videos else {}
+
+    bases = _media_bases(roots, prefix)
+    clips = []
+    skipped_no_duration = 0
+    unprobed = 0
+    for a in videos:
+        f = facets.get(a.asset_id)
+        duration = f.duration_sec if f and f.duration_sec is not None else a.duration_sec
+        if not duration:
+            # A zero-length clip makes Final Cut reject the file.
+            skipped_no_duration += 1
+            continue
+        if f is None:
+            unprobed += 1
+        clips.append(ExportClip(
+            asset_id=a.asset_id,
+            name=posixpath.basename(a.rel_path),
+            path=posixpath.join(bases.get(a.library_id, "/"), a.rel_path.lstrip("/")),
+            duration_sec=duration,
+            frame_rate_num=f.frame_rate_num if f else None,
+            frame_rate_den=f.frame_rate_den if f else None,
+            width=f.width if f else a.width,
+            height=f.height if f else a.height,
+            start_timecode=f.start_timecode if f else None,
+            drop_frame=f.drop_frame if f else None,
+            audio_channels=f.audio_channels if f else None,
+            audio_sample_rate=f.audio_sample_rate if f else None,
+        ))
+
+    body = provider.render(ExportBin(name=col.name, clips=clips))
+    filename = _export_filename(col.name, provider.file_extension)
+    return Response(
+        content=body,
+        media_type=provider.content_type,
+        headers={
+            "Content-Disposition": _content_disposition(filename),
+            "X-Lumiverb-Skipped-Stills": str(skipped_stills),
+            "X-Lumiverb-Skipped-No-Duration": str(skipped_no_duration),
+            "X-Lumiverb-Unprobed": str(unprobed),
+            "Access-Control-Expose-Headers": (
+                "Content-Disposition, X-Lumiverb-Skipped-Stills, "
+                "X-Lumiverb-Skipped-No-Duration, X-Lumiverb-Unprobed"
+            ),
+        },
+    )
