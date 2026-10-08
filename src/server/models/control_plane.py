@@ -120,10 +120,10 @@ class PublicLibrary(SQLModel, table=True):
     )
 
 
-class PublicCollection(SQLModel, table=True):
-    __tablename__ = "public_collections"
+class PublicProject(SQLModel, table=True):
+    __tablename__ = "public_projects"
 
-    collection_id: str = Field(primary_key=True)
+    project_id: str = Field(primary_key=True)
     tenant_id: str = Field(foreign_key="tenants.tenant_id", nullable=False)
     connection_string: str = Field(nullable=False)
     created_at: datetime = Field(

@@ -32,7 +32,7 @@ Two-layer Postgres architecture:
 - `users` — user_id, tenant_id, email, password_hash, role (`admin`|`editor`|`viewer`), created_at, last_login_at
 - `password_reset_tokens` — token_hash, user_id, expires_at, used_at
 - `public_libraries` — library_id, tenant_id, connection_string, created_at
-- `public_collections` — collection_id, tenant_id, connection_string, created_at
+- `public_projects` — project_id, tenant_id, connection_string, created_at
 - `revoked_tokens` — jti (PK), revoked_at. Tracks revoked JWTs for server-side logout/refresh revocation. Cleaned up by upkeep sweep (entries older than 8 days).
 - `tenant_db_routing` — tenant_id, connection_string, region
 
@@ -243,31 +243,33 @@ Atomic ingest: create + populate assets in one request. The server normalizes th
 
 - **DELETE /v1/trash/empty** — Permanently delete trashed assets. Requires admin API key. Body: `{ "asset_ids": ["ast_..."] (optional), "trashed_before": "2026-01-01T00:00:00Z" (optional) }`. Without `asset_ids`, only the user's trash is purged (`deleted_reason = "user"`): assets that are merely missing on disk, such as an unplugged drive, keep their human data until purged by id. Scope: intersection when both provided. Deletes DB rows in FK-safe order, then best-effort proxy/thumbnail file removal and Quickwit delete. Assets the user trashed leave an `ignored_files` record (library, path, SHA-256), because Lumiverb never deletes originals and the file may still be on disk; scans and ingest keep skipping it until it is removed with `DELETE /v1/libraries/{id}/ignored-paths`. Returns `{ "deleted": N }`.
 
-## Collections API
+## Projects API
 
-Collections are virtual groupings of assets across libraries. See ADR-006 for full design.
+Projects are transient, many-to-many sets of clips for one job (ADR-016), across libraries; what ADR-006 called collections. "Collection" is reserved for a future long-lived container. The same routes are still served at `/v1/collections` and `/v1/public/collections` (deprecated, hidden from the schema) until the macOS/iOS apps move over, and every project response also carries a legacy `collection_id` equal to `project_id`. New ids start `prj_`; ids from before the rename start `col_`.
 
-- **POST /v1/collections** — Body: `{ "name", "description" (optional), "sort_order": "manual"|"added_at"|"taken_at" (default "manual"), "visibility": "private"|"shared" (default "private"), "asset_ids": [...] (optional) }`. Creates collection owned by current user. When `asset_ids` provided, creates and populates atomically. Returns 201 with `CollectionItem`.
-- **GET /v1/collections** — List collections owned by user + shared collections. Returns `{ "items": [CollectionItem] }`. Each item includes `ownership` ("own" or "shared"), resolved `cover_asset_id` and computed `asset_count`.
-- **GET /v1/collections/{id}** — Get collection detail. Returns `CollectionItem`. 404 if not found or not visible to user.
-- **PATCH /v1/collections/{id}** — Body: `{ "name", "description", "visibility", "sort_order", "cover_asset_id" }` (all optional, only provided fields updated). Owner only (403). Returns updated `CollectionItem`. 400 for invalid sort_order/visibility.
-- **DELETE /v1/collections/{id}** — Delete collection. Owner only (403). Source assets untouched. Returns 204. 404 if not found.
-- **POST /v1/collections/{id}/assets** — Body: `{ "asset_ids": [...] }`. Add assets to collection. Owner only (403). Idempotent (duplicates ignored via ON CONFLICT DO NOTHING). Rejects trashed assets (404). Returns `{ "added": N }`.
-- **DELETE /v1/collections/{id}/assets** — Body: `{ "asset_ids": [...] }`. Remove assets from collection. Owner only (403). Does not affect source assets. Returns `{ "removed": N }`.
-- **GET /v1/collections/{id}/assets** — Query: `after` (cursor), `limit` (1–1000, default 200). Paginated asset list ordered by collection's `sort_order`. Owner or shared visibility required. Returns `{ "items": [CollectionAssetItem], "next_cursor" }`.
-- **PATCH /v1/collections/{id}/reorder** — Body: `{ "asset_ids": [...] }`. Reorder assets. Owner only (403). Must include ALL active asset IDs in the collection. 400 if partial. Returns `{ "ok": true }`.
+**Lifecycle**: `status` is `active` or `archived`. Archived projects leave the default list (sidebar, pickers) but keep their clips and stay readable and exportable.
 
-**CollectionItem**: `{ "collection_id", "name", "description", "cover_asset_id", "owner_user_id", "visibility", "ownership", "sort_order", "asset_count", "created_at", "updated_at" }`
+- **POST /v1/projects** — Body: `{ "name", "description" (optional), "sort_order": "manual"|"added_at"|"taken_at" (default "manual"), "visibility": "private"|"shared" (default "private"), "asset_ids": [...] (optional) }`. Creates project owned by current user. When `asset_ids` provided, creates and populates atomically. Returns 201 with `ProjectItem`.
+- **GET /v1/projects** — Query: `status` (`active` default, `archived`, `all`). List projects owned by user + shared projects. Returns `{ "items": [ProjectItem] }`. Each item includes `ownership` ("own" or "shared"), resolved `cover_asset_id` and computed `asset_count`.
+- **GET /v1/projects/{id}** — Get project detail. Returns `ProjectItem`. 404 if not found or not visible to user.
+- **PATCH /v1/projects/{id}** — Body: `{ "name", "description", "visibility", "sort_order", "cover_asset_id", "status" }` (all optional, only provided fields updated). Owner only (403). Returns updated `ProjectItem`. 400 for invalid sort_order/visibility.
+- **DELETE /v1/projects/{id}** — Delete project. Owner only (403). Source assets untouched. Returns 204. 404 if not found.
+- **POST /v1/projects/{id}/assets** — Body: `{ "asset_ids": [...] }`. Add assets to project. Owner only (403). Idempotent (duplicates ignored via ON CONFLICT DO NOTHING). Rejects trashed assets (404). Returns `{ "added": N }`.
+- **DELETE /v1/projects/{id}/assets** — Body: `{ "asset_ids": [...] }`. Remove assets from project. Owner only (403). Does not affect source assets. Returns `{ "removed": N }`.
+- **GET /v1/projects/{id}/assets** — Query: `after` (cursor), `limit` (1–1000, default 200). Paginated asset list ordered by project's `sort_order`. Owner or shared visibility required. Returns `{ "items": [ProjectAssetItem], "next_cursor" }`.
+- **PATCH /v1/projects/{id}/reorder** — Body: `{ "asset_ids": [...] }`. Reorder assets. Owner only (403). Must include ALL active asset IDs in the project. 400 if partial. Returns `{ "ok": true }`.
 
-**CollectionAssetItem**: `{ "asset_id", "rel_path", "file_size", "media_type", "width", "height", "taken_at", "status", "duration_sec", "camera_make", "camera_model" }`
+**ProjectItem**: `{ "project_id", "name", "description", "cover_asset_id", "owner_user_id", "visibility", "ownership", "sort_order", "asset_count", "created_at", "updated_at" }`
 
-**Key behaviors**: Collections are user-owned (`owner_user_id`). Visibility: `private` (owner only), `shared` (all tenant users can view), `public` (anyone with link). Mutations (add/remove/reorder/delete) require ownership. Asset count is computed at query time (no denormalized column). Cover image uses lazy self-healing — if `cover_asset_id` points to a deleted/removed asset, falls back to first-by-position and nulls the stale value. Trashing an asset hides it from collections but preserves the `collection_assets` row; restoring the asset restores collection membership and position. Hard-deleting (empty trash) removes `collection_assets` rows via ON DELETE CASCADE.
+**ProjectAssetItem**: `{ "asset_id", "rel_path", "file_size", "media_type", "width", "height", "taken_at", "status", "duration_sec", "camera_make", "camera_model" }`
 
-**Public collection endpoints (no auth required):**
+**Key behaviors**: Projects are user-owned (`owner_user_id`). Visibility: `private` (owner only), `shared` (all tenant users can view), `public` (anyone with link). Mutations (add/remove/reorder/delete) require ownership. Asset count is computed at query time (no denormalized column). Cover image uses lazy self-healing — if `cover_asset_id` points to a deleted/removed asset, falls back to first-by-position and nulls the stale value. Trashing an asset hides it from projects but preserves the `project_assets` row; restoring the asset restores project membership and position. Hard-deleting (empty trash) removes `project_assets` rows via ON DELETE CASCADE.
 
-- **GET /v1/public/collections/{id}** — Returns privacy-stripped collection metadata: `{ "collection_id", "name", "description", "cover_asset_id", "asset_count" }`. 404 if collection not found or not public. Resolved via `public_collections` control plane table.
-- **GET /v1/public/collections/{id}/assets** — Query: `after` (cursor), `limit`. Returns privacy-stripped asset list: `{ "items": [{ "asset_id", "media_type", "width", "height", "taken_at", "duration_sec" }], "next_cursor" }`. No rel_path, no camera info, no GPS.
-- Asset thumbnails/proxies served via existing `/v1/assets/{id}/proxy?public_collection_id={id}` — verifies asset membership in the public collection.
+**Public project endpoints (no auth required):**
+
+- **GET /v1/public/projects/{id}** — Returns privacy-stripped project metadata: `{ "project_id", "name", "description", "cover_asset_id", "asset_count" }`. 404 if project not found or not public. Resolved via `public_projects` control plane table.
+- **GET /v1/public/projects/{id}/assets** — Query: `after` (cursor), `limit`. Returns privacy-stripped asset list: `{ "items": [{ "asset_id", "media_type", "width", "height", "taken_at", "duration_sec" }], "next_cursor" }`. No rel_path, no camera info, no GPS.
+- Asset thumbnails/proxies served via existing `/v1/assets/{id}/proxy?public_project_id={id}` (or the legacy `public_collection_id`) — verifies asset membership in the public project.
 
 ## Unified Query API
 

@@ -16,8 +16,8 @@ const TARGET_ROW_HEIGHT = 220;
 const FIXED_CELL_WIDTH = 150;
 const CELL_ASPECT_RATIO = 1.0;
 
-interface PublicCollectionDetail {
-  collection_id: string;
+interface PublicProjectDetail {
+  project_id: string;
   name: string;
   description: string | null;
   cover_asset_id: string | null;
@@ -38,35 +38,35 @@ interface PublicAssetsResponse {
   next_cursor: string | null;
 }
 
-async function fetchPublicCollection(collectionId: string): Promise<PublicCollectionDetail> {
-  const res = await fetch(`/v1/public/collections/${collectionId}`);
-  if (!res.ok) throw new Error("Collection not found");
+async function fetchPublicProject(projectId: string): Promise<PublicProjectDetail> {
+  const res = await fetch(`/v1/public/projects/${projectId}`);
+  if (!res.ok) throw new Error("Project not found");
   return res.json();
 }
 
 async function fetchPublicAssets(
-  collectionId: string,
+  projectId: string,
   cursor?: string,
 ): Promise<PublicAssetsResponse> {
   const qs = new URLSearchParams();
   if (cursor) qs.set("after", cursor);
   qs.set("limit", String(PAGE_SIZE));
-  const res = await fetch(`/v1/public/collections/${collectionId}/assets?${qs.toString()}`);
+  const res = await fetch(`/v1/public/projects/${projectId}/assets?${qs.toString()}`);
   if (!res.ok) throw new Error("Failed to load assets");
   return res.json();
 }
 
-export default function PublicCollectionPage() {
-  const { collectionId } = useParams<{ collectionId: string }>();
+export default function PublicProjectPage() {
+  const { projectId } = useParams<{ projectId: string }>();
   const scrollRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
   const [lightboxAsset, setLightboxAsset] = useState<AssetPageItem | null>(null);
 
-  const { data: collection, isLoading: isCollectionLoading, error } = useQuery({
-    queryKey: ["public-collection", collectionId],
-    queryFn: () => fetchPublicCollection(collectionId!),
-    enabled: !!collectionId,
+  const { data: project, isLoading: isProjectLoading, error } = useQuery({
+    queryKey: ["public-project", projectId],
+    queryFn: () => fetchPublicProject(projectId!),
+    enabled: !!projectId,
   });
 
   const {
@@ -76,11 +76,11 @@ export default function PublicCollectionPage() {
     isFetchingNextPage,
     isLoading: isAssetsLoading,
   } = useInfiniteQuery({
-    queryKey: ["public-collection-assets", collectionId],
-    queryFn: ({ pageParam }) => fetchPublicAssets(collectionId!, pageParam),
+    queryKey: ["public-project-assets", projectId],
+    queryFn: ({ pageParam }) => fetchPublicAssets(projectId!, pageParam),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage?.next_cursor ?? undefined,
-    enabled: !!collectionId,
+    enabled: !!projectId,
   });
 
   // Adapt public assets to AssetPageItem shape for reuse of grid components
@@ -182,7 +182,7 @@ export default function PublicCollectionPage() {
     [orderedAssets, hasNextPage, isFetchingNextPage, fetchNextPage],
   );
 
-  if (isCollectionLoading) {
+  if (isProjectLoading) {
     return (
       <div className="flex h-screen items-center justify-center bg-gray-950 text-gray-500">
         Loading...
@@ -190,10 +190,10 @@ export default function PublicCollectionPage() {
     );
   }
 
-  if (error || !collection) {
+  if (error || !project) {
     return (
       <div className="flex h-screen items-center justify-center bg-gray-950 text-gray-500">
-        Collection not found
+        Project not found
       </div>
     );
   }
@@ -202,12 +202,12 @@ export default function PublicCollectionPage() {
     <div className="flex h-screen flex-col bg-gray-950 text-gray-100">
       {/* Header */}
       <div className="shrink-0 border-b border-gray-800 px-6 py-4">
-        <h1 className="text-xl font-semibold">{collection.name}</h1>
-        {collection.description && (
-          <p className="mt-1 text-sm text-gray-400">{collection.description}</p>
+        <h1 className="text-xl font-semibold">{project.name}</h1>
+        {project.description && (
+          <p className="mt-1 text-sm text-gray-400">{project.description}</p>
         )}
         <p className="mt-1 text-xs text-gray-600">
-          {collection.asset_count} {collection.asset_count === 1 ? "item" : "items"}
+          {project.asset_count} {project.asset_count === 1 ? "item" : "items"}
         </p>
       </div>
 
@@ -220,7 +220,7 @@ export default function PublicCollectionPage() {
             </div>
           ) : orderedAssets.length === 0 ? (
             <div className="flex h-32 items-center justify-center text-gray-500">
-              This collection is empty.
+              This project is empty.
             </div>
           ) : (
             <div
@@ -283,7 +283,7 @@ export default function PublicCollectionPage() {
                               onClick={() => handleAssetClick(asset)}
                               aspectRatio={aspectRatio}
                               isPublic
-                              publicLibraryId={collectionId}
+                              publicLibraryId={projectId}
                             />
                           </div>
                         );
@@ -306,7 +306,7 @@ export default function PublicCollectionPage() {
           onClose={() => setLightboxAsset(null)}
           onNavigate={handleLightboxNavigate}
           isPublic
-          publicLibraryId={collectionId}
+          publicLibraryId={projectId}
         />
       )}
     </div>

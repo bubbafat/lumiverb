@@ -1,8 +1,8 @@
-"""Collection sharing / visibility tests.
+"""Project sharing / visibility tests.
 
 Tests cover:
 1. Changing visibility via PATCH (private → shared → public)
-2. Shared collections appear in other users' list
+2. Shared projects appear in other users' list
 3. Visibility validation
 """
 
@@ -129,15 +129,15 @@ def test_change_visibility_private_to_shared(sharing_env):
     client, api_key, _ = sharing_env
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "VisToggle"},
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
     assert r.json()["visibility"] == "private"
 
     r2 = client.patch(
-        f"/v1/collections/{col_id}",
+        f"/v1/projects/{col_id}",
         json={"visibility": "shared"},
         headers=_headers(api_key),
     )
@@ -151,19 +151,19 @@ def test_change_visibility_shared_to_public(sharing_env):
     client, api_key, _ = sharing_env
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "ToPublic"},
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
     client.patch(
-        f"/v1/collections/{col_id}",
+        f"/v1/projects/{col_id}",
         json={"visibility": "shared"},
         headers=_headers(api_key),
     )
     r2 = client.patch(
-        f"/v1/collections/{col_id}",
+        f"/v1/projects/{col_id}",
         json={"visibility": "public"},
         headers=_headers(api_key),
     )
@@ -177,19 +177,19 @@ def test_change_visibility_public_back_to_private(sharing_env):
     client, api_key, _ = sharing_env
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "Demote"},
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
     client.patch(
-        f"/v1/collections/{col_id}",
+        f"/v1/projects/{col_id}",
         json={"visibility": "public"},
         headers=_headers(api_key),
     )
     r2 = client.patch(
-        f"/v1/collections/{col_id}",
+        f"/v1/projects/{col_id}",
         json={"visibility": "private"},
         headers=_headers(api_key),
     )
@@ -203,14 +203,14 @@ def test_invalid_visibility_rejected(sharing_env):
     client, api_key, _ = sharing_env
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "BadVis"},
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
     r2 = client.patch(
-        f"/v1/collections/{col_id}",
+        f"/v1/projects/{col_id}",
         json={"visibility": "unlisted"},
         headers=_headers(api_key),
     )
@@ -218,34 +218,34 @@ def test_invalid_visibility_rejected(sharing_env):
 
 
 # ---------------------------------------------------------------------------
-# Visibility affects collection listing
+# Visibility affects project listing
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.slow
-def test_private_collection_in_own_list(sharing_env):
-    """Private collections appear in owner's list."""
+def test_private_project_in_own_list(sharing_env):
+    """Private projects appear in owner's list."""
     client, api_key, _ = sharing_env
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "MyPrivate"},
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
-    r2 = client.get("/v1/collections", headers=_headers(api_key))
-    ids = [c["collection_id"] for c in r2.json()["items"]]
+    r2 = client.get("/v1/projects", headers=_headers(api_key))
+    ids = [c["project_id"] for c in r2.json()["items"]]
     assert col_id in ids
 
 
 @pytest.mark.slow
-def test_shared_collection_ownership_field(sharing_env):
-    """Shared collection has ownership=own for creator, shared for others."""
+def test_shared_project_ownership_field(sharing_env):
+    """Shared project has ownership=own for creator, shared for others."""
     client, api_key, _ = sharing_env
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "SharedOwnership", "visibility": "shared"},
         headers=_headers(api_key),
     )
@@ -256,30 +256,30 @@ def test_shared_collection_ownership_field(sharing_env):
 
 
 # ---------------------------------------------------------------------------
-# Collection with assets + visibility change
+# Project with assets + visibility change
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.slow
-def test_share_collection_with_assets(sharing_env):
-    """A collection with assets can be shared. Assets are accessible via the shared collection."""
+def test_share_project_with_assets(sharing_env):
+    """A project with assets can be shared. Assets are accessible via the shared project."""
     client, api_key, library_id = sharing_env
 
     a1 = _ingest_asset(client, api_key, library_id, "share/photo1.jpg")
     a2 = _ingest_asset(client, api_key, library_id, "share/photo2.jpg")
 
-    # Create private collection with assets
+    # Create private project with assets
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "ShareWithAssets", "asset_ids": [a1, a2]},
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
     assert r.json()["asset_count"] == 2
 
     # Share it
     r2 = client.patch(
-        f"/v1/collections/{col_id}",
+        f"/v1/projects/{col_id}",
         json={"visibility": "shared"},
         headers=_headers(api_key),
     )
@@ -287,7 +287,7 @@ def test_share_collection_with_assets(sharing_env):
     assert r2.json()["visibility"] == "shared"
 
     # Assets still accessible
-    r3 = client.get(f"/v1/collections/{col_id}/assets", headers=_headers(api_key))
+    r3 = client.get(f"/v1/projects/{col_id}/assets", headers=_headers(api_key))
     assert r3.status_code == 200
     ids = [i["asset_id"] for i in r3.json()["items"]]
     assert a1 in ids
@@ -295,17 +295,17 @@ def test_share_collection_with_assets(sharing_env):
 
 
 # ---------------------------------------------------------------------------
-# Create collection with initial visibility
+# Create project with initial visibility
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.slow
-def test_create_collection_with_visibility(sharing_env):
-    """Collections can be created with a non-default visibility."""
+def test_create_project_with_visibility(sharing_env):
+    """Projects can be created with a non-default visibility."""
     client, api_key, _ = sharing_env
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "BornShared", "visibility": "shared"},
         headers=_headers(api_key),
     )
@@ -313,7 +313,7 @@ def test_create_collection_with_visibility(sharing_env):
     assert r.json()["visibility"] == "shared"
 
     r2 = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "BornPublic", "visibility": "public"},
         headers=_headers(api_key),
     )

@@ -764,7 +764,7 @@ class TestFromJson:
         """Defensive: pre-V2 saved queries occasionally had string entries
         in `filters`. Don't crash — skip the bad entry, keep the good ones,
         return a valid QuerySpec. Regression test for the production crash
-        loading collections list with a corrupt smart query in the DB."""
+        loading projects list with a corrupt smart query in the DB."""
         data = {
             "filters": [
                 "camera_make:Canon",  # bad: string instead of dict

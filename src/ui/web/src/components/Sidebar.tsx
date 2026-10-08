@@ -37,7 +37,7 @@ function photoStackIcon() {
   );
 }
 
-function collectionsIcon() {
+function projectsIcon() {
   return (
     <svg
       className="h-5 w-5 text-gray-300"
@@ -376,16 +376,16 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette }: Sidebar
             {showLabels && <span>Manage libraries</span>}
           </Link>
           <Link
-            to="/collections"
+            to="/projects"
             className={`flex items-center gap-2 rounded-lg px-2 py-3 text-sm transition-colors duration-150 ${
-              location.pathname.startsWith("/collections")
+              location.pathname.startsWith("/projects")
                 ? "bg-indigo-600/30 text-indigo-200"
                 : "text-gray-400 hover:bg-gray-800/80 hover:text-gray-200"
             }`}
           >
             <span className="h-2 w-2 rounded-full bg-gray-500" />
-            {collectionsIcon()}
-            {showLabels && <span>Collections</span>}
+            {projectsIcon()}
+            {showLabels && <span>Projects</span>}
           </Link>
           <Link
             to="/people"

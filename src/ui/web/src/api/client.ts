@@ -5,9 +5,9 @@ import type {
   AssetPageItem,
   BatchAddResponse,
   BatchRemoveResponse,
-  CollectionAssetsResponse,
-  CollectionItem,
-  CollectionListResponse,
+  ProjectAssetsResponse,
+  ProjectItem,
+  ProjectListResponse,
   CurrentUser,
   DirectoryNode,
   EmptyTrashResponse,
@@ -751,21 +751,38 @@ export async function revokeApiKey(keyId: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Collections
+// Projects
 // ---------------------------------------------------------------------------
 
-export async function listCollections(): Promise<CollectionItem[]> {
-  const res = await apiFetch<CollectionListResponse>("/collections");
+export type ProjectStatus = "active" | "archived";
+
+/** Active projects by default; archived ones leave the sidebar and pickers. */
+export async function listProjects(
+  status: ProjectStatus | "all" = "active",
+): Promise<ProjectItem[]> {
+  const qs = status === "active" ? "" : `?status=${status}`;
+  const res = await apiFetch<ProjectListResponse>(`/projects${qs}`);
   return res.items;
 }
 
-export async function getCollection(
-  collectionId: string,
-): Promise<CollectionItem> {
-  return apiFetch<CollectionItem>(`/collections/${collectionId}`);
+/** Archive (or restore) a project. Archived projects keep their clips. */
+export async function setProjectStatus(
+  projectId: string,
+  status: ProjectStatus,
+): Promise<ProjectItem> {
+  return apiFetch<ProjectItem>(`/projects/${projectId}`, {
+    method: "PATCH",
+    body: { status },
+  });
 }
 
-export async function createCollection(
+export async function getProject(
+  projectId: string,
+): Promise<ProjectItem> {
+  return apiFetch<ProjectItem>(`/projects/${projectId}`);
+}
+
+export async function createProject(
   name: string,
   opts?: {
     description?: string;
@@ -775,15 +792,15 @@ export async function createCollection(
     type?: string;
     saved_query?: Record<string, unknown>;
   },
-): Promise<CollectionItem> {
-  return apiFetch<CollectionItem>("/collections", {
+): Promise<ProjectItem> {
+  return apiFetch<ProjectItem>("/projects", {
     method: "POST",
     body: { name, ...opts },
   });
 }
 
-export async function updateCollection(
-  collectionId: string,
+export async function updateProject(
+  projectId: string,
   body: {
     name?: string;
     description?: string | null;
@@ -792,57 +809,57 @@ export async function updateCollection(
     cover_asset_id?: string | null;
     saved_query?: { q?: string; filters: Record<string, unknown>; library_id?: string } | null;
   },
-): Promise<CollectionItem> {
-  return apiFetch<CollectionItem>(`/collections/${collectionId}`, {
+): Promise<ProjectItem> {
+  return apiFetch<ProjectItem>(`/projects/${projectId}`, {
     method: "PATCH",
     body,
   });
 }
 
-export async function deleteCollection(
-  collectionId: string,
+export async function deleteProject(
+  projectId: string,
 ): Promise<void> {
-  return apiFetch<void>(`/collections/${collectionId}`, { method: "DELETE" });
+  return apiFetch<void>(`/projects/${projectId}`, { method: "DELETE" });
 }
 
-export async function listCollectionAssets(
-  collectionId: string,
+export async function listProjectAssets(
+  projectId: string,
   after?: string,
   limit = 200,
-): Promise<CollectionAssetsResponse> {
+): Promise<ProjectAssetsResponse> {
   const qs = new URLSearchParams();
   if (after) qs.set("after", after);
   qs.set("limit", String(limit));
-  return apiFetch<CollectionAssetsResponse>(
-    `/collections/${collectionId}/assets?${qs.toString()}`,
+  return apiFetch<ProjectAssetsResponse>(
+    `/projects/${projectId}/assets?${qs.toString()}`,
   );
 }
 
-export async function addAssetsToCollection(
-  collectionId: string,
+export async function addAssetsToProject(
+  projectId: string,
   assetIds: string[],
 ): Promise<BatchAddResponse> {
-  return apiFetch<BatchAddResponse>(`/collections/${collectionId}/assets`, {
+  return apiFetch<BatchAddResponse>(`/projects/${projectId}/assets`, {
     method: "POST",
     body: { asset_ids: assetIds },
   });
 }
 
-export async function removeAssetsFromCollection(
-  collectionId: string,
+export async function removeAssetsFromProject(
+  projectId: string,
   assetIds: string[],
 ): Promise<BatchRemoveResponse> {
-  return apiFetch<BatchRemoveResponse>(`/collections/${collectionId}/assets`, {
+  return apiFetch<BatchRemoveResponse>(`/projects/${projectId}/assets`, {
     method: "DELETE",
     body: { asset_ids: assetIds },
   });
 }
 
-export async function reorderCollection(
-  collectionId: string,
+export async function reorderProject(
+  projectId: string,
   assetIds: string[],
 ): Promise<void> {
-  return apiFetch<void>(`/collections/${collectionId}/reorder`, {
+  return apiFetch<void>(`/projects/${projectId}/reorder`, {
     method: "PATCH",
     body: { asset_ids: assetIds },
   });

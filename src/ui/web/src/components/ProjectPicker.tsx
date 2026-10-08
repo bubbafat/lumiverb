@@ -1,18 +1,18 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  listCollections,
-  createCollection,
-  addAssetsToCollection,
+  listProjects,
+  createProject,
+  addAssetsToProject,
 } from "../api/client";
 
-interface CollectionPickerProps {
+interface ProjectPickerProps {
   assetIds: string[];
   onClose: () => void;
   onDone?: () => void;
 }
 
-export function CollectionPicker({ assetIds, onClose, onDone }: CollectionPickerProps) {
+export function ProjectPicker({ assetIds, onClose, onDone }: ProjectPickerProps) {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [newName, setNewName] = useState("");
@@ -20,24 +20,24 @@ export function CollectionPicker({ assetIds, onClose, onDone }: CollectionPicker
   const [adding, setAdding] = useState<string | null>(null);
   const [error, setError] = useState("");
 
-  const { data: collections } = useQuery({
-    queryKey: ["collections"],
-    queryFn: listCollections,
+  const { data: projects } = useQuery({
+    queryKey: ["projects"],
+    queryFn: () => listProjects(),
   });
 
   const filtered = useMemo(() => {
-    if (!collections) return [];
-    if (!search.trim()) return collections;
+    if (!projects) return [];
+    if (!search.trim()) return projects;
     const q = search.toLowerCase();
-    return collections.filter((c) => c.name.toLowerCase().includes(q));
-  }, [collections, search]);
+    return projects.filter((c) => c.name.toLowerCase().includes(q));
+  }, [projects, search]);
 
   const addMutation = useMutation({
-    mutationFn: (collectionId: string) =>
-      addAssetsToCollection(collectionId, assetIds),
+    mutationFn: (projectId: string) =>
+      addAssetsToProject(projectId, assetIds),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["collections"] });
-      queryClient.invalidateQueries({ queryKey: ["collection-assets"] });
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      queryClient.invalidateQueries({ queryKey: ["project-assets"] });
       onDone?.();
       onClose();
     },
@@ -49,19 +49,19 @@ export function CollectionPicker({ assetIds, onClose, onDone }: CollectionPicker
 
   const createMutation = useMutation({
     mutationFn: () =>
-      createCollection(newName.trim(), { asset_ids: assetIds }),
+      createProject(newName.trim(), { asset_ids: assetIds }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["collections"] });
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
       onDone?.();
       onClose();
     },
     onError: (err: Error) => setError(err.message),
   });
 
-  const handleSelect = (collectionId: string) => {
-    setAdding(collectionId);
+  const handleSelect = (projectId: string) => {
+    setAdding(projectId);
     setError("");
-    addMutation.mutate(collectionId);
+    addMutation.mutate(projectId);
   };
 
   const handleCreate = (e: React.FormEvent) => {
@@ -83,7 +83,7 @@ export function CollectionPicker({ assetIds, onClose, onDone }: CollectionPicker
       >
         <div className="border-b border-gray-800 px-4 py-3">
           <h2 className="text-sm font-semibold text-gray-100">
-            Add {assetIds.length} {assetIds.length === 1 ? "item" : "items"} to collection
+            Add {assetIds.length} {assetIds.length === 1 ? "item" : "items"} to project
           </h2>
         </div>
 
@@ -98,7 +98,7 @@ export function CollectionPicker({ assetIds, onClose, onDone }: CollectionPicker
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search collections..."
+            placeholder="Search projects..."
             autoFocus
             className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           />
@@ -112,7 +112,7 @@ export function CollectionPicker({ assetIds, onClose, onDone }: CollectionPicker
                 type="text"
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
-                placeholder="Collection name"
+                placeholder="Project name"
                 autoFocus
                 className="mb-2 w-full rounded border border-gray-600 bg-gray-800 px-2 py-1.5 text-sm text-gray-100 placeholder-gray-500 focus:border-indigo-500 focus:outline-none"
               />
@@ -152,27 +152,27 @@ export function CollectionPicker({ assetIds, onClose, onDone }: CollectionPicker
                 <line x1="12" y1="5" x2="12" y2="19" />
                 <line x1="5" y1="12" x2="19" y2="12" />
               </svg>
-              Create new collection
+              Create new project
             </button>
           )}
 
-          {/* Existing collections */}
+          {/* Existing projects */}
           {filtered.length === 0 && !showCreate ? (
             <div className="px-3 py-4 text-center text-xs text-gray-500">
-              {search ? "No matching collections" : "No collections yet"}
+              {search ? "No matching projects" : "No projects yet"}
             </div>
           ) : (
             filtered.map((col) => (
               <button
-                key={col.collection_id}
+                key={col.project_id}
                 type="button"
-                onClick={() => handleSelect(col.collection_id)}
+                onClick={() => handleSelect(col.project_id)}
                 disabled={addMutation.isPending}
                 className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-800/80 disabled:opacity-50"
               >
                 <span className="truncate">{col.name}</span>
                 <span className="shrink-0 text-xs text-gray-600">
-                  {adding === col.collection_id
+                  {adding === col.project_id
                     ? "Adding..."
                     : `${col.asset_count} items`}
                 </span>

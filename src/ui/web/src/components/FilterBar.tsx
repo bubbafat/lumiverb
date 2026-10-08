@@ -96,8 +96,8 @@ interface FilterBarProps {
   onClearAll: () => void;
   /** Facets for populating dropdowns. */
   facets: FacetsResponse | null;
-  /** Called when user clicks "Save as Smart Collection". */
-  onSaveSmartCollection?: () => void;
+  /** Called when user clicks "Save as Smart Project". */
+  onSaveSmartProject?: () => void;
 }
 
 function PersonChiclet({ personId, onClear }: { personId: string; onClear: () => void }) {
@@ -192,7 +192,7 @@ export function FilterBar({
   onSetSort,
   onClearAll,
   facets,
-  onSaveSmartCollection,
+  onSaveSmartProject,
 }: FilterBarProps) {
   // --- Read individual values from filter array ---
   const q = getFilterValue(filters, "query") ?? null;
@@ -565,13 +565,13 @@ export function FilterBar({
               >
                 Clear filters
               </button>
-              {onSaveSmartCollection && (
+              {onSaveSmartProject && (
                 <button
                   type="button"
-                  onClick={onSaveSmartCollection}
+                  onClick={onSaveSmartProject}
                   className="text-xs text-indigo-400 hover:text-indigo-300 whitespace-nowrap"
                 >
-                  Save collection
+                  Save project
                 </button>
               )}
             </>
@@ -863,7 +863,7 @@ export function FilterBar({
           {hasActiveFilters && (
             <FilterMenu
               onClearAll={onClearAll}
-              onSaveSmartCollection={onSaveSmartCollection}
+              onSaveSmartProject={onSaveSmartProject}
             />
           )}
         </div>
@@ -874,10 +874,10 @@ export function FilterBar({
 
 function FilterMenu({
   onClearAll,
-  onSaveSmartCollection,
+  onSaveSmartProject,
 }: {
   onClearAll: () => void;
-  onSaveSmartCollection?: () => void;
+  onSaveSmartProject?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -913,16 +913,16 @@ function FilterMenu({
             </svg>
             Clear all filters
           </button>
-          {onSaveSmartCollection && (
+          {onSaveSmartProject && (
             <button
               type="button"
-              onClick={() => { onSaveSmartCollection(); setOpen(false); }}
+              onClick={() => { onSaveSmartProject(); setOpen(false); }}
               className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-300 hover:bg-gray-700"
             >
               <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
                 <path d="M12 5v14M5 12h14" />
               </svg>
-              Save as Smart Collection
+              Save as Smart Project
             </button>
           )}
         </div>

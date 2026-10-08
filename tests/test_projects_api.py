@@ -1,4 +1,4 @@
-"""Collections API integration tests. Uses testcontainers Postgres + tenant DB."""
+"""Projects API integration tests. Uses testcontainers Postgres + tenant DB."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ def _ingest_asset(client, api_key, library_id, rel_path) -> str:
 
 
 @pytest.fixture(scope="module")
-def collections_env():
+def projects_env():
     """Two testcontainers Postgres: control + tenant. Yield (client, api_key, library_id)."""
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -64,7 +64,7 @@ def collections_env():
         tenant_tpl = str(u.set(database="{tenant_id}"))
         os.environ["CONTROL_PLANE_DATABASE_URL"] = control_url
         os.environ["TENANT_DATABASE_URL_TEMPLATE"] = tenant_tpl
-        os.environ["ADMIN_KEY"] = "test-admin-collections"
+        os.environ["ADMIN_KEY"] = "test-admin-projects"
         get_settings.cache_clear()
         _engines.clear()
 
@@ -72,8 +72,8 @@ def collections_env():
             with TestClient(app) as client:
                 r = client.post(
                     "/v1/admin/tenants",
-                    json={"name": "CollectionsTenant", "plan": "free"},
-                    headers={"Authorization": "Bearer test-admin-collections"},
+                    json={"name": "ProjectsTenant", "plan": "free"},
+                    headers={"Authorization": "Bearer test-admin-projects"},
                 )
                 assert r.status_code == 200, (r.status_code, r.text)
                 data = r.json()
@@ -99,7 +99,7 @@ def collections_env():
             with TestClient(app) as client:
                 cr = client.post(
                     "/v1/libraries",
-                    json={"name": "CollectionTestLib", "root_path": "/tmp/col-test"},
+                    json={"name": "ProjectTestLib", "root_path": "/tmp/col-test"},
                     headers={"Authorization": f"Bearer {api_key}"},
                 )
                 assert cr.status_code == 200
@@ -119,17 +119,17 @@ def _headers(api_key: str) -> dict:
 
 
 @pytest.mark.slow
-def test_create_collection(collections_env):
-    client, api_key, _ = collections_env
+def test_create_project(projects_env):
+    client, api_key, _ = projects_env
     r = client.post(
-        "/v1/collections",
-        json={"name": "My Collection"},
+        "/v1/projects",
+        json={"name": "My Project"},
         headers=_headers(api_key),
     )
     assert r.status_code == 201
     data = r.json()
-    assert data["name"] == "My Collection"
-    assert data["collection_id"].startswith("col_")
+    assert data["name"] == "My Project"
+    assert data["project_id"].startswith("prj_")
     assert data["asset_count"] == 0
     assert data["sort_order"] == "manual"
     assert data["visibility"] == "private"
@@ -138,9 +138,9 @@ def test_create_collection(collections_env):
 
 
 @pytest.mark.slow
-def test_list_collections(collections_env):
-    client, api_key, _ = collections_env
-    r = client.get("/v1/collections", headers=_headers(api_key))
+def test_list_projects(projects_env):
+    client, api_key, _ = projects_env
+    r = client.get("/v1/projects", headers=_headers(api_key))
     assert r.status_code == 200
     data = r.json()
     assert isinstance(data["items"], list)
@@ -148,40 +148,40 @@ def test_list_collections(collections_env):
 
 
 @pytest.mark.slow
-def test_get_collection(collections_env):
-    client, api_key, _ = collections_env
+def test_get_project(projects_env):
+    client, api_key, _ = projects_env
     # Create one
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "GetTest"},
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
-    r2 = client.get(f"/v1/collections/{col_id}", headers=_headers(api_key))
+    r2 = client.get(f"/v1/projects/{col_id}", headers=_headers(api_key))
     assert r2.status_code == 200
     assert r2.json()["name"] == "GetTest"
 
 
 @pytest.mark.slow
-def test_get_collection_404(collections_env):
-    client, api_key, _ = collections_env
-    r = client.get("/v1/collections/col_nonexistent", headers=_headers(api_key))
+def test_get_project_404(projects_env):
+    client, api_key, _ = projects_env
+    r = client.get("/v1/projects/col_nonexistent", headers=_headers(api_key))
     assert r.status_code == 404
 
 
 @pytest.mark.slow
-def test_update_collection(collections_env):
-    client, api_key, _ = collections_env
+def test_update_project(projects_env):
+    client, api_key, _ = projects_env
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "UpdateTest"},
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
     r2 = client.patch(
-        f"/v1/collections/{col_id}",
+        f"/v1/projects/{col_id}",
         json={"name": "Updated Name", "description": "A description", "sort_order": "added_at"},
         headers=_headers(api_key),
     )
@@ -193,17 +193,17 @@ def test_update_collection(collections_env):
 
 
 @pytest.mark.slow
-def test_update_collection_invalid_sort(collections_env):
-    client, api_key, _ = collections_env
+def test_update_project_invalid_sort(projects_env):
+    client, api_key, _ = projects_env
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "BadSort"},
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
     r2 = client.patch(
-        f"/v1/collections/{col_id}",
+        f"/v1/projects/{col_id}",
         json={"sort_order": "invalid"},
         headers=_headers(api_key),
     )
@@ -211,26 +211,26 @@ def test_update_collection_invalid_sort(collections_env):
 
 
 @pytest.mark.slow
-def test_delete_collection(collections_env):
-    client, api_key, _ = collections_env
+def test_delete_project(projects_env):
+    client, api_key, _ = projects_env
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "DeleteMe"},
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
-    r2 = client.request("DELETE", f"/v1/collections/{col_id}", headers=_headers(api_key))
+    r2 = client.request("DELETE", f"/v1/projects/{col_id}", headers=_headers(api_key))
     assert r2.status_code == 204
 
-    r3 = client.get(f"/v1/collections/{col_id}", headers=_headers(api_key))
+    r3 = client.get(f"/v1/projects/{col_id}", headers=_headers(api_key))
     assert r3.status_code == 404
 
 
 @pytest.mark.slow
-def test_delete_collection_404(collections_env):
-    client, api_key, _ = collections_env
-    r = client.request("DELETE", "/v1/collections/col_nonexistent", headers=_headers(api_key))
+def test_delete_project_404(projects_env):
+    client, api_key, _ = projects_env
+    r = client.request("DELETE", "/v1/projects/col_nonexistent", headers=_headers(api_key))
     assert r.status_code == 404
 
 
@@ -240,23 +240,23 @@ def test_delete_collection_404(collections_env):
 
 
 @pytest.mark.slow
-def test_add_and_list_assets(collections_env):
-    client, api_key, library_id = collections_env
+def test_add_and_list_assets(projects_env):
+    client, api_key, library_id = projects_env
     # Create assets
     a1 = _ingest_asset(client, api_key, library_id, "col/photo1.jpg")
     a2 = _ingest_asset(client, api_key, library_id, "col/photo2.jpg")
 
-    # Create collection
+    # Create project
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "AssetTest"},
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
     # Add assets
     r2 = client.post(
-        f"/v1/collections/{col_id}/assets",
+        f"/v1/projects/{col_id}/assets",
         json={"asset_ids": [a1, a2]},
         headers=_headers(api_key),
     )
@@ -264,50 +264,50 @@ def test_add_and_list_assets(collections_env):
     assert r2.json()["added"] == 2
 
     # List assets
-    r3 = client.get(f"/v1/collections/{col_id}/assets", headers=_headers(api_key))
+    r3 = client.get(f"/v1/projects/{col_id}/assets", headers=_headers(api_key))
     assert r3.status_code == 200
     items = r3.json()["items"]
     assert len(items) == 2
 
-    # Asset count in collection detail
-    r4 = client.get(f"/v1/collections/{col_id}", headers=_headers(api_key))
+    # Asset count in project detail
+    r4 = client.get(f"/v1/projects/{col_id}", headers=_headers(api_key))
     assert r4.json()["asset_count"] == 2
 
 
 @pytest.mark.slow
-def test_idempotent_add(collections_env):
-    client, api_key, library_id = collections_env
+def test_idempotent_add(projects_env):
+    client, api_key, library_id = projects_env
     a1 = _ingest_asset(client, api_key, library_id, "col/idempotent1.jpg")
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "IdempotentTest"},
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
     # Add once
     client.post(
-        f"/v1/collections/{col_id}/assets",
+        f"/v1/projects/{col_id}/assets",
         json={"asset_ids": [a1]},
         headers=_headers(api_key),
     )
     # Add again — should be idempotent
     r2 = client.post(
-        f"/v1/collections/{col_id}/assets",
+        f"/v1/projects/{col_id}/assets",
         json={"asset_ids": [a1]},
         headers=_headers(api_key),
     )
     assert r2.json()["added"] == 0
 
     # Still just one asset
-    r3 = client.get(f"/v1/collections/{col_id}", headers=_headers(api_key))
+    r3 = client.get(f"/v1/projects/{col_id}", headers=_headers(api_key))
     assert r3.json()["asset_count"] == 1
 
 
 @pytest.mark.slow
-def test_add_trashed_asset_rejected(collections_env):
-    client, api_key, library_id = collections_env
+def test_add_trashed_asset_rejected(projects_env):
+    client, api_key, library_id = projects_env
     a1 = _ingest_asset(client, api_key, library_id, "col/trashable.jpg")
 
     # Trash the asset
@@ -319,15 +319,15 @@ def test_add_trashed_asset_rejected(collections_env):
     )
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "TrashTest"},
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
     # Try to add trashed asset
     r2 = client.post(
-        f"/v1/collections/{col_id}/assets",
+        f"/v1/projects/{col_id}/assets",
         json={"asset_ids": [a1]},
         headers=_headers(api_key),
     )
@@ -335,20 +335,20 @@ def test_add_trashed_asset_rejected(collections_env):
 
 
 @pytest.mark.slow
-def test_remove_assets(collections_env):
-    client, api_key, library_id = collections_env
+def test_remove_assets(projects_env):
+    client, api_key, library_id = projects_env
     a1 = _ingest_asset(client, api_key, library_id, "col/removable1.jpg")
     a2 = _ingest_asset(client, api_key, library_id, "col/removable2.jpg")
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "RemoveTest"},
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
     client.post(
-        f"/v1/collections/{col_id}/assets",
+        f"/v1/projects/{col_id}/assets",
         json={"asset_ids": [a1, a2]},
         headers=_headers(api_key),
     )
@@ -356,7 +356,7 @@ def test_remove_assets(collections_env):
     # Remove one
     r2 = client.request(
         "DELETE",
-        f"/v1/collections/{col_id}/assets",
+        f"/v1/projects/{col_id}/assets",
         json={"asset_ids": [a1]},
         headers=_headers(api_key),
     )
@@ -364,7 +364,7 @@ def test_remove_assets(collections_env):
     assert r2.json()["removed"] == 1
 
     # Only one left
-    r3 = client.get(f"/v1/collections/{col_id}", headers=_headers(api_key))
+    r3 = client.get(f"/v1/projects/{col_id}", headers=_headers(api_key))
     assert r3.json()["asset_count"] == 1
 
 
@@ -374,13 +374,13 @@ def test_remove_assets(collections_env):
 
 
 @pytest.mark.slow
-def test_create_with_assets(collections_env):
-    client, api_key, library_id = collections_env
+def test_create_with_assets(projects_env):
+    client, api_key, library_id = projects_env
     a1 = _ingest_asset(client, api_key, library_id, "col/atomic1.jpg")
     a2 = _ingest_asset(client, api_key, library_id, "col/atomic2.jpg")
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "Atomic Create", "asset_ids": [a1, a2]},
         headers=_headers(api_key),
     )
@@ -395,18 +395,18 @@ def test_create_with_assets(collections_env):
 
 
 @pytest.mark.slow
-def test_trashed_asset_hidden_in_collection(collections_env):
-    """Trashing an asset hides it from collection views but row persists."""
-    client, api_key, library_id = collections_env
+def test_trashed_asset_hidden_in_project(projects_env):
+    """Trashing an asset hides it from project views but row persists."""
+    client, api_key, library_id = projects_env
     a1 = _ingest_asset(client, api_key, library_id, "col/soft1.jpg")
     a2 = _ingest_asset(client, api_key, library_id, "col/soft2.jpg")
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "SoftDeleteTest", "asset_ids": [a1, a2]},
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
     assert r.json()["asset_count"] == 2
 
     # Trash one asset
@@ -418,27 +418,27 @@ def test_trashed_asset_hidden_in_collection(collections_env):
     )
 
     # Count should drop
-    r2 = client.get(f"/v1/collections/{col_id}", headers=_headers(api_key))
+    r2 = client.get(f"/v1/projects/{col_id}", headers=_headers(api_key))
     assert r2.json()["asset_count"] == 1
 
     # Asset list should only show the non-trashed one
-    r3 = client.get(f"/v1/collections/{col_id}/assets", headers=_headers(api_key))
+    r3 = client.get(f"/v1/projects/{col_id}/assets", headers=_headers(api_key))
     assert len(r3.json()["items"]) == 1
     assert r3.json()["items"][0]["asset_id"] == a2
 
 
 @pytest.mark.slow
-def test_restore_asset_restores_collection_membership(collections_env):
-    """Restoring a trashed asset brings it back into the collection."""
-    client, api_key, library_id = collections_env
+def test_restore_asset_restores_project_membership(projects_env):
+    """Restoring a trashed asset brings it back into the project."""
+    client, api_key, library_id = projects_env
     a1 = _ingest_asset(client, api_key, library_id, "col/restore1.jpg")
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "RestoreTest", "asset_ids": [a1]},
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
     # Trash
     client.request(
@@ -447,7 +447,7 @@ def test_restore_asset_restores_collection_membership(collections_env):
         json={"asset_ids": [a1]},
         headers=_headers(api_key),
     )
-    r2 = client.get(f"/v1/collections/{col_id}", headers=_headers(api_key))
+    r2 = client.get(f"/v1/projects/{col_id}", headers=_headers(api_key))
     assert r2.json()["asset_count"] == 0
 
     # Restore
@@ -455,7 +455,7 @@ def test_restore_asset_restores_collection_membership(collections_env):
         f"/v1/assets/{a1}/restore",
         headers=_headers(api_key),
     )
-    r3 = client.get(f"/v1/collections/{col_id}", headers=_headers(api_key))
+    r3 = client.get(f"/v1/projects/{col_id}", headers=_headers(api_key))
     assert r3.json()["asset_count"] == 1
 
 
@@ -465,37 +465,37 @@ def test_restore_asset_restores_collection_membership(collections_env):
 
 
 @pytest.mark.slow
-def test_cover_defaults_to_first_asset(collections_env):
-    client, api_key, library_id = collections_env
+def test_cover_defaults_to_first_asset(projects_env):
+    client, api_key, library_id = projects_env
     a1 = _ingest_asset(client, api_key, library_id, "col/cover1.jpg")
     a2 = _ingest_asset(client, api_key, library_id, "col/cover2.jpg")
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "CoverTest", "asset_ids": [a1, a2]},
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
     # First by position = a1
     assert r.json()["cover_asset_id"] == a1
 
 
 @pytest.mark.slow
-def test_cover_explicit_set(collections_env):
-    client, api_key, library_id = collections_env
+def test_cover_explicit_set(projects_env):
+    client, api_key, library_id = projects_env
     a1 = _ingest_asset(client, api_key, library_id, "col/coverex1.jpg")
     a2 = _ingest_asset(client, api_key, library_id, "col/coverex2.jpg")
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "CoverExplicit", "asset_ids": [a1, a2]},
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
     # Set explicit cover
     r2 = client.patch(
-        f"/v1/collections/{col_id}",
+        f"/v1/projects/{col_id}",
         json={"cover_asset_id": a2},
         headers=_headers(api_key),
     )
@@ -503,22 +503,22 @@ def test_cover_explicit_set(collections_env):
 
 
 @pytest.mark.slow
-def test_cover_stale_self_heals(collections_env):
+def test_cover_stale_self_heals(projects_env):
     """Cover falls back to first-by-position when cover asset is trashed."""
-    client, api_key, library_id = collections_env
+    client, api_key, library_id = projects_env
     a1 = _ingest_asset(client, api_key, library_id, "col/coverheal1.jpg")
     a2 = _ingest_asset(client, api_key, library_id, "col/coverheal2.jpg")
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "CoverHeal", "asset_ids": [a1, a2]},
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
     # Set a1 as cover
     client.patch(
-        f"/v1/collections/{col_id}",
+        f"/v1/projects/{col_id}",
         json={"cover_asset_id": a1},
         headers=_headers(api_key),
     )
@@ -532,7 +532,7 @@ def test_cover_stale_self_heals(collections_env):
     )
 
     # Cover should fall back to a2 (first active by position)
-    r2 = client.get(f"/v1/collections/{col_id}", headers=_headers(api_key))
+    r2 = client.get(f"/v1/projects/{col_id}", headers=_headers(api_key))
     assert r2.json()["cover_asset_id"] == a2
 
 
@@ -542,50 +542,50 @@ def test_cover_stale_self_heals(collections_env):
 
 
 @pytest.mark.slow
-def test_reorder(collections_env):
-    client, api_key, library_id = collections_env
+def test_reorder(projects_env):
+    client, api_key, library_id = projects_env
     a1 = _ingest_asset(client, api_key, library_id, "col/reorder1.jpg")
     a2 = _ingest_asset(client, api_key, library_id, "col/reorder2.jpg")
     a3 = _ingest_asset(client, api_key, library_id, "col/reorder3.jpg")
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "ReorderTest", "asset_ids": [a1, a2, a3]},
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
     # Reorder: reverse
     r2 = client.patch(
-        f"/v1/collections/{col_id}/reorder",
+        f"/v1/projects/{col_id}/reorder",
         json={"asset_ids": [a3, a2, a1]},
         headers=_headers(api_key),
     )
     assert r2.status_code == 200
 
     # Verify order
-    r3 = client.get(f"/v1/collections/{col_id}/assets", headers=_headers(api_key))
+    r3 = client.get(f"/v1/projects/{col_id}/assets", headers=_headers(api_key))
     ids = [item["asset_id"] for item in r3.json()["items"]]
     assert ids == [a3, a2, a1]
 
 
 @pytest.mark.slow
-def test_reorder_partial_rejected(collections_env):
+def test_reorder_partial_rejected(projects_env):
     """Partial reorder (missing assets) is rejected with 400."""
-    client, api_key, library_id = collections_env
+    client, api_key, library_id = projects_env
     a1 = _ingest_asset(client, api_key, library_id, "col/partial1.jpg")
     a2 = _ingest_asset(client, api_key, library_id, "col/partial2.jpg")
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "PartialReorder", "asset_ids": [a1, a2]},
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
     # Only provide one of two
     r2 = client.patch(
-        f"/v1/collections/{col_id}/reorder",
+        f"/v1/projects/{col_id}/reorder",
         json={"asset_ids": [a1]},
         headers=_headers(api_key),
     )
@@ -593,24 +593,24 @@ def test_reorder_partial_rejected(collections_env):
 
 
 # ---------------------------------------------------------------------------
-# Delete collection does not affect source assets
+# Delete project does not affect source assets
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.slow
-def test_delete_collection_preserves_assets(collections_env):
-    client, api_key, library_id = collections_env
+def test_delete_project_preserves_assets(projects_env):
+    client, api_key, library_id = projects_env
     a1 = _ingest_asset(client, api_key, library_id, "col/preserved.jpg")
 
     r = client.post(
-        "/v1/collections",
+        "/v1/projects",
         json={"name": "DeletePreserve", "asset_ids": [a1]},
         headers=_headers(api_key),
     )
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
-    # Delete collection
-    client.request("DELETE", f"/v1/collections/{col_id}", headers=_headers(api_key))
+    # Delete project
+    client.request("DELETE", f"/v1/projects/{col_id}", headers=_headers(api_key))
 
     # Asset should still exist
     r2 = client.get(
@@ -619,3 +619,109 @@ def test_delete_collection_preserves_assets(collections_env):
     )
     asset_ids = [item["asset_id"] for item in r2.json()["items"]]
     assert a1 in asset_ids
+
+
+# ---------------------------------------------------------------------------
+# Pre-rename paths: macOS/iOS builds and share links still use /collections
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_legacy_collections_path_serves_projects(projects_env):
+    client, api_key, _ = projects_env
+    r = client.post("/v1/collections", json={"name": "Legacy client"}, headers=_headers(api_key))
+    assert r.status_code == 201, r.text
+    created = r.json()
+    assert created["collection_id"] == created["project_id"]
+
+    listed = client.get("/v1/projects", headers=_headers(api_key)).json()["items"]
+    assert created["project_id"] in {p["project_id"] for p in listed}
+    legacy = client.get(f"/v1/collections/{created['project_id']}", headers=_headers(api_key))
+    assert legacy.status_code == 200
+    assert legacy.json()["collection_id"] == created["project_id"]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("prefix", ["/v1/public/projects", "/v1/public/collections"])
+def test_public_project_readable_without_auth(projects_env, prefix):
+    client, api_key, library_id = projects_env
+    asset_id = _ingest_asset(client, api_key, library_id, f"public/{prefix.rsplit('/', 1)[1]}.jpg")
+    r = client.post(
+        "/v1/projects",
+        json={"name": "Shared reel", "asset_ids": [asset_id]},
+        headers=_headers(api_key),
+    )
+    project_id = r.json()["project_id"]
+    r = client.patch(
+        f"/v1/projects/{project_id}", json={"visibility": "public"}, headers=_headers(api_key)
+    )
+    assert r.status_code == 200, r.text
+
+    detail = client.get(f"{prefix}/{project_id}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["project_id"] == project_id
+    assert detail.json()["collection_id"] == project_id
+    assets = client.get(f"{prefix}/{project_id}/assets")
+    assert assets.status_code == 200, assets.text
+    assert [a["asset_id"] for a in assets.json()["items"]] == [asset_id]
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle: active -> archived -> active
+# ---------------------------------------------------------------------------
+
+
+def _ids(client, api_key, **params) -> set[str]:
+    r = client.get("/v1/projects", params=params, headers=_headers(api_key))
+    assert r.status_code == 200, r.text
+    return {p["project_id"] for p in r.json()["items"]}
+
+
+@pytest.mark.slow
+def test_archive_hides_project_but_keeps_its_clips(projects_env):
+    client, api_key, library_id = projects_env
+    asset_id = _ingest_asset(client, api_key, library_id, "lifecycle/clip.jpg")
+    project_id = client.post(
+        "/v1/projects", json={"name": "Customer Video 123", "asset_ids": [asset_id]},
+        headers=_headers(api_key),
+    ).json()["project_id"]
+    assert client.get(f"/v1/projects/{project_id}", headers=_headers(api_key)).json()["status"] == "active"
+
+    r = client.patch(
+        f"/v1/projects/{project_id}", json={"status": "archived"}, headers=_headers(api_key)
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "archived"
+    assert r.json()["archived_at"] is not None
+
+    assert project_id not in _ids(client, api_key)
+    assert project_id in _ids(client, api_key, status="archived")
+    assert project_id in _ids(client, api_key, status="all")
+    assert project_id not in _ids(client, api_key, status="active")
+    detail = client.get(f"/v1/projects/{project_id}", headers=_headers(api_key))
+    assert detail.status_code == 200
+    assert detail.json()["asset_count"] == 1
+    assets = client.get(f"/v1/projects/{project_id}/assets", headers=_headers(api_key))
+    assert [a["asset_id"] for a in assets.json()["items"]] == [asset_id]
+
+    r = client.patch(
+        f"/v1/projects/{project_id}", json={"status": "active"}, headers=_headers(api_key)
+    )
+    assert r.json()["status"] == "active"
+    assert r.json()["archived_at"] is None
+    assert project_id in _ids(client, api_key)
+
+
+@pytest.mark.slow
+def test_invalid_status_rejected(projects_env):
+    client, api_key, _ = projects_env
+    project_id = client.post(
+        "/v1/projects", json={"name": "Bad status"}, headers=_headers(api_key)
+    ).json()["project_id"]
+
+    r = client.patch(
+        f"/v1/projects/{project_id}", json={"status": "deleted"}, headers=_headers(api_key)
+    )
+    assert r.status_code in (400, 422)
+    r = client.get("/v1/projects", params={"status": "nope"}, headers=_headers(api_key))
+    assert r.status_code in (400, 422)

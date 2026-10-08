@@ -21,7 +21,7 @@ interface LightboxProps {
   onNearbyClick?: (lat: number, lon: number) => void;
   onFilterClick?: (params: Record<string, string>) => void;
   onPathClick?: (path: string) => void;
-  onAddToCollection?: (assetId: string) => void;
+  onAddToProject?: (assetId: string) => void;
   rating?: AssetRating;
   onRatingChange?: (assetId: string, update: { favorite?: boolean; stars?: number; color?: RatingColor | null }) => void;
   libraryId?: string;
@@ -238,7 +238,7 @@ export function Lightbox({
   onNearbyClick,
   onFilterClick,
   onPathClick,
-  onAddToCollection,
+  onAddToProject,
   rating,
   onRatingChange,
   libraryId,
@@ -1591,15 +1591,15 @@ export function Lightbox({
                 )}
               </div>
 
-              {onAddToCollection && (
+              {onAddToProject && (
                 <>
                   <hr className="border-gray-700" />
                   <button
                     type="button"
-                    onClick={() => onAddToCollection(asset.asset_id)}
+                    onClick={() => onAddToProject(asset.asset_id)}
                     className="w-full rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-700 hover:text-gray-100"
                   >
-                    Add to collection
+                    Add to project
                   </button>
                 </>
               )}

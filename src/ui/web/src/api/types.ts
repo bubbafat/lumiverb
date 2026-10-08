@@ -226,8 +226,8 @@ export interface SavedQuery {
   direction?: string;
 }
 
-export interface CollectionItem {
-  collection_id: string;
+export interface ProjectItem {
+  project_id: string;
   name: string;
   description: string | null;
   cover_asset_id: string | null;
@@ -240,13 +240,15 @@ export interface CollectionItem {
   asset_count: number;
   created_at: string;
   updated_at: string;
+  status?: "active" | "archived";
+  archived_at?: string | null;
 }
 
-export interface CollectionListResponse {
-  items: CollectionItem[];
+export interface ProjectListResponse {
+  items: ProjectItem[];
 }
 
-export interface CollectionAssetItem {
+export interface ProjectAssetItem {
   asset_id: string;
   rel_path: string;
   file_size: number;
@@ -260,8 +262,8 @@ export interface CollectionAssetItem {
   camera_model: string | null;
 }
 
-export interface CollectionAssetsResponse {
-  items: CollectionAssetItem[];
+export interface ProjectAssetsResponse {
+  items: ProjectAssetItem[];
   next_cursor: string | null;
 }
 

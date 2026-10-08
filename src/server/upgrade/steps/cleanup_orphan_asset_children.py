@@ -35,7 +35,7 @@ _CLEANABLE_TABLES = (
     "asset_embeddings",
     "video_scenes",
     "video_index_chunks",
-    "collection_assets",
+    "project_assets",
     "asset_ratings",
 )
 
@@ -46,7 +46,7 @@ class CleanupOrphanAssetChildrenStep:
     Faces are handled separately because two other FKs point at them
     (``face_person_matches.face_id`` and ``people.representative_face_id``)
     and must be cleared first or the face delete will FK-violate. The
-    ``cover_asset_id`` on collections is nullable and gets a SET NULL
+    ``cover_asset_id`` on projects is nullable and gets a SET NULL
     rather than a delete.
     """
 
@@ -81,11 +81,11 @@ class CleanupOrphanAssetChildrenStep:
         ).first()
         if face_row:
             return True
-        # Collections.cover_asset_id is nullable — orphan = non-null and
+        # Projects.cover_asset_id is nullable — orphan = non-null and
         # missing in assets.
         cover_row = ctx.session.exec(
             text(
-                "SELECT 1 FROM collections c"
+                "SELECT 1 FROM projects c"
                 " WHERE c.cover_asset_id IS NOT NULL"
                 " AND NOT EXISTS ("
                 "   SELECT 1 FROM assets a WHERE a.asset_id = c.cover_asset_id"
@@ -144,17 +144,17 @@ class CleanupOrphanAssetChildrenStep:
         )
         counts["faces"] = face_result.rowcount or 0
 
-        # Collection cover is nullable — null it instead of deleting.
+        # Project cover is nullable — null it instead of deleting.
         cover_result = ctx.session.exec(
             text(
-                "UPDATE collections SET cover_asset_id = NULL"
+                "UPDATE projects SET cover_asset_id = NULL"
                 " WHERE cover_asset_id IS NOT NULL"
                 " AND NOT EXISTS ("
-                "   SELECT 1 FROM assets a WHERE a.asset_id = collections.cover_asset_id"
+                "   SELECT 1 FROM assets a WHERE a.asset_id = projects.cover_asset_id"
                 " )"
             )
         )
-        counts["collections.cover_asset_id"] = cover_result.rowcount or 0
+        counts["projects.cover_asset_id"] = cover_result.rowcount or 0
 
         # The cluster cache references face IDs that we may have just
         # deleted, so flip it dirty so the next /v1/faces/clusters call

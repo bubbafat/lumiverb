@@ -110,7 +110,7 @@ class LeafFilter(ABC):
         ...
 
     def to_json(self) -> dict:
-        """Serialize for smart collection saved_query."""
+        """Serialize for smart project saved_query."""
         return {"type": self.type_name(), "value": self.to_url_value()}
 
     @classmethod
@@ -181,7 +181,7 @@ class QuerySpec:
         return any(f.needs_metadata_join for f in self.leaves)
 
     def to_json(self) -> dict:
-        """Serialize for smart collection saved_query."""
+        """Serialize for smart project saved_query."""
         children_json = [c.to_json() for c in self.root.children]
         result: dict = {"filters": children_json}
         if self.sort != "taken_at":

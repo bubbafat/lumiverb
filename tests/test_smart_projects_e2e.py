@@ -1,7 +1,7 @@
-"""End-to-end smart collection tests that simulate exact client payloads.
+"""End-to-end smart project tests that simulate exact client payloads.
 
 These tests reproduce the exact JSON the web and Swift clients send
-when creating smart collections using the filter algebra format:
+when creating smart projects using the filter algebra format:
   {"filters": [{"type": "camera_make", "value": "Canon"}, ...], "sort": "taken_at", "direction": "desc"}
 """
 
@@ -108,7 +108,7 @@ def e2e_env():
 
 
 @pytest.mark.slow
-def test_web_client_smart_collection_payload(e2e_env):
+def test_web_client_smart_project_payload(e2e_env):
     """Simulate the exact JSON the web client sends using the filter algebra.
 
     Web client builds a filter array from the active chiclets.
@@ -133,11 +133,11 @@ def test_web_client_smart_collection_payload(e2e_env):
         },
     }
 
-    r = client.post("/v1/collections", json=web_payload, headers=_h(api_key))
+    r = client.post("/v1/projects", json=web_payload, headers=_h(api_key))
     assert r.status_code == 201, r.text
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
-    r2 = client.get(f"/v1/collections/{col_id}/assets", headers=_h(api_key))
+    r2 = client.get(f"/v1/projects/{col_id}/assets", headers=_h(api_key))
     assert r2.status_code == 200
     ids = [i["asset_id"] for i in r2.json()["items"]]
     assert a_canon in ids, f"Canon asset not found. Got {len(ids)} items: {ids}"
@@ -145,8 +145,8 @@ def test_web_client_smart_collection_payload(e2e_env):
 
 
 @pytest.mark.slow
-def test_swift_client_smart_collection_payload(e2e_env):
-    """Simulate the exact JSON the Swift client sends from SaveSmartCollectionSheet.
+def test_swift_client_smart_project_payload(e2e_env):
+    """Simulate the exact JSON the Swift client sends from SaveSmartProjectSheet.
 
     Swift QueryFilterState serializes as [LeafFilter] → filter algebra JSON.
     """
@@ -174,17 +174,17 @@ def test_swift_client_smart_collection_payload(e2e_env):
         },
     }
 
-    r = client.post("/v1/collections", json=swift_payload, headers=_h(api_key))
+    r = client.post("/v1/projects", json=swift_payload, headers=_h(api_key))
     assert r.status_code == 201, r.text
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
-    r2 = client.get(f"/v1/collections/{col_id}/assets", headers=_h(api_key))
+    r2 = client.get(f"/v1/projects/{col_id}/assets", headers=_h(api_key))
     assert r2.status_code == 200
     ids = [i["asset_id"] for i in r2.json()["items"]]
     assert a_nikon in ids, f"Nikon favorite not found. Items: {r2.json()['items']}"
     assert a_other not in ids
 
-    r3 = client.get(f"/v1/collections/{col_id}", headers=_h(api_key))
+    r3 = client.get(f"/v1/projects/{col_id}", headers=_h(api_key))
     assert r3.status_code == 200
     sq = r3.json()["saved_query"]
     assert sq is not None
@@ -196,8 +196,8 @@ def test_swift_client_smart_collection_payload(e2e_env):
 
 
 @pytest.mark.slow
-def test_collection_with_path_filter(e2e_env):
-    """Smart collection scoped to a library + path prefix."""
+def test_project_with_path_filter(e2e_env):
+    """Smart project scoped to a library + path prefix."""
     client, api_key, library_id = e2e_env
 
     a_in = _ingest_asset(client, api_key, library_id, "2024/Travel/paris.jpg",
@@ -205,7 +205,7 @@ def test_collection_with_path_filter(e2e_env):
     a_out = _ingest_asset(client, api_key, library_id, "2024/Home/garden.jpg",
                           exif={"taken_at": "2024-03-02T10:00:00+00:00"})
 
-    r = client.post("/v1/collections", json={
+    r = client.post("/v1/projects", json={
         "name": "Travel Photos",
         "type": "smart",
         "saved_query": {
@@ -216,9 +216,9 @@ def test_collection_with_path_filter(e2e_env):
         },
     }, headers=_h(api_key))
     assert r.status_code == 201
-    col_id = r.json()["collection_id"]
+    col_id = r.json()["project_id"]
 
-    r2 = client.get(f"/v1/collections/{col_id}/assets", headers=_h(api_key))
+    r2 = client.get(f"/v1/projects/{col_id}/assets", headers=_h(api_key))
     assert r2.status_code == 200
     ids = [i["asset_id"] for i in r2.json()["items"]]
     assert a_in in ids

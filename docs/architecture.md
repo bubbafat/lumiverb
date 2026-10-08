@@ -58,7 +58,7 @@ users             — user_id, tenant_id, email, password_hash, role,
                     created_at, last_login_at
 password_reset_tokens — token_hash, user_id, expires_at, used_at
 public_libraries  — library_id, tenant_id, connection_string, created_at
-public_collections — collection_id, tenant_id, connection_string, created_at
+public_projects   — project_id, tenant_id, connection_string, created_at
 revoked_tokens    — jti (PK), revoked_at. Server-side JWT revocation.
 tenant_db_routing — tenant_id, connection_string, region
 ```
