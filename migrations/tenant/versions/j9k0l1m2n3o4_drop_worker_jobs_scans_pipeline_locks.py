@@ -79,8 +79,9 @@ def downgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
     )
 
-    # Restore last_scan_id column
+    # Restore last_scan_id column (FK under its original name, which the
+    # add_scans_table downgrade drops by name)
     op.add_column("assets", sa.Column("last_scan_id", sa.String(), nullable=True))
     op.create_foreign_key(
-        "assets_last_scan_id_fkey", "assets", "scans", ["last_scan_id"], ["scan_id"]
+        "fk_assets_last_scan_id_scans", "assets", "scans", ["last_scan_id"], ["scan_id"]
     )

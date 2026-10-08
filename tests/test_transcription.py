@@ -228,43 +228,29 @@ class TestTranscriptEndpointEmptySrt:
 
 
 @pytest.mark.fast
-class TestSearchHitTranscriptType:
-    """Verify the SearchHit model supports the transcript type."""
+class TestSearchContextTranscriptType:
+    """Verify /v1/query's SearchContext supports transcript hits."""
 
-    def test_transcript_type_literal(self):
-        from src.server.api.routers.search import SearchHit
-        hit = SearchHit(
-            type="transcript",
-            asset_id="ast_1",
-            rel_path="video.mp4",
-            description="",
-            tags=[],
+    def test_transcript_hit(self):
+        from src.server.api.routers.query import SearchContext
+        ctx = SearchContext(
             score=1.0,
-            source="quickwit_transcripts",
+            hit_type="transcript",
+            snippet="Hello and welcome to the show.",
             start_ms=5000,
             end_ms=10500,
-            snippet="Hello and welcome to the show.",
-            language="en",
         )
-        assert hit.type == "transcript"
-        assert hit.snippet == "Hello and welcome to the show."
-        assert hit.language == "en"
-        assert hit.start_ms == 5000
-        assert hit.end_ms == 10500
+        assert ctx.hit_type == "transcript"
+        assert ctx.snippet == "Hello and welcome to the show."
+        assert ctx.start_ms == 5000
+        assert ctx.end_ms == 10500
 
-    def test_snippet_and_language_fields_exist(self):
-        from src.server.api.routers.search import SearchHit
-        hit = SearchHit(
-            type="image",
-            asset_id="a",
-            rel_path="p",
-            description="",
-            tags=[],
-            score=0,
-            source="x",
-        )
-        assert hit.snippet is None
-        assert hit.language is None
+    def test_snippet_and_times_default_to_none(self):
+        from src.server.api.routers.query import SearchContext
+        ctx = SearchContext(score=0)
+        assert ctx.hit_type == "asset"
+        assert ctx.snippet is None
+        assert ctx.start_ms is None
 
 
 @pytest.mark.fast

@@ -166,13 +166,13 @@ def test_search_without_library_id(search_env):
     client, api_key, lib1_id, lib2_id, a1, a2, a3 = search_env
 
     r = client.get(
-        "/v1/search",
-        params={"q": "sunset"},
+        "/v1/query",
+        params={"f": ["query:sunset"]},
         headers=_headers(api_key),
     )
     assert r.status_code == 200
     data = r.json()
-    ids = [h["asset_id"] for h in data["hits"]]
+    ids = [h["asset_id"] for h in data["items"]]
     # sunset appears in lib1 (2 assets) — should find at least those
     assert a1 in ids or a3 in ids
 
@@ -183,13 +183,13 @@ def test_search_with_library_id_filters(search_env):
     client, api_key, lib1_id, lib2_id, a1, a2, a3 = search_env
 
     r = client.get(
-        "/v1/search",
-        params={"q": "sunset", "library_id": lib2_id},
+        "/v1/query",
+        params={"f": ["query:sunset", f"library:{lib2_id}"]},
         headers=_headers(api_key),
     )
     assert r.status_code == 200
     data = r.json()
-    ids = [h["asset_id"] for h in data["hits"]]
+    ids = [h["asset_id"] for h in data["items"]]
     # "sunset" is not in lib2's description
     assert a1 not in ids
     assert a3 not in ids
@@ -201,31 +201,17 @@ def test_search_hits_include_library_fields(search_env):
     client, api_key, lib1_id, lib2_id, a1, a2, a3 = search_env
 
     r = client.get(
-        "/v1/search",
-        params={"q": "portrait"},
+        "/v1/query",
+        params={"f": ["query:portrait"]},
         headers=_headers(api_key),
     )
     assert r.status_code == 200
     data = r.json()
-    assert len(data["hits"]) >= 1
-    hit = next((h for h in data["hits"] if h["asset_id"] == a2), None)
+    assert len(data["items"]) >= 1
+    hit = next((h for h in data["items"] if h["asset_id"] == a2), None)
     if hit:
         assert hit["library_id"] == lib2_id
         assert hit["library_name"] == "Portraits"
-
-
-@pytest.mark.slow
-def test_search_empty_query_no_date_returns_empty(search_env):
-    """Empty query with no date filter returns empty response."""
-    client, api_key, *_ = search_env
-
-    r = client.get(
-        "/v1/search",
-        params={"q": ""},
-        headers=_headers(api_key),
-    )
-    assert r.status_code == 200
-    assert r.json()["total"] == 0
 
 
 @pytest.mark.slow
@@ -234,19 +220,19 @@ def test_search_no_results(search_env):
     client, api_key, *_ = search_env
 
     r = client.get(
-        "/v1/search",
-        params={"q": "xyznonexistent12345"},
+        "/v1/query",
+        params={"f": ["query:xyznonexistent12345"]},
         headers=_headers(api_key),
     )
     assert r.status_code == 200
-    assert r.json()["total"] == 0
+    assert r.json()["items"] == []
 
 
 @pytest.mark.slow
 def test_search_requires_auth(search_env):
     """Search without auth fails."""
     client, *_ = search_env
-    r = client.get("/v1/search", params={"q": "sunset"})
+    r = client.get("/v1/query", params={"f": ["query:sunset"]})
     assert r.status_code in (401, 403)
 
 
@@ -256,10 +242,10 @@ def test_search_date_only_cross_library(search_env):
     client, api_key, *_ = search_env
 
     r = client.get(
-        "/v1/search",
-        params={"date_from": "2020-01-01", "date_to": "2030-12-31"},
+        "/v1/query",
+        params={"f": ["date:2020-01-01,2030-12-31"]},
         headers=_headers(api_key),
     )
     assert r.status_code == 200
     # Test assets may not have taken_at/file_mtime set, so we just verify the endpoint works
-    assert "hits" in r.json()
+    assert "items" in r.json()

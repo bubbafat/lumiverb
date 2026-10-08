@@ -946,9 +946,11 @@ def search(
     output: Annotated[str, typer.Option("--output", "-o", help="Output format: table, json, text")] = "table",
     media_type: Annotated[str, typer.Option("--media-type", "-m", help="Filter by type: image, video, all")] = "all",
     limit: Annotated[int, typer.Option("--limit", help="Max results (0 = all)")] = 20,
-    offset: Annotated[int, typer.Option("--offset", help="Start offset")] = 0,
 ) -> None:
-    """Search assets and video scenes in a library by natural language query."""
+    """Search assets and video scenes in a library by natural language query.
+
+    Results come from GET /v1/query, ranked by relevance.
+    """
     if output not in ("table", "json", "text"):
         console.print("[red]--output must be one of: table, json, text[/red]")
         raise typer.Exit(1)
@@ -960,46 +962,29 @@ def search(
     client = LumiverbClient()
     library_id = _resolve_library_id(client, library)
 
-    if limit == 0:
-        all_hits: list[dict] = []
-        page_offset = offset
-        page_size = 100
-        source = "unknown"
-        while True:
-            resp = client.get(
-                "/v1/search",
-                params={
-                    "library_id": library_id,
-                    "q": query,
-                    "limit": page_size,
-                    "offset": page_offset,
-                    "media_type": media_type,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            source = data.get("source", "unknown")
-            batch = data.get("hits", [])
-            all_hits.extend(batch)
-            if len(batch) < page_size:
-                break
-            page_offset += page_size
-        hits = all_hits
-    else:
-        resp = client.get(
-            "/v1/search",
-            params={
-                "library_id": library_id,
-                "q": query,
-                "limit": limit,
-                "offset": offset,
-                "media_type": media_type,
-            },
-        )
+    filters = [f"library:{library_id}", f"query:{query}"]
+    if media_type != "all":
+        filters.append(f"media:{media_type}")
+
+    max_page = 500  # /v1/query's limit cap
+    hits: list[dict] = []
+    source = "unknown"
+    cursor: str | None = None
+    while True:
+        page_size = max_page if limit == 0 else min(max_page, limit - len(hits))
+        params: dict = {"f": filters, "limit": page_size}
+        if cursor:
+            params["after"] = cursor
+        resp = client.get("/v1/query", params=params)
         resp.raise_for_status()
         data = resp.json()
-        hits = data.get("hits", [])
-        source = data.get("source", "unknown")
+        source = data.get("search_source") or source
+        hits.extend(data.get("items", []))
+        cursor = data.get("next_cursor")
+        if not cursor or (limit and len(hits) >= limit):
+            break
+    if limit:
+        hits = hits[:limit]
 
     if not hits:
         console.print("No results.")
@@ -1019,32 +1004,24 @@ def search(
         table.add_column("Type", style="dim", width=6)
         table.add_column("Path", style="cyan", no_wrap=False)
         table.add_column("Detail", no_wrap=False, max_width=40)
-        table.add_column("Description", no_wrap=False, max_width=100)
-        table.add_column("Tags", no_wrap=False, max_width=60)
+        table.add_column("Match", no_wrap=False, max_width=100)
 
         for hit in hits:
-            hit_type = hit.get("type", "image")
-            tags_str = ", ".join(hit.get("tags") or [])
-            description = hit.get("description") or ""
-            desc_display = description[:100] + "…" if len(description) > 100 else description
-            tags_display = tags_str[:60] + "…" if len(tags_str) > 60 else tags_str
+            ctx = hit.get("search_context") or {}
+            snippet = ctx.get("snippet") or ""
+            snippet_display = snippet[:100] + "…" if len(snippet) > 100 else snippet
 
-            if hit_type == "scene":
-                start_s = (hit.get("start_ms") or 0) // 1000
-                end_s = (hit.get("end_ms") or 0) // 1000
+            if ctx.get("hit_type") == "scene":
+                start_s = (ctx.get("start_ms") or 0) // 1000
+                end_s = (ctx.get("end_ms") or 0) // 1000
                 detail = f"{start_s}s – {end_s}s"
                 type_label = "[magenta]scene[/magenta]"
             else:
                 detail = hit.get("camera_model") or hit.get("camera_make") or ""
-                type_label = "[blue]image[/blue]"
+                kind = "video" if hit.get("media_type") == "video" else "image"
+                type_label = f"[blue]{kind}[/blue]"
 
-            table.add_row(
-                type_label,
-                hit["rel_path"],
-                detail,
-                desc_display,
-                tags_display,
-            )
+            table.add_row(type_label, hit["rel_path"], detail, snippet_display)
 
         console.print(table)
         n = len(hits)

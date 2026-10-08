@@ -2,7 +2,7 @@
 *Feed this to Cursor when working on the CLI.*
 
 ## Purpose
-The CLI is a local agent that runs on the machine where source files live.
+The CLI is a local agent that runs on a machine that can read the source files: the machine that holds them, or the brain through a read-only mount ([ADR-016](adr/016-operating-model.md)).
 It never touches the tenant DB, Quickwit, or object storage directly — it is an API client only.
 
 See docs/architecture.md for the full design.
@@ -28,7 +28,7 @@ Entry point: `lumiverb = "src.client.cli:main"` (setuptools); `main()` invokes t
 - `lumiverb enrich [--library <name>] [--job-type embed|vision|faces|redetect-faces|ocr|transcribe|video-scenes|scene-vision|search-sync|all] [--dry-run] [--concurrency N] [--force]` — Run enrichment on assets with missing pipeline outputs. Reads proxies from the local cache (populated by scan) and runs inference: CLIP embeddings, vision AI, OCR, face detection, video transcription, search sync. On cache miss, downloads the proxy from the server. `redetect-faces` re-runs face detection on ALL images with quality gates. `transcribe` uses faster-whisper to transcribe video audio (requires source files, not proxy cache). Omit `--library` to enrich all libraries.
 
 #### Search
-- `lumiverb search --library <name> --query <query> [--output table|json|text] [--media-type all|image|video] [--limit N] [--offset N]` — Search assets in a library by natural language query. `--limit 0` fetches all results (paginated).
+- `lumiverb search --library <name> --query <query> [--output table|json|text] [--media-type all|image|video] [--limit N]` — Search assets in a library by natural language query via `GET /v1/query` (`f=library:`, `f=query:`, `f=media:`), ranked by relevance. `--limit 0` fetches all results (cursor-paginated). The table shows the match snippet, and the time range for scene hits.
 
 #### Similar
 - `lumiverb similar --library <name> [--asset-id <id> | --path <rel_path> | --image <file>] [--limit N] [--offset N] [--output table|json|text] [--from-ts N] [--to-ts N] [--asset-types image,video] [--camera-make X] [--camera-model X]` — Find visually similar assets by vector similarity. Supply one of: `--asset-id` (existing asset), `--path` (relative path in library), or `--image` (local image file).
@@ -43,7 +43,7 @@ Entry point: `lumiverb = "src.client.cli:main"` (setuptools); `main()` invokes t
 - `lumiverb config show` — Show current config.
 
 #### Library
-- `lumiverb library create <name> <path>` — Create a library.
+- `lumiverb library create --name <name> --path <path>` — Create a library.
 - `lumiverb library list` — List libraries.
 - `lumiverb library update <name> [--name <new>] [--root-path <path>]` — Update library.
 - `lumiverb library delete <name>` — Soft delete (trash).
@@ -84,7 +84,7 @@ Entry point: `lumiverb = "src.client.cli:main"` (setuptools); `main()` invokes t
 - `lumiverb admin vision-test --path <dir> [--url <url>] [--api-key <key>]` — Test vision API against images.
 
 #### Maintenance
-- `lumiverb maintenance cleanup [--library <name>] [--execute]` — Remove orphaned files (dry-run by default).
+- `lumiverb maintenance cleanup [--library <name>] [--execute]` — Remove orphaned files (dry-run by default). Needs an admin API key.
 - `lumiverb maintenance search-sync [--library <name>] [--force]` — Push stale assets to search index.
 - `lumiverb maintenance cleanup-dismissed` — Delete dismissed people with zero face matches.
 - `lumiverb maintenance upgrade [--dry-run] [--max-steps N] [--step <step_id>] [--force]` — Run tenant-level upgrade steps idempotently.
@@ -97,4 +97,4 @@ The CLI is an API client and never queries the DB directly, so it is not subject
 
 The API server enforces these rules (see `docs/cursor-api.md` for the full contract):
 - All asset reads go through the `active_assets` view (`deleted_at IS NULL`).
-- Ingesting a file that was previously trashed **restores** it (same `asset_id`, `deleted_at` cleared). It does not create a new record and does not leave a zombie.
+- Ingesting a file that was previously trashed **restores** it (same `asset_id`, `deleted_at` cleared). It does not create a new record and does not leave a zombie. ADR-016 phase 0 changes this: a user's trash survives a rescan.

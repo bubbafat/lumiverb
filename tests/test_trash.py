@@ -295,22 +295,22 @@ def test_trashed_asset_absent_from_search(trash_api_client: tuple[TestClient, st
         get_settings.cache_clear()
  
         r_before = client.get(
-            "/v1/search",
-            params={"library_id": library_id, "q": "jpg"},
+            "/v1/query",
+            params={"f": [f"library:{library_id}", "query:jpg"]},
             headers=auth,
         )
         assert r_before.status_code == 200
-        hits_before = {h["asset_id"] for h in r_before.json()["hits"]}
+        hits_before = {h["asset_id"] for h in r_before.json()["items"]}
 
         client.delete(f"/v1/assets/{aid}", headers=auth)
 
         r_after = client.get(
-            "/v1/search",
-            params={"library_id": library_id, "q": "jpg"},
+            "/v1/query",
+            params={"f": [f"library:{library_id}", "query:jpg"]},
             headers=auth,
         )
         assert r_after.status_code == 200
-        hits_after = {h["asset_id"] for h in r_after.json()["hits"]}
+        hits_after = {h["asset_id"] for h in r_after.json()["items"]}
         assert aid not in hits_after
         assert aid in hits_before
     finally:
