@@ -80,10 +80,12 @@ def trash_add(
 def trash_restore(
     asset_ids: Annotated[list[str], typer.Argument(help="Clip ids.", show_default=False)],
 ) -> None:
-    """Take clips out of the trash. Archived clips aren't in the trash (lumiverb
-    archive restore), and a library's clips come back with the library."""
+    """Take clips out of the trash, back to where they were: in sight, or the
+    archive for clips archived before. A library's clips come back with the library."""
     data = LumiverbClient().post("/v1/assets/restore", json={"asset_ids": asset_ids}).json()
-    console.print(f"Restored {clips(len(data.get('restored', [])))}.")
+    back = len(data.get("to_archive", []))
+    console.print(f"Restored {clips(len(data.get('restored', [])))}."
+                  + (f" {clips(back)} went back to the archive, where {'it was' if back == 1 else 'they were'}." if back else ""))
     skipped = data.get("skipped", [])
     if skipped:
         console.print(f"Skipped {clips(len(skipped))} not in the trash (or whose library is): " + ", ".join(skipped))
@@ -122,22 +124,29 @@ def trash_list(
 @trash_app.command("empty")
 def trash_empty(
     asset_ids: Annotated[list[str] | None, typer.Argument(help="Clip ids; leave out with --all.", show_default=False)] = None,
-    all_: Annotated[bool, typer.Option("--all", help="Every clip in the trash.")] = False,
+    all_: Annotated[bool, typer.Option("--all", help="Every clip in the trash (of --library, --folder).")] = False,
+    library: Annotated[str | None, typer.Option("--library", "-l", help="With --all: only this library's trash.")] = None,
+    folder: Annotated[str | None, typer.Option("--folder", "-f", help="With --all: only under this folder.")] = None,
     remove_from_projects: Annotated[bool, typer.Option(
         "--remove-from-projects", help="Clips in projects leave them.")] = False,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask; fail instead.")] = False,
 ) -> None:
     """Delete clips in the trash for good now, to free space (admins only). Never
     archived clips: move them to the trash first."""
-    if bool(asset_ids) == all_:
-        console.print("[red]Give clip ids, or --all.[/red]")
+    if bool(asset_ids) == all_ or ((library or folder) and not all_):
+        console.print("[red]Give clip ids, or --all (with --library or --folder to narrow it).[/red]")
         raise typer.Exit(2)
-    what = "every clip in the trash" if all_ else clips(len(asset_ids or []))
+    client = LumiverbClient()
+    body: dict = {} if all_ else {"asset_ids": asset_ids}
+    if library:
+        body["library_id"] = library_id_for(client, library)
+    if folder:
+        body["path"] = folder
+    where = (f" in {library}" if library else "") + (f" under '{folder}'" if folder else "")
+    what = f"every clip in the trash{where}" if all_ else clips(len(asset_ids or []))
     if not yes and not typer.confirm(f"Delete {what} for good? This can't be undone.", default=False):
         console.print("Aborted.")
         raise typer.Exit(0)
-    client = LumiverbClient()
-    body: dict = {} if all_ else {"asset_ids": asset_ids}
     while True:
         r = client.raw("DELETE", "/v1/trash/empty", json={**body, "remove_from_projects": remove_from_projects})
         if r.status_code < 400:

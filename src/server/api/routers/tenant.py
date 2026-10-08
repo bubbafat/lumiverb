@@ -146,7 +146,8 @@ def _ask_before_shortening(session: Session, old: int | None, new: int | None, c
 
     counts = AssetRepository(session).count_expiring(utcnow() - timedelta(days=new))
     if any(counts.values()):
-        what = ", ".join(f"{n} {k if n != 1 else k[:-1]}" for k, n in counts.items() if n)
+        one = {"clips": "clip", "libraries": "library", "projects": "project"}
+        what = ", ".join(f"{n} {one[k] if n == 1 else k}" for k, n in counts.items() if n)
         raise DecisionRequiredError(
             "trash_days_shortened",
             f"With {new} trash days, {what} in the trash for longer would be deleted for good within minutes. "

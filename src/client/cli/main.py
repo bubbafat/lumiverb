@@ -306,6 +306,10 @@ def library_delete(
     brings it back until then."""
     client = LumiverbClient()
     library_id = _library_named(client, name, trashed=False)["library_id"]
+    # Archived clips aren't deleted on their own, but they go with their library.
+    archived = int(client.get("/v1/archive", params={"library_id": library_id, "limit": 1}).json().get("total", 0))
+    if archived:
+        console.print(f"Its {archived} archived {'clip goes' if archived == 1 else 'clips go'} with it.")
     if not yes and not typer.confirm(f"Delete library '{name}'? This moves it to trash.", default=False):
         console.print("Aborted.")
         raise typer.Exit(0)

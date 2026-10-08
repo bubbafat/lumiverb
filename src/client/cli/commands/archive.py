@@ -70,12 +70,24 @@ _FOLDER = Annotated[str | None, typer.Option("--folder", "-f", help="Every clip 
 
 
 @archive_app.command("add")
-def archive_add(asset_ids: _ASSET_IDS = None, library: _LIBRARY = None, folder: _FOLDER = None) -> None:
+def archive_add(
+    asset_ids: _ASSET_IDS = None,
+    library: _LIBRARY = None,
+    folder: _FOLDER = None,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask before archiving a folder.")] = False,
+) -> None:
     """Archive clips: out of sight, kept forever with everything they have. Scans
     leave them archived. By id, or every clip under a folder (a file added to the
-    folder later shows up as usual)."""
+    folder later shows up as usual); a folder asks first."""
     client = LumiverbClient()
-    data = client.post("/v1/assets/archive", json=pick(client, asset_ids, library, folder)).json()
+    body = pick(client, asset_ids, library, folder)
+    if "path" in body and not yes:
+        where = f"under '{folder}' in {library}" if folder else f"in {library}"
+        if not typer.confirm(f"Archive every clip {where}? They leave browse and search, kept with "
+                             "everything they have.", default=False):
+            console.print("Aborted.")
+            raise typer.Exit(0)
+    data = client.post("/v1/assets/archive", json=body).json()
     console.print(f"Archived {clips(len(data.get('archived', [])))}.")
     skipped = data.get("skipped", [])
     if skipped:

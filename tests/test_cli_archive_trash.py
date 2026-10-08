@@ -69,17 +69,25 @@ def test_archive_clips_by_id():
 
 def test_archive_a_folder_by_library_name():
     client = _client(**{"/v1/assets/archive": {"archived": ["a1"], "skipped": []}})
-    result = _run(client, "archive", "add", "--library", "Media", "--folder", "Trips/Paris")
+    result = _run(client, "archive", "add", "--library", "Media", "--folder", "Trips/Paris", input="y\n")
     assert result.exit_code == 0, result.output
+    assert "Archive every clip under 'Trips/Paris' in Media?" in result.output
     client.post.assert_called_with("/v1/assets/archive", json={"library_id": "lib_1", "path": "Trips/Paris"})
     assert "Archived 1 clip." in result.output
 
 
 def test_the_whole_library_is_an_empty_folder():
     client = _client(**{"/v1/assets/archive": {"archived": [], "skipped": []}})
-    result = _run(client, "archive", "add", "--library", "lib_1", "--folder", "")
+    result = _run(client, "archive", "add", "--library", "lib_1", "--folder", "", "--yes")
     assert result.exit_code == 0, result.output
     client.post.assert_called_with("/v1/assets/archive", json={"library_id": "lib_1", "path": ""})
+
+
+def test_archiving_a_folder_asks_first():
+    client = _client()
+    result = _run(client, "archive", "add", "--library", "Media", "--folder", "", input="n\n")
+    assert result.exit_code == 0 and "Archive every clip in Media?" in result.output
+    assert not [c for c in client.post.call_args_list if c.args[0] == "/v1/assets/archive"]
 
 
 @pytest.mark.parametrize("args", [
@@ -163,6 +171,12 @@ def test_trash_restore():
     assert "Restored 1 clip." in result.output and "Skipped 1 clip" in result.output
 
 
+def test_trash_restore_says_which_went_back_to_the_archive():
+    client = _client(**{"/v1/assets/restore": {"restored": ["a1", "a2"], "skipped": [], "to_archive": ["a2"]}})
+    result = _run(client, "trash", "restore", "a1", "a2")
+    assert "Restored 2 clips. 1 clip went back to the archive, where it was." in " ".join(result.output.split())
+
+
 def test_trash_list_shows_when_each_goes():
     page = {"items": [{"asset_id": "a1", "library_name": "Media", "rel_path": "x/a.mov",
                        "trashed_at": "2026-10-01T12:00:00+00:00", "expires_at": "2026-10-31T12:00:00+00:00"}],
@@ -193,6 +207,16 @@ def test_emptying_asks_first_and_names_what_goes():
     assert client.raw.call_args.args == ("DELETE", "/v1/trash/empty")
     assert client.raw.call_args.kwargs["json"] == {"asset_ids": ["a1", "a2"], "remove_from_projects": False}
     assert "Deleted 2 clips for good." in result.output
+
+
+def test_emptying_one_librarys_trash():
+    client = _client()
+    client.raw.return_value = _answer(200, {"deleted": 3})
+    result = _run(client, "trash", "empty", "--all", "--library", "Media", "--folder", "x", input="y\n")
+    assert result.exit_code == 0, result.output
+    assert "every clip in the trash in Media under 'x'" in result.output
+    assert client.raw.call_args.kwargs["json"] == {"library_id": "lib_1", "path": "x", "remove_from_projects": False}
+    assert _run(client, "trash", "empty", "a1", "--library", "Media").exit_code == 2
 
 
 def test_emptying_everything_needs_all():
@@ -237,10 +261,25 @@ def test_library_empty_trash_of_one_library():
                                              ("off", None, "emptied by hand only"), ("OFF", None, "by hand")])
 def test_settings_trash_days(arg, value, shown):
     client = _client()
+    client.raw.return_value = _answer(200, {"trash_days": value})
     result = _run(client, "settings", "trash-days", arg)
     assert result.exit_code == 0, result.output
-    client.patch.assert_called_once_with("/v1/tenant/settings", json={"trash_days": value})
+    client.raw.assert_called_once_with("PATCH", "/v1/tenant/settings", json={"trash_days": value, "confirm_purge": False})
     assert shown in result.output
+
+
+@pytest.mark.parametrize("answer,calls", [("y", 2), ("n", 1)])
+def test_fewer_trash_days_says_what_goes_and_asks(answer, calls):
+    client = _client()
+    shortened = _answer(409, {"error": {"code": "trash_days_shortened", "message": "m",
+                                        "details": {"trash_days": 7, "clips": 12, "libraries": 1, "projects": 0}}})
+    client.raw.side_effect = [shortened, _answer(200, {"trash_days": 7})]
+    result = _run(client, "settings", "trash-days", "7", input=f"{answer}\n")
+    assert result.exit_code == 0, result.output
+    assert "12 clips, 1 library already in the trash longer" in " ".join(result.output.split())
+    assert client.raw.call_count == calls
+    if calls == 2:
+        assert client.raw.call_args.kwargs["json"] == {"trash_days": 7, "confirm_purge": True}
 
 
 @pytest.mark.parametrize("arg", ["0", "3651", "-1", "2.5", "thirty", "٣"])
@@ -248,7 +287,7 @@ def test_settings_trash_days_refuses_nonsense(arg):
     client = _client()
     result = _run(client, "settings", "trash-days", "--", arg)
     assert result.exit_code == 2, result.output
-    client.patch.assert_not_called()
+    client.raw.assert_not_called()
 
 
 def test_settings_show_says_how_long_the_trash_keeps_things():

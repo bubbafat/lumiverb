@@ -290,6 +290,7 @@ def test_shortening_the_trash_days_asks_when_it_would_delete_things_at_once(env)
     err = r.json()["error"]
     assert err["code"] == "trash_days_shortened"
     assert err["details"]["clips"] >= 1 and set(err["details"]) == {"trash_days", "clips", "libraries", "projects"}
+    assert "librarie " not in err["message"] and "in the trash for longer would be deleted" in err["message"]
     assert _settings(env, trash_days=60).json()["trash_days"] == 60  # longer never asks
     r = _settings(env, trash_days=7, confirm_purge=True)
     assert r.status_code == 200 and r.json()["trash_days"] == 7
