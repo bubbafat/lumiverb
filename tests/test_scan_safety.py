@@ -95,6 +95,7 @@ def _scan_with(
     ignored: set[str] | None = None,
     split: MagicMock | None = None,
     local: list[dict] | None = None,
+    walk=None,
     **kwargs,
 ) -> MagicMock:
     """run_scan with `on_server` images on the server, of which `on_disk` are on disk unchanged."""
@@ -115,7 +116,7 @@ def _scan_with(
     with (
         patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
         patch("src.client.cli.scan._load_library_filters", return_value=[]),
-        patch("src.client.cli.scan._walk_library", return_value=local),
+        patch("src.client.cli.scan._walk_library", side_effect=walk or (lambda *a, **k: local)),
         patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value=existing),
         patch("src.client.cli.scan._fetch_ignored_paths", return_value=ignored or set()),
         patch("src.client.cli.scan._split_files", split or MagicMock(return_value=([], [], local))),
@@ -177,21 +178,47 @@ def test_a_scan_with_nothing_missing_doesnt_check_the_mount_again(tmp_path: Path
 
 @pytest.mark.fast
 def test_an_unmounted_share_mid_scan_archives_nothing(tmp_path: Path, monkeypatch) -> None:
-    """End to end through the real mount check: fstab lists the share, and by
-    the time the scan has files to archive it isn't mounted any more."""
+    """End to end through the real mount check: fstab lists the share, it's
+    mounted when the scan starts, and it goes away during the walk."""
     from src.client.cli import roots
 
     root = tmp_path / "lib"
     fstab = tmp_path / "fstab"
     fstab.write_text(f"//nas/share {root} cifs soft 0 0\n")
     monkeypatch.setattr(roots, "FSTAB", fstab)
-    mounted = iter([True, False])
-    monkeypatch.setattr(roots.os.path, "ismount", lambda p: next(mounted) if str(p) == str(root) else False)
+    mounted = {str(root)}
+    monkeypatch.setattr(roots.os.path, "ismount", lambda p: str(p) in mounted)
+    local = [{"rel_path": f"f{i}.jpg", "file_size": 4, "file_mtime": None, "media_type": "image", "ext": ".jpg"}
+             for i in range(10)]
 
-    client = _scan_with(tmp_path, on_disk=10, on_server=100, allow_mass_delete=True)
+    def walk(*args, **kwargs):
+        mounted.clear()  # unmounted mid-walk: the files not yet seen look missing
+        return local
+
+    client = _scan_with(tmp_path, on_disk=10, on_server=100, allow_mass_delete=True, local=local, walk=walk)
 
     assert _deleted_ids(client) == []
     assert client.scan_stats.root_unreachable
+
+
+@pytest.mark.fast
+def test_a_share_gone_before_the_walk_found_anything_keeps_the_changes(tmp_path: Path) -> None:
+    """An empty walk on a library that had files: the storage is checked
+    again, and if it's gone the scan says so (the worker then keeps the
+    change reports for when it's back)."""
+    root = tmp_path / "lib"
+    with patch("src.client.cli.scan.reachable_root", side_effect=[root, None]):
+        client = _scan_with(tmp_path, on_disk=0, on_server=100, allow_mass_delete=True)
+    assert _deleted_ids(client) == []
+    assert client.scan_stats.root_unreachable
+
+
+@pytest.mark.fast
+def test_a_library_with_no_media_on_a_present_share_is_just_empty(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    with patch("src.client.cli.scan.reachable_root", side_effect=[root, root]):
+        client = _scan_with(tmp_path, on_disk=0, on_server=0)
+    assert not client.scan_stats.root_unreachable
 
 
 @pytest.mark.fast

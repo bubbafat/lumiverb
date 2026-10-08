@@ -108,7 +108,7 @@ def _probe(path: Path, require_entries: bool) -> Path | None:
     # A folder fstab says is a mount counts only while it's mounted: anything
     # in an unmounted mount point (a stray copy) isn't the share.
     resolved = path.resolve()
-    for candidate in (path, resolved):  # a root map may reach the mount through a symlink
+    for candidate in dict.fromkeys((path, resolved)):  # a root map may reach the mount through a symlink
         mount = _expected_mount(candidate)
         if mount is not None and not os.path.ismount(mount):
             return None

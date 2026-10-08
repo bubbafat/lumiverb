@@ -704,6 +704,11 @@ def run_scan(
     # An empty library is more likely an unmounted volume than a deleted
     # one. An empty folder within it is just empty: its files are gone.
     if not local_files and not force and not path_prefix:
+        # A share gone since the scan started looks just like this: say so,
+        # so the worker keeps the changes for when it's back.
+        if reachable_root(library, require_entries=True) is None:
+            console.print("[red]The library's storage went away during the scan; it's scanned again once it's back.[/red]")
+            stats.root_unreachable = True
         return stats
 
     # Fetch existing assets with SHA for change detection
