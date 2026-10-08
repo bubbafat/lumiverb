@@ -776,9 +776,17 @@ def project_usage(
     deleting them for good would take them out of. Every project counts,
     archived, trashed and other people's included; names only for those the
     caller can see."""
+    return project_usage_summary(session, user_id, asset_ids=body.asset_ids, library_ids=body.library_ids)
+
+
+def project_usage_summary(
+    session: Session, user_id: str | None, *, asset_ids: list[str] = (), library_ids: list[str] = ()  # type: ignore[assignment]
+) -> ProjectUsageResponse:
+    """See project_usage. Also what a permanent delete refuses with until
+    the request says remove_from_projects."""
     from src.server.repository.tenant import ProjectRepository
 
-    rows, in_any = ProjectRepository(session).usage(body.asset_ids, body.library_ids)
+    rows, in_any = ProjectRepository(session).usage(list(asset_ids), list(library_ids))
     visible: list[ProjectUsageItem] = []
     other = 0
     for project, clips in rows:

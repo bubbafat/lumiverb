@@ -147,20 +147,34 @@ def _response(status: int, body: dict | None = None) -> MagicMock:
 
 
 def _trash_client(*, in_trash: bool = True, trashed_clips: int = 0) -> MagicMock:
+    """A server whose project restore needs a choice when clips are in the trash."""
     client = _client()
 
-    def raw(method: str, path: str, **_: object) -> MagicMock:
+    def raw(method: str, path: str, **kwargs: object) -> MagicMock:
         if path.endswith("/restore"):
-            return _response(204 if in_trash else 404)
+            if not in_trash:
+                return _response(404)
+            choice = (kwargs.get("json") or {}).get("with_clips")
+            if trashed_clips and choice is None:
+                return _response(409, {"error": {
+                    "code": "clips_in_trash", "message": "choose",
+                    "details": {"trashed_clips": trashed_clips, "missing_clips": 1},
+                }})
+            restored = trashed_clips if choice else 0
+            return _response(200, {"restored_clips": restored, "trashed_clips": trashed_clips - restored,
+                                   "missing_clips": 1})
         return _response(204)
 
     client.raw.side_effect = raw
     client.get.return_value.json.return_value = {
-        "project_id": "prj_1", "name": "Job", "status": "active", "trashed_asset_count": trashed_clips,
         "items": [{"project_id": "prj_1", "name": "Job", "asset_count": 3}],
     }
     client.post.return_value.json.return_value = {"restored": 2, "missing": 1, "deleted": 1}
     return client
+
+
+def _restore_calls(client: MagicMock) -> list:
+    return [c for c in client.raw.call_args_list if c.args[1].endswith("/restore")]
 
 
 def test_list_trashed() -> None:
@@ -186,7 +200,7 @@ def test_restore_takes_a_project_out_of_the_trash() -> None:
     client = _trash_client(in_trash=True)
     result = _run(client, "restore", "--id", "prj_1")
     assert result.exit_code == 0, result.output
-    client.raw.assert_any_call("POST", "/v1/projects/prj_1/restore")
+    assert _restore_calls(client)[0].kwargs["json"] == {}
     client.patch.assert_not_called()
     assert "out of the trash" in result.output
 
@@ -198,20 +212,24 @@ def test_restore_unarchives_a_project_that_isnt_in_the_trash() -> None:
     client.patch.assert_called_once_with("/v1/projects/prj_1", json={"status": "active"})
 
 
-def test_restore_mentions_trashed_clips() -> None:
+@pytest.mark.parametrize(("answer", "choice", "restored"), [("y\n", True, "Restored 2 clips"), ("n\n", False, "Left 2 clips")])
+def test_restore_asks_about_trashed_clips(answer: str, choice: bool, restored: str) -> None:
     client = _trash_client(trashed_clips=2)
-    result = _run(client, "restore", "--id", "prj_1")
+    result = _run(client, "restore", "--id", "prj_1", input=answer)
     assert result.exit_code == 0, result.output
-    assert "2 clips" in result.output and "--with-clips" in result.output
-    client.post.assert_not_called()
+    assert "2 clips in this project are in the trash" in result.output
+    assert _restore_calls(client)[-1].kwargs["json"] == {"with_clips": choice}
+    assert restored in result.output
 
 
-def test_restore_with_clips() -> None:
+@pytest.mark.parametrize(("flag", "choice"), [("--with-clips", True), ("--without-clips", False)])
+def test_restore_with_a_flag_doesnt_ask(flag: str, choice: bool) -> None:
     client = _trash_client(trashed_clips=2)
-    result = _run(client, "restore", "--id", "prj_1", "--with-clips")
+    result = _run(client, "restore", "--id", "prj_1", flag)
     assert result.exit_code == 0, result.output
-    client.post.assert_called_once_with("/v1/projects/prj_1/restore-clips")
-    assert "Restored 2 clips" in result.output and "1 clip is missing from disk" in result.output
+    assert len(_restore_calls(client)) == 1
+    assert _restore_calls(client)[0].kwargs["json"] == {"with_clips": choice}
+    assert "1 clip is missing from disk" in result.output
 
 
 def test_restore_clips() -> None:
@@ -267,3 +285,10 @@ def test_emptying_the_library_trash_says_which_projects_lose_clips() -> None:
         result = runner.invoke(app, ["library", "empty-trash"], input="n\n")
     assert result.exit_code == 0, result.output
     assert "4 clips" in result.output and "2 projects" in result.output and "Customer Video" in result.output
+    assert not [c for c in client.post.call_args_list if c.args[0] == "/v1/libraries/empty-trash"]
+
+    with patch("src.client.cli.main.LumiverbClient", return_value=client):
+        result = runner.invoke(app, ["library", "empty-trash"], input="y\n")
+    assert result.exit_code == 0, result.output
+    empty = [c for c in client.post.call_args_list if c.args[0] == "/v1/libraries/empty-trash"]
+    assert empty[-1].kwargs["json"] == {"remove_from_projects": True}

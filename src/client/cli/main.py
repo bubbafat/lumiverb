@@ -231,7 +231,8 @@ def library_empty_trash() -> None:
     if not confirm:
         console.print("Aborted.")
         raise typer.Exit(0)
-    empty_resp = client.post("/v1/libraries/empty-trash")
+    # The user has seen which projects lose clips and said yes.
+    empty_resp = client.post("/v1/libraries/empty-trash", json={"remove_from_projects": bool(in_projects)})
     data = empty_resp.json()
     n = data.get("deleted", 0)
     console.print(f"Deleted {n} libraries.")

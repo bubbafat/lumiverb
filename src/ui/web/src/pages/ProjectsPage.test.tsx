@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
+import { ApiError } from "../api/client";
 import ProjectsPage from "./ProjectsPage";
 
 const api = vi.hoisted(() => ({
@@ -44,7 +45,7 @@ function project(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   api.trashProject.mockResolvedValue(undefined);
-  api.restoreProject.mockResolvedValue(undefined);
+  api.restoreProject.mockResolvedValue({ restored_clips: 0, missing_clips: 0 });
   api.restoreProjectClips.mockResolvedValue({ restored: 2, missing: 0 });
   api.emptyProjectTrash.mockResolvedValue({ deleted: 1 });
   api.listProjects.mockResolvedValue([
@@ -121,7 +122,8 @@ describe("ProjectsPage", () => {
     const notice = await screen.findByRole("status");
     expect(notice.textContent).toContain("Customer Video 123");
     fireEvent.click(within(notice).getByRole("button", { name: "Undo" }));
-    await waitFor(() => expect(api.restoreProject).toHaveBeenCalledWith("prj_1"));
+    // Undo only undoes the project delete: its trashed clips stay as they were.
+    await waitFor(() => expect(api.restoreProject).toHaveBeenCalledWith("prj_1", false));
   });
 
   it("lists the trash on its own tab", async () => {
@@ -149,8 +151,25 @@ describe("ProjectsPage", () => {
     renderPage();
     await openTrash();
     fireEvent.click(screen.getByRole("button", { name: "Restore" }));
-    await waitFor(() => expect(api.restoreProject).toHaveBeenCalledWith("prj_1"));
-    expect(api.restoreProjectClips).not.toHaveBeenCalled();
+    // No choice sent: if clips were trashed since, the server asks for one.
+    await waitFor(() => expect(api.restoreProject).toHaveBeenCalledWith("prj_1", undefined));
+  });
+
+  it("asks when the server finds trashed clips the list didn't know about", async () => {
+    inTrash();
+    api.restoreProject.mockImplementation(async (_id: string, withClips?: boolean) => {
+      if (withClips === undefined) {
+        throw new ApiError(409, "clips in trash", "clips_in_trash", { trashed_clips: 3, missing_clips: 0 });
+      }
+      return { restored_clips: withClips ? 3 : 0, missing_clips: 0 };
+    });
+    renderPage();
+    await openTrash();
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toMatch(/3 clips in the trash/);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Restore project and clips" }));
+    await waitFor(() => expect(api.restoreProject).toHaveBeenLastCalledWith("prj_1", true));
   });
 
   it("offers to restore a project's trashed clips with it", async () => {
@@ -162,8 +181,7 @@ describe("ProjectsPage", () => {
     expect(dialog.textContent).toMatch(/2 clips in the trash/);
     expect(dialog.textContent).toMatch(/1 clip is missing from disk/);
     fireEvent.click(within(dialog).getByRole("button", { name: "Restore project and clips" }));
-    await waitFor(() => expect(api.restoreProjectClips).toHaveBeenCalledWith("prj_1"));
-    expect(api.restoreProject).toHaveBeenCalledWith("prj_1");
+    await waitFor(() => expect(api.restoreProject).toHaveBeenCalledWith("prj_1", true));
   });
 
   it("can restore just the project", async () => {
@@ -172,8 +190,7 @@ describe("ProjectsPage", () => {
     await openTrash();
     fireEvent.click(screen.getByRole("button", { name: "Restore" }));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Project only" }));
-    await waitFor(() => expect(api.restoreProject).toHaveBeenCalledWith("prj_1"));
-    expect(api.restoreProjectClips).not.toHaveBeenCalled();
+    await waitFor(() => expect(api.restoreProject).toHaveBeenCalledWith("prj_1", false));
   });
 
   it("empties the whole trash after asking", async () => {

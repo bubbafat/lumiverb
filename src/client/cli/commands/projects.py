@@ -216,27 +216,47 @@ def project_archive(
 def project_restore(
     project_id: Annotated[str, typer.Option("--id", help="Project ID.")],
     with_clips: Annotated[
-        bool, typer.Option("--with-clips", help="Also restore the project's clips that are in the trash.")
-    ] = False,
+        bool | None,
+        typer.Option(
+            "--with-clips/--without-clips",
+            help="What to do with the project's clips in the trash; asked if they exist and neither is given.",
+        ),
+    ] = None,
 ) -> None:
     """Take a project out of the trash (back to active or archived, as it
     was), or restore an archived project to active."""
     client = LumiverbClient()
-    resp = client.raw("POST", f"/v1/projects/{project_id}/restore")
+    path = f"/v1/projects/{project_id}/restore"
+    resp = client.raw("POST", path, json={} if with_clips is None else {"with_clips": with_clips})
     if resp.status_code == 404:
         # Not in the trash: un-archive it, as before trash existed.
         _set_status(project_id, "active")
-    else:
-        client._handle_response(resp)  # type: ignore[attr-defined]
-        console.print(f"[green]Took {project_id} out of the trash.[/green]")
-    if with_clips:
-        _restore_clips(client, project_id)
         return
-    trashed = client.get(f"/v1/projects/{project_id}").json().get("trashed_asset_count", 0)
-    if trashed:
+    if resp.status_code == 409:
+        # Clips in the trash: the server wants the user's choice.
+        details = resp.json().get("error", {}).get("details", {})
+        trashed = details.get("trashed_clips", 0)
         console.print(
             f"{_plural(trashed, 'clip', 'clips')} in this project {'is' if trashed == 1 else 'are'} in the trash. "
-            f"Restore them with --with-clips, or: lumiverb project restore-clips --id {project_id}"
+            "Restoring them brings them back everywhere: the library, search and other projects."
+        )
+        with_clips = typer.confirm("Restore them too?", default=False)
+        resp = client.raw("POST", path, json={"with_clips": with_clips})
+    client._handle_response(resp)  # type: ignore[attr-defined]
+    data = resp.json()
+    console.print(f"[green]Took {project_id} out of the trash.[/green]")
+    restored, missing = data.get("restored_clips", 0), data.get("missing_clips", 0)
+    left = data.get("trashed_clips", 0)
+    if restored:
+        console.print(f"[green]Restored {_plural(restored, 'clip', 'clips')} from the trash.[/green]")
+    if left:
+        console.print(
+            f"Left {_plural(left, 'clip', 'clips')} in the trash; restore later with: "
+            f"lumiverb project restore-clips --id {project_id}"
+        )
+    if missing:
+        console.print(
+            f"{_plural(missing, 'clip is', 'clips are')} missing from disk and will come back when the files do."
         )
 
 

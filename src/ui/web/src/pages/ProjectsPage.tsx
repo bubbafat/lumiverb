@@ -6,7 +6,6 @@ import {
   createProject,
   trashProject,
   restoreProject,
-  restoreProjectClips,
   emptyProjectTrash,
   setProjectStatus,
   ApiError,
@@ -212,17 +211,28 @@ export default function ProjectsPage() {
     },
   });
 
+  // withClips undefined: no choice made, because we think there's nothing
+  // to choose. If clips were trashed since, the server refuses with the real
+  // counts (409 clips_in_trash) and we ask then.
   const restoreMutation = useMutation({
-    mutationFn: async ({ project, withClips }: { project: ProjectItem; withClips: boolean }) => {
-      await restoreProject(project.project_id);
-      if (withClips) await restoreProjectClips(project.project_id);
-    },
+    mutationFn: ({ project, withClips }: { project: ProjectItem; withClips?: boolean }) =>
+      restoreProject(project.project_id, withClips),
     onSuccess: () => {
       setRestoring(null);
       setJustTrashed(null);
       refresh();
       queryClient.invalidateQueries({ queryKey: ["project"] });
       queryClient.invalidateQueries({ queryKey: ["project-assets"] });
+    },
+    onError: (err: ApiError, { project }) => {
+      if (err.code === "clips_in_trash" && err.details) {
+        const d = err.details as { trashed_clips?: number; missing_clips?: number };
+        setRestoring({
+          ...project,
+          trashed_asset_count: d.trashed_clips ?? 0,
+          missing_asset_count: d.missing_clips ?? 0,
+        });
+      }
     },
   });
 
@@ -237,7 +247,7 @@ export default function ProjectsPage() {
   const startRestore = (project: ProjectItem) => {
     // Only ask when there's something more to bring back.
     if ((project.trashed_asset_count ?? 0) > 0) setRestoring(project);
-    else restoreMutation.mutate({ project, withClips: false });
+    else restoreMutation.mutate({ project });
   };
 
   const handleCreateSubmit = (e: React.FormEvent) => {

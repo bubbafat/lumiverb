@@ -28,6 +28,10 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    /** The envelope's error code, e.g. "in_projects" for a 409 that needs the user's say. */
+    public code?: string,
+    /** The facts behind the code, e.g. which projects would lose clips. */
+    public details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "ApiError";
@@ -172,13 +176,19 @@ async function apiFetch<T>(
       handleUnauthorized();
     }
     let message = res.statusText;
+    let code: string | undefined;
+    let details: Record<string, unknown> | undefined;
     try {
-      const json = (await res.json()) as { error?: { message?: string } };
+      const json = (await res.json()) as {
+        error?: { code?: string; message?: string; details?: Record<string, unknown> };
+      };
       message = json?.error?.message ?? message;
+      code = json?.error?.code;
+      details = json?.error?.details;
     } catch {
       // ignore
     }
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, code, details);
   }
   if (res.status === 204) {
     return null as T;
@@ -238,10 +248,21 @@ export async function updateLibraryVisibility(
   });
 }
 
-export async function emptyTrash(): Promise<EmptyTrashResponse> {
+/** Delete trashed libraries for good. If their clips are in projects, the
+ * server refuses (409 in_projects, with the projects) unless
+ * removeFromProjects says the user agreed. */
+export async function emptyTrash(removeFromProjects = false): Promise<EmptyTrashResponse> {
   return apiFetch<EmptyTrashResponse>("/libraries/empty-trash", {
     method: "POST",
+    body: { remove_from_projects: removeFromProjects },
   });
+}
+
+/** What deleting clips for good would take them out of (a 409 in_projects's details). */
+export interface ProjectUsage {
+  assets_in_projects: number;
+  projects: { project_id: string; name: string; status: string; in_trash: boolean; clips: number }[];
+  other_projects: number;
 }
 
 export async function listDirectories(
@@ -824,9 +845,17 @@ export async function trashProject(projectId: string): Promise<void> {
   return apiFetch<void>(`/projects/${projectId}`, { method: "DELETE" });
 }
 
-/** Take a project out of the trash, back to active or archived as it was. */
-export async function restoreProject(projectId: string): Promise<void> {
-  return apiFetch<void>(`/projects/${projectId}/restore`, { method: "POST" });
+/** Take a project out of the trash, back to active or archived as it was.
+ * withClips says what to do with its clips in the trash; the server refuses
+ * (409 clips_in_trash) without it when there are some. */
+export async function restoreProject(
+  projectId: string,
+  withClips?: boolean,
+): Promise<{ restored_clips: number; trashed_clips: number; missing_clips: number }> {
+  return apiFetch<{ restored_clips: number; trashed_clips: number; missing_clips: number }>(`/projects/${projectId}/restore`, {
+    method: "POST",
+    body: withClips === undefined ? {} : { with_clips: withClips },
+  });
 }
 
 /** Delete trashed projects for good: these ones, or the whole trash. Their

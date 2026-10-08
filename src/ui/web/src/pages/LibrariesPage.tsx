@@ -8,6 +8,7 @@ import {
   deleteLibrary,
   emptyTrash,
   ApiError,
+  type ProjectUsage,
   updateLibraryVisibility,
 } from "../api/client";
 import { Badge } from "../components/Badge";
@@ -35,6 +36,8 @@ export default function LibrariesPage() {
   const [addError, setAddError] = useState("");
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [emptyTrashConfirm, setEmptyTrashConfirm] = useState(false);
+  // Set when the server says the trashed libraries' clips are in projects.
+  const [trashUsage, setTrashUsage] = useState<ProjectUsage | null>(null);
   const [visibilityUpdatingId, setVisibilityUpdatingId] = useState<
     string | null
   >(null);
@@ -83,12 +86,22 @@ export default function LibrariesPage() {
   });
 
   const emptyTrashMutation = useMutation({
-    mutationFn: emptyTrash,
+    mutationFn: (removeFromProjects: boolean) => emptyTrash(removeFromProjects),
     onSuccess: () => {
       setEmptyTrashConfirm(false);
+      setTrashUsage(null);
       queryClient.invalidateQueries({ queryKey: ["libraries"] });
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+    },
+    onError: (err: ApiError) => {
+      if (err.code === "in_projects" && err.details) setTrashUsage(err.details as unknown as ProjectUsage);
     },
   });
+  const closeEmptyTrash = () => {
+    setEmptyTrashConfirm(false);
+    setTrashUsage(null);
+  };
+  const usageTotal = trashUsage ? trashUsage.projects.length + trashUsage.other_projects : 0;
 
   const visibilityMutation = useMutation({
     mutationFn: (vars: {
@@ -399,9 +412,12 @@ export default function LibrariesPage() {
       {emptyTrashConfirm && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-          onClick={() => setEmptyTrashConfirm(false)}
+          onClick={closeEmptyTrash}
         >
           <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Empty trash"
             className="w-full max-w-md rounded-xl bg-gray-900 p-6 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
@@ -413,21 +429,48 @@ export default function LibrariesPage() {
               {trashedCount === 1 ? " library" : " libraries"} and all their
               assets. This cannot be undone.
             </p>
+            {trashUsage && (
+              <div className="mb-4 rounded-lg border border-amber-800/50 bg-amber-950/30 p-3 text-sm text-amber-100/90">
+                <p className="mb-2">
+                  {trashUsage.assets_in_projects}{" "}
+                  {trashUsage.assets_in_projects === 1 ? "clip" : "clips"} from these libraries{" "}
+                  {trashUsage.assets_in_projects === 1 ? "is" : "are"} in {usageTotal}{" "}
+                  {usageTotal === 1 ? "project" : "projects"}. Deleting them for good removes them from
+                  those projects.
+                </p>
+                <ul className="space-y-0.5 text-amber-200/80">
+                  {trashUsage.projects.map((p) => (
+                    <li key={p.project_id}>
+                      {p.name}: {p.clips} {p.clips === 1 ? "clip" : "clips"}
+                      {p.status === "archived" ? " (archived)" : ""}
+                      {p.in_trash ? " (in the trash)" : ""}
+                    </li>
+                  ))}
+                  {trashUsage.other_projects > 0 && (
+                    <li>and {trashUsage.other_projects} more you can&apos;t see</li>
+                  )}
+                </ul>
+              </div>
+            )}
             <div className="flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setEmptyTrashConfirm(false)}
+                onClick={closeEmptyTrash}
                 className="rounded-lg border border-gray-600 px-4 py-2 text-sm font-medium text-gray-300 transition-colors duration-150 hover:bg-gray-800"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                onClick={() => emptyTrashMutation.mutate()}
+                onClick={() => emptyTrashMutation.mutate(trashUsage !== null)}
                 disabled={emptyTrashMutation.isPending}
                 className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-red-500 disabled:opacity-50"
               >
-                {emptyTrashMutation.isPending ? "Deleting…" : "Empty trash"}
+                {emptyTrashMutation.isPending
+                  ? "Deleting…"
+                  : trashUsage
+                    ? "Delete and remove from projects"
+                    : "Empty trash"}
               </button>
             </div>
           </div>

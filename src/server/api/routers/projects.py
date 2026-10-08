@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, model_validator
 from sqlmodel import Session, select
 
 from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor
+from src.server.api.errors import DecisionRequiredError
 from src.server.database import get_control_session
 from src.server.repository.control_plane import PublicProjectRepository
 from src.server.repository.tenant import AssetRepository, ProjectRepository
@@ -92,6 +93,18 @@ class EmptyTrashRequest(BaseModel):
 
 class EmptyTrashResponse(BaseModel):
     deleted: int
+
+
+class RestoreProjectRequest(BaseModel):
+    # Required when the project has clips someone trashed: restore them too
+    # (they come back everywhere), or leave them in the trash.
+    with_clips: bool | None = None
+
+
+class RestoreProjectResponse(BaseModel):
+    restored_clips: int
+    trashed_clips: int  # still in the trash: the request said to leave them
+    missing_clips: int  # files missing from disk; back when the files are
 
 
 class RestoreClipsResponse(BaseModel):
@@ -418,22 +431,58 @@ def delete_project(
     repo.trash(project_id)
 
 
-@router.post("/{project_id}/restore", status_code=204)
+@router.post("/{project_id}/restore", response_model=RestoreProjectResponse)
 def restore_project(
     project_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
     user_id: Annotated[str, Depends(get_current_user_id)],
-) -> None:
+    body: RestoreProjectRequest | None = None,
+) -> RestoreProjectResponse:
     """Take a project out of the trash, back to active or archived as it
-    was. 404 unless it's in the caller's trash."""
+    was. 404 unless it's in the caller's trash.
+
+    If clips in it are in the trash, the request must say what to do with
+    them (with_clips), or it's refused with 409 clips_in_trash and the
+    counts: restoring them brings them back everywhere, so the user decides.
+    """
     repo = ProjectRepository(session)
     col = repo.get_by_id(project_id, include_trashed=True)
     if col is None or col.deleted_at is None:
         raise HTTPException(status_code=404, detail="Project not in the trash")
     if col.owner_user_id is not None and col.owner_user_id != user_id:
         raise HTTPException(status_code=404, detail="Project not in the trash")
+    with_clips = body.with_clips if body else None
+    trashed = repo.trashed_asset_count(project_id)
+    missing = repo.missing_asset_count(project_id)
+    if trashed and with_clips is None:
+        raise DecisionRequiredError(
+            "clips_in_trash",
+            f"{trashed} {'clip' if trashed == 1 else 'clips'} in this project "
+            f"{'is' if trashed == 1 else 'are'} in the trash. Send with_clips: true to restore "
+            f"{'it' if trashed == 1 else 'them'} too (everywhere), or false to leave "
+            f"{'it' if trashed == 1 else 'them'}.",
+            {"trashed_clips": trashed, "missing_clips": missing},
+        )
     repo.restore(project_id)
+    restored = _restore_trashed_clips(request, session, repo, project_id) if with_clips and trashed else 0
+    return RestoreProjectResponse(restored_clips=restored, trashed_clips=trashed - restored, missing_clips=missing)
+
+
+def _restore_trashed_clips(request: Request, session: Session, repo: ProjectRepository, project_id: str) -> int:
+    """Restore the project's clips that a person trashed, everywhere. Returns how many."""
+    from src.server.api.routers.assets import reindex_restored_asset
+
+    asset_repo = AssetRepository(session)
+    restored = 0
+    for asset_id in repo.trashed_asset_ids(project_id):
+        if asset_repo.restore(asset_id):
+            restored += 1
+            asset = asset_repo.get_by_id(asset_id)
+            if asset is not None:
+                reindex_restored_asset(request, asset)
+    return restored
 
 
 @router.post("/{project_id}/restore-clips", response_model=RestoreClipsResponse)
@@ -448,20 +497,11 @@ def restore_project_clips(
     everywhere: the library, search, and every other project holding them.
     Clips a scan trashed because their file went missing are only counted;
     they come back when the file does."""
-    from src.server.api.routers.assets import reindex_restored_asset
-
     repo = ProjectRepository(session)
     col = _get_project_or_404(repo, project_id)
     if not _can_view(col, user_id):
         raise HTTPException(status_code=404, detail="Project not found")
-    asset_repo = AssetRepository(session)
-    restored = 0
-    for asset_id in repo.trashed_asset_ids(project_id):
-        if asset_repo.restore(asset_id):
-            restored += 1
-            asset = asset_repo.get_by_id(asset_id)
-            if asset is not None:
-                reindex_restored_asset(request, asset)
+    restored = _restore_trashed_clips(request, session, repo, project_id)
     return RestoreClipsResponse(restored=restored, missing=repo.missing_asset_count(project_id))
 
 

@@ -951,7 +951,7 @@ def test_restore_puts_a_project_back_where_it_was(projects_env, archived):
     client.delete(f"/v1/projects/{project_id}", headers=_headers(api_key))
 
     r = client.post(f"/v1/projects/{project_id}/restore", headers=_headers(api_key))
-    assert r.status_code == 204, r.text
+    assert r.status_code == 200, r.text
 
     item = client.get(f"/v1/projects/{project_id}", headers=_headers(api_key)).json()
     assert item["status"] == ("archived" if archived else "active")
@@ -1104,7 +1104,10 @@ def _restore_clip(client, api_key, asset_id):
 
 
 def _delete_clips_for_good(client, api_key, *asset_ids):
-    r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": list(asset_ids)}, headers=_headers(api_key))
+    r = client.request(
+        "DELETE", "/v1/trash/empty", json={"asset_ids": list(asset_ids), "remove_from_projects": True},
+        headers=_headers(api_key),
+    )
     assert r.status_code == 200, r.text
 
 
@@ -1187,7 +1190,9 @@ def test_a_project_restored_after_its_clip_was_trashed(projects_env):
     client.delete(f"/v1/projects/{project_id}", headers=_headers(api_key))
     _trash_clips(client, api_key, a1)
 
-    client.post(f"/v1/projects/{project_id}/restore", headers=_headers(api_key))
+    r = client.post(f"/v1/projects/{project_id}/restore", json={"with_clips": False}, headers=_headers(api_key))
+    assert r.status_code == 200, r.text
+    assert r.json() == {"restored_clips": 0, "trashed_clips": 1, "missing_clips": 0}
     assert _clip_ids(client, api_key, project_id) == [a2]
     assert _item(client, api_key, project_id)["trashed_asset_count"] == 1
 
@@ -1279,7 +1284,7 @@ def test_restore_clips_after_restoring_the_project(projects_env):
 
     # Not while the project itself is in the trash.
     assert client.post(f"/v1/projects/{project_id}/restore-clips", headers=_headers(api_key)).status_code == 404
-    client.post(f"/v1/projects/{project_id}/restore", headers=_headers(api_key))
+    client.post(f"/v1/projects/{project_id}/restore", json={"with_clips": False}, headers=_headers(api_key))
     assert _item(client, api_key, project_id)["trashed_asset_count"] == 2
     r = client.post(f"/v1/projects/{project_id}/restore-clips", headers=_headers(api_key))
     assert r.json() == {"restored": 2, "missing": 0}
@@ -1339,3 +1344,112 @@ def test_project_usage_by_library(projects_env):
     assert r.status_code == 200, r.text
     assert r.json()["assets_in_projects"] == 2
     assert [(p["project_id"], p["clips"]) for p in r.json()["projects"]] == [(project_id, 2)]
+
+
+
+# ---------------------------------------------------------------------------
+# The API requires the user's decision, so every client has to ask for it
+# ---------------------------------------------------------------------------
+
+
+def _error(r) -> dict:
+    return r.json()["error"]
+
+
+@pytest.mark.slow
+def test_deleting_clips_in_projects_for_good_needs_an_explicit_yes(projects_env):
+    client, api_key, library_id = projects_env
+    clip = _ingest_asset(client, api_key, library_id, "intent/in-project.jpg")
+    project_id = _project(client, api_key, "Intent: holds the clip", [clip])
+    _trash_clips(client, api_key, clip)
+
+    r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [clip]}, headers=_headers(api_key))
+    assert r.status_code == 409, r.text
+    err = _error(r)
+    assert err["code"] == "in_projects"
+    assert err["details"]["assets_in_projects"] == 1
+    assert [p["project_id"] for p in err["details"]["projects"]] == [project_id]
+    assert _item(client, api_key, project_id)["trashed_asset_count"] == 1  # nothing deleted
+
+    r = client.request(
+        "DELETE", "/v1/trash/empty", json={"asset_ids": [clip], "remove_from_projects": True}, headers=_headers(api_key),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == 1
+    assert _item(client, api_key, project_id)["trashed_asset_count"] == 0
+
+
+@pytest.mark.slow
+def test_deleting_clips_in_no_project_needs_no_yes(projects_env):
+    client, api_key, library_id = projects_env
+    clip = _ingest_asset(client, api_key, library_id, "intent/loose.jpg")
+    _trash_clips(client, api_key, clip)
+    r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [clip]}, headers=_headers(api_key))
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == 1
+
+
+@pytest.mark.slow
+def test_emptying_the_whole_clip_trash_asks_too(projects_env):
+    client, api_key, library_id = projects_env
+    clip = _ingest_asset(client, api_key, library_id, "intent/whole-trash.jpg")
+    _project(client, api_key, "Intent: whole trash", [clip])
+    _trash_clips(client, api_key, clip)
+    r = client.request("DELETE", "/v1/trash/empty", json={}, headers=_headers(api_key))
+    assert r.status_code == 409, r.text
+    assert _error(r)["code"] == "in_projects"
+    assert client.post(f"/v1/assets/{clip}/restore", headers=_headers(api_key)).status_code == 204
+
+
+@pytest.mark.slow
+def test_emptying_library_trash_with_clips_in_projects_needs_a_yes(projects_env):
+    client, api_key, _ = projects_env
+    lib = client.post(
+        "/v1/libraries", json={"name": "Intent lib", "root_path": "/intent-lib"}, headers=_headers(api_key),
+    ).json()["library_id"]
+    clip = _ingest_asset(client, api_key, lib, "intent/lib-clip.jpg")
+    project_id = _project(client, api_key, "Intent: library clip", [clip])
+    assert client.delete(f"/v1/libraries/{lib}", headers=_headers(api_key)).status_code == 204
+
+    r = client.post("/v1/libraries/empty-trash", headers=_headers(api_key))
+    assert r.status_code == 409, r.text
+    assert _error(r)["code"] == "in_projects"
+    assert _error(r)["details"]["assets_in_projects"] == 1
+
+    r = client.post("/v1/libraries/empty-trash", json={"remove_from_projects": True}, headers=_headers(api_key))
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] >= 1
+    assert _item(client, api_key, project_id)["asset_count"] == 0
+
+
+@pytest.mark.slow
+def test_restoring_a_project_with_trashed_clips_needs_a_choice(projects_env):
+    client, api_key, library_id = projects_env
+    a1, a2 = (_ingest_asset(client, api_key, library_id, f"intent/choice-{i}.jpg") for i in range(2))
+    project_id = _project(client, api_key, "Intent: restore choice", [a1, a2])
+    _trash_clips(client, api_key, a1)
+    _trash_clips(client, api_key, a2, reason="missing")
+    client.delete(f"/v1/projects/{project_id}", headers=_headers(api_key))
+
+    r = client.post(f"/v1/projects/{project_id}/restore", headers=_headers(api_key))
+    assert r.status_code == 409, r.text
+    assert _error(r)["code"] == "clips_in_trash"
+    assert _error(r)["details"] == {"trashed_clips": 1, "missing_clips": 1}
+    assert project_id in _trashed(client, api_key)  # still in the trash
+
+    r = client.post(f"/v1/projects/{project_id}/restore", json={"with_clips": True}, headers=_headers(api_key))
+    assert r.status_code == 200, r.text
+    assert r.json() == {"restored_clips": 1, "trashed_clips": 0, "missing_clips": 1}
+    assert _clip_ids(client, api_key, project_id) == [a1]
+
+
+@pytest.mark.slow
+def test_restoring_a_project_without_trashed_clips_needs_no_choice(projects_env):
+    client, api_key, library_id = projects_env
+    clip = _ingest_asset(client, api_key, library_id, "intent/no-choice.jpg")
+    project_id = _project(client, api_key, "Intent: nothing to ask", [clip])
+    _trash_clips(client, api_key, clip, reason="missing")  # missing files can't be restored
+    client.delete(f"/v1/projects/{project_id}", headers=_headers(api_key))
+    r = client.post(f"/v1/projects/{project_id}/restore", headers=_headers(api_key))
+    assert r.status_code == 200, r.text
+    assert r.json() == {"restored_clips": 0, "trashed_clips": 0, "missing_clips": 1}

@@ -8,7 +8,8 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlmodel import Session
 
-from src.server.api.dependencies import get_tenant_session, require_tenant_admin
+from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_tenant_admin
+from src.server.api.errors import DecisionRequiredError
 from src.shared.utils import utcnow
 from src.server.repository.tenant import AssetRepository
 from src.server.storage.local import get_storage
@@ -21,6 +22,9 @@ router = APIRouter(prefix="/v1/trash", tags=["trash"])
 class EmptyTrashRequest(BaseModel):
     asset_ids: list[str] | None = None
     trashed_before: str | None = None  # ISO8601
+    # Required when any of the clips are in projects: deleting them for good
+    # takes them out of those projects, and the user has to have said yes.
+    remove_from_projects: bool = False
 
 
 class EmptyTrashResponse(BaseModel):
@@ -33,6 +37,7 @@ def empty_trash(
     body: EmptyTrashRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_tenant_admin)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> EmptyTrashResponse:
     """
     Permanently delete trashed assets. Admin only.
@@ -57,6 +62,18 @@ def empty_trash(
     if not to_delete:
         return EmptyTrashResponse(deleted=0)
     asset_ids = [a.asset_id for a in to_delete]
+    if not body.remove_from_projects:
+        from src.server.api.routers.assets import project_usage_summary
+
+        usage = project_usage_summary(session, user_id, asset_ids=asset_ids)
+        if usage.assets_in_projects:
+            n = usage.assets_in_projects
+            raise DecisionRequiredError(
+                "in_projects",
+                f"{n} of these clips {'is' if n == 1 else 'are'} in projects; deleting them for good "
+                "removes them from those projects. Send remove_from_projects: true to go ahead.",
+                usage.model_dump(),
+            )
     # Collect keys for file cleanup before DB delete
     keys_to_remove: list[str] = []
     for a in to_delete:
