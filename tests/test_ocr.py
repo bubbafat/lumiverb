@@ -305,9 +305,13 @@ def test_extract_text_reasoning_response(mock_chat, provider, tmp_path):
 
 @patch.object(OpenAICompatibleCaptionProvider, "_chat")
 def test_extract_text_missing_file(mock_chat, provider):
-    """Missing file returns empty string without calling the model."""
-    result = provider.extract_text(Path("/nonexistent/file.jpg"))
-    assert result == ""
+    """A missing file is an error (not "no text"), the image's not the
+    endpoint's, and the model isn't called."""
+    from src.client.workers.captions.base import CaptionError
+
+    with pytest.raises(CaptionError) as e:
+        provider.extract_text(Path("/nonexistent/file.jpg"))
+    assert e.value.endpoint_fault is False
     mock_chat.assert_not_called()
 
 
