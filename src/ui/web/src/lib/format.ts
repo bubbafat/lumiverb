@@ -26,3 +26,10 @@ export function formatDate(iso: string | null): string {
     return "Unknown";
   }
 }
+
+/** "5 photos", "1 video", "3 of 10 items": what a list holds, by the media filter in force. */
+export function mediaCount(n: number, media?: string | null, ofTotal?: number | null): string {
+  const noun = media === "image" ? "photo" : media === "video" ? "video" : "item";
+  const of = ofTotal != null ? ` of ${ofTotal.toLocaleString()}` : "";
+  return `${n.toLocaleString()}${of} ${noun}${n === 1 && ofTotal == null ? "" : "s"}`;
+}

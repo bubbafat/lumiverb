@@ -35,6 +35,7 @@ import { buildVirtualRows, buildFixedGridRows } from "../lib/virtualRows";
 import { useLocalStorage } from "../lib/useLocalStorage";
 // parseSearchQuery available for future prefix query support
 import type { VirtualRowKind } from "../lib/virtualRows";
+import { mediaCount } from "../lib/format";
 
 const PAGE_SIZE = 100;
 const ROW_GAP = 4;
@@ -167,6 +168,9 @@ export default function BrowsePage() {
     if (hasLib || !libraryId) return urlFilters;
     return [...urlFilters, { type: "library", value: libraryId }];
   }, [urlFilters, libraryId]);
+
+  // Photos, videos or both: names what the count is counting.
+  const mediaFilter = urlFilters.find((f) => f.type === "media")?.value ?? null;
 
   // Legacy compat: read path from URL for directory tree
   const pathPrefix = searchParams.get("path") ?? undefined;
@@ -724,7 +728,7 @@ export default function BrowsePage() {
       {/* Toolbar: status line */}
       {!isLoading && browseCount > 0 && (
         <p className="text-xs text-gray-500">
-          {browseCount.toLocaleString()}{currentDirTotal != null ? ` of ${currentDirTotal.toLocaleString()}` : ""} photo{browseCount === 1 ? "" : "s"}
+          {mediaCount(browseCount, mediaFilter, currentDirTotal)}
         </p>
       )}
 
@@ -754,7 +758,7 @@ export default function BrowsePage() {
                 <line x1="7" y1="12" x2="17" y2="12" />
                 <line x1="10" y1="18" x2="14" y2="18" />
               </svg>
-              <p className="text-sm text-gray-400 mb-2">No photos match your filters</p>
+              <p className="text-sm text-gray-400 mb-2">Nothing matches your filters</p>
               <button
                 type="button"
                 onClick={handleClearAll}
@@ -765,7 +769,7 @@ export default function BrowsePage() {
             </>
           ) : pathPrefix ? (
             // Browse mode, path filter active, empty folder
-            <p className="text-sm text-gray-400">No photos in this folder</p>
+            <p className="text-sm text-gray-400">Nothing in this folder</p>
           ) : (
             <>
               <svg
@@ -780,13 +784,9 @@ export default function BrowsePage() {
                 <circle cx="8.5" cy="10.5" r="1.5" />
                 <path d="M21 15l-5-5L5 19" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
-              <p className="text-sm text-gray-400">No photos yet</p>
+              <p className="text-sm text-gray-400">Nothing here yet</p>
               <p className="mt-1 text-xs text-gray-600">
-                Run{" "}
-                <code className="rounded bg-gray-800 px-1 py-0.5 text-gray-400">
-                  lumiverb ingest
-                </code>{" "}
-                to add photos
+                Photos and videos appear once the library is scanned.
               </p>
             </>
           )}

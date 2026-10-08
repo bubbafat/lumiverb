@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { basename, formatFileSize, formatDate } from "./format";
+import { basename, formatFileSize, formatDate, mediaCount } from "./format";
 
 describe("basename", () => {
   it("extracts filename from a nested path", () => {
@@ -53,5 +53,23 @@ describe("formatDate", () => {
     // The function only returns "Unknown" on null/empty or thrown exception.
     const result = formatDate("not-a-date");
     expect(typeof result).toBe("string");
+  });
+});
+
+describe("mediaCount", () => {
+  it("says photos when only photos are shown", () => {
+    expect(mediaCount(1, "image")).toBe("1 photo");
+    expect(mediaCount(5, "image")).toBe("5 photos");
+  });
+  it("says videos when only videos are shown", () => {
+    expect(mediaCount(1, "video")).toBe("1 video");
+    expect(mediaCount(1200, "video")).toBe("1,200 videos");
+  });
+  it("says items when photos and videos are mixed", () => {
+    expect(mediaCount(5)).toBe("5 items");
+    expect(mediaCount(1, null)).toBe("1 item");
+  });
+  it("shows how many of the folder", () => {
+    expect(mediaCount(3, "video", 10)).toBe("3 of 10 videos");
   });
 });
