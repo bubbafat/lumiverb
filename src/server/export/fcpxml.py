@@ -1,4 +1,12 @@
-"""FCPXML 1.10: an event of asset clips for Final Cut Pro."""
+"""FCPXML 1.8 for Final Cut Pro: an event of asset clips, plus a project.
+
+Version 1.8 (media path in asset@src, before 1.9's <media-rep>) is what
+both Final Cut and Resolve import across releases.
+
+The project lays every clip end to end in bin order on the first clip's
+frame grid: Resolve imports FCPXML as timelines too. It holds the clips;
+it isn't an edit (ADR-016).
+"""
 
 from __future__ import annotations
 
@@ -20,11 +28,12 @@ class FcpxmlProvider:
     content_type = "application/xml"
 
     def render(self, bin_: ExportBin) -> bytes:
-        root = ET.Element("fcpxml", version="1.10")
+        root = ET.Element("fcpxml", version="1.8")
         resources = ET.SubElement(root, "resources")
         event = ET.SubElement(ET.SubElement(root, "library"), "event", name=bin_.name)
 
         formats: dict[tuple, str] = {}
+        assets: list[tuple[ExportClip, str, str]] = []  # (clip, asset id, format id)
         next_id = 1
         for clip in bin_.clips:
             num, den = clip.rate
@@ -51,6 +60,7 @@ class FcpxmlProvider:
                     "start": start,
                     "duration": duration,
                     "hasVideo": "1",
+                    "src": clip.file_url,
                     "format": formats[key],
                     "hasAudio": "1" if clip.audio_channels else "0",
                     **(
@@ -64,7 +74,6 @@ class FcpxmlProvider:
                     ),
                 },
             )
-            ET.SubElement(asset, "media-rep", kind="original-media", src=clip.file_url)
             ET.SubElement(
                 event,
                 "asset-clip",
@@ -75,6 +84,32 @@ class FcpxmlProvider:
                 format=formats[key],
                 tcFormat="DF" if clip.is_drop_frame else "NDF",
             )
+            assets.append((clip, asset_id, formats[key]))
+
+        if assets:
+            lead, _, lead_format = assets[0]
+            num, den = lead.rate
+            project = ET.SubElement(event, "project", name=bin_.name)
+            sequence = ET.SubElement(
+                project, "sequence", format=lead_format, tcStart="0s", tcFormat="NDF"
+            )
+            spine = ET.SubElement(sequence, "spine")
+            position = 0
+            for clip, asset_id, format_id in assets:
+                length = round((clip.duration_sec or 0.0) * num / den)
+                ET.SubElement(
+                    spine,
+                    "asset-clip",
+                    ref=asset_id,
+                    name=clip.name,
+                    offset=f"{position * den}/{num}s",
+                    start=_seconds(clip.start_frames, clip),
+                    duration=f"{length * den}/{num}s",
+                    format=format_id,
+                    tcFormat="DF" if clip.is_drop_frame else "NDF",
+                )
+                position += length
+            sequence.set("duration", f"{position * den}/{num}s")
 
         ET.indent(root)
         body = ET.tostring(root, encoding="unicode")

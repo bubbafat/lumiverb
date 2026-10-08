@@ -1,7 +1,7 @@
 """Editor export providers (ADR-016 phase 1): a project becomes a bin of master clips.
 
 FCP7 XML (xmeml v5) is what DaVinci Resolve and Premiere Pro import;
-FCPXML 1.10 is Final Cut Pro's. Both point at the original files and
+FCPXML 1.8 is Final Cut Pro's (Resolve imports it too). Both point at the original files and
 carry frame rate, duration in frames, start timecode and audio layout.
 """
 
@@ -55,6 +55,12 @@ def _render(provider_id: str, bin_: ExportBin = BIN) -> ET.Element:
     return ET.fromstring(EXPORT_PROVIDERS[provider_id].render(bin_))
 
 
+def _file_of(root: ET.Element, master: ET.Element) -> ET.Element:
+    """The full <file> definition a master clip refers to (by id)."""
+    file_id = master.find(".//file").get("id")
+    return next(f for f in root.iter("file") if f.get("id") == file_id and f.find("pathurl") is not None)
+
+
 def test_registry() -> None:
     assert EXPORT_PROVIDERS["fcp7"].label == "DaVinci Resolve / Premiere Pro"
     assert EXPORT_PROVIDERS["fcp7"].file_extension == ".xml"
@@ -93,8 +99,9 @@ def test_fcp7_bin_of_master_clips() -> None:
 
 
 def test_fcp7_ntsc_drop_frame_clip() -> None:
-    clip = _render("fcp7").findall("bin/children/clip")[0]
-    file_ = clip.find(".//file")
+    root = _render("fcp7")
+    clip = root.findall("bin/children/clip")[0]
+    file_ = _file_of(root, clip)
 
     assert clip.findtext("duration") == "212"  # round(7.07 * 29.97)
     assert clip.findtext("rate/timebase") == "30"
@@ -109,8 +116,9 @@ def test_fcp7_ntsc_drop_frame_clip() -> None:
 
 
 def test_fcp7_pal_clip_without_audio() -> None:
-    clip = _render("fcp7").findall("bin/children/clip")[1]
-    file_ = clip.find(".//file")
+    root = _render("fcp7")
+    clip = root.findall("bin/children/clip")[1]
+    file_ = _file_of(root, clip)
 
     assert clip.findtext("duration") == "100"
     assert clip.findtext("rate/timebase") == "25"
@@ -121,12 +129,13 @@ def test_fcp7_pal_clip_without_audio() -> None:
 
 
 def test_fcp7_unprobed_clip_falls_back_to_30fps() -> None:
-    clip = _render("fcp7", ExportBin(name="x", clips=[UNPROBED])).find("bin/children/clip")
+    root = _render("fcp7", ExportBin(name="x", clips=[UNPROBED]))
+    clip = root.find("bin/children/clip")
 
     assert clip.findtext("rate/timebase") == "30"
     assert clip.findtext("rate/ntsc") == "FALSE"
     assert clip.findtext("duration") == "60"
-    assert clip.find(".//file/timecode/frame").text == "0"
+    assert _file_of(root, clip).findtext("timecode/frame") == "0"
 
 
 def test_fcp7_files_defined_once_and_referenced_by_id() -> None:
@@ -148,10 +157,11 @@ def test_fcp7_files_defined_once_and_referenced_by_id() -> None:
 def test_fcpxml_event_of_asset_clips() -> None:
     root = _render("fcpxml")
 
-    assert root.tag == "fcpxml" and root.get("version") == "1.10"
+    assert root.tag == "fcpxml" and root.get("version") == "1.8"
     event = root.find("library/event")
     assert event.get("name") == "Customer Video <123>"
     clips = event.findall("asset-clip")
+    assert event.find("project").get("name") == "Customer Video <123>"
     assert [c.get("name") for c in clips] == ["My Clip & Co.mov", "pal.mxf"]
 
 
@@ -163,8 +173,7 @@ def test_fcpxml_asset_and_format() -> None:
 
     assert fmt.get("frameDuration") == "1001/30000s"
     assert (fmt.get("width"), fmt.get("height")) == ("640", "360")
-    assert asset.find("media-rep").get("src") == "file:///Volumes/DAS/clips/My%20Clip%20%26%20Co.mov"
-    assert asset.find("media-rep").get("kind") == "original-media"
+    assert asset.get("src") == "file:///Volumes/DAS/clips/My%20Clip%20%26%20Co.mov"
     assert asset.get("duration") == "212212/30000s"  # 212 frames
     assert asset.get("start") == "107999892/30000s"  # 01:00:00;00 = 107892 frames
     assert asset.get("hasAudio") == "1"
@@ -260,7 +269,8 @@ def test_bad_timecode_never_breaks_an_export(tc: str) -> None:
 
     for provider_id in ("fcp7", "fcpxml"):
         _render(provider_id, ExportBin(name="x", clips=[clip]))
-    file_ = _render("fcp7", ExportBin(name="x", clips=[clip])).find(".//file")
+    root = _render("fcp7", ExportBin(name="x", clips=[clip]))
+    file_ = _file_of(root, root.find("bin/children/clip"))
     assert file_.findtext("timecode/string") == "00:00:00:00"
     assert file_.findtext("timecode/frame") == "0"
 
@@ -276,3 +286,48 @@ def test_common_rates(num: int, den: int, timebase: str, ntsc: str) -> None:
     assert (master.findtext("rate/timebase"), master.findtext("rate/ntsc")) == (timebase, ntsc)
     fmt = _render("fcpxml", ExportBin(name="x", clips=[clip])).find("resources/format")
     assert fmt.get("frameDuration") == f"{den}/{num}s"
+
+
+# ---------------------------------------------------------------------------
+# An independent reader: OpenTimelineIO's FCP7 and FCPXML adapters
+# ---------------------------------------------------------------------------
+
+
+def _otio_clips(provider_id: str, bin_: ExportBin = BIN) -> list:
+    import opentimelineio as otio
+
+    adapter = {"fcp7": "fcp_xml", "fcpxml": "fcpx_xml"}[provider_id]
+    result = otio.adapters.read_from_string(EXPORT_PROVIDERS[provider_id].render(bin_).decode(), adapter)
+    timelines = [result] if isinstance(result, otio.schema.Timeline) else [
+        t for t in result.find_children() if isinstance(t, otio.schema.Timeline)
+    ] if hasattr(result, "find_children") else []
+    if isinstance(result, otio.schema.SerializableCollection):
+        timelines = [t for t in result if isinstance(t, otio.schema.Timeline)]
+    assert timelines, "no timeline in the export"
+    return [c for t in timelines for c in t.find_clips()]
+
+
+@pytest.mark.parametrize("provider_id", ["fcp7", "fcpxml"])
+def test_independent_reader_finds_every_clip_online(provider_id: str) -> None:
+    """Resolve imports these formats as timelines and resolves each clip's
+    file as it reads. If a reader built the same way finds a clip with no
+    media, that clip would import offline."""
+    import opentimelineio as otio
+    from urllib.parse import unquote
+
+    clips = _otio_clips(provider_id)
+
+    assert clips
+    for clip in clips:
+        assert isinstance(clip.media_reference, otio.schema.ExternalReference), clip.name
+    paths = {unquote(c.media_reference.target_url).replace("file://localhost", "file://") for c in clips}
+    assert paths == {"file:///Volumes/DAS/clips/My Clip & Co.mov", "file:///Volumes/DAS/pal.mxf"}
+
+
+@pytest.mark.parametrize("provider_id", ["fcp7", "fcpxml"])
+def test_independent_reader_sees_clip_lengths(provider_id: str) -> None:
+    clips = _otio_clips(provider_id)
+    seconds = {c.name: round(c.duration().to_seconds(), 1) for c in clips}
+
+    assert seconds["My Clip & Co.mov"] == 7.1
+    assert seconds["pal.mxf"] == 4.0
