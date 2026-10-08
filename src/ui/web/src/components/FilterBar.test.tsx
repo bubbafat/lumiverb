@@ -61,6 +61,7 @@ describe("FilterBar for a public page's visitor", () => {
     expect(screen.queryByText("Favorites")).toBeNull();
     expect(screen.queryByText("Rating")).toBeNull();
     expect(screen.queryByTitle("3 stars")).toBeNull();
+    expect(screen.queryByPlaceholderText("Search people...")).toBeNull();
   });
 
   it("doesn't look people up while a visitor types", () => {

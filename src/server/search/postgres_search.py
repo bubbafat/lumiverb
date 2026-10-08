@@ -33,7 +33,7 @@ def search_assets(
     from src.server.search.query_builder import parse_query, postgres_rank_clauses
 
     lib_condition = "a.library_id = :library_id AND" if library_id else ""
-    rank_expr, rank_params = postgres_rank_clauses(query)
+    rank_expr, rank_params = postgres_rank_clauses(query, include_transcripts=include_transcripts)
 
     # Build one ILIKE group per parsed term and AND them together so
     # a quoted phrase acts as a literal substring constraint instead

@@ -267,6 +267,9 @@ def page_assets(
         library = lib_repo.get_by_id(library_id)
         if library is None or not library.is_public:
             raise HTTPException(status_code=404, detail="Not found")
+        # Ratings are a signed-in person's; who's in a photo isn't for visitors to probe.
+        if person_id or any(v is not None for v in (favorite, star_min, star_max, color, has_rating)):
+            raise HTTPException(status_code=403, detail="That filter isn't available on public pages")
 
     sort_col = sort if sort in SORT_COLUMNS else "taken_at"
     direction = dir if dir in ("asc", "desc") else "desc"
@@ -664,6 +667,31 @@ def _check_public_request(request: Request, session: Session, asset) -> None:
                   q.get("public_project_id") or q.get("public_collection_id"))
 
 
+def _project_visitor_view(response: AssetResponse) -> AssetResponse:
+    """What a public project's page may show of a clip: what its clip list gives
+    (shape, time, length) and what's seen or heard in it. Not where it lives,
+    where it was shot, what shot it, or the team's notes."""
+    return AssetResponse(
+        asset_id=response.asset_id,
+        library_id="",
+        rel_path="",
+        media_type=response.media_type,
+        status=response.status,
+        proxy_key=None,
+        thumbnail_key=None,
+        width=response.width,
+        height=response.height,
+        taken_at=response.taken_at,
+        duration_sec=response.duration_sec,
+        ai_description=response.ai_description,
+        ai_tags=response.ai_tags,
+        ocr_text=response.ocr_text,
+        transcript_srt=response.transcript_srt,
+        transcript_language=response.transcript_language,
+        video_facet=response.video_facet,
+    )
+
+
 def _trim_public_transcript(request: Request, session: Session, response: AssetResponse) -> None:
     """A public page's transcript stops where its playback does, and doesn't say who wrote the note."""
     if not getattr(request.state, "is_public_request", False):
@@ -891,6 +919,9 @@ def get_asset(
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
     _check_public_request(request, session, asset)
+    via_project = getattr(request.state, "is_public_request", False) and bool(
+        request.query_params.get("public_project_id") or request.query_params.get("public_collection_id")
+    )
     response = _to_asset_response(asset)
     ai_description: str | None = None
     ai_tags: list[str] = []
@@ -910,7 +941,7 @@ def get_asset(
     # Stored rows are returned as they are (validation is for writes).
     response.video_facet = VideoFacetModel.model_construct(**facet) if facet else None
     _trim_public_transcript(request, session, response)
-    return response
+    return _project_visitor_view(response) if via_project else response
 
 
 @router.put("/{asset_id}/video-facet", response_model=VideoFacetModel)

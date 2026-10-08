@@ -65,3 +65,33 @@ def test_signed_in_search_has_everything(quickwit):
     scores, _, _ = _search(None)
     assert set(scores) == {"ast_early_scene", "ast_late_scene", "ast_no_time", "ast_early_words", "ast_late_words"}
     assert any("transcript_text" in q for q in quickwit.asset_queries)
+
+
+def test_the_public_guard_takes_only_a_plain_and_of_filters():
+    # An OR could widen a visitor's scope past the library filter.
+    from unittest.mock import MagicMock
+
+    from fastapi import HTTPException
+
+    from src.server.api.routers.query import guard_public_spec
+    from src.server.models.query_filter import Combinator, GroupFilter, LibraryScope, MediaType, QuerySpec
+
+    request = MagicMock()
+    request.state.is_public_request = True
+    session = MagicMock()
+    lib = LibraryScope(library_ids=("lib_pub",))
+    nested = QuerySpec(root=GroupFilter(children=(lib, GroupFilter(combinator=Combinator.OR, children=(MediaType(types=("video",)),)))))
+    with pytest.raises(HTTPException) as e:
+        guard_public_spec(request, session, nested)
+    assert e.value.status_code == 403
+    either = QuerySpec(root=GroupFilter(combinator=Combinator.OR, children=(lib,)))
+    with pytest.raises(HTTPException):
+        guard_public_spec(request, session, either)
+
+
+def test_fallback_ranking_doesnt_read_the_transcript_when_matching_doesnt():
+    from src.server.search.query_builder import postgres_rank_clauses
+
+    with_t, _ = postgres_rank_clauses("zebra")
+    without, _ = postgres_rank_clauses("zebra", include_transcripts=False)
+    assert "transcript_text" in with_t and "transcript_text" not in without

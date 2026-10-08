@@ -18,7 +18,7 @@ from sqlmodel import Session
 
 from src.server.api.dependencies import get_optional_user_id, get_tenant_session
 from src.server.models.filter_registry import parse_f_params
-from src.server.models.query_filter import LibraryScope, PersonFilter, SearchTerm
+from src.server.models.query_filter import Combinator, GroupFilter, LibraryScope, PersonFilter, SearchTerm
 from src.server.repository.tenant import LibraryRepository, UnifiedBrowseRepository
 
 logger = logging.getLogger(__name__)
@@ -427,6 +427,10 @@ def guard_public_spec(request: Request, session: Session, spec) -> int | None:
     """
     if not getattr(request.state, "is_public_request", False):
         return None
+    # A plain AND only: an OR (at any depth) could widen scope past the library filter.
+    root = spec.root
+    if root.combinator != Combinator.AND or any(isinstance(c, GroupFilter) for c in root.children):
+        raise HTTPException(status_code=403, detail="Grouped filters aren't available on public pages")
     if spec.needs_rating_join or any(isinstance(leaf, PersonFilter) for leaf in spec.leaves):
         raise HTTPException(status_code=403, detail="That filter isn't available on public pages")
     scoped_lib_ids: set[str] = set()

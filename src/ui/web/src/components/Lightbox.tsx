@@ -368,7 +368,8 @@ export function Lightbox({
   });
 
   const isImage = !isVideo;
-  const hasFaces = isImage && (asset.face_count ?? 0) > 0;
+  // Who's in a photo is for signed-in people: no faces button, key or overlay for visitors.
+  const hasFaces = !isPublic && isImage && (asset.face_count ?? 0) > 0;
 
   const queryClient = useQueryClient();
 

@@ -409,3 +409,89 @@ def test_scene_frames_past_the_public_cap_arent_public(public_lib_client, spoken
     r = client.get(f"/v1/assets/{spoken}/artifacts/scene_rep",
                    params={"public_library_id": library_id, "rep_frame_ms": 60_000})
     assert r.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Public projects: visitors get what the project list gives, no more
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def shared_clip(public_lib_client):
+    """A clip from the PRIVATE library, with GPS, camera and a note, in a public project."""
+    import io
+    import json as _json
+
+    from PIL import Image
+
+    client, api_key, _, private_library_id = public_lib_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+    buf = io.BytesIO()
+    Image.new("RGB", (32, 18)).save(buf, format="JPEG")
+    buf.seek(0)
+    exif = {"sha256": os.urandom(32).hex(), "gps_lat": 40.7, "gps_lon": -74.0, "camera_make": "Sony"}
+    r = client.post("/v1/ingest", data={"library_id": private_library_id, "rel_path": "Clients/ACME/interview_jane.mov",
+                                        "file_size": "10", "media_type": "video", "width": "32", "height": "18",
+                                        "exif": _json.dumps(exif)},
+                    files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=auth)
+    assert r.status_code == 200, r.text
+    asset_id = r.json()["asset_id"]
+    assert client.put(f"/v1/assets/{asset_id}/note", json={"text": "internal: reshoot"}, headers=auth).status_code == 200
+    r = client.post("/v1/projects", json={"name": "Reel", "asset_ids": [asset_id], "visibility": "public"}, headers=auth)
+    assert r.status_code == 201, r.text
+    return asset_id, r.json()["project_id"]
+
+
+@pytest.mark.slow
+def test_a_public_projects_clip_detail_is_privacy_stripped(public_lib_client, shared_clip):
+    client, api_key, _, private_library_id = public_lib_client
+    asset_id, project_id = shared_clip
+    r = client.get(f"/v1/assets/{asset_id}", params={"public_project_id": project_id})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    # What the project list gives: shape and time.
+    assert (d["asset_id"], d["media_type"], d["width"], d["height"]) == (asset_id, "video", 32, 18)
+    # Not where it lives, where it was shot, what shot it, or what the team noted.
+    assert d["rel_path"] == "" and d["library_id"] == ""
+    for field in ("gps_lat", "gps_lon", "sha256", "camera_make", "camera_model", "proxy_key", "thumbnail_key",
+                  "video_preview_key", "note", "note_author", "note_updated_at", "file_size"):
+        assert d.get(field) in (None, ""), (field, d.get(field))
+    # Signed in, it's all there.
+    full = client.get(f"/v1/assets/{asset_id}", headers={"Authorization": f"Bearer {api_key}"}).json()
+    assert full["gps_lat"] == 40.7 and full["note"] == "internal: reshoot" and full["library_id"] == private_library_id
+
+
+@pytest.mark.slow
+def test_project_visitors_cant_reach_library_health_or_a_private_revision(public_lib_client, shared_clip):
+    client, _, _, private_library_id = public_lib_client
+    _, project_id = shared_clip
+    params = {"public_project_id": project_id}
+    assert client.get("/v1/libraries/health", params=params).status_code == 401
+    assert client.get(f"/v1/libraries/{private_library_id}/revision", params=params).status_code == 404
+
+
+@pytest.mark.slow
+def test_a_public_library_doesnt_show_its_folder_on_the_server(public_lib_client):
+    client, api_key, library_id, _ = public_lib_client
+    public = client.get(f"/v1/libraries/{library_id}").json()
+    assert not public.get("root_path")
+    signed_in = client.get(f"/v1/libraries/{library_id}", headers={"Authorization": f"Bearer {api_key}"}).json()
+    assert signed_in["root_path"] == "/pub"
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("param", [{"person_id": "per_x"}, {"favorite": "true"}, {"star_min": "3"}, {"color": "red"},
+                                   {"has_rating": "true"}])
+def test_asset_pages_refuse_visitors_private_filters(public_lib_client, param):
+    client, _, library_id, _ = public_lib_client
+    r = client.get("/v1/assets/page", params={"library_id": library_id, **param})
+    assert r.status_code == 403, (param, r.status_code, r.text)
+
+
+@pytest.mark.slow
+def test_similar_from_a_trashed_clip_isnt_public(public_lib_client):
+    client, api_key, library_id, _ = public_lib_client
+    asset_id = _ingest(client, api_key, library_id, "sim/trashed.jpg", media_type="image")
+    assert client.delete(f"/v1/assets/{asset_id}", headers={"Authorization": f"Bearer {api_key}"}).status_code == 204
+    r = client.get("/v1/similar", params={"asset_id": asset_id, "library_id": library_id})
+    assert r.status_code == 404

@@ -139,7 +139,7 @@ class LibraryHealthItem(BaseModel):
     pending: int
 
 
-@router.get("/health", response_model=list[LibraryHealthItem])
+@router.get("/health", response_model=list[LibraryHealthItem], dependencies=[Depends(require_signed_in)])
 def list_library_health(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> list[LibraryHealthItem]:
@@ -236,12 +236,14 @@ def get_library(
     library = repo.get_by_id(library_id)
     if library is None:
         raise HTTPException(status_code=404, detail="Library not found")
-    if getattr(request.state, "is_public_request", False) and not library.is_public:
+    is_public_request = getattr(request.state, "is_public_request", False)
+    if is_public_request and not library.is_public:
         raise HTTPException(status_code=404, detail="Not found")
     return LibraryResponse(
         library_id=library.library_id,
         name=library.name,
-        root_path=library.root_path,
+        # Where the files are on the server isn't a visitor's business.
+        root_path="" if is_public_request else library.root_path,
         is_public=library.is_public,
         cover_asset_id=repo.resolve_cover(library),
     )
@@ -424,6 +426,7 @@ class LibraryRevisionResponse(BaseModel):
 @router.get("/{library_id}/revision", response_model=LibraryRevisionResponse)
 def get_library_revision(
     library_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> LibraryRevisionResponse:
     """Lightweight endpoint for UI polling. Returns the library revision counter
@@ -431,7 +434,7 @@ def get_library_revision(
     re-fetching full asset pages."""
     lib_repo = LibraryRepository(session)
     library = lib_repo.get_by_id(library_id)
-    if library is None:
+    if library is None or (getattr(request.state, "is_public_request", False) and not library.is_public):
         raise HTTPException(status_code=404, detail="Library not found")
     asset_count = AssetRepository(session).count_by_library(library_id)
     return LibraryRevisionResponse(
