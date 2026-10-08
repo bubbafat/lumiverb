@@ -43,7 +43,7 @@ BRANCH=""
 CERTBOT_EMAIL=""
 SKIP_CERTBOT=false
 CERTIFICATE_ARCHIVE=""
-NO_FIREWALL=false
+NO_FIREWALL=""
 DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
@@ -56,11 +56,13 @@ while [[ $# -gt 0 ]]; do
     --certificate)    CERTIFICATE_ARCHIVE="${2:?Missing value for --certificate}"; shift 2 ;;
     --skip-certbot)   SKIP_CERTBOT=true; shift ;;
     --no-firewall)    NO_FIREWALL=true; shift ;;
+    --firewall)       NO_FIREWALL=false; shift ;;
     --dry-run)        DRY_RUN=true; shift ;;
     -h|--help)
-      echo "Usage: $0 --domain <FQDN|_> --api-upstream <URL> [--email <certbot-email>] [--certificate <letsencrypt.tar.gz>] [--repo <url>] [--branch <ref>] [--skip-certbot] [--no-firewall] [--dry-run]"
+      echo "Usage: $0 --domain <FQDN|_> --api-upstream <URL> [--email <certbot-email>] [--certificate <letsencrypt.tar.gz>] [--repo <url>] [--branch <ref>] [--skip-certbot] [--no-firewall | --firewall] [--dry-run]"
       echo "  --domain _      Answer on any host name or address, over HTTP (no certificate)"
       echo "  --no-firewall   Leave ufw alone (the host runs other services)"
+      echo "  --firewall      Configure ufw even where deploy-api.sh remembered --no-firewall"
       exit 0
       ;;
     *) fail "Unknown option: $1" ;;
@@ -97,7 +99,7 @@ if [[ -e "$API_ENV" && ! -r "$API_ENV" ]] || [[ -d "$API_CONF_DIR" && ! -x "$API
 fi
 _api_val() { grep "^${1}=" "$API_ENV" 2>/dev/null | head -1 | cut -d= -f2- || true; }
 BRANCH="${BRANCH:-$(_api_val BRANCH)}"; BRANCH="${BRANCH:-main}"
-[[ "$NO_FIREWALL" == "true" ]] || NO_FIREWALL="$(_api_val NO_FIREWALL)"
+NO_FIREWALL="${NO_FIREWALL:-$(_api_val NO_FIREWALL)}"
 [[ "$NO_FIREWALL" == "true" ]] || NO_FIREWALL=false
 
 if [[ "$DRY_RUN" == "true" ]]; then

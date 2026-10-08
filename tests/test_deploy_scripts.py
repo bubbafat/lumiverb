@@ -97,6 +97,14 @@ def test_flags_beat_remembered_values(tmp_path):
     assert s["DATA_DIR"] == "/srv/lv"
 
 
+def test_firewall_turns_a_remembered_no_firewall_back_off(tmp_path):
+    # Remembered once, --no-firewall could never be undone.
+    assert _settings(tmp_path, "--firewall", env_file=REMEMBERED)["NO_FIREWALL"] == "false"
+    assert _settings(tmp_path, "--no-firewall", "--firewall", env_file=REMEMBERED)["NO_FIREWALL"] == "false"
+    assert _settings(tmp_path, "--firewall", "--no-firewall")["NO_FIREWALL"] == "true"
+    assert _web_settings(tmp_path, "--firewall", env_file=REMEMBERED)["NO_FIREWALL"] == "false"
+
+
 def test_earlier_install_without_pg_version_keeps_the_cluster_on_its_port(tmp_path):
     # Installs from before PG_VERSION was remembered: use the version of the
     # cluster on our port, not whichever is newest, and never 18 by default

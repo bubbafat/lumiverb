@@ -17,8 +17,8 @@
 #
 # Idempotent: safe to run again to update an existing install. Ports, the
 # app host, the data dir, the branch, the Postgres version and --no-firewall
-# given once are remembered in /etc/lumiverb/env. --dry-run prints what a
-# run would use and changes nothing.
+# given once are remembered in /etc/lumiverb/env (--firewall undoes
+# --no-firewall). --dry-run prints what a run would use and changes nothing.
 #
 set -euo pipefail
 
@@ -56,7 +56,7 @@ PG_PORT=""
 PG_VERSION=""
 API_PORT=""
 QW_PORT=""
-NO_FIREWALL=false
+NO_FIREWALL=""
 WITH_WORKER=false
 DRY_RUN=false
 ROOT_MAPS=()
@@ -79,6 +79,7 @@ while [[ $# -gt 0 ]]; do
     --api-port)         API_PORT="${2:?Missing value for --api-port}"; shift 2 ;;
     --quickwit-port)    QW_PORT="${2:?Missing value for --quickwit-port}"; shift 2 ;;
     --no-firewall)      NO_FIREWALL=true; shift ;;
+    --firewall)         NO_FIREWALL=false; shift ;;
     --worker)           WITH_WORKER=true; shift ;;
     --root-map)         ROOT_MAPS+=("${2:?Missing value for --root-map}"); shift 2 ;;
     --dry-run)          DRY_RUN=true; shift ;;
@@ -86,10 +87,11 @@ while [[ $# -gt 0 ]]; do
       echo "Usage: $0 (--domain <FQDN> | --app-host <URL>) [--email <email>] [--tenant <name>] [--data-dir <path>]"
       echo "          [--api-listen-host <ip>] [--api-allow-from <cidr>] [--vision-api-url <url>] [--vision-api-key <key>]"
       echo "          [--pg-port <port>] [--pg-version <major>] [--api-port <port>] [--quickwit-port <port>]"
-      echo "          [--no-firewall] [--worker] [--root-map <server-prefix>=<local-prefix>]... [--repo <url>] [--branch <ref>] [--dry-run]"
+      echo "          [--no-firewall | --firewall] [--worker] [--root-map <server-prefix>=<local-prefix>]... [--repo <url>] [--branch <ref>] [--dry-run]"
       echo ""
       echo "  --app-host       Base URL people reach Lumiverb at, instead of https://<domain> (e.g. http://192.168.86.166)"
-      echo "  --no-firewall    Leave ufw alone (the host runs other services)"
+      echo "  --no-firewall    Leave ufw alone (the host runs other services); remembered"
+      echo "  --firewall       Turn ufw on again after --no-firewall"
       echo "  --worker         Install and start lumiverb-worker: scan and enrich on this machine (ffmpeg, Whisper, ...)"
       echo "  --root-map       Where a library root prefix is on this machine, e.g. /Volumes/media-01=/mnt/media-01"
       echo "  --dry-run        Print the settings this run would use (flags, else values remembered from"
@@ -145,7 +147,7 @@ QW_GRPC_PORT=$((QW_PORT + 1))
 # search would come up empty and every artifact would 404.
 DATA_DIR="${DATA_DIR_OVERRIDE:-$(_existing_val DATA_DIR)}"; DATA_DIR="${DATA_DIR:-/var/lib/lumiverb}"
 BRANCH="${BRANCH:-$(_existing_val BRANCH)}";             BRANCH="${BRANCH:-main}"
-[[ "$NO_FIREWALL" == "true" ]] || NO_FIREWALL="$(_existing_val NO_FIREWALL)"
+NO_FIREWALL="${NO_FIREWALL:-$(_existing_val NO_FIREWALL)}"
 [[ "$NO_FIREWALL" == "true" ]] || NO_FIREWALL=false
 # Postgres: the version an earlier install uses; new installs get 18, which
 # Ubuntu 26.04 ships with pgvector (tests run against it too). Installs from
