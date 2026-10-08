@@ -1277,7 +1277,7 @@ export function Lightbox({
                 <>
                   <hr className="border-gray-700" />
                   <div>
-                    <div className="mb-1 flex items-center justify-between">
+                    <div className="mb-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
                       <span className="text-xs font-medium uppercase tracking-wide text-gray-500">
                         Transcript
                         {detail.transcript_language && (

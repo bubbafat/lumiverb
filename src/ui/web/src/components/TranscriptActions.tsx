@@ -7,9 +7,9 @@ function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-function Alert({ text }: { text: string | null }) {
+function Alert({ text, className = "" }: { text: string | null; className?: string }) {
   return text ? (
-    <p role="alert" className="mt-1 text-xs text-red-400">
+    <p role="alert" className={`mt-1 text-xs text-red-400 ${className}`}>
       {text}
     </p>
   ) : null;
@@ -64,7 +64,9 @@ interface ActionsProps {
   onChanged: () => void;
 }
 
-/** Download, and for editors Replace and Remove, beside a transcript. */
+/** Download, and for editors Replace and Remove, beside a transcript. Goes in
+ * a wrapping flex row after its label: the buttons move under the label when
+ * they don't fit beside it, and a message takes a line of its own. */
 export function TranscriptActions({ assetId, source, machineUnderneath, canEdit, onDownload, onChanged }: ActionsProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -75,8 +77,8 @@ export function TranscriptActions({ assetId, source, machineUnderneath, canEdit,
     : { text: "Remove", label: mine ? "Remove your transcript" : "Remove the machine's transcript" };
 
   return (
-    <div className="flex flex-col items-end">
-      <div className="flex gap-2">
+    <>
+      <div className="ml-auto flex gap-3 whitespace-nowrap">
         <button type="button" className={linkClass} onClick={onDownload}>
           Download
         </button>
@@ -93,6 +95,7 @@ export function TranscriptActions({ assetId, source, machineUnderneath, canEdit,
               type="button"
               className="text-xs text-red-400 hover:text-red-300 disabled:opacity-50"
               aria-label={remove.label}
+              title={remove.label}
               disabled={busy}
               onClick={async () => {
                 setBusy(true);
@@ -117,8 +120,8 @@ export function TranscriptActions({ assetId, source, machineUnderneath, canEdit,
           </>
         )}
       </div>
-      <Alert text={error} />
-    </div>
+      <Alert text={error} className="basis-full text-right" />
+    </>
   );
 }
 
