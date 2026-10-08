@@ -155,6 +155,9 @@ def test_reported_changes_are_scanned_then_acknowledged(das: Path) -> None:
     [call] = scan.call_args_list
     assert call.kwargs["path_prefix"] == "Day 1"
     assert call.kwargs["allow_moves"] is True
+    # The archive model: missing files are archived (reversible) on a healthy
+    # mount, so no 5% guard holds them back (Robert's call, Oct 8).
+    assert call.kwargs["allow_mass_delete"] is True
     assert server.acks == [("lib_1", [{"change_id": "chg_1", "version": 7}])]
 
 

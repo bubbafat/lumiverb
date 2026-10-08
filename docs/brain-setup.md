@@ -81,33 +81,23 @@ sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb library list
 
 `library list` shows a **Here** column with the mapped path. Within a minute the worker starts the first full scan. That is the fresh ingest of the DAS: probe, poster and preview, then analysis proxies, transcripts and scenes.
 
-### 6. Vision AI (optional)
+### 6. Vision AI
 
-Descriptions, OCR and scene descriptions need a vision endpoint. Without one, the worker skips those steps; it doesn't fail them.
+Descriptions, OCR and scene descriptions need a vision endpoint; without one, the worker skips those steps rather than failing them. For now the brain uses `qwen3-vl:8b` in the Ollama container of the ResourceSpace stack (`~/dam-stack/resourcespace`), on the RTX 3080, reached at its internal address:
 
 ```bash
-sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb admin tenants set-vision --help
+sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb config set --vision-api-url http://172.18.0.6:11434/v1 --vision-model-id qwen3-vl:8b
 ```
+
+That address changes if the container is recreated, and the endpoint goes with ResourceSpace: give Lumiverb its own Ollama before switching ResourceSpace off.
 
 ### 7. The Mac app
 
-Point it at `http://192.168.86.166`. The Swift changes it needs are under "Mac app changes" below.
+Not pointed at the brain yet (your call, Oct 8): its Swift changes wait. Until then it keeps scanning and enriching its own server. The changes it needs are under "Mac app changes" below.
 
-### 8. Read-only mount (later)
+### 8. The DAS mounts
 
-`/mnt/media-01` and `/mnt/media-02` are mounted read-write from `/etc/fstab`, and ResourceSpace may rely on that. Lumiverb can't write there anyway (the worker's sandbox). Once ResourceSpace is off, add `ro` to those two fstab lines and remount:
-
-```bash
-sudo sed -i 's|^\(//10.10.10.1/media-0[12] .* cifs \)|\1ro,|' /etc/fstab
-```
-
-```bash
-sudo mount -o remount,ro /mnt/media-01
-```
-
-```bash
-sudo mount -o remount,ro /mnt/media-02
-```
+`/mnt/media-01` and `/mnt/media-02` stay read-write in `/etc/fstab` (your call, Oct 8): Lumiverb can't write there anyway, because the worker's sandbox makes everything outside its data folder and home read-only.
 
 The fstab lines don't say `soft` or `hard`, so the mounts are `soft`, the CIFS default: when the Mac Studio sleeps, reads fail instead of hanging forever. Never add `hard`: a sleeping Mac would then hang the worker's scans and renders indefinitely.
 
@@ -116,7 +106,8 @@ The fstab lines don't say `soft` or `hard`, so the mounts are `soft`, the CIFS d
 - **Changes.** The Mac reports paths it sees change: `POST /v1/changes`. Each cycle (every 60 s), the worker scans the one folder that covers a library's reported changes, then acknowledges them. A file modified in the last 30 seconds may still be copying, so it waits for the next cycle (one stamped more than 5 minutes in the future came from a camera clock running ahead, and doesn't wait).
 - **Files that fail.** A file that fails to scan doesn't hold back the changes around it. It's tried again on its own after 5 minutes, then 10, 20 and so on, up to once a day. A folder that can't be listed (no permission, or the share timing out mid-scan) keeps its changes for the same retry, and that scan removes nothing.
 - **Safety net.** Each library is scanned in full once a day, in case a report was missed. When each was last scanned in full, and which files and folders wait for a retry, are kept in `worker-state.json` beside the worker lock (in `/mnt/ssd2/lumiverb/cache/lumiverb`), even when the worker is stopped mid-cycle, so a restart or deploy doesn't rescan everything; delete it to force full scans.
-- **The Mac Studio asleep.** The worker doesn't scan its libraries: an unmounted share looks empty, and an empty mount point is never scanned. It keeps enriching from analysis proxies. Only probing and rendering wait, and they start as soon as the storage is back.
+- **The Mac Studio asleep.** The worker doesn't scan its libraries. A folder `/etc/fstab` lists as a mount counts only while it's mounted, and an empty folder never counts, so an unmounted share is never scanned. It keeps enriching from analysis proxies. Only probing and rendering wait, and they start as soon as the storage is back.
+- **Missing files are archived.** On a healthy mount, a file the scan no longer finds is archived (marked missing) at once: its asset keeps ratings, projects, faces and transcripts. When the file comes back, at the same path or anywhere else in the library (matched by content), the asset is restored. Archiving is reversible, so nothing is held back, however many go at once. Emptying the trash never deletes archived clips; deleting a library asks whether to delete its archived clips for good or keep them.
 - **Scanning first.** Each cycle scans every library before enriching any. Enrichment then gets 15 minutes and stops between items, so change reports never wait on a first ingest's days of renders and transcription; it goes on next cycle, least recently enriched library first. Probing and rendering stop as soon as the storage stops answering, rather than waiting out a timeout per file.
 - **Pacing.** Enrichment runs again when a library's counts change, when its storage comes back, or hourly, so a clip that fails every time isn't retried every minute. Within a run, a clip enrichment tried in the last hour waits, so one that fails slowly (a 15-minute render, say) doesn't hold up the clips behind it. After a restart each is tried once more.
 - **Analysis proxies** are full-length copies at most 960 px on the long side, at most 30 fps, with every audio track ffmpeg can decode: each at most stereo, 48 kHz AAC at 48 kbps per channel. With several tracks, a stereo mix of them comes first ("Lumiverb mix"): it's what the web player plays and what transcription hears, so a lav on its own track counts. A track ffmpeg can't decode (iPhone spatial audio, for one) is left out rather than failing the clip. Scenes and scene vision read the proxies too, never the originals. They are not edit proxies.
