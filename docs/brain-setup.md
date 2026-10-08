@@ -101,6 +101,8 @@ Not pointed at the brain yet (your call, Oct 8): its Swift changes wait. Until t
 
 The fstab lines don't say `soft` or `hard`, so the mounts are `soft`, the CIFS default: when the Mac Studio sleeps, reads fail instead of hanging forever. Never add `hard`: a sleeping Mac would then hang the worker's scans and renders indefinitely.
 
+Keep the DAS mounts in `/etc/fstab`, not in hand-written systemd mount units or autofs: the scanner reads fstab to tell an unmounted share from a share that has lost some files. For a share fstab doesn't list only the empty-folder check is left, so stray files in its unmounted mount point would look like the whole library, and everything else would be archived (your call, Oct 8).
+
 ## How it runs
 
 - **Changes.** The Mac reports paths it sees change: `POST /v1/changes`. Each cycle (every 60 s), the worker scans the one folder that covers a library's reported changes, then acknowledges them. A file modified in the last 30 seconds may still be copying, so it waits for the next cycle (one stamped more than 5 minutes in the future came from a camera clock running ahead, and doesn't wait).
