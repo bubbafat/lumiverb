@@ -338,6 +338,69 @@ def test_update_without_a_data_dir_leaves_caches_alone(tmp_path):
     assert calls == []
 
 
+def _update_python(tmp_path: Path, venv_cfg: str | None, pin: str = "3.12\n") -> tuple[list[str], str]:
+    """Run update-api.sh's dependencies step; returns the systemctl and sudo calls in order, and its output."""
+    app = tmp_path / "app"
+    (app / ".venv").mkdir(parents=True, exist_ok=True)
+    (app / ".python-version").write_text(pin)
+    if venv_cfg is not None:
+        (app / ".venv" / "pyvenv.cfg").write_text(venv_cfg)
+    calls = tmp_path / "calls"
+    calls.write_text("")
+    text = UPDATE_API.read_text()
+    block = text.split('step "Updating Python dependencies"', 1)[1].split("# ----", 1)[0]
+    script = (
+        'step() { :; }; ok() { :; }; warn() { echo "warn: $1"; }\n'
+        f'systemctl() {{ echo "systemctl $*" >> "{calls}"; }}\n'
+        f'sudo() {{ echo "sudo $*" >> "{calls}"; }}\n'
+        f'APP_DIR="{app}"; SVC_USER=lumiverb; UV_BIN=/usr/local/bin/uv\n'
+        + block
+    )
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stdout + out.stderr
+    return calls.read_text().splitlines(), out.stdout
+
+
+VENV_CFG = "home = /usr/bin\nimplementation = CPython\nuv = 0.7.12\nversion_info = {}\nprompt = lumiverb\n"
+
+
+def test_update_stops_the_services_while_a_new_python_rebuilds_the_venv(tmp_path):
+    # uv sync deletes the 3.14 venv and downloads GBs of 3.12 wheels; the API
+    # and worker would run on deleted files until the restart at the end.
+    calls, out = _update_python(tmp_path, VENV_CFG.format("3.14.4"))
+    assert "Python changes from 3.14 to 3.12" in out
+    sync = next(i for i, c in enumerate(calls) if " sync " in c)
+    stops = [c for c in calls[:sync] if c.startswith("systemctl stop")]
+    assert " ".join(stops).count("lumiverb-worker") == 1 and " ".join(stops).count("lumiverb-api") == 1
+    assert calls[sync + 1:] == ["sudo -u lumiverb /usr/local/bin/uv cache prune"]
+
+
+@pytest.mark.parametrize("cfg", [VENV_CFG.format("3.12.11"), None], ids=["same-python", "no-venv-yet"])
+def test_update_on_the_same_python_keeps_the_services_running(tmp_path, cfg):
+    calls, out = _update_python(tmp_path, cfg)
+    assert not [c for c in calls if c.startswith("systemctl stop")]
+    assert not [c for c in calls if "cache prune" in c]
+    assert "Python changes" not in out
+    assert any(" sync " in c for c in calls)
+
+
+def test_a_failed_cache_prune_doesnt_stop_the_update(tmp_path):
+    app = tmp_path / "app"
+    (app / ".venv").mkdir(parents=True)
+    (app / ".python-version").write_text("3.12\n")
+    (app / ".venv" / "pyvenv.cfg").write_text(VENV_CFG.format("3.14.4"))
+    text = UPDATE_API.read_text()
+    block = text.split('step "Updating Python dependencies"', 1)[1].split("# ----", 1)[0]
+    script = (
+        'step() { :; }; ok() { :; }; warn() { :; }; systemctl() { :; }\n'
+        'sudo() { [[ "$*" != *"cache prune"* ]]; }\n'
+        f'APP_DIR="{app}"; SVC_USER=lumiverb; UV_BIN=/usr/local/bin/uv\n'
+        + block + "echo reached the end\n"
+    )
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0 and "reached the end" in out.stdout, out.stdout + out.stderr
+
+
 DEPLOY_WEB = REPO / "scripts" / "deploy-web.sh"
 
 

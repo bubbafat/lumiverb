@@ -9,7 +9,7 @@
 #
 # What it does:
 #   1. git pull
-#   2. uv sync
+#   2. uv sync (the API and worker stopped first if Python changes)
 #   3. Run migrations (control plane + tenants)
 #   4. Sync data directory
 #   5. Fix Quickwit sandbox
@@ -80,8 +80,24 @@ EXTRAS=(--extra cli --extra embeddings --extra face_recognition)
 if systemctl is-enabled lumiverb-worker >/dev/null 2>&1; then
   EXTRAS+=(--extra workers)
 fi
+# A new Python makes uv sync delete the venv and download it all again;
+# the API and worker would run on deleted files until the restart below.
+HAVE_PY="$(sed -n 's/^version_info *= *\([0-9]*\.[0-9]*\).*/\1/p' "$APP_DIR/.venv/pyvenv.cfg" 2>/dev/null || true)"
+WANT_PY="$(grep -oE '[0-9]+\.[0-9]+' "$APP_DIR/.python-version" 2>/dev/null | head -1 || true)"
+PY_CHANGED=""
+if [[ -n "$HAVE_PY" && -n "$WANT_PY" && "$HAVE_PY" != "$WANT_PY" ]]; then
+  PY_CHANGED=1
+  warn "Python changes from ${HAVE_PY} to ${WANT_PY}: rebuilding the environment downloads a few GB; the API and worker are stopped until it's done"
+  if systemctl is-enabled lumiverb-worker >/dev/null 2>&1; then
+    systemctl stop lumiverb-worker
+  fi
+  systemctl stop lumiverb-api
+fi
 sudo -u "$SVC_USER" "$UV_BIN" sync "${EXTRAS[@]}"
 ok "Python venv synced (${EXTRAS[*]})"
+if [[ -n "$PY_CHANGED" ]]; then
+  sudo -u "$SVC_USER" "$UV_BIN" cache prune || warn "Couldn't prune uv's cache of the old Python's packages"
+fi
 
 # ---------------------------------------------------------------------------
 step "Running migrations"

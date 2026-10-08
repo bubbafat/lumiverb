@@ -161,7 +161,7 @@ sudo bash /opt/lumiverb/scripts/update-web.sh
 
 `update-api.sh` keeps the worker's packages and restarts it. `update-web.sh` brings the nginx site up to date: playback streams go straight through, unbuffered, and their links (good for hours) stay out of the access logs, nginx's and the API's.
 
-The repo pins Python 3.12 (`.python-version`), the version the tests run on; this box's own Python is 3.14. The first update after the pin rebuilds `/opt/lumiverb/.venv` on 3.12, which uv downloads for the `lumiverb` user, so that update's dependency step takes a few minutes. Later updates reuse it.
+The repo pins Python 3.12 (`.python-version`), the version the tests run on; this box's own Python is 3.14. The first update after the pin rebuilds `/opt/lumiverb/.venv` on 3.12, which uv downloads for the `lumiverb` user along with a few GB of packages (torch, CUDA), so that update takes a while, and the API and the worker are stopped until it's done: the script says so, stops them before the rebuild, and starts them again at the end. Then it prunes uv's cache. Later updates reuse the environment and keep the services running until the restart.
 
 Caches used to live in the `lumiverb` user's home, on the root disk. They are now all under `/mnt/ssd2/lumiverb/cache`, so after updating, the old ones can be deleted:
 
