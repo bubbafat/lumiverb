@@ -30,7 +30,7 @@ export default function SettingsPage() {
     <div className="mx-auto max-w-4xl px-6 py-6">
       <h1 className="text-2xl font-semibold text-gray-100">Settings</h1>
       <div className="mt-6 flex flex-col gap-8 sm:flex-row">
-        <nav className="flex shrink-0 flex-row gap-1 sm:w-48 sm:flex-col">
+        <nav className="flex shrink-0 flex-row flex-wrap gap-1 sm:w-48 sm:flex-col sm:flex-nowrap">
           {NAV_ITEMS.map((item) => {
             if (item.requireEditor && !isEditorOrAbove) return null;
             return (
