@@ -39,6 +39,7 @@ from rich.console import Console
 from src.client.cache_dir import cache_dir
 from src.client.cli.client import LumiverbClient
 from src.client.cli.roots import reachable_root
+from src.client.proxy.analysis_cache import clear_leftovers
 from src.shared.io_utils import is_within, resolve_source_path
 
 if TYPE_CHECKING:
@@ -353,6 +354,8 @@ def run_forever(
     sleep: Callable[[float], None] = time.sleep,
 ) -> None:
     console = console or Console(force_terminal=False, width=120)
+    if removed := clear_leftovers():
+        logger.info("worker: removed %d half-made analysis proxies left by an earlier run", removed)
     state = WorkerState()
     client = LumiverbClient()
     while True:

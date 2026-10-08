@@ -121,6 +121,7 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     h = tmp_path / "home"
     h.mkdir()
     monkeypatch.setattr(Path, "home", lambda: h)
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
     return h
 
 
@@ -352,7 +353,7 @@ def test_a_second_worker_refuses_to_start(home: Path, monkeypatch: pytest.Monkey
 
 
 @pytest.mark.fast
-def test_worker_loops_until_stopped(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_worker_loops_until_stopped(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from src.client.cli import worker
 
     cycles = MagicMock()
@@ -365,7 +366,7 @@ def test_worker_loops_until_stopped(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.fast
-def test_a_failed_cycle_does_not_stop_the_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_failed_cycle_does_not_stop_the_worker(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from src.client.cli import worker
 
     cycles = MagicMock(side_effect=[ConnectionError("API restarting"), None])
@@ -374,6 +375,29 @@ def test_a_failed_cycle_does_not_stop_the_worker(monkeypatch: pytest.MonkeyPatch
     sleeps: list[float] = []
     worker.run_forever(poll=1, sleep=sleeps.append, stop=lambda: len(sleeps) >= 2, console=Console(quiet=True))
     assert cycles.call_count == 2
+
+
+@pytest.mark.fast
+def test_worker_start_clears_proxies_cut_off_by_a_kill(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A SIGKILL mid-render or mid-download leaves these; eviction only
+    # counts finished proxies, so nothing else would remove them.
+    from src.client.cli import worker
+
+    cache = home / ".cache" / "lumiverb" / "analysis"
+    cache.mkdir(parents=True)
+    for name in ("ast_a.mp4", "ast_b.rendering", "ast_c.rendering.part", "ast_d.mp4.part"):
+        (cache / name).write_bytes(b"x")
+    monkeypatch.setattr(worker, "run_cycle", MagicMock())
+    monkeypatch.setattr(worker, "LumiverbClient", MagicMock())
+    worker.run_forever(once=True, console=Console(quiet=True))
+    assert sorted(p.name for p in cache.iterdir()) == ["ast_a.mp4"]
+
+
+@pytest.mark.fast
+def test_clearing_leftovers_without_a_cache_is_fine(tmp_path: Path) -> None:
+    from src.client.proxy.analysis_cache import clear_leftovers
+
+    assert clear_leftovers(tmp_path / "never-made") == 0
 
 
 @pytest.mark.fast

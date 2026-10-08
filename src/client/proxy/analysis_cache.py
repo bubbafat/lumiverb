@@ -22,6 +22,29 @@ def default_cache_dir() -> Path:
     return cache_dir("analysis")
 
 
+# What a render (repair._render_one) or a download leaves behind when the
+# process is killed. Eviction counts only finished proxies.
+_LEFTOVERS = ("*.rendering", "*.rendering.part", "*.mp4.part")
+
+
+def clear_leftovers(directory: Path | None = None) -> int:
+    """Remove half-made proxies a killed process left. Returns how many.
+
+    Only while nothing else is rendering into the cache: the worker does
+    this at start, holding the worker lock.
+    """
+    directory = directory or default_cache_dir()
+    removed = 0
+    for pattern in _LEFTOVERS:
+        for path in directory.glob(pattern):
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                pass
+    return removed
+
+
 class AnalysisProxyCache:
     def __init__(self, client: object, *, cache_dir: Path | None = None, max_bytes: int | None = None) -> None:
         if max_bytes is None:
