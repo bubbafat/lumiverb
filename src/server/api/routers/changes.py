@@ -90,10 +90,7 @@ def _match(path: str, roots: list[tuple[str, str]]) -> tuple[str, str] | None:
     """(library_id, rel_path) for the deepest library root holding path."""
     best: tuple[str, str, int] | None = None
     for library_id, root in roots:
-        if root == "/":
-            hit = True
-        else:
-            hit = path == root or path.startswith(root + "/")
+        hit = root == "/" or path == root or path.startswith(root + "/")
         if hit and (best is None or len(root) > best[2]):
             rel = "" if path == root else path[len(root):].lstrip("/")
             best = (library_id, rel, len(root))
