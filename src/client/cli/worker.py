@@ -7,7 +7,10 @@ Runs as a service (`lumiverb worker`). Each cycle, for each library:
    the changes the scan saw.
 2. If anything is missing, enrich. Videos are enriched from analysis
    proxies, so this continues while the storage sleeps; only probing and
-   rendering wait for it.
+   rendering wait for it. Enrichment runs again only when a library's
+   counts change, its storage comes back, or an hour has passed, so a
+   file that fails every time isn't retried every minute. Steps that need
+   vision AI are skipped while none is configured.
 
 A library is skipped, never failed: the next cycle tries again.
 """
@@ -31,6 +34,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_POLL_SEC = 60.0
 DEFAULT_FULL_SCAN_EVERY_SEC = 24 * 3600.0
+DEFAULT_RETRY_EVERY_SEC = 3600.0
+
+# Enrich steps that need a vision AI endpoint, and the count each repairs.
+VISION_STEPS = {"vision": "missing_vision", "ocr": "missing_ocr", "scene-vision": "missing_scene_vision"}
 
 # repair-summary counts that enrich acts on. Counts like missing_proxy are
 # scan's job.
@@ -77,6 +84,8 @@ class WorkerState:
     """What the worker remembers between cycles (in memory only)."""
 
     last_full_scan: dict[str, float] = field(default_factory=dict)
+    # library_id -> (what the library looked like after the last enrich, when)
+    last_enrich: dict[str, tuple[tuple, float]] = field(default_factory=dict)
 
 
 class WorkerLock:
@@ -106,8 +115,20 @@ class WorkerLock:
             self._fd = None
 
 
-def _has_enrich_work(summary: dict) -> bool:
-    return any(summary.get(key, 0) for key in ENRICH_COUNTS)
+def _vision_configured(client: LumiverbClient) -> bool:
+    from src.client.cli.ingest import _resolve_vision_config
+
+    try:
+        url, _key, model, _source = _resolve_vision_config(client)
+    except Exception:  # noqa: BLE001 — e.g. the endpoint is down; its steps would fail anyway
+        logger.warning("worker: couldn't resolve the vision AI endpoint; skipping its steps this cycle")
+        return False
+    return bool(url and model)
+
+
+def _fingerprint(summary: dict, reachable: bool, skip: set[str]) -> tuple:
+    skipped = {VISION_STEPS[s] for s in skip}
+    return (reachable, tuple(summary.get(k, 0) for k in ENRICH_COUNTS if k not in skipped))
 
 
 def _scan_library(
@@ -160,6 +181,7 @@ def run_cycle(
     console: Console,
     now: float | None = None,
     full_scan_every: float = DEFAULT_FULL_SCAN_EVERY_SEC,
+    retry_every: float = DEFAULT_RETRY_EVERY_SEC,
     only: list[str] | None = None,
     scan_fn: Callable | None = None,
     enrich_fn: Callable | None = None,
@@ -174,6 +196,7 @@ def run_cycle(
     libraries = client.get("/v1/libraries").json()
     if only:
         libraries = [lib for lib in libraries if lib["name"] in only]
+    skip = set() if _vision_configured(client) else set(VISION_STEPS)
 
     for library in libraries:
         name = library["name"]
@@ -190,11 +213,38 @@ def run_cycle(
                 logger.exception("worker: scanning %s failed; trying again next cycle", name)
 
         try:
-            summary = client.get("/v1/assets/repair-summary", params={"library_id": library["library_id"]}).json()
-            if _has_enrich_work(summary):
-                enrich_fn(client, library, job_type="all", console=console)
+            _enrich_library(client, library, state, reachable=root is not None, skip=skip, now=now,
+                            retry_every=retry_every, enrich_fn=enrich_fn, console=console)
         except Exception:  # noqa: BLE001
             logger.exception("worker: enriching %s failed; trying again next cycle", name)
+
+
+def _enrich_library(
+    client: LumiverbClient,
+    library: dict,
+    state: WorkerState,
+    *,
+    reachable: bool,
+    skip: set[str],
+    now: float,
+    retry_every: float,
+    enrich_fn: Callable,
+    console: Console,
+) -> None:
+    library_id = library["library_id"]
+
+    def look() -> tuple:
+        summary = client.get("/v1/assets/repair-summary", params={"library_id": library_id}).json()
+        return _fingerprint(summary, reachable, skip)
+
+    before = look()
+    if not any(before[1]):
+        return
+    previous = state.last_enrich.get(library_id)
+    if previous is not None and previous[0] == before and now - previous[1] < retry_every:
+        return  # nothing changed since the last try
+    enrich_fn(client, library, job_type="all", console=console, skip_types=skip)
+    state.last_enrich[library_id] = (look(), now)
 
 
 def run_forever(

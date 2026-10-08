@@ -111,6 +111,11 @@ class FakeServer:
         return client
 
 
+@pytest.fixture(autouse=True)
+def vision_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.client.cli.worker._vision_configured", lambda client: True)
+
+
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     h = tmp_path / "home"
@@ -413,3 +418,69 @@ def test_report_changes_makes_relative_paths_absolute(home: Path, tmp_path: Path
     monkeypatch.chdir(tmp_path)
     CliRunner().invoke(main.app, ["library", "report-changes", "clip.mov"])
     assert client.post.call_args.kwargs["json"]["paths"] == [str(tmp_path / "clip.mov")]
+
+
+# ---------------------------------------------------------------------------
+# Pacing enrichment
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_enrich_is_not_repeated_while_nothing_changes(das: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A clip that fails every time shouldn't be retried every minute.
+    monkeypatch.setattr("src.client.cli.worker._vision_configured", lambda client: True)
+    server = FakeServer([LIB], summaries={"lib_1": WORK})
+    state = WorkerState(last_full_scan={"lib_1": 100 * HOUR})
+    _, enrich, state = _cycle(server, state, now=100 * HOUR)
+    _, enrich2, state = _cycle(server, state, now=100 * HOUR + 60)
+    assert enrich.call_count == 1
+    enrich2.assert_not_called()
+
+
+@pytest.mark.fast
+def test_enrich_runs_again_when_the_counts_change(das: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.client.cli.worker._vision_configured", lambda client: True)
+    server = FakeServer([LIB], summaries={"lib_1": WORK})
+    state = WorkerState(last_full_scan={"lib_1": 100 * HOUR})
+    _, _, state = _cycle(server, state, now=100 * HOUR)
+    server.summaries["lib_1"] = {**WORK, "missing_transcription": 2}  # a new clip arrived
+    _, enrich, _ = _cycle(server, state, now=100 * HOUR + 60)
+    assert enrich.call_count == 1
+
+
+@pytest.mark.fast
+def test_failures_are_retried_hourly(das: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.client.cli.worker._vision_configured", lambda client: True)
+    server = FakeServer([LIB], summaries={"lib_1": WORK})
+    state = WorkerState(last_full_scan={"lib_1": 100 * HOUR})
+    _, _, state = _cycle(server, state, now=100 * HOUR)
+    _, enrich, _ = _cycle(server, state, now=101 * HOUR + 1)
+    assert enrich.call_count == 1
+
+
+@pytest.mark.fast
+def test_enrich_runs_when_storage_wakes(home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Rendering waited for the storage; it can go as soon as it's back.
+    monkeypatch.setattr("src.client.cli.worker._vision_configured", lambda client: True)
+    mount = tmp_path / "mnt"
+    save_config(CLIConfig(root_map={MAC: str(mount)}))
+    server = FakeServer([LIB], summaries={"lib_1": {"total_assets": 1, "missing_analysis_proxy": 1}})
+    state = WorkerState(last_full_scan={"lib_1": 100 * HOUR})
+    _, asleep, state = _cycle(server, state, now=100 * HOUR)
+    (mount / "Footage" / "Day 1").mkdir(parents=True)
+    (mount / "Footage" / "Day 1" / "A001.mov").write_bytes(b"x")
+    _, awake, _ = _cycle(server, state, now=100 * HOUR + 60)
+    assert asleep.call_count == 1 and awake.call_count == 1
+
+
+@pytest.mark.fast
+def test_without_vision_ai_its_steps_are_skipped(das: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.client.cli.worker._vision_configured", lambda client: False)
+    server = FakeServer([LIB], summaries={"lib_1": {"total_assets": 3, "missing_scene_vision": 3,
+                                                    "missing_vision": 2, "missing_ocr": 1}})
+    _, enrich, _ = _cycle(server, WorkerState(last_full_scan={"lib_1": 100 * HOUR}))
+    enrich.assert_not_called()
+
+    server.summaries["lib_1"]["missing_transcription"] = 1
+    _, enrich, _ = _cycle(server, WorkerState(last_full_scan={"lib_1": 100 * HOUR}))
+    assert enrich.call_args.kwargs["skip_types"] == {"vision", "ocr", "scene-vision"}
