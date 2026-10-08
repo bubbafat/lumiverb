@@ -252,36 +252,151 @@ def test_ocr_runs_as_many_at_once_as_the_machines_take(tmp_path, monkeypatch):
     assert sorted(i["asset_id"] for b in sent for i in b["items"]) == [f"ast_{i}" for i in range(6)]
 
 
-def test_a_scene_that_cant_be_described_is_reported_for_its_video():
-    from src.client.cli.video_index import run_video_enrich
-
-    fails: list[tuple[str, object]] = []
-    with patch("src.client.cli.video_index.enrich_video_scenes", return_value={
-        "enriched": 2, "skipped": 0, "failed": 1, "errors": ["unparseable answer"], "elapsed": 0.1}):
-        ok, failed = run_video_enrich(
-            client=MagicMock(), source_for=lambda v: MagicMock(is_file=lambda: True),
-            videos=[{"asset_id": "ast_v", "rel_path": "v.mov"}], vision_provider=MagicMock(),
-            vision_model_id="m", console=MagicMock(), progress=MagicMock(), task_id=1,
-            on_fail=lambda a, e: fails.append((a, e)))
-    assert (ok, failed) == (0, 1)
-    assert fails == [("ast_v", "1 of 3 scenes failed: unparseable answer")]
+# Scene descriptions: videos ({asset_id: scenes to describe}) on the account's
+# machines, each machine answering with describe(machine_url, frame).
 
 
-def test_the_endpoint_failing_mid_video_stops_the_video_for_the_guard(tmp_path):
-    from src.client.cli.video_index import enrich_video_scenes
+def _scene_server(machines, videos: dict[str, int]) -> MagicMock:
+    client = _client(machines)
+    job = client.get.return_value.json.return_value
 
-    client = MagicMock()
-    client.get.return_value.json.return_value = {"scenes": [
-        {"scene_id": f"s{i}", "rep_frame_ms": i * 1000, "description": None} for i in range(3)]}
-    provider = MagicMock()
-    provider.describe.side_effect = CaptionError("connection refused", endpoint_fault=True)
+    def get(path, **_kwargs):
+        resp = MagicMock()
+        if path.startswith("/v1/video/"):
+            asset_id = path.split("/")[3]
+            resp.json.return_value = {"scenes": [
+                {"scene_id": f"{asset_id}_s{i}", "rep_frame_ms": i * 1000, "description": None}
+                for i in range(videos[asset_id])]}
+        else:
+            resp.json.return_value = job
+        return resp
 
-    def frame(_source, dest, timestamp):
-        dest.write_bytes(b"jpeg")
+    client.get.side_effect = get
+    return client
+
+
+def _describe_scenes(tmp_path, monkeypatch, client, videos: dict[str, int], describe) -> None:
+    page = [{"asset_id": a, "rel_path": f"{a}.mov", "sha256": f"sha_{a}", "has_analysis_proxy": True}
+            for a in videos]
+
+    def proxy(asset_id):
+        path = tmp_path / f"{asset_id}.mp4"
+        path.write_bytes(b"proxy")
+        return path
+
+    def frame(source, dest, timestamp):
+        dest.write_text(f"{source.stem}_s{int(timestamp)}")  # the scene it's of
         return MagicMock(ok=True)
 
-    with patch("src.client.cli.video_index.extract_video_frame_detailed", side_effect=frame), \
-            pytest.raises(CaptionError):
-        enrich_video_scenes(client=client, source_path=tmp_path / "a.mp4", asset_id="ast_v", rel_path="v.mov",
-                            vision_provider=provider, vision_model_id="m")
-    assert provider.describe.call_count == 1
+    def provider(model, url, key, settings=None, ocr_settings=None):
+        p = MagicMock()
+        p.describe.side_effect = lambda path: describe(url, path.read_text())
+        return p
+
+    with (
+        patch("src.client.cli.repair._page_missing", return_value=page),
+        patch("src.client.proxy.analysis_cache.AnalysisProxyCache.get", side_effect=proxy),
+        patch("src.client.cli.video_index.extract_video_frame_detailed", side_effect=frame),
+        patch("src.client.workers.captions.factory.get_caption_provider", side_effect=provider),
+        patch("src.client.cli.ai_pool.list_models", return_value=[QWEN]),
+    ):
+        _repair(tmp_path, monkeypatch, client,
+                {"total_assets": len(videos), "missing_scene_vision": len(videos)}, "scene-vision")
+
+
+def _described(client) -> dict[str, dict]:
+    """Scene id → what was recorded for it."""
+    return {c.args[0].rsplit("/", 1)[1]: c.kwargs["json"] for c in client.patch.call_args_list
+            if c.args[0].startswith("/v1/video/scenes/")}
+
+
+def _listed(client) -> list[str]:
+    """The videos whose scenes were asked for, in order."""
+    return [c.args[0].split("/")[3] for c in client.get.call_args_list if c.args[0].startswith("/v1/video/")]
+
+
+STUDIO = {**BRAIN, "machine_id": "aim_studio", "name": "Studio", "api_url": "http://studio/v1", "at_once": 4}
+
+
+def test_scene_descriptions_run_as_many_at_once_as_the_machines_take(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    # Short clips: no one video has enough scenes to keep the machines busy.
+    videos = {f"ast_{v}": 3 for v in range(4)}
+    client = _scene_server((BRAIN, STUDIO), videos)
+    now: dict[str, int] = {}
+    most: dict[str, int] = {}
+    lock = threading.Lock()
+
+    def describe(url, _frame):
+        with lock:
+            now[url] = now.get(url, 0) + 1
+            now["all"] = now.get("all", 0) + 1
+            for k in (url, "all"):
+                most[k] = max(most.get(k, 0), now[k])
+        time.sleep(0.15)
+        with lock:
+            now[url] -= 1
+            now["all"] -= 1
+        return {"description": "a street at night", "tags": ["street"]}
+
+    _describe_scenes(tmp_path, monkeypatch, client, videos, describe)
+    assert most["all"] == 6
+    assert most["http://brain/v1"] <= 2 and most["http://studio/v1"] <= 4
+    described = _described(client)
+    assert sorted(described) == sorted(f"{a}_s{i}" for a in videos for i in range(3))
+    # Each scene's lineage is its own video's.
+    assert all(d["lineage"]["source_sha256"] == f"sha_{sid.rsplit('_s', 1)[0]}" for sid, d in described.items())
+    assert not _charged(client)
+
+
+def test_a_scene_goes_to_another_machine_when_one_fails(tmp_path, monkeypatch):
+    videos = {f"ast_{v}": 3 for v in range(3)}
+    client = _scene_server((BRAIN, STUDIO), videos)
+    served: list[str] = []
+
+    def describe(url, _frame):
+        served.append(url)
+        if url == "http://brain/v1":
+            raise CaptionError("500 out of memory", endpoint_fault=True)
+        return {"description": "a beach", "tags": ["beach"]}
+
+    _describe_scenes(tmp_path, monkeypatch, client, videos, describe)
+    assert sorted(_described(client)) == sorted(f"{a}_s{i}" for a in videos for i in range(3))
+    assert served.count("http://brain/v1") <= 2  # skipped once it failed
+    brain = [c.kwargs["json"] for c in client.post.call_args_list if c.args[0] == "/v1/ai/machines/aim_brain/status"]
+    assert brain[-1]["online"] is False
+    assert not _charged(client)
+
+
+def test_scene_descriptions_stop_when_no_machine_is_left_and_charge_no_clip(tmp_path, monkeypatch):
+    videos = {f"ast_{v}": 2 for v in range(5)}
+    client = _scene_server((BRAIN,), videos)
+    served: list[str] = []
+
+    def describe(url, _frame):
+        served.append(url)
+        raise CaptionError("connection refused", endpoint_fault=True)
+
+    _describe_scenes(tmp_path, monkeypatch, client, videos, describe)
+    assert _listed(client) == ["ast_0"]  # the rest wait for a machine
+    assert len(served) <= 2
+    assert not _described(client)
+    assert not _charged(client)
+
+
+def test_a_scene_that_cant_be_described_is_reported_for_its_video(tmp_path, monkeypatch):
+    videos = {"ast_a": 3, "ast_b": 2}
+    client = _scene_server((BRAIN, STUDIO), videos)
+
+    def describe(_url, scene):
+        if scene == "ast_a_s1":
+            raise CaptionError("unparseable answer", endpoint_fault=False)
+        return {"description": "a dog", "tags": ["dog"]}
+
+    _describe_scenes(tmp_path, monkeypatch, client, videos, describe)
+    charged = [i for c in _charged(client) for i in c.kwargs["json"]["items"]]
+    assert [(i["asset_id"], i["artifact"], i["error"]) for i in charged] == [
+        ("ast_a", "scene_vision", "1 of 3 scenes failed: unparseable answer")]
+    assert sorted(_described(client)) == ["ast_a_s0", "ast_a_s2", "ast_b_s0", "ast_b_s1"]
