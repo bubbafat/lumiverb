@@ -608,7 +608,7 @@ def test_ocr_says_which_file_each_came_from(home: Path, library: dict) -> None:
     [call] = _sent(client, "/batch-ocr")
     body = call.kwargs["json"]
     assert body["items"] == [{"asset_id": "ast_a", "ocr_text": "EXIT", "source_sha256": SHA}]
-    assert body["lineage"] == P.lineage("ocr", P.effective_settings("ocr", account={"model": "qwen3-vl:8b"}), None)
+    assert body["lineage"] == P.lineage("ocr", P.effective_settings("ocr", account={"vision": "qwen3-vl:8b"}), None)
 
 
 @pytest.mark.fast

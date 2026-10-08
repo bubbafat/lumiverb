@@ -10,6 +10,13 @@ lists its models. The worker checks each machine before sending it work and
 reports what it found here; Settings shows it. Keys are never shown back,
 and a viewer never gets one. Changing a job's model makes its artifacts
 stale.
+
+Every tenant has one built-in machine: the worker's own computer, with no
+URL or key, doing what the worker does itself (Whisper: transcripts). It
+can be renamed, given more at once or turned off, not removed. The server
+can't reach it: it offers the models faster-whisper knows, and only the
+worker says whether it's online. A faster-whisper model is known by one
+name, whatever a server lists it as (src/shared/whisper_models.py).
 """
 
 from __future__ import annotations
@@ -24,10 +31,11 @@ from sqlmodel import Session
 from src.server.api.dependencies import require_editor, require_signed_in, require_tenant_admin
 from src.server.api.errors import ConflictError, DecisionRequiredError, UpstreamError
 from src.server.models.control_plane import AiMachine, Tenant
-from src.server.repository.ai_machines import first_vision_machine, machines
-from src.shared.ai_jobs import JOBS
+from src.server.repository.ai_machines import first_vision_machine, job_model, machines, set_job_model as _store_model
+from src.shared.ai_jobs import BUILT_IN_JOBS, JOBS
 from src.shared.utils import utcnow
 from src.shared.vision_endpoint import VisionEndpointError, list_models
+from src.shared.whisper_models import BUILT_IN_MODELS, canonical, canonical_models
 
 router = APIRouter(prefix="/v1/ai", tags=["ai"])
 
@@ -47,6 +55,8 @@ class MachineOut(BaseModel):
     jobs: list[str]
     at_once: int
     enabled: bool
+    # The worker's own computer: no URL or key; can't be removed.
+    built_in: bool = False
     # The latest check (the worker's, or Connect's when saved); None until there is one.
     status: MachineStatus | None = None
 
@@ -58,6 +68,8 @@ class JobOut(BaseModel):
     # Enabled machines doing the job, and how many offered its model when last checked.
     machines: int
     offering: int
+    # The models those machines offer, to pick the job's from.
+    choices: list[str] = []
 
 
 class AiSettings(BaseModel):
@@ -139,6 +151,8 @@ class WorkerMachine(BaseModel):
     api_url: str
     api_key: str
     at_once: int
+    # The worker's own computer: it does the job itself.
+    built_in: bool
 
 
 class WorkerJob(BaseModel):
@@ -151,13 +165,18 @@ def _url(api_url: str) -> str:
     return api_url.strip().rstrip("/")
 
 
-def _job_model(tenant: Tenant, job: str) -> str:
-    return (tenant.vision_model_id or "") if job == "vision" else ""
+def _job_model(tenant: Tenant | None, job: str) -> str:
+    return job_model(tenant, job)
 
 
-def _set_job_model(tenant: Tenant, job: str, model: str) -> None:
-    if job == "vision":
-        tenant.vision_model_id = model
+def _offers(machine: AiMachine) -> list[str]:
+    """The models a machine offers, by their one names: the built-in one,
+    what faster-whisper knows; any other, what it listed when last checked."""
+    return BUILT_IN_MODELS if machine.built_in else list(machine.models)
+
+
+def _built_in_error(message: str) -> ConflictError:
+    return ConflictError("built_in_machine", message, {})
 
 
 def _machines(ctrl: Session, tenant_id: str) -> list[AiMachine]:
@@ -183,22 +202,25 @@ def _settings(ctrl: Session, tenant_id: str) -> AiSettings:
     machines = _machines(ctrl, tenant_id)
     jobs = []
     for job, label in JOBS.items():
-        model = _job_model(tenant, job) if tenant else ""
+        model = _job_model(tenant, job)
         doing = [m for m in machines if m.enabled and job in m.jobs]
-        offering = sum(1 for m in doing if m.online and model and model in m.models)
-        jobs.append(JobOut(job=job, label=label, model=model, machines=len(doing), offering=offering))
+        offering = sum(1 for m in doing if m.online and model and model in _offers(m))
+        choices = sorted({x for m in doing for x in _offers(m)})
+        jobs.append(JobOut(job=job, label=label, model=model, machines=len(doing), offering=offering,
+                           choices=choices))
     return AiSettings(
         machines=[MachineOut(machine_id=m.machine_id, name=m.name, api_url=m.api_url, has_key=bool(m.api_key),
-                             jobs=list(m.jobs), at_once=m.at_once, enabled=m.enabled, status=_status(m))
+                             jobs=list(m.jobs), at_once=m.at_once, enabled=m.enabled, built_in=m.built_in,
+                             status=_status(m))
                   for m in machines],
         jobs=jobs,
     )
 
 
 def _ask(api_url: str, api_key: str | None) -> tuple[list[str], str]:
-    """(models, "") when the machine answers; ([], why not) when it can't."""
+    """(models by their one names, "") when the machine answers; ([], why not) when it can't."""
     try:
-        return list_models(api_url, api_key or None), ""
+        return canonical_models(list_models(api_url, api_key or None)), ""
     except VisionEndpointError as e:
         return [], str(e)
 
@@ -206,7 +228,7 @@ def _ask(api_url: str, api_key: str | None) -> tuple[list[str], str]:
 def _record(machine: AiMachine, models: list[str], error: str) -> None:
     machine.online = not error
     machine.status_error = error
-    machine.models = models
+    machine.models = canonical_models(models)
     machine.checked_at = utcnow()
 
 
@@ -321,6 +343,12 @@ def update_machine(machine_id: str, body: MachinePatch, request: Request, leave_
     tenant_id = request.state.tenant_id
     with _control() as ctrl:
         machine = _machine(ctrl, request, machine_id)
+        if machine.built_in:
+            if body.api_url is not None or body.api_key is not None:
+                raise _built_in_error("The built-in machine is the worker's own computer: it has no URL or key.")
+            if body.jobs is not None and set(body.jobs) - BUILT_IN_JOBS:
+                can = " and ".join(JOBS[j].lower() for j in JOBS if j in BUILT_IN_JOBS)
+                raise _built_in_error(f"The built-in machine only does {can}: the rest need a server.")
         was = (machine.api_url, machine.api_key, set(machine.jobs), machine.enabled)
         if body.name is not None:
             _name_free(ctrl, tenant_id, body.name, machine_id)
@@ -340,7 +368,10 @@ def update_machine(machine_id: str, body: MachinePatch, request: Request, leave_
         # Asked again only for what needs it: where it is or its key changed,
         # a job it hadn't, or turned back on. A rename or a new limit doesn't.
         moved = (machine.api_url, machine.api_key) != was[:2]
-        if machine.enabled and (moved or set(machine.jobs) - was[2] or not was[3]):
+        if machine.built_in:
+            # Nothing to ask: the worker checks it. A new job's model must be one it knows.
+            _check_jobs(ctrl.get(Tenant, tenant_id), list(set(machine.jobs) - was[2]), BUILT_IN_MODELS)
+        elif machine.enabled and (moved or set(machine.jobs) - was[2] or not was[3]):
             models = _models_or_502(machine.api_url, machine.api_key)
             _check_jobs(ctrl.get(Tenant, tenant_id), machine.jobs, models)
             _record(machine, models, "")
@@ -352,9 +383,12 @@ def update_machine(machine_id: str, body: MachinePatch, request: Request, leave_
 @router.delete("/machines/{machine_id}", response_model=AiSettings, dependencies=[Depends(require_tenant_admin)])
 def remove_machine(machine_id: str, request: Request, leave_jobs: bool = False) -> AiSettings:
     """Remove a machine. The last machine doing a job asks first (409
-    job_left_without_machine) unless leave_jobs."""
+    job_left_without_machine) unless leave_jobs. The built-in one can't be
+    removed (409 built_in_machine): it can be turned off."""
     with _control() as ctrl:
         machine = _machine(ctrl, request, machine_id)
+        if machine.built_in:
+            raise _built_in_error("The built-in machine can't be removed: turn it off instead.")
         _ask_before_leaving_jobs(ctrl, request.state.tenant_id, machine, leave_jobs, remove=True)
         ctrl.delete(machine)
         ctrl.commit()
@@ -365,20 +399,25 @@ def remove_machine(machine_id: str, request: Request, leave_jobs: bool = False) 
 def set_job_model(job: str, body: JobModelIn, request: Request) -> AiSettings:
     """Set a job's model; "" turns the job off. Every enabled machine doing
     the job is asked (what it says is its status): 409 model_not_offered,
-    with each machine's models or why it couldn't say, when none offers it."""
+    with each machine's models or why it couldn't say, when none offers it.
+    The built-in machine isn't asked: it offers what faster-whisper knows.
+    A faster-whisper model is kept by its one name ("small", not its repo)."""
     if job not in JOBS:
         raise HTTPException(status_code=404, detail="Unknown job")
     tenant_id = request.state.tenant_id
-    model = body.model.strip()
+    model = canonical(body.model.strip())
     with _control() as ctrl:
         tenant = ctrl.get(Tenant, tenant_id)
         if model:
             asked = []
             for machine in _machines(ctrl, tenant_id):
                 if machine.enabled and job in machine.jobs:
-                    models, error = _ask(machine.api_url, machine.api_key)
-                    _record(machine, models, error)
-                    ctrl.add(machine)
+                    if machine.built_in:
+                        models, error = BUILT_IN_MODELS, ""
+                    else:
+                        models, error = _ask(machine.api_url, machine.api_key)
+                        _record(machine, models, error)
+                        ctrl.add(machine)
                     asked.append({"machine_id": machine.machine_id, "name": machine.name, "models": models,
                                   "error": error})
             ctrl.commit()
@@ -386,7 +425,7 @@ def set_job_model(job: str, body: JobModelIn, request: Request) -> AiSettings:
                 raise ConflictError("model_not_offered",
                                     f"No machine doing {JOBS[job].lower()} offers {model}.",
                                     {"job": job, "model": model, "machines": asked})
-        _set_job_model(tenant, job, model)
+        _store_model(tenant, job, model)
         ctrl.add(tenant)
         ctrl.commit()
         return _settings(ctrl, tenant_id)
@@ -395,15 +434,16 @@ def set_job_model(job: str, body: JobModelIn, request: Request) -> AiSettings:
 @router.get("/jobs/{job}", response_model=WorkerJob, dependencies=[Depends(require_editor)])
 def job_machines(job: str, request: Request) -> WorkerJob:
     """For the worker: a job's model and the enabled machines doing it, with
-    their keys, in order. It checks each before sending it work."""
+    their keys, in order (built_in: the worker does it itself). It checks
+    each before sending it work."""
     if job not in JOBS:
         raise HTTPException(status_code=404, detail="Unknown job")
     tenant_id = request.state.tenant_id
     with _control() as ctrl:
         tenant = ctrl.get(Tenant, tenant_id)
-        return WorkerJob(job=job, model=_job_model(tenant, job) if tenant else "", machines=[
+        return WorkerJob(job=job, model=_job_model(tenant, job), machines=[
             WorkerMachine(machine_id=m.machine_id, name=m.name, api_url=m.api_url, api_key=m.api_key,
-                          at_once=m.at_once)
+                          at_once=m.at_once, built_in=m.built_in)
             for m in _machines(ctrl, tenant_id) if m.enabled and job in m.jobs])
 
 
@@ -413,7 +453,7 @@ def report_status(machine_id: str, body: StatusIn, request: Request) -> Response
     Not a failure of any clip."""
     with _control() as ctrl:
         machine = _machine(ctrl, request, machine_id)
-        _record(machine, sorted(set(body.models)), "" if body.online else (body.error or "Offline."))
+        _record(machine, body.models, "" if body.online else (body.error or "Offline."))
         ctrl.add(machine)
         ctrl.commit()
     return Response(status_code=204)
