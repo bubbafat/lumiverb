@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
-from src.server.api.errors import DecisionRequiredError, decision_required_handler
+from src.server.api.errors import ConflictError, decision_required_handler
 from src.server.api.middleware import TenantResolutionMiddleware
 from src.shared.logging_config import hide_stream_links
 
@@ -43,7 +43,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
-from src.server.api.routers import admin, assets, changes, projects, keys, libraries, me, path_filters, tenant, trash, video
+from src.server.api.routers import admin, archive, assets, changes, projects, keys, libraries, me, path_filters, tenant, trash, video
 from src.server.api.routers.auth import router as auth_router
 from src.server.api.routers.users import router as users_router
 from src.server.api.routers.artifacts import router as artifacts_router
@@ -72,7 +72,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Lumiverb API", version="0.1.0", lifespan=lifespan)
 
 
-app.add_exception_handler(DecisionRequiredError, decision_required_handler)
+app.add_exception_handler(ConflictError, decision_required_handler)
 
 
 @app.exception_handler(RequestValidationError)
@@ -122,6 +122,7 @@ app.include_router(video.router)
 app.include_router(keys.router)
 app.include_router(me.router)
 app.include_router(trash.router)
+app.include_router(archive.router)
 app.include_router(similarity_router)
 app.include_router(maintenance_router)
 app.include_router(upgrade_router)

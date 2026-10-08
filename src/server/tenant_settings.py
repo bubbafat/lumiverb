@@ -75,6 +75,26 @@ def set_follow_moves(session: Session, value: bool) -> None:
     _put(session, FOLLOW_MOVES, None if value else "off")
 
 
+TRASH_DAYS = "trash_days"
+# What's in the trash is deleted for good after this many days, until an admin says otherwise.
+DEFAULT_TRASH_DAYS = 30
+_OFF = "off"
+
+
+def get_trash_days(session: Session) -> int | None:
+    """Days a clip, library or project stays in the trash before it's deleted
+    for good; None when an admin turned that off (the trash is emptied by hand)."""
+    value = _get(session, TRASH_DAYS)
+    if value == _OFF:
+        return None
+    # Unset, or unreadable: the default.
+    return _seconds(value) or DEFAULT_TRASH_DAYS
+
+
+def set_trash_days(session: Session, value: int | None) -> None:
+    _put(session, TRASH_DAYS, _OFF if value is None else str(value))
+
+
 def playback_cap(session: Session, *, public: bool) -> int | None:
     """Seconds a video plays for this audience: the account's cap, and on public pages the public one too."""
     caps = [get_video_preview_max_seconds(session)]

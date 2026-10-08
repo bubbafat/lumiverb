@@ -14,10 +14,12 @@ from rich.table import Table
 
 from src.client.cli.client import LumiverbAPIError, LumiverbClient
 from src.client.cli.config import get_admin_key, load_config, save_config
+from src.client.cli.commands.archive import archive_app
 from src.client.cli.commands.projects import projects_app
 from src.client.cli.commands.keys import keys_app
 from src.client.cli.commands.maintenance import maintenance_app
 from src.client.cli.commands.settings import settings_app
+from src.client.cli.commands.trash import projects_say_yes, trash_app
 from src.client.cli.commands.users import user_app
 from src.shared.io_utils import normalize_path_prefix
 from src.shared.logging_config import configure_logging
@@ -36,6 +38,8 @@ app.add_typer(settings_app, name="settings")
 filter_app = typer.Typer(help="Manage path filters (include/exclude patterns).")
 app.add_typer(filter_app, name="filter")
 app.add_typer(maintenance_app, name="maintenance")
+app.add_typer(archive_app, name="archive")
+app.add_typer(trash_app, name="trash")
 
 console = Console()
 
@@ -274,6 +278,17 @@ def library_update(
     console.print(f"  root_path: {data.get('root_path')}")
 
 
+def _library_named(client: LumiverbClient, name: str, *, trashed: bool) -> dict:
+    """The library with this name, in the trash or out of it; exits 1 if there's none."""
+    libraries = client.get("/v1/libraries", params={"include_trashed": True}).json()
+    match = next((lib for lib in libraries if lib.get("name") == name
+                  and (lib.get("status") == "trashed") == trashed), None)
+    if match is None:
+        console.print(f"[red]Library not found{' in the trash' if trashed else ''}: {escape(name)}[/red]")
+        raise typer.Exit(1)
+    return match
+
+
 @library_app.command("delete")
 def library_delete(
     name: Annotated[
@@ -281,79 +296,68 @@ def library_delete(
         typer.Option("--name", "-n", help="Library name to move to trash."),
     ],
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask for confirmation.")] = False,
-    archived: Annotated[
-        str | None,
-        typer.Option("--archived", help="Archived clips (files gone missing): 'delete' them for good or 'keep' them."),
-    ] = None,
     remove_from_projects: Annotated[
-        bool, typer.Option("--remove-from-projects", help="Deleting archived clips may take them out of projects."),
+        bool, typer.Option("--remove-from-projects",
+                           help="Its clips in projects: hidden there now, gone from them once deleted for good."),
     ] = False,
 ) -> None:
-    """Move a library to trash (soft delete). Use 'lumiverb library empty-trash' to permanently delete."""
-    if archived not in (None, "keep", "delete"):
-        console.print("[red]--archived takes 'keep' or 'delete'.[/red]")
-        raise typer.Exit(2)
+    """Move a library to the trash with everything in it. It's deleted for good
+    after the trash days (lumiverb settings show); 'lumiverb library restore'
+    brings it back until then."""
     client = LumiverbClient()
-    resp = client.get("/v1/libraries")
-    libraries = resp.json()
-    match = next((lib for lib in libraries if lib.get("name") == name), None)
-    if match is None:
-        console.print(f"[red]Library not found: {name}[/red]")
-        raise typer.Exit(1)
-    library_id = match["library_id"]
+    library_id = _library_named(client, name, trashed=False)["library_id"]
+    # Archived clips aren't deleted on their own, but they go with their library.
+    archived = int(client.get("/v1/archive", params={"library_id": library_id, "limit": 1}).json().get("total", 0))
+    if archived:
+        console.print(f"Its {archived} archived {'clip goes' if archived == 1 else 'clips go'} with it.")
     if not yes and not typer.confirm(f"Delete library '{name}'? This moves it to trash.", default=False):
         console.print("Aborted.")
         raise typer.Exit(0)
 
-    # The API asks what happens to archived clips, and maybe about projects:
-    # answer from the flags, else ask here.
+    # The API asks about clips that projects use: answer from the flag, else ask here.
     while True:
-        body = {"archived": archived, "remove_from_projects": remove_from_projects} if archived else None
-        r = client.raw("DELETE", f"/v1/libraries/{library_id}", **({"json": body} if body else {}))
+        r = client.raw("DELETE", f"/v1/libraries/{library_id}", json={"remove_from_projects": remove_from_projects})
         if r.status_code < 400:
             break
         error = (r.json() or {}).get("error", {}) if r.status_code == 409 else {}
-        code, details = error.get("code"), error.get("details") or {}
-        if code == "archived_clips" and archived is None:
-            n = int(details.get("archived_clips", 0))
-            what = f"{n} {'clip' if n == 1 else 'clips'} in {name} {'is' if n == 1 else 'are'} archived"
-            if yes:
-                console.print(f"[red]{what}: say --archived keep or --archived delete.[/red]")
-                raise typer.Exit(2)
-            console.print(f"{what}: their files went missing and haven't come back.")
-            answer = typer.prompt("Delete them for good (d), keep them with the library (k), or cancel (c)?",
-                                  default="c").strip().lower()[:1]
-            if answer not in ("d", "k"):
-                console.print("Aborted.")
-                raise typer.Exit(0)
-            archived = "delete" if answer == "d" else "keep"
-        elif code == "in_projects" and not remove_from_projects:
-            n = int(details.get("assets_in_projects", 0))
-            prompt = f"{n} of them {'is' if n == 1 else 'are'} in projects; deleting them for good takes them out."
-            if yes:
-                console.print(f"[red]{prompt} Add --remove-from-projects to go ahead.[/red]")
-                raise typer.Exit(2)
-            if not typer.confirm(f"{prompt} Go ahead?", default=False):
-                console.print("Aborted.")
-                raise typer.Exit(0)
+        if error.get("code") == "in_projects" and not remove_from_projects:
+            if not projects_say_yes(error.get("details") or {}, yes=yes,
+                                    what="in the trash they're hidden there, and deleted for good they leave"):
+                raise typer.Exit(2 if yes else 0)
             remove_from_projects = True
-        else:
-            message = error.get("message") or r.text
-            console.print(f"[red]Couldn't delete '{name}': {message}[/red]")
-            raise typer.Exit(1)
+            continue
+        message = error.get("message") or r.text
+        console.print(f"[red]Couldn't delete '{escape(name)}': {escape(message)}[/red]")
+        raise typer.Exit(1)
     console.print(f"Library '{name}' moved to trash.")
-    console.print("Run 'lumiverb library empty-trash' to permanently delete.")
+    console.print("Restore it with 'lumiverb library restore', or delete it for good now with "
+                  "'lumiverb library empty-trash'.")
+
+
+@library_app.command("restore")
+def library_restore(
+    name: Annotated[str, typer.Option("--name", "-n", help="Library name in the trash.")],
+) -> None:
+    """Take a library out of the trash with the clips that went with it. It comes back private."""
+    client = LumiverbClient()
+    library_id = _library_named(client, name, trashed=True)["library_id"]
+    client.post(f"/v1/libraries/{library_id}/restore")
+    console.print(f"Library '{name}' restored, with the clips that went with it. It's private now, "
+                  "even if it was public before.")
 
 
 @library_app.command("empty-trash")
-def library_empty_trash() -> None:
-    """Permanently delete all libraries in trash and their assets."""
+def library_empty_trash(
+    name: Annotated[str | None, typer.Option("--name", "-n", help="Only this library (default: all in the trash).")] = None,
+) -> None:
+    """Permanently delete libraries in the trash and their assets: one, or all of them."""
     client = LumiverbClient()
     resp = client.get("/v1/libraries", params={"include_trashed": True})
     libraries = resp.json()
-    trashed = [lib for lib in libraries if lib.get("status") == "trashed"]
+    trashed = [lib for lib in libraries if lib.get("status") == "trashed"
+               and (name is None or lib.get("name") == name)]
     if not trashed:
-        console.print("Trash is empty.")
+        console.print("Trash is empty." if name is None else f"No library named '{escape(name)}' in the trash.")
         raise typer.Exit(0)
     for lib in trashed:
         console.print(f"  {lib.get('name', '')} ({lib.get('library_id', '')})")
@@ -390,7 +394,9 @@ def library_empty_trash() -> None:
         console.print("Aborted.")
         raise typer.Exit(0)
     # The user has seen which projects lose clips and said yes.
-    empty_resp = client.post("/v1/libraries/empty-trash", json={"remove_from_projects": bool(in_projects)})
+    empty_resp = client.post("/v1/libraries/empty-trash", json={
+        "library_ids": [lib["library_id"] for lib in trashed], "remove_from_projects": bool(in_projects),
+    })
     data = empty_resp.json()
     n = data.get("deleted", 0)
     console.print(f"Deleted {n} {'library' if n == 1 else 'libraries'}.")

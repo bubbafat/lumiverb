@@ -218,7 +218,9 @@ def test_trashed_clips_are_left_out(env) -> None:
     keep = _ingest(client, headers, library_id, "trash/keep.mov", "video", FACET)
     gone = _ingest(client, headers, library_id, "trash/gone.mov", "video", FACET)
     project_id = _project(client, headers, "With trash", [keep, gone])
-    client.delete(f"/v1/assets/{gone}", headers=headers)
+    # The project uses it, so trashing it asks first (409 in_projects).
+    assert client.delete(f"/v1/assets/{gone}", headers=headers).status_code == 409
+    assert client.delete(f"/v1/assets/{gone}", params={"remove_from_projects": True}, headers=headers).status_code == 204
 
     r = _export(client, headers, project_id, format="fcp7")
 

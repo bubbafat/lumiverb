@@ -8,6 +8,8 @@ export interface DirectoryTreeProps {
   onNavigate: (path: string | null) => void;
   revision?: number;
   onExcludeFolder?: (path: string) => void;
+  /** Archive every clip under the folder; count is how many (subfolders included). */
+  onArchiveFolder?: (path: string, count: number) => void;
 }
 
 export function DirectoryTree({
@@ -16,7 +18,9 @@ export function DirectoryTree({
   onNavigate,
   revision,
   onExcludeFolder,
+  onArchiveFolder,
 }: DirectoryTreeProps) {
+  const hasMenu = Boolean(onExcludeFolder || onArchiveFolder);
   const [rootNodes, setRootNodes] = useState<DirectoryNode[] | null>(null);
   const [childrenCache, setChildrenCache] = useState<
     Map<string, DirectoryNode[]>
@@ -182,9 +186,12 @@ export function DirectoryTree({
               </button>
               {/* Asset count: plain text or clickable with dropdown */}
               <div className="relative shrink-0">
-                {onExcludeFolder ? (
+                {hasMenu ? (
                   <button
                     type="button"
+                    aria-label={`${node.name}: ${node.asset_count === 1 ? "1 clip" : `${node.asset_count} clips`}, folder actions`}
+                    aria-haspopup="menu"
+                    aria-expanded={isDropdownOpen}
                     onClick={(e) => {
                       e.stopPropagation();
                       setDropdownPath(isDropdownOpen ? null : node.path);
@@ -198,26 +205,47 @@ export function DirectoryTree({
                     {node.asset_count}
                   </span>
                 )}
-                {isDropdownOpen && onExcludeFolder && (
+                {isDropdownOpen && hasMenu && (
                   <div
                     ref={dropdownRef}
-                    className="absolute right-0 top-full z-50 mt-1 w-40 rounded-lg border border-gray-700 bg-gray-800 py-1 shadow-lg"
+                    role="menu"
+                    className="absolute right-0 top-full z-50 mt-1 w-44 rounded-lg border border-gray-700 bg-gray-800 py-1 shadow-lg"
                   >
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setDropdownPath(null);
-                        onExcludeFolder(node.path);
-                      }}
-                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-red-400 hover:bg-gray-700/50"
-                    >
-                      <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden>
-                        <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.7" />
-                        <path d="M5.5 18.5l13-13" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-                      </svg>
-                      Exclude folder
-                    </button>
+                    {onArchiveFolder && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDropdownPath(null);
+                          onArchiveFolder(node.path, node.asset_count);
+                        }}
+                        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-gray-200 hover:bg-gray-700/50"
+                      >
+                        <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M4 7h16M5 7v11a2 2 0 002 2h10a2 2 0 002-2V7M9 11h6M3 4h18v3H3z" />
+                        </svg>
+                        Archive folder
+                      </button>
+                    )}
+                    {onExcludeFolder && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDropdownPath(null);
+                          onExcludeFolder(node.path);
+                        }}
+                        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-red-400 hover:bg-gray-700/50"
+                      >
+                        <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden>
+                          <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.7" />
+                          <path d="M5.5 18.5l13-13" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+                        </svg>
+                        Exclude folder
+                      </button>
+                    )}
                   </div>
                 )}
               </div>

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -13,7 +14,7 @@ from src.server.api.dependencies import get_current_user_id, get_tenant_session,
 from src.server.api.errors import DecisionRequiredError
 from src.server.database import get_control_session
 from src.server.repository.control_plane import PublicProjectRepository
-from src.server.repository.tenant import AssetRepository, ProjectRepository
+from src.server.repository.tenant import AssetRepository, LibraryRepository, ProjectRepository
 
 # Mounted at /v1/projects, and at /v1/collections (deprecated) until the
 # macOS/iOS apps move to the new path. See main.py.
@@ -68,9 +69,11 @@ class ProjectItem(BaseModel):
     # Clips a scan trashed because their file went missing; they come back
     # when the file does. Always 0 for smart projects.
     missing_asset_count: int = 0
-    # Clips whose library is in the trash: libraries have no restore, so
-    # these don't come back. Always 0 for smart projects.
+    # Clips whose library is in the trash: they come back if the library is
+    # restored. Always 0 for smart projects.
     library_trashed_asset_count: int = 0
+    # Clips a person archived: kept, and back with unarchive. Always 0 for smart projects.
+    archived_asset_count: int = 0
     created_at: str
     updated_at: str
     status: str = "active"  # active | archived
@@ -105,14 +108,16 @@ class RestoreProjectRequest(BaseModel):
 
 
 class RestoreProjectResponse(BaseModel):
-    restored_clips: int
+    restored_clips: int  # back in sight
     trashed_clips: int  # still in the trash: the request said to leave them
     missing_clips: int  # files missing from disk; back when the files are
+    archived_clips: int = 0  # out of the trash, back in the archive where they were
 
 
 class RestoreClipsResponse(BaseModel):
-    restored: int  # clips you trashed, now back everywhere
+    restored: int  # clips you trashed, now back in sight everywhere
     missing: int  # clips whose files went missing; back when the files are
+    archived: int = 0  # out of the trash, back in the archive where they were (still hidden here)
 
 
 class AssetIdsRequest(BaseModel):
@@ -182,7 +187,7 @@ def _project_to_item(
             limit=10000,
         )
         count = len(live_assets)
-        hidden = {"trashed": 0, "missing": 0, "library_trashed": 0}
+        hidden = {"trashed": 0, "missing": 0, "library_trashed": 0, "archived": 0}
     else:
         count = repo.asset_count(col.project_id)
         hidden = repo.hidden_clip_counts(col.project_id)
@@ -202,6 +207,7 @@ def _project_to_item(
         trashed_asset_count=hidden["trashed"],
         missing_asset_count=hidden["missing"],
         library_trashed_asset_count=hidden["library_trashed"],
+        archived_asset_count=hidden["archived"],
         created_at=col.created_at.isoformat(),
         updated_at=col.updated_at.isoformat(),
         status=col.status,
@@ -341,12 +347,26 @@ def empty_project_trash(
     if body is not None and body.project_ids is not None:
         wanted = set(body.project_ids)
         doomed = [c for c in doomed if c.project_id in wanted]
-    for col in doomed:
-        if col.visibility == "public":
+    return EmptyTrashResponse(deleted=delete_projects_for_good(session, doomed))
+
+
+def delete_projects_for_good(session: Session, projects: list, *, before: datetime | None = None) -> int:
+    """Delete trashed projects and their public pages. The clips stay in their
+    libraries. Returns how many. Each is re-checked under a row lock (still in
+    the trash, since before `before`): one restored since it was listed stays."""
+    repo = ProjectRepository(session)
+    deleted = 0
+    # Read before anything commits or rolls back (both expire the objects).
+    for project_id, was_public in [(col.project_id, col.visibility == "public") for col in projects]:
+        if not repo.lock_trashed(project_id, before):
+            session.rollback()
+            continue
+        repo.delete(project_id)  # commits, releasing the lock
+        deleted += 1
+        if was_public:
             with get_control_session() as ctrl_session:
-                PublicProjectRepository(ctrl_session).delete(col.project_id)
-        repo.delete(col.project_id)
-    return EmptyTrashResponse(deleted=len(doomed))
+                PublicProjectRepository(ctrl_session).delete(project_id)
+    return deleted
 
 
 @router.get("/{project_id}", response_model=ProjectItem)
@@ -468,28 +488,36 @@ def restore_project(
             f"{'it' if trashed == 1 else 'them'}.",
             {"trashed_clips": trashed, "missing_clips": missing},
         )
-    repo.restore(project_id)
+    if not repo.restore(project_id):
+        # Deleted for good while this waited for the purge holding it.
+        raise HTTPException(status_code=404, detail="Project not in the trash")
     if col.visibility == "public":
         _sync_public_index(request, project_id, public=True)
-    restored = _restore_trashed_clips(request, session, repo, project_id) if with_clips and trashed else 0
+    restored, archived = _restore_trashed_clips(request, session, repo, project_id) if with_clips and trashed else (0, 0)
     return RestoreProjectResponse(
-        restored_clips=restored, trashed_clips=max(0, trashed - restored), missing_clips=missing
+        restored_clips=restored, trashed_clips=max(0, trashed - restored - archived), missing_clips=missing,
+        archived_clips=archived,
     )
 
 
-def _restore_trashed_clips(request: Request, session: Session, repo: ProjectRepository, project_id: str) -> int:
-    """Restore the project's clips that a person trashed, everywhere. Returns how many."""
+def _restore_trashed_clips(
+    request: Request, session: Session, repo: ProjectRepository, project_id: str,
+) -> tuple[int, int]:
+    """Restore the project's clips that a person trashed, everywhere, back to
+    where they were. Returns (back in sight, back in the archive)."""
     from src.server.api.routers.assets import reindex_restored_asset
 
     asset_repo = AssetRepository(session)
-    restored = 0
-    for asset_id in repo.trashed_asset_ids(project_id):
-        if asset_repo.restore(asset_id):
-            restored += 1
-            asset = asset_repo.get_by_id(asset_id)
-            if asset is not None:
-                reindex_restored_asset(request, asset)
-    return restored
+    restored, _, to_archive = asset_repo.restore_many(repo.trashed_asset_ids(project_id))
+    for asset_id in restored:
+        if asset_id in to_archive:
+            continue  # back in the archive: not in search
+        asset = asset_repo.get_by_id(asset_id)
+        if asset is not None:
+            reindex_restored_asset(request, asset)
+    for library_id in asset_repo.library_ids_of(restored):
+        LibraryRepository(session).bump_revision(library_id)
+    return len(restored) - len(to_archive), len(to_archive)
 
 
 @router.post("/{project_id}/restore-clips", response_model=RestoreClipsResponse)
@@ -508,8 +536,9 @@ def restore_project_clips(
     col = _get_project_or_404(repo, project_id)
     if not _can_view(col, user_id):
         raise HTTPException(status_code=404, detail="Project not found")
-    restored = _restore_trashed_clips(request, session, repo, project_id)
-    return RestoreClipsResponse(restored=restored, missing=repo.hidden_clip_counts(project_id)["missing"])
+    restored, archived = _restore_trashed_clips(request, session, repo, project_id)
+    return RestoreClipsResponse(restored=restored, missing=repo.hidden_clip_counts(project_id)["missing"],
+                                archived=archived)
 
 
 # ---------------------------------------------------------------------------
@@ -865,7 +894,7 @@ def export_project(
     # videos count, since photos aren't exported anyway.
     is_smart = getattr(col, "type", "static") == "smart"
     hidden = (
-        {"trashed": 0, "missing": 0, "library_trashed": 0}
+        {"trashed": 0, "missing": 0, "library_trashed": 0, "archived": 0}
         if is_smart else repo.hidden_clip_counts(col.project_id, videos_only=True)
     )
 
@@ -923,11 +952,12 @@ def export_project(
             "X-Lumiverb-Skipped-Trashed": str(hidden["trashed"]),
             "X-Lumiverb-Skipped-Missing": str(hidden["missing"]),
             "X-Lumiverb-Skipped-Library-Trashed": str(hidden["library_trashed"]),
+            "X-Lumiverb-Skipped-Archived": str(hidden["archived"]),
             "Access-Control-Expose-Headers": (
                 "Content-Disposition, X-Lumiverb-Skipped-Stills, "
                 "X-Lumiverb-Skipped-No-Duration, X-Lumiverb-Unprobed, "
                 "X-Lumiverb-Skipped-Trashed, X-Lumiverb-Skipped-Missing, "
-                "X-Lumiverb-Skipped-Library-Trashed"
+                "X-Lumiverb-Skipped-Library-Trashed, X-Lumiverb-Skipped-Archived"
             ),
         },
     )

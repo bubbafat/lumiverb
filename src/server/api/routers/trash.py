@@ -4,12 +4,13 @@ import logging
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlmodel import Session
 
-from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_tenant_admin
+from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_signed_in, require_tenant_admin
+from src.server.api.routers.archive import HiddenClip, decode_cursor, encode_cursor
 from src.server.api.errors import DecisionRequiredError
 from src.shared.utils import utcnow
 from src.server.models.tenant import Asset
@@ -24,16 +25,69 @@ router = APIRouter(prefix="/v1/trash", tags=["trash"])
 class EmptyTrashRequest(BaseModel):
     asset_ids: list[str] | None = None
     trashed_before: str | None = None  # ISO8601
+    # Only this library's trash, and only under this folder: what a filtered view showed.
+    library_id: str | None = None
+    path: str | None = None
     # Required when any of the clips are in projects: deleting them for good
     # takes them out of those projects, and the user has to have said yes.
     remove_from_projects: bool = False
-    # Missing (archived) clips named in asset_ids are deleted for good only
-    # with this: otherwise only what a person trashed goes.
-    include_missing: bool = False
 
 
 class EmptyTrashResponse(BaseModel):
     deleted: int
+
+
+class TrashedClip(HiddenClip):
+    trashed_at: str
+    # When it's deleted for good; None when the trash days are off.
+    expires_at: str | None
+
+
+class TrashPage(BaseModel):
+    items: list[TrashedClip]
+    next_cursor: str | None = None
+    total: int
+    # When this was listed (server time): send it back as trashed_before when
+    # emptying, so nothing trashed since (never shown) goes with it.
+    listed_at: str
+    # The account's trash days; None when the trash is emptied only by hand.
+    trash_days: int | None
+
+
+@router.get("", response_model=TrashPage, dependencies=[Depends(require_signed_in)])
+def list_trash(
+    session: Annotated[Session, Depends(get_tenant_session)],
+    library_id: str | None = None,
+    path: str | None = Query(default=None, description="Only clips under this folder (recursive)."),
+    after: str | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+) -> TrashPage:
+    """Clips a person trashed, most recently trashed first, with when each is
+    deleted for good. Clips of a library in the trash go with the library,
+    so they're not here."""
+    from datetime import timedelta
+
+    from src.server.tenant_settings import get_trash_days
+
+    days = get_trash_days(session)
+    listed_at = utcnow()
+    rows, total = AssetRepository(session).page_hidden(
+        ("user",), library_id=library_id, folder=path, after=decode_cursor(after), limit=limit,
+    )
+    return TrashPage(
+        items=[
+            TrashedClip(
+                asset_id=r["asset_id"], library_id=r["library_id"], library_name=r["library_name"],
+                rel_path=r["rel_path"], media_type=r["media_type"], trashed_at=r["deleted_at"].isoformat(),
+                expires_at=(r["deleted_at"] + timedelta(days=days)).isoformat() if days else None,
+            )
+            for r in rows
+        ],
+        next_cursor=encode_cursor(rows[-1]) if len(rows) == limit else None,
+        total=total,
+        trash_days=days,
+        listed_at=listed_at.isoformat(),
+    )
 
 
 @router.delete("/empty", response_model=EmptyTrashResponse)
@@ -60,15 +114,13 @@ def empty_trash(
             trashed_before_dt = None
     if body.asset_ids is None and trashed_before_dt is None:
         trashed_before_dt = utcnow()
-    to_delete = asset_repo.list_trashed(
-        asset_ids=body.asset_ids,
-        trashed_before=trashed_before_dt,
-        include_missing=body.include_missing,
-    )
+    to_delete = asset_repo.list_trashed(asset_ids=body.asset_ids, trashed_before=trashed_before_dt,
+                                        library_id=body.library_id, folder=body.path)
     if not to_delete:
         return EmptyTrashResponse(deleted=0)
     return EmptyTrashResponse(
-        deleted=purge_assets(session, request, to_delete, user_id, remove_from_projects=body.remove_from_projects),
+        deleted=purge_assets(session, getattr(request.state, "tenant_id", None), to_delete, user_id,
+                             remove_from_projects=body.remove_from_projects),
     )
 
 
@@ -118,7 +170,7 @@ def _hand_over(session: Session, request: Request, asset_id: str) -> str | None:
     repo = AssetRepository(session)
     archived = session.get(Asset, asset_id)  # get_by_id leaves out deleted assets
     if (archived is None or not repo.lock_for_restore(archived, archived.rel_path)
-            or archived.deleted_at is None or archived.deleted_reason not in (None, "missing")):
+            or archived.deleted_at is None or archived.deleted_reason != "missing"):
         session.rollback()
         return None
     # A person un-assigning a face or merging people locks in the other order
@@ -148,7 +200,8 @@ def _hand_over(session: Session, request: Request, asset_id: str) -> str | None:
                         {"a": asset_id, "c": copy_id})
     session.flush()
     # Deletes the copy for good and commits the move with it.
-    if purge_assets(session, request, [copy], "", remove_from_projects=True) != 1:
+    if purge_assets(session, getattr(request.state, "tenant_id", None), [copy], "",
+                    remove_from_projects=True, reason="handed_over") != 1:
         session.rollback()  # nothing was deleted, so nothing committed
         return None
     logger.info("Asset %s moved to its copy at %s (copy %s removed)", asset_id, path, copy_id)
@@ -165,18 +218,22 @@ def _hand_over(session: Session, request: Request, asset_id: str) -> str | None:
 
 def purge_assets(
     session: Session,
-    request: Request,
+    tenant_id: str | None,
     to_delete: list,
     user_id: str,
     *,
     remove_from_projects: bool,
+    reason: str = "user",
+    before: datetime | None = None,
 ) -> int:
     """Delete these trashed assets for good: rows, files, playback cuts and search
-    documents. 409 in_projects when any are in projects, unless remove_from_projects."""
+    documents. 409 in_projects when any are in projects, unless remove_from_projects.
+
+    Re-checked under a row lock: only those still deleted for `reason` (since
+    before `before`) go. One restored, archived or trashed again since it was
+    listed keeps its files and everything else."""
     asset_repo = AssetRepository(session)
-    # Lock what's still deleted; one a scan restored since it was listed keeps
-    # its files and everything else.
-    still = set(asset_repo.lock_still_deleted([a.asset_id for a in to_delete]))
+    still = set(asset_repo.lock_still_deleted([a.asset_id for a in to_delete], reason=reason, before=before))
     to_delete = [a for a in to_delete if a.asset_id in still]
     if not to_delete:
         return 0
@@ -214,7 +271,6 @@ def purge_assets(
                 path.unlink()
         except OSError as e:
             logger.warning("Failed to remove file %s after empty trash: %s", key, e)
-    tenant_id = getattr(request.state, "tenant_id", None)
     if tenant_id:
         # Playback cuts are copies of the start of each video.
         from src.server.api.routers.playback import clear_cuts
@@ -223,14 +279,38 @@ def purge_assets(
             clear_cuts(tenant_id, asset_ids)
         except OSError as e:
             logger.warning("Failed to remove playback cuts after empty trash: %s", e)
-    try:
-        from src.server.search.quickwit_client import QuickwitClient
-        qw = QuickwitClient()
-        tenant_id = getattr(request.state, "tenant_id", None)
-        for aid in asset_ids:
-            if tenant_id:
-                qw.delete_tenant_documents_by_asset_id(tenant_id, aid)
-    except Exception as e:
-        logger.warning("Quickwit delete after empty trash failed: %s", e)
+        try:
+            from src.server.search.quickwit_client import QuickwitClient
+
+            QuickwitClient().delete_tenant_documents_by_asset_ids(tenant_id, asset_ids)
+        except Exception as e:
+            logger.warning("Quickwit delete after empty trash failed: %s", e)
     return deleted_count
+
+
+def purge_expired_trash(session: Session, tenant_id: str, *, limit: int = 500) -> dict[str, int]:
+    """Delete for good what has been in the trash longer than the account's
+    trash days: clips a person trashed, libraries, projects. Nothing when an
+    admin turned that off. Trashing is the consent (trashing what projects
+    use asks first), so clips leave their projects without asking again.
+    At most `limit` clips a run, so a run stays short; the next run takes more.
+    """
+    from datetime import timedelta
+
+    from src.server.api.routers.libraries import delete_libraries_for_good
+    from src.server.api.routers.projects import delete_projects_for_good
+    from src.server.repository.tenant import ProjectRepository
+    from src.server.tenant_settings import get_trash_days
+
+    days = get_trash_days(session)
+    if days is None:
+        return {"clips": 0, "libraries": 0, "projects": 0}
+    cutoff = utcnow() - timedelta(days=days)
+    clips = AssetRepository(session).list_trashed(trashed_before=cutoff, limit=limit)
+    n_clips = purge_assets(session, tenant_id, clips, "", remove_from_projects=True, before=cutoff) if clips else 0
+    expired_libraries = [lib for lib in LibraryRepository(session).get_trashed()
+                         if lib.trashed_at is not None and lib.trashed_at < cutoff]
+    n_libraries = delete_libraries_for_good(session, tenant_id, expired_libraries, before=cutoff)
+    n_projects = delete_projects_for_good(session, ProjectRepository(session).list_trashed_before(cutoff), before=cutoff)
+    return {"clips": n_clips, "libraries": n_libraries, "projects": n_projects}
 

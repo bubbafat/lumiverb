@@ -11,12 +11,15 @@ from pydantic import BaseModel, Field, StrictBool
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_tenant_session, require_editor, require_tenant_admin
+from src.server.api.errors import DecisionRequiredError
 from src.server.tenant_settings import (
     get_follow_moves,
     get_public_video_preview_max_seconds,
+    get_trash_days,
     get_video_preview_max_seconds,
     set_follow_moves,
     set_public_video_preview_max_seconds,
+    set_trash_days,
     set_video_preview_max_seconds,
 )
 from src.shared.path_filter import validate_pattern
@@ -33,6 +36,7 @@ class TenantContextResponse(BaseModel):
 
 
 _Seconds = Annotated[int, Field(strict=True, ge=1, le=86_400)]
+_Days = Annotated[int, Field(strict=True, ge=1, le=3650)]
 
 
 class TenantSettingsResponse(BaseModel):
@@ -43,14 +47,21 @@ class TenantSettingsResponse(BaseModel):
     # The same content is the same asset: moves, renames, copy then delete.
     # Off, the path is the only identity.
     follow_moves: bool = True
+    # Days clips, libraries and projects stay in the trash before they're
+    # deleted for good; None when that's off (the trash is emptied by hand).
+    trash_days: int | None = 30
 
 
 class TenantSettingsUpdate(BaseModel):
-    """Fields left out stay as they are; null means the whole video."""
+    """Fields left out stay as they are; null means the whole video, or (trash_days) never."""
 
     video_preview_max_seconds: _Seconds | None = None
     public_video_preview_max_seconds: _Seconds | None = None
     follow_moves: StrictBool = True
+    trash_days: _Days | None = None
+    # Fewer trash days (or turning them back on) deletes for good, on the next
+    # upkeep, what's already been in the trash longer: say yes to that.
+    confirm_purge: StrictBool = False
 
 
 class TenantFilterDefaultItem(BaseModel):
@@ -89,6 +100,7 @@ def _settings(session: Session) -> TenantSettingsResponse:
         video_preview_max_seconds=get_video_preview_max_seconds(session),
         public_video_preview_max_seconds=get_public_video_preview_max_seconds(session),
         follow_moves=get_follow_moves(session),
+        trash_days=get_trash_days(session),
     )
 
 
@@ -106,17 +118,44 @@ def update_tenant_settings(
     from src.server.api.routers.playback import clear_cuts
 
     before = _settings(session)
+    # Asked before anything is saved: a 409 changes nothing.
+    if "trash_days" in body.model_fields_set:
+        _ask_before_shortening(session, before.trash_days, body.trash_days, body.confirm_purge)
     if "video_preview_max_seconds" in body.model_fields_set:
         set_video_preview_max_seconds(session, body.video_preview_max_seconds)
     if "public_video_preview_max_seconds" in body.model_fields_set:
         set_public_video_preview_max_seconds(session, body.public_video_preview_max_seconds)
     if "follow_moves" in body.model_fields_set:
         set_follow_moves(session, body.follow_moves)
+    if "trash_days" in body.model_fields_set:
+        set_trash_days(session, body.trash_days)
     after = _settings(session)
     caps = ("video_preview_max_seconds", "public_video_preview_max_seconds")
     if any(getattr(after, c) != getattr(before, c) for c in caps):
         clear_cuts(request.state.tenant_id)
     return after
+
+
+def _ask_before_shortening(session: Session, old: int | None, new: int | None, confirmed: bool) -> None:
+    """409 trash_days_shortened when the new trash days would delete things on
+    the next upkeep that the old ones kept (fewer days, or turned back on)."""
+    if new is None or (old is not None and new >= old) or confirmed:
+        return
+    from datetime import timedelta
+
+    from src.server.repository.tenant import AssetRepository
+    from src.shared.utils import utcnow
+
+    counts = AssetRepository(session).count_expiring(utcnow() - timedelta(days=new))
+    if any(counts.values()):
+        one = {"clips": "clip", "libraries": "library", "projects": "project"}
+        what = ", ".join(f"{n} {one[k] if n == 1 else k}" for k, n in counts.items() if n)
+        raise DecisionRequiredError(
+            "trash_days_shortened",
+            f"With {new} trash days, {what} in the trash for longer would be deleted for good within minutes. "
+            "Send confirm_purge: true to go ahead.",
+            {"trash_days": new, **counts},
+        )
 
 
 @router.get("/context", response_model=TenantContextResponse)

@@ -20,6 +20,8 @@ import DismissedPeoplePage from "./pages/DismissedPeoplePage";
 import PeoplePage from "./pages/PeoplePage";
 import PersonDetailPage from "./pages/PersonDetailPage";
 import SettingsPage from "./pages/SettingsPage";
+import ArchivePage from "./pages/ArchivePage";
+import TrashPage from "./pages/TrashPage";
 import AccountSection from "./pages/settings/AccountSection";
 import PreferencesSection from "./pages/settings/PreferencesSection";
 import PlaybackSection from "./pages/settings/PlaybackSection";
@@ -113,6 +115,22 @@ createRoot(document.getElementById("root")!).render(
               element={
                 <RequireAuth>
                   {<ProjectDetailPage />}
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="archive"
+              element={
+                <RequireAuth>
+                  {<ArchivePage />}
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="trash"
+              element={
+                <RequireAuth>
+                  {<TrashPage />}
                 </RequireAuth>
               }
             />

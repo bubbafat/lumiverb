@@ -7,14 +7,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlmodel import Session
 
 from src.shared.io_utils import normalize_rel_path
 from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor, require_signed_in
-from src.server.api.errors import DecisionRequiredError
+from src.server.api.errors import ConflictError, DecisionRequiredError
 from src.shared import asset_status
 from src.shared.io_utils import normalize_path_prefix
 from src.server.repository.tenant import AssetMetadataRepository, AssetRepository, LibraryRepository
@@ -161,10 +161,56 @@ def _encode_cursor(sort_col: str, sort_value: object, asset_id: str) -> str:
 
 class BatchTrashRequest(BaseModel):
     asset_ids: list[str]
-    # "user": trashed by a person; survives rescans. "missing": the scanner
-    # no longer finds the file; restored if it reappears. Omitted = "missing"
-    # behavior (what scanners sent before reasons existed).
+    # "user": a person trashed them; deleted for good after the trash days,
+    # and scans leave them trashed. "missing": the scanner no longer finds the
+    # files (archived; restored when they reappear). Omitted = "missing": what
+    # scanners sent before reasons existed (the Mac app still does).
     reason: Literal["user", "missing"] | None = None
+    # A person's trash: required when any of the clips are in projects. In the
+    # trash they're hidden there, and deleted for good they leave them.
+    remove_from_projects: bool = False
+
+
+class PickClipsRequest(BaseModel):
+    """Clips by id, or every clip under a folder of a library (path "" is the
+    whole library). The folder only picks the clips; it has no state of its own."""
+
+    asset_ids: list[str] | None = Field(default=None, max_length=10_000)
+    library_id: str | None = None
+    path: str | None = None
+
+    @model_validator(mode="after")
+    def _one_way(self) -> "PickClipsRequest":
+        by_folder = self.library_id is not None or self.path is not None
+        if (self.asset_ids is not None) == by_folder:
+            raise ValueError("Send asset_ids, or library_id and path")
+        if by_folder and (self.library_id is None or self.path is None):
+            raise ValueError("A folder needs library_id and path")
+        return self
+
+
+class ArchiveResponse(BaseModel):
+    archived: list[str]
+    # Asked for but not in sight (already archived, in the trash, or unknown): left as they were.
+    skipped: list[str] = []
+
+
+class UnarchiveResponse(BaseModel):
+    unarchived: list[str]
+    # Not archived by a person (a missing file's clip comes back with its file), or unknown.
+    skipped: list[str] = []
+
+
+class RestoreRequest(BaseModel):
+    asset_ids: list[str] = Field(max_length=10_000)
+
+
+class RestoreResponse(BaseModel):
+    restored: list[str]
+    # Not in a person's trash (archived, missing, in sight, unknown), or their library is in the trash.
+    skipped: list[str] = []
+    # Of the restored, those archived before they were trashed: back in the archive, not in sight.
+    to_archive: list[str] = []
 
 
 
@@ -501,11 +547,14 @@ def _stream_asset_file(
     request: Request,
     session: Session,
 ) -> StreamingResponse:
-    asset_repo = AssetRepository(session)
-    asset = asset_repo.get_by_id(asset_id)
-    if asset is None or asset.deleted_at is not None:
+    # Signed in, a clip out of sight (archived, in the trash) still shows its
+    # pictures: the archive and trash views need them. Public pages never do.
+    asset = session.get(Asset, asset_id)
+    is_public = getattr(request.state, "is_public_request", False)
+    signed_in = getattr(request.state, "role", None) in ("admin", "editor", "viewer")
+    if asset is None or (asset.deleted_at is not None and (is_public or not signed_in)):
         raise HTTPException(status_code=404, detail="Asset not found")
-    if getattr(request.state, "is_public_request", False):
+    if is_public:
         public_library_id = request.query_params.get("public_library_id")
         public_project_id = request.query_params.get("public_project_id") or request.query_params.get(
             "public_collection_id"  # pre-rename name
@@ -885,39 +934,93 @@ def project_usage_summary(
     return ProjectUsageResponse(assets_in_projects=in_any, projects=visible, other_projects=other)
 
 
+def _ask_about_projects(session: Session, request: Request, asset_ids: list[str]) -> None:
+    """409 in_projects when a person trashes clips that projects use: hidden
+    there while in the trash, and gone from them once deleted for good."""
+    usage = project_usage_summary(session, get_current_user_id(request), asset_ids=asset_ids)
+    if usage.assets_in_projects:
+        n = usage.assets_in_projects
+        raise DecisionRequiredError(
+            "in_projects",
+            f"{n} of these clips {'is' if n == 1 else 'are'} in projects. In the trash they're hidden "
+            "there; deleted for good, they leave those projects. Send remove_from_projects: true to go ahead.",
+            usage.model_dump(),
+        )
+
+
+def _out_of_search(background: BackgroundTasks, request: Request, asset_ids: list[str]) -> None:
+    """Drop these clips' search documents after the response (best effort):
+    search already leaves out clips out of sight; this keeps pages full."""
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if tenant_id and asset_ids:
+        from src.server.search.quickwit_client import QuickwitClient
+
+        background.add_task(QuickwitClient().delete_tenant_documents_by_asset_ids, tenant_id, list(asset_ids))
+
+
+def _back_in_search(background: BackgroundTasks, request: Request, session: Session, asset_ids: list[str]) -> None:
+    """Clips back in sight: the sync sweep re-indexes them and their scenes
+    (bringing them back queued them); transcript segments are put back here,
+    after the response."""
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if not tenant_id or not asset_ids:
+        return
+    from sqlmodel import select
+
+    with_transcripts = list(session.exec(
+        select(Asset).where(Asset.asset_id.in_(asset_ids), Asset.transcript_srt.is_not(None))  # type: ignore[attr-defined,union-attr]
+    ).all())
+    if with_transcripts:
+        from src.server.search.sync import index_transcript_segments
+
+        def run() -> None:
+            for asset in with_transcripts:
+                index_transcript_segments(tenant_id, asset)
+
+        background.add_task(run)
+
+
+def _refresh_grids(session: Session, asset_ids: list[str]) -> None:
+    """Bump the revision of every library these clips are in, so open grids and folder trees reload."""
+    asset_repo, library_repo = AssetRepository(session), LibraryRepository(session)
+    for library_id in asset_repo.library_ids_of(asset_ids):
+        library_repo.bump_revision(library_id)
+
+
 @router.delete("", response_model=BatchTrashResponse)
 def batch_trash_assets(
     body: BatchTrashRequest,
     request: Request,
+    background: BackgroundTasks,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> BatchTrashResponse:
-    """Soft-delete multiple assets. Returns trashed and not_found lists. Quickwit delete is best-effort.
+    """Take clips out of sight: a person's trash ("user"), or files a scan no longer finds ("missing").
 
-    A person's trash ("user") needs an editor. Marking files the scanner no
-    longer finds ("missing", or no reason) stays open to whoever can scan.
+    A person's trash needs an editor, takes archived clips too (deleting an
+    archived clip moves it to the trash), and asks first about clips that
+    projects use (409 in_projects). Marking files missing stays open to
+    whoever can scan, and hands each over to an empty copy of its file when
+    there is one (follow moves).
     """
-    if body.reason == "user":
-        require_editor(request)
+    reason = body.reason or "missing"
     asset_repo = AssetRepository(session)
-    trashed_ids, not_found_ids = asset_repo.trash_many(body.asset_ids, reason=body.reason)
-    if trashed_ids:
-        try:
-            from src.server.search.quickwit_client import QuickwitClient
-            qw = QuickwitClient()
-            tenant_id = getattr(request.state, "tenant_id", None)
-            for aid in trashed_ids:
-                if tenant_id:
-                    qw.delete_tenant_documents_by_asset_id(tenant_id, aid)
-        except Exception as e:
-            logger.warning("Quickwit delete after batch trash failed: %s", e)
+    if reason == "user":
+        require_editor(request)
+        if not body.remove_from_projects:
+            # Only about clips this would trash: one already in the trash needs no answer.
+            _ask_about_projects(session, request, asset_repo.trashable(body.asset_ids))
+    trashed_ids, not_found_ids = asset_repo.trash_many(body.asset_ids, reason=reason)
+    _out_of_search(background, request, trashed_ids)
     handed_over: list[str] = []
-    if trashed_ids and body.reason != "user":
+    if trashed_ids and reason == "missing":
         # Copy, then delete the original: the asset moves to its empty copy.
         from src.server.api.routers.trash import hand_over_to_copies
         from src.server.tenant_settings import get_follow_moves
 
         if get_follow_moves(session):
             handed_over = hand_over_to_copies(session, request, trashed_ids)
+    if trashed_ids and reason == "user":
+        _refresh_grids(session, trashed_ids)
     return BatchTrashResponse(trashed=trashed_ids, not_found=not_found_ids, handed_over=handed_over)
 
 
@@ -981,24 +1084,25 @@ def put_video_facet(
 def trash_asset(
     asset_id: str,
     request: Request,
+    background: BackgroundTasks,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
+    remove_from_projects: bool = False,
 ) -> None:
-    """Trash a single asset for the user; it stays trashed through rescans.
+    """A person trashes one clip (in sight or archived); scans leave it trashed.
 
-    404 if not found or already trashed. Quickwit delete is best-effort.
+    404 if not found, already in the trash, or trashed with its library.
+    409 in_projects as for DELETE /v1/assets.
     """
     asset_repo = AssetRepository(session)
-    ok = asset_repo.trash(asset_id, reason="user")
-    if not ok:
+    if not asset_repo.trashable([asset_id]):
         raise HTTPException(status_code=404, detail="Asset not found or already trashed")
-    tenant_id = getattr(request.state, "tenant_id", None)
-    if tenant_id:
-        try:
-            from src.server.search.quickwit_client import QuickwitClient
-            QuickwitClient().delete_tenant_documents_by_asset_id(tenant_id, asset_id)
-        except Exception as e:
-            logger.warning("Quickwit delete after trash failed for %s: %s", asset_id, e)
+    if not remove_from_projects:
+        _ask_about_projects(session, request, [asset_id])
+    if not asset_repo.trash(asset_id, reason="user"):
+        raise HTTPException(status_code=404, detail="Asset not found or already trashed")
+    _out_of_search(background, request, [asset_id])
+    _refresh_grids(session, [asset_id])
 
 
 def reindex_restored_asset(request: Request, asset: Asset) -> None:
@@ -1011,21 +1115,103 @@ def reindex_restored_asset(request: Request, asset: Asset) -> None:
         index_transcript_segments(tenant_id, asset)
 
 
+_NOT_THE_TRASH = {
+    "archived": ("archived", "This clip is archived, not in the trash: unarchive it (POST /v1/assets/unarchive)."),
+    "missing": ("file_missing", "This clip's file is missing; it comes back when the file does."),
+    "library_trashed": ("library_trashed", "This clip went to the trash with its library; restore the library."),
+}
+
+
 @router.post("/{asset_id}/restore", status_code=204)
 def restore_asset(
     asset_id: str,
     request: Request,
+    background: BackgroundTasks,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
 ) -> None:
-    """Restore a single trashed asset. 404 if not found or not trashed."""
+    """Take one clip out of the trash, back to where it was (in sight, or the
+    archive if it was archived before). 404 if not found or not deleted;
+    409 archived, file_missing or library_trashed for a clip that isn't in a
+    person's trash."""
     asset_repo = AssetRepository(session)
-    ok = asset_repo.restore(asset_id)
-    if not ok:
+    outcome = asset_repo.restore(asset_id)
+    if outcome in _NOT_THE_TRASH:
+        raise ConflictError(*_NOT_THE_TRASH[outcome])
+    if outcome != "restored":
         raise HTTPException(status_code=404, detail="Asset not found or not trashed")
-    asset = asset_repo.get_by_id(asset_id)
-    if asset is not None:
-        reindex_restored_asset(request, asset)
+    back = session.get(Asset, asset_id)
+    if back is not None and back.deleted_at is None:  # else it went back to the archive
+        _back_in_search(background, request, session, [asset_id])
+    _refresh_grids(session, [asset_id])
+
+
+@router.post("/restore", response_model=RestoreResponse)
+def restore_assets(
+    body: RestoreRequest,
+    request: Request,
+    background: BackgroundTasks,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
+) -> RestoreResponse:
+    """Take clips out of the trash, back to where they were: in sight, or the
+    archive for those archived before they were trashed (to_archive).
+    Anything else asked for is skipped: archived or missing clips, clips in
+    sight, and clips whose library is in the trash."""
+    restored, skipped, to_archive = AssetRepository(session).restore_many(body.asset_ids)
+    _back_in_search(background, request, session, [a for a in restored if a not in set(to_archive)])
+    _refresh_grids(session, restored)
+    return RestoreResponse(restored=restored, skipped=skipped, to_archive=to_archive)
+
+
+def _folder_library(session: Session, library_id: str) -> None:
+    library = LibraryRepository(session).get_by_id(library_id)
+    if library is None or library.status == "trashed":
+        raise HTTPException(status_code=404, detail="Library not found")
+
+
+@router.post("/archive", response_model=ArchiveResponse)
+def archive_assets(
+    body: PickClipsRequest,
+    request: Request,
+    background: BackgroundTasks,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
+) -> ArchiveResponse:
+    """Archive clips: out of sight, kept forever, with everything they have.
+    Scans leave them archived while their files are on disk; unarchive brings
+    them back. By id (clips not in sight are skipped) or every clip in sight
+    under a folder."""
+    repo = AssetRepository(session)
+    if body.asset_ids is not None:
+        archived, skipped = repo.archive(body.asset_ids)
+    else:
+        _folder_library(session, body.library_id)  # type: ignore[arg-type]
+        archived, skipped = repo.archive_folder(body.library_id, body.path), []  # type: ignore[arg-type]
+    _out_of_search(background, request, archived)
+    _refresh_grids(session, archived)
+    return ArchiveResponse(archived=archived, skipped=skipped)
+
+
+@router.post("/unarchive", response_model=UnarchiveResponse)
+def unarchive_assets(
+    body: PickClipsRequest,
+    request: Request,
+    background: BackgroundTasks,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
+) -> UnarchiveResponse:
+    """Bring back clips a person archived, by id or under a folder. A missing
+    file's clip isn't brought back: it returns when its file does."""
+    repo = AssetRepository(session)
+    if body.asset_ids is not None:
+        back, skipped = repo.unarchive(body.asset_ids)
+    else:
+        _folder_library(session, body.library_id)  # type: ignore[arg-type]
+        back, skipped = repo.unarchive_folder(body.library_id, body.path), []  # type: ignore[arg-type]
+    _back_in_search(background, request, session, back)
+    _refresh_grids(session, back)
+    return UnarchiveResponse(unarchived=back, skipped=skipped)
 
 
 @router.post("/{asset_id}/vision", response_model=VisionSubmitResponse)

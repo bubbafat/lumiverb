@@ -7,13 +7,19 @@ import {
   createLibrary,
   deleteLibrary,
   emptyTrash,
+  getTenantSettings,
+  listArchive,
+  restoreLibrary,
   ApiError,
   type ProjectUsage,
   updateLibraryVisibility,
 } from "../api/client";
 import { Badge } from "../components/Badge";
 import { Modal } from "../components/Modal";
+import { ProjectUsageList, clipCount } from "../components/ProjectUsageList";
 import { SkeletonRow } from "../components/SkeletonRow";
+import { deletedForGoodOn, shortDate } from "../lib/format";
+import { useCanEdit } from "../lib/useCanEdit";
 
 function formatLastIngest(lastScanAt: string | null): string {
   if (!lastScanAt) return "Never ingested";
@@ -35,9 +41,12 @@ export default function LibrariesPage() {
   const [addPath, setAddPath] = useState("");
   const [addError, setAddError] = useState("");
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
-  // The API asked what happens to a library's archived clips, then maybe about projects.
-  const [archivedAsk, setArchivedAsk] = useState<{ id: string; count: number; inProjects?: number } | null>(null);
-  const [emptyTrashConfirm, setEmptyTrashConfirm] = useState(false);
+  // The API asked about the library's clips that projects use: hidden there in
+  // the trash, gone from them once the library is deleted for good.
+  const [projectsAsk, setProjectsAsk] = useState<{ id: string; usage: ProjectUsage } | null>(null);
+  // Delete for good: every library in the trash (true), or one (its id).
+  const [emptyTrashConfirm, setEmptyTrashConfirm] = useState<true | string | false>(false);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
   // Set when the server says the trashed libraries' clips are in projects.
   const [trashUsage, setTrashUsage] = useState<ProjectUsage | null>(null);
   const [visibilityUpdatingId, setVisibilityUpdatingId] = useState<
@@ -81,33 +90,57 @@ export default function LibrariesPage() {
     },
   });
 
-  type DeleteVars = { id: string; archived?: "keep" | "delete"; removeFromProjects?: boolean };
+  const { data: settings } = useQuery({ queryKey: ["tenant-settings"], queryFn: getTenantSettings, staleTime: 60_000 });
+  const trashDays = settings?.trash_days === undefined ? 30 : settings.trash_days;
+  const canEdit = useCanEdit();
+  // Archived clips aren't deleted on their own, but they go with their library: say how many.
+  const { data: archivedInDeleting } = useQuery({
+    queryKey: ["archive", deleteConfirmId, null, "all", "count"],
+    queryFn: () => listArchive({ libraryId: deleteConfirmId!, limit: 1 }),
+    enabled: deleteConfirmId !== null,
+  });
+  const archivedCount = archivedInDeleting?.total ?? 0;
+
+  type DeleteVars = { id: string; removeFromProjects?: boolean };
   const deleteMutation = useMutation({
-    mutationFn: ({ id, archived, removeFromProjects }: DeleteVars) =>
-      deleteLibrary(id, archived ? { archived, ...(removeFromProjects ? { removeFromProjects } : {}) } : undefined),
+    mutationFn: ({ id, removeFromProjects }: DeleteVars) => deleteLibrary(id, removeFromProjects ?? false),
     onMutate: () => setDeleteError(null),
     onSuccess: () => {
       setDeleteConfirmId(null);
-      setArchivedAsk(null);
+      setProjectsAsk(null);
       queryClient.invalidateQueries({ queryKey: ["libraries"] });
       queryClient.invalidateQueries({ queryKey: ["projects"] });
     },
     onError: (err: ApiError, vars) => {
-      if (err.code === "archived_clips" && err.details) {
-        setArchivedAsk({ id: vars.id, count: Number(err.details.archived_clips) || 0 });
-      } else if (err.code === "in_projects" && err.details && archivedAsk) {
-        setArchivedAsk({ ...archivedAsk, inProjects: Number(err.details.assets_in_projects) || 0 });
+      if (err.code === "in_projects" && err.details) {
+        setProjectsAsk({ id: vars.id, usage: err.details as unknown as ProjectUsage });
       } else {
         setDeleteConfirmId(null);
-        setArchivedAsk(null);
+        setProjectsAsk(null);
         setDeleteError(err.message);
       }
     },
   });
-  const clips = (n: number) => (n === 1 ? "1 clip" : `${n} clips`);
+
+  const restoreMutation = useMutation({
+    mutationFn: (id: string) => restoreLibrary(id),
+    onMutate: () => setRestoreError(null),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["libraries"] });
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+    },
+    onError: (err: ApiError) => setRestoreError(err.message),
+  });
 
   const emptyTrashMutation = useMutation({
-    mutationFn: (removeFromProjects: boolean) => emptyTrash(removeFromProjects),
+    // The libraries shown: one, or every one in the trash on this page (never one trashed since).
+    mutationFn: (removeFromProjects: boolean) =>
+      emptyTrash(
+        removeFromProjects,
+        typeof emptyTrashConfirm === "string"
+          ? [emptyTrashConfirm]
+          : (libraries ?? []).filter((l) => l.status === "trashed").map((l) => l.library_id),
+      ),
     onMutate: () => setEmptyTrashError(null),
     onSuccess: () => {
       setEmptyTrashConfirm(false);
@@ -156,6 +189,11 @@ export default function LibrariesPage() {
   }
 
   const trashedCount = libraries?.filter((l) => l.status === "trashed").length ?? 0;
+  // What the delete-for-good dialog is about: one library, or all of them in the trash.
+  const emptyOne = typeof emptyTrashConfirm === "string"
+    ? libraries?.find((l) => l.library_id === emptyTrashConfirm)
+    : undefined;
+  const emptyCount = emptyOne ? 1 : trashedCount;
 
   const handleAddSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -170,7 +208,7 @@ export default function LibrariesPage() {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <h1 className="text-2xl font-semibold">Libraries</h1>
           <div className="flex items-center gap-3">
-            {trashedCount > 0 && (
+            {canEdit && trashedCount > 0 && (
               <button
                 type="button"
                 onClick={() => setEmptyTrashConfirm(true)}
@@ -204,6 +242,16 @@ export default function LibrariesPage() {
             <span>Couldn&apos;t delete the library: {deleteError}</span>
           </div>
         )}
+        {restoreError && (
+          <div role="alert" className="flex items-center justify-between rounded-lg border border-red-800/50 bg-red-900/20 px-4 py-3 text-red-400">
+            <span>Couldn&apos;t restore the library: {restoreError}</span>
+          </div>
+        )}
+        <p className="text-sm text-gray-500">
+          Clips you archived or moved to the trash are in{" "}
+          <Link to="/archive" className="text-indigo-300 hover:underline">Archive</Link> and{" "}
+          <Link to="/trash" className="text-indigo-300 hover:underline">Trash</Link>.
+        </p>
 
         {isLoading ? (
           <div className="space-y-4">
@@ -259,6 +307,14 @@ export default function LibrariesPage() {
                       <p className="mt-0.5 font-mono text-sm text-gray-400">
                         {lib.root_path}
                       </p>
+                      {lib.status === "trashed" && (() => {
+                        const on = deletedForGoodOn(lib.trashed_at, trashDays);
+                        return (
+                          <p className="mt-0.5 text-sm text-amber-300/80">
+                            {on ? `Deleted for good on ${shortDate(on)} unless restored.` : "In the trash until you delete it for good."}
+                          </p>
+                        );
+                      })()}
                     </div>
                     <div className="flex flex-wrap items-center gap-3">
                       {lib.status !== "trashed" && (
@@ -325,65 +381,66 @@ export default function LibrariesPage() {
                       <span className="text-sm text-gray-500">
                         {formatLastIngest(lib.last_scan_at)}
                       </span>
-                      {lib.status !== "trashed" && (
+                      {canEdit && lib.status === "trashed" && (
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => restoreMutation.mutate(lib.library_id)}
+                            disabled={restoreMutation.isPending}
+                            className="rounded-lg border border-gray-600 px-3 py-1.5 text-sm font-medium text-gray-200 transition-colors duration-150 hover:border-gray-500 hover:bg-gray-800/50 disabled:opacity-50"
+                          >
+                            Restore
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEmptyTrashConfirm(lib.library_id)}
+                            className="rounded px-3 py-1.5 text-sm font-medium text-red-400 transition-colors duration-150 hover:bg-red-900/30"
+                          >
+                            Delete for good
+                          </button>
+                        </div>
+                      )}
+                      {canEdit && lib.status !== "trashed" && (
                         <div>
-                          {archivedAsk?.id === lib.library_id ? (
-                            <div className="flex flex-wrap items-center gap-2" role="alertdialog">
-                              {archivedAsk.inProjects ? (
-                                <>
-                                  <span className="text-sm text-gray-400">
-                                    {clips(archivedAsk.inProjects)} of them {archivedAsk.inProjects === 1 ? "is" : "are"} in
-                                    projects; deleting them for good takes them out of those projects.
-                                  </span>
-                                  <button
-                                    type="button"
-                                    onClick={() => deleteMutation.mutate({ id: lib.library_id, archived: "delete", removeFromProjects: true })}
-                                    disabled={deleteMutation.isPending}
-                                    className="rounded px-2 py-1 text-sm font-medium text-red-400 transition-colors duration-150 hover:bg-red-900/30"
-                                  >
-                                    Delete anyway
-                                  </button>
-                                </>
-                              ) : (
-                                <>
-                                  <span className="text-sm text-gray-400">
-                                    {clips(archivedAsk.count)} in {lib.name} {archivedAsk.count === 1 ? "is" : "are"} archived:
-                                    their files went missing and haven't come back.
-                                  </span>
-                                  <button
-                                    type="button"
-                                    onClick={() => deleteMutation.mutate({ id: lib.library_id, archived: "delete" })}
-                                    disabled={deleteMutation.isPending}
-                                    className="rounded px-2 py-1 text-sm font-medium text-red-400 transition-colors duration-150 hover:bg-red-900/30"
-                                  >
-                                    Delete them for good
-                                  </button>
-                                </>
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => deleteMutation.mutate({ id: lib.library_id, archived: "keep" })}
-                                disabled={deleteMutation.isPending}
-                                className="rounded px-2 py-1 text-sm text-gray-200 transition-colors duration-150 hover:bg-gray-800"
-                              >
-                                Keep them
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setArchivedAsk(null);
-                                  setDeleteConfirmId(null);
-                                }}
-                                className="rounded px-2 py-1 text-sm text-gray-400 transition-colors duration-150 hover:text-gray-300"
-                              >
-                                Cancel
-                              </button>
+                          {projectsAsk?.id === lib.library_id ? (
+                            <div className="flex max-w-md flex-col gap-2" role="alertdialog" aria-label={`Delete ${lib.name}`}>
+                              <ProjectUsageList usage={projectsAsk.usage}>
+                                {clipCount(projectsAsk.usage.assets_in_projects)} in {lib.name}{" "}
+                                {projectsAsk.usage.assets_in_projects === 1 ? "is" : "are"} in projects. In the trash{" "}
+                                {projectsAsk.usage.assets_in_projects === 1 ? "it's" : "they're"} hidden there; deleted
+                                for good with the library, {projectsAsk.usage.assets_in_projects === 1 ? "it leaves" : "they leave"} those
+                                projects.
+                              </ProjectUsageList>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => deleteMutation.mutate({ id: lib.library_id, removeFromProjects: true })}
+                                  disabled={deleteMutation.isPending}
+                                  className="rounded px-2 py-1 text-sm font-medium text-red-400 transition-colors duration-150 hover:bg-red-900/30"
+                                >
+                                  Move to trash anyway
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setProjectsAsk(null);
+                                    setDeleteConfirmId(null);
+                                  }}
+                                  className="rounded px-2 py-1 text-sm text-gray-400 transition-colors duration-150 hover:text-gray-300"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
                             </div>
                           ) : deleteConfirmId === lib.library_id ? (
                             <div className="flex items-center gap-2">
                               <span className="text-sm text-gray-400">
-                                Delete {lib.name}? This moves it to trash. You
-                                can recover it until trash is emptied.
+                                Delete {lib.name}? It moves to the trash with everything in it
+                                {archivedCount > 0
+                                  ? `, its ${archivedCount === 1 ? "archived clip" : `${archivedCount.toLocaleString()} archived clips`} too,`
+                                  : ""}
+                                {trashDays ? ` and is deleted for good after ${trashDays} days` : ""}. You can
+                                restore it until then.
                               </span>
                               <button
                                 type="button"
@@ -490,7 +547,7 @@ export default function LibrariesPage() {
         </form>
       </Modal>
 
-      {emptyTrashConfirm && (
+      {emptyTrashConfirm !== false && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
           onClick={closeEmptyTrash}
@@ -498,41 +555,32 @@ export default function LibrariesPage() {
           <div
             role="dialog"
             aria-modal="true"
-            aria-label="Empty trash"
+            aria-label={emptyOne ? `Delete ${emptyOne.name} for good` : "Empty trash"}
             className="w-full max-w-md rounded-xl bg-gray-900 p-6 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <h2 className="mb-2 text-lg font-semibold text-gray-100">
-              Empty trash
+              {emptyOne ? `Delete ${emptyOne.name} for good` : "Empty trash"}
             </h2>
             <p className="mb-4 text-sm text-gray-400">
-              This will permanently delete {trashedCount} trashed
-              {trashedCount === 1 ? " library and all its" : " libraries and all their"}{" "}
-              assets. This cannot be undone.
+              {emptyOne
+                ? `This will permanently delete ${emptyOne.name} and all its assets.`
+                : `This will permanently delete ${trashedCount} trashed${
+                    trashedCount === 1 ? " library and all its" : " libraries and all their"
+                  } assets.`}{" "}
+              This cannot be undone.
             </p>
             {trashUsage && (
-              <div className="mb-4 rounded-lg border border-amber-800/50 bg-amber-950/30 p-3 text-sm text-amber-100/90">
-                <p className="mb-2">
-                  {trashUsage.assets_in_projects === 1 ? "1 clip" : `${trashUsage.assets_in_projects} clips`} from{" "}
-                  {trashedCount === 1 ? "this library" : "these libraries"}{" "}
+              <div className="mb-4">
+                <ProjectUsageList usage={trashUsage}>
+                  {clipCount(trashUsage.assets_in_projects)} from{" "}
+                  {emptyCount === 1 ? "this library" : "these libraries"}{" "}
                   {trashUsage.assets_in_projects === 1 ? "is" : "are"} in{" "}
                   {usageTotal === 1 ? "1 project" : `${usageTotal} projects`}. Deleting{" "}
                   {trashUsage.assets_in_projects === 1 ? "it" : "them"} for good removes{" "}
                   {trashUsage.assets_in_projects === 1 ? "it" : "them"} from{" "}
                   {usageTotal === 1 ? "that project" : "those projects"}.
-                </p>
-                <ul className="space-y-0.5 text-amber-200/80">
-                  {trashUsage.projects.map((p) => (
-                    <li key={p.project_id}>
-                      {p.name}: {p.clips} {p.clips === 1 ? "clip" : "clips"}
-                      {p.status === "archived" ? " (archived)" : ""}
-                      {p.in_trash ? " (in the trash)" : ""}
-                    </li>
-                  ))}
-                  {trashUsage.other_projects > 0 && (
-                    <li>and {trashUsage.other_projects} more you can&apos;t see</li>
-                  )}
-                </ul>
+                </ProjectUsageList>
               </div>
             )}
             {emptyTrashError && (
@@ -558,7 +606,9 @@ export default function LibrariesPage() {
                   ? "Deleting…"
                   : trashUsage
                     ? "Delete and remove from projects"
-                    : "Empty trash"}
+                    : emptyOne
+                      ? "Delete for good"
+                      : "Empty trash"}
               </button>
             </div>
           </div>

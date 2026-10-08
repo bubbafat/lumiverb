@@ -59,9 +59,17 @@ class FacePropagateResult(BaseModel):
     scanned: int = 0
 
 
+class TrashPurgeResult(BaseModel):
+    """Deleted for good because they'd been in the trash longer than the account's trash days."""
+    clips: int = 0
+    libraries: int = 0
+    projects: int = 0
+
+
 class UpkeepResult(BaseModel):
     search_sync: SearchSyncResult
     face_propagate: FacePropagateResult = FacePropagateResult()
+    trash_purge: TrashPurgeResult = TrashPurgeResult()
 
 
 def _is_admin_key(authorization: str | None) -> bool:
@@ -131,6 +139,44 @@ def _propagate_faces_single_tenant(authorization: str | None) -> dict:
     _, connection_string, _ = tenant
     with TenantSession(get_engine_for_url(connection_string)) as session:
         return FaceRepository(session).propagate_assignments()
+
+
+def _purge_expired_trash_all_tenants() -> dict:
+    """Empty every tenant's expired trash."""
+    from src.server.api.routers.trash import purge_expired_trash
+    from src.server.database import get_control_session, get_tenant_session
+    from src.server.repository.control_plane import TenantRepository
+
+    totals = {"clips": 0, "libraries": 0, "projects": 0}
+    with get_control_session() as ctrl:
+        tenants = TenantRepository(ctrl).list_all()
+    for tenant in tenants:
+        try:
+            with get_tenant_session(tenant.tenant_id) as session:
+                for key, n in purge_expired_trash(session, tenant.tenant_id).items():
+                    totals[key] += n
+        except Exception as exc:
+            logger.warning("Trash purge failed for tenant %s: %s", tenant.tenant_id, exc)
+    return totals
+
+
+def _purge_expired_trash_single_tenant(authorization: str | None) -> dict:
+    """Empty the expired trash of the tenant resolved from the API key."""
+    from sqlmodel import Session as TenantSession
+
+    from src.server.api.routers.trash import purge_expired_trash
+    from src.server.database import get_engine_for_url
+
+    tenant = _tenant_for_key(authorization)
+    if tenant is None:
+        return {}
+    tenant_id, connection_string, _ = tenant
+    try:
+        with TenantSession(get_engine_for_url(connection_string)) as session:
+            return purge_expired_trash(session, tenant_id)
+    except Exception as exc:
+        logger.warning("Trash purge failed for tenant %s: %s", tenant_id, exc)
+        return {}
 
 
 def _reset_search_synced_at(session) -> None:
@@ -203,20 +249,24 @@ def _cleanup_revoked_tokens() -> int:
 def run_upkeep(
     authorization: Annotated[str | None, Header()] = None,
 ) -> UpkeepResult:
-    """Run all periodic upkeep tasks: search sync + face propagation.
+    """Run all periodic upkeep tasks: search sync, face propagation, and
+    deleting for good what has been in the trash past the trash days.
 
     With admin key: sweeps all tenants. With tenant API key: sweeps that tenant only.
     """
     if _is_admin_key(authorization):
         sync_result = _run_sweep_all_tenants()
         prop_result = _propagate_faces_all_tenants()
+        purge_result = _purge_expired_trash_all_tenants()
         _cleanup_revoked_tokens()
     else:
         sync_result = _run_sweep_single_tenant(authorization)
         prop_result = _propagate_faces_single_tenant(authorization)
+        purge_result = _purge_expired_trash_single_tenant(authorization)
     return UpkeepResult(
         search_sync=SearchSyncResult(**sync_result),
         face_propagate=FacePropagateResult(**prop_result),
+        trash_purge=TrashPurgeResult(**purge_result),
     )
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlmodel import Session
 
@@ -38,6 +38,9 @@ class CreateLibraryFilterRequest(BaseModel):
     type: str  # "include" | "exclude"
     pattern: str
     trash_matching: bool = False
+    # With trash_matching: required when projects use matching clips. In the
+    # trash they're hidden there; deleted for good, they leave them.
+    remove_from_projects: bool = False
 
 
 class PreviewFilterRequest(BaseModel):
@@ -76,10 +79,16 @@ def list_library_filters(
 def create_library_filter(
     library_id: str,
     body: CreateLibraryFilterRequest,
+    request: Request,
+    background: BackgroundTasks,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
 ) -> LibraryFilterItemWithType:
-    """Add a path filter to a library. Returns 400 if pattern invalid, 404 if library not found."""
+    """Add a path filter to a library. Returns 400 if pattern invalid, 404 if library not found.
+
+    An exclude filter with trash_matching moves the clips it matches to the
+    trash; 409 in_projects first when projects use them, unless
+    remove_from_projects (nothing is added until then)."""
     if body.type not in ("include", "exclude"):
         raise HTTPException(status_code=400, detail="type must be 'include' or 'exclude'")
     try:
@@ -89,19 +98,29 @@ def create_library_filter(
     lib_repo = LibraryRepository(session)
     if lib_repo.get_by_id(library_id) is None:
         raise HTTPException(status_code=404, detail="Library not found")
+    asset_repo = AssetRepository(session)
+    trashing = body.trash_matching and body.type == "exclude"
+    matching_ids = asset_repo.list_ids_matching_pattern(library_id, body.pattern) if trashing else []
+    if matching_ids and not body.remove_from_projects:
+        # Asked before anything changes: the trash deletes them for good on its own later.
+        from src.server.api.routers.assets import _ask_about_projects
+
+        _ask_about_projects(session, request, matching_ids)
     filter_repo = PathFilterRepository(session)
     row = filter_repo.add_for_library(library_id=library_id, type=body.type, pattern=body.pattern)
 
     trashed_count = 0
-    if body.trash_matching and body.type == "exclude":
-        asset_repo = AssetRepository(session)
-        matching_ids = asset_repo.list_ids_matching_pattern(library_id, body.pattern)
-        if matching_ids:
-            # The user chose to trash what the filter excludes: user trash, which
-            # stays trashed if the filter is later removed.
-            trashed_ids, _ = asset_repo.trash_many(matching_ids, reason="user")
-            trashed_count = len(trashed_ids)
-            LibraryRepository(session).bump_revision(library_id)
+    if matching_ids:
+        # The user chose to trash what the filter excludes: user trash, which
+        # stays trashed if the filter is later removed.
+        trashed_ids, _ = asset_repo.trash_many(matching_ids, reason="user")
+        trashed_count = len(trashed_ids)
+        LibraryRepository(session).bump_revision(library_id)
+        tenant_id = getattr(request.state, "tenant_id", None)
+        if tenant_id and trashed_ids:
+            from src.server.search.quickwit_client import QuickwitClient
+
+            background.add_task(QuickwitClient().delete_tenant_documents_by_asset_ids, tenant_id, trashed_ids)
 
     return LibraryFilterItemWithType(
         filter_id=row.filter_id,

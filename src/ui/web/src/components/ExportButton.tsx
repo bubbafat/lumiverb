@@ -78,6 +78,9 @@ export function ExportButton({ projectId }: { projectId: string }) {
           `${plural(file.skippedLibraryTrashed, "clip in a deleted library wasn't", "clips in a deleted library weren't")} included.`,
         );
       }
+      if (file.skippedArchived > 0) {
+        notes.push(`${plural(file.skippedArchived, "archived clip wasn't", "archived clips weren't")} included.`);
+      }
       if (file.unprobed > 0) {
         notes.push(
           `${plural(file.unprobed, "video hasn't", "videos haven't")} been probed and use a default frame rate; run lumiverb enrich --job-type probe.`,

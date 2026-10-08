@@ -423,6 +423,27 @@ class QuickwitClient:
                     index_id, len(batch), exc,
                 )
 
+    def delete_tenant_documents_by_asset_ids(self, tenant_id: str, asset_ids: list[str]) -> None:
+        """Best-effort: delete these assets' documents from all three tenant
+        indexes (assets, scenes, transcript segments), 500 ids a request.
+        For many clips at once (archiving a folder, trashing a selection)."""
+        if not self._enabled or not asset_ids:
+            return
+        BATCH = 500
+        indexes = (self.tenant_index_id(tenant_id), self.tenant_scene_index_id(tenant_id),
+                   self.tenant_transcript_index_id(tenant_id))
+        for i in range(0, len(asset_ids), BATCH):
+            query = " OR ".join(f'asset_id:"{aid}"' for aid in asset_ids[i : i + BATCH])
+            for index_id in indexes:
+                try:
+                    resp = requests.post(f"{self._base_url}/api/v1/{index_id}/delete-tasks",
+                                         json={"query": query}, timeout=30)
+                    if resp.status_code not in (200, 201, 202):
+                        logger.warning("Quickwit bulk delete failed for %s: %s %s",
+                                       index_id, resp.status_code, resp.text)
+                except requests.RequestException as exc:
+                    logger.warning("Quickwit bulk delete request failed for %s: %s", index_id, exc)
+
     def delete_tenant_documents_by_library_id(self, tenant_id: str, library_id: str) -> None:
         """Best-effort delete all documents for a library from both tenant indexes."""
         if not self._enabled:

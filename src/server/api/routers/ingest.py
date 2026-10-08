@@ -406,7 +406,7 @@ async def create_and_ingest(
         # unless the account doesn't follow moves (the path is the identity).
         from src.server.tenant_settings import get_follow_moves
 
-        archived = (asset_repo.find_archived_by_sha(library_id, (exif_data or {}).get("sha256"))
+        archived = (asset_repo.find_missing_by_sha(library_id, (exif_data or {}).get("sha256"))
                     if get_follow_moves(session) else None)
         if archived is not None:
             archived.rel_path = rel_path
@@ -422,14 +422,12 @@ async def create_and_ingest(
         asset_id = asset.asset_id
         created = True
     else:
-        # The user's trash is human data: a rescan of a file still on disk
-        # never undoes it. Scanners skip these via
+        # A person's trash or archive is human data: a rescan of a file still
+        # on disk never undoes it. Scanners skip these via
         # GET /v1/libraries/{id}/ignored-paths.
-        if existing.deleted_at is not None and existing.deleted_reason == "user":
-            raise HTTPException(
-                status_code=409,
-                detail=f"Asset is in the trash: {rel_path}",
-            )
+        if existing.deleted_at is not None and existing.deleted_reason in ("user", "archived"):
+            where = "in the trash" if existing.deleted_reason == "user" else "archived"
+            raise HTTPException(status_code=409, detail=f"Asset is {where}: {rel_path}")
         asset_id = existing.asset_id
         # Update file metadata if changed
         existing.file_size = file_size

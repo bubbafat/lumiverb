@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { Lightbox } from "./Lightbox";
@@ -34,6 +34,9 @@ const asset = {
   lens_model: null, flash_fired: null, gps_lat: null, gps_lon: null, face_count: 0, created_at: null,
 } as AssetPageItem;
 
+const onArchive = vi.fn();
+const onTrash = vi.fn();
+
 function renderLightbox(isPublic: boolean) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -46,6 +49,8 @@ function renderLightbox(isPublic: boolean) {
           onNavigate={() => {}}
           onRatingChange={() => {}}
           onAddToProject={() => {}}
+          onArchive={onArchive}
+          onTrash={onTrash}
           isPublic={isPublic}
           publicProjectId={isPublic ? "prj_1" : undefined}
         />
@@ -58,7 +63,8 @@ describe("Lightbox on a public page", () => {
   it("offers a visitor nothing they can't do", async () => {
     renderLightbox(true);
     await screen.findByText(/Dimensions/);
-    for (const text of ["Add note", "Upload SRT", "Add to project", "Rating", "Favorite", "Stars", "Colors", "Faces"]) {
+    for (const text of ["Add note", "Upload SRT", "Add to project", "Rating", "Favorite", "Stars", "Colors", "Faces",
+                        "Archive", "Move to trash"]) {
       expect(screen.queryByText(text), text).toBeNull();
     }
     // Withheld isn't zero, and an empty section isn't shown.
@@ -87,5 +93,15 @@ describe("Lightbox on a public page", () => {
     screen.getByText("Add note");
     screen.getByText("Upload SRT");
     screen.getByText("Add to project");
+  });
+});
+
+describe("Lightbox signed in", () => {
+  it("archives or trashes the clip it shows", async () => {
+    renderLightbox(false);
+    fireEvent.click(await screen.findByRole("button", { name: "Archive" }));
+    expect(onArchive).toHaveBeenCalledWith("ast_1");
+    fireEvent.click(screen.getByRole("button", { name: "Move to trash" }));
+    expect(onTrash).toHaveBeenCalledWith("ast_1");
   });
 });

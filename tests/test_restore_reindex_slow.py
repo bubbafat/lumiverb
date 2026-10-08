@@ -186,7 +186,7 @@ def test_clips_restored_through_a_project_come_back_in_search(env, how):
     asset_id = _ingest_video(client, auth, library_id, f"project-restore/{how}.mov")
     _mark_synced_with_transcript(client, auth, engine, asset_id)
     project_id = client.post("/v1/projects", json={"name": how, "asset_ids": [asset_id]}, headers=auth).json()["project_id"]
-    r = client.request("DELETE", "/v1/assets", json={"asset_ids": [asset_id], "reason": "user"}, headers=auth)
+    r = client.request("DELETE", "/v1/assets", json={"asset_ids": [asset_id], "reason": "user", "remove_from_projects": True}, headers=auth)
     assert r.status_code == 200, r.text
 
     qw = MagicMock()
