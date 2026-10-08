@@ -21,6 +21,11 @@ logger = logging.getLogger(__name__)
 # A network mount whose server is asleep can block a stat for minutes.
 DEFAULT_TIMEOUT_SEC = 10.0
 
+# The latest probe thread per path, so a hung mount gets one stuck thread,
+# not one per check.
+_probes: dict[str, threading.Thread] = {}
+_probes_lock = threading.Lock()
+
 
 def _clean(path: str) -> str:
     """NFC, no trailing slash (except the filesystem root)."""
@@ -52,6 +57,12 @@ def map_root(root_path: str, root_map: dict[str, str]) -> str:
     if not tail:
         return target
     return f"{target.rstrip('/')}/{tail}"
+
+
+def unmap_path(local_path: str, root_map: dict[str, str]) -> str:
+    """The reverse of map_root: a path on this machine as library roots store it."""
+    reverse = {dst: src for src, dst in root_map.items()}
+    return map_root(local_path, reverse)
 
 
 def _configured_map() -> dict[str, str]:
@@ -99,6 +110,13 @@ def reachable_root(
     if path is None:
         return None
 
+    with _probes_lock:
+        stuck = _probes.get(str(path))
+        if stuck is not None and stuck.is_alive():
+            # Still waiting on an earlier probe: don't add another stuck thread.
+            logger.warning("Library root %s is still not answering; treating it as unreachable", path)
+            return None
+
     result: dict[str, Path | None | BaseException] = {}
 
     def run() -> None:
@@ -108,6 +126,8 @@ def reachable_root(
             result["error"] = exc
 
     worker = threading.Thread(target=run, name=f"root-probe-{library.get('library_id', '')}", daemon=True)
+    with _probes_lock:
+        _probes[str(path)] = worker
     worker.start()
     worker.join(timeout)
     if worker.is_alive():

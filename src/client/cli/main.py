@@ -187,6 +187,49 @@ def library_list() -> None:
     console.print(table)
 
 
+@library_app.command("report-changes")
+def library_report_changes(
+    paths: Annotated[list[str] | None, typer.Argument(help="Files or folders that changed.")] = None,
+    stdin: Annotated[bool, typer.Option("--stdin", help="Also read paths from standard input, one per line.")] = False,
+) -> None:
+    """Tell the brain these paths changed on storage, so its worker scans them.
+
+    The machine holding the storage reports what it sees change; the brain
+    mounts it over the network and can't watch it. Paths under a root
+    mapped with `config map-root` are sent as the library stores them.
+    """
+    import os
+
+    from src.client.cli.roots import unmap_path
+
+    given = list(paths or [])
+    if stdin:
+        given += [line.strip() for line in sys.stdin if line.strip()]
+    if not given:
+        console.print("[red]No paths given.[/red]")
+        raise typer.Exit(1)
+    root_map = load_config().root_map
+    server_paths = [unmap_path(os.path.abspath(p), root_map) for p in given]
+
+    client = LumiverbClient()
+    accepted, libraries, unmatched, sample = 0, set(), 0, []
+    for i in range(0, len(server_paths), 10_000):
+        body = client.post("/v1/changes", json={"paths": server_paths[i:i + 10_000]}).json()
+        accepted += body["accepted"]
+        libraries |= set(body["libraries"])
+        unmatched += body["unmatched"]
+        sample += body["unmatched_sample"]
+    n_libs = len(libraries)
+    console.print(
+        f"Reported {accepted:,} change{'s' if accepted != 1 else ''} "
+        f"in {n_libs} librar{'ies' if n_libs != 1 else 'y'}."
+    )
+    if unmatched:
+        console.print(f"[yellow]{unmatched:,} path{'s are' if unmatched != 1 else ' is'} in no library:[/yellow]")
+        for p in sample[:10]:
+            console.print(f"  {escape(p)}", soft_wrap=True)
+
+
 @library_app.command("update")
 def library_update(
     name: Annotated[str, typer.Option("--name", "-n", help="Library name to update.")],
@@ -965,6 +1008,49 @@ def scan(
 
 
 ENRICH_TYPES = ("probe", "render", "embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all")
+
+
+@app.command("worker")
+def worker(
+    poll: Annotated[float, typer.Option("--poll", help="Seconds between cycles.")] = 60.0,
+    full_scan_hours: Annotated[float, typer.Option("--full-scan-hours", help="Scan each library in full this often, in case a change report was missed.")] = 24.0,
+    library: Annotated[list[str] | None, typer.Option("--library", "-l", help="Only these libraries (repeatable).")] = None,
+    once: Annotated[bool, typer.Option("--once", help="Run one cycle and exit.")] = False,
+) -> None:
+    """Scan what changed and enrich what's missing, forever (the brain's service).
+
+    \b
+    Each cycle, for each library:
+      - if its storage is reachable here and changes were reported (or a
+        full scan is due), scan the folder that covers them
+      - if anything is missing, enrich; videos are enriched from analysis
+        proxies, so this continues while the storage sleeps
+    """
+    import signal
+
+    from src.client.cli import worker as worker_mod
+
+    lock = worker_mod.WorkerLock()
+    if not lock.acquire():
+        console.print("[red]A worker is already running on this machine.[/red]")
+        raise typer.Exit(1)
+
+    def _stop(signum: int, frame: object) -> None:
+        raise SystemExit(0)
+
+    import contextlib
+
+    with contextlib.suppress(ValueError):  # not the main thread (tests)
+        signal.signal(signal.SIGTERM, _stop)
+    try:
+        worker_mod.run_forever(
+            poll=poll,
+            full_scan_every=full_scan_hours * 3600,
+            only=library or None,
+            once=once,
+        )
+    finally:
+        lock.release()
 
 
 @app.command("enrich")

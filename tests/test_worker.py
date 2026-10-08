@@ -1,0 +1,415 @@
+"""The brain's worker: scan what changed, enrich what's missing (ADR-016 phase 2).
+
+`lumiverb worker` runs as a service on the brain. Each cycle it scans the
+folders the Mac reported changed (and each library in full once a day),
+then enriches. Libraries whose storage is asleep aren't scanned, but their
+videos keep being enriched from analysis proxies.
+"""
+
+from __future__ import annotations
+
+import threading
+from dataclasses import dataclass, field
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
+from rich.console import Console
+
+from src.client.cli import roots
+from src.client.cli.config import CLIConfig, save_config
+from src.client.cli.scan import ScanStats
+from src.client.cli.worker import WorkerLock, WorkerState, run_cycle, scan_scope
+
+MAC = "/Volumes/media-01"
+HOUR = 3600.0
+
+
+# ---------------------------------------------------------------------------
+# scan_scope
+# ---------------------------------------------------------------------------
+
+
+def _dirs(*names: str):
+    return lambda rel: rel in names
+
+
+@pytest.mark.fast
+def test_a_changed_file_scans_its_folder() -> None:
+    assert scan_scope(["Day 1/A001.mov"], _dirs("Day 1")) == "Day 1"
+
+
+@pytest.mark.fast
+def test_a_changed_folder_scans_itself() -> None:
+    assert scan_scope(["Day 1/Cam A"], _dirs("Day 1", "Day 1/Cam A")) == "Day 1/Cam A"
+
+
+@pytest.mark.fast
+def test_changes_in_two_folders_scan_their_common_folder() -> None:
+    # One scan, so a file moved between them is seen as a move.
+    paths = ["Shoots/Day 1/A.mov", "Shoots/Day 2/B.mov"]
+    assert scan_scope(paths, _dirs("Shoots", "Shoots/Day 1", "Shoots/Day 2")) == "Shoots"
+
+
+@pytest.mark.fast
+def test_a_removed_folder_scans_its_parent() -> None:
+    assert scan_scope(["Shoots/Gone"], _dirs("Shoots")) == "Shoots"
+
+
+@pytest.mark.fast
+def test_a_change_at_the_top_scans_everything() -> None:
+    assert scan_scope(["A.mov"], _dirs()) is None
+    assert scan_scope(["", "Day 1/A.mov"], _dirs("Day 1")) is None
+
+
+@pytest.mark.fast
+def test_folders_only_share_whole_names() -> None:
+    assert scan_scope(["Day 1/a.mov", "Day 10/b.mov"], _dirs("Day 1", "Day 10")) is None
+
+
+# ---------------------------------------------------------------------------
+# run_cycle
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class FakeServer:
+    libraries: list[dict]
+    pending: dict[str, list[dict]] = field(default_factory=dict)
+    truncated: set[str] = field(default_factory=set)
+    summaries: dict[str, dict] = field(default_factory=dict)
+    acks: list[tuple[str, list[dict]]] = field(default_factory=list)
+
+    def client(self) -> MagicMock:
+        client = MagicMock()
+
+        def get(url: str, **kw):
+            resp = MagicMock()
+            if url == "/v1/libraries":
+                resp.json.return_value = self.libraries
+            elif url == "/v1/changes":
+                resp.json.return_value = {"libraries": [
+                    {"library_id": k, "pending": len(v), "oldest_reported_at": "2026-10-07T00:00:00Z"}
+                    for k, v in self.pending.items() if v
+                ]}
+            elif url.endswith("/changes"):
+                lib = url.split("/")[3]
+                resp.json.return_value = {"changes": self.pending.get(lib, []), "truncated": lib in self.truncated}
+            elif url == "/v1/assets/repair-summary":
+                resp.json.return_value = self.summaries.get(kw["params"]["library_id"], {"total_assets": 0})
+            else:
+                raise AssertionError(url)
+            return resp
+
+        def post(url: str, **kw):
+            if url.endswith("/changes/ack"):
+                self.acks.append((url.split("/")[3], kw["json"]["changes"]))
+            return MagicMock()
+
+        client.get.side_effect = get
+        client.post.side_effect = post
+        return client
+
+
+@pytest.fixture
+def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    h = tmp_path / "home"
+    h.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: h)
+    return h
+
+
+@pytest.fixture
+def das(home: Path, tmp_path: Path) -> Path:
+    mount = tmp_path / "mnt"
+    (mount / "Footage" / "Day 1").mkdir(parents=True)
+    (mount / "Footage" / "Day 1" / "A001.mov").write_bytes(b"x")
+    save_config(CLIConfig(root_map={MAC: str(mount)}))
+    return mount
+
+
+LIB = {"library_id": "lib_1", "name": "Footage", "root_path": f"{MAC}/Footage"}
+CHANGE = {"change_id": "chg_1", "rel_path": "Day 1/A001.mov", "reported_at": "2026-10-07T00:00:00Z", "version": 7}
+WORK = {"total_assets": 1, "missing_transcription": 1}
+
+
+def _cycle(server: FakeServer, state: WorkerState | None = None, *, now: float = 100 * HOUR, **kw):
+    scan = kw.pop("scan", MagicMock(return_value=ScanStats()))
+    enrich = kw.pop("enrich", MagicMock())
+    state = state or WorkerState(last_full_scan={"lib_1": now - 1})
+    run_cycle(server.client(), state=state, now=now, scan_fn=scan, enrich_fn=enrich,
+              console=Console(quiet=True), **kw)
+    return scan, enrich, state
+
+
+@pytest.mark.fast
+def test_reported_changes_are_scanned_then_acknowledged(das: Path) -> None:
+    server = FakeServer([LIB], pending={"lib_1": [CHANGE]})
+    scan, _, _ = _cycle(server)
+    [call] = scan.call_args_list
+    assert call.kwargs["path_prefix"] == "Day 1"
+    assert call.kwargs["allow_moves"] is True
+    assert server.acks == [("lib_1", [{"change_id": "chg_1", "version": 7}])]
+
+
+@pytest.mark.fast
+def test_nothing_reported_and_no_full_scan_due_means_no_scan(das: Path) -> None:
+    scan, _, _ = _cycle(FakeServer([LIB]))
+    scan.assert_not_called()
+
+
+@pytest.mark.fast
+def test_a_full_scan_runs_when_due_and_is_remembered(das: Path) -> None:
+    state = WorkerState(last_full_scan={"lib_1": 0.0})
+    scan, _, state = _cycle(FakeServer([LIB]), state, now=30 * HOUR, full_scan_every=24 * HOUR)
+    assert scan.call_args.kwargs["path_prefix"] is None
+    assert state.last_full_scan["lib_1"] == 30 * HOUR
+
+
+@pytest.mark.fast
+def test_the_first_cycle_scans_every_library_in_full(das: Path) -> None:
+    scan, _, _ = _cycle(FakeServer([LIB]), WorkerState())
+    assert scan.call_args.kwargs["path_prefix"] is None
+
+
+@pytest.mark.fast
+def test_a_truncated_backlog_scans_everything(das: Path) -> None:
+    server = FakeServer([LIB], pending={"lib_1": [CHANGE]}, truncated={"lib_1"})
+    scan, _, _ = _cycle(server)
+    assert scan.call_args.kwargs["path_prefix"] is None
+    assert server.acks == [("lib_1", [{"change_id": "chg_1", "version": 7}])]
+
+
+@pytest.mark.fast
+def test_sleeping_storage_is_not_scanned_but_still_enriched(home: Path) -> None:
+    save_config(CLIConfig(root_map={MAC: str(home / "not-mounted")}))
+    server = FakeServer([LIB], pending={"lib_1": [CHANGE]}, summaries={"lib_1": WORK})
+    scan, enrich, _ = _cycle(server, WorkerState())
+    scan.assert_not_called()
+    assert server.acks == []
+    assert [c.args[1]["library_id"] for c in enrich.call_args_list] == ["lib_1"]
+
+
+@pytest.mark.fast
+def test_an_empty_mount_point_is_never_scanned(home: Path, tmp_path: Path) -> None:
+    # An unmounted share is an empty folder; scanning it would mark every
+    # file missing.
+    mount = tmp_path / "empty-mount"
+    (mount / "Footage").mkdir(parents=True)
+    save_config(CLIConfig(root_map={MAC: str(mount)}))
+    scan, _, _ = _cycle(FakeServer([LIB]), WorkerState())
+    scan.assert_not_called()
+
+
+@pytest.mark.fast
+def test_a_failed_scan_keeps_the_changes(das: Path) -> None:
+    server = FakeServer([LIB, {**LIB, "library_id": "lib_2", "name": "Two"}],
+                        pending={"lib_1": [CHANGE], "lib_2": [{**CHANGE, "change_id": "chg_2"}]})
+    scan = MagicMock(side_effect=[RuntimeError("server hiccup"), ScanStats()])
+    _cycle(server, WorkerState(last_full_scan={"lib_1": 99 * HOUR, "lib_2": 99 * HOUR}), scan=scan)
+    assert [lib for lib, _ in server.acks] == ["lib_2"]
+
+
+@pytest.mark.fast
+def test_a_scan_that_lost_its_root_keeps_the_changes(das: Path) -> None:
+    server = FakeServer([LIB], pending={"lib_1": [CHANGE]})
+    _cycle(server, scan=MagicMock(return_value=ScanStats(root_unreachable=True)))
+    assert server.acks == []
+
+
+@pytest.mark.fast
+def test_a_scan_with_failures_keeps_the_changes(das: Path) -> None:
+    # Files that failed to ingest get another try on the next cycle.
+    server = FakeServer([LIB], pending={"lib_1": [CHANGE]})
+    _cycle(server, scan=MagicMock(return_value=ScanStats(failed=1)))
+    assert server.acks == []
+
+
+@pytest.mark.fast
+def test_enrich_runs_only_where_there_is_work(das: Path) -> None:
+    libs = [LIB, {**LIB, "library_id": "lib_2", "name": "Done"}]
+    server = FakeServer(libs, summaries={"lib_1": WORK, "lib_2": {"total_assets": 5}})
+    _, enrich, _ = _cycle(server, WorkerState(last_full_scan={"lib_1": 99 * HOUR, "lib_2": 99 * HOUR}))
+    assert [c.args[1]["library_id"] for c in enrich.call_args_list] == ["lib_1"]
+    assert enrich.call_args.kwargs["job_type"] == "all"
+
+
+@pytest.mark.fast
+def test_a_failed_enrich_does_not_stop_the_cycle(das: Path) -> None:
+    libs = [LIB, {**LIB, "library_id": "lib_2", "name": "Two"}]
+    server = FakeServer(libs, summaries={"lib_1": WORK, "lib_2": WORK})
+    enrich = MagicMock(side_effect=[RuntimeError("model crashed"), None])
+    _cycle(server, WorkerState(last_full_scan={"lib_1": 99 * HOUR, "lib_2": 99 * HOUR}), enrich=enrich)
+    assert enrich.call_count == 2
+
+
+@pytest.mark.fast
+def test_only_named_libraries_are_worked(das: Path) -> None:
+    libs = [LIB, {**LIB, "library_id": "lib_2", "name": "Other"}]
+    server = FakeServer(libs, summaries={"lib_1": WORK, "lib_2": WORK})
+    _, enrich, _ = _cycle(server, WorkerState(last_full_scan={"lib_1": 99 * HOUR, "lib_2": 99 * HOUR}),
+                          only=["Other"])
+    assert [c.args[1]["name"] for c in enrich.call_args_list] == ["Other"]
+
+
+# ---------------------------------------------------------------------------
+# Process safety
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_only_one_worker_runs_per_machine(tmp_path: Path) -> None:
+    first = WorkerLock(tmp_path / "worker.lock")
+    second = WorkerLock(tmp_path / "worker.lock")
+    assert first.acquire() is True
+    assert second.acquire() is False
+    first.release()
+    assert second.acquire() is True
+    second.release()
+
+
+@pytest.mark.fast
+def test_a_hung_probe_is_not_piled_up(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Each cycle probes each root; a mount that hangs must not leave a new
+    # stuck thread behind every minute.
+    release = threading.Event()
+    calls: list[Path] = []
+
+    def hang(path: Path, require_entries: bool) -> Path:
+        calls.append(path)
+        release.wait(5)
+        return path
+
+    monkeypatch.setattr(roots, "_probe", hang)
+    lib = {"library_id": "lib_h", "root_path": str(tmp_path)}
+    try:
+        assert roots.reachable_root(lib, root_map={}, timeout=0.05) is None
+        assert roots.reachable_root(lib, root_map={}, timeout=0.05) is None
+        assert len(calls) == 1
+    finally:
+        release.set()
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_worker_once_runs_one_cycle(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from typer.testing import CliRunner
+
+    from src.client.cli import worker
+    from src.client.cli.main import app
+
+    cycles = MagicMock()
+    monkeypatch.setattr(worker, "run_cycle", cycles)
+    monkeypatch.setattr(worker, "LumiverbClient", MagicMock())
+    result = CliRunner().invoke(app, ["worker", "--once", "--library", "Footage"])
+    assert result.exit_code == 0, result.output
+    assert cycles.call_count == 1
+    assert cycles.call_args.kwargs["only"] == ["Footage"]
+    # The lock is released afterwards.
+    assert WorkerLock(home / ".cache" / "lumiverb" / "worker.lock").acquire()
+
+
+@pytest.mark.fast
+def test_a_second_worker_refuses_to_start(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from typer.testing import CliRunner
+
+    from src.client.cli import worker
+    from src.client.cli.main import app
+
+    held = WorkerLock(home / ".cache" / "lumiverb" / "worker.lock")
+    assert held.acquire()
+    cycles = MagicMock()
+    monkeypatch.setattr(worker, "run_cycle", cycles)
+    try:
+        result = CliRunner().invoke(app, ["worker", "--once"])
+    finally:
+        held.release()
+    assert result.exit_code == 1
+    assert "already running" in result.output
+    cycles.assert_not_called()
+
+
+@pytest.mark.fast
+def test_worker_loops_until_stopped(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.client.cli import worker
+
+    cycles = MagicMock()
+    monkeypatch.setattr(worker, "run_cycle", cycles)
+    monkeypatch.setattr(worker, "LumiverbClient", MagicMock())
+    sleeps: list[float] = []
+    worker.run_forever(poll=5, sleep=sleeps.append, stop=lambda: len(sleeps) >= 3, console=Console(quiet=True))
+    assert cycles.call_count == 3
+    assert sleeps == [5, 5, 5]
+
+
+@pytest.mark.fast
+def test_a_failed_cycle_does_not_stop_the_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.client.cli import worker
+
+    cycles = MagicMock(side_effect=[ConnectionError("API restarting"), None])
+    monkeypatch.setattr(worker, "run_cycle", cycles)
+    monkeypatch.setattr(worker, "LumiverbClient", MagicMock())
+    sleeps: list[float] = []
+    worker.run_forever(poll=1, sleep=sleeps.append, stop=lambda: len(sleeps) >= 2, console=Console(quiet=True))
+    assert cycles.call_count == 2
+
+
+@pytest.mark.fast
+def test_report_changes_sends_paths_as_libraries_store_them(home: Path, tmp_path: Path,
+                                                            monkeypatch: pytest.MonkeyPatch) -> None:
+    import importlib
+
+    from typer.testing import CliRunner
+
+    main = importlib.import_module("src.client.cli.main")
+    save_config(CLIConfig(root_map={MAC: "/mnt/media-01"}))
+    client = MagicMock()
+    client.post.return_value.json.return_value = {
+        "accepted": 1, "libraries": {"lib_1": 1}, "unmatched": 1, "unmatched_sample": ["/elsewhere/x.mov"],
+    }
+    monkeypatch.setattr(main, "LumiverbClient", lambda: client)
+    result = CliRunner().invoke(main.app, ["library", "report-changes",
+                                           "/mnt/media-01/Footage/Day 1/A001.mov", "/elsewhere/x.mov"])
+    assert result.exit_code == 0, result.output
+    client.post.assert_called_once_with("/v1/changes", json={
+        "paths": [f"{MAC}/Footage/Day 1/A001.mov", "/elsewhere/x.mov"],
+    })
+    assert "1 change" in result.output and "1 path" in result.output
+
+
+@pytest.mark.fast
+def test_report_changes_reads_paths_from_stdin(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import importlib
+
+    from typer.testing import CliRunner
+
+    main = importlib.import_module("src.client.cli.main")
+    client = MagicMock()
+    client.post.return_value.json.return_value = {"accepted": 2, "libraries": {"lib_1": 2}, "unmatched": 0,
+                                                   "unmatched_sample": []}
+    monkeypatch.setattr(main, "LumiverbClient", lambda: client)
+    result = CliRunner().invoke(main.app, ["library", "report-changes", "--stdin"],
+                                input="/Volumes/a/x.mov\n\n/Volumes/a/y.mov\n")
+    assert result.exit_code == 0, result.output
+    assert client.post.call_args.kwargs["json"]["paths"] == ["/Volumes/a/x.mov", "/Volumes/a/y.mov"]
+
+
+@pytest.mark.fast
+def test_report_changes_makes_relative_paths_absolute(home: Path, tmp_path: Path,
+                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+    import importlib
+
+    from typer.testing import CliRunner
+
+    main = importlib.import_module("src.client.cli.main")
+    client = MagicMock()
+    client.post.return_value.json.return_value = {"accepted": 1, "libraries": {}, "unmatched": 0,
+                                                   "unmatched_sample": []}
+    monkeypatch.setattr(main, "LumiverbClient", lambda: client)
+    monkeypatch.chdir(tmp_path)
+    CliRunner().invoke(main.app, ["library", "report-changes", "clip.mov"])
+    assert client.post.call_args.kwargs["json"]["paths"] == [str(tmp_path / "clip.mov")]
