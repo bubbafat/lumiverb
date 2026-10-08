@@ -83,6 +83,8 @@ beforeEach(() => {
   vi.stubGlobal("ResizeObserver", FakeResizeObserver);
   serverRevision = 1;
   gridFetches = [];
+  pageRequests = [];
+  holdFirstPage = null;
   api.getApiKey.mockReturnValue("test-key");
   api.getLibrary.mockResolvedValue({
     library_id: "lib_1",
@@ -147,7 +149,7 @@ function renderPage() {
     defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
   });
   const scroller = document.createElement("div");
-  return render(
+  const view = render(
     <QueryClientProvider client={client}>
       <ScrollContainerContext.Provider value={scroller}>
         <MemoryRouter initialEntries={["/libraries/lib_1/browse"]}>
@@ -160,6 +162,45 @@ function renderPage() {
       </ScrollContainerContext.Provider>
     </QueryClientProvider>,
   );
+  return { ...view, client, scroller };
+}
+
+/** The grid's loaded pages, as the file names of their clips. */
+function gridPages(client: QueryClient): string[][] {
+  const [[, data]] = client.getQueriesData<{ pages: { items: { rel_path: string }[] }[] }>({
+    queryKey: ["unified-query"],
+  });
+  return data!.pages.map((p) => p.items.map((i) => i.rel_path));
+}
+
+/** Endless pages of one clip each, named for the revision they were read at. */
+function servePages() {
+  api.queryAssets.mockImplementation(async (_filters: unknown, opts?: { after?: string }) => {
+    const page = opts?.after ? Number(opts.after.split("@")[0].slice(1)) : 1;
+    const rev = serverRevision;
+    gridFetches.push(rev);
+    pageRequests.push(opts?.after);
+    const result = {
+      items: [{ ...clip, asset_id: `ast_p${page}_r${rev}`, rel_path: `r${rev}/p${page}.mov` }],
+      next_cursor: `p${page + 1}@r${rev}`,
+      total_estimate: 100,
+    };
+    if (holdFirstPage && page === 1) {
+      const hold = holdFirstPage;
+      holdFirstPage = null;
+      await hold;
+    }
+    return result;
+  });
+}
+let pageRequests: (string | undefined)[] = [];
+let holdFirstPage: Promise<void> | null = null;
+
+function scrollToBottom(scroller: HTMLElement) {
+  // jsdom has no layout: every scroll is at the bottom.
+  act(() => {
+    scroller.dispatchEvent(new Event("scroll"));
+  });
 }
 
 async function advance(ms: number) {
@@ -219,6 +260,42 @@ describe("BrowsePage revision polling", () => {
     act(() => navigate("/libraries/lib_1/browse"));
     await advance(100);
     expect(gridFetches).toEqual([1]);
+  });
+
+  it("refetches every loaded page, each from the new cursor of the page before", async () => {
+    servePages();
+    const { client, scroller } = renderPage();
+    await advance(100);
+    scrollToBottom(scroller);
+    await advance(100);
+    expect(gridPages(client)).toEqual([["r1/p1.mov"], ["r1/p2.mov"]]);
+
+    pageRequests = [];
+    serverRevision = 2;
+    await advance(POLL_MS);
+    expect(pageRequests).toEqual([undefined, "p2@r2"]);
+    expect(gridPages(client)).toEqual([["r2/p1.mov"], ["r2/p2.mov"]]);
+  });
+
+  it("finishes the refresh when scrolling reaches the end while it runs", async () => {
+    servePages();
+    const { client, scroller } = renderPage();
+    await advance(100);
+    scrollToBottom(scroller);
+    await advance(100);
+
+    // The refresh starts and its first page is slow to come back...
+    let release!: () => void;
+    holdFirstPage = new Promise<void>((resolve) => (release = resolve));
+    serverRevision = 2;
+    await advance(POLL_MS);
+    // ...while the grid is scrolled to its end.
+    scrollToBottom(scroller);
+    await advance(100);
+    release();
+    await advance(100);
+
+    expect(gridPages(client)).toEqual([["r2/p1.mov"], ["r2/p2.mov"]]);
   });
 
   it("doesn't refetch the grid on every poll during a long ingest, and ends up current", async () => {

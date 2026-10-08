@@ -283,8 +283,10 @@ export default function UnifiedBrowsePage() {
   const fetchNextPage = browseQuery.fetchNextPage;
 
   // Stable ref for scroll handler — avoids re-attaching listener on every data update
+  // A next page waits for a refresh in flight instead of cancelling it (the
+  // default), which would keep the old pages and lose the refresh.
   const fetchNextPageRef = useRef(fetchNextPage);
-  fetchNextPageRef.current = fetchNextPage;
+  fetchNextPageRef.current = () => fetchNextPage({ cancelRefetch: false });
 
   const browseCount = flatAssets.length;
 

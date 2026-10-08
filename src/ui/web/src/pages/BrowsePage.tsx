@@ -377,8 +377,10 @@ export default function BrowsePage() {
   const isError = browseQuery.isError;
 
   // Stable ref for scroll/pagination handlers
+  // A next page waits for a refresh in flight instead of cancelling it (the
+  // default), which would keep the old pages and lose the refresh.
   const fetchNextPageRef = useRef(fetchNextPage);
-  fetchNextPageRef.current = fetchNextPage;
+  fetchNextPageRef.current = () => fetchNextPage({ cancelRefetch: false });
 
   const browseCount = useMemo(() => {
     return browseQuery.data?.pages.flatMap((p) => p?.items ?? []).length ?? 0;
