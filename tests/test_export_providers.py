@@ -331,3 +331,14 @@ def test_independent_reader_sees_clip_lengths(provider_id: str) -> None:
 
     assert seconds["My Clip & Co.mov"] == 7.1
     assert seconds["pal.mxf"] == 4.0
+
+
+def test_media_bases_tolerate_a_relative_library_root() -> None:
+    """A library created with a relative root must not break exports of
+    projects that also hold other libraries."""
+    from src.server.api.routers.projects import _media_bases
+
+    bases = _media_bases({"a": "/mnt/das/2024", "b": "relative/x"}, "/Volumes/DAS")
+
+    assert bases["a"].startswith("/Volumes/DAS")
+    assert bases["b"].startswith("/Volumes/DAS")

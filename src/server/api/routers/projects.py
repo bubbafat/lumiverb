@@ -615,8 +615,12 @@ def _content_disposition(filename: str) -> str:
     import unicodedata
     from urllib.parse import quote
 
-    ascii_name = unicodedata.normalize("NFKD", filename).encode("ascii", "ignore").decode()
-    ascii_name = ascii_name.replace('"', "_").replace("\\", "_").strip() or "project-export"
+    stem, dot, extension = filename.rpartition(".")
+    ascii_stem = unicodedata.normalize("NFKD", stem).encode("ascii", "ignore").decode()
+    ascii_stem = ascii_stem.replace('"', "_").replace("\\", "_").strip()
+    if not any(ch.isalnum() for ch in ascii_stem):
+        ascii_stem = "project-export"
+    ascii_name = f"{ascii_stem}{dot}{extension}"
     return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(filename)}'
 
 
@@ -635,7 +639,8 @@ def _media_bases(roots: dict[str, str], prefix: str | None) -> dict[str, str]:
         return dict(roots)
     if not roots:
         return {}
-    clean = {lid: posixpath.normpath(root) for lid, root in roots.items()}
+    # A relative root (a library created that way) is taken as relative to "/".
+    clean = {lid: posixpath.normpath(posixpath.join("/", root)) for lid, root in roots.items()}
     common = posixpath.commonpath(list(clean.values())) if len(set(clean.values())) > 1 else next(iter(clean.values()))
     base = posixpath.normpath(prefix)
     return {

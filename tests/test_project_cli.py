@@ -106,3 +106,28 @@ def test_export_rejects_unknown_format() -> None:
 
     assert result.exit_code != 0
     client.get.assert_not_called()
+
+
+def test_export_uses_the_real_name_and_reports_what_was_left_out(tmp_path) -> None:
+    import os
+
+    client = _export_client()
+    client.get.return_value.headers = {
+        "content-disposition": (
+            "attachment; filename=\"project-export.xml\"; filename*=UTF-8''%E6%9D%B1%E4%BA%AC.xml"
+        ),
+        "x-lumiverb-skipped-stills": "0",
+        "x-lumiverb-skipped-no-duration": "2",
+        "x-lumiverb-unprobed": "3",
+    }
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        result = _run(client, "export", "--id", "prj_1", "--format", "fcp7")
+    finally:
+        os.chdir(cwd)
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "東京.xml").exists()
+    assert "2 videos with no known length" in result.output
+    assert "3 videos haven't been probed" in result.output

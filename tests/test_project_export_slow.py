@@ -345,5 +345,17 @@ def test_unprobed_and_durationless_clips_are_reported(env) -> None:
     assert r.status_code == 200, r.text
     assert r.headers["x-lumiverb-unprobed"] == "1"
     assert r.headers["x-lumiverb-skipped-no-duration"] == "1"
-    names = sorted(c.get("name") for c in ET.fromstring(r.content).iter("asset-clip"))
+    names = sorted(c.get("name") for c in ET.fromstring(r.content).findall("library/event/asset-clip"))
     assert names == ["probed.mov", "unprobed.mov"]
+
+
+@pytest.mark.slow
+def test_name_without_latin_letters_gets_a_usable_ascii_fallback(env) -> None:
+    client, headers, library_id, _ = env
+    asset = _ingest(client, headers, library_id, "names/tokyo.mov", "video", FACET)
+    project_id = _project(client, headers, "東京", [asset])
+
+    r = _export(client, headers, project_id, format="fcp7")
+
+    assert 'filename="project-export.xml"' in r.headers["content-disposition"]
+    assert "filename*=UTF-8''%E6%9D%B1%E4%BA%AC.xml" in r.headers["content-disposition"]
