@@ -128,3 +128,75 @@ def test_restore_reindexes_transcript_segments(env):
     docs = list(qw.ingest_tenant_transcript_documents.call_args.args[1])
     assert [d["text"] for d in docs] == ["the quick brown fox", "jumps over"]
     assert {d["asset_id"] for d in docs} == {asset_id}
+
+
+def _ingest_video(client, auth, library_id, rel_path) -> str:
+    import io
+
+    from PIL import Image as PILImage
+
+    buf = io.BytesIO()
+    PILImage.new("RGB", (64, 64), color=(10, 20, 30)).save(buf, format="JPEG")
+    buf.seek(0)
+    r = client.post(
+        "/v1/ingest",
+        data={"library_id": library_id, "rel_path": rel_path, "file_size": "1000", "media_type": "video",
+              "width": "64", "height": "64"},
+        files={"proxy": ("proxy.jpg", buf, "image/jpeg")},
+        headers=auth,
+    )
+    assert r.status_code == 200, r.text
+    return r.json()["asset_id"]
+
+
+def _synced(engine, asset_id):
+    with engine.connect() as conn:
+        return conn.execute(
+            text("SELECT search_synced_at FROM assets WHERE asset_id = :a"), {"a": asset_id}
+        ).scalar()
+
+
+def _mark_synced_with_transcript(client, auth, engine, asset_id):
+    r = client.post(f"/v1/assets/{asset_id}/transcript", json={"srt": SRT, "language": "en"}, headers=auth)
+    assert r.status_code == 200, r.text
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE assets SET search_synced_at = now() WHERE asset_id = :a"), {"a": asset_id})
+
+
+@pytest.mark.slow
+def test_a_file_that_reappears_comes_back_in_search(env):
+    client, auth, library_id, engine = env
+    asset_id = _ingest_video(client, auth, library_id, "reappear/clip.mov")
+    _mark_synced_with_transcript(client, auth, engine, asset_id)
+    r = client.request("DELETE", "/v1/assets", json={"asset_ids": [asset_id], "reason": "missing"}, headers=auth)
+    assert r.status_code == 200, r.text
+
+    qw = MagicMock()
+    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=qw):
+        _ingest_video(client, auth, library_id, "reappear/clip.mov")  # the scan finds it again
+
+    assert _synced(engine, asset_id) is None
+    assert qw.ingest_tenant_transcript_documents.call_count == 1
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("how", ["restore_with_clips", "restore_clips"])
+def test_clips_restored_through_a_project_come_back_in_search(env, how):
+    client, auth, library_id, engine = env
+    asset_id = _ingest_video(client, auth, library_id, f"project-restore/{how}.mov")
+    _mark_synced_with_transcript(client, auth, engine, asset_id)
+    project_id = client.post("/v1/projects", json={"name": how, "asset_ids": [asset_id]}, headers=auth).json()["project_id"]
+    r = client.request("DELETE", "/v1/assets", json={"asset_ids": [asset_id], "reason": "user"}, headers=auth)
+    assert r.status_code == 200, r.text
+
+    qw = MagicMock()
+    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=qw):
+        if how == "restore_with_clips":
+            client.delete(f"/v1/projects/{project_id}", headers=auth)
+            r = client.post(f"/v1/projects/{project_id}/restore", json={"with_clips": True}, headers=auth)
+        else:
+            r = client.post(f"/v1/projects/{project_id}/restore-clips", headers=auth)
+        assert r.status_code == 200, r.text
+
+    assert _synced(engine, asset_id) is None
+    assert qw.ingest_tenant_transcript_documents.call_count == 1

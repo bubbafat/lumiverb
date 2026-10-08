@@ -245,7 +245,8 @@ def test_empty_trash_asks_first() -> None:
     assert result.exit_code == 0, result.output
     client.post.assert_not_called()
     result = _run(client, "empty-trash", input="y\n")
-    client.post.assert_called_once_with("/v1/projects/empty-trash", json={})
+    # Exactly the projects it listed, not whatever is in the trash by now.
+    client.post.assert_called_once_with("/v1/projects/empty-trash", json={"project_ids": ["prj_1"]})
 
 
 def test_empty_trash_named_projects_without_asking() -> None:
@@ -341,9 +342,11 @@ def test_export_reports_trashed_and_missing_clips(tmp_path) -> None:
         "content-disposition": 'attachment; filename="Job.xml"',
         "x-lumiverb-skipped-trashed": "2",
         "x-lumiverb-skipped-missing": "1",
+        "x-lumiverb-skipped-library-trashed": "3",
     }
     result = _run(client, "export", "--id", "prj_1", "--format", "fcp7", "--output", str(tmp_path / "Job.xml"))
     assert result.exit_code == 0, result.output
     out = " ".join(result.output.split())
     assert "2 clips in the trash weren't included" in out
     assert "1 clip missing from disk wasn't included" in out
+    assert "3 clips in a deleted library weren't included" in out

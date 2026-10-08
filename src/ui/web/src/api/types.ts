@@ -248,6 +248,8 @@ export interface ProjectItem {
   trashed_asset_count?: number;
   /** Clips whose files went missing: back when the files are. */
   missing_asset_count?: number;
+  /** Clips whose library is in the trash: libraries have no restore. */
+  library_trashed_asset_count?: number;
 }
 
 export interface ProjectListResponse {

@@ -261,6 +261,8 @@ export default function ProjectDetailPage() {
 
   const trashedClips = project?.trashed_asset_count ?? 0;
   const missingClips = project?.missing_asset_count ?? 0;
+  const libraryTrashedClips = project?.library_trashed_asset_count ?? 0;
+  const isOwner = project?.ownership !== "shared";
 
   if (isProjectLoading) {
     return (
@@ -338,7 +340,7 @@ export default function ProjectDetailPage() {
       )}
 
       {/* Clips still in the project but not shown: trashed, or files missing */}
-      {(trashedClips > 0 || missingClips > 0) && (
+      {(trashedClips > 0 || missingClips > 0 || libraryTrashedClips > 0) && (
         <div
           role="status"
           className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-amber-900/40 bg-amber-950/30 px-4 py-2 text-sm text-amber-200/90"
@@ -353,6 +355,12 @@ export default function ProjectDetailPage() {
             <span>
               {missingClips === 1 ? "1 clip is" : `${missingClips} clips are`} missing from disk and will
               come back when {missingClips === 1 ? "its file does" : "their files do"}.
+            </span>
+          )}
+          {libraryTrashedClips > 0 && (
+            <span>
+              {libraryTrashedClips === 1 ? "1 clip is" : `${libraryTrashedClips} clips are`} in a deleted
+              library and can&apos;t come back from here.
             </span>
           )}
           {trashedClips > 0 && (
@@ -591,14 +599,18 @@ export default function ProjectDetailPage() {
                 )}
               </div>
               <div className="flex items-center justify-between pt-2">
-                <button
-                  type="button"
-                  onClick={() => trashMutation.mutate()}
-                  disabled={trashMutation.isPending}
-                  className="text-sm text-red-400 hover:text-red-300 disabled:opacity-50"
-                >
-                  Move to trash
-                </button>
+                {isOwner ? (
+                  <button
+                    type="button"
+                    onClick={() => trashMutation.mutate()}
+                    disabled={trashMutation.isPending}
+                    className="text-sm text-red-400 hover:text-red-300 disabled:opacity-50"
+                  >
+                    Move to trash
+                  </button>
+                ) : (
+                  <span />
+                )}
                 <div className="flex gap-2">
                   <button
                     type="button"

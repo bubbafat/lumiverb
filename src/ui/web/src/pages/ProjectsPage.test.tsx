@@ -199,6 +199,22 @@ describe("ProjectsPage", () => {
     await openTrash();
     fireEvent.click(screen.getByRole("button", { name: "Empty trash" }));
     fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
-    await waitFor(() => expect(api.emptyProjectTrash).toHaveBeenCalledWith(undefined));
+    // Exactly what was shown: a project trashed meanwhile elsewhere isn't swept up.
+    await waitFor(() => expect(api.emptyProjectTrash).toHaveBeenCalledWith(["prj_1"]));
+  });
+
+  it("says so when moving to the trash fails", async () => {
+    api.trashProject.mockRejectedValue(new ApiError(403, "Only the project owner can perform this action"));
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    expect((await screen.findByRole("alert")).textContent).toMatch(/Only the project owner/);
+  });
+
+  it("offers no archive or delete on someone else's project", async () => {
+    api.listProjects.mockResolvedValue([project({ ownership: "shared", owner_user_id: "usr_2" })]);
+    renderPage();
+    await screen.findByText("Customer Video 123");
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Archive" })).toBeNull();
   });
 });

@@ -153,4 +153,24 @@ describe("ProjectDetailPage", () => {
     await waitFor(() => expect(api.trashProject).toHaveBeenCalledWith("prj_1"));
     expect(await screen.findByText("Projects list; trashed: Test")).toBeTruthy();
   });
+
+  it("says when clips are only missing from disk, with nothing to restore", async () => {
+    withProject({ missing_asset_count: 2 });
+    renderPage();
+    expect((await screen.findByRole("status")).textContent).toMatch(/2 clips are missing from disk/);
+    expect(screen.queryByRole("button", { name: /^Restore/ })).toBeNull();
+  });
+
+  it("says when clips went with a deleted library", async () => {
+    withProject({ library_trashed_asset_count: 1 });
+    renderPage();
+    expect((await screen.findByRole("status")).textContent).toMatch(/1 clip is in a deleted library/);
+  });
+
+  it("offers no move to trash on someone else's project", async () => {
+    withProject({ ownership: "shared", owner_user_id: "usr_2" });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    expect(screen.queryByRole("button", { name: "Move to trash" })).toBeNull();
+  });
 });

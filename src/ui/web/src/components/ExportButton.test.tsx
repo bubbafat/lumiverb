@@ -140,7 +140,7 @@ describe("ExportButton remembered location and reports", () => {
     api.getDefaultExportFormat.mockReturnValue("fcp7");
     api.exportProject.mockResolvedValue({
       blob: new Blob(["x"]), filename: "a.xml", skippedStills: 0, skippedNoDuration: 0, unprobed: 0,
-      skippedTrashed: 2, skippedMissing: 1,
+      skippedTrashed: 2, skippedMissing: 1, skippedLibraryTrashed: 3,
     });
     renderButton();
 
@@ -148,6 +148,7 @@ describe("ExportButton remembered location and reports", () => {
 
     expect(await screen.findByText(/2 clips in the trash weren't included/)).toBeTruthy();
     expect(screen.getByText(/1 clip missing from disk wasn't included/)).toBeTruthy();
+    expect(screen.getByText(/3 clips in a deleted library weren't included/)).toBeTruthy();
   });
 
   it("frees the download link only after the browser has it", async () => {

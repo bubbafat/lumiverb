@@ -1069,6 +1069,8 @@ export interface ProjectExportFile {
   skippedTrashed: number;
   /** Clips whose files went missing, left out until they're back. */
   skippedMissing: number;
+  /** Clips whose library is in the trash, left out. */
+  skippedLibraryTrashed: number;
 }
 
 function filenameFromDisposition(header: string | null): string | null {
@@ -1116,6 +1118,7 @@ export async function exportProject(
     unprobed: Number(res.headers.get("X-Lumiverb-Unprobed") ?? 0) || 0,
     skippedTrashed: Number(res.headers.get("X-Lumiverb-Skipped-Trashed") ?? 0) || 0,
     skippedMissing: Number(res.headers.get("X-Lumiverb-Skipped-Missing") ?? 0) || 0,
+    skippedLibraryTrashed: Number(res.headers.get("X-Lumiverb-Skipped-Library-Trashed") ?? 0) || 0,
   };
 }
 

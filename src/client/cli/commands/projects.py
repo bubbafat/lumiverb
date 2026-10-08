@@ -295,7 +295,8 @@ def project_empty_trash(
     ):
         console.print("Aborted.")
         return
-    body = {"project_ids": [p["project_id"] for p in trashed]} if project_ids else {}
+    # Exactly the projects listed above, not whatever is in the trash by now.
+    body = {"project_ids": [p["project_id"] for p in trashed]}
     deleted = client.post("/v1/projects/empty-trash", json=body).json().get("deleted", 0)
     console.print(f"[green]Deleted {_plural(deleted, 'project', 'projects')} for good.[/green]")
 
@@ -356,6 +357,12 @@ def project_export(
     if missing:
         console.print(
             f"[yellow]{_plural(missing, 'clip missing from disk wasn', 'clips missing from disk weren')}'t included.[/yellow]"
+        )
+    library_trashed = int(resp.headers.get("x-lumiverb-skipped-library-trashed", "0") or 0)
+    if library_trashed:
+        console.print(
+            f"[yellow]{_plural(library_trashed, 'clip in a deleted library wasn', 'clips in a deleted library weren')}"
+            "'t included.[/yellow]"
         )
     unprobed = int(resp.headers.get("x-lumiverb-unprobed", "0") or 0)
     if unprobed:

@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlmodel import Session
 
 from src.shared.io_utils import normalize_rel_path
-from src.server.api.dependencies import get_current_user_id, get_tenant_session
+from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor
 from src.shared import asset_status
 from src.shared.io_utils import normalize_path_prefix
 from src.server.repository.tenant import AssetMetadataRepository, AssetRepository, LibraryRepository
@@ -807,6 +807,7 @@ def batch_trash_assets(
     body: BatchTrashRequest,
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
 ) -> BatchTrashResponse:
     """Soft-delete multiple assets. Returns trashed and not_found lists. Quickwit delete is best-effort."""
     asset_repo = AssetRepository(session)
@@ -886,6 +887,7 @@ def trash_asset(
     asset_id: str,
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
 ) -> None:
     """Trash a single asset for the user; it stays trashed through rescans.
 
@@ -919,6 +921,7 @@ def restore_asset(
     asset_id: str,
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
 ) -> None:
     """Restore a single trashed asset. 404 if not found or not trashed."""
     asset_repo = AssetRepository(session)

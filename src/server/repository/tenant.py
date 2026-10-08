@@ -158,10 +158,12 @@ class LibraryRepository:
             raise ValueError(f"Library not found: {library_id}")
         if library.status == "trashed":
             raise ValueError(f"Library already trashed: {library_id}")
-        # Soft-delete all assets in this library
+        # Soft-delete all assets in this library. The reason says the clip
+        # went with its library, not that its file went missing.
         self._session.execute(
             text(
-                "UPDATE assets SET deleted_at = :now WHERE library_id = :library_id AND deleted_at IS NULL"
+                "UPDATE assets SET deleted_at = :now, deleted_reason = 'library'"
+                " WHERE library_id = :library_id AND deleted_at IS NULL"
             ),
             {"library_id": library_id, "now": utcnow()},
         )
@@ -851,16 +853,22 @@ class AssetRepository:
         asset = self._session.get(Asset, asset_id)
         if asset is None or asset.deleted_at is None:
             return False
+        self.clear_trash(asset)
+        self._session.commit()
+        return True
+
+    def clear_trash(self, asset: Asset) -> None:
+        """Take an asset out of the trash and queue it and its scenes for the
+        next search sync (trashing deleted their search documents). No
+        commit. Transcript segments aren't swept: callers re-index them."""
         asset.deleted_at = None
         asset.deleted_reason = None
         asset.search_synced_at = None
         self._session.add(asset)
         self._session.execute(
             text("UPDATE video_scenes SET search_synced_at = NULL WHERE asset_id = :a"),
-            {"a": asset_id},
+            {"a": asset.asset_id},
         )
-        self._session.commit()
-        return True
 
     def page_ignored_paths(
         self, library_id: str, *, after: str | None = None, limit: int = 500
@@ -1881,7 +1889,7 @@ class ProjectRepository:
         col = self.get_by_id(project_id)
         if col is None:
             return False
-        col.deleted_at = utcnow()
+        col.deleted_at = col.updated_at = utcnow()
         self._session.add(col)
         self._session.commit()
         return True
@@ -1956,36 +1964,54 @@ class ProjectRepository:
         )
         return int(result.scalar() or 0)
 
-    def _trashed_members(self, project_id: str, *, by_user: bool):
-        """Clips still linked to the project but in the trash: those a person
-        trashed (by_user), or those a scan trashed because the file went
-        missing (every other reason, including the legacy NULL)."""
-        reason = Asset.deleted_reason == "user"
-        return (
-            select(ProjectAsset.asset_id)
-            .join(Asset, ProjectAsset.asset_id == Asset.asset_id)
-            .where(
-                ProjectAsset.project_id == project_id,
-                Asset.deleted_at.is_not(None),  # type: ignore[union-attr]
-                reason if by_user else or_(Asset.deleted_reason.is_(None), ~reason),  # type: ignore[union-attr]
-            )
-        )
+    # Clips still linked to a project but hidden, in three kinds that need
+    # different actions: a person trashed them (restorable), a scan found
+    # the file missing (back when the file is), or their library is in the
+    # trash (libraries have no restore; never brought back from a project).
+    _HIDDEN_CLIPS_SQL = (
+        "SELECT"
+        " count(*) FILTER (WHERE l.status <> 'trashed' AND a.deleted_reason = 'user') AS trashed,"
+        " count(*) FILTER (WHERE l.status <> 'trashed'"
+        "   AND a.deleted_reason IS DISTINCT FROM 'user') AS missing,"
+        " count(*) FILTER (WHERE l.status = 'trashed') AS library_trashed"
+        " FROM project_assets pa"
+        " JOIN assets a ON a.asset_id = pa.asset_id"
+        " JOIN libraries l ON l.library_id = a.library_id"
+        " WHERE pa.project_id = :pid AND a.deleted_at IS NOT NULL"
+    )
+
+    def hidden_clip_counts(self, project_id: str, *, videos_only: bool = False) -> dict[str, int]:
+        """{"trashed", "missing", "library_trashed"} for the project's hidden
+        clips, in one query. videos_only for what an export leaves out."""
+        sql = self._HIDDEN_CLIPS_SQL
+        if videos_only:
+            sql += " AND (a.media_type = 'video' OR a.media_type LIKE 'video/%')"
+        row = self._session.execute(text(sql), {"pid": project_id}).one()
+        return {"trashed": int(row[0]), "missing": int(row[1]), "library_trashed": int(row[2])}
 
     def trashed_asset_count(self, project_id: str) -> int:
         """Clips in the project that a person trashed: hidden and left out
         of exports until restored."""
-        sub = self._trashed_members(project_id, by_user=True).subquery()
-        return int(self._session.execute(select(func.count()).select_from(sub)).scalar() or 0)
+        return self.hidden_clip_counts(project_id)["trashed"]
 
     def missing_asset_count(self, project_id: str) -> int:
         """Clips in the project a scan trashed because the file went
         missing; they come back when the file does."""
-        sub = self._trashed_members(project_id, by_user=False).subquery()
-        return int(self._session.execute(select(func.count()).select_from(sub)).scalar() or 0)
+        return self.hidden_clip_counts(project_id)["missing"]
 
     def trashed_asset_ids(self, project_id: str) -> list[str]:
-        """The clips in the project that a person trashed."""
-        return list(self._session.execute(self._trashed_members(project_id, by_user=True)).scalars().all())
+        """The clips in the project that a person trashed, whose library
+        isn't in the trash: the ones restoring with the project brings back."""
+        return list(self._session.execute(
+            text(
+                "SELECT a.asset_id FROM project_assets pa"
+                " JOIN assets a ON a.asset_id = pa.asset_id"
+                " JOIN libraries l ON l.library_id = a.library_id"
+                " WHERE pa.project_id = :pid AND a.deleted_at IS NOT NULL"
+                "   AND a.deleted_reason = 'user' AND l.status <> 'trashed'"
+            ),
+            {"pid": project_id},
+        ).scalars().all())
 
     def _usage_filter(self, asset_ids: list[str], library_ids: list[str]):
         """Membership rows for these clips, or for any clip in these libraries."""

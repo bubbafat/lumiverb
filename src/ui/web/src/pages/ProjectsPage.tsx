@@ -1,5 +1,5 @@
-import { useState, type ReactNode } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { useEffect, useState, type ReactNode } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   listProjects,
@@ -165,9 +165,17 @@ export default function ProjectsPage() {
   const [confirming, setConfirming] = useState<string | null>(null);
   // A project trashed here, or from its own page on the way here.
   const location = useLocation();
+  const navigate = useNavigate();
   const [justTrashed, setJustTrashed] = useState<ProjectItem | null>(
     (location.state as { justTrashed?: ProjectItem } | null)?.justTrashed ?? null,
   );
+  const [actionError, setActionError] = useState<string | null>(null);
+  // Read once: a reload must not offer an Undo for something long gone.
+  useEffect(() => {
+    if ((location.state as { justTrashed?: unknown } | null)?.justTrashed) {
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [restoring, setRestoring] = useState<ProjectItem | null>(null);
 
   const { data: projects, isLoading, error } = useQuery({
@@ -205,10 +213,12 @@ export default function ProjectsPage() {
 
   const trashMutation = useMutation({
     mutationFn: (project: ProjectItem) => trashProject(project.project_id),
+    onMutate: () => setActionError(null),
     onSuccess: (_, project) => {
       setJustTrashed(project);
       refresh();
     },
+    onError: (err: Error) => setActionError(err.message),
   });
 
   // withClips undefined: no choice made, because we think there's nothing
@@ -225,6 +235,7 @@ export default function ProjectsPage() {
       queryClient.invalidateQueries({ queryKey: ["project-assets"] });
     },
     onError: (err: ApiError, { project }) => {
+      if (err.code !== "clips_in_trash") setActionError(err.message);
       if (err.code === "clips_in_trash" && err.details) {
         const d = err.details as { trashed_clips?: number; missing_clips?: number };
         setRestoring({
@@ -237,11 +248,12 @@ export default function ProjectsPage() {
   });
 
   const emptyMutation = useMutation({
-    mutationFn: (ids?: string[]) => emptyProjectTrash(ids),
+    mutationFn: (ids: string[]) => emptyProjectTrash(ids),
     onSuccess: () => {
       setConfirming(null);
       refresh();
     },
+    onError: (err: Error) => setActionError(err.message),
   });
 
   const startRestore = (project: ProjectItem) => {
@@ -275,6 +287,8 @@ export default function ProjectsPage() {
         </div>
       );
     }
+    // Only the owner archives or deletes; the server would refuse anyway.
+    if (project.ownership === "shared") return null;
     return (
       // Hidden until hover only where hovering exists; a phone can't hover.
       <div className="flex items-center gap-1 transition-opacity focus-within:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100">
@@ -341,6 +355,12 @@ export default function ProjectsPage() {
           </div>
         )}
 
+        {actionError && (
+          <div role="alert" className="rounded-lg border border-red-800/50 bg-red-900/20 px-4 py-2 text-sm text-red-400">
+            {actionError}
+          </div>
+        )}
+
         {justTrashed && (
           <div
             role="status"
@@ -375,7 +395,8 @@ export default function ProjectsPage() {
                 <span className="text-red-300">Delete everything in the trash for good?</span>
                 <button
                   type="button"
-                  onClick={() => emptyMutation.mutate(undefined)}
+                  // Exactly what's shown, not whatever is in the trash by now.
+                  onClick={() => emptyMutation.mutate((projects ?? []).map((p) => p.project_id))}
                   disabled={emptyMutation.isPending}
                   className="rounded px-2 py-1 font-medium text-red-400 hover:bg-red-900/30 disabled:opacity-50"
                 >

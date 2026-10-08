@@ -68,6 +68,9 @@ class ProjectItem(BaseModel):
     # Clips a scan trashed because their file went missing; they come back
     # when the file does. Always 0 for smart projects.
     missing_asset_count: int = 0
+    # Clips whose library is in the trash: libraries have no restore, so
+    # these don't come back. Always 0 for smart projects.
+    library_trashed_asset_count: int = 0
     created_at: str
     updated_at: str
     status: str = "active"  # active | archived
@@ -179,11 +182,10 @@ def _project_to_item(
             limit=10000,
         )
         count = len(live_assets)
-        trashed_count = missing_count = 0
+        hidden = {"trashed": 0, "missing": 0, "library_trashed": 0}
     else:
         count = repo.asset_count(col.project_id)
-        trashed_count = repo.trashed_asset_count(col.project_id)
-        missing_count = repo.missing_asset_count(col.project_id)
+        hidden = repo.hidden_clip_counts(col.project_id)
 
     return ProjectItem(
         project_id=col.project_id,
@@ -197,8 +199,9 @@ def _project_to_item(
         type=col_type,
         saved_query=getattr(col, "saved_query", None),
         asset_count=count,
-        trashed_asset_count=trashed_count,
-        missing_asset_count=missing_count,
+        trashed_asset_count=hidden["trashed"],
+        missing_asset_count=hidden["missing"],
+        library_trashed_asset_count=hidden["library_trashed"],
         created_at=col.created_at.isoformat(),
         updated_at=col.updated_at.isoformat(),
         status=col.status,
@@ -325,17 +328,17 @@ def list_projects(
 
 @router.post("/empty-trash", response_model=EmptyTrashResponse)
 def empty_project_trash(
-    body: EmptyTrashRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
     user_id: Annotated[str, Depends(get_current_user_id)],
+    body: EmptyTrashRequest | None = None,
 ) -> EmptyTrashResponse:
     """Delete trashed projects for good: the named ones, or the caller's whole
     trash. Only the caller's own trash; active projects are never touched.
     The clips stay in their libraries."""
     repo = ProjectRepository(session)
     doomed = repo.list_trashed(user_id)
-    if body.project_ids is not None:
+    if body is not None and body.project_ids is not None:
         wanted = set(body.project_ids)
         doomed = [c for c in doomed if c.project_id in wanted]
     for col in doomed:
@@ -454,8 +457,8 @@ def restore_project(
     if col.owner_user_id is not None and col.owner_user_id != user_id:
         raise HTTPException(status_code=404, detail="Project not in the trash")
     with_clips = body.with_clips if body else None
-    trashed = repo.trashed_asset_count(project_id)
-    missing = repo.missing_asset_count(project_id)
+    hidden = repo.hidden_clip_counts(project_id)
+    trashed, missing = hidden["trashed"], hidden["missing"]
     if trashed and with_clips is None:
         raise DecisionRequiredError(
             "clips_in_trash",
@@ -466,8 +469,12 @@ def restore_project(
             {"trashed_clips": trashed, "missing_clips": missing},
         )
     repo.restore(project_id)
+    if col.visibility == "public":
+        _sync_public_index(request, project_id, public=True)
     restored = _restore_trashed_clips(request, session, repo, project_id) if with_clips and trashed else 0
-    return RestoreProjectResponse(restored_clips=restored, trashed_clips=trashed - restored, missing_clips=missing)
+    return RestoreProjectResponse(
+        restored_clips=restored, trashed_clips=max(0, trashed - restored), missing_clips=missing
+    )
 
 
 def _restore_trashed_clips(request: Request, session: Session, repo: ProjectRepository, project_id: str) -> int:
@@ -502,7 +509,7 @@ def restore_project_clips(
     if not _can_view(col, user_id):
         raise HTTPException(status_code=404, detail="Project not found")
     restored = _restore_trashed_clips(request, session, repo, project_id)
-    return RestoreClipsResponse(restored=restored, missing=repo.missing_asset_count(project_id))
+    return RestoreClipsResponse(restored=restored, missing=repo.hidden_clip_counts(project_id)["missing"])
 
 
 # ---------------------------------------------------------------------------
@@ -828,9 +835,11 @@ def export_project(
     only for now. Headers count what needs the user's attention:
     X-Lumiverb-Skipped-Stills (photos left out), X-Lumiverb-Skipped-No-Duration
     (videos with no known length, left out), X-Lumiverb-Unprobed (videos
-    exported at a fallback frame rate), X-Lumiverb-Skipped-Trashed (clips you
-    trashed, left out until restored) and X-Lumiverb-Skipped-Missing (clips
-    whose files went missing). Archived projects export too.
+    exported at a fallback frame rate), X-Lumiverb-Skipped-Trashed (clips
+    someone trashed, left out until restored), X-Lumiverb-Skipped-Missing
+    (clips whose files went missing) and X-Lumiverb-Skipped-Library-Trashed
+    (clips whose library is in the trash); these count videos only.
+    Archived projects export too.
     """
     import posixpath
 
@@ -852,10 +861,13 @@ def export_project(
     assets = _all_project_assets(col, request, session, user_id)
     videos = [a for a in assets if a.media_type == "video"]
     skipped_stills = len(assets) - len(videos)
-    # Trashed clips are still in a static project but never exported.
+    # Hidden clips are still in a static project but never exported; only
+    # videos count, since photos aren't exported anyway.
     is_smart = getattr(col, "type", "static") == "smart"
-    skipped_trashed = 0 if is_smart else repo.trashed_asset_count(col.project_id)
-    skipped_missing = 0 if is_smart else repo.missing_asset_count(col.project_id)
+    hidden = (
+        {"trashed": 0, "missing": 0, "library_trashed": 0}
+        if is_smart else repo.hidden_clip_counts(col.project_id, videos_only=True)
+    )
 
     roots = {
         lib.library_id: lib.root_path
@@ -908,12 +920,14 @@ def export_project(
             "X-Lumiverb-Skipped-Stills": str(skipped_stills),
             "X-Lumiverb-Skipped-No-Duration": str(skipped_no_duration),
             "X-Lumiverb-Unprobed": str(unprobed),
-            "X-Lumiverb-Skipped-Trashed": str(skipped_trashed),
-            "X-Lumiverb-Skipped-Missing": str(skipped_missing),
+            "X-Lumiverb-Skipped-Trashed": str(hidden["trashed"]),
+            "X-Lumiverb-Skipped-Missing": str(hidden["missing"]),
+            "X-Lumiverb-Skipped-Library-Trashed": str(hidden["library_trashed"]),
             "Access-Control-Expose-Headers": (
                 "Content-Disposition, X-Lumiverb-Skipped-Stills, "
                 "X-Lumiverb-Skipped-No-Duration, X-Lumiverb-Unprobed, "
-                "X-Lumiverb-Skipped-Trashed, X-Lumiverb-Skipped-Missing"
+                "X-Lumiverb-Skipped-Trashed, X-Lumiverb-Skipped-Missing, "
+                "X-Lumiverb-Skipped-Library-Trashed"
             ),
         },
     )
