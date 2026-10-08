@@ -25,6 +25,9 @@ class EmptyTrashRequest(BaseModel):
     # Required when any of the clips are in projects: deleting them for good
     # takes them out of those projects, and the user has to have said yes.
     remove_from_projects: bool = False
+    # Missing (archived) clips named in asset_ids are deleted for good only
+    # with this: otherwise only what a person trashed goes.
+    include_missing: bool = False
 
 
 class EmptyTrashResponse(BaseModel):
@@ -58,11 +61,34 @@ def empty_trash(
     to_delete = asset_repo.list_trashed(
         asset_ids=body.asset_ids,
         trashed_before=trashed_before_dt,
+        include_missing=body.include_missing,
     )
     if not to_delete:
         return EmptyTrashResponse(deleted=0)
+    return EmptyTrashResponse(
+        deleted=purge_assets(session, request, to_delete, user_id, remove_from_projects=body.remove_from_projects),
+    )
+
+
+def purge_assets(
+    session: Session,
+    request: Request,
+    to_delete: list,
+    user_id: str,
+    *,
+    remove_from_projects: bool,
+) -> int:
+    """Delete these trashed assets for good: rows, files, playback cuts and search
+    documents. 409 in_projects when any are in projects, unless remove_from_projects."""
+    asset_repo = AssetRepository(session)
+    # Lock what's still deleted; one a scan restored since it was listed keeps
+    # its files and everything else.
+    still = set(asset_repo.lock_still_deleted([a.asset_id for a in to_delete]))
+    to_delete = [a for a in to_delete if a.asset_id in still]
+    if not to_delete:
+        return 0
     asset_ids = [a.asset_id for a in to_delete]
-    if not body.remove_from_projects:
+    if not remove_from_projects:
         from src.server.api.routers.assets import project_usage_summary
 
         usage = project_usage_summary(session, user_id, asset_ids=asset_ids)
@@ -113,4 +139,5 @@ def empty_trash(
                 qw.delete_tenant_documents_by_asset_id(tenant_id, aid)
     except Exception as e:
         logger.warning("Quickwit delete after empty trash failed: %s", e)
-    return EmptyTrashResponse(deleted=deleted_count)
+    return deleted_count
+

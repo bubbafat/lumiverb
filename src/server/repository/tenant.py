@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import and_, bindparam, column, func, insert, or_, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.sql import text as sa_text
 from sqlmodel import Session, select
 
@@ -431,6 +432,13 @@ class PathFilterRepository:
             self.add_for_library(library_id=library_id, type=d.type, pattern=d.pattern)
             count += 1
         return count
+
+def _archived():
+    """Archived: deleted because the file went missing. Rows from before reasons
+    were recorded have none. Not a person's trash, not trashed with a library."""
+    return and_(Asset.deleted_at.is_not(None),
+                or_(Asset.deleted_reason.is_(None), Asset.deleted_reason == "missing"))
+
 
 class AssetRepository:
     """Repository for assets table."""
@@ -918,6 +926,56 @@ class AssetRepository:
         self._session.commit()
         return True
 
+    def list_archived(self, library_id: str) -> list[Asset]:
+        """The library's archived assets: missing on disk, not trashed by a person."""
+        stmt = select(Asset).where(Asset.library_id == library_id, _archived())
+        return list(self._session.exec(stmt).all())
+
+    def count_archived(self, library_id: str) -> int:
+        stmt = select(func.count()).select_from(Asset).where(Asset.library_id == library_id, _archived())
+        return int(self._session.exec(stmt).one())
+
+    def find_archived_by_sha(self, library_id: str, sha256: str | None) -> Asset | None:
+        """The library's most recently archived (missing) asset with this content,
+        locked for restoring. A row someone else holds is waited for, not
+        skipped: if another ingest claimed it meanwhile, it no longer matches
+        and this file gets its own asset; if other work held it (a re-index, an
+        OCR batch), it's still here to restore."""
+        if not sha256:
+            return None
+        stmt = (
+            select(Asset)
+            .where(Asset.library_id == library_id, Asset.sha256 == sha256, _archived())
+            .order_by(Asset.deleted_at.desc())
+            .limit(1)
+            .with_for_update()
+        )
+        return self._session.exec(stmt).first()
+
+    def lock_for_restore(self, asset: Asset, rel_path: str) -> bool:
+        """Lock an archived asset found at rel_path before restoring it there.
+        False when, meanwhile, another ingest restored it at another path (a
+        copy of the file, matched by content): rel_path is then unknown."""
+        try:
+            self._session.refresh(asset, with_for_update=True)
+        except InvalidRequestError:
+            # Deleted for good meanwhile (the trash emptied): nothing to restore.
+            self._session.expunge(asset)
+            return False
+        return asset.rel_path == rel_path
+
+    def lock_still_deleted(self, asset_ids: list[str]) -> list[str]:
+        """Of these, the assets still deleted, locked until the transaction ends:
+        one a scan restored since they were listed is left out."""
+        if not asset_ids:
+            return []
+        rows = self._session.execute(
+            text("SELECT asset_id FROM assets WHERE asset_id = ANY(:asset_ids) AND deleted_at IS NOT NULL"
+                 " ORDER BY asset_id FOR UPDATE"),
+            {"asset_ids": asset_ids},
+        )
+        return [r[0] for r in rows]
+
     def clear_trash(self, asset: Asset) -> None:
         """Take an asset out of the trash and queue it and its scenes for the
         next search sync (trashing deleted their search documents). No
@@ -1015,18 +1073,21 @@ class AssetRepository:
         self,
         asset_ids: list[str] | None = None,
         trashed_before: datetime | None = None,
+        include_missing: bool = False,
     ) -> list[Asset]:
         """Return trashed assets matching the given filters.
 
-        Without explicit asset_ids, only the user's trash: assets that are
-        merely missing on disk (an unplugged drive) keep their human data
-        until someone purges them by id.
+        Only the user's trash: assets that are merely missing on disk (archived;
+        they come back when the file does) are left alone unless they're named
+        in asset_ids and include_missing says so.
         """
         stmt = select(Asset).where(Asset.deleted_at.isnot(None))
         if asset_ids is not None:
             stmt = stmt.where(Asset.asset_id.in_(asset_ids))
-        else:
+        if asset_ids is None or not include_missing:
             stmt = stmt.where(Asset.deleted_reason == "user")
+        else:
+            stmt = stmt.where(or_(Asset.deleted_reason == "user", _archived()))
         if trashed_before is not None:
             stmt = stmt.where(Asset.deleted_at < trashed_before)
         return list(self._session.exec(stmt).all())
@@ -1057,6 +1118,9 @@ class AssetRepository:
         - ``projects.cover_asset_id`` is nullable — set to NULL rather
           than deleting the project itself
         """
+        # Only what's still deleted: a scan may have restored one since it was
+        # listed, and its ratings, projects and faces stay.
+        asset_ids = self.lock_still_deleted(asset_ids)
         if not asset_ids:
             return 0
         params = {"asset_ids": asset_ids}

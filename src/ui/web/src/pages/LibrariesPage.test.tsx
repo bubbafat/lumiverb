@@ -5,7 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { ApiError } from "../api/client";
 import LibrariesPage from "./LibrariesPage";
 
-const api = vi.hoisted(() => ({ listLibraries: vi.fn(), emptyTrash: vi.fn() }));
+const api = vi.hoisted(() => ({ listLibraries: vi.fn(), emptyTrash: vi.fn(), deleteLibrary: vi.fn() }));
 vi.mock("../api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/client")>()),
   ...api,
@@ -73,6 +73,14 @@ describe("LibrariesPage empty trash", () => {
     await waitFor(() => expect(api.emptyTrash).toHaveBeenLastCalledWith(true));
   });
 
+  it("says why when emptying the trash fails", async () => {
+    api.emptyTrash.mockRejectedValue(new ApiError(500, "Couldn't reach the database", "internal"));
+    renderPage();
+    const dialog = await openEmptyTrash();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Empty trash" }));
+    expect((await within(dialog).findByRole("alert")).textContent).toContain("Couldn't reach the database");
+  });
+
   it("says it, not them, for one clip in one project", async () => {
     api.emptyTrash.mockRejectedValue(new ApiError(409, "in projects", "in_projects", {
       assets_in_projects: 1,
@@ -84,5 +92,69 @@ describe("LibrariesPage empty trash", () => {
     expect(dialog.textContent).toMatch(/1 trashed library and all its assets/);
     fireEvent.click(within(dialog).getByRole("button", { name: "Empty trash" }));
     expect(await within(dialog).findByText(/1 clip from this library is in 1 project\. Deleting it for good removes it from that project\./)).toBeTruthy();
+  });
+});
+
+describe("LibrariesPage delete with archived clips", () => {
+  beforeEach(() => {
+    api.listLibraries.mockResolvedValue([
+      { library_id: "lib_2", name: "Media", root_path: "/media", status: "active", is_public: false, last_scan_at: null },
+    ]);
+  });
+
+  async function startDelete() {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+  }
+
+  const archived = () => new ApiError(409, "archived", "archived_clips", { archived_clips: 3 });
+
+  it("asks what happens to archived clips, and deletes them for good when told to", async () => {
+    api.deleteLibrary.mockImplementation(async (_id: string, opts?: { archived?: string }) => {
+      if (!opts?.archived) throw archived();
+    });
+    await startDelete();
+    await screen.findByText(/3 clips in Media are archived/);
+    fireEvent.click(screen.getByRole("button", { name: "Delete them for good" }));
+    await waitFor(() => expect(api.deleteLibrary).toHaveBeenLastCalledWith("lib_2", { archived: "delete" }));
+  });
+
+  it("keeps them with the library when told to", async () => {
+    api.deleteLibrary.mockImplementation(async (_id: string, opts?: { archived?: string }) => {
+      if (!opts?.archived) throw archived();
+    });
+    await startDelete();
+    fireEvent.click(await screen.findByRole("button", { name: "Keep them" }));
+    await waitFor(() => expect(api.deleteLibrary).toHaveBeenLastCalledWith("lib_2", { archived: "keep" }));
+  });
+
+  it("asks again when deleting them would take them out of projects", async () => {
+    api.deleteLibrary.mockImplementation(async (_id: string, opts?: { archived?: string; removeFromProjects?: boolean }) => {
+      if (!opts?.archived) throw archived();
+      if (opts.archived === "delete" && !opts.removeFromProjects) {
+        throw new ApiError(409, "in projects", "in_projects", usage as unknown as Record<string, unknown>);
+      }
+    });
+    await startDelete();
+    fireEvent.click(await screen.findByRole("button", { name: "Delete them for good" }));
+    await screen.findByText(/in projects/i);
+    fireEvent.click(screen.getByRole("button", { name: "Delete anyway" }));
+    await waitFor(() =>
+      expect(api.deleteLibrary).toHaveBeenLastCalledWith("lib_2", { archived: "delete", removeFromProjects: true }),
+    );
+  });
+
+  it("says why when a delete fails", async () => {
+    api.deleteLibrary.mockRejectedValue(new ApiError(403, "Only an admin can delete libraries", "forbidden"));
+    await startDelete();
+    expect((await screen.findByRole("alert")).textContent).toContain("Only an admin can delete libraries");
+  });
+
+  it("a library without archived clips deletes straight away", async () => {
+    api.deleteLibrary.mockResolvedValue(undefined);
+    await startDelete();
+    await waitFor(() => expect(api.deleteLibrary).toHaveBeenCalledWith("lib_2", undefined));
+    expect(screen.queryByText(/archived/)).toBeNull();
   });
 });

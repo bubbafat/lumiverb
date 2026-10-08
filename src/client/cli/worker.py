@@ -255,7 +255,10 @@ def _scan_library(
         library["name"], f" / {prefix}" if prefix else "", len(changes),
         ", retrying what failed" if retry_due else "", ", full scan due" if full_due else "",
     )
-    stats = scan_fn(client, library, path_prefix=prefix, allow_moves=True, console=console)
+    # Archiving is reversible (a file that comes back, anywhere in the library,
+    # restores its asset), so no mass-delete guard: the mount check and
+    # unreadable folders are what keep a glitch from archiving anything.
+    stats = scan_fn(client, library, path_prefix=prefix, allow_moves=True, allow_mass_delete=True, console=console)
     if stats.root_unreachable:
         logger.warning("worker: %s became unreachable during the scan; changes kept", library["name"])
         return

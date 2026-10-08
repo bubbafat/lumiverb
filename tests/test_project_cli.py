@@ -330,6 +330,7 @@ def test_emptying_the_library_trash_reads_right_for_one() -> None:
 def test_deleting_a_library_asks_once() -> None:
     client = MagicMock()
     client.get.return_value.json.return_value = [{"library_id": "lib_1", "name": "Old card"}]
+    client.raw.return_value.status_code = 204
     with patch("src.client.cli.main.LumiverbClient", return_value=client):
         result = runner.invoke(app, ["library", "delete", "--name", "Old card"], input="y\n")
     assert result.exit_code == 0, result.output

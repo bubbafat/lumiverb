@@ -111,7 +111,7 @@ def test_library_delete_requires_confirmation() -> None:
 
     assert result.exit_code == 0
     assert "Aborted" in result.output
-    mock_client.delete.assert_not_called()
+    mock_client.raw.assert_not_called()
 
 
 @pytest.mark.fast
@@ -123,7 +123,7 @@ def test_library_delete_confirms_and_calls_api() -> None:
     ]
     mock_client = MagicMock()
     mock_client.get.return_value = mock_response
-    mock_client.delete.return_value = MagicMock(status_code=204)
+    mock_client.raw.return_value = MagicMock(status_code=204)
 
     with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
         result = runner.invoke(
@@ -135,9 +135,79 @@ def test_library_delete_confirms_and_calls_api() -> None:
     assert result.exit_code == 0
     assert "moved to trash" in result.output
     assert "empty-trash" in result.output
-    mock_client.delete.assert_called_once()
-    call_args = mock_client.delete.call_args[0]
-    assert call_args[0] == "/v1/libraries/lib_01DEL"
+    mock_client.raw.assert_called_once()
+    assert mock_client.raw.call_args[0] == ("DELETE", "/v1/libraries/lib_01DEL")
+
+
+def _archived_client(*responses):
+    """A client whose library list has one active library and whose DELETEs answer `responses` in turn."""
+    listing = MagicMock()
+    listing.json.return_value = [{"library_id": "lib_1", "name": "Media", "root_path": "/m", "status": "active"}]
+    client = MagicMock()
+    client.get.return_value = listing
+    client.raw.side_effect = list(responses)
+    return client
+
+
+def _decision(code: str, details: dict) -> MagicMock:
+    r = MagicMock(status_code=409)
+    r.json.return_value = {"error": {"code": code, "message": code, "details": details}}
+    return r
+
+
+_DONE = MagicMock(status_code=204)
+_ARCHIVED = {"archived_clips": 3}
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("answer,choice", [("d", "delete"), ("k", "keep")])
+def test_library_delete_asks_about_archived_clips(answer, choice) -> None:
+    client = _archived_client(_decision("archived_clips", _ARCHIVED), _DONE)
+    with patch("src.client.cli.main.LumiverbClient", return_value=client):
+        result = runner.invoke(app, ["library", "delete", "--name", "Media"], input=f"y\n{answer}\n")
+    assert result.exit_code == 0, result.output
+    assert "3 clips in Media are archived" in result.output
+    assert client.raw.call_args_list[-1].kwargs["json"] == {"archived": choice, "remove_from_projects": False}
+    assert "moved to trash" in result.output
+
+
+@pytest.mark.fast
+def test_library_delete_cancelled_at_the_archived_question_changes_nothing() -> None:
+    client = _archived_client(_decision("archived_clips", _ARCHIVED))
+    with patch("src.client.cli.main.LumiverbClient", return_value=client):
+        result = runner.invoke(app, ["library", "delete", "--name", "Media"], input="y\nc\n")
+    assert result.exit_code == 0
+    assert "Aborted" in result.output
+    assert client.raw.call_count == 1
+
+
+@pytest.mark.fast
+def test_library_delete_with_flags_asks_nothing() -> None:
+    client = _archived_client(_DONE)
+    with patch("src.client.cli.main.LumiverbClient", return_value=client):
+        result = runner.invoke(app, ["library", "delete", "--name", "Media", "--yes", "--archived", "keep"])
+    assert result.exit_code == 0, result.output
+    assert client.raw.call_args.kwargs["json"] == {"archived": "keep", "remove_from_projects": False}
+
+
+@pytest.mark.fast
+def test_library_delete_yes_without_a_choice_stops_when_clips_are_archived() -> None:
+    client = _archived_client(_decision("archived_clips", _ARCHIVED))
+    with patch("src.client.cli.main.LumiverbClient", return_value=client):
+        result = runner.invoke(app, ["library", "delete", "--name", "Media", "--yes"])
+    assert result.exit_code == 2
+    assert "--archived keep" in result.output and "--archived delete" in result.output
+
+
+@pytest.mark.fast
+def test_library_delete_asks_again_when_archived_clips_are_in_projects() -> None:
+    usage = {"assets_in_projects": 2, "projects": [], "other_projects": 0}
+    client = _archived_client(_decision("archived_clips", _ARCHIVED), _decision("in_projects", usage), _DONE)
+    with patch("src.client.cli.main.LumiverbClient", return_value=client):
+        result = runner.invoke(app, ["library", "delete", "--name", "Media"], input="y\nd\ny\n")
+    assert result.exit_code == 0, result.output
+    assert "2 of them are in projects" in result.output
+    assert client.raw.call_args.kwargs["json"] == {"archived": "delete", "remove_from_projects": True}
 
 
 @pytest.mark.fast

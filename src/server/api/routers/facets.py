@@ -71,12 +71,14 @@ def get_facets(
 
             scores, contexts, source = _run_quickwit_search(
                 tenant_id, spec.search_terms, library_ids, limit=MAX_CANDIDATE_IDS, public_cap_ms=public_cap_ms,
+                public=getattr(request.state, "is_public_request", False),
             )
             if source == "postgres_fallback":
                 pg_query = " ".join(st.q for st in spec.search_terms if st.q)
                 scores, contexts = _run_postgres_fallback(
                     session, pg_query, library_ids, limit=MAX_CANDIDATE_IDS,
                     include_transcripts=public_cap_ms is None,
+                    include_notes=not getattr(request.state, "is_public_request", False),
                 )
             if not scores:
                 return _empty_facets()

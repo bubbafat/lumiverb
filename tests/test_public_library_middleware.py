@@ -382,14 +382,16 @@ def test_signed_in_only_routes_refuse_visitors(public_lib_client, spoken, path):
 
 
 @pytest.mark.slow
-def test_a_public_page_doesnt_show_who_wrote_a_note(public_lib_client, spoken):
+def test_a_public_page_doesnt_show_notes(public_lib_client, spoken):
     client, api_key, library_id, _ = public_lib_client
     auth = {"Authorization": f"Bearer {api_key}"}
     r = client.put(f"/v1/assets/{spoken}/note", json={"text": "keep this take"}, headers=auth)
     assert r.status_code in (200, 204), r.text
     public = client.get(f"/v1/assets/{spoken}", params={"public_library_id": library_id}).json()
-    assert public["note"] == "keep this take"
-    assert not public.get("note_author")
+    # Notes are the team's working notes (Robert's call, Oct 8).
+    assert not public.get("note") and not public.get("note_author") and not public.get("note_updated_at")
+    signed_in = client.get(f"/v1/assets/{spoken}", headers=auth).json()
+    assert signed_in["note"] == "keep this take"
 
 
 @pytest.mark.slow
@@ -503,3 +505,14 @@ def test_similar_from_a_trashed_clip_isnt_public(public_lib_client):
     assert client.delete(f"/v1/assets/{asset_id}", headers={"Authorization": f"Bearer {api_key}"}).status_code == 204
     r = client.get("/v1/similar", params={"asset_id": asset_id, "library_id": library_id})
     assert r.status_code == 404
+
+
+@pytest.mark.slow
+def test_public_search_doesnt_read_notes(public_lib_client):
+    client, api_key, library_id, _ = public_lib_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+    asset_id = _ingest(client, api_key, library_id, "notes/clip.mov")
+    assert client.put(f"/v1/assets/{asset_id}/note", json={"text": "flamingo budget"}, headers=auth).status_code == 200
+    params = [("f", f"library:{library_id}"), ("f", "query:flamingo")]
+    assert [i["asset_id"] for i in client.get("/v1/query", params=params).json()["items"]] == []
+    assert asset_id in [i["asset_id"] for i in client.get("/v1/query", params=params, headers=auth).json()["items"]]

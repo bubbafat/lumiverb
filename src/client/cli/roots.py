@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import unicodedata
 from pathlib import Path
@@ -80,9 +81,37 @@ def local_library_root(library: dict, root_map: dict[str, str] | None = None) ->
     return Path(map_root(root_path, mapping))
 
 
+# Mount points the system expects (the brain mounts the DAS from here).
+FSTAB = Path("/etc/fstab")
+
+
+def _expected_mount(path: Path) -> Path | None:
+    """The deepest mount point fstab lists at or above `path`, other than /."""
+    try:
+        lines = FSTAB.read_text().splitlines()
+    except OSError:
+        return None
+    best: Path | None = None
+    for line in lines:
+        fields = line.split()
+        if len(fields) < 2 or fields[0].startswith("#") or fields[1] in ("/", "none", "swap"):
+            continue
+        # fstab escapes a space as \040, a tab as \011 and so on.
+        mount = Path(re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), fields[1]))
+        if (path == mount or mount in path.parents) and (best is None or len(mount.parts) > len(best.parts)):
+            best = mount
+    return best
+
+
 def _probe(path: Path, require_entries: bool) -> Path | None:
     """Resolve and list the folder. Runs in a thread: it can hang."""
+    # A folder fstab says is a mount counts only while it's mounted: anything
+    # in an unmounted mount point (a stray copy) isn't the share.
     resolved = path.resolve()
+    for candidate in dict.fromkeys((path, resolved)):  # a root map may reach the mount through a symlink
+        mount = _expected_mount(candidate)
+        if mount is not None and not os.path.ismount(mount):
+            return None
     if not resolved.is_dir():
         return None
     if require_entries:

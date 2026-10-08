@@ -1,18 +1,24 @@
 """Libraries API: create and list libraries. All routes require tenant auth (middleware)."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlmodel import Session
-from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor, require_signed_in
+
+from src.server.api.dependencies import (
+    get_current_user_id,
+    get_tenant_session,
+    require_editor,
+    require_signed_in,
+)
 from src.server.api.errors import DecisionRequiredError
 from src.server.database import get_control_session
-from src.shared.io_utils import normalize_path_prefix
-from src.shared.utils import utcnow
 from src.server.repository.control_plane import PublicLibraryRepository
 from src.server.repository.tenant import AssetRepository, LibraryRepository, PathFilterRepository
 from src.server.search.quickwit import purge_library_from_quickwit
+from src.shared.io_utils import normalize_path_prefix
+from src.shared.utils import utcnow
 
 router = APIRouter(prefix="/v1/libraries", tags=["libraries"])
 
@@ -153,6 +159,7 @@ def list_library_health(
     no work to do and shouldn't surface in the indicator either.
     """
     from sqlalchemy import text
+
     from src.server.repository.tenant import MISSING_CONDITIONS
 
     pending_clause = " OR ".join(
@@ -293,17 +300,52 @@ def update_library(
     )
 
 
+class DeleteLibraryRequest(BaseModel):
+    # Required when the library holds archived clips (files that went missing
+    # and haven't come back): "delete" removes them for good first, "keep"
+    # leaves them archived with the library in the trash.
+    archived: Literal["keep", "delete"] | None = None
+    # Required with "delete" when any of those clips are in projects.
+    remove_from_projects: bool = False
+
+
 @router.delete("/{library_id}", status_code=204)
 def delete_library(
     library_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
+    body: DeleteLibraryRequest | None = None,
 ) -> None:
-    """Soft delete: move library to trash (status=trashed). Returns 409 if already trashed."""
+    """Soft delete: move library to trash (status=trashed). Returns 409 if already trashed.
+
+    409 archived_clips when it holds archived clips and the request doesn't
+    say what happens to them (`archived`).
+    """
     repo = LibraryRepository(session)
     library = repo.get_by_id(library_id)
     if library is None:
         raise HTTPException(status_code=404, detail="Library not found")
+    if library.status == "trashed":
+        raise HTTPException(status_code=409, detail="Library is already in trash")
+    n = AssetRepository(session).count_archived(library_id)
+    if n:
+        choice = body.archived if body else None
+        if choice is None:
+            raise DecisionRequiredError(
+                "archived_clips",
+                f"{n} {'clip' if n == 1 else 'clips'} in this library {'is' if n == 1 else 'are'} archived: "
+                "the files went missing and haven't come back. Send archived: \"delete\" to delete "
+                f"{'it' if n == 1 else 'them'} for good, or \"keep\" to keep "
+                f"{'it' if n == 1 else 'them'} with the library in the trash.",
+                {"archived_clips": n},
+            )
+        if choice == "delete":
+            from src.server.api.routers.trash import purge_assets
+
+            purge_assets(session, request, AssetRepository(session).list_archived(library_id), user_id,
+                         remove_from_projects=body.remove_from_projects)
     was_public = library.is_public
     try:
         repo.trash(library_id)

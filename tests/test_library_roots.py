@@ -337,3 +337,95 @@ def test_scan_command_says_the_root_is_unreachable_and_fails(home: Path, tmp_pat
     assert result.exit_code == 1
     assert "not accessible" in result.output
     assert "Done:" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# A folder fstab says is a mount counts only while it's mounted
+# ---------------------------------------------------------------------------
+
+
+def _fstab(tmp_path: Path, *mount_points: str) -> Path:
+    f = tmp_path / "fstab"
+    lines = ["# comment", "UUID=abc / ext4 defaults 0 1"]
+    lines += [f"//10.10.10.1/share {mp} cifs soft 0 0" for mp in mount_points]
+    f.write_text("\n".join(lines) + "\n")
+    return f
+
+
+@pytest.fixture
+def mounts(monkeypatch: pytest.MonkeyPatch):
+    """The set of paths os.path.ismount says are mounted."""
+    mounted: set[str] = set()
+    monkeypatch.setattr(roots.os.path, "ismount", lambda p: str(p) in mounted or str(p) == "/")
+    return mounted
+
+
+def test_an_unmounted_mount_point_is_away_even_with_files_in_it(tmp_path: Path, monkeypatch, mounts) -> None:
+    # Files written into the mount point while unmounted (a stray copy) look
+    # like a library, but aren't the share.
+    share = tmp_path / "mnt" / "media-01"
+    (share / "Media").mkdir(parents=True)
+    (share / "Media" / "stray.mov").write_text("x")
+    monkeypatch.setattr(roots, "FSTAB", _fstab(tmp_path, str(share)))
+    lib = {"root_path": "/Volumes/media-01/Media"}
+    root_map = {"/Volumes/media-01": str(share)}
+    assert reachable_root(lib, root_map=root_map, require_entries=True) is None
+    mounts.add(str(share))
+    assert reachable_root(lib, root_map=root_map, require_entries=True) == (share / "Media").resolve()
+
+
+def test_folders_fstab_doesnt_mention_are_checked_as_before(tmp_path: Path, monkeypatch, mounts) -> None:
+    local = tmp_path / "dev" / "das" / "Journey"
+    local.mkdir(parents=True)
+    (local / "a.mov").write_text("x")
+    monkeypatch.setattr(roots, "FSTAB", _fstab(tmp_path, "/mnt/somewhere-else"))
+    lib = {"root_path": "/Volumes/brain-das/Journey"}
+    assert reachable_root(lib, root_map={"/Volumes/brain-das": str(tmp_path / "dev" / "das")},
+                          require_entries=True) == local.resolve()
+
+
+def test_the_deepest_fstab_mount_point_is_the_one_checked(tmp_path: Path, monkeypatch, mounts) -> None:
+    outer = tmp_path / "mnt"
+    inner = outer / "media-02"
+    (inner / "Photos").mkdir(parents=True)
+    (inner / "Photos" / "p.jpg").write_text("x")
+    monkeypatch.setattr(roots, "FSTAB", _fstab(tmp_path, str(outer), str(inner)))
+    mounts.add(str(outer))  # the outer disk is there, the share isn't
+    lib = {"root_path": "/Volumes/media-02/Photos"}
+    assert reachable_root(lib, root_map={"/Volumes/media-02": str(inner)}, require_entries=True) is None
+
+
+def test_an_unreadable_fstab_doesnt_block_anything(tmp_path: Path, monkeypatch, mounts) -> None:
+    local = tmp_path / "lib"
+    local.mkdir()
+    (local / "a.mov").write_text("x")
+    monkeypatch.setattr(roots, "FSTAB", tmp_path / "no-such-fstab")
+    assert reachable_root({"root_path": str(local)}, root_map={}, require_entries=True) == local.resolve()
+
+
+def test_fstab_octal_escapes_are_read(tmp_path: Path, monkeypatch, mounts) -> None:
+    # fstab writes a space as \040, a tab as \011, a backslash as \134.
+    share = tmp_path / "mnt" / "media\t01"
+    (share / "Media").mkdir(parents=True)
+    (share / "Media" / "a.mov").write_text("x")
+    escaped = str(share).replace("\t", "\\011")
+    (tmp_path / "fstab").write_text(f"//nas/share {escaped} cifs soft 0 0\n")
+    monkeypatch.setattr(roots, "FSTAB", tmp_path / "fstab")
+    lib = {"root_path": str(share / "Media")}
+    assert reachable_root(lib, root_map={}, require_entries=True) is None
+    mounts.add(str(share))
+    assert reachable_root(lib, root_map={}, require_entries=True) == (share / "Media").resolve()
+
+
+def test_a_root_reached_through_a_symlink_is_checked_where_it_lands(tmp_path: Path, monkeypatch, mounts) -> None:
+    share = tmp_path / "mnt" / "media-01"
+    (share / "Media").mkdir(parents=True)
+    (share / "Media" / "a.mov").write_text("x")
+    link = tmp_path / "das"
+    link.symlink_to(share)
+    monkeypatch.setattr(roots, "FSTAB", _fstab(tmp_path, str(share)))
+    lib = {"root_path": "/Volumes/media-01/Media"}
+    root_map = {"/Volumes/media-01": str(link)}
+    assert reachable_root(lib, root_map=root_map, require_entries=True) is None
+    mounts.add(str(share))
+    assert reachable_root(lib, root_map=root_map, require_entries=True) == (share / "Media").resolve()

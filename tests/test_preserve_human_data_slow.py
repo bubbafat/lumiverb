@@ -925,10 +925,25 @@ def test_emptied_missing_file_is_not_remembered(env) -> None:
         "DELETE", "/v1/assets", json={"asset_ids": [asset_id], "reason": "missing"},
         headers=headers,
     )
-    client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [asset_id]}, headers=headers)
+    r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [asset_id], "include_missing": True},
+                       headers=headers)
+    assert r.json()["deleted"] == 1
 
     assert rel_path not in _ignored(client, headers, library_id)
     assert _ingest(client, headers, library_id, rel_path).status_code == 200
+
+
+@pytest.mark.slow
+def test_emptying_the_trash_keeps_archived_files_even_when_named(env) -> None:
+    """Only what a person trashed is deleted for good, unless missing files are asked for by name
+    and include_missing says so (Robert's call, Oct 8): an archived file may still come back."""
+    client, headers, library_id, _ = env
+    asset_id = _ingest(client, headers, library_id, "trash/archived-named.jpg").json()["asset_id"]
+    client.request("DELETE", "/v1/assets", json={"asset_ids": [asset_id], "reason": "missing"}, headers=headers)
+    r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [asset_id]}, headers=headers)
+    assert r.status_code == 200 and r.json()["deleted"] == 0
+    # Still archived: it comes back when the file does.
+    assert _ingest(client, headers, library_id, "trash/archived-named.jpg").json()["asset_id"] == asset_id
 
 
 @pytest.mark.slow

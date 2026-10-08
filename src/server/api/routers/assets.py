@@ -693,10 +693,13 @@ def _project_visitor_view(response: AssetResponse) -> AssetResponse:
 
 
 def _trim_public_transcript(request: Request, session: Session, response: AssetResponse) -> None:
-    """A public page's transcript stops where its playback does, and doesn't say who wrote the note."""
+    """A public page's transcript stops where its playback does, and it shows no notes:
+    they're the team's working notes (Robert's call, Oct 8)."""
     if not getattr(request.state, "is_public_request", False):
         return
+    response.note = None
     response.note_author = None
+    response.note_updated_at = None
     if not response.transcript_srt:
         return
     from src.server.api.routers.playback import srt_before
