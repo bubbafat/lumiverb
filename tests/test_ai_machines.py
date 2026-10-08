@@ -101,6 +101,7 @@ def none(env):
 
     client, headers, *_ = env
     assert _model(env, "vision", "").status_code == 200
+    assert _model(env, "transcripts", "").status_code == 200
     for m in _ai(env)["machines"]:
         if m["built_in"]:
             r = client.patch(f"/v1/ai/machines/{m['machine_id']}", headers=headers, json={
@@ -651,3 +652,61 @@ def test_changing_the_transcripts_model_makes_transcripts_stale(env, none):
     r = client.get("/v1/producers", params={"counts": "false"}, headers=headers)
     settings = {p["artifact"]: p["settings"] for p in r.json()["producers"]}
     assert settings["transcript"]["model"] == "medium" and settings["vision"]["model"] == QWEN
+
+
+@pytest.mark.slow
+def test_a_job_already_without_a_machine_isnt_asked_about_on_other_machines(env, none):
+    """With the built-in off (transcripts left waiting on purpose), changing or
+    removing a machine that never did transcripts asks nothing."""
+    client, headers, *_ = env
+    built_in = _built_in(_ai(env))["machine_id"]
+    assert client.patch(f"/v1/ai/machines/{built_in}", params={"leave_jobs": True}, json={"enabled": False},
+                        headers=headers).status_code == 200
+    fake, _ = _machines({BRAIN: (QWEN,), STUDIO: (QWEN,)})
+    with fake:
+        _add(env, name="Brain")
+        _add(env, name="Studio", api_url=STUDIO)
+    studio = _machine(_ai(env), "Studio")["machine_id"]
+    r = client.patch(f"/v1/ai/machines/{studio}", json={"name": "Mac Studio", "at_once": 4}, headers=headers)
+    assert r.status_code == 200, r.text
+    assert client.delete(f"/v1/ai/machines/{studio}", headers=headers).status_code == 200
+    # Turning the built-in back on and off again still asks: it's the last doing transcripts.
+    client.patch(f"/v1/ai/machines/{built_in}", json={"enabled": True}, headers=headers)
+    r = client.patch(f"/v1/ai/machines/{built_in}", json={"enabled": False}, headers=headers)
+    assert r.status_code == 409 and r.json()["error"]["details"]["jobs"][0]["job"] == "transcripts"
+
+
+@pytest.mark.slow
+def test_the_built_in_takes_transcripts_back_only_with_a_model_it_knows(env, none):
+    client, headers, *_ = env
+    built_in = _built_in(_ai(env))["machine_id"]
+    fake, _ = _machines({SPEACHES: ("whisper-1",)})
+    with fake:
+        assert _model(env, "transcripts", "").status_code == 200
+        assert _add(env, name="Server", api_url=SPEACHES, jobs=["transcripts"]).status_code == 201
+        assert client.patch(f"/v1/ai/machines/{built_in}", json={"jobs": []}, headers=headers).status_code == 200
+        assert _model(env, "transcripts", "whisper-1").status_code == 200
+    r = client.patch(f"/v1/ai/machines/{built_in}", json={"jobs": ["transcripts"]}, headers=headers)
+    assert r.status_code == 409, r.text
+    assert r.json()["error"]["code"] == "model_not_offered" and r.json()["error"]["details"]["model"] == "whisper-1"
+
+
+@pytest.mark.slow
+def test_the_workers_report_of_a_server_is_kept_by_one_name(env, none):
+    client, *_ = env
+    fake, _ = _machines({SPEACHES: (SMALL_REPO,)})
+    with fake:
+        _add(env, name="Speaches", api_url=SPEACHES, jobs=["transcripts"])
+    sp = _machine(_ai(env), "Speaches")["machine_id"]
+    r = client.post(f"/v1/ai/machines/{sp}/status", json={"online": True, "models": [SMALL_REPO, LARGE_REPO, KOKORO]},
+                    headers=_key_with_role(env, "editor"))
+    assert r.status_code == 204
+    assert _machine(_ai(env), "Speaches")["status"]["models"] == ["large-v3", "small", KOKORO]
+
+
+@pytest.mark.slow
+def test_no_machine_can_take_the_built_ins_name(env, none):
+    fake, _ = _machines({SPEACHES: (SMALL_REPO,)})
+    with fake:
+        r = _add(env, name="Built in", api_url=SPEACHES, jobs=["transcripts"])
+    assert r.status_code == 409 and r.json()["error"]["code"] == "name_taken"

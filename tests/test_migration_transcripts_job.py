@@ -4,6 +4,8 @@ transcripts one at a time as the worker did, and the job's model starts at
 small, what every transcript so far was made with. A downgrade takes them
 away again. Runs Alembic against a throwaway testcontainers database only."""
 
+import hashlib
+
 import pytest
 from sqlalchemy import create_engine, text
 from testcontainers.postgres import PostgresContainer
@@ -41,7 +43,7 @@ def test_each_tenant_gets_its_built_in_whisper_and_small() -> None:
         assert [tuple(r) for r in built_in] == [
             ("ten_a", "Built in", "", "", ["transcripts"], 1, True, None),
             # A machine already had the name.
-            ("ten_b", "Built in (2)", "", "", ["transcripts"], 1, True, None),
+            ("ten_b", f"Built in ({hashlib.md5(b'ten_b').hexdigest()[:6]})", "", "", ["transcripts"], 1, True, None),
         ]
         assert models == {"ten_a": "small", "ten_b": "small"}
         assert first != "aim_gpu"

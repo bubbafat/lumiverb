@@ -34,7 +34,7 @@ def upgrade() -> None:
         " built_in, created_at)"
         " SELECT 'aim_' || substr(md5('built_in:' || t.tenant_id), 1, 22), t.tenant_id,"
         "   CASE WHEN EXISTS (SELECT 1 FROM ai_machines m WHERE m.tenant_id = t.tenant_id AND m.name = 'Built in')"
-        "        THEN 'Built in (2)' ELSE 'Built in' END,"
+        "        THEN 'Built in (' || substr(md5(t.tenant_id), 1, 6) || ')' ELSE 'Built in' END,"
         "   '', '', '[\"transcripts\"]'::jsonb, 1, true, true, t.created_at"
         " FROM tenants t"
     ))
