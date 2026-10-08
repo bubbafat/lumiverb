@@ -5,13 +5,14 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, field_validator
 from sqlmodel import Session
 
+from src.shared.io_utils import normalize_rel_path
 from src.server.api.dependencies import get_current_user_id, get_tenant_session
 from src.shared import asset_status
 from src.shared.io_utils import normalize_path_prefix
@@ -133,6 +134,11 @@ def _encode_cursor(sort_col: str, sort_value: object, asset_id: str) -> str:
 
 class BatchTrashRequest(BaseModel):
     asset_ids: list[str]
+    # "user": trashed by a person; survives rescans. "missing": the scanner
+    # no longer finds the file; restored if it reappears. Omitted = "missing"
+    # behavior (what scanners sent before reasons existed).
+    reason: Literal["user", "missing"] | None = None
+
 
 
 class BatchTrashResponse(BaseModel):
@@ -667,6 +673,7 @@ def get_asset_by_path(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> AssetResponse:
     """Return a single asset by library_id + rel_path. 404 if not found or trashed."""
+    rel_path = normalize_rel_path(rel_path)
     if getattr(request.state, "is_public_request", False):
         lib = LibraryRepository(session).get_by_id(library_id)
         if lib is None or not lib.is_public:
@@ -712,7 +719,7 @@ def batch_trash_assets(
 ) -> BatchTrashResponse:
     """Soft-delete multiple assets. Returns trashed and not_found lists. Quickwit delete is best-effort."""
     asset_repo = AssetRepository(session)
-    trashed_ids, not_found_ids = asset_repo.trash_many(body.asset_ids)
+    trashed_ids, not_found_ids = asset_repo.trash_many(body.asset_ids, reason=body.reason)
     if trashed_ids:
         try:
             from src.server.search.quickwit_client import QuickwitClient
@@ -768,9 +775,12 @@ def trash_asset(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> None:
-    """Soft-delete a single asset. 404 if not found or already trashed. Quickwit delete is best-effort."""
+    """Trash a single asset for the user; it stays trashed through rescans.
+
+    404 if not found or already trashed. Quickwit delete is best-effort.
+    """
     asset_repo = AssetRepository(session)
-    ok = asset_repo.trash(asset_id)
+    ok = asset_repo.trash(asset_id, reason="user")
     if not ok:
         raise HTTPException(status_code=404, detail="Asset not found or already trashed")
     tenant_id = getattr(request.state, "tenant_id", None)
@@ -1004,6 +1014,8 @@ def submit_batch_vision(
 class TranscriptSubmitRequest(BaseModel):
     srt: str
     language: str | None = None
+    # "manual" for a person's transcript; a provider id (e.g. "whisper") for
+    # machine output, which never replaces a manual one.
     source: str = "manual"
 
 
@@ -1029,11 +1041,16 @@ def submit_transcript(
     if asset.media_type != "video":
         raise HTTPException(status_code=400, detail="Transcripts are only supported for video assets")
 
+    # A person's transcript is human data: machine output never replaces it.
+    if body.source != "manual" and asset.transcript_source == "manual":
+        return TranscriptSubmitResponse(asset_id=asset_id, status="kept_manual")
+
     # Empty SRT = "checked, no speech" (e.g., silent video processed by Whisper)
     if not body.srt or not body.srt.strip():
         asset.transcript_srt = None
         asset.transcript_text = None
         asset.transcript_language = body.language
+        asset.transcript_source = body.source
         asset.transcribed_at = utcnow()
         asset.has_transcript = False
         asset.updated_at = utcnow()
@@ -1049,6 +1066,7 @@ def submit_transcript(
     asset.transcript_srt = body.srt
     asset.transcript_text = plain_text
     asset.transcript_language = body.language
+    asset.transcript_source = body.source
     asset.transcribed_at = utcnow()
     asset.has_transcript = bool(plain_text.strip())
     asset.updated_at = utcnow()
@@ -1112,6 +1130,7 @@ def delete_transcript(
     asset.transcript_srt = None
     asset.transcript_text = None
     asset.transcript_language = None
+    asset.transcript_source = None
     asset.transcribed_at = None
     asset.has_transcript = False
     asset.updated_at = utcnow()
@@ -1316,7 +1335,7 @@ def submit_batch_moves(
         if asset is None or asset.deleted_at is not None:
             skipped += 1
             continue
-        asset.rel_path = item.rel_path
+        asset.rel_path = normalize_rel_path(item.rel_path)
         asset.search_synced_at = None
         asset.updated_at = utcnow()
         session.add(asset)
@@ -1411,12 +1430,13 @@ def upsert_asset(
             raise HTTPException(status_code=400, detail="Invalid file_mtime format")
 
     asset_repo = AssetRepository(session)
-    existing = asset_repo.get_by_library_and_rel_path(body.library_id, body.rel_path)
+    rel_path = normalize_rel_path(body.rel_path)
+    existing = asset_repo.get_by_library_and_rel_path(body.library_id, rel_path)
 
     if existing is None:
         asset_repo.create_asset(
             library_id=body.library_id,
-            rel_path=body.rel_path,
+            rel_path=rel_path,
             file_size=body.file_size,
             file_mtime=file_mtime_dt,
             media_type=body.media_type,
@@ -1643,7 +1663,11 @@ def submit_faces(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> FaceSubmitResponse:
-    """Submit face detections for an asset. Replaces existing faces for the same model."""
+    """Submit face detections for an asset.
+
+    Faces the new detections re-find keep their ids and confirmed assignments;
+    confirmed faces that aren't re-found are kept. See FaceRepository.submit_faces.
+    """
     from src.server.repository.tenant import FaceRepository
 
     asset = AssetRepository(session).get_by_id(asset_id)
@@ -1674,7 +1698,8 @@ def submit_faces(
     # Bump library revision so UI reflects face_count changes
     LibraryRepository(session).bump_revision(asset.library_id)
 
-    return FaceSubmitResponse(face_count=len(face_ids), face_ids=face_ids)
+    session.refresh(asset)
+    return FaceSubmitResponse(face_count=asset.face_count or 0, face_ids=face_ids)
 
 
 @router.get("/{asset_id}/faces", response_model=FaceListResponse)

@@ -91,3 +91,8 @@ class _AuthClient:
         kwargs.setdefault("headers", {})
         kwargs["headers"].update(self._headers)
         return self._client.post(path, **kwargs)
+
+    def delete(self, path: str, **kwargs: object) -> object:
+        kwargs.setdefault("headers", {})
+        kwargs["headers"].update(self._headers)
+        return self._client.request("DELETE", path, **kwargs)

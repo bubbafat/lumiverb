@@ -140,6 +140,10 @@ class Asset(SQLModel, table=True):
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
+    # Why deleted_at is set: "user" (trashed by the user; survives rescans)
+    # or "missing" / None (file not found by the scanner; restored when it
+    # reappears).
+    deleted_reason: str | None = Field(default=None, nullable=True)
     search_synced_at: datetime | None = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
@@ -149,6 +153,9 @@ class Asset(SQLModel, table=True):
     transcript_srt: str | None = Field(default=None, nullable=True)
     transcript_text: str | None = Field(default=None, nullable=True)
     transcript_language: str | None = Field(default=None, nullable=True)
+    # "manual" or a provider id (e.g. "whisper"). Machine output never
+    # replaces a manual transcript.
+    transcript_source: str | None = Field(default=None, nullable=True)
     transcribed_at: datetime | None = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
@@ -424,6 +431,35 @@ class Person(SQLModel, table=True):
     representative_face_id: str | None = Field(
         default=None, foreign_key="faces.face_id", nullable=True
     )
+    created_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
+class IgnoredFile(SQLModel, table=True):
+    """A file whose trash the user emptied. Its asset row is gone, but scans
+    and ingest keep skipping the path while the file is still on disk."""
+
+    __tablename__ = "ignored_files"
+
+    library_id: str = Field(foreign_key="libraries.library_id", primary_key=True)
+    rel_path: str = Field(primary_key=True)
+    sha256: str | None = Field(default=None, nullable=True)
+    created_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
+class FacePersonRejection(SQLModel, table=True):
+    """"This face is not this person" — recorded when a user un-assigns a
+    face, so auto-assignment never puts it back."""
+
+    __tablename__ = "face_person_rejections"
+
+    face_id: str = Field(foreign_key="faces.face_id", primary_key=True)
+    person_id: str = Field(foreign_key="people.person_id", primary_key=True)
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),

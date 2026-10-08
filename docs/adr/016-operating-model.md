@@ -134,6 +134,18 @@ Proposed (not yet decided): whole-value overrides (a description, OCR text) win 
 | Storage asleep (Mac Studio off) | Proposed: enrichment continues from analysis proxies; only discovery, probing and rendering wait. |
 | Producer whose prerequisites can never exist | Disabled with a stated reason, not failing per asset. |
 
+Known limitations after phase 0 (accepted for now; each is a follow-up):
+
+| Limitation | Effect | Follow-up |
+|---|---|---|
+| A "not this person" on a face that re-detection doesn't find again is dropped with the face | If a later detection of the same face isn't paired, it can be auto-assigned to that person again | Narrow; revisit with region-anchored corrections (phase 3) |
+| Re-detection pairs a face with its old self only within embedding distance 0.4 | The same face seen more than 0.4 apart becomes a second face next to the kept confirmed one (nothing is lost); identical twins closer than 0.4 can still be paired | Tune the gate on real Apple Vision vs InsightFace data |
+| Trash is tracked by path | A trashed file that is renamed or moved on disk comes back as a new asset | Use the stored SHA-256 to recognise it |
+| The macOS scanner doesn't read the trashed list | It re-uploads trashed files and logs a 409 for each, every scan; no data changes | Fix in Swift, or moot once scanning moves to the brain (phase 2) |
+| Assets marked missing have no listing or purge UI | They wait, with their human data, until the file returns or someone purges them by id | A "missing files" view |
+| Two rows whose paths differ only in Unicode form are left as they are by the migration | The NFD one is marked missing on the next scan | Merge them by hand; the migration logs the count |
+| `recreate-search-indexes` and forced `search-sync` accept any tenant key | They only rebuild derived data | Require admin with the other upkeep routes |
+
 ## Code References
 
 Phase 0 targets, read from the repo on 2026-10-07:

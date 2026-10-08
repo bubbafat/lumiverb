@@ -97,7 +97,9 @@ def create_library_filter(
         asset_repo = AssetRepository(session)
         matching_ids = asset_repo.list_ids_matching_pattern(library_id, body.pattern)
         if matching_ids:
-            trashed_ids, _ = asset_repo.trash_many(matching_ids)
+            # The user chose to trash what the filter excludes: user trash, which
+            # stays trashed if the filter is later removed.
+            trashed_ids, _ = asset_repo.trash_many(matching_ids, reason="user")
             trashed_count = len(trashed_ids)
             LibraryRepository(session).bump_revision(library_id)
 

@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from PIL import Image
 from sqlmodel import Session
 
+from src.shared.io_utils import normalize_rel_path
 from src.server.api.dependencies import get_tenant_session
 from src.shared import asset_status
 from src.shared.path_filter import PathFilter, is_path_included_merged
@@ -323,6 +324,7 @@ async def create_and_ingest(
         raise HTTPException(status_code=400, detail="Proxy file is empty")
 
     tenant_id: str = request.state.tenant_id
+    rel_path = normalize_rel_path(rel_path)
 
     # Validate library
     lib_repo = LibraryRepository(session)
@@ -361,6 +363,11 @@ async def create_and_ingest(
     created = False
 
     if existing is None:
+        if asset_repo.is_ignored(library_id, rel_path):
+            raise HTTPException(
+                status_code=409,
+                detail=f"File was removed from the library (trash emptied): {rel_path}",
+            )
         asset = asset_repo.create_asset(
             library_id=library_id,
             rel_path=rel_path,
@@ -371,16 +378,25 @@ async def create_and_ingest(
         asset_id = asset.asset_id
         created = True
     else:
+        # The user's trash is human data: a rescan of a file still on disk
+        # never undoes it. Scanners skip these via
+        # GET /v1/libraries/{id}/ignored-paths.
+        if existing.deleted_at is not None and existing.deleted_reason == "user":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Asset is in the trash: {rel_path}",
+            )
         asset_id = existing.asset_id
         # Update file metadata if changed
         existing.file_size = file_size
         if file_mtime_dt is not None:
             existing.file_mtime = file_mtime_dt
         existing.media_type = media_type
-        # Re-ingesting a soft-deleted asset restores it. Without this,
-        # the asset stays invisible (active_assets filters deleted_at)
-        # and the scanner re-discovers it every cycle.
+        # A file the scanner marked missing has reappeared: restore it.
+        # Without this, the asset stays invisible (active_assets filters
+        # deleted_at) and the scanner re-discovers it every cycle.
         existing.deleted_at = None
+        existing.deleted_reason = None
         session.add(existing)
 
     result = _do_ingest(

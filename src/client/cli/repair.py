@@ -560,7 +560,9 @@ def _generate_proxy_for_item(
             return item  # no hash to check, trust the cache
 
     if root_path is not None:
-        source = root_path / rel_path
+        from src.shared.io_utils import resolve_source_path
+
+        source = resolve_source_path(root_path, rel_path)
         if source.is_file():
             if expected_hash:
                 from src.client.workers.exif_extract import compute_sha256
@@ -1091,6 +1093,7 @@ def run_repair(
 
             # Transcription needs source files (for audio extraction)
             from pathlib import Path as _Path
+            from src.shared.io_utils import resolve_source_path
             root_path_str = library.get("root_path")
             lib_root = _Path(root_path_str).resolve() if root_path_str else None
             if lib_root and not lib_root.is_dir():
@@ -1106,7 +1109,7 @@ def run_repair(
                     asset_id = a["asset_id"]
 
                     # Resolve source file
-                    source_path = lib_root / rel_path if lib_root else None
+                    source_path = resolve_source_path(lib_root, rel_path) if lib_root else None
                     if source_path is None or not source_path.exists():
                         logger.warning("Source file not found for %s: %s", asset_id, rel_path)
                         with stats.lock:

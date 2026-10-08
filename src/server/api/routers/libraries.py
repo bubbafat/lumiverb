@@ -49,6 +49,26 @@ class EmptyTrashResponse(BaseModel):
     deleted: int
 
 
+class IgnoredPathItem(BaseModel):
+    rel_path: str
+    # "trashed": in the trash by the user's choice. "emptied": the user
+    # emptied its trash; the file may still be on disk.
+    reason: str
+
+
+class IgnoredPathPage(BaseModel):
+    items: list[IgnoredPathItem]
+    next_cursor: str | None
+
+
+class UnignoreRequest(BaseModel):
+    rel_paths: list[str]
+
+
+class UnignoreResponse(BaseModel):
+    removed: int
+
+
 class DirectoryItem(BaseModel):
     name: str
     path: str
@@ -268,6 +288,43 @@ def delete_library(
     if was_public:
         with get_control_session() as ctrl_session:
             PublicLibraryRepository(ctrl_session).delete(library_id)
+
+
+@router.get("/{library_id}/ignored-paths", response_model=IgnoredPathPage)
+def page_ignored_paths(
+    library_id: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    after: str | None = None,
+    limit: int = 500,
+) -> IgnoredPathPage:
+    """Paths a scan must skip because the user trashed them, by rel_path.
+
+    Lumiverb never deletes originals, so these files may still be on disk.
+    Ingest refuses them with 409.
+    """
+    if LibraryRepository(session).get_by_id(library_id) is None:
+        raise HTTPException(status_code=404, detail="Library not found")
+    limit = max(1, min(limit, 1000))
+    rows = AssetRepository(session).page_ignored_paths(library_id, after=after, limit=limit)
+    return IgnoredPathPage(
+        items=[IgnoredPathItem(rel_path=p, reason=k) for p, k in rows],
+        next_cursor=rows[-1][0] if len(rows) == limit else None,
+    )
+
+
+@router.delete("/{library_id}/ignored-paths", response_model=UnignoreResponse)
+def unignore_paths(
+    library_id: str,
+    body: UnignoreRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
+) -> UnignoreResponse:
+    """Forget emptied-trash records so the next scan ingests those files again.
+
+    Assets still in the trash are restored with POST /v1/assets/{id}/restore instead.
+    """
+    removed = AssetRepository(session).unignore(library_id, body.rel_paths)
+    return UnignoreResponse(removed=removed)
 
 
 @router.get("/{library_id}/directories", response_model=list[DirectoryItem])

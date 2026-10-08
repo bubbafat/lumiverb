@@ -1,16 +1,16 @@
 """Slow tests for the redetection → representative_face_id healing path.
 
-When the macOS / CLI face provider re-runs detection on an asset that
-already has named-person faces, ``FaceRepository.submit_faces`` deletes
-all old face rows and inserts new ones with new ULIDs. The previous
-representative face for any affected person is therefore orphaned. This
-file pins the two healing mechanisms:
+When the macOS / CLI face provider re-runs detection on an asset,
+``FaceRepository.submit_faces`` updates the faces it re-finds in place
+(same face_id) and deletes unconfirmed faces it doesn't re-find. A
+person whose representative face was deleted would be left orphaned.
+This file pins:
 
-1. **Eager**: ``submit_faces`` re-picks a representative for every
-   affected person from its current ``face_person_matches`` rows
-   *inside the same transaction*. Verified by re-detecting and then
-   reading the person row directly — the representative must be a
-   freshly-created face_id, not the old one.
+1. **Re-found**: a re-found representative face keeps its id, so the
+   person's representative stays valid with no healing needed.
+2. **Eager**: ``submit_faces`` re-picks a representative for every
+   person whose representative face it deleted, from that person's
+   remaining ``face_person_matches`` rows, *inside the same transaction*.
 
 2. **Lazy**: ``GET /v1/people`` backfills ``representative_face_id``
    for any person that ended up NULL. Verified by manually nulling
@@ -204,19 +204,13 @@ def _read_representative(tenant_url: str, person_id: str) -> str | None:
 
 
 @pytest.mark.slow
-def test_redetection_repicks_representative_face(people_client) -> None:
-    """submit_faces should leave each affected person with a current
-    representative_face_id pointing to one of the freshly-inserted
-    faces — never NULL, never the orphaned old id."""
+def test_redetection_keeps_refound_representative_face(people_client) -> None:
+    """A re-found face keeps its id, so the representative stays put."""
     auth_client, library_id, tenant_url = people_client
     asset_id, person_id, old_face_id = _seed_named_person_with_face(
-        tenant_url, library_id, idx=11, name="RepRepick"
+        tenant_url, library_id, idx=11, name="RepKeep"
     )
 
-    assert _read_representative(tenant_url, person_id) == old_face_id
-
-    # Re-submit face detection for the same asset with the same
-    # embedding so the auto-assign-by-centroid path matches.
     r = auth_client.post(
         f"/v1/assets/{asset_id}/faces",
         json={
@@ -232,22 +226,89 @@ def test_redetection_repicks_representative_face(people_client) -> None:
         },
     )
     assert r.status_code == 201, (r.status_code, r.text)
+    assert r.json()["face_ids"] == [old_face_id]
+    assert _read_representative(tenant_url, person_id) == old_face_id
 
-    new_rep = _read_representative(tenant_url, person_id)
-    assert new_rep is not None, "redetection left representative_face_id NULL"
-    assert new_rep != old_face_id, "redetection failed to refresh representative"
-    # And the new rep must really exist in faces
+
+@pytest.mark.slow
+def test_redetection_repicks_representative_face(people_client) -> None:
+    """When re-detection deletes a person's representative face (machine-
+    matched, not re-found), submit_faces re-picks one of the person's
+    remaining faces — never NULL, never the orphaned old id."""
+    auth_client, library_id, tenant_url = people_client
+    other_asset_id, person_id, other_face_id = _seed_named_person_with_face(
+        tenant_url, library_id, idx=13, name="RepRepick"
+    )
+
+    # A second asset whose face was auto-matched to the person and is
+    # the person's representative.
     engine = create_engine(tenant_url, future=True)
     try:
         with Session(engine) as session:
-            row = session.execute(
-                text("SELECT face_id, asset_id FROM faces WHERE face_id = :fid"),
-                {"fid": new_rep},
-            ).first()
-            assert row is not None, "new representative points at a missing face row"
-            assert row[1] == asset_id
+            asset_id = "ast_" + uuid.uuid4().hex[:20]
+            rep_face_id = "face_" + uuid.uuid4().hex[:20]
+            session.execute(
+                text(
+                    "INSERT INTO assets (asset_id, library_id, rel_path, file_size,"
+                    " media_type, availability, status, created_at, updated_at)"
+                    " VALUES (:id, :lib, :rp, 1000, 'image', 'online', 'discovered',"
+                    "         NOW(), NOW())"
+                ),
+                {"id": asset_id, "lib": library_id, "rp": "x/RepRepick-2.jpg"},
+            )
+            session.execute(
+                text(
+                    "INSERT INTO faces (face_id, asset_id, bounding_box_json,"
+                    " detection_confidence, detection_model, detection_model_version,"
+                    " embedding_vector, created_at)"
+                    " VALUES (:fid, :aid, CAST(:box AS jsonb), 0.99, 'insightface',"
+                    "         'buffalo_l', CAST(:v AS vector), NOW())"
+                ),
+                {
+                    "fid": rep_face_id,
+                    "aid": asset_id,
+                    "box": '{"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2}',
+                    "v": _emb_to_pgvector(_orthogonal_512(13)),
+                },
+            )
+            session.execute(
+                text(
+                    "INSERT INTO face_person_matches (match_id, face_id, person_id,"
+                    " confidence, confirmed, created_at)"
+                    " VALUES (:mid, :fid, :pid, 0.9, false, NOW())"
+                ),
+                {"mid": "fpm_" + uuid.uuid4().hex[:16], "fid": rep_face_id, "pid": person_id},
+            )
+            session.execute(
+                text("UPDATE people SET representative_face_id = :fid WHERE person_id = :pid"),
+                {"fid": rep_face_id, "pid": person_id},
+            )
+            session.commit()
     finally:
         engine.dispose()
+
+    # Re-detection finds a different face elsewhere in the frame.
+    r = auth_client.post(
+        f"/v1/assets/{asset_id}/faces",
+        json={
+            "detection_model": "apple_vision",
+            "detection_model_version": "1",
+            "faces": [
+                {
+                    "bounding_box": {"x1": 0.6, "y1": 0.6, "x2": 0.8, "y2": 0.8},
+                    "detection_confidence": 0.92,
+                    "embedding": _orthogonal_512(14),
+                }
+            ],
+        },
+    )
+    assert r.status_code == 201, (r.status_code, r.text)
+
+    new_rep = _read_representative(tenant_url, person_id)
+    assert new_rep is not None, "redetection left representative_face_id NULL"
+    assert new_rep != rep_face_id, "redetection kept a deleted representative"
+    assert new_rep == other_face_id
+    assert other_asset_id != asset_id
 
 
 @pytest.mark.slow

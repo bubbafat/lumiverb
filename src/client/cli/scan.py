@@ -46,6 +46,7 @@ from src.client.cli.ingest import (
 )
 from src.client.proxy.proxy_cache import ProxyCache
 from src.client.workers.exif_extract import compute_sha256
+from src.shared.io_utils import resolve_source_path
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,7 @@ class _ServerAsset:
     sha256: str | None
     file_size: int | None = None
     file_mtime: str | None = None  # ISO8601 string from server
+    media_type: str | None = None
 
 
 def _fetch_existing_assets_with_sha(
@@ -95,11 +97,44 @@ def _fetch_existing_assets_with_sha(
                 sha256=a.get("sha256"),
                 file_size=a.get("file_size"),
                 file_mtime=a.get("file_mtime"),
+                media_type=a.get("media_type"),
             )
         cursor = data.get("next_cursor")
         if not cursor:
             break
     return existing
+
+
+def _fetch_ignored_paths(client: LumiverbClient, library_id: str) -> set[str]:
+    """rel_paths the user trashed (or emptied from the trash). Scans skip them:
+    Lumiverb never deletes originals, so they may still be on disk."""
+    paths: set[str] = set()
+    cursor: str | None = None
+    while True:
+        params: dict[str, str] = {"limit": "1000"}
+        if cursor:
+            params["after"] = cursor
+        data = client.get(f"/v1/libraries/{library_id}/ignored-paths", params=params).json()
+        paths.update(item["rel_path"] for item in data.get("items", []))
+        cursor = data.get("next_cursor")
+        if not cursor:
+            return paths
+
+
+# Same threshold as the macOS scanner (ScanPipeline.swift): a scan that
+# would delete more than 50 files AND more than 5% of the library's assets
+# skips deletions. A half-mounted volume looks exactly like that.
+MASS_DELETE_MIN_FILES = 50
+MASS_DELETE_MIN_FRACTION = 0.05
+
+
+def _deletion_guard_trips(deleting: int, on_server: int) -> bool:
+    """True when deleting this many of the server's assets looks like a mount problem."""
+    return (
+        deleting > MASS_DELETE_MIN_FILES
+        and on_server > 0
+        and deleting / on_server > MASS_DELETE_MIN_FRACTION
+    )
 
 
 def _split_files(
@@ -233,7 +268,7 @@ def _detect_moves(
 
     try:
         for f in candidates:
-            source_path = root_path / f["rel_path"]
+            source_path = resolve_source_path(root_path, f["rel_path"])
             source_sha = compute_sha256(source_path)
             f["source_sha256"] = source_sha
 
@@ -309,7 +344,7 @@ def _scan_one(
     Works for both new and changed files.
     """
     rel_path = f["rel_path"]
-    source_path = (root_path / rel_path).resolve()
+    source_path = resolve_source_path(root_path, rel_path).resolve()
     if not source_path.is_relative_to(root_path):
         logger.warning("Skipping %s: escapes library root", rel_path)
         with stats.lock:
@@ -383,7 +418,7 @@ def _scan_one_video(
 ) -> None:
     """Scan a single video: poster frame + EXIF + 10-sec preview → upload → cache."""
     rel_path = f["rel_path"]
-    source_path = (root_path / rel_path).resolve()
+    source_path = resolve_source_path(root_path, rel_path).resolve()
     if not source_path.is_relative_to(root_path):
         logger.warning("Skipping %s: escapes library root", rel_path)
         with stats.lock:
@@ -562,6 +597,7 @@ def run_scan(
     allow_moves: bool = False,
     skip_moves: bool = False,
     thorough: bool = False,
+    allow_mass_delete: bool = False,
     console: Console,
 ) -> ScanStats:
     """Discover files, compute SHA, extract EXIF, generate proxies, upload.
@@ -604,6 +640,13 @@ def run_scan(
     existing = _fetch_existing_assets_with_sha(client, library_id)
     console.print(f"Server has {len(existing):,} existing assets")
 
+    ignored = _fetch_ignored_paths(client, library_id)
+    if ignored:
+        before = len(local_files)
+        local_files = [f for f in local_files if f["rel_path"] not in ignored]
+        if before > len(local_files):
+            console.print(f"Skipping {before - len(local_files):,} file(s) you trashed")
+
     # Split files: new (not on server by path) vs existing (need SHA check)
     # Default (fast): mtime+size match skips hashing. --thorough forces SHA on all.
     new_files, needs_hash, fast_unchanged = _split_files(
@@ -611,8 +654,20 @@ def run_scan(
     )
     local_rel_paths = {f["rel_path"] for f in local_files}
 
+    # Deletions, and the mass-deletion guard, only consider what this scan
+    # covers: a `--media-type image` scan doesn't see videos on disk, so it
+    # must not count them as gone.
+    scope = existing
+    if media_type_filter != "all":
+        scope = {rp: sa for rp, sa in existing.items() if sa.media_type == media_type_filter}
+    if path_prefix:
+        prefix_dir = path_prefix.rstrip("/") + "/"
+        scope_size = sum(1 for rp in scope if rp.startswith(prefix_dir))
+    else:
+        scope_size = len(scope)
+
     # Detect deletions first (needed to scope move detection)
-    deleted_ids = _detect_deletions(local_files, existing, root_path, path_prefix)
+    deleted_ids = _detect_deletions(local_files, scope, root_path, path_prefix)
 
     # --- Move detection ---
     # Only check for moves when: there are new files, there are deletions
@@ -667,6 +722,20 @@ def run_scan(
         console.print(f"[dim]Skipping {len(deleted_ids):,} deletions (--skip-moves)[/dim]")
         deleted_ids = []
 
+    if (
+        deleted_ids
+        and not allow_mass_delete
+        and _deletion_guard_trips(len(deleted_ids), scope_size)
+    ):
+        pct = 100 * len(deleted_ids) / scope_size
+        console.print(
+            f"[yellow]Skipping {len(deleted_ids):,} deletions: {pct:.0f}% of the "
+            f"{scope_size:,} assets this scan covers aren't on disk, which usually means "
+            "the volume isn't fully mounted. If the files really are gone, re-run "
+            "with --allow-mass-delete.[/yellow]"
+        )
+        deleted_ids = []
+
     # For skipped moves (via prompt choice): moved files don't participate.
     # New paths already removed from new_files by _detect_moves.
     # Old paths already removed from deleted_ids above.
@@ -687,7 +756,7 @@ def run_scan(
                 tid = hash_progress.add_task("Hashing", total=len(needs_hash))
                 for f in needs_hash:
                     server = f.pop("_server")
-                    source_sha = compute_sha256(root_path / f["rel_path"])
+                    source_sha = compute_sha256(resolve_source_path(root_path, f["rel_path"]))
                     if force or (source_sha and server.sha256 != source_sha):
                         changed_files.append(f)
                     else:
@@ -715,7 +784,8 @@ def run_scan(
         console.print(f"Removing {len(deleted_ids):,} assets no longer on disk...")
         for batch_start in range(0, len(deleted_ids), 500):
             batch = deleted_ids[batch_start : batch_start + 500]
-            client.delete("/v1/assets", json={"asset_ids": batch})
+            # "missing", not the user's trash: restored if the file reappears.
+            client.delete("/v1/assets", json={"asset_ids": batch, "reason": "missing"})
         stats.deleted = len(deleted_ids)
 
     # Pipeline: scan new files immediately while hashing existing files
@@ -774,7 +844,7 @@ def run_scan(
         # Unchanged files skip scanning (advance progress bar only).
         for f in needs_hash:
             server = f.pop("_server")
-            source_sha = compute_sha256(root_path / f["rel_path"])
+            source_sha = compute_sha256(resolve_source_path(root_path, f["rel_path"]))
             f["source_sha256"] = source_sha
 
             if force or (source_sha and server.sha256 != source_sha):

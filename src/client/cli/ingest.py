@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import threading
+import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -447,7 +448,9 @@ def _walk_library(
         if ext not in SUPPORTED_EXTENSIONS:
             continue
 
-        rel_path = str(p.relative_to(root_path))
+        # NFC, as the macOS scanner stores it: one identity per file whichever
+        # machine scans it. Disk access goes through resolve_source_path.
+        rel_path = unicodedata.normalize("NFC", str(p.relative_to(root_path)))
 
         if has_filters and not is_path_included_merged(rel_path, t_filters, l_filters):
             continue

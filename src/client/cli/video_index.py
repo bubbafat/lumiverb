@@ -23,6 +23,7 @@ from rich.progress import Progress
 from src.client.cli.client import LumiverbClient
 from src.client.video.clip_extractor import extract_video_frame_detailed
 from src.client.video.scene_segmenter import SceneSegmenter
+from src.shared.io_utils import resolve_source_path
 from src.client.video.video_scanner import SyncError, VideoScanner
 
 logger = logging.getLogger(__name__)
@@ -157,7 +158,7 @@ def run_video_index(
         asset_id = video["asset_id"]
         rel_path = video["rel_path"]
         duration_sec = video["duration_sec"]
-        source_path = (root_path / rel_path).resolve()
+        source_path = resolve_source_path(root_path, rel_path).resolve()
 
         if not source_path.is_file():
             logger.warning("video-index: %s — source file not found, skipping", rel_path)
@@ -321,7 +322,7 @@ def run_video_enrich(
     for video in videos:
         asset_id = video["asset_id"]
         rel_path = video["rel_path"]
-        source_path = (root_path / rel_path).resolve()
+        source_path = resolve_source_path(root_path, rel_path).resolve()
 
         if not source_path.is_file():
             logger.warning("scene-enrich: %s — source file not found, skipping", rel_path)
