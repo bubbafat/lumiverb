@@ -100,6 +100,7 @@ def _scan_with(
     """run_scan with `on_server` images on the server, of which `on_disk` are on disk unchanged."""
     root = tmp_path / "lib"
     root.mkdir(exist_ok=True)
+    (root / "f0.jpg").touch()  # a library on a mounted share has something in it
     if local is None:
         local = [
             {"rel_path": f"f{i}.jpg", "file_size": 4, "file_mtime": None, "media_type": "image", "ext": ".jpg"}
@@ -120,7 +121,7 @@ def _scan_with(
         patch("src.client.cli.scan._split_files", split or MagicMock(return_value=([], [], local))),
         patch("src.client.cli.scan._populate_cache_for_unchanged"),
     ):
-        run_scan(
+        client.scan_stats = run_scan(
             client,
             {"library_id": "lib_1", "root_path": str(root)},
             console=Console(quiet=True),
@@ -139,6 +140,58 @@ def _deleted_ids(client: MagicMock) -> list[str]:
             assert call.kwargs["json"]["reason"] == "missing"
             ids.extend(call.kwargs["json"]["asset_ids"])
     return ids
+
+
+@pytest.mark.fast
+def test_a_mount_gone_when_files_look_missing_stops_the_scan(tmp_path: Path) -> None:
+    """Files that look missing make the scan check the mount again; if it has
+    gone (a network drop, a clean unmount mid-walk), the scan stops and
+    archives nothing (Robert's rule, Oct 8). The worker keeps the changes."""
+    root = tmp_path / "lib"
+    with patch("src.client.cli.scan.reachable_root", side_effect=[root, None]) as probe:
+        client = _scan_with(tmp_path, on_disk=10, on_server=100, allow_mass_delete=True)
+
+    assert _deleted_ids(client) == []
+    assert client.scan_stats.root_unreachable
+    assert probe.call_args_list[1].kwargs == {"require_entries": True}
+
+
+@pytest.mark.fast
+def test_files_missing_from_a_mount_still_there_are_archived(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    with patch("src.client.cli.scan.reachable_root", side_effect=[root, root]):
+        client = _scan_with(tmp_path, on_disk=10, on_server=100, allow_mass_delete=True)
+
+    assert len(_deleted_ids(client)) == 90
+    assert not client.scan_stats.root_unreachable
+
+
+@pytest.mark.fast
+def test_a_scan_with_nothing_missing_doesnt_check_the_mount_again(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    with patch("src.client.cli.scan.reachable_root", return_value=root) as probe:
+        _scan_with(tmp_path, on_disk=100, on_server=100)
+
+    assert probe.call_count == 1
+
+
+@pytest.mark.fast
+def test_an_unmounted_share_mid_scan_archives_nothing(tmp_path: Path, monkeypatch) -> None:
+    """End to end through the real mount check: fstab lists the share, and by
+    the time the scan has files to archive it isn't mounted any more."""
+    from src.client.cli import roots
+
+    root = tmp_path / "lib"
+    fstab = tmp_path / "fstab"
+    fstab.write_text(f"//nas/share {root} cifs soft 0 0\n")
+    monkeypatch.setattr(roots, "FSTAB", fstab)
+    mounted = iter([True, False])
+    monkeypatch.setattr(roots.os.path, "ismount", lambda p: next(mounted) if str(p) == str(root) else False)
+
+    client = _scan_with(tmp_path, on_disk=10, on_server=100, allow_mass_delete=True)
+
+    assert _deleted_ids(client) == []
+    assert client.scan_stats.root_unreachable
 
 
 @pytest.mark.fast
