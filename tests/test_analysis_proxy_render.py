@@ -317,6 +317,13 @@ def test_settings_shape_the_command() -> None:
 from src.client.video import analysis_proxy as AP  # noqa: E402
 
 needs_vulkan = pytest.mark.skipif(not AP._vulkan_decodes(), reason="no Vulkan video decoding here")
+_real_gpu_has_room = AP._gpu_has_room
+
+
+@pytest.fixture(autouse=True)
+def _room_on_the_gpu(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Renders here never depend on how full this machine's GPU is right now."""
+    monkeypatch.setattr(AP, "_gpu_has_room", lambda: True)
 
 
 def _frame_hashes(path: Path) -> list[str]:
@@ -344,8 +351,8 @@ def _recording_ffmpeg(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
 def test_the_decoder_is_this_machines_and_doesnt_change_what_is_made() -> None:
     # H.264 and HEVC decoding is exact, so where it happens is a machine
     # choice like the encoder: never tracked, never set by the server.
-    s = AnalysisProxySettings.for_producer({"max_edge": 640, "decoder": "cpu"}, "libx264", "cuda")
-    assert (s.max_edge, s.encoder, s.decoder) == (640, "libx264", "cuda")
+    s = AnalysisProxySettings.for_producer({"max_edge": 640, "decoder": "cpu", "gpu_decodes": 9}, "libx264", "cuda", 2)
+    assert (s.max_edge, s.encoder, s.decoder, s.gpu_decodes) == (640, "libx264", "cuda", 2)
     assert "decoder" not in s.output() and "encoder" not in s.output()
     assert AnalysisProxySettings.for_producer({"decoder": "cpu"}, "libx264").decoder == "auto"
 
@@ -404,10 +411,103 @@ def test_decoding_on_the_cpu_never_asks_for_the_gpu(tmp_path: Path, monkeypatch:
     assert ran and not any("-hwaccel" in cmd for cmd in ran)
 
 
+def _fake_renders(monkeypatch: pytest.MonkeyPatch, seconds: float = 0.3) -> tuple[list, list]:
+    """_run records whether each render decoded on the GPU, and how many did at once."""
+    import threading
+
+    used: list[str | None] = []
+    most = [0]
+    now = [0]
+    lock = threading.Lock()
+
+    def run(source, part, settings, tracks, timeout, hwaccel=None):
+        with lock:
+            used.append(hwaccel)
+            if hwaccel:
+                now[0] += 1
+                most[0] = max(most[0], now[0])
+        time.sleep(seconds)
+        with lock:
+            if hwaccel:
+                now[0] -= 1
+        part.write_bytes(b"proxy")
+
+    monkeypatch.setattr(AP, "audio_tracks", lambda source: [])
+    monkeypatch.setattr(AP, "_run", run)
+    return used, most
+
+
+@pytest.mark.fast
+def test_one_gpu_decode_at_a_time_and_the_rest_on_the_cpu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # One saturates the 3080's video decoder, and each holds video memory the
+    # vision model and Whisper need: the others decode on the CPU meanwhile.
+    from concurrent.futures import ThreadPoolExecutor
+
+    used, most = _fake_renders(monkeypatch)
+    with ThreadPoolExecutor(3) as pool:
+        list(pool.map(lambda i: render_analysis_proxy(tmp_path / f"{i}.mov", tmp_path / f"{i}.mp4",
+                                                      AnalysisProxySettings(decoder="vulkan")), range(3)))
+    assert most[0] == 1
+    assert used.count("vulkan") == 1 and used.count(None) == 2
+    # Free again afterwards.
+    render_analysis_proxy(tmp_path / "x.mov", tmp_path / "x.mp4", AnalysisProxySettings(decoder="vulkan"))
+    assert used[-1] == "vulkan"
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("slots", [2, 0])
+def test_how_many_decode_on_the_gpu_at_once_is_this_machines_choice(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, slots: int) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    used, most = _fake_renders(monkeypatch)
+    settings = AnalysisProxySettings(decoder="vulkan", gpu_decodes=slots)
+    with ThreadPoolExecutor(3) as pool:
+        list(pool.map(lambda i: render_analysis_proxy(tmp_path / f"{i}.mov", tmp_path / f"{i}.mp4", settings), range(3)))
+    assert most[0] == slots and used.count("vulkan") == slots
+    assert "gpu_decodes" not in settings.output()
+
+
+@pytest.mark.fast
+def test_without_room_on_the_gpu_the_cpu_decodes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    used, _ = _fake_renders(monkeypatch, seconds=0)
+    monkeypatch.setattr(AP, "_gpu_has_room", lambda: False)
+    render_analysis_proxy(tmp_path / "a.mov", tmp_path / "a.mp4", AnalysisProxySettings(decoder="vulkan"))
+    assert used == [None]
+    # The GPU's turn isn't kept by a render that didn't use it.
+    monkeypatch.setattr(AP, "_gpu_has_room", lambda: True)
+    render_analysis_proxy(tmp_path / "b.mov", tmp_path / "b.mp4", AnalysisProxySettings(decoder="vulkan"))
+    assert used == [None, "vulkan"]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("answer,room", [
+    ((0, "4096\n"), True),
+    ((0, "900\n"), False),
+    ((0, "900\n6000\n"), False),  # the first GPU is the one ffmpeg picks
+    ((9, ""), True),  # nvidia-smi failed: nothing to go by, try
+    ((0, "[N/A]\n"), True),
+    (FileNotFoundError(), True),  # not NVIDIA: nothing to go by, try
+])
+def test_room_on_the_gpu_is_its_free_memory(monkeypatch: pytest.MonkeyPatch, answer, room: bool) -> None:
+    import types
+
+    def run(cmd, *args, **kwargs):
+        assert cmd[0] == "nvidia-smi"
+        if isinstance(answer, Exception):
+            raise answer
+        return types.SimpleNamespace(returncode=answer[0], stdout=answer[1])
+
+    monkeypatch.setattr(AP.subprocess, "run", run)
+    assert _real_gpu_has_room() is room
+
+
 @needs_vulkan
 @pytest.mark.fast
 def test_the_gpu_makes_the_same_proxy_as_the_cpu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # 10-bit HEVC turned on its side, like the brain's camera and phone files.
+    if not _real_gpu_has_room():
+        pytest.skip("the GPU is too full right now to decode beside what's on it")
     flat = _make(tmp_path / "flat.mp4", extra=["-c:v", "libx265", "-pix_fmt", "yuv420p10le",
                                                "-x265-params", "log-level=error"])
     src = tmp_path / "portrait.mov"

@@ -16,7 +16,9 @@ Decoding a 4K HEVC original is most of a render. Where ffmpeg and the GPU
 can, the GPU decodes (Vulkan by default): about four times faster on the
 brain, with the same pictures, since decoding is exact. ffmpeg itself
 decodes on the CPU what the GPU can't (ProRes, 4:2:2), and a render whose
-GPU decoding fails runs again on the CPU.
+GPU decoding fails runs again on the CPU. One render at a time decodes on
+the GPU, and only while it has room beside the models using it; the rest
+decode on the CPU meanwhile.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from __future__ import annotations
 import functools
 import logging
 import subprocess
+import threading
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
@@ -55,21 +58,25 @@ class AnalysisProxySettings:
     audio_kbps_per_channel: int = 48
     # "auto" (Vulkan when it works here), "cpu", or an ffmpeg hwaccel name.
     decoder: str = "auto"
+    # Renders that decode on the GPU at once (the rest on the CPU meanwhile).
+    gpu_decodes: int = 1
 
     @classmethod
-    def for_producer(cls, settings: Mapping[str, Any], encoder: str, decoder: str = "auto") -> AnalysisProxySettings:
+    def for_producer(cls, settings: Mapping[str, Any], encoder: str, decoder: str = "auto",
+                     gpu_decodes: int = 1) -> AnalysisProxySettings:
         """The account's settings (GET /v1/producers), rendered with this
         machine's encoder and decoder. Settings this version doesn't know are left out."""
         known = {f.name for f in fields(cls)} - set(MACHINE_CHOICES)
-        return cls(**{k: v for k, v in settings.items() if k in known}, encoder=encoder, decoder=decoder)
+        return cls(**{k: v for k, v in settings.items() if k in known}, encoder=encoder, decoder=decoder,
+                   gpu_decodes=gpu_decodes)
 
     def output(self) -> dict[str, Any]:
         """What lineage hashes: everything but this machine's way of
-        rendering (encoder and decoder), like an endpoint."""
+        rendering (encoder, decoder, GPU decodes), like an endpoint."""
         return {k: v for k, v in asdict(self).items() if k not in MACHINE_CHOICES}
 
 
-MACHINE_CHOICES = ("encoder", "decoder")
+MACHINE_CHOICES = ("encoder", "decoder", "gpu_decodes")
 
 
 @functools.cache
@@ -85,6 +92,37 @@ def _vulkan_decodes() -> bool:
     except (subprocess.SubprocessError, OSError):
         return False
     return result.returncode == 0
+
+
+# How many renders decode on the GPU at once is this machine's choice
+# (gpu_decodes in its config, default 1): one nearly saturates the brain's
+# video decoder (a 3080's NVDEC at 100% with three, each a third as fast),
+# and each holds a few hundred MB of video memory that the vision model and
+# Whisper need more; three at once ran the vision model out of memory. The
+# others decode on the CPU meanwhile.
+@functools.cache
+def _gpu_slots(count: int) -> threading.BoundedSemaphore:
+    return threading.BoundedSemaphore(count)
+
+
+# What a GPU decode leaves free for the models beside it to grow into.
+GPU_DECODE_MIN_FREE_MB = 1536
+
+
+def _gpu_has_room() -> bool:
+    """Whether the GPU has room for a decode beside the models using it: free
+    memory on the first NVIDIA GPU (the one ffmpeg picks). Without nvidia-smi,
+    or an answer from it, there's nothing to go by: try."""
+    try:
+        result = subprocess.run(["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+                                capture_output=True, text=True, timeout=10, check=False)
+    except (subprocess.SubprocessError, OSError):
+        return True
+    lines = result.stdout.split() if result.returncode == 0 else []
+    try:
+        return int(lines[0]) >= GPU_DECODE_MIN_FREE_MB
+    except (IndexError, ValueError):
+        return True
 
 
 def gpu_decoder(choice: str) -> str | None:
@@ -198,15 +236,20 @@ def render_analysis_proxy(
     except (subprocess.SubprocessError, OSError, ValueError) as exc:
         # Never render without audio because a read failed: no transcript would follow.
         raise RenderError(f"ffprobe couldn't read {source.name}: {exc}") from exc
-    hwaccel = gpu_decoder((settings or AnalysisProxySettings()).decoder)
+    s = settings or AnalysisProxySettings()
+    hwaccel = gpu_decoder(s.decoder) if s.gpu_decodes > 0 else None
+    slots = _gpu_slots(s.gpu_decodes) if hwaccel else None
 
     def attempt(with_tracks: list[AudioTrack]) -> None:
-        if hwaccel:
+        if slots is not None and slots.acquire(blocking=False):
             try:
-                _run(source, part, settings, with_tracks, timeout, hwaccel)
-                return
+                if _gpu_has_room():
+                    _run(source, part, settings, with_tracks, timeout, hwaccel)
+                    return
             except RenderError as exc:
                 logger.info("%s; decoding on the CPU instead", exc)
+            finally:
+                slots.release()
         _run(source, part, settings, with_tracks, timeout)
 
     try:
