@@ -466,6 +466,8 @@ class Face(SQLModel, table=True):
     detection_confidence: float | None = Field(default=None, nullable=True)
     detection_model: str = Field(default="insightface", nullable=False)
     detection_model_version: str = Field(default="buffalo_l", nullable=False)
+    # Which model embedded it: embeddings are compared only within one model.
+    embedding_model: str = Field(default="buffalo_l", nullable=False)
     person_id: str | None = Field(
         default=None,
         foreign_key="people.person_id",
@@ -488,6 +490,8 @@ class Person(SQLModel, table=True):
         default=None,
         sa_column=Column(Vector(512), nullable=True),
     )
+    # The face model whose embeddings the centroid averages.
+    centroid_model: str = Field(default="buffalo_l", nullable=False)
     confirmation_count: int = Field(default=0, nullable=False)
     dismissed: bool = Field(default=False, nullable=False)
     representative_face_id: str | None = Field(

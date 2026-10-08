@@ -12,8 +12,11 @@ const detail = {
   note: null, note_author: null, note_updated_at: null, ai_tags: [], video_facet: null,
 };
 
+let role = "editor";
+
 vi.mock("../api/client", async (orig) => ({
   ...(await orig<typeof import("../api/client")>()),
+  getCurrentUser: vi.fn(async () => ({ role })),
   getAsset: vi.fn(async () => detail),
   findSimilar: vi.fn(async () => ({ hits: [] })),
   listFaces: vi.fn(async () => ({ faces: [] })),
@@ -25,7 +28,10 @@ vi.mock("../api/usePlayback", () => ({
   usePlayback: () => ({ src: "/v1/stream/t", source: "analysis_proxy", maxSeconds: 10, isLoading: false, renew: () => {}, failed: false }),
 }));
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  role = "editor";
+});
 
 const asset = {
   asset_id: "ast_1", rel_path: "", file_size: 0, file_mtime: null, sha256: null, media_type: "video",
@@ -91,8 +97,16 @@ describe("Lightbox on a public page", () => {
     renderLightbox(false);
     await screen.findByText(/Dimensions/);
     screen.getByText("Add note");
-    screen.getByText("Upload SRT");
+    await screen.findByText("Upload SRT");
     screen.getByText("Add to project");
+  });
+
+  it("a viewer can't upload a transcript", async () => {
+    role = "viewer";
+    renderLightbox(false);
+    await screen.findByText(/Dimensions/);
+    await screen.findByText("No transcript");
+    expect(screen.queryByText("Upload SRT")).toBeNull();
   });
 });
 

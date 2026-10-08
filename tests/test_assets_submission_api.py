@@ -487,16 +487,17 @@ def test_submit_then_delete_transcript(submission_client) -> None:
     assert r.json()["status"] == "transcribed"
 
     # Now delete the transcript
-    r = client.delete(f"/v1/assets/{video_asset_id}/transcript", headers=auth)
+    r = client.delete(f"/v1/assets/{video_asset_id}/transcript", params={"which": "manual"}, headers=auth)
     assert r.status_code == 204
 
     # Deleting a transcript that does not exist on a real asset succeeds (idempotent)
-    r = client.delete(f"/v1/assets/{video_asset_id}/transcript", headers=auth)
+    r = client.delete(f"/v1/assets/{video_asset_id}/transcript", params={"which": "manual"}, headers=auth)
     assert r.status_code == 204
 
     # And 404 on unknown asset
     r = client.delete(
         "/v1/assets/ast_doesnotexist0000000000000/transcript",
+        params={"which": "manual"},
         headers=auth,
     )
     assert r.status_code == 404

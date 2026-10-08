@@ -1,7 +1,10 @@
 import { useEffect, useCallback, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getAsset, findSimilar, listFaces, listPeople, getNearestPeopleForFace, searchPeople, assignFace, unassignFace, uploadTranscript, deleteTranscript, updateNote, deleteNote } from "../api/client";
+import { getAsset, findSimilar, listFaces, listPeople, getNearestPeopleForFace, searchPeople, assignFace, unassignFace, updateNote, deleteNote, correctAsset } from "../api/client";
+import { CorrectableTags, CorrectableText } from "./CorrectableFields";
+import { NoTranscript, TranscriptActions } from "./TranscriptActions";
+import { useCanEdit } from "../lib/useCanEdit";
 import TranscriptViewer from "./TranscriptViewer";
 import VideoPlayer from "./VideoPlayer";
 import { useLocalStorage } from "../lib/useLocalStorage";
@@ -369,6 +372,21 @@ export function Lightbox({
     enabled: !isPublic || !!publicLibraryId || !!publicProjectId,
     refetchInterval: 10_000,
   });
+
+  // Corrections: editors fix a description, the text in an image or tags; the
+  // machine's values stay underneath ("Use the AI's" brings them back).
+  const canCorrect = useCanEdit(!isPublic) && !isPublic;
+  const correctionClient = useQueryClient();
+  // The clip rides with each save: a save that returns after moving on
+  // refreshes the clip it changed, not the one shown by then.
+  const correct = useMutation({
+    mutationFn: ({ assetId, body }: {
+      assetId: string;
+      body: { description?: string | null; ocr_text?: string | null; tags?: string[] | null };
+    }) => correctAsset(assetId, body),
+    onSuccess: (_detail, { assetId }) => correctionClient.invalidateQueries({ queryKey: ["asset", assetId] }),
+  });
+  const corrected = detail?.corrected ?? [];
 
   const { data: similarData, isLoading: similarLoading } = useQuery({
     queryKey: ["similar", asset.asset_id, libraryId],
@@ -1173,47 +1191,64 @@ export function Lightbox({
 
               <hr className="border-gray-700" />
 
-              {/* Section 2: AI description */}
-              <div>
-                <div className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">
-                  Description
-                </div>
-                {detailLoading ? (
+              {/* Section 2: description (a person's correction over the AI's) */}
+              {detailLoading && !detail ? (
+                <div>
+                  <div className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">Description</div>
                   <MetadataSkeleton />
-                ) : detail?.ai_description ? (
-                  <p className="italic text-gray-300">{detail.ai_description}</p>
-                ) : (
-                  <p className="text-gray-500">No description yet</p>
-                )}
-              </div>
+                </div>
+              ) : (
+                <CorrectableText
+                  key={asset.asset_id}
+                  label="Description"
+                  value={detail?.ai_description}
+                  machine={detail?.machine_description}
+                  corrected={corrected.includes("description")}
+                  canEdit={canCorrect}
+                  emptyText="No description yet"
+                  saving={correct.isPending}
+                  onSave={(value) => correct.mutateAsync({ assetId: asset.asset_id, body: { description: value } })}
+                  render={(value) => <p className="italic text-gray-300">{value}</p>}
+                />
+              )}
 
-              {/* Section: OCR Text */}
-              {detail?.ocr_text && (
+              {/* Section: the text in an image */}
+              {(detail?.ocr_text || corrected.includes("ocr_text") || (canCorrect && detail?.media_type === "image")) && (
                 <>
                   <hr className="border-gray-700" />
-                  <div>
-                    <div className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">
-                      Text in Image
-                    </div>
-                    <p className="text-sm text-gray-300 whitespace-pre-wrap">{detail.ocr_text}</p>
-                  </div>
+                  <CorrectableText
+                    key={asset.asset_id}
+                    label="Text in Image"
+                    value={detail?.ocr_text}
+                    machine={detail?.machine_ocr_text}
+                    corrected={corrected.includes("ocr_text")}
+                    canEdit={canCorrect}
+                    emptyText="No text found"
+                    saving={correct.isPending}
+                    onSave={(value) => correct.mutateAsync({ assetId: asset.asset_id, body: { ocr_text: value } })}
+                  />
                 </>
               )}
 
               {/* Section 3: Tags */}
               {(detailLoading ||
+                canCorrect ||
                 (detail?.ai_tags && detail.ai_tags.length > 0)) && (
                 <>
                   <hr className="border-gray-700" />
                   <div>
-                    <div className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">
-                      Tags
-                    </div>
                     {detailLoading && !detail ? (
                       <MetadataSkeleton />
                     ) : (
-                      <div className="mt-1 flex flex-wrap gap-1.5">
-                        {detail?.ai_tags?.map((tag) =>
+                      <CorrectableTags
+                        key={asset.asset_id}
+                        tags={detail?.ai_tags ?? []}
+                        machineTags={detail?.machine_tags}
+                        corrected={corrected.includes("tags")}
+                        canEdit={canCorrect}
+                        saving={correct.isPending}
+                        onSave={(tags) => correct.mutateAsync({ assetId: asset.asset_id, body: { tags } })}
+                        renderTag={(tag) =>
                           onTagClick ? (
                             <button
                               key={tag}
@@ -1233,9 +1268,9 @@ export function Lightbox({
                             >
                               {tag}
                             </span>
-                          ),
-                        )}
-                      </div>
+                          )
+                        }
+                      />
                     )}
                   </div>
                 </>
@@ -1246,7 +1281,7 @@ export function Lightbox({
                 <>
                   <hr className="border-gray-700" />
                   <div>
-                    <div className="mb-1 flex items-center justify-between">
+                    <div className="mb-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
                       <span className="text-xs font-medium uppercase tracking-wide text-gray-500">
                         Transcript
                         {detail.transcript_language && (
@@ -1254,54 +1289,24 @@ export function Lightbox({
                         )}
                       </span>
                       {detail.transcript_srt && (
-                        <div className="flex gap-2">
-                          <button
-                            type="button"
-                            className="text-xs text-indigo-400 hover:text-indigo-300"
-                            onClick={() => {
-                              const blob = new Blob([detail.transcript_srt!], { type: "text/srt" });
-                              const url = URL.createObjectURL(blob);
-                              const a = document.createElement("a");
-                              const stem = asset.rel_path.replace(/\.[^.]+$/, "").split("/").pop() || "transcript";
-                              a.href = url;
-                              a.download = `${stem}.srt`;
-                              a.click();
-                              URL.revokeObjectURL(url);
-                            }}
-                          >
-                            Download
-                          </button>
-                          {!isPublic && (
-                          <>
-                          <label className="cursor-pointer text-xs text-indigo-400 hover:text-indigo-300">
-                            Replace
-                            <input
-                              type="file"
-                              accept=".srt"
-                              className="hidden"
-                              onChange={async (e) => {
-                                const file = e.target.files?.[0];
-                                if (!file) return;
-                                const text = await file.text();
-                                await uploadTranscript(asset.asset_id, text);
-                                queryClient.invalidateQueries({ queryKey: ["asset", asset.asset_id] });
-                                e.target.value = "";
-                              }}
-                            />
-                          </label>
-                          <button
-                            type="button"
-                            className="text-xs text-red-400 hover:text-red-300"
-                            onClick={async () => {
-                              await deleteTranscript(asset.asset_id);
-                              queryClient.invalidateQueries({ queryKey: ["asset", asset.asset_id] });
-                            }}
-                          >
-                            Remove
-                          </button>
-                          </>
-                          )}
-                        </div>
+                        <TranscriptActions
+                          key={asset.asset_id}
+                          assetId={asset.asset_id}
+                          source={detail.transcript_source}
+                          machineUnderneath={!!detail.machine_transcript}
+                          canEdit={canCorrect}
+                          onChanged={() => queryClient.invalidateQueries({ queryKey: ["asset", asset.asset_id] })}
+                          onDownload={() => {
+                            const blob = new Blob([detail.transcript_srt!], { type: "text/srt" });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement("a");
+                            const stem = asset.rel_path.replace(/\.[^.]+$/, "").split("/").pop() || "transcript";
+                            a.href = url;
+                            a.download = `${stem}.srt`;
+                            a.click();
+                            URL.revokeObjectURL(url);
+                          }}
+                        />
                       )}
                     </div>
                     {detailLoading ? (
@@ -1309,22 +1314,12 @@ export function Lightbox({
                     ) : detail?.transcript_srt ? (
                       <TranscriptViewer srt={detail.transcript_srt} onSeek={seekVideo} seekableUntil={playback.maxSeconds} />
                     ) : (
-                      <label className="inline-flex cursor-pointer items-center gap-1.5 rounded bg-gray-700/60 px-3 py-1.5 text-xs text-gray-300 hover:bg-indigo-600/40 hover:text-indigo-200 transition-colors">
-                        Upload SRT
-                        <input
-                          type="file"
-                          accept=".srt"
-                          className="hidden"
-                          onChange={async (e) => {
-                            const file = e.target.files?.[0];
-                            if (!file) return;
-                            const text = await file.text();
-                            await uploadTranscript(asset.asset_id, text);
-                            queryClient.invalidateQueries({ queryKey: ["asset", asset.asset_id] });
-                            e.target.value = "";
-                          }}
-                        />
-                      </label>
+                      <NoTranscript
+                        key={asset.asset_id}
+                        assetId={asset.asset_id}
+                        canEdit={canCorrect}
+                        onChanged={() => queryClient.invalidateQueries({ queryKey: ["asset", asset.asset_id] })}
+                      />
                     )}
                   </div>
                 </>

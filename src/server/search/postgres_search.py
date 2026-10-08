@@ -5,6 +5,8 @@ from __future__ import annotations
 from sqlalchemy import text
 from sqlmodel import Session
 
+from src.server.repository.corrections import tags_join
+
 
 def search_assets(
     session: Session,
@@ -61,9 +63,9 @@ def search_assets(
                OR a.rel_path       ILIKE :{name}
                OR a.camera_make    ILIKE :{name}
                OR a.camera_model   ILIKE :{name}
-               OR m.data->>'description' ILIKE :{name}
-               OR CAST(m.data->'tags' AS TEXT) ILIKE :{name}
-               OR o.text ILIKE :{name}
+               OR COALESCE(c.description, m.data->>'description') ILIKE :{name}
+               OR CAST(et.tags AS TEXT) ILIKE :{name}
+               OR COALESCE(c.ocr_text, o.text) ILIKE :{name}
                {note_or.format(name=name)}
                {transcript_or.format(name=name)}
               )"""
@@ -78,9 +80,9 @@ def search_assets(
            OR a.rel_path       ILIKE :like_0
            OR a.camera_make    ILIKE :like_0
            OR a.camera_model   ILIKE :like_0
-           OR m.data->>'description' ILIKE :like_0
-           OR CAST(m.data->'tags' AS TEXT) ILIKE :like_0
-           OR o.text ILIKE :like_0
+           OR COALESCE(c.description, m.data->>'description') ILIKE :like_0
+           OR CAST(et.tags AS TEXT) ILIKE :like_0
+           OR COALESCE(c.ocr_text, o.text) ILIKE :like_0
            {note_or.format(name='like_0')}
            {transcript_or.format(name='like_0')}
           )"""
@@ -96,8 +98,8 @@ def search_assets(
             a.proxy_key,
             a.camera_make,
             a.camera_model,
-            COALESCE(m.data->>'description', '') AS description,
-            COALESCE(m.data->'tags', '[]'::jsonb) AS tags,
+            COALESCE(c.description, m.data->>'description', '') AS description,
+            et.tags AS tags,
             {rank_expr} AS rank
         FROM active_assets a
         LEFT JOIN LATERAL (
@@ -108,6 +110,8 @@ def search_assets(
             LIMIT 1
         ) m ON true
         LEFT JOIN asset_ocr o ON o.asset_id = a.asset_id
+        LEFT JOIN asset_corrections c ON c.asset_id = a.asset_id
+        {tags_join("et")}
         WHERE {lib_condition}
               a.availability = 'online'
           AND {groups}

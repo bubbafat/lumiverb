@@ -563,6 +563,8 @@ def _face_batch_worker(
                 "source_sha256": item.get("sha256"),
                 "detection_model": provider.model_id,
                 "detection_model_version": provider.model_version,
+                # InsightFace's model pack embeds the faces it finds.
+                "embedding_model": provider.model_version,
                 "faces": [
                     {
                         "bounding_box": d.bounding_box,
@@ -592,6 +594,7 @@ def _face_batch_worker(
                     client.post(f"/v1/assets/{bi['asset_id']}/faces", json={
                         "detection_model": bi["detection_model"],
                         "detection_model_version": bi["detection_model_version"],
+                        "embedding_model": bi["embedding_model"],
                         "faces": bi["faces"],
                         "lineage": {**lineage, "source_sha256": bi.get("source_sha256")} if lineage else None,
                     })

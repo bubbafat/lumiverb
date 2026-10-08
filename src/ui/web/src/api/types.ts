@@ -151,8 +151,18 @@ export interface AssetDetail {
   ai_description?: string | null;
   ai_tags: string[];
   ocr_text?: string | null;
+  /** Which of "description", "tags", "ocr_text" a person corrected; the values above are what they see. */
+  corrected?: string[];
+  /** The machine's value under a correction (only for corrected fields). */
+  machine_description?: string | null;
+  machine_tags?: string[];
+  machine_ocr_text?: string | null;
   transcript_srt?: string | null;
   transcript_language?: string | null;
+  /** Whose transcript is shown: "manual" (a person's) or the machine that made it. */
+  transcript_source?: string | null;
+  /** A person's transcript is shown with the machine's kept under it: removing theirs brings it back. */
+  machine_transcript?: boolean;
   transcribed_at?: string | null;
   note?: string | null;
   note_author?: string | null;

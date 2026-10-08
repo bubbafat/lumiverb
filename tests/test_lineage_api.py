@@ -192,7 +192,7 @@ def test_a_persons_transcript_is_current_whatever_the_settings(env):
                 headers=headers)
     assert _row(env, clip, "transcript")[0] == P.PERSON and _state(env, clip, "transcript") == "current"
     # Deleting it is a person's choice too: nothing regenerates it.
-    client.delete(f"/v1/assets/{clip}/transcript", headers=headers)
+    client.delete(f"/v1/assets/{clip}/transcript", params={"which": "manual"}, headers=headers)
     assert _row(env, clip, "transcript")[0] == P.PERSON and _row(env, clip, "transcript")[4] == "empty"
 
 
