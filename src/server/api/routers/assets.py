@@ -17,7 +17,7 @@ from src.server.api.dependencies import get_current_user_id, get_tenant_session,
 from src.server.api.errors import ConflictError, DecisionRequiredError
 from src.shared import asset_status
 from src.shared.io_utils import normalize_path_prefix
-from src.server.repository.tenant import AssetMetadataRepository, AssetRepository, LibraryRepository
+from src.server.repository.tenant import AssetMetadataRepository, AssetOcrRepository, AssetRepository, LibraryRepository
 from src.server.repository import lineage
 from src.shared.producers import CLIP_MODEL_ID
 from src.server.api.routers.producers import LineageIn, lineage_dict
@@ -483,6 +483,7 @@ def repair_summary(
     if lib is None:
         raise HTTPException(status_code=404, detail="Library not found")
     from src.server.repository.tenant import MISSING_CONDITIONS
+    from src.server.search.sync import STALE_SEARCH  # the search sweep's own rule
     row = session.execute(
         text(f"""
             SELECT
@@ -499,19 +500,7 @@ def repair_summary(
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_transcription"]}) AS missing_transcription,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_probe"]}) AS missing_probe,
                 COUNT(*) FILTER (WHERE {MISSING_CONDITIONS["missing_analysis_proxy"]}) AS missing_analysis_proxy,
-                COUNT(*) FILTER (
-                    WHERE EXISTS (
-                        SELECT 1 FROM asset_metadata am
-                        WHERE am.asset_id = a.asset_id
-                    ) AND (
-                        a.search_synced_at IS NULL
-                        OR a.search_synced_at < (
-                            SELECT MAX(am2.generated_at)
-                            FROM asset_metadata am2
-                            WHERE am2.asset_id = a.asset_id
-                        )
-                    )
-                ) AS stale_search_sync,
+                COUNT(*) FILTER (WHERE {STALE_SEARCH}) AS stale_search_sync,
                 {_waiting_failures_sql()} AS waiting_failures
             FROM active_assets a
             {lineage.LINEAGE_JOIN}
@@ -875,7 +864,7 @@ def get_asset_by_path(
     if meta and meta.data:
         ai_description = meta.data.get("description") or None
         ai_tags = meta.data.get("tags") or []
-        ocr_text = meta.data.get("ocr_text") or None
+    ocr_text = AssetOcrRepository(session).text_for(asset.asset_id) or None
 
     response.ai_description = ai_description
     response.ai_tags = ai_tags
@@ -1070,7 +1059,7 @@ def get_asset(
     if meta and meta.data:
         ai_description = meta.data.get("description") or None
         ai_tags = meta.data.get("tags") or []
-        ocr_text = meta.data.get("ocr_text") or None
+    ocr_text = AssetOcrRepository(session).text_for(asset.asset_id) or None
 
     response.ai_description = ai_description
     response.ai_tags = ai_tags
@@ -1294,6 +1283,8 @@ def submit_vision(
 
 class OcrSubmitRequest(BaseModel):
     ocr_text: str
+    # The vision model that read it.
+    model_id: str = Field(default="", max_length=200)
     lineage: LineageIn | None = None
 
 
@@ -1304,30 +1295,20 @@ def submit_ocr(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> dict:
-    """Submit OCR text for an asset. Merges into existing metadata."""
+    """Submit the text read in an asset's image ("" when there's none). Kept
+    apart from its description: no description needed, and describing it
+    again leaves this alone."""
     asset = AssetRepository(session).get_by_id(asset_id)
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
 
-    meta_repo = AssetMetadataRepository(session)
-    meta = meta_repo.get_latest(asset_id=asset_id)
-    if meta is None:
-        raise HTTPException(status_code=400, detail="Asset has no vision metadata — run vision first")
-
-    # Merge ocr_text + has_text into existing metadata data dict
-    data = dict(meta.data) if meta.data else {}
-    data["ocr_text"] = body.ocr_text
-    data["has_text"] = bool(body.ocr_text)
-    meta_repo.upsert(
-        asset_id=asset_id,
-        model_id=meta.model_id,
-        model_version=meta.model_version,
-        data=data,
-    )
-    lineage.record(session, asset_id, "ocr", lineage_dict(body.lineage), outcome="ok" if body.ocr_text else "empty")
+    AssetOcrRepository(session).upsert(asset_id, body.ocr_text, body.model_id, commit=False)
+    lineage.record(session, asset_id, "ocr", lineage_dict(body.lineage), outcome="ok" if body.ocr_text else "empty",
+                   commit=False)
+    session.commit()  # the text and how it was made, together
 
     # Re-sync search
-    meta = meta_repo.get_latest(asset_id=asset_id)
+    meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
     from src.server.search.sync import try_sync_asset
     try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
 
@@ -1344,6 +1325,8 @@ class BatchOcrItem(BaseModel):
 
 class BatchOcrRequest(BaseModel):
     items: list[BatchOcrItem]
+    # The vision model that read them.
+    model_id: str = Field(default="", max_length=200)
     lineage: LineageIn | None = None
 
 
@@ -1353,8 +1336,9 @@ def submit_batch_ocr(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> dict:
-    """Submit OCR text for multiple assets in one request."""
-    meta_repo = AssetMetadataRepository(session)
+    """Submit OCR text for multiple assets in one request. Assets that don't
+    exist (or are in the trash) are skipped."""
+    ocr_repo = AssetOcrRepository(session)
     asset_repo = AssetRepository(session)
     updated = 0
     skipped = 0
@@ -1364,22 +1348,11 @@ def submit_batch_ocr(
         if asset is None or asset.deleted_at is not None:
             skipped += 1
             continue
-        meta = meta_repo.get_latest(asset_id=item.asset_id)
-        if meta is None:
-            skipped += 1
-            continue
-        data = dict(meta.data) if meta.data else {}
-        data["ocr_text"] = item.ocr_text
-        data["has_text"] = bool(item.ocr_text)
-        meta_repo.upsert(
-            asset_id=item.asset_id,
-            model_id=meta.model_id,
-            model_version=meta.model_version,
-            data=data,
-        )
+        ocr_repo.upsert(item.asset_id, item.ocr_text, body.model_id, commit=False)
         lineage.record(session, item.asset_id, "ocr", lineage_dict(body.lineage, item.source_sha256),
-                       outcome="ok" if item.ocr_text else "empty")
+                       outcome="ok" if item.ocr_text else "empty", commit=False)
         updated += 1
+    session.commit()
 
     # Clear search_synced_at so the sweep picks these up for re-indexing.
     # Avoids 25 individual Quickwit calls inside the request.

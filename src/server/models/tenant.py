@@ -289,6 +289,21 @@ class AssetMetadata(SQLModel, table=True):
     )
 
 
+
+class AssetOcr(SQLModel, table=True):
+    """The text read in a clip's image (ADR-016 phase 3): one row per clip,
+    apart from its description so describing it again leaves this alone.
+    has_text false with text "" means the model found none."""
+
+    __tablename__ = "asset_ocr"
+
+    asset_id: str = Field(foreign_key="assets.asset_id", primary_key=True)
+    text: str = Field(default="", nullable=False)
+    has_text: bool = Field(nullable=False)
+    model_id: str = Field(default="", nullable=False)
+    generated_at: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
+
+
 class AssetEmbedding(SQLModel, table=True):
     __tablename__ = "asset_embeddings"
     __table_args__ = (

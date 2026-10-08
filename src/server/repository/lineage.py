@@ -47,8 +47,7 @@ APPLIES: dict[str, str] = {
     "scene_vision": ("a.media_type = 'video' AND a.video_indexed"
                      " AND EXISTS (SELECT 1 FROM video_scenes s WHERE s.asset_id = a.asset_id)"),
     "vision": "a.media_type = 'image'",
-    # OCR is kept with the description until it has a table of its own.
-    "ocr": "a.media_type = 'image' AND EXISTS (SELECT 1 FROM asset_metadata am WHERE am.asset_id = a.asset_id)",
+    "ocr": "a.media_type = 'image'",
     "clip": "a.media_type = 'image'",
     "faces": "a.media_type = 'image'",
 }
@@ -63,8 +62,7 @@ MADE: dict[str, str] = {
     "scene_vision": ("NOT EXISTS (SELECT 1 FROM video_scenes s"
                      " WHERE s.asset_id = a.asset_id AND s.description IS NULL)"),
     "vision": "EXISTS (SELECT 1 FROM asset_metadata am WHERE am.asset_id = a.asset_id)",
-    "ocr": ("EXISTS (SELECT 1 FROM asset_metadata am"
-            " WHERE am.asset_id = a.asset_id AND (am.data->>'has_text') IS NOT NULL)"),
+    "ocr": "EXISTS (SELECT 1 FROM asset_ocr o WHERE o.asset_id = a.asset_id)",
     "clip": f"EXISTS (SELECT 1 FROM asset_embeddings ae WHERE ae.asset_id = a.asset_id AND ae.model_id = '{CLIP_MODEL_ID}')",
     "faces": "a.face_count IS NOT NULL",
     "transcript": "a.has_transcript IS NOT NULL",
