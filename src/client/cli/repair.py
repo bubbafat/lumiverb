@@ -16,6 +16,7 @@ from rich.table import Table
 
 from src.client.cli.client import LumiverbClient
 from src.client.video.analysis_proxy import AnalysisProxySettings, RenderError, render_analysis_proxy, render_timeout
+from src.client.video.audio import audio_channels, speech_wav_command
 from src.client.video.probe import probe_video
 from src.client.workers.faces.insightface_provider import InsightFaceProvider
 from src.shared.io_utils import resolve_source_path
@@ -179,19 +180,24 @@ def _transcribe_one(
     import subprocess
     import sys
     import tempfile
+    from pathlib import Path
 
     try:
-        # Extract audio to temp WAV (16kHz mono)
+        channels = audio_channels(source_path)
+    except (subprocess.SubprocessError, OSError, ValueError) as exc:
+        logger.warning("Couldn't read the audio tracks of %s; trying again later: %s", source_path, exc)
+        return None
+    if not channels:
+        logger.info("No audio track in %s", source_path)
+        return ("", "")
+
+    try:
+        # Every audio track mixed into a 16 kHz mono WAV: a lav may be on any track.
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             wav_path = tmp.name
 
-        cmd = [
-            "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-i", str(source_path),
-            "-vn", "-ar", "16000", "-ac", "1", "-f", "wav",
-            "-y", wav_path,
-        ]
-        result = subprocess.run(cmd, capture_output=True, timeout=300)
+        cmd = speech_wav_command(source_path, Path(wav_path), channels)
+        result = subprocess.run(cmd, capture_output=True, timeout=1800)
         if result.returncode != 0:
             stderr = result.stderr.decode(errors="replace") if result.stderr else ""
             if "does not contain any stream" in stderr or "Output file #0 does not contain" in stderr:

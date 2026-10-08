@@ -1,7 +1,7 @@
 """Rendering analysis proxies with ffmpeg, and the local cache (ADR-016 phase 2).
 
-An analysis proxy is a full-length, low-resolution copy of a video with its
-first audio track. Transcription, scenes and vision read it instead of the
+An analysis proxy is a full-length, low-resolution copy of a video with all
+its audio tracks, each at most stereo and at a low bitrate. Transcription, scenes and vision read it instead of the
 original. These tests render real files made with ffmpeg's test sources.
 """
 
@@ -24,11 +24,18 @@ from src.client.video.analysis_proxy import (
 
 
 def _make(path: Path, *, size: str = "1280x720", rate: int = 30, seconds: float = 2.0,
-          audio: int = 1, extra: list[str] | None = None) -> Path:
+          audio: int = 1, extra: list[str] | None = None, layouts: list[str] | None = None,
+          sample_rate: int = 48000, silent: tuple[int, ...] = ()) -> Path:
+    """A test video; `layouts` gives each audio track's channel layout, `silent` the silent ones."""
+    layouts = layouts or ["mono"] * audio
+    audio = len(layouts)
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
            "-f", "lavfi", "-i", f"testsrc2=size={size}:rate={rate}:duration={seconds}"]
-    for i in range(audio):
-        cmd += ["-f", "lavfi", "-i", f"sine=frequency={440 + 220 * i}:duration={seconds}"]
+    for i, layout in enumerate(layouts):
+        tone = "volume=0" if i in silent else "volume=1"
+        cmd += ["-f", "lavfi", "-i",
+                f"sine=frequency={440 + 220 * i}:sample_rate={sample_rate}:duration={seconds},{tone},"
+                f"aformat=channel_layouts={layout}"]
     cmd += ["-map", "0:v"]
     for i in range(audio):
         cmd += ["-map", f"{i + 1}:a"]
@@ -99,11 +106,25 @@ def test_video_without_audio_has_no_audio_track(tmp_path: Path) -> None:
 
 
 @pytest.mark.fast
-def test_only_the_first_audio_track_is_kept(tmp_path: Path) -> None:
-    src = _make(tmp_path / "two.mov", audio=2)
+def test_every_audio_track_is_kept_in_order_at_most_stereo(tmp_path: Path) -> None:
+    # Pro cameras put a lav on its own track; it must reach transcription.
+    src = _make(tmp_path / "three.mov", layouts=["mono", "stereo", "5.1"])
     out = tmp_path / "out.mp4"
     render_analysis_proxy(src, out)
-    assert len(_audio(_probe(out))) == 1
+    assert [a["channels"] for a in _audio(_probe(out))] == [1, 2, 2]
+
+
+@pytest.mark.fast
+def test_audio_is_low_bitrate_at_48k(tmp_path: Path) -> None:
+    src = _make(tmp_path / "hi.mov", layouts=["mono", "stereo"], sample_rate=96000, seconds=4,
+                extra=["-c:a", "pcm_s32le"])
+    out = tmp_path / "out.mp4"
+    render_analysis_proxy(src, out)
+    mono, stereo = _audio(_probe(out))
+    assert mono["codec_name"] == stereo["codec_name"] == "aac"
+    assert mono["sample_rate"] == stereo["sample_rate"] == "48000"
+    assert int(mono["bit_rate"]) <= 60_000
+    assert int(stereo["bit_rate"]) <= 110_000
 
 
 @pytest.mark.fast
@@ -162,6 +183,8 @@ def test_settings_shape_the_command() -> None:
     assert "min(iw,640)" in joined and "min(ih,640)" in joined
     assert "h264_nvenc" in cmd
     assert "-movflags" in cmd and "+faststart" in cmd
+    # The first real video stream: never cover art (V, not v).
+    assert cmd[cmd.index("-map") + 1] == "0:V:0"
     # Originals are only read: the source is an input, never an output.
     assert cmd[cmd.index("-i") + 1] == "/in.mov"
     assert cmd[-1] == "/out.mp4"
@@ -267,3 +290,50 @@ def test_the_newest_file_survives_even_when_alone_too_big(tmp_path: Path) -> Non
     src.write_bytes(b"x" * 50)
     path = cache.put("ast_big", src)
     assert path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Audio for transcription
+# ---------------------------------------------------------------------------
+
+from src.client.video.audio import audio_channels, speech_wav_command  # noqa: E402
+
+
+def _peak(wav: Path) -> int:
+    import array
+    import wave
+
+    with wave.open(str(wav)) as w:
+        samples = array.array("h", w.readframes(w.getnframes()))
+    return max((abs(x) for x in samples), default=0)
+
+
+@pytest.mark.fast
+def test_audio_channels_lists_each_track_in_order(tmp_path: Path) -> None:
+    assert audio_channels(_make(tmp_path / "a.mov", layouts=["mono", "stereo", "5.1"])) == [1, 2, 6]
+    assert audio_channels(_make(tmp_path / "s.mov", audio=0)) == []
+
+
+@pytest.mark.fast
+def test_audio_channels_of_an_unreadable_file_raises(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.mov"
+    bad.write_bytes(b"nope")
+    with pytest.raises(subprocess.CalledProcessError):
+        audio_channels(bad)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("layouts,silent", [
+    (["stereo", "mono"], (0,)),   # camera mic silent, lav on track 2
+    (["mono", "mono"], (1,)),     # lav on track 1, track 2 silent
+    (["mono"], ()),               # one track
+])
+def test_speech_audio_hears_every_track(tmp_path: Path, layouts: list[str], silent: tuple[int, ...]) -> None:
+    src = _make(tmp_path / "clip.mov", layouts=layouts, silent=silent)
+    wav = tmp_path / "speech.wav"
+    subprocess.run(speech_wav_command(src, wav, audio_channels(src)), check=True)
+    import wave
+
+    with wave.open(str(wav)) as w:
+        assert (w.getframerate(), w.getnchannels()) == (16000, 1)
+    assert _peak(wav) > 1000

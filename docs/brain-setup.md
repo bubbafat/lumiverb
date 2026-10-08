@@ -46,7 +46,7 @@ sudo bash scripts/deploy-api.sh --app-host http://192.168.86.166 --pg-port 5434 
 
 Add `--dry-run` (no sudo needed) to see the settings it will use without changing anything.
 
-- **Data dir** `/mnt/ssd2/lumiverb` (proposed): 3.4 TB free. Previews, stills and analysis proxies live there. Analysis proxies take about 0.4 GB per hour of footage. The worker's caches go there too (`cache/`), not on the root disk.
+- **Data dir** `/mnt/ssd2/lumiverb` (proposed): 3.4 TB free. Previews, stills and analysis proxies live there. Analysis proxies take about 0.4 GB per hour of footage, plus about 20 MB per hour for each extra stereo audio track. The worker's caches go there too (`cache/`), not on the root disk.
 - **Postgres 18** comes from Ubuntu's own packages, and the cluster is created on 5434. Resolve's database on 5432 is never touched.
 - **The worker** runs as the `lumiverb` user. Everything outside the data dir and its home is read-only to it, the DAS mounts included, whatever the mount options say.
 - **Reruns are safe.** They keep the ports, the data dir, the branch, the Postgres version, `--no-firewall`, the tenant and the keys from the first run, so `sudo bash scripts/deploy-api.sh` alone is enough. `deploy-web.sh` follows the same branch and firewall setting.
@@ -117,7 +117,7 @@ Keep `soft`: when the Mac Studio sleeps, reads fail instead of hanging forever.
 - **Safety net.** Each library is scanned in full once a day, in case a report was missed.
 - **The Mac Studio asleep.** The worker doesn't scan its libraries: an unmounted share looks empty, and an empty mount point is never scanned. It keeps enriching from analysis proxies. Only probing and rendering wait, and they start as soon as the storage is back.
 - **Pacing.** Enrichment runs again when a library's counts change, when its storage comes back, or hourly, so a clip that fails every time isn't retried every minute.
-- **Analysis proxies** are full-length copies at most 960 px on the long side, at most 30 fps, with the first audio track. Transcription, scenes and scene vision read these, never the originals. They are not edit proxies.
+- **Analysis proxies** are full-length copies at most 960 px on the long side, at most 30 fps, with every audio track: each at most stereo, 48 kHz AAC at 48 kbps per channel. Transcription hears all the tracks mixed, so a lav on its own track counts. Scenes and scene vision read the proxies too, never the originals. They are not edit proxies.
 - **Library health.** The libraries page shows a library as pending until its videos have analysis proxies.
 
 Useful:
