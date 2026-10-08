@@ -158,10 +158,11 @@ class TestCliConfig:
         assert "whisper_model" not in CLIConfig.model_fields
         assert PRODUCERS["transcript"].defaults["model"] == "small"
 
-    def test_transcribe_concurrency_default(self):
+    def test_how_many_at_once_is_the_machines_not_the_workers(self):
+        """Each AI machine's "at once" (Settings → AI); an older config's key is ignored."""
         from src.client.cli.config import CLIConfig
-        cfg = CLIConfig()
-        assert cfg.transcribe_concurrency == 1
+        assert "transcribe_concurrency" not in CLIConfig.model_fields
+        assert CLIConfig.model_validate_json('{"transcribe_concurrency": 3}') == CLIConfig()
 
 
 @pytest.mark.fast
@@ -197,9 +198,10 @@ class TestTranscribeOneErrors:
     def test_nonexistent_source_file(self):
         """_transcribe_one should handle missing source gracefully."""
         from pathlib import Path
+        from unittest.mock import MagicMock
         from src.client.cli.repair import _transcribe_one
         # This will fail at ffmpeg since the file doesn't exist
-        result = _transcribe_one(Path("/nonexistent/video.mp4"), "small")
+        result = _transcribe_one(Path("/nonexistent/video.mp4"), MagicMock())
         # Should return None (transient failure) or ("", "") (deterministic)
         # Either is acceptable since ffmpeg will error out
         assert result is None or result == ("", "")

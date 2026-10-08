@@ -76,6 +76,8 @@ def test_the_srt_is_written_as_it_always_was() -> None:
     assert srt == ("1\n00:00:05,000 --> 00:00:10,500\nHello and welcome.\n\n"
                    "3\n01:02:05,250 --> 01:02:07,000\nLater.\n")
     assert to_srt([]) == ""
+    # Times to the millisecond, whatever the float: 2.8 s is 02,800, not 02,799.
+    assert to_srt([Segment(2.8, 59.999, "x")]) == "1\n00:00:02,800 --> 00:00:59,999\nx\n"
 
 
 @pytest.mark.fast

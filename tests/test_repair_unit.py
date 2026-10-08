@@ -304,32 +304,49 @@ def test_ocr_one_returns_empty_text_on_none() -> None:
 # ---- _transcribe_one ------------------------------------------------------
 
 from src.client.video.audio import AudioTrack  # noqa: E402
+from src.client.workers.transcripts.base import Heard, Segment, TranscriptError  # noqa: E402
+from src.client.workers.transcripts.speech import SpeechError  # noqa: E402
+
+
+def _ffmpeg_writes(size: int = 10_000, returncode: int = 0, stderr: bytes = b""):
+    """subprocess.run for ffmpeg: writes `size` bytes to the WAV it's told to."""
+    def run(cmd, **_kwargs):
+        if returncode == 0:
+            Path(cmd[-1]).write_bytes(b"\x00" * size)
+        return MagicMock(returncode=returncode, stderr=stderr)
+    return run
+
+
+def _hears(heard: Heard | BaseException) -> MagicMock:
+    transcriber = MagicMock()
+    if isinstance(heard, BaseException):
+        transcriber.transcribe.side_effect = heard
+    else:
+        transcriber.transcribe.return_value = heard
+    return transcriber
 
 
 def test_transcribe_one_no_audio_track(tmp_path: Path) -> None:
     """When ffmpeg reports a stream-less file, the helper returns ('','')."""
     src = tmp_path / "silent.mov"
     src.write_bytes(b"\x00" * 16)
-
+    transcriber = _hears(Heard())
     with patch("src.client.cli.repair.audio_tracks", return_value=[]), \
          patch("subprocess.run") as run:
-        out = _transcribe_one(src)
+        out = _transcribe_one(src, transcriber)
     assert out == ("", "")
     run.assert_not_called()
+    transcriber.transcribe.assert_not_called()
 
 
 def test_transcribe_one_hears_every_audio_track(tmp_path: Path) -> None:
     """A lav on its own track is mixed in, not dropped."""
     src = tmp_path / "two.mov"
     src.write_bytes(b"\x00" * 16)
-
-    ffmpeg_ok = MagicMock(returncode=0, stderr=b"")
-    whisper_ok = MagicMock(returncode=0, stdout='{"srt": "", "language": ""}', stderr="")
     with patch("src.client.cli.repair.audio_tracks", return_value=[AudioTrack(0, 2, "aac"), AudioTrack(1, 1, "aac")]), \
-         patch("subprocess.run", side_effect=[ffmpeg_ok, whisper_ok]) as run, \
-         patch("os.path.getsize", return_value=10_000), \
-         patch("os.unlink"):
-        _transcribe_one(src)
+         patch("subprocess.run", side_effect=_ffmpeg_writes()) as run, \
+         patch("src.client.workers.transcripts.speech.find_speech", return_value=[]):
+        assert _transcribe_one(src, _hears(Heard())) == ("", "")
     ffmpeg_cmd = " ".join(run.call_args_list[0].args[0])
     assert "amix=inputs=2" in ffmpeg_cmd
 
@@ -341,74 +358,71 @@ def test_transcribe_one_unreadable_audio_is_retried_later(tmp_path: Path) -> Non
     src = tmp_path / "flaky.mov"
     src.write_bytes(b"\x00" * 16)
     with patch("src.client.cli.repair.audio_tracks", side_effect=subprocess.CalledProcessError(1, "ffprobe")):
-        assert _transcribe_one(src) is None
+        assert _transcribe_one(src, _hears(Heard())) is None
 
 
-def test_transcribe_one_returns_srt_on_success(tmp_path: Path) -> None:
-    """ffmpeg succeeds, whisper subprocess returns valid JSON."""
+def test_transcribe_one_finds_the_speech_then_a_machine_hears_only_it(tmp_path: Path) -> None:
+    """The speech is found here with the producer's silences; what the
+    machine says is timed in the speech, and comes back timed in the clip."""
     src = tmp_path / "speak.mp4"
     src.write_bytes(b"\x00" * 16)
+    # One second of speech at 2 s.
+    chunks = [{"start": 32_000, "end": 48_000}]
+    found = []
 
-    ffmpeg_ok = MagicMock(returncode=0, stderr=b"")
-    whisper_ok = MagicMock(
-        returncode=0,
-        stdout='{"srt": "1\\n00:00:00,000 --> 00:00:01,000\\nhi\\n", "language": "en"}',
-        stderr="",
-    )
+    def find_speech(wav, speech, min_silence_ms):
+        found.append((wav.name, speech.name, min_silence_ms))
+        speech.write_bytes(b"speech")
+        return chunks
 
-    # Make the temp wav report a non-trivial size so the early-empty branch is bypassed
+    transcriber = _hears(Heard([Segment(0.0, 0.8, " hi there")], "english"))
     with patch("src.client.cli.repair.audio_tracks", return_value=[AudioTrack(0, 2, "aac")]), \
-         patch("subprocess.run", side_effect=[ffmpeg_ok, whisper_ok]), \
-         patch("os.path.getsize", return_value=10_000), \
-         patch("os.unlink"):
-        out = _transcribe_one(src)
-    assert out is not None
-    srt, lang = out
-    assert "00:00:00,000" in srt
-    assert lang == "en"
+         patch("subprocess.run", side_effect=_ffmpeg_writes()), \
+         patch("src.client.workers.transcripts.speech.find_speech", side_effect=find_speech):
+        out = _transcribe_one(src, transcriber, 700)
+    assert found == [("audio.wav", "speech.wav", 700)]
+    [call] = transcriber.transcribe.call_args_list
+    assert call.args[0].name == "speech.wav"
+    assert out == ("1\n00:00:02,000 --> 00:00:02,800\nhi there\n", "en")
 
 
-def test_transcribe_one_whisper_subprocess_failure(tmp_path: Path) -> None:
+def test_transcribe_one_nothing_said_needs_no_machine(tmp_path: Path) -> None:
+    src = tmp_path / "quiet.mp4"
+    src.write_bytes(b"\x00" * 16)
+    transcriber = _hears(Heard())
+    with patch("src.client.cli.repair.audio_tracks", return_value=[AudioTrack(0, 2, "aac")]), \
+         patch("subprocess.run", side_effect=_ffmpeg_writes()), \
+         patch("src.client.workers.transcripts.speech.find_speech", return_value=[]):
+        assert _transcribe_one(src, transcriber) == ("", "")
+    transcriber.transcribe.assert_not_called()
+
+
+def test_transcribe_one_speech_that_cant_be_found_is_retried_later(tmp_path: Path) -> None:
     src = tmp_path / "speak.mp4"
     src.write_bytes(b"\x00" * 16)
-
-    ffmpeg_ok = MagicMock(returncode=0, stderr=b"")
-    whisper_fail = MagicMock(returncode=1, stdout="", stderr="boom")
-
     with patch("src.client.cli.repair.audio_tracks", return_value=[AudioTrack(0, 2, "aac")]), \
-         patch("subprocess.run", side_effect=[ffmpeg_ok, whisper_fail]), \
-         patch("os.path.getsize", return_value=10_000), \
-         patch("os.unlink"):
-        out = _transcribe_one(src)
-    assert out is None  # transient — caller will retry
+         patch("subprocess.run", side_effect=_ffmpeg_writes()), \
+         patch("src.client.workers.transcripts.speech.find_speech", side_effect=SpeechError("boom")):
+        assert _transcribe_one(src, _hears(Heard())) is None
 
 
-def test_transcribe_one_invalid_whisper_json(tmp_path: Path) -> None:
+def test_transcribe_one_a_machines_failure_says_whose_it_is(tmp_path: Path) -> None:
     src = tmp_path / "speak.mp4"
     src.write_bytes(b"\x00" * 16)
-
-    ffmpeg_ok = MagicMock(returncode=0, stderr=b"")
-    whisper_garbage = MagicMock(returncode=0, stdout="not json", stderr="")
-
     with patch("src.client.cli.repair.audio_tracks", return_value=[AudioTrack(0, 2, "aac")]), \
-         patch("subprocess.run", side_effect=[ffmpeg_ok, whisper_garbage]), \
-         patch("os.path.getsize", return_value=10_000), \
-         patch("os.unlink"):
-        out = _transcribe_one(src)
-    assert out is None
+         patch("subprocess.run", side_effect=_ffmpeg_writes()), \
+         patch("src.client.workers.transcripts.speech.find_speech", return_value=[{"start": 0, "end": 16_000}]), \
+         pytest.raises(TranscriptError) as e:
+        _transcribe_one(src, _hears(TranscriptError("refused", endpoint_fault=True)))
+    assert e.value.endpoint_fault
 
 
 def test_transcribe_one_short_wav_treated_as_empty(tmp_path: Path) -> None:
     src = tmp_path / "speak.mp4"
     src.write_bytes(b"\x00" * 16)
-
-    ffmpeg_ok = MagicMock(returncode=0, stderr=b"")
     with patch("src.client.cli.repair.audio_tracks", return_value=[AudioTrack(0, 2, "aac")]), \
-         patch("subprocess.run", return_value=ffmpeg_ok), \
-         patch("os.path.getsize", return_value=10), \
-         patch("os.unlink"):
-        out = _transcribe_one(src)
-    assert out == ("", "")
+         patch("subprocess.run", side_effect=_ffmpeg_writes(size=10)):
+        assert _transcribe_one(src, _hears(Heard())) == ("", "")
 
 
 # ---- run_repair (dry_run plan builder) -----------------------------------

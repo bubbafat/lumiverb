@@ -82,8 +82,9 @@ def restore(segments: Iterable[Segment], chunks: list[dict]) -> list[Segment]:
 
 
 def _stamp(seconds: float) -> str:
-    return (f"{int(seconds // 3600):02d}:{int((seconds % 3600) // 60):02d}:{int(seconds % 60):02d},"
-            f"{int((seconds % 1) * 1000):03d}")
+    # Whole milliseconds first: 2.8 s is 02,800 (the float parts gave 02,799).
+    ms = round(seconds * 1000)
+    return f"{ms // 3_600_000:02d}:{ms // 60_000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
 
 
 def to_srt(segments: Iterable[Segment]) -> str:

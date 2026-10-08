@@ -60,7 +60,11 @@ def _cached(home: Path, asset_id: str, body: bytes = b"proxy") -> Path:
     return path
 
 
-def _run(client: MagicMock, library: dict, job_type: str, summary: dict, pages: dict[str, list[dict]], **kwargs):
+def _run(client: MagicMock, library: dict, job_type: str, summary: dict, pages: dict[str, list[dict]], *,
+         whisper: str = "small", **kwargs):
+    """whisper: the transcripts job's model, done by the built-in Whisper."""
+    from tests.ai_machine_fakes import built_in_whisper
+
     def page_missing(_client, _library_id, **flags):
         [flag] = [k for k, v in flags.items() if v]
         return pages.get(flag, [])
@@ -68,6 +72,7 @@ def _run(client: MagicMock, library: dict, job_type: str, summary: dict, pages: 
     with (
         patch("src.client.cli.repair.get_repair_summary", return_value={"total_assets": 2, **summary}),
         patch("src.client.cli.repair._page_missing", side_effect=page_missing),
+        built_in_whisper(whisper),
     ):
         run_repair(client, library, job_type=job_type, console=Console(quiet=True), **kwargs)
 
@@ -250,9 +255,12 @@ def test_all_renders_before_reading_proxies(home: Path, library: dict) -> None:
 
     summary = {"total_assets": 1, "missing_probe": 1, "missing_analysis_proxy": 1, "missing_transcription": 1,
                "missing_video_scenes": 1, "missing_scene_vision": 1}
+    from tests.ai_machine_fakes import built_in_whisper
+
     with (
         patch("src.client.cli.repair.get_repair_summary", return_value=summary),
         patch("src.client.cli.repair._page_missing", side_effect=page_missing),
+        built_in_whisper(),
     ):
         run_repair(client, library, job_type="all", console=Console(quiet=True))
     assert order.index("missing_probe") < order.index("missing_analysis_proxy") < order.index("missing_transcription")
@@ -317,7 +325,10 @@ def test_a_step_told_to_stop_does_no_more_items(home: Path, library: dict, job_t
         stop["now"] = True  # the step has started
         return [{"asset_id": "ast_a", "rel_path": "a.mov", "duration_sec": 4.0, "has_analysis_proxy": True}]
 
+    from tests.ai_machine_fakes import built_in_whisper
+
     with ExitStack() as stack:
+        stack.enter_context(built_in_whisper())
         stack.enter_context(patch("src.client.cli.repair.get_repair_summary",
                                   return_value={"total_assets": 1, flag: 1}))
         stack.enter_context(patch("src.client.cli.repair._page_missing", side_effect=page_missing))
@@ -434,7 +445,10 @@ def test_a_step_leaves_skipped_items_and_reports_what_it_takes(home: Path, libra
     page = [{"asset_id": x, "rel_path": f"{x}.mov", "duration_sec": 4.0, "has_analysis_proxy": True}
             for x in ("ast_a", "ast_b")]
     taken: list[tuple[str, str]] = []
+    from tests.ai_machine_fakes import built_in_whisper
+
     with ExitStack() as stack:
+        stack.enter_context(built_in_whisper())
         stack.enter_context(patch("src.client.cli.repair.get_repair_summary",
                                   return_value={"total_assets": 2, flag: 2}))
         stack.enter_context(patch("src.client.cli.repair._page_missing", return_value=page))
@@ -547,20 +561,23 @@ def test_the_encoder_and_decoder_are_this_machines_and_dont_make_a_proxy_stale(h
 
 
 @pytest.mark.fast
-def test_transcription_uses_the_servers_whisper_settings_and_says_so(home: Path, library: dict) -> None:
+def test_transcription_uses_the_jobs_model_and_the_servers_silences_and_says_so(home: Path, library: dict) -> None:
+    from src.client.cli.ai_pool import PooledTranscriber
     from src.shared import producers as P
 
     _cached(home, "ast_a")
+    # The run's settings were read before the job's model changed to large-v3.
     client = _with_producers({"transcript": {"model": "medium", "vad_min_silence_ms": 700}})
     pages = {"missing_transcription": [{"asset_id": "ast_a", "rel_path": "a.mov", "duration_sec": 4.0, "sha256": SHA,
                                          "has_analysis_proxy": True}]}
     with patch("src.client.cli.repair._transcribe_one", return_value=("", "")) as tr:
-        _run(client, library, "transcribe", {"missing_transcription": 1}, pages)
+        _run(client, library, "transcribe", {"missing_transcription": 1}, pages, whisper="large-v3")
 
-    assert tr.call_args.args[1:] == ("medium", 700)
+    _source, transcriber, vad_ms = tr.call_args.args
+    assert isinstance(transcriber, PooledTranscriber) and vad_ms == 700
     [call] = _sent(client, "/transcript")
     assert call.kwargs["json"]["lineage"] == P.lineage(
-        "transcript", {**P.effective_settings("transcript"), "model": "medium", "vad_min_silence_ms": 700}, SHA)
+        "transcript", {"model": "large-v3", "vad_min_silence_ms": 700}, SHA)
 
 
 @pytest.mark.fast
