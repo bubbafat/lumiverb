@@ -135,6 +135,8 @@ def test_api_buffers_uploads_on_the_data_disk():
     text = DEPLOY_API.read_text()
     api_unit = text.split("Description=Lumiverb API Server", 1)[1].split("UNIT", 1)[0]
     assert "Environment=TMPDIR=${DATA_DIR}/tmp" in api_unit
+    # PrivateTmp emptied /tmp on every start; uploads a killed API left there go the same way.
+    assert "ExecStartPre=-/usr/bin/find ${DATA_DIR}/tmp -mindepth 1 -delete" in api_unit
     assert "ReadWritePaths=${DATA_DIR}" in api_unit
     assert '"$DATA_DIR"/tmp' in text.split('step "Creating service user and directories"', 1)[1].split("ok ", 1)[0]
 
@@ -172,6 +174,7 @@ def test_update_moves_an_existing_api_unit_s_tmpdir_to_the_data_disk(tmp_path):
     lines = unit.read_text().splitlines()
     assert lines.count("Environment=TMPDIR=/mnt/ssd2/lumiverb/tmp") == 1
     assert lines.index("Environment=TMPDIR=/mnt/ssd2/lumiverb/tmp") == lines.index("Environment=PYTHONUNBUFFERED=1") + 1
+    assert lines.count("ExecStartPre=-/usr/bin/find /mnt/ssd2/lumiverb/tmp -mindepth 1 -delete") == 1
 
 
 def test_update_makes_the_api_tmpdir():

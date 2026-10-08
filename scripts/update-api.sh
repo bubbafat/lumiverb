@@ -124,10 +124,16 @@ if [[ -f "$API_UNIT" ]]; then
   # can be RAM (tmpfs), so they go on the data disk (inside ReadWritePaths).
   if [[ -z "$DATA_DIR" ]]; then
     warn "No DATA_DIR in ${ENV_FILE}; API uploads stay in /tmp"
-  elif ! grep -q "^Environment=TMPDIR=" "$API_UNIT"; then
-    sed -i "/^Environment=PYTHONUNBUFFERED=1$/a Environment=TMPDIR=${DATA_DIR}/tmp" "$API_UNIT"
+  else
+    if ! grep -q "^Environment=TMPDIR=" "$API_UNIT"; then
+      sed -i "/^Environment=PYTHONUNBUFFERED=1$/a Environment=TMPDIR=${DATA_DIR}/tmp" "$API_UNIT"
+      ok "API uploads spool to ${DATA_DIR}/tmp"
+    fi
+    # PrivateTmp emptied /tmp on each start; do the same for uploads a killed API left.
+    if ! grep -q "^ExecStartPre=-/usr/bin/find ${DATA_DIR}/tmp " "$API_UNIT"; then
+      sed -i "/^Environment=TMPDIR=/a ExecStartPre=-/usr/bin/find ${DATA_DIR}/tmp -mindepth 1 -delete" "$API_UNIT"
+    fi
     systemctl daemon-reload
-    ok "API uploads spool to ${DATA_DIR}/tmp"
   fi
 fi
 

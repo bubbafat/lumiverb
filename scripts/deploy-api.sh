@@ -493,6 +493,8 @@ Environment=PYTHONUNBUFFERED=1
 # Large uploads (analysis proxies) are spooled to TMPDIR; PrivateTmp's /tmp
 # can be RAM (tmpfs), so they go on the data disk.
 Environment=TMPDIR=${DATA_DIR}/tmp
+# PrivateTmp emptied /tmp on each start; do the same for uploads a killed API left.
+ExecStartPre=-/usr/bin/find ${DATA_DIR}/tmp -mindepth 1 -delete
 ExecStart=${APP_DIR}/.venv/bin/uvicorn src.server.api.main:app --host \${API_LISTEN_HOST} --port \${API_PORT} --workers 2
 Restart=on-failure
 RestartSec=5s
