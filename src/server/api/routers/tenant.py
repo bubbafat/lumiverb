@@ -7,10 +7,11 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import Session
 
-from src.server.api.dependencies import get_tenant_session, require_editor
+from src.server.api.dependencies import get_tenant_session, require_editor, require_tenant_admin
+from src.server.tenant_settings import get_video_preview_max_seconds, set_video_preview_max_seconds
 from src.shared.path_filter import validate_pattern
 from src.server.repository.tenant import PathFilterRepository
 
@@ -22,6 +23,17 @@ class TenantContextResponse(BaseModel):
     vision_api_url: str = ""
     vision_api_key: str = ""
     vision_model_id: str = ""
+
+
+class TenantSettingsResponse(BaseModel):
+    # Seconds of each video that playback serves; None means the whole video.
+    video_preview_max_seconds: int | None = None
+
+
+class TenantSettingsUpdate(BaseModel):
+    """Fields left out stay as they are; null clears a cap."""
+
+    video_preview_max_seconds: Annotated[int, Field(strict=True, ge=1, le=86_400)] | None = None
 
 
 class TenantFilterDefaultItem(BaseModel):
@@ -45,6 +57,29 @@ class TenantFilterDefaultsResponse(BaseModel):
 class CreateTenantFilterDefaultRequest(BaseModel):
     type: str  # "include" | "exclude"
     pattern: str
+
+
+@router.get("/settings", response_model=TenantSettingsResponse)
+def get_tenant_settings(
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> TenantSettingsResponse:
+    """Account-wide settings. Anyone signed in can read them."""
+    return TenantSettingsResponse(video_preview_max_seconds=get_video_preview_max_seconds(session))
+
+
+@router.patch(
+    "/settings",
+    response_model=TenantSettingsResponse,
+    dependencies=[Depends(require_tenant_admin)],
+)
+def update_tenant_settings(
+    body: TenantSettingsUpdate,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> TenantSettingsResponse:
+    """Change account-wide settings (admins only)."""
+    if "video_preview_max_seconds" in body.model_fields_set:
+        set_video_preview_max_seconds(session, body.video_preview_max_seconds)
+    return TenantSettingsResponse(video_preview_max_seconds=get_video_preview_max_seconds(session))
 
 
 @router.get("/context", response_model=TenantContextResponse)

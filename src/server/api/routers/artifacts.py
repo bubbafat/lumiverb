@@ -283,6 +283,9 @@ def download_artifact(
     elif artifact_type == "video_preview":
         key = asset.video_preview_key
     elif artifact_type == "analysis_proxy":
+        # The whole video: public pages play it through /playback, within the account's cap.
+        if getattr(request.state, "is_public_request", False):
+            raise HTTPException(status_code=403, detail="Analysis proxies aren't public")
         key = asset.analysis_proxy_key
     else:  # scene_rep
         if rep_frame_ms is None:

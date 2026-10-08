@@ -43,6 +43,7 @@ from src.server.api.routers import admin, assets, changes, projects, keys, libra
 from src.server.api.routers.auth import router as auth_router
 from src.server.api.routers.users import router as users_router
 from src.server.api.routers.artifacts import router as artifacts_router
+from src.server.api.routers.playback import router as playback_router
 from src.server.api.routers.ingest import router as ingest_router
 from src.server.api.routers.maintenance import router as maintenance_router
 from src.server.api.routers.upgrade import router as upgrade_router
@@ -103,6 +104,7 @@ app.include_router(people_router)
 app.include_router(faces_router)
 app.include_router(filters_router)
 app.include_router(facets_router)
+app.include_router(playback_router)
 app.include_router(assets.router)
 app.include_router(projects.router, prefix="/v1/projects", tags=["projects"])
 app.include_router(public_projects_router, prefix="/v1/public/projects", tags=["public_projects"])

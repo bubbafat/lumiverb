@@ -29,6 +29,8 @@ def _skip_tenant_middleware(path: str) -> bool:
         return True
     if path.startswith("/v1/filters/"):
         return True
+    if path.startswith("/v1/stream/"):
+        return True  # signed playback links resolve their own tenant
     if path in ("/docs", "/redoc", "/openapi.json"):
         return True
     return False

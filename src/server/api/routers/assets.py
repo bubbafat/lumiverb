@@ -1498,6 +1498,14 @@ def stream_or_enqueue_preview(
                 asset.video_preview_last_accessed_at = now
                 session.add(asset)
                 session.commit()
+            from src.server.api.routers.playback import capped
+            from src.server.tenant_settings import get_video_preview_max_seconds
+
+            path = capped(
+                path, get_video_preview_max_seconds(session), storage=storage,
+                tenant_id=request.state.tenant_id, asset_id=asset_id, source="preview",
+                version=f"{int(path.stat().st_mtime)}-{path.stat().st_size}",
+            )
             return _stream_file_with_range(path, request, media_type="video/mp4")
 
         # File is missing on disk – clear key.
