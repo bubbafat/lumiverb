@@ -44,6 +44,8 @@ export default function LibrariesPage() {
     string | null
   >(null);
   const [visibilityError, setVisibilityError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [emptyTrashError, setEmptyTrashError] = useState<string | null>(null);
 
   const { data: libraries, isLoading, error } = useQuery({
     queryKey: ["libraries", true],
@@ -83,6 +85,7 @@ export default function LibrariesPage() {
   const deleteMutation = useMutation({
     mutationFn: ({ id, archived, removeFromProjects }: DeleteVars) =>
       deleteLibrary(id, archived ? { archived, ...(removeFromProjects ? { removeFromProjects } : {}) } : undefined),
+    onMutate: () => setDeleteError(null),
     onSuccess: () => {
       setDeleteConfirmId(null);
       setArchivedAsk(null);
@@ -94,6 +97,10 @@ export default function LibrariesPage() {
         setArchivedAsk({ id: vars.id, count: Number(err.details.archived_clips) || 0 });
       } else if (err.code === "in_projects" && err.details && archivedAsk) {
         setArchivedAsk({ ...archivedAsk, inProjects: Number(err.details.assets_in_projects) || 0 });
+      } else {
+        setDeleteConfirmId(null);
+        setArchivedAsk(null);
+        setDeleteError(err.message);
       }
     },
   });
@@ -101,6 +108,7 @@ export default function LibrariesPage() {
 
   const emptyTrashMutation = useMutation({
     mutationFn: (removeFromProjects: boolean) => emptyTrash(removeFromProjects),
+    onMutate: () => setEmptyTrashError(null),
     onSuccess: () => {
       setEmptyTrashConfirm(false);
       setTrashUsage(null);
@@ -109,11 +117,13 @@ export default function LibrariesPage() {
     },
     onError: (err: ApiError) => {
       if (err.code === "in_projects" && err.details) setTrashUsage(err.details as unknown as ProjectUsage);
+      else setEmptyTrashError(err.message);
     },
   });
   const closeEmptyTrash = () => {
     setEmptyTrashConfirm(false);
     setTrashUsage(null);
+    setEmptyTrashError(null);
   };
   const usageTotal = trashUsage ? trashUsage.projects.length + trashUsage.other_projects : 0;
 
@@ -187,6 +197,11 @@ export default function LibrariesPage() {
         {visibilityError && (
           <div className="flex items-center justify-between rounded-lg border border-red-800/50 bg-red-900/20 px-4 py-3 text-red-400">
             <span>{visibilityError}</span>
+          </div>
+        )}
+        {deleteError && (
+          <div role="alert" className="flex items-center justify-between rounded-lg border border-red-800/50 bg-red-900/20 px-4 py-3 text-red-400">
+            <span>Couldn&apos;t delete the library: {deleteError}</span>
           </div>
         )}
 
@@ -518,6 +533,11 @@ export default function LibrariesPage() {
                     <li>and {trashUsage.other_projects} more you can&apos;t see</li>
                   )}
                 </ul>
+              </div>
+            )}
+            {emptyTrashError && (
+              <div role="alert" className="mb-4 rounded-lg border border-red-800/50 bg-red-900/20 px-3 py-2 text-sm text-red-400">
+                Couldn&apos;t empty the trash: {emptyTrashError}
               </div>
             )}
             <div className="flex justify-end gap-2">

@@ -73,6 +73,14 @@ describe("LibrariesPage empty trash", () => {
     await waitFor(() => expect(api.emptyTrash).toHaveBeenLastCalledWith(true));
   });
 
+  it("says why when emptying the trash fails", async () => {
+    api.emptyTrash.mockRejectedValue(new ApiError(500, "Couldn't reach the database", "internal"));
+    renderPage();
+    const dialog = await openEmptyTrash();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Empty trash" }));
+    expect((await within(dialog).findByRole("alert")).textContent).toContain("Couldn't reach the database");
+  });
+
   it("says it, not them, for one clip in one project", async () => {
     api.emptyTrash.mockRejectedValue(new ApiError(409, "in projects", "in_projects", {
       assets_in_projects: 1,
@@ -135,6 +143,12 @@ describe("LibrariesPage delete with archived clips", () => {
     await waitFor(() =>
       expect(api.deleteLibrary).toHaveBeenLastCalledWith("lib_2", { archived: "delete", removeFromProjects: true }),
     );
+  });
+
+  it("says why when a delete fails", async () => {
+    api.deleteLibrary.mockRejectedValue(new ApiError(403, "Only an admin can delete libraries", "forbidden"));
+    await startDelete();
+    expect((await screen.findByRole("alert")).textContent).toContain("Only an admin can delete libraries");
   });
 
   it("a library without archived clips deletes straight away", async () => {
