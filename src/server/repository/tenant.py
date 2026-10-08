@@ -1032,17 +1032,18 @@ class AssetRepository:
         self,
         asset_ids: list[str] | None = None,
         trashed_before: datetime | None = None,
+        include_missing: bool = False,
     ) -> list[Asset]:
         """Return trashed assets matching the given filters.
 
-        Without explicit asset_ids, only the user's trash: assets that are
-        merely missing on disk (an unplugged drive) keep their human data
-        until someone purges them by id.
+        Only the user's trash: assets that are merely missing on disk (archived;
+        they come back when the file does) are left alone unless they're named
+        in asset_ids and include_missing says so.
         """
         stmt = select(Asset).where(Asset.deleted_at.isnot(None))
         if asset_ids is not None:
             stmt = stmt.where(Asset.asset_id.in_(asset_ids))
-        else:
+        if asset_ids is None or not include_missing:
             stmt = stmt.where(Asset.deleted_reason == "user")
         if trashed_before is not None:
             stmt = stmt.where(Asset.deleted_at < trashed_before)
