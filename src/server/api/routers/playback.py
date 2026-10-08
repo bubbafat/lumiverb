@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import functools
 import hashlib
 import hmac
 import json
@@ -177,6 +178,12 @@ def _duration(path: Path) -> float | None:
         return None
 
 
+@functools.lru_cache(maxsize=8192)
+def _served_duration(path: str, version: str) -> float | None:
+    """The served file's own length, probed once per version of it."""
+    return _duration(Path(path))
+
+
 def _playback_dir(storage: LocalStorage, tenant_id: str) -> Path:
     return storage.abs_path(f"{tenant_id}/playback")
 
@@ -190,21 +197,20 @@ def capped(
     asset_id: str,
     source: Source,
     version: str,
-    duration: float | None = None,
 ) -> Path:
     """`path`, or a copy of its first `max_seconds` when it runs longer.
 
     Cuts are made with stream copy (no re-encoding, every track kept) and
     stored under {tenant}/playback, outside the library folders cleanup
-    walks. `duration`, when known, saves an ffprobe per request.
+    walks. Whether the file runs longer is the file's own say, not a
+    stored duration that may be wrong; unknown means cut.
     """
     if max_seconds is None:
         return path
     cut = _playback_dir(storage, tenant_id) / f"{asset_id}_{source}_{version}_{max_seconds}s.mp4"
     if cut.is_file():
         return cut
-    if duration is None:
-        duration = _duration(path)
+    duration = _served_duration(str(path), version)
     if duration is not None and duration <= max_seconds + _CAP_SLACK_SEC:
         return path
     cut.parent.mkdir(parents=True, exist_ok=True)
@@ -246,9 +252,10 @@ def clear_cuts(tenant_id: str, asset_ids: list[str] | None = None) -> None:
     folder = _playback_dir(get_storage(), tenant_id)
     if not folder.is_dir():
         return
+    doomed = None if asset_ids is None else set(asset_ids)
     for f in folder.iterdir():
-        name = f.name.lstrip(".")
-        if asset_ids is None or any(name.startswith(f"{a}_") for a in asset_ids):
+        m = _CUT_NAME.match(f.name.lstrip("."))
+        if doomed is None or (m is not None and m.group(1) in doomed):
             with contextlib.suppress(OSError):
                 f.unlink(missing_ok=True)
 
@@ -292,11 +299,6 @@ def srt_before(srt: str, seconds: int) -> str:
                     kept.append(block)
                 break
     return "\n\n".join(kept) + ("\n" if kept else "")
-
-
-def preview_duration(asset: Asset) -> float | None:
-    """Scan's preview is the first 10 seconds."""
-    return min(10.0, asset.duration_sec) if asset.duration_sec else None
 
 
 # ---------------------------------------------------------------------------
@@ -380,10 +382,9 @@ def stream(token: str, request: Request) -> StreamingResponse:
             raise HTTPException(status_code=404, detail="Nothing to play")
         source, path, version = playable
         max_seconds = playback_cap(session, public=bool(claims.get("pl") or claims.get("pp")))
-        duration = asset.duration_sec if source == "analysis_proxy" else preview_duration(asset)
 
     path = capped(path, max_seconds, storage=storage, tenant_id=tenant_id, asset_id=asset_id,
-                  source=source, version=version, duration=duration)
+                  source=source, version=version)
     # Names the bytes: a cap change or a new proxy mid-play mustn't splice two files.
     etag = f'"{source}-{version}-{max_seconds or "whole"}"'
     response = _stream_file_with_range(path, request, media_type="video/mp4", etag=etag)

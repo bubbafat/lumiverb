@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlmodel import Session
 
 from src.shared.io_utils import normalize_rel_path
-from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor
+from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor, require_signed_in
 from src.shared import asset_status
 from src.shared.io_utils import normalize_path_prefix
 from src.server.repository.tenant import AssetMetadataRepository, AssetRepository, LibraryRepository
@@ -402,7 +402,7 @@ class RepairSummary(BaseModel):
     stale_search_sync: int = 0
 
 
-@router.get("/repair-summary", response_model=RepairSummary)
+@router.get("/repair-summary", response_model=RepairSummary, dependencies=[Depends(require_signed_in)])
 def repair_summary(
     session: Annotated[Session, Depends(get_tenant_session)],
     library_id: str,
@@ -589,7 +589,8 @@ def _stream_file_with_range(
 ) -> StreamingResponse:
     """Stream `path`, honoring a single Range: `bytes=a-b`, `bytes=a-` or `bytes=-n`.
 
-    A range starting past the end is a 416; a malformed one gets the whole file.
+    A range starting past the end is a 416; a malformed one gets the whole
+    file, and so does one whose If-Range names another version (`etag`).
     """
     file_size = path.stat().st_size
     range_header = request.headers.get("range")
@@ -600,6 +601,9 @@ def _stream_file_with_range(
     if etag:
         headers["ETag"] = etag
 
+    if_range = request.headers.get("if-range")
+    if range_header and if_range and etag and if_range.strip() != etag:
+        range_header = None  # the client holds another version: send this one whole
     if range_header:
         units, _, range_spec = range_header.partition("=")
         start_str, _, end_str = range_spec.split(",")[0].strip().partition("-")
@@ -661,8 +665,11 @@ def _check_public_request(request: Request, session: Session, asset) -> None:
 
 
 def _trim_public_transcript(request: Request, session: Session, response: AssetResponse) -> None:
-    """A public page's transcript stops where its playback does."""
-    if not getattr(request.state, "is_public_request", False) or not response.transcript_srt:
+    """A public page's transcript stops where its playback does, and doesn't say who wrote the note."""
+    if not getattr(request.state, "is_public_request", False):
+        return
+    response.note_author = None
+    if not response.transcript_srt:
         return
     from src.server.api.routers.playback import srt_before
     from src.server.tenant_settings import playback_cap
@@ -1522,14 +1529,13 @@ def stream_or_enqueue_preview(
                 asset.video_preview_last_accessed_at = now
                 session.add(asset)
                 session.commit()
-            from src.server.api.routers.playback import capped, preview_duration
+            from src.server.api.routers.playback import capped
             from src.server.tenant_settings import playback_cap
 
             path = capped(
                 path, playback_cap(session, public=getattr(request.state, "is_public_request", False)),
                 storage=storage, tenant_id=request.state.tenant_id, asset_id=asset_id, source="preview",
                 version=f"{int(path.stat().st_mtime)}-{path.stat().st_size}",
-                duration=preview_duration(asset),
             )
             return _stream_file_with_range(path, request, media_type="video/mp4")
 
@@ -1850,7 +1856,7 @@ def submit_faces(
     return FaceSubmitResponse(face_count=asset.face_count or 0, face_ids=face_ids)
 
 
-@router.get("/{asset_id}/faces", response_model=FaceListResponse)
+@router.get("/{asset_id}/faces", response_model=FaceListResponse, dependencies=[Depends(require_signed_in)])
 def list_faces(
     asset_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],

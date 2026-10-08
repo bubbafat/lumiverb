@@ -12,6 +12,7 @@ def search_assets(
     query: str,
     limit: int = 20,
     offset: int = 0,
+    include_transcripts: bool = True,
 ) -> list[dict]:
     """
     Simple Postgres fallback search using ILIKE across:
@@ -43,6 +44,8 @@ def search_assets(
     # full raw string, so multi-word unquoted queries also only
     # matched when the words appeared contiguously. Per-term groups
     # actually loosen that for unquoted input.
+    # A capped public page doesn't show the whole transcript, so its search doesn't read it.
+    transcript_or = "OR a.transcript_text ILIKE :{name}" if include_transcripts else ""
     terms = parse_query(query)
     term_patterns: list[tuple[str, str]] = []  # (bind_name, ilike_value)
     for i, term in enumerate(terms):
@@ -59,7 +62,7 @@ def search_assets(
                OR CAST(m.data->'tags' AS TEXT) ILIKE :{name}
                OR m.data->>'ocr_text' ILIKE :{name}
                OR a.note ILIKE :{name}
-               OR a.transcript_text ILIKE :{name}
+               {transcript_or.format(name=name)}
               )"""
             for name, _ in term_patterns
         )
@@ -67,7 +70,7 @@ def search_assets(
         # No parseable terms — degrade to the old raw-substring filter
         # so callers that pass opaque text (e.g. exact asset IDs) still
         # work.
-        groups = """(
+        groups = f"""(
               a.asset_id       ILIKE :like_0
            OR a.rel_path       ILIKE :like_0
            OR a.camera_make    ILIKE :like_0
@@ -76,7 +79,7 @@ def search_assets(
            OR CAST(m.data->'tags' AS TEXT) ILIKE :like_0
            OR m.data->>'ocr_text' ILIKE :like_0
            OR a.note ILIKE :like_0
-           OR a.transcript_text ILIKE :like_0
+           {transcript_or.format(name='like_0')}
           )"""
         term_patterns = [("like_0", f"%{query}%")]
 

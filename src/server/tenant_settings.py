@@ -52,9 +52,10 @@ def set_video_preview_max_seconds(session: Session, value: int | None) -> None:
 def get_public_video_preview_max_seconds(session: Session) -> int | None:
     """How many seconds public pages play; 10 until set, None once lifted."""
     value = _get(session, PUBLIC_VIDEO_PREVIEW_MAX_SECONDS)
-    if value is None:
-        return PUBLIC_DEFAULT_SECONDS
-    return None if value == _WHOLE else _seconds(value)
+    if value == _WHOLE:
+        return None
+    # Unset, or unreadable: public pages stay capped.
+    return _seconds(value) or PUBLIC_DEFAULT_SECONDS
 
 
 def set_public_video_preview_max_seconds(session: Session, value: int | None) -> None:

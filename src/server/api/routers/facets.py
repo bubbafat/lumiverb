@@ -44,7 +44,10 @@ def get_facets(
 
     Accepts the same ``?f=prefix:value`` params as ``/v1/query``.
     """
+    from src.server.api.routers.query import guard_public_spec
+
     spec = parse_f_params(f)
+    public_cap_ms = guard_public_spec(request, session, spec)
 
     conditions: list[str] = []
     params: dict[str, object] = {}
@@ -67,12 +70,13 @@ def get_facets(
             )
 
             scores, contexts, source = _run_quickwit_search(
-                tenant_id, spec.search_terms, library_ids, limit=MAX_CANDIDATE_IDS,
+                tenant_id, spec.search_terms, library_ids, limit=MAX_CANDIDATE_IDS, public_cap_ms=public_cap_ms,
             )
             if source == "postgres_fallback":
                 pg_query = " ".join(st.q for st in spec.search_terms if st.q)
                 scores, contexts = _run_postgres_fallback(
                     session, pg_query, library_ids, limit=MAX_CANDIDATE_IDS,
+                    include_transcripts=public_cap_ms is None,
                 )
             if not scores:
                 return _empty_facets()

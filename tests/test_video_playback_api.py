@@ -651,9 +651,27 @@ def test_the_daily_sweep_drops_cuts_of_gone_assets_and_stale_temp_files(tmp_path
 
 
 @pytest.mark.fast
-def test_the_cleanup_job_sweeps_playback_cuts():
-    text = (Path(__file__).resolve().parents[1] / "src" / "server" / "search" / "cleanup.py").read_text()
-    assert "sweep_cuts(" in text
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_the_cleanup_job_sweeps_playback_cuts(tmp_path, dry_run):
+    from unittest.mock import MagicMock
+
+    from src.server.search.cleanup import run_cleanup_for_tenant
+
+    kept, gone = "ast_01M4CWVZ2MPTAV6FSGG6B6VXVP", "ast_01M4CWVZYN681BTVTSA2CYJQNZ"
+    folder = tmp_path / "ten_1" / "playback"
+    folder.mkdir(parents=True)
+    (folder / f"{kept}_preview_1-2_5s.mp4").write_bytes(b"x")
+    (folder / f"{gone}_preview_1-2_5s.mp4").write_bytes(b"x")
+
+    def execute(sql, *a, **k):
+        rows = [(kept,)] if "FROM assets" in str(sql) else []
+        return MagicMock(fetchall=lambda: rows)
+
+    session = MagicMock(execute=execute)
+    result = run_cleanup_for_tenant(tmp_path, "ten_1", session, dry_run=dry_run)
+    assert result.orphan_files == 1
+    left = sorted(p.name for p in folder.iterdir())
+    assert left == sorted([f"{kept}_preview_1-2_5s.mp4"] + ([f"{gone}_preview_1-2_5s.mp4"] if dry_run else []))
 
 
 @pytest.mark.slow
@@ -688,3 +706,60 @@ def test_every_link_is_new_even_within_a_second(monkeypatch):
     a, b = mint_stream_token("ten_1", "ast_1"), mint_stream_token("ten_1", "ast_1")
     assert a != b
     assert read_stream_token(a)["a"] == read_stream_token(b)["a"] == "ast_1"
+
+
+@pytest.mark.slow
+def test_the_cap_goes_by_the_file_not_a_stored_duration(env, media, tmp_path):
+    # A wrong duration on the asset (client-supplied, or before the probe)
+    # mustn't let a public page play the whole video.
+    client, admin, library_id, *_ = env
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 36)).save(buf, format="JPEG")
+    buf.seek(0)
+    data = {"library_id": library_id, "rel_path": "lies.mov", "file_size": "1000", "media_type": "video",
+            "width": "64", "height": "36", "exif": json.dumps({"sha256": os.urandom(32).hex(), "duration_sec": 2})}
+    r = client.post("/v1/ingest", data=data, files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=admin)
+    assert r.status_code == 200, r.text
+    asset_id = r.json()["asset_id"]
+    _upload(env, asset_id, "analysis_proxy", media["long"])
+    params = _public(env)
+    url = _path(client.get(f"/v1/assets/{asset_id}/playback", params=params).json()["url"])
+    assert _duration(client.get(url).content, tmp_path) == pytest.approx(10, abs=0.6)
+
+
+@pytest.mark.slow
+def test_if_range_with_an_old_version_gets_the_whole_new_file(env, media):
+    client, admin, *_ = env
+    url = _path(_playback(env, _video(env, media, "ifrange")).json()["url"])
+    etag = client.get(url).headers["etag"]
+    same = client.get(url, headers={"Range": "bytes=0-99", "If-Range": etag})
+    assert same.status_code == 206 and len(same.content) == 100
+    stale = client.get(url, headers={"Range": "bytes=0-99", "If-Range": '"something-else"'})
+    assert stale.status_code == 200 and stale.content == media["proxy"]
+
+
+@pytest.mark.fast
+def test_an_unreadable_public_setting_stays_capped():
+    from unittest.mock import MagicMock
+
+    from src.server.tenant_settings import PUBLIC_DEFAULT_SECONDS, get_public_video_preview_max_seconds
+
+    session = MagicMock()
+    session.get.return_value = MagicMock(value="garbage")
+    assert get_public_video_preview_max_seconds(session) == PUBLIC_DEFAULT_SECONDS
+
+
+@pytest.mark.fast
+def test_clearing_cuts_for_deleted_assets_leaves_the_rest(tmp_path, monkeypatch):
+    from src.server.api.routers import playback
+
+    folder = tmp_path / "ten_1" / "playback"
+    folder.mkdir(parents=True)
+    a, b = "ast_01M4CWVZ2MPTAV6FSGG6B6VXVP", "ast_01M4CWVZYN681BTVTSA2CYJQNZ"
+    for n in (f"{a}_preview_1-2_5s.mp4", f".{a}_tmp.mp4", f"{b}_analysis_proxy_x_5s.mp4"):
+        (folder / n).write_bytes(b"x")
+    monkeypatch.setattr(playback, "get_storage", lambda: LocalStorage(str(tmp_path)))
+    playback.clear_cuts("ten_1", [a])
+    assert [p.name for p in folder.iterdir()] == [f"{b}_analysis_proxy_x_5s.mp4"]

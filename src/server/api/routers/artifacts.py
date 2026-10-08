@@ -266,7 +266,7 @@ def download_artifact(
         )
 
     asset = AssetRepository(session).get_by_id(asset_id)
-    if asset is None:
+    if asset is None or (asset.deleted_at is not None and getattr(request.state, "is_public_request", False)):
         raise HTTPException(status_code=404, detail="Asset not found")
     if getattr(request.state, "is_public_request", False):
         public_library_id = request.query_params.get("public_library_id")
@@ -298,6 +298,12 @@ def download_artifact(
             raise HTTPException(
                 status_code=400, detail="rep_frame_ms is required for scene_rep artifacts"
             )
+        if getattr(request.state, "is_public_request", False):
+            from src.server.tenant_settings import playback_cap
+
+            cap = playback_cap(session, public=True)
+            if cap is not None and rep_frame_ms >= cap * 1000:
+                raise HTTPException(status_code=403, detail="Past what public pages play")
         tenant_id: str = request.state.tenant_id
         storage: LocalStorage = get_storage()
         key = storage.scene_rep_key(tenant_id, asset.library_id, asset_id, rep_frame_ms)
@@ -325,14 +331,14 @@ def download_artifact(
     if artifact_type == "video_preview":
         # Within the playback cap for whoever is asking, like /preview.
         from src.server.api.routers.assets import _stream_file_with_range
-        from src.server.api.routers.playback import capped, preview_duration
+        from src.server.api.routers.playback import capped
         from src.server.tenant_settings import playback_cap
 
         st = path.stat()
         path = capped(
             path, playback_cap(session, public=getattr(request.state, "is_public_request", False)),
             storage=storage, tenant_id=request.state.tenant_id, asset_id=asset_id, source="preview",
-            version=f"{int(st.st_mtime)}-{st.st_size}", duration=preview_duration(asset),
+            version=f"{int(st.st_mtime)}-{st.st_size}",
         )
         return _stream_file_with_range(path, request, media_type=CONTENT_TYPES[artifact_type])
 

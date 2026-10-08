@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlmodel import Session
-from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor
+from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor, require_signed_in
 from src.server.api.errors import DecisionRequiredError
 from src.server.database import get_control_session
 from src.shared.io_utils import normalize_path_prefix
@@ -314,7 +314,7 @@ def delete_library(
             PublicLibraryRepository(ctrl_session).delete(library_id)
 
 
-@router.get("/{library_id}/ignored-paths", response_model=IgnoredPathPage)
+@router.get("/{library_id}/ignored-paths", response_model=IgnoredPathPage, dependencies=[Depends(require_signed_in)])
 def page_ignored_paths(
     library_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
