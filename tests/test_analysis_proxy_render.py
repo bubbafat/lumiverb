@@ -112,10 +112,34 @@ def _handlers(info: dict) -> list[str]:
     return [a.get("tags", {}).get("handler_name", "") for a in _audio(info)]
 
 
-def _mean_volume(path: Path, track: int) -> float:
+def _mean_volume(path: Path, track: int, between: tuple[float, float] | None = None) -> float:
+    """Mean dB of an audio track, or of its seconds `between` (by timestamp)."""
+    trim = f"atrim={between[0]}:{between[1]}," if between else ""
     out = subprocess.run(["ffmpeg", "-hide_banner", "-nostdin", "-i", str(path), "-map", f"0:a:{track}",
-                          "-af", "volumedetect", "-f", "null", "-"], capture_output=True, text=True).stderr
+                          "-af", f"{trim}volumedetect", "-f", "null", "-"], capture_output=True, text=True).stderr
     return float(out.split("mean_volume:")[1].split("dB")[0])
+
+
+def _late_lav(path: Path, *, gap: bool = False) -> Path:
+    """6 s, track 1 silent throughout, track 2 a tone only from 3 s to 5 s.
+
+    The tone's track starts late (start_time near 3 s), or with `gap`, starts
+    at 0 with a hole in its timestamps from 1 s to 3 s and the tone after it.
+    """
+    tone = path.with_name("tone.mkv")
+    source = "sine=frequency=660:sample_rate=48000:duration="
+    source += "3,volume=0:enable='lt(t,1)'" if gap else "2"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", source,
+                    "-c:a", "aac", str(tone)], check=True)
+    late = ["-c:a:1", "copy", "-bsf:a:1", r"setts=ts=TS+if(gte(TS*TB\,1)\,2/TB\,0)"] if gap else []
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+           "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=30:duration=6",
+           "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=6,volume=0",
+           *([] if gap else ["-itsoffset", "3"]), "-i", str(tone),
+           "-map", "0:v", "-map", "1:a", "-map", "2:a",
+           "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", *late, str(path)]
+    subprocess.run(cmd, check=True)
+    return path
 
 
 @pytest.mark.fast
@@ -150,6 +174,19 @@ def test_the_mix_keeps_a_lone_voice_as_loud_as_it_was(tmp_path: Path) -> None:
     live = _mean_volume(src, 4)
     mix = _mean_volume(out, 0)
     assert abs(mix - live) < 4, (live, mix)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("gap", [False, True], ids=["starts-late", "has-a-gap"])
+def test_the_mix_keeps_each_track_at_its_time(tmp_path: Path, gap: bool) -> None:
+    # amix takes samples in order: a lav that starts 3 s in would play from 0
+    # in the mix, out of step with the picture and the transcript.
+    src = _late_lav(tmp_path / "late.mkv", gap=gap)
+    assert _mean_volume(src, 1, (3, 5)) > -40
+    out = tmp_path / "out.mp4"
+    render_analysis_proxy(src, out)
+    assert _mean_volume(out, 0, (0, 2)) < -80
+    assert _mean_volume(out, 0, (3, 5)) > -40
 
 
 @pytest.mark.fast
@@ -427,6 +464,22 @@ def test_speech_from_a_proxy_uses_its_mix(tmp_path: Path) -> None:
     assert "-filter_complex" not in cmd and cmd[cmd.index("-map") + 1] == "0:a:0"
     subprocess.run(cmd, check=True)
     assert _peak(tmp_path / "s.wav") > 1000
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("alone", [False, True], ids=["mixed", "one-track"])
+def test_speech_audio_keeps_each_track_at_its_time(tmp_path: Path, alone: bool) -> None:
+    # Whisper's timestamps are times in the clip: a late lav must stay late.
+    src = _late_lav(tmp_path / "late.mkv")
+    if alone:
+        one = tmp_path / "one.mkv"
+        subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(src),
+                        "-map", "0:v", "-map", "0:a:1", "-c", "copy", str(one)], check=True)
+        src = one
+    wav = tmp_path / "s.wav"
+    subprocess.run(speech_wav_command(src, wav, audio_tracks(src)), check=True)
+    assert _mean_volume(wav, 0, (0, 2)) < -80
+    assert _mean_volume(wav, 0, (3, 5)) > -40
 
 
 @pytest.mark.fast

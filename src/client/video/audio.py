@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 MIX_HANDLER = "Lumiverb mix"
 # Codecs ffprobe names for audio it can't decode (e.g. iPhone spatial audio).
 _UNDECODABLE = {"", "none", "unknown"}
+# Lays a track out from the clip's start: silence where it starts late or skips.
+_FROM_START = "aresample=async=1:first_pts=0"
 
 
 @dataclass(frozen=True)
@@ -52,17 +54,19 @@ def mix_filter(tracks: list[AudioTrack], label: str) -> str:
 
     amix's default divides by the number of tracks, so one live lav among
     eight would come out 18 dB down; the limiter stops loud ones clipping.
+    amix also takes samples in order, so each track is first laid out from
+    the clip's start, with silence where it starts late or skips.
     """
-    parts = [f"[0:a:{t.index}]aformat=channel_layouts=stereo[m{n}]" for n, t in enumerate(tracks)]
+    parts = [f"[0:a:{t.index}]{_FROM_START},aformat=channel_layouts=stereo[m{n}]" for n, t in enumerate(tracks)]
     inputs = "".join(f"[m{n}]" for n in range(len(tracks)))
     parts.append(f"{inputs}amix=inputs={len(tracks)}:normalize=0,alimiter=limit=0.95:level=false[{label}]")
     return ";".join(parts)
 
 
 def speech_wav_command(source: Path, wav: Path, tracks: list[AudioTrack]) -> list[str]:
-    """ffmpeg command for a 16 kHz mono WAV of everything said on any track."""
+    """ffmpeg command for a 16 kHz mono WAV of everything said on any track, timed as in the clip."""
     if tracks[0].handler == MIX_HANDLER or len(tracks) == 1:
-        audio = ["-map", f"0:a:{tracks[0].index}"]
+        audio = ["-map", f"0:a:{tracks[0].index}", "-af", _FROM_START]
     else:
         audio = ["-filter_complex", mix_filter(tracks, "speech"), "-map", "[speech]"]
     return [
