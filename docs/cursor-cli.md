@@ -58,7 +58,7 @@ Entry point: `lumiverb = "src.client.cli:main"` (setuptools); `main()` invokes t
 - `lumiverb library list` — List libraries; a **Here** column shows mapped roots.
 - `lumiverb library report-changes <path>... [--stdin]` — Tell the brain these files or folders changed, so its worker scans them (`POST /v1/changes`). Paths are as this machine sees them; root mappings turn them back into the library's form. Prints how many matched a library and which didn't.
 - `lumiverb library update <name> [--name <new>] [--root-path <path>]` — Update library.
-- `lumiverb library delete --name <name>` — Soft delete (trash).
+- `lumiverb library delete --name <name> [--yes] [--archived keep|delete] [--remove-from-projects]` — Soft delete (trash). If the library holds archived clips (files that went missing and haven't come back), it asks whether to delete them for good or keep them with the library, and, when deleting them would take them out of projects, asks again; the flags answer for scripts (`--yes` without `--archived` stops if there are any).
 - `lumiverb library empty-trash` — Permanently delete trashed libraries. First lists the projects their clips are in (deleting removes the clips from those projects) and asks.
 
 #### Project

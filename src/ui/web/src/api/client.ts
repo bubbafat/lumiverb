@@ -230,8 +230,20 @@ export async function createLibrary(
   });
 }
 
-export async function deleteLibrary(libraryId: string): Promise<void> {
-  return apiFetch<void>(`/libraries/${libraryId}`, { method: "DELETE" });
+/**
+ * Move a library to the trash. If it holds archived clips (files that went
+ * missing and haven't come back) the API answers 409 archived_clips until
+ * `archived` says whether to delete them for good or keep them; deleting them
+ * may answer 409 in_projects until `removeFromProjects` is set.
+ */
+export async function deleteLibrary(
+  libraryId: string,
+  opts?: { archived?: "keep" | "delete"; removeFromProjects?: boolean },
+): Promise<void> {
+  return apiFetch<void>(`/libraries/${libraryId}`, {
+    method: "DELETE",
+    body: opts ? { archived: opts.archived, remove_from_projects: opts.removeFromProjects ?? false } : undefined,
+  });
 }
 
 export async function getLibrary(libraryId: string): Promise<LibraryResponse> {

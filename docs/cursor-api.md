@@ -260,6 +260,7 @@ Atomic ingest: create + populate assets in one request. The server normalizes th
 When an action would surprise the user, the API refuses until the request states the user's choice, so every client (web, CLI, macOS, iOS) has to show the facts and ask. The refusal is **409** in the standard envelope, `{ "error": { "code", "message", "details" } }`, with the facts in `details`:
 
 - `in_projects` — deleting clips for good (`DELETE /v1/trash/empty`, `POST /v1/libraries/empty-trash`) would take them out of projects. `details` is the project usage (see `POST /v1/assets/project-usage`). Resend with `"remove_from_projects": true`.
+- `archived_clips` — deleting a library (`DELETE /v1/libraries/{id}`) that holds archived clips: files that went missing and haven't come back. `details`: `{ "archived_clips" }`. Resend with body `{"archived": "delete"}` (delete them for good first; may then ask `in_projects`, answered with `"remove_from_projects": true`) or `{"archived": "keep"}` (they stay archived with the library in the trash).
 - `clips_in_trash` — restoring a project (`POST /v1/projects/{id}/restore`) whose clips someone trashed. `details`: `{ "trashed_clips", "missing_clips" }`. Resend with `"with_clips": true` (restore them everywhere) or `false` (leave them).
 
 Moving an asset or a project to the trash is reversible and needs no decision. (Libraries have a trash but no restore yet.)

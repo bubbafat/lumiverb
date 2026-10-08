@@ -35,6 +35,8 @@ export default function LibrariesPage() {
   const [addPath, setAddPath] = useState("");
   const [addError, setAddError] = useState("");
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  // The API asked what happens to a library's archived clips, then maybe about projects.
+  const [archivedAsk, setArchivedAsk] = useState<{ id: string; count: number; inProjects?: number } | null>(null);
   const [emptyTrashConfirm, setEmptyTrashConfirm] = useState(false);
   // Set when the server says the trashed libraries' clips are in projects.
   const [trashUsage, setTrashUsage] = useState<ProjectUsage | null>(null);
@@ -77,13 +79,25 @@ export default function LibrariesPage() {
     },
   });
 
+  type DeleteVars = { id: string; archived?: "keep" | "delete"; removeFromProjects?: boolean };
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => deleteLibrary(id),
+    mutationFn: ({ id, archived, removeFromProjects }: DeleteVars) =>
+      deleteLibrary(id, archived ? { archived, ...(removeFromProjects ? { removeFromProjects } : {}) } : undefined),
     onSuccess: () => {
       setDeleteConfirmId(null);
+      setArchivedAsk(null);
       queryClient.invalidateQueries({ queryKey: ["libraries"] });
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+    },
+    onError: (err: ApiError, vars) => {
+      if (err.code === "archived_clips" && err.details) {
+        setArchivedAsk({ id: vars.id, count: Number(err.details.archived_clips) || 0 });
+      } else if (err.code === "in_projects" && err.details && archivedAsk) {
+        setArchivedAsk({ ...archivedAsk, inProjects: Number(err.details.assets_in_projects) || 0 });
+      }
     },
   });
+  const clips = (n: number) => (n === 1 ? "1 clip" : `${n} clips`);
 
   const emptyTrashMutation = useMutation({
     mutationFn: (removeFromProjects: boolean) => emptyTrash(removeFromProjects),
@@ -298,7 +312,59 @@ export default function LibrariesPage() {
                       </span>
                       {lib.status !== "trashed" && (
                         <div>
-                          {deleteConfirmId === lib.library_id ? (
+                          {archivedAsk?.id === lib.library_id ? (
+                            <div className="flex flex-wrap items-center gap-2" role="alertdialog">
+                              {archivedAsk.inProjects ? (
+                                <>
+                                  <span className="text-sm text-gray-400">
+                                    {clips(archivedAsk.inProjects)} of them {archivedAsk.inProjects === 1 ? "is" : "are"} in
+                                    projects; deleting them for good takes them out of those projects.
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => deleteMutation.mutate({ id: lib.library_id, archived: "delete", removeFromProjects: true })}
+                                    disabled={deleteMutation.isPending}
+                                    className="rounded px-2 py-1 text-sm font-medium text-red-400 transition-colors duration-150 hover:bg-red-900/30"
+                                  >
+                                    Delete anyway
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  <span className="text-sm text-gray-400">
+                                    {clips(archivedAsk.count)} in {lib.name} {archivedAsk.count === 1 ? "is" : "are"} archived:
+                                    their files went missing and haven't come back.
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => deleteMutation.mutate({ id: lib.library_id, archived: "delete" })}
+                                    disabled={deleteMutation.isPending}
+                                    className="rounded px-2 py-1 text-sm font-medium text-red-400 transition-colors duration-150 hover:bg-red-900/30"
+                                  >
+                                    Delete them for good
+                                  </button>
+                                </>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => deleteMutation.mutate({ id: lib.library_id, archived: "keep" })}
+                                disabled={deleteMutation.isPending}
+                                className="rounded px-2 py-1 text-sm text-gray-200 transition-colors duration-150 hover:bg-gray-800"
+                              >
+                                Keep them
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setArchivedAsk(null);
+                                  setDeleteConfirmId(null);
+                                }}
+                                className="rounded px-2 py-1 text-sm text-gray-400 transition-colors duration-150 hover:text-gray-300"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : deleteConfirmId === lib.library_id ? (
                             <div className="flex items-center gap-2">
                               <span className="text-sm text-gray-400">
                                 Delete {lib.name}? This moves it to trash. You
@@ -307,7 +373,7 @@ export default function LibrariesPage() {
                               <button
                                 type="button"
                                 onClick={() =>
-                                  deleteMutation.mutate(lib.library_id)
+                                  deleteMutation.mutate({ id: lib.library_id })
                                 }
                                 disabled={deleteMutation.isPending}
                                 className="rounded px-2 py-1 text-sm font-medium text-red-400 transition-colors duration-150 hover:bg-red-900/30"

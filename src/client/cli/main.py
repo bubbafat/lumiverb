@@ -280,8 +280,19 @@ def library_delete(
         str,
         typer.Option("--name", "-n", help="Library name to move to trash."),
     ],
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask for confirmation.")] = False,
+    archived: Annotated[
+        str | None,
+        typer.Option("--archived", help="Archived clips (files gone missing): 'delete' them for good or 'keep' them."),
+    ] = None,
+    remove_from_projects: Annotated[
+        bool, typer.Option("--remove-from-projects", help="Deleting archived clips may take them out of projects."),
+    ] = False,
 ) -> None:
     """Move a library to trash (soft delete). Use 'lumiverb library empty-trash' to permanently delete."""
+    if archived not in (None, "keep", "delete"):
+        console.print("[red]--archived takes 'keep' or 'delete'.[/red]")
+        raise typer.Exit(2)
     client = LumiverbClient()
     resp = client.get("/v1/libraries")
     libraries = resp.json()
@@ -290,14 +301,46 @@ def library_delete(
         console.print(f"[red]Library not found: {name}[/red]")
         raise typer.Exit(1)
     library_id = match["library_id"]
-    confirm = typer.confirm(
-        f"Delete library '{name}'? This moves it to trash.",
-        default=False,
-    )
-    if not confirm:
+    if not yes and not typer.confirm(f"Delete library '{name}'? This moves it to trash.", default=False):
         console.print("Aborted.")
         raise typer.Exit(0)
-    client.delete(f"/v1/libraries/{library_id}")
+
+    # The API asks what happens to archived clips, and maybe about projects:
+    # answer from the flags, else ask here.
+    while True:
+        body = {"archived": archived, "remove_from_projects": remove_from_projects} if archived else None
+        r = client.raw("DELETE", f"/v1/libraries/{library_id}", **({"json": body} if body else {}))
+        if r.status_code < 400:
+            break
+        error = (r.json() or {}).get("error", {}) if r.status_code == 409 else {}
+        code, details = error.get("code"), error.get("details") or {}
+        if code == "archived_clips" and archived is None:
+            n = int(details.get("archived_clips", 0))
+            what = f"{n} {'clip' if n == 1 else 'clips'} in {name} {'is' if n == 1 else 'are'} archived"
+            if yes:
+                console.print(f"[red]{what}: say --archived keep or --archived delete.[/red]")
+                raise typer.Exit(2)
+            console.print(f"{what}: their files went missing and haven't come back.")
+            answer = typer.prompt("Delete them for good (d), keep them with the library (k), or cancel (c)?",
+                                  default="c").strip().lower()[:1]
+            if answer not in ("d", "k"):
+                console.print("Aborted.")
+                raise typer.Exit(0)
+            archived = "delete" if answer == "d" else "keep"
+        elif code == "in_projects" and not remove_from_projects:
+            n = int(details.get("assets_in_projects", 0))
+            prompt = f"{n} of them {'is' if n == 1 else 'are'} in projects; deleting them for good takes them out."
+            if yes:
+                console.print(f"[red]{prompt} Add --remove-from-projects to go ahead.[/red]")
+                raise typer.Exit(2)
+            if not typer.confirm(f"{prompt} Go ahead?", default=False):
+                console.print("Aborted.")
+                raise typer.Exit(0)
+            remove_from_projects = True
+        else:
+            message = error.get("message") or r.text
+            console.print(f"[red]Couldn't delete '{name}': {message}[/red]")
+            raise typer.Exit(1)
     console.print(f"Library '{name}' moved to trash.")
     console.print("Run 'lumiverb library empty-trash' to permanently delete.")
 
