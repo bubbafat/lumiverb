@@ -79,3 +79,45 @@ def test_config_set_takes_the_cache_home(tmp_path: Path, monkeypatch: pytest.Mon
     result = CliRunner().invoke(app, ["config", "set", "--cache-home", "/mnt/ssd2/lumiverb/cache"])
     assert result.exit_code == 0, result.output
     assert load_config().cache_home == "/mnt/ssd2/lumiverb/cache"
+
+
+def _config_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *args: str):
+    from typer.testing import CliRunner
+
+    from src.client.cli.main import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    return CliRunner().invoke(app, ["config", "set", *args])
+
+
+def test_config_set_expands_a_cache_home_under_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.client.cli.config import load_config
+
+    result = _config_set(tmp_path, monkeypatch, "--cache-home", "~/data/cache/")
+    assert result.exit_code == 0, result.output
+    assert load_config().cache_home == str(tmp_path / "data" / "cache")
+
+
+@pytest.mark.parametrize("given", ["cache", "./data/cache", "~nosuchuser_lumiverb/cache"])
+def test_config_set_refuses_a_relative_cache_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, given: str) -> None:
+    # Relative to wherever the command ran: the worker would look elsewhere.
+    from src.client.cli.config import CLIConfig, load_config, save_config
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    save_config(CLIConfig(cache_home="/mnt/ssd2/lumiverb/cache"))
+    result = _config_set(tmp_path, monkeypatch, "--cache-home", given, "--api-url", "http://elsewhere:9999")
+    assert result.exit_code != 0
+    assert "absolute" in result.output and given in result.output
+    cfg = load_config()
+    assert (cfg.cache_home, cfg.api_url) == ("/mnt/ssd2/lumiverb/cache", CLIConfig().api_url)
+
+
+def test_config_set_clears_the_cache_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.client.cli.config import CLIConfig, load_config, save_config
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    save_config(CLIConfig(cache_home="/mnt/ssd2/lumiverb/cache"))
+    result = _config_set(tmp_path, monkeypatch, "--cache-home", "")
+    assert result.exit_code == 0, result.output
+    assert load_config().cache_home == ""

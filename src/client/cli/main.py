@@ -5,6 +5,7 @@ from typing import Annotated
 
 import json as _json
 import logging
+import os
 import sys
 import typer
 from rich.console import Console
@@ -62,8 +63,15 @@ def config_set(
 ) -> None:
     """Set API URL, API key, and/or admin key in ~/.lumiverb/config.json."""
     cfg = load_config()
+    if cache_home:
+        # Relative to wherever this ran, the worker would look somewhere else.
+        expanded = os.path.expanduser(cache_home)
+        if not os.path.isabs(expanded):
+            console.print(f"[red]--cache-home must be an absolute path (or '' to undo), not {escape(cache_home)}[/red]")
+            raise typer.Exit(1)
+        cache_home = os.path.normpath(expanded)
     if cache_home is not None:
-        cfg.cache_home = cache_home.rstrip("/")
+        cfg.cache_home = cache_home
     if api_url is not None:
         cfg.api_url = api_url.rstrip("/")
     if api_key is not None:
