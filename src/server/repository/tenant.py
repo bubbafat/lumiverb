@@ -94,6 +94,63 @@ def _active_assets_subquery():
 
 
 
+class LibraryChangeRepository:
+    """Paths reported changed on storage, waiting for the brain to scan them."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def record(self, library_id: str, rel_paths: list[str]) -> None:
+        """Add paths, or bump the version and time of ones already pending."""
+        for rel_path in dict.fromkeys(rel_paths):
+            self._session.execute(
+                sa_text(
+                    "INSERT INTO library_changes (change_id, library_id, rel_path, reported_at)"
+                    " VALUES (:change_id, :library_id, :rel_path, clock_timestamp())"
+                    " ON CONFLICT (library_id, rel_path) DO UPDATE"
+                    " SET reported_at = clock_timestamp(),"
+                    "     version = nextval('library_changes_version_seq')"
+                ),
+                {"change_id": "chg_" + str(ULID()), "library_id": library_id, "rel_path": rel_path},
+            )
+        self._session.commit()
+
+    def pending(self, library_id: str, limit: int) -> tuple[list[dict], bool]:
+        """Oldest first. Returns (changes, truncated)."""
+        rows = self._session.execute(
+            sa_text(
+                "SELECT change_id, rel_path, reported_at, version FROM library_changes"
+                " WHERE library_id = :library_id ORDER BY reported_at, change_id LIMIT :limit"
+            ),
+            {"library_id": library_id, "limit": limit + 1},
+        ).all()
+        return [dict(r._mapping) for r in rows[:limit]], len(rows) > limit
+
+    def acknowledge(self, library_id: str, seen: list[tuple[str, int]]) -> int:
+        """Remove changes whose version is the one the scan saw. Returns how many."""
+        removed = 0
+        for change_id, version in seen:
+            result = self._session.execute(
+                sa_text(
+                    "DELETE FROM library_changes"
+                    " WHERE library_id = :library_id AND change_id = :change_id AND version <= :version"
+                ),
+                {"library_id": library_id, "change_id": change_id, "version": version},
+            )
+            removed += result.rowcount or 0
+        self._session.commit()
+        return removed
+
+    def summary(self) -> list[dict]:
+        rows = self._session.execute(
+            sa_text(
+                "SELECT library_id, COUNT(*) AS pending, MIN(reported_at) AS oldest_reported_at"
+                " FROM library_changes GROUP BY library_id ORDER BY library_id"
+            )
+        ).all()
+        return [dict(r._mapping) for r in rows]
+
+
 class LibraryRepository:
     """Repository for libraries table."""
 

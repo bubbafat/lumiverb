@@ -44,6 +44,22 @@ class Library(SQLModel, table=True):
     )
 
 
+class LibraryChange(SQLModel, table=True):
+    """A path the storage's own machine saw change, waiting to be scanned."""
+
+    __tablename__ = "library_changes"
+    __table_args__ = (UniqueConstraint("library_id", "rel_path", name="uq_library_changes_library_path"),)
+
+    change_id: str = Field(primary_key=True)
+    library_id: str = Field(foreign_key="libraries.library_id", nullable=False, index=True)
+    rel_path: str = Field(nullable=False)
+    reported_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+    version: int = Field(sa_column=Column(BigInteger, nullable=False))
+
+
 class LibraryPathFilter(SQLModel, table=True):
     __tablename__ = "library_path_filters"
 
