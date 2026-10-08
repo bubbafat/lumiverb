@@ -984,6 +984,7 @@ def scan(
             + (f", {stats.cache_populated:,} cache populated" if stats.cache_populated else "")
             + (f", {stats.failed:,} failed" if stats.failed else "")
             + (f", {stats.settling:,} still being written" if stats.settling else "")
+            + (f", {len(stats.unlisted):,} folder(s) couldn't be listed" if stats.unlisted else "")
         )
 
         # Show what enrichment is pending

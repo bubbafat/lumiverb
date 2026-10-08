@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import os
 import unicodedata
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -356,6 +357,100 @@ def test_an_emptied_folder_sees_its_deletions(tmp_path: Path) -> None:
     _write(root, "Other/b.jpg")
     client = _scan_disk(root, _assets("Shoots/Day 1/a.jpg", "Other/b.jpg"), path_prefix="Shoots/Day 1")
     assert _deleted_ids(client) == ["ast_Shoots/Day 1/a.jpg"]
+
+
+@pytest.mark.fast
+def test_walk_lists_hidden_files_and_linked_files_but_not_linked_folders(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    for rel in ("a/f.jpg", ".h.jpg", ".hid/g.jpg", "notes.txt"):
+        _write(root, rel)
+    _write(tmp_path, "other/o.jpg")
+    (root / "linked").symlink_to(tmp_path / "other")
+    (root / "link.jpg").symlink_to(tmp_path / "other" / "o.jpg")
+    (root / "broken.jpg").symlink_to(tmp_path / "nowhere.jpg")
+    assert [f["rel_path"] for f in _walk_library(root)] == [".h.jpg", ".hid/g.jpg", "a/f.jpg", "link.jpg"]
+
+
+# ---------------------------------------------------------------------------
+# A folder that can't be listed (no permission, or a CIFS soft mount timing
+# out mid-walk) must not look deleted.
+# ---------------------------------------------------------------------------
+
+needs_permissions = pytest.mark.skipif(os.geteuid() == 0, reason="root reads any folder")
+
+
+@pytest.fixture
+def locked(tmp_path: Path):
+    """A library with a folder nobody can list."""
+    root = tmp_path / "lib"
+    _write(root, "open/a.jpg")
+    _write(root, "Locked/b.jpg")
+    (root / "Locked").chmod(0)
+    yield root
+    (root / "Locked").chmod(0o755)
+
+
+@pytest.mark.fast
+@needs_permissions
+def test_walk_reports_folders_it_could_not_list(locked: Path) -> None:
+    unlisted: list[str] = []
+    files = _walk_library(locked, unlisted=unlisted)
+    assert [f["rel_path"] for f in files] == ["open/a.jpg"]
+    assert unlisted == ["Locked"]
+
+
+@pytest.mark.fast
+@needs_permissions
+def test_a_folder_that_cannot_be_listed_deletes_nothing(locked: Path) -> None:
+    client = _scan_disk(locked, _assets("open/a.jpg", "Locked/b.jpg", "gone.jpg"))
+    assert _deleted_ids(client) == []
+
+
+@pytest.mark.fast
+@needs_permissions
+def test_a_scan_says_which_folders_it_could_not_list(locked: Path) -> None:
+    with (
+        patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
+        patch("src.client.cli.scan._load_library_filters", return_value=[]),
+        patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value=_assets("open/a.jpg")),
+        patch("src.client.cli.scan._fetch_ignored_paths", return_value=set()),
+        patch("src.client.cli.scan._split_files", side_effect=lambda files, existing, thorough: ([], [], files)),
+        patch("src.client.cli.scan.ProxyCache"),
+        patch("src.client.cli.scan._populate_cache_for_unchanged"),
+    ):
+        stats = run_scan(MagicMock(), {"library_id": "lib_1", "root_path": str(locked)}, console=Console(quiet=True))
+    assert stats.unlisted == ["Locked"]
+
+
+@pytest.mark.fast
+@needs_permissions
+def test_moves_outside_a_folder_that_cannot_be_listed_still_apply(locked: Path) -> None:
+    from src.client.workers.exif_extract import compute_sha256
+
+    moved = _write(locked, "open/moved.jpg", b"moved bytes")
+    for f in (moved, locked / "open" / "a.jpg"):
+        os.utime(f, (1e9, 1e9))  # long settled
+    sha = compute_sha256(moved)
+    existing = {
+        "Locked/b.jpg": _ServerAsset(asset_id="ast_b", sha256=sha, file_size=11, media_type="image"),
+        "was/moved.jpg": _ServerAsset(asset_id="ast_moved", sha256=sha, file_size=11, media_type="image"),
+    }
+    client = MagicMock()
+    with (
+        patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
+        patch("src.client.cli.scan._load_library_filters", return_value=[]),
+        patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value=existing),
+        patch("src.client.cli.scan._fetch_ignored_paths", return_value=set()),
+        patch("src.client.cli.scan._scan_one"),
+        patch("src.client.cli.scan.ProxyCache"),
+        patch("src.client.cli.scan._populate_cache_for_unchanged"),
+    ):
+        run_scan(client, {"library_id": "lib_1", "root_path": str(locked)}, path_prefix=None,
+                 console=Console(quiet=True), allow_moves=True)
+    moves = [c.kwargs["json"]["items"] for c in client.post.call_args_list if c.args[0] == "/v1/assets/batch-moves"]
+    # Never the asset in the folder that couldn't be listed: it may still be there.
+    assert moves == [[{"asset_id": "ast_moved", "rel_path": "open/moved.jpg"}]]
+    assert _deleted_ids(client) == []
 
 
 @pytest.mark.fast

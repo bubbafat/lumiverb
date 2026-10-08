@@ -37,6 +37,11 @@ def normalize_rel_path(rel_path: str) -> str:
     return unicodedata.normalize("NFC", rel_path)
 
 
+def is_within(rel_path: str, folder: str | None) -> bool:
+    """rel_path is the library folder or inside it. None or "" is the whole library."""
+    return not folder or rel_path == folder or rel_path.startswith(folder + "/")
+
+
 def resolve_source_path(root: Path, rel_path: str) -> Path:
     """Where a library file lives on this machine's disk.
 

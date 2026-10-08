@@ -575,3 +575,40 @@ def test_a_retry_not_yet_due_does_not_widen_other_scans(das: Path) -> None:
     scan, _, state = _cycle(server, state, now=t + MIN)
     assert scan.call_args.kwargs["path_prefix"] == "Day 2"
     assert state.retries["lib_1"].paths == {"Day 1/A001.mov"}
+
+
+# ---------------------------------------------------------------------------
+# A folder that couldn't be listed: its changes wait, with back-off
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_a_scan_that_could_not_list_a_folder_keeps_the_changes(das: Path) -> None:
+    server = FakeServer([LIB], pending={"lib_1": [CHANGE]})
+    _cycle(server, scan=MagicMock(return_value=ScanStats(unlisted=["Day 1"])))
+    assert server.acks == []
+
+
+@pytest.mark.fast
+def test_changes_under_a_folder_that_could_not_be_listed_wait_for_the_retry(das: Path) -> None:
+    # A folder that stays unreadable (chmod 000) mustn't be rescanned every minute.
+    t = 100 * HOUR
+    server = FakeServer([LIB], pending={"lib_1": [CHANGE]})
+    _, _, state = _cycle(server, now=t, scan=MagicMock(return_value=ScanStats(unlisted=["Day 1"])))
+    scan, _, state = _cycle(server, state, now=t + MIN)
+    scan.assert_not_called()
+    scan, _, state = _cycle(server, state, now=t + 5 * MIN)
+    assert scan.call_args.kwargs["path_prefix"] == "Day 1"
+    assert server.acks == [("lib_1", [{"change_id": "chg_1", "version": 7}])]
+    assert state.retries == {}
+
+
+@pytest.mark.fast
+def test_a_change_reported_again_does_not_wait_for_the_retry(das: Path) -> None:
+    t = 100 * HOUR
+    server = FakeServer([LIB], pending={"lib_1": [CHANGE]})
+    _, _, state = _cycle(server, now=t, scan=MagicMock(return_value=ScanStats(unlisted=["Day 1"])))
+    server.pending = {"lib_1": [{**CHANGE, "version": 8}]}
+    scan, _, _ = _cycle(server, state, now=t + MIN)
+    assert scan.call_args.kwargs["path_prefix"] == "Day 1"
+    assert server.acks == [("lib_1", [{"change_id": "chg_1", "version": 8}])]

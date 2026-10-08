@@ -48,7 +48,7 @@ from src.client.cli.ingest import (
 from src.client.proxy.proxy_cache import ProxyCache
 from src.client.workers.exif_extract import compute_sha256
 from src.client.video.probe import probe_video
-from src.shared.io_utils import resolve_source_path
+from src.shared.io_utils import is_within, resolve_source_path
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,8 @@ class ScanStats:
     # Files written too recently to trust: left for a later scan.
     settling: int = 0
     settling_paths: list[str] = field(default_factory=list)
+    # Folders that couldn't be listed, so nothing was taken for deleted.
+    unlisted: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -679,7 +681,11 @@ def run_scan(
 
     # Discover files
     console.print("[bold]Discovering files...[/bold]")
-    local_files = _walk_library(root_path, path_prefix, tenant_filters=tenant_filters, library_filters=library_filters)
+    local_files = _walk_library(root_path, path_prefix, tenant_filters=tenant_filters, library_filters=library_filters,
+                                unlisted=stats.unlisted)
+    if stats.unlisted:
+        console.print(f"[yellow]Couldn't list {len(stats.unlisted):,} folder(s), so this scan "
+                      "doesn't remove anything: {}[/yellow]".format(", ".join(stats.unlisted[:5]) or "/"))
 
     # Filter by media type
     if media_type_filter != "all":
@@ -741,6 +747,11 @@ def run_scan(
 
     # Detect deletions first (needed to scope move detection)
     deleted_ids = _detect_deletions(local_files, scope, root_path, path_prefix)
+    if stats.unlisted:
+        # Files in a folder that couldn't be listed may well be there, so
+        # they're neither deleted nor the old half of a move.
+        unseen = {sa.asset_id for rp, sa in scope.items() if any(is_within(rp, u) for u in stats.unlisted)}
+        deleted_ids = [aid for aid in deleted_ids if aid not in unseen]
 
     # --- Move detection ---
     # Only check for moves when: there are new files, there are deletions
@@ -791,6 +802,10 @@ def run_scan(
 
     # --skip-moves suppresses deletions too: without move detection we can't
     # distinguish real deletes from the "old path" half of a move.
+    if stats.unlisted and deleted_ids:
+        console.print(f"[yellow]Skipping {len(deleted_ids):,} deletions: some folders couldn't be listed[/yellow]")
+        deleted_ids = []
+
     if skip_moves and deleted_ids:
         console.print(f"[dim]Skipping {len(deleted_ids):,} deletions (--skip-moves)[/dim]")
         deleted_ids = []

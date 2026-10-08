@@ -424,25 +424,36 @@ def _walk_library(
     path_prefix: str | None = None,
     tenant_filters: list[PathFilter] | None = None,
     library_filters: list[PathFilter] | None = None,
+    unlisted: list[str] | None = None,
 ) -> list[dict]:
     """Walk the library root and return a list of file descriptors.
 
     Each entry: {rel_path, file_size, file_mtime, media_type, ext}.
     Files that don't pass the merged tenant + library filters are silently skipped.
+    Hidden files are listed; linked folders aren't followed. Folders that
+    can't be listed go in `unlisted` as rel paths ("" is the library root),
+    so the caller doesn't take their files for deleted.
     """
     walk_root = root_path
     if path_prefix:
         walk_root = resolve_source_path(root_path, path_prefix)
 
-    if not walk_root.is_dir():
-        return []
+    def _unreadable(exc: OSError) -> None:
+        logger.warning("Can't list %s: %s", exc.filename or walk_root, exc)
+        if unlisted is not None:
+            rel = os.path.relpath(exc.filename or walk_root, root_path)
+            unlisted.append("" if rel == "." else unicodedata.normalize("NFC", rel))
 
     has_filters = bool(tenant_filters or library_filters)
     t_filters = tenant_filters or []
     l_filters = library_filters or []
 
+    found: list[Path] = []
+    for folder, _dirs, names in os.walk(walk_root, onerror=_unreadable):
+        found.extend(Path(folder, name) for name in names)
+
     results = []
-    for p in sorted(walk_root.rglob("*")):
+    for p in sorted(found):
         if not p.is_file():
             continue
         ext = p.suffix.lower()
