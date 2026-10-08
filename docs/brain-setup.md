@@ -83,20 +83,22 @@ sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb library list
 
 ### 6. AI machines
 
-Descriptions, OCR and scene descriptions run on the account's **AI machines** (Settings → AI): GPU boxes, each an OpenAI-compatible endpoint such as Ollama, with the jobs it does and how many requests it takes at once. The job's one model, `qwen3-vl:8b`, must be on every machine doing it; until a model is chosen and a machine offers it, those steps wait rather than fail. The worker reads all of this from the server and keeps none of its own (a `vision_*` key left in an older worker config is ignored).
+Descriptions, OCR and scene descriptions run on the account's **AI machines** (Settings → AI): GPU boxes, each an OpenAI-compatible endpoint such as Ollama, with the jobs it does and how many requests it takes at once. The job's one model must be on every machine doing it; until a model is chosen and a machine offers it, those steps wait rather than fail. The worker reads all of this from the server and keeps none of its own (a `vision_*` key left in an older worker config is ignored).
+
+The model is `qwen3-vl:8b-instruct`. Plain `qwen3-vl:8b` is the thinking variant: its reasoning used up the 500-token answer budget, so most descriptions came back empty or cut off (Oct 8). Every machine doing descriptions needs it pulled (`ollama pull qwen3-vl:8b-instruct`).
 
 On Oct 8 there are two:
 
 | Machine | URL | At once |
 |---|---|---|
-| Brain 3080 (the Ollama container from `~/dam-stack/resourcespace`) | `http://172.18.0.6:11434/v1` | 2 |
-| Mac Studio (Ollama, over the direct 10 Gb link; the brain is 10.10.10.2) | `http://10.10.10.1:11434/v1` | 4 |
+| Brain 3080 | `http://10.10.10.2:11434/v1` | 2 |
+| Mac Studio (over the direct 10 Gb link) | `http://10.10.10.1:11434/v1` | 4 |
 
-To add one, as an admin: **Settings → AI → Add machine**, a name, the URL, **Connect** (it lists the models the machine offers), tick **Descriptions & text**, how many at once, **Add**. "At once" is how many images it works on together: more needs more GPU memory.
+**The brain's Ollama** is Lumiverb's own: `~/ollama/docker-compose.yaml` (`docker compose -f ~/ollama/docker-compose.yaml up -d`), with the image digest and model folder (`/mnt/ssd1/ollama-models`) it had as ResourceSpace's `ollama` service. Its port is published on every address of the brain, so it's at a fixed address: 10.10.10.2 (the direct link to the Mac), localhost, and the LAN. Ollama has no password. Until Oct 8 Lumiverb borrowed ResourceSpace's Ollama at a Docker-internal address, which changed when that container restarted and stopped vision. ResourceSpace is retired: its containers are stopped with `restart=no`. If its compose file is ever started again, take the `ollama` service out of it first: it would take the same container name and GPU.
+
+To add a machine, as an admin: **Settings → AI → Add machine**, a name, the URL, **Connect** (it lists the models the machine offers), tick **Descriptions & text**, how many at once, **Add**. "At once" is how many images it works on together; more needs more GPU memory. It only helps if that Ollama runs that many in parallel (`OLLAMA_NUM_PARALLEL`); otherwise the rest wait there. A request is about 2k tokens (a 1280 px image, the prompt, a 500-token answer), so any context of 8k or more is plenty.
 
 Before each round of vision work the worker checks every machine, and sends work only to those online and offering the model, spread by how many each takes. One that stops answering (asleep, out of memory, the model gone) is skipped and its work goes to the others; it's checked again a minute later. Settings → AI shows each machine's state, offline ones in red, with a red dot on AI in the Settings menu. Only when no machine is left does vision work wait, and no clip is charged a failure.
-
-The brain's Ollama address changes if its container is recreated.
 
 ### 7. The Mac app
 
