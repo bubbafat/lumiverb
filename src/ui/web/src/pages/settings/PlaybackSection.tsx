@@ -14,6 +14,12 @@ function describe(cap: number | null): string {
   return cap == null ? "whole video" : `first ${cap} seconds`;
 }
 
+/** What public pages get: never more than signed-in people. */
+function effectivePublic(signedIn: number | null, pub: number | null): number | null {
+  const caps = [signedIn, pub].filter((c): c is number => c != null);
+  return caps.length ? Math.min(...caps) : null;
+}
+
 /** One audience's choice, starting from what's saved: the whole video, or the first N seconds. */
 function useCapField(saved: number | null) {
   const [capped, setCapped] = useState(saved != null);
@@ -138,7 +144,9 @@ function PlaybackForm({ settings, isAdmin }: { settings: TenantSettings; isAdmin
       ) : (
         <div className="space-y-1">
           <p className="text-sm text-gray-200">Signed in: {describe(settings.video_preview_max_seconds)}</p>
-          <p className="text-sm text-gray-200">Public pages: {describe(settings.public_video_preview_max_seconds)}</p>
+          <p className="text-sm text-gray-200">
+            Public pages: {describe(effectivePublic(settings.video_preview_max_seconds, settings.public_video_preview_max_seconds))}
+          </p>
           <p className="text-sm text-gray-500">Only admins can change this.</p>
         </div>
       )}

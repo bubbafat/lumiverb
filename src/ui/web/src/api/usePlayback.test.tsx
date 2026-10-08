@@ -101,6 +101,20 @@ describe("usePlayback", () => {
     await waitFor(() => expect(result.current.src).toBe("/v1/stream/link2"));
   });
 
+  it("reports a renewal that fails, so the player can say so", async () => {
+    let n = 0;
+    fetchMock.mockImplementation(async () =>
+      ++n === 1
+        ? new Response(JSON.stringify({ url: "/v1/stream/one", expires_at: "x", source: "analysis_proxy", max_seconds: null }), { status: 200 })
+        : new Response(JSON.stringify({ error: { code: "x", message: "gone" } }), { status: 404 }),
+    );
+    const { result } = renderHook(() => usePlayback("ast_1", { enabled: true }), { wrapper });
+    await waitFor(() => expect(result.current.src).toBe("/v1/stream/one"));
+    expect(result.current.failed).toBe(false);
+    result.current.renew();
+    await waitFor(() => expect(result.current.failed).toBe(true));
+  });
+
   it("asks for a public project's clip by project", async () => {
     fetchMock.mockImplementation(async () =>
       new Response(JSON.stringify({ url: "/v1/stream/p", expires_at: "x", source: "preview", max_seconds: 10 }), { status: 200 }),

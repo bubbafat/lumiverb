@@ -753,6 +753,7 @@ export function Lightbox({
                 maxSeconds={playback.maxSeconds}
                 videoRef={videoRef}
                 onRenew={playback.renew}
+                failed={playback.failed}
               />
             ) : mediaUrl ? (
               <div className="relative inline-block">

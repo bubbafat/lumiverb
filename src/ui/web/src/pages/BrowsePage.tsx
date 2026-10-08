@@ -717,6 +717,7 @@ export default function BrowsePage() {
         onClearAll={handleClearAll}
         facets={facets}
         onSaveSmartProject={() => setShowSmartColModal(true)}
+        isPublic={isPublicMode}
       />
 
       {showSmartColModal && (

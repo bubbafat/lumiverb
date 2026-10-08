@@ -29,7 +29,8 @@ def _run(*args: str):
 
 @pytest.mark.parametrize("cap,public,shown,public_shown", [
     (None, 10, "whole video", "first 10 seconds"),
-    (30, None, "first 30 seconds", "whole video"),
+    (30, None, "first 30 seconds", "first 30 seconds"),  # never more than signed in
+    (None, None, "whole video", "whole video"),
 ])
 def test_show(client, cap, public, shown, public_shown):
     client.get.return_value.json.return_value = {"video_preview_max_seconds": cap,
@@ -68,3 +69,11 @@ def test_nonsense_is_refused_before_asking_the_server(client, command, arg):
     assert result.exit_code == 2, result.output
     client.patch.assert_not_called()
     assert "full" in result.output and "seconds" in result.output
+
+
+def test_show_says_what_public_pages_actually_get(client):
+    # Public pages never play more than signed-in people get.
+    client.get.return_value.json.return_value = {"video_preview_max_seconds": 5,
+                                                 "public_video_preview_max_seconds": 10}
+    result = _run("show")
+    assert "On public pages: first 5 seconds" in result.output

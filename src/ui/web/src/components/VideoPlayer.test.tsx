@@ -92,6 +92,22 @@ describe("VideoPlayer", () => {
     screen.getByText(/This video can't play right now/);
   });
 
+  it("a switch to the whole video that fails asks for a fresh link before giving up", () => {
+    const onRenew = vi.fn();
+    const { rerender, container } = render(
+      <VideoPlayer src="/v1/stream/short" source="preview" maxSeconds={null} onRenew={onRenew} />,
+    );
+    rerender(<VideoPlayer src="/v1/stream/full" source="analysis_proxy" maxSeconds={null} onRenew={onRenew} />);
+    fireEvent.error(container.querySelector("video") as HTMLVideoElement);
+    expect(onRenew).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/can't play/)).toBeNull();
+  });
+
+  it("says so when no fresh link could be had", () => {
+    render(<VideoPlayer src="/v1/stream/x" source="analysis_proxy" maxSeconds={null} failed />);
+    screen.getByText(/This video can't play right now/);
+  });
+
   it("names a short clip's real length", () => {
     const { container } = render(<VideoPlayer src="/v1/stream/s" source="preview" maxSeconds={null} />);
     const video = container.querySelector("video") as HTMLVideoElement;

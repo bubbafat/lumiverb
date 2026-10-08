@@ -21,6 +21,12 @@ def _describe(cap: int | None) -> str:
     return "whole video" if cap is None else f"first {cap} seconds"
 
 
+def _public(signed_in: int | None, public: int | None) -> int | None:
+    """What public pages get: never more than signed-in people."""
+    caps = [c for c in (signed_in, public) if c is not None]
+    return min(caps) if caps else None
+
+
 def _length(text: str) -> int | None:
     """'full' → None, or whole seconds 1..86,400 (ASCII digits only); exits 2 otherwise."""
     text = text.strip()
@@ -37,7 +43,8 @@ def show() -> None:
     """Show account-wide settings."""
     settings = LumiverbClient().get("/v1/tenant/settings").json()
     console.print(f"Video playback: {_describe(settings.get('video_preview_max_seconds'))}")
-    console.print(f"On public pages: {_describe(settings.get('public_video_preview_max_seconds'))}")
+    public = _public(settings.get("video_preview_max_seconds"), settings.get("public_video_preview_max_seconds"))
+    console.print(f"On public pages: {_describe(public)}")
 
 
 @settings_app.command("video-preview")

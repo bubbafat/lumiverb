@@ -98,6 +98,8 @@ interface FilterBarProps {
   facets: FacetsResponse | null;
   /** Called when user clicks "Save as Smart Project". */
   onSaveSmartProject?: () => void;
+  /** A public page's visitor: no rating or people filters (those are signed-in people's). */
+  isPublic?: boolean;
 }
 
 function PersonChiclet({ personId, onClear }: { personId: string; onClear: () => void }) {
@@ -193,6 +195,7 @@ export function FilterBar({
   onClearAll,
   facets,
   onSaveSmartProject,
+  isPublic = false,
 }: FilterBarProps) {
   // --- Read individual values from filter array ---
   const q = getFilterValue(filters, "query") ?? null;
@@ -246,7 +249,7 @@ export function FilterBar({
   }, [dateVal.from, dateVal.to]);
 
   // Person suggestions in main search bar
-  const showPersonSuggestions = searchFocused && inputValue.trim().length >= 2 && !personId;
+  const showPersonSuggestions = !isPublic && searchFocused && inputValue.trim().length >= 2 && !personId;
   const { data: searchPeopleData } = useQuery({
     queryKey: ["people-search-bar", inputValue.trim()],
     queryFn: () => searchPeople(inputValue.trim(), 5),
@@ -565,7 +568,7 @@ export function FilterBar({
               >
                 Clear filters
               </button>
-              {onSaveSmartProject && (
+              {onSaveSmartProject && !isPublic && (
                 <button
                   type="button"
                   onClick={onSaveSmartProject}
@@ -761,10 +764,12 @@ export function FilterBar({
           )}
 
           {/* Person filter */}
-          <PersonFilterDropdown
-            personId={personId}
-            onSelect={(pid) => onSetFilter("person", pid)}
-          />
+          {!isPublic && (
+            <PersonFilterDropdown
+              personId={personId}
+              onSelect={(pid) => onSetFilter("person", pid)}
+            />
+          )}
 
           {/* Geo-proximity radius selector (only when near filter is set) */}
           {nearVal && (
@@ -785,6 +790,7 @@ export function FilterBar({
           )}
 
           {/* Rating filters */}
+          {!isPublic && (
           <div className="flex flex-wrap items-center gap-3">
             <span className="text-xs font-medium text-gray-400">Rating</span>
             <button
@@ -859,11 +865,12 @@ export function FilterBar({
               ))}
             </div>
           </div>
+          )}
 
           {hasActiveFilters && (
             <FilterMenu
               onClearAll={onClearAll}
-              onSaveSmartProject={onSaveSmartProject}
+              onSaveSmartProject={isPublic ? undefined : onSaveSmartProject}
             />
           )}
         </div>

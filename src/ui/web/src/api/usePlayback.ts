@@ -31,6 +31,8 @@ export function usePlayback(
   maxSeconds: number | null;
   isLoading: boolean;
   renew: () => void;
+  /** A renewal found nothing to play (the link can't be replaced). */
+  failed: boolean;
 } {
   const canAsk = enabled && (!isPublic || !!publicLibraryId || !!publicProjectId);
   const playback = useQuery({
@@ -57,7 +59,8 @@ export function usePlayback(
     void playback.refetch();
   };
 
-  if (!enabled) return { src: null, source: null, maxSeconds: null, isLoading: false, renew };
+  const failed = playback.isRefetchError;
+  if (!enabled) return { src: null, source: null, maxSeconds: null, isLoading: false, renew, failed: false };
   if (playback.data) {
     const { source, url, max_seconds } = playback.data;
     const stale = !kept.current || kept.current.assetId !== assetId || kept.current.source !== source;
@@ -65,7 +68,7 @@ export function usePlayback(
       kept.current = { assetId, source, url };
       renewing.current = false;
     }
-    return { src: kept.current!.url, source, maxSeconds: max_seconds, isLoading: false, renew };
+    return { src: kept.current!.url, source, maxSeconds: max_seconds, isLoading: false, renew, failed };
   }
   if (playback.isError) {
     return {
@@ -74,7 +77,8 @@ export function usePlayback(
       maxSeconds: null,
       isLoading: fallback.isLoading,
       renew,
+      failed: false,
     };
   }
-  return { src: null, source: null, maxSeconds: null, isLoading: canAsk, renew };
+  return { src: null, source: null, maxSeconds: null, isLoading: canAsk, renew, failed: false };
 }

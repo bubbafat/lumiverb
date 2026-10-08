@@ -12,6 +12,7 @@ export default function VideoPlayer({
   maxSeconds,
   videoRef,
   onRenew,
+  failed: renewFailed = false,
 }: {
   src: string;
   source: "analysis_proxy" | "preview" | null;
@@ -19,13 +20,16 @@ export default function VideoPlayer({
   videoRef?: MutableRefObject<HTMLVideoElement | null>;
   /** Ask for a fresh link: this one failed (expired, say). */
   onRenew?: () => void;
+  /** No fresh link could be had. */
+  failed?: boolean;
 }) {
   const ownRef = useRef<HTMLVideoElement | null>(null);
   const ref = videoRef ?? ownRef;
   const last = useRef({ time: 0, playing: false });
   const resumeOn = useRef<string | null>(null);
   const shown = useRef(src);
-  const renewedFor = useRef<string | null>(null);
+  // A fresh link was asked for and hasn't loaded yet.
+  const renewing = useRef(false);
   const [failed, setFailed] = useState(false);
   const [duration, setDuration] = useState<number | null>(null);
 
@@ -67,8 +71,8 @@ export default function VideoPlayer({
           }}
           onError={() => {
             // One fresh link per failure; if that fails too, say so.
-            if (onRenew && renewedFor.current !== src && resumeOn.current !== src) {
-              renewedFor.current = src;
+            if (onRenew && !renewing.current) {
+              renewing.current = true;
               onRenew();
             } else {
               setFailed(true);
@@ -76,6 +80,7 @@ export default function VideoPlayer({
           }}
           onLoadedMetadata={(e) => {
             const video = e.currentTarget;
+            renewing.current = false;
             setFailed(false);
             setDuration(Number.isFinite(video.duration) ? video.duration : null);
             if (resumeOn.current !== src) return;
@@ -86,7 +91,7 @@ export default function VideoPlayer({
           }}
         />
       </div>
-      {failed ? (
+      {failed || renewFailed ? (
         <p className="text-xs text-red-300">This video can't play right now. Try again later.</p>
       ) : full ? (
         <p className="text-xs text-emerald-300/90">

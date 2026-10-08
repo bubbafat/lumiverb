@@ -102,6 +102,14 @@ describe("PlaybackSection", () => {
     expect((screen.getByLabelText("Seconds") as HTMLInputElement).value).toBe("45");
   });
 
+  it("shows non-admins what public pages actually get", async () => {
+    role = "viewer";
+    cap = 5;
+    publicCap = 10;
+    renderSection();
+    await screen.findByText("Public pages: first 5 seconds");
+  });
+
   it("is read-only for anyone but admins", async () => {
     role = "editor";
     cap = 20;
