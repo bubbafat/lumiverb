@@ -36,11 +36,10 @@ def build_asset_document(asset: Asset, meta: AssetMetadata | None, ocr_text: str
                          corrections: dict | None = None) -> dict:
     """Build a Quickwit document for an asset as a person sees it: its latest
     AI description and the text read in its image, with their corrections."""
-    from src.server.repository.corrections import apply
+    from src.server.repository.corrections import apply, machine_tags
 
     data = (meta.data if meta else None) or {}
-    description, tags, ocr_text, _ = apply(corrections, data.get("description", ""), data.get("tags") or [],
-                                           ocr_text)
+    description, tags, ocr_text, _ = apply(corrections, data.get("description", ""), machine_tags(data), ocr_text)
 
     capture_ts = None
     if asset.taken_at:

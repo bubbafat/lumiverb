@@ -3595,13 +3595,21 @@ class FaceRepository:
             {"count": len(faces) + len(kept_ids), "aid": asset_id},
         )
 
-        # Confirmed faces found again carry the new embedding: their people's
-        # centroids follow (after a face-model switch, this is how a name
-        # teaches the new model what that person looks like).
+        # Confirmed faces found again by a new face model carry its embedding:
+        # their people's centroids follow (this is how a name teaches the new
+        # model what that person looks like). The same model's embedding
+        # barely moves, so only a switch, or a centroid still of another
+        # model, recomputes; in person order, so two workers can't deadlock.
         if reused_ids:
+            switched = [r.face_id for r in old_rows
+                        if r.face_id in reused_ids and (r.embedding_model or "buffalo_l") != embedding_model]
             for (pid,) in self._session.execute(
-                text("SELECT DISTINCT person_id FROM face_person_matches WHERE face_id = ANY(:fids) AND confirmed"),
-                {"fids": list(reused_ids)},
+                text("SELECT DISTINCT m.person_id FROM face_person_matches m"
+                     " JOIN people p ON p.person_id = m.person_id"
+                     " WHERE m.face_id = ANY(:fids) AND m.confirmed"
+                     "   AND (m.face_id = ANY(:switched) OR p.centroid_model <> :model)"
+                     " ORDER BY m.person_id"),
+                {"fids": list(reused_ids), "switched": switched, "model": embedding_model},
             ).all():
                 PersonRepository(self._session)._recompute_centroid(pid)
 
@@ -3739,10 +3747,11 @@ class FaceRepository:
                     close.append((dist, oi, ni))
         take(sorted(close))
 
-        # One face before and one now, with no embeddings to compare (a
-        # face-model switch): if the boxes touch at all, it's the same face,
-        # however differently the two models frame it.
-        if (not pairs and len(old_rows) == 1 and len(faces) == 1 and distance(0, 0) is None
+        # One face before and one now, across a face-model switch (no
+        # embeddings to compare): if the boxes touch at all, it's the same
+        # face, however differently the two models frame it.
+        switched = (getattr(old_rows[0], "embedding_model", None) or "buffalo_l") != embedding_model if old_rows else False
+        if (not pairs and switched and len(old_rows) == 1 and len(faces) == 1 and distance(0, 0) is None
                 and _bbox_iou(old_rows[0].bounding_box_json, faces[0].get("bounding_box")) > 0):
             pairs[0] = old_rows[0].face_id
         return pairs

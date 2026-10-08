@@ -23,25 +23,37 @@ def tags_join(alias: str = "m") -> str:
     """The tags a clip shows, as `{alias}.tags` (a jsonb array): its latest
     description's tags, less the ones a person removed, plus the ones they
     added. Joined after `FROM active_assets a` wherever tags are filtered,
-    counted or searched."""
+    counted or searched.
+
+    Most clips have no corrections: theirs is the machine's array as stored,
+    and only a corrected clip's list is worked out. Tags that aren't a list
+    count as none."""
+    md, c = f"{alias}_md", f"{alias}_c"
+    machine = f"CASE WHEN jsonb_typeof({md}.tags) = 'array' THEN {md}.tags ELSE '[]'::jsonb END"
     return f"""
             LEFT JOIN LATERAL (
-                SELECT COALESCE(jsonb_agg(DISTINCT s.t), '[]'::jsonb) AS tags
-                FROM (
-                    SELECT jsonb_array_elements_text(COALESCE(md.data->'tags', '[]'::jsonb)) AS t
-                    FROM (SELECT data FROM asset_metadata WHERE asset_id = a.asset_id
-                          ORDER BY generated_at DESC LIMIT 1) md
-                    UNION
-                    SELECT jsonb_array_elements_text(ca.tags_added)
-                    FROM asset_corrections ca WHERE ca.asset_id = a.asset_id
-                ) s
-                WHERE NOT EXISTS (SELECT 1 FROM asset_corrections cr
-                                  WHERE cr.asset_id = a.asset_id AND cr.tags_removed ? s.t)
+                SELECT data->'tags' AS tags FROM asset_metadata WHERE asset_id = a.asset_id
+                ORDER BY generated_at DESC LIMIT 1
+            ) {md} ON TRUE
+            LEFT JOIN asset_corrections {c} ON {c}.asset_id = a.asset_id
+            LEFT JOIN LATERAL (
+                SELECT CASE WHEN {c}.asset_id IS NULL THEN {machine} ELSE (
+                    SELECT COALESCE(jsonb_agg(DISTINCT s.t), '[]'::jsonb)
+                    FROM (SELECT jsonb_array_elements_text({machine}) AS t
+                          UNION SELECT jsonb_array_elements_text({c}.tags_added)) s
+                    WHERE NOT {c}.tags_removed ? s.t
+                ) END AS tags
             ) {alias} ON TRUE
             """
 
 
 TAGS_JOIN = tags_join("m")
+
+
+def machine_tags(data: dict | None) -> list[str]:
+    """The tags in a description's data; anything but a list counts as none."""
+    tags = (data or {}).get("tags")
+    return [str(t) for t in tags] if isinstance(tags, list) else []
 
 
 def shown_tags(machine: list[str], added: list[str], removed: list[str]) -> list[str]:
@@ -76,7 +88,13 @@ class CorrectionsRepository:
         """Apply the fields given: `description` / `ocr_text` (a string sets
         the correction, None removes it), `tags` (the list the person wants
         shown, kept as adds and removes against the machine's; None removes
-        the tag edits). Fields not given stay as they are."""
+        the tag edits). Fields not given stay as they are.
+
+        Earlier tag edits last: a tag the person added stays added while
+        they keep it, even once the machine has it too, and one they
+        removed stays removed until they put it back, even while the
+        machine leaves it out. An empty description or OCR is a correction
+        too (there's none); None removes it."""
         current = self.get(asset_id) or {"description": None, "ocr_text": None,
                                           "tags_added": [], "tags_removed": []}
         description = current["description"]
@@ -91,8 +109,9 @@ class CorrectionsRepository:
                 added, removed = [], []
             else:
                 wanted = _clean_tags(fields["tags"])
-                added = [t for t in wanted if t not in machine_tags]
-                removed = [t for t in machine_tags if t not in wanted]
+                added = [t for t in wanted if t not in machine_tags or t in added]
+                removed = ([t for t in machine_tags if t not in wanted]
+                           + [t for t in removed if t not in wanted and t not in machine_tags])
         if description is None and ocr_text is None and not added and not removed:
             self._session.execute(text("DELETE FROM asset_corrections WHERE asset_id = :a"), {"a": asset_id})
         else:

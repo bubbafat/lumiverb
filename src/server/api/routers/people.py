@@ -838,8 +838,9 @@ def nearest_people_for_face(
     centroid (1 − cosine similarity, ascending).
 
     Returns an empty list — not 404 — when the face exists but has no
-    embedding, so the popover can still show the alphabetical
-    fallback list without an error path.
+    embedding, or one from another face model than the account's (mid
+    switch: another space than the people's centroids), so the popover
+    can still show the alphabetical fallback list without an error path.
     """
     import numpy as np
     from sqlalchemy import text as sa_text
@@ -851,7 +852,8 @@ def nearest_people_for_face(
     face = session.get(Face, face_id)
     if face is None:
         raise HTTPException(status_code=404, detail="Face not found")
-    if face.embedding_vector is None:
+    model = current_face_model(session)
+    if face.embedding_vector is None or face.embedding_model != model:
         return []
 
     # The pgvector adapter returns the column as a numpy array via the
@@ -876,7 +878,7 @@ def nearest_people_for_face(
                   AND p.centroid_model = :model
             GROUP BY p.person_id
         """),
-        {"model": current_face_model(session)},
+        {"model": model},
     ).all()
 
     if not people_rows:

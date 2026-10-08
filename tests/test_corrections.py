@@ -48,9 +48,12 @@ def _shown(env, vid: str) -> dict:
             "underneath": d.get("machine_transcript")}
 
 
-def _remove(env, vid: str):
-    client, headers, *_ = env
-    assert client.delete(f"/v1/assets/{vid}/transcript", headers=headers).status_code == 204
+def _remove(env, vid: str, which: str = "manual", status: int = 204, headers=None):
+    """Remove the transcript shown, saying whose it is ("manual": a person's)."""
+    client, own, *_ = env
+    r = client.delete(f"/v1/assets/{vid}/transcript", params={"which": which}, headers=headers or own)
+    assert r.status_code == status, r.text
+    return r
 
 
 @pytest.mark.slow
@@ -92,6 +95,88 @@ def test_a_machine_transcript_with_no_speech_comes_back_as_no_speech(env):
     assert shown["srt"] is None and shown["source"] == "whisper"
     with _db(env) as s:
         assert s.execute(text("SELECT has_transcript FROM assets WHERE asset_id = :a"), {"a": vid}).scalar() is False
+
+
+@pytest.mark.slow
+def test_removing_the_machines_transcript_is_for_good(env):
+    # A person who removes the machine's transcript doesn't want it back,
+    # not even after adding and removing one of their own.
+    lib, vid, sha = _video(env, "CorrMachineGone")
+    _transcribe(env, vid, SRT_MACHINE, sha)
+    _remove(env, vid, "machine")
+    assert _shown(env, vid) == {"srt": None, "source": None, "underneath": False}
+    _transcribe(env, vid, SRT_PERSON, source="manual")
+    assert _shown(env, vid)["underneath"] is False
+    _remove(env, vid)
+    assert _shown(env, vid)["srt"] is None
+    assert _due(lib, "missing_transcription") == []
+
+
+@pytest.mark.slow
+def test_removing_twice_never_removes_both(env):
+    # A double click on "remove mine" must not take the machine's too.
+    lib, vid, sha = _video(env, "CorrRemoveTwice")
+    _transcribe(env, vid, SRT_MACHINE, sha)
+    _transcribe(env, vid, SRT_PERSON, source="manual")
+    _remove(env, vid, "manual")
+    r = _remove(env, vid, "manual", status=409)
+    assert r.json()["error"]["code"] == "transcript_changed"
+    assert r.json()["error"]["details"] == {"shown": "machine"}
+    assert _shown(env, vid)["srt"] == SRT_MACHINE
+
+    # Removing what's already gone is done already.
+    _remove(env, vid, "machine")
+    _remove(env, vid, "machine")
+    assert _shown(env, vid)["srt"] is None
+
+
+@pytest.mark.slow
+def test_removing_a_transcript_says_whose(env):
+    client, headers, *_ = env
+    lib, vid, sha = _video(env, "CorrRemoveWhose")
+    _transcribe(env, vid, SRT_MACHINE, sha)
+    assert client.delete(f"/v1/assets/{vid}/transcript", headers=headers).status_code == 422
+    assert client.delete(f"/v1/assets/{vid}/transcript", params={"which": "all"}, headers=headers).status_code == 422
+    r = _remove(env, vid, "manual", status=409)
+    assert r.json()["error"]["details"] == {"shown": "machine"}
+    assert _shown(env, vid)["srt"] == SRT_MACHINE
+
+
+@pytest.mark.slow
+def test_only_editors_upload_or_remove_a_transcript(env):
+    from tests.test_archive_trash_safety import _key_with_role
+
+    client, headers, *_ = env
+    lib, vid, sha = _video(env, "CorrTranscriptRole")
+    viewer, editor = _key_with_role(env, "viewer"), _key_with_role(env, "editor")
+    person = {"srt": SRT_PERSON, "language": "en", "source": "manual"}
+    assert client.post(f"/v1/assets/{vid}/transcript", json=person, headers=viewer).status_code == 403
+    assert client.post(f"/v1/assets/{vid}/transcript", json=person, headers=editor).status_code == 200
+    _remove(env, vid, "manual", status=403, headers=viewer)
+    _remove(env, vid, "manual", headers=editor)
+
+
+@pytest.mark.slow
+def test_a_public_librarys_page_shows_only_what_a_person_sees(env):
+    client, headers, *_ = env
+    lib, vid, sha = _video(env, "CorrPublicLibrary")
+    _transcribe(env, vid, SRT_MACHINE, sha)
+    _transcribe(env, vid, SRT_PERSON, source="manual")
+    _describe_as(env, vid, "a cat", ["cat"])
+    assert _correct(env, vid, description="Mittens", tags=["Mittens"]).status_code == 200
+    library_id = lib[2]
+    assert client.patch(f"/v1/libraries/{library_id}", json={"is_public": True}, headers=headers).status_code == 200
+    try:
+        pages = [client.get(f"/v1/assets/{vid}", params={"public_library_id": library_id}),
+                 client.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": "a.mov"})]
+    finally:
+        client.patch(f"/v1/libraries/{library_id}", json={"is_public": False}, headers=headers)
+    for r in pages:
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert d["ai_description"] == "Mittens" and d["ai_tags"] == ["Mittens"]
+        assert d["machine_description"] is None and d["machine_tags"] == [] and d["corrected"] == []
+        assert d["transcript_source"] is None and d["machine_transcript"] is False
 
 
 @pytest.mark.slow
@@ -172,6 +257,65 @@ def test_tag_edits_are_adds_and_removes_on_the_machines_list(env):
     assert sorted(d["ai_tags"]) == ["Rex", "dog", "sand"]
     assert sorted(d["machine_tags"]) == ["dog", "ocean", "sand"]
     assert d["corrected"] == ["tags"]
+
+
+@pytest.mark.slow
+def test_tag_edits_last_through_the_machine_changing_its_mind(env):
+    lib, clip, sha = _image(env, "CorrTagsLast")
+    _describe_as(env, clip, "a dog on a beach", ["dog", "beach", "ocean"])
+    _correct(env, clip, tags=["dog", "beach", "Rex"])  # ocean out, Rex in
+
+    # The machine drops ocean and finds Rex itself; the person then takes out sand.
+    _describe_as(env, clip, "Rex on the sand", ["dog", "sand", "Rex"])
+    assert sorted(_detail(env, clip)["ai_tags"]) == ["Rex", "dog", "sand"]
+    _correct(env, clip, tags=["dog", "Rex"])
+
+    # Ocean stays out and Rex stays in, whatever the machine says next.
+    _describe_as(env, clip, "a dog by the ocean", ["dog", "ocean", "beach"])
+    assert sorted(_detail(env, clip)["ai_tags"]) == ["Rex", "beach", "dog"]
+
+    # Putting a removed tag back undoes its removal.
+    _correct(env, clip, tags=["dog", "Rex", "beach", "ocean"])
+    _describe_as(env, clip, "a dog by the ocean", ["dog", "ocean"])
+    assert sorted(_detail(env, clip)["ai_tags"]) == ["Rex", "dog", "ocean"]
+
+
+@pytest.mark.slow
+def test_tags_that_arent_a_list_dont_break_anything(env):
+    client, headers, *_ = env
+    lib, clip, sha = _image(env, "CorrNullTags")
+    _describe_as(env, clip, "a cat", ["cat"])
+    for odd in ("null", '"cat"', '{"a": 1}'):
+        with _db(env) as s:
+            s.execute(text("UPDATE asset_metadata SET data = jsonb_set(data, '{tags}', CAST(:v AS jsonb))"
+                           " WHERE asset_id = :a"), {"a": clip, "v": odd})
+            s.commit()
+        assert _detail(env, clip)["ai_tags"] == []
+        r = client.get("/v1/query", params=[("f", f"library:{lib[2]}"), ("f", "tag:cat")], headers=headers)
+        assert r.status_code == 200 and r.json()["items"] == [], r.text
+        r = client.get("/v1/assets/facets", params=[("f", f"library:{lib[2]}")], headers=headers)
+        assert r.status_code == 200, r.text
+        assert _correct(env, clip, tags=["Mittens"]).status_code == 200
+        assert _detail(env, clip)["ai_tags"] == ["Mittens"]
+        _correct(env, clip, tags=None)
+
+
+@pytest.mark.slow
+def test_undoing_every_correction_while_search_is_down_still_reaches_search(env, monkeypatch):
+    import src.server.search.sync as sync
+
+    lib, clip, sha = _image(env, "CorrSearchDown")
+    _describe_as(env, clip, "a cat", ["cat"])
+    _correct(env, clip, description="Mittens")
+    with _db(env) as s:
+        s.execute(text("UPDATE assets SET search_synced_at = now() WHERE asset_id = :a"), {"a": clip})
+        s.commit()
+    monkeypatch.setattr(sync, "try_sync_asset", lambda *a, **k: None)  # Quickwit down
+    assert _correct(env, clip, description=None).status_code == 200
+    with _db(env) as s:
+        stale = s.execute(text(f"SELECT {sync.STALE_SEARCH} FROM active_assets a WHERE a.asset_id = :a"),
+                          {"a": clip}).scalar()
+    assert stale is True
 
 
 @pytest.mark.slow

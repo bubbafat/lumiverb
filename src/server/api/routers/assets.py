@@ -743,11 +743,12 @@ def _fill_described(session: Session, asset_id: str, response: AssetResponse) ->
     """The description, tags and OCR a clip shows (a person's corrections over
     the machine's), which were corrected, and the machine's for those."""
     from src.server.repository.corrections import CorrectionsRepository, apply
+    from src.server.repository.corrections import machine_tags as tags_in
 
     meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
     data = (meta.data if meta else None) or {}
     machine_description = data.get("description") or None
-    machine_tags = data.get("tags") or []
+    machine_tags = tags_in(data)
     machine_ocr = AssetOcrRepository(session).text_for(asset_id) or None
     description, tags, ocr_text, corrected = apply(
         CorrectionsRepository(session).get(asset_id), machine_description, machine_tags, machine_ocr)
@@ -787,12 +788,19 @@ def _project_visitor_view(response: AssetResponse) -> AssetResponse:
 
 def _trim_public_transcript(request: Request, session: Session, response: AssetResponse) -> None:
     """A public page's transcript stops where its playback does, and it shows no notes:
-    they're the team's working notes (Robert's call, Oct 8)."""
+    they're the team's working notes (Robert's call, Oct 8). Nor does it say
+    what a person corrected or what the machine's was: a visitor sees the result."""
     if not getattr(request.state, "is_public_request", False):
         return
     response.note = None
     response.note_author = None
     response.note_updated_at = None
+    response.corrected = []
+    response.machine_description = None
+    response.machine_tags = []
+    response.machine_ocr_text = None
+    response.transcript_source = None
+    response.machine_transcript = False
     if not response.transcript_srt:
         return
     from src.server.api.routers.playback import srt_before
@@ -1462,18 +1470,22 @@ def correct_asset(
     """A person corrects a clip's description, OCR or tags. Kept beside the
     machine's values: describing or reading the clip again changes what's
     underneath, never the correction. Returns the clip's detail."""
-    from src.server.repository.corrections import CorrectionsRepository
+    from src.server.repository.corrections import CorrectionsRepository, machine_tags
 
     asset = AssetRepository(session).get_by_id(asset_id)
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
     meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
-    machine_tags = ((meta.data if meta else None) or {}).get("tags") or []
     CorrectionsRepository(session).update(asset_id, body.model_dump(include=body.model_fields_set),
-                                          machine_tags, user_id)
+                                          machine_tags(meta.data if meta else None), user_id)
 
     from src.server.search.sync import try_sync_asset
 
+    # Stale until search has it: undoing every correction leaves no row
+    # whose time says so, and search may be down.
+    asset.search_synced_at = None
+    session.add(asset)
+    session.commit()
     try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
     LibraryRepository(session).bump_revision(asset.library_id)
 
@@ -1540,9 +1552,12 @@ def submit_transcript(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> TranscriptSubmitResponse:
     """Upload or replace an SRT transcript for a video asset. A machine's is
-    always kept (under a person's, if there is one): it never replaces theirs."""
+    always kept (under a person's, if there is one): it never replaces theirs.
+    A person's ("manual") needs an editor."""
     from src.server.srt import parse_srt_to_text, validate_srt
 
+    if body.source == "manual":
+        require_editor(request)
     asset_repo = AssetRepository(session)
     asset = asset_repo.get_by_id(asset_id)
     if asset is None or asset.deleted_at is not None:
@@ -1639,24 +1654,45 @@ def _show_machine_transcript(session: Session, request: Request, asset: Asset, m
     LibraryRepository(session).bump_revision(asset.library_id)
 
 
-@router.delete("/{asset_id}/transcript", status_code=204)
+@router.delete("/{asset_id}/transcript", status_code=204, dependencies=[Depends(require_editor)])
 def delete_transcript(
     asset_id: str,
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
+    which: Annotated[Literal["manual", "machine"], Query()],
 ) -> None:
-    """Remove the transcript a video asset shows. Removing a person's brings
-    back the machine's kept under it, if there is one; otherwise the clip
-    has none, and nothing regenerates one (it's the person's choice)."""
+    """Remove the transcript a video asset shows; `which` says whose the
+    caller means: a person's ("manual") or the machine's.
+
+    Removing a person's brings back the machine's kept under it, if there is
+    one. Removing the machine's removes it for good, the copy kept for under
+    a person's too; nothing regenerates it (it's the person's choice).
+    When the clip shows the other one, 409 transcript_changed (a second
+    click never removes both); when it shows none, there's nothing to do."""
     asset_repo = AssetRepository(session)
     asset = asset_repo.get_by_id(asset_id)
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
 
-    machine = _machine_transcript(session, asset_id) if asset.transcript_source == "manual" else None
+    if asset.transcript_source is None:
+        return
+    shown = "manual" if asset.transcript_source == "manual" else "machine"
+    if shown != which:
+        raise ConflictError(
+            "transcript_changed",
+            f"The clip now shows {'a person' if shown == 'manual' else 'the machine'}'s transcript, "
+            f"not {'a person' if which == 'manual' else 'the machine'}'s. Nothing was removed.",
+            {"shown": shown},
+        )
+
+    machine = _machine_transcript(session, asset_id) if shown == "manual" else None
     if machine is not None:
         _show_machine_transcript(session, request, asset, machine)
         return
+    if shown == "machine":
+        from sqlalchemy import text as sa_text
+
+        session.execute(sa_text("DELETE FROM machine_transcripts WHERE asset_id = :a"), {"a": asset_id})
 
     asset.transcript_srt = None
     asset.transcript_text = None
