@@ -222,22 +222,28 @@ def test_an_undecodable_track_is_left_out_not_fatal(tmp_path: Path) -> None:
 
 
 @pytest.mark.fast
-def test_a_render_that_fails_on_several_tracks_retries_with_the_first(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("decoder,expected", [
+    ("cpu", [(2, None), (1, None)]),
+    # The GPU, then the CPU, with every track; then both with the first.
+    ("no-such-hwaccel", [(2, "no-such-hwaccel"), (2, None), (1, "no-such-hwaccel"), (1, None)]),
+])
+def test_a_render_that_fails_on_several_tracks_retries_with_the_first(
+        tmp_path: Path, monkeypatch, decoder: str, expected: list) -> None:
     from src.client.video import analysis_proxy
 
     src = _make(tmp_path / "two.mov", layouts=["mono", "mono"])
     real = analysis_proxy.build_command
-    tried: list[int] = []
+    tried: list[tuple[int, str | None]] = []
 
-    def flaky(source, dest, settings=None, tracks=()):
-        tried.append(len(tracks))
-        cmd = real(source, dest, settings, tracks)
+    def flaky(source, dest, settings=None, tracks=(), hwaccel=None):
+        tried.append((len(tracks), hwaccel))
+        cmd = real(source, dest, settings, tracks, hwaccel)
         return cmd if len(tracks) == 1 else [*cmd[:-1], "-c:a", "no_such_encoder", cmd[-1]]
 
     monkeypatch.setattr(analysis_proxy, "build_command", flaky)
     out = tmp_path / "out.mp4"
-    render_analysis_proxy(src, out)
-    assert tried == [2, 1]
+    render_analysis_proxy(src, out, AnalysisProxySettings(decoder=decoder))
+    assert tried == expected
     assert len(_audio(_probe(out))) == 1
 
 
@@ -302,6 +308,120 @@ def test_settings_shape_the_command() -> None:
     # Originals are only read: the source is an input, never an output.
     assert cmd[cmd.index("-i") + 1] == "/in.mov"
     assert cmd[-1] == "/out.mp4"
+
+
+# ---------------------------------------------------------------------------
+# Decoding on the GPU
+# ---------------------------------------------------------------------------
+
+from src.client.video import analysis_proxy as AP  # noqa: E402
+
+needs_vulkan = pytest.mark.skipif(not AP._vulkan_decodes(), reason="no Vulkan video decoding here")
+
+
+def _frame_hashes(path: Path) -> list[str]:
+    """Each picture's hash, to compare two proxies frame by frame."""
+    out = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-i", str(path),
+                          "-map", "0:v:0", "-f", "framemd5", "-"], check=True, capture_output=True, text=True).stdout
+    return [line.rsplit(",", 1)[1].strip() for line in out.splitlines() if not line.startswith("#")]
+
+
+def _recording_ffmpeg(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """The ffmpeg commands renders run (into a .part), still run for real."""
+    ran: list[list[str]] = []
+    real = AP.subprocess.run
+
+    def run(cmd, *args, **kwargs):
+        if cmd[0] == "ffmpeg" and cmd[-1].endswith(".part"):
+            ran.append(cmd)
+        return real(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(AP.subprocess, "run", run)
+    return ran
+
+
+@pytest.mark.fast
+def test_the_decoder_is_this_machines_and_doesnt_change_what_is_made() -> None:
+    # H.264 and HEVC decoding is exact, so where it happens is a machine
+    # choice like the encoder: never tracked, never set by the server.
+    s = AnalysisProxySettings.for_producer({"max_edge": 640, "decoder": "cpu"}, "libx264", "cuda")
+    assert (s.max_edge, s.encoder, s.decoder) == (640, "libx264", "cuda")
+    assert "decoder" not in s.output() and "encoder" not in s.output()
+    assert AnalysisProxySettings.for_producer({"decoder": "cpu"}, "libx264").decoder == "auto"
+
+
+@pytest.mark.fast
+def test_gpu_decoding_is_asked_for_before_the_input() -> None:
+    cmd = build_command(Path("/in.mov"), Path("/out.mp4"), hwaccel="vulkan")
+    assert cmd[cmd.index("-hwaccel") + 1] == "vulkan"
+    assert cmd.index("-hwaccel") < cmd.index("-i")
+    assert "-hwaccel" not in build_command(Path("/in.mov"), Path("/out.mp4"))
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("choice,vulkan,expected", [
+    ("auto", True, "vulkan"),
+    ("auto", False, None),
+    ("cpu", True, None),
+    ("", True, None),
+    ("cuda", False, "cuda"),
+    ("vulkan", False, "vulkan"),
+])
+def test_which_decoder(monkeypatch: pytest.MonkeyPatch, choice: str, vulkan: bool, expected: str | None) -> None:
+    monkeypatch.setattr(AP, "_vulkan_decodes", lambda: vulkan)
+    assert AP.gpu_decoder(choice) == expected
+
+
+@pytest.mark.fast
+def test_when_gpu_decoding_fails_the_cpu_renders_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A missing device or driver, or a stream the GPU gives up on halfway.
+    ran = _recording_ffmpeg(monkeypatch)
+    src = _make(tmp_path / "in.mov")
+    out = tmp_path / "out.mp4"
+    render_analysis_proxy(src, out, AnalysisProxySettings(decoder="no-such-hwaccel"))
+
+    info = _probe(out)
+    assert (_video(info)["width"], _video(info)["height"]) == (960, 540)
+    assert len(_audio(info)) == 1
+    assert ["-hwaccel" in cmd for cmd in ran] == [True, False]
+    assert list(tmp_path.glob("out.mp4.*")) == []
+
+
+@pytest.mark.fast
+def test_a_broken_file_fails_on_the_cpu_too_and_leaves_nothing(tmp_path: Path) -> None:
+    src = tmp_path / "broken.mov"
+    src.write_bytes(b"not a video at all")
+    out = tmp_path / "out.mp4"
+    with pytest.raises(RenderError):
+        render_analysis_proxy(src, out, AnalysisProxySettings(decoder="no-such-hwaccel"))
+    assert list(tmp_path.glob("out*")) == []
+
+
+@pytest.mark.fast
+def test_decoding_on_the_cpu_never_asks_for_the_gpu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ran = _recording_ffmpeg(monkeypatch)
+    render_analysis_proxy(_make(tmp_path / "in.mov"), tmp_path / "out.mp4", AnalysisProxySettings(decoder="cpu"))
+    assert ran and not any("-hwaccel" in cmd for cmd in ran)
+
+
+@needs_vulkan
+@pytest.mark.fast
+def test_the_gpu_makes_the_same_proxy_as_the_cpu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 10-bit HEVC turned on its side, like the brain's camera and phone files.
+    flat = _make(tmp_path / "flat.mp4", extra=["-c:v", "libx265", "-pix_fmt", "yuv420p10le",
+                                               "-x265-params", "log-level=error"])
+    src = tmp_path / "portrait.mov"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-display_rotation", "90",
+                    "-i", str(flat), "-c", "copy", str(src)], check=True)
+    ran = _recording_ffmpeg(monkeypatch)
+
+    gpu, cpu = tmp_path / "gpu.mp4", tmp_path / "cpu.mp4"
+    render_analysis_proxy(src, gpu, AnalysisProxySettings(decoder="vulkan"))
+    render_analysis_proxy(src, cpu, AnalysisProxySettings(decoder="cpu"))
+
+    assert [cmd[cmd.index("-hwaccel") + 1] if "-hwaccel" in cmd else None for cmd in ran] == ["vulkan", None]
+    assert (_video(_probe(gpu))["width"], _video(_probe(gpu))["height"]) == (540, 960)
+    assert _frame_hashes(gpu) == _frame_hashes(cpu)
 
 
 # ---------------------------------------------------------------------------

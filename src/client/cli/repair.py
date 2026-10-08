@@ -18,7 +18,13 @@ from rich.progress import Progress, BarColumn, TextColumn, MofNCompleteColumn, T
 from rich.table import Table
 
 from src.client.cli.client import LumiverbClient
-from src.client.video.analysis_proxy import AnalysisProxySettings, RenderError, render_analysis_proxy, render_timeout
+from src.client.video.analysis_proxy import (
+    AnalysisProxySettings,
+    RenderError,
+    gpu_decoder,
+    render_analysis_proxy,
+    render_timeout,
+)
 from src.client.video.audio import audio_tracks, speech_wav_command
 from src.client.video.probe import probe_video
 from src.client.workers.faces.insightface_provider import InsightFaceProvider
@@ -1102,9 +1108,12 @@ def run_repair(
         assets = _due("render", assets)
 
         # The account's settings, so what's recorded as current is what's
-        # rendered; the encoder is this machine's.
+        # rendered; the encoder and decoder are this machine's.
         settings = AnalysisProxySettings.for_producer(producers.settings("analysis_proxy"),
-                                                      _cfg.analysis_proxy_encoder)
+                                                      _cfg.analysis_proxy_encoder, _cfg.analysis_proxy_decoder)
+        hwaccel = gpu_decoder(settings.decoder)
+        if hwaccel:
+            console.print(f"Decoding on the GPU ({hwaccel}); the CPU takes what it can't.")
         # Several at once: one render of a 4K HEVC original decodes on a few
         # cores and leaves the rest idle.
         render_conc = _cfg.render_concurrency or default_render_concurrency()
