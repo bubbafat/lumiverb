@@ -981,6 +981,7 @@ def scan(
             f"{stats.moved:,} moved"
             + (f", {stats.cache_populated:,} cache populated" if stats.cache_populated else "")
             + (f", {stats.failed:,} failed" if stats.failed else "")
+            + (f", {stats.settling:,} still being written" if stats.settling else "")
         )
 
         # Show what enrichment is pending

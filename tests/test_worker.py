@@ -484,3 +484,10 @@ def test_without_vision_ai_its_steps_are_skipped(das: Path, monkeypatch: pytest.
     server.summaries["lib_1"]["missing_transcription"] = 1
     _, enrich, _ = _cycle(server, WorkerState(last_full_scan={"lib_1": 100 * HOUR}))
     assert enrich.call_args.kwargs["skip_types"] == {"vision", "ocr", "scene-vision"}
+
+
+@pytest.mark.fast
+def test_files_still_being_written_keep_the_changes(das: Path) -> None:
+    server = FakeServer([LIB], pending={"lib_1": [CHANGE]})
+    _cycle(server, scan=MagicMock(return_value=ScanStats(settling=1)))
+    assert server.acks == []

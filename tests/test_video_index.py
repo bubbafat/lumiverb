@@ -295,22 +295,19 @@ def test_index_video_scenes_scene_fields_complete(mock_segmenter_cls, mock_scann
 
 @patch("src.client.cli.video_index.index_video_scenes")
 def test_run_video_index_missing_source(mock_index):
-    """Videos with missing source files are skipped with fail count."""
+    """Videos without an analysis proxy are skipped with fail count."""
     progress = MagicMock()
     progress.console = MagicMock()
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        root = Path(tmpdir)
-        # Don't create the video file — it should be missing
-
-        run_video_index(
-            client=MagicMock(),
-            root_path=root,
-            videos=[{"asset_id": "a1", "rel_path": "missing.mp4", "duration_sec": 10.0}],
-            console=MagicMock(),
-            progress=progress,
-            task_id=0,
-        )
+    result = run_video_index(
+        client=MagicMock(),
+        source_for=lambda v: None,
+        videos=[{"asset_id": "a1", "rel_path": "missing.mp4", "duration_sec": 10.0}],
+        console=MagicMock(),
+        progress=progress,
+        task_id=0,
+    )
+    assert result == (0, 1)
 
     # index_video_scenes should NOT have been called
     mock_index.assert_not_called()
@@ -328,12 +325,12 @@ def test_run_video_index_happy_path(mock_index):
 
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
-        (root / "a.mp4").write_bytes(b"\x00" * 100)
-        (root / "b.mp4").write_bytes(b"\x00" * 100)
+        (root / "a1.mp4").write_bytes(b"\x00" * 100)
+        (root / "a2.mp4").write_bytes(b"\x00" * 100)
 
-        run_video_index(
+        result = run_video_index(
             client=MagicMock(),
-            root_path=root,
+            source_for=lambda v: root / f"{v['asset_id']}.mp4",
             videos=[
                 {"asset_id": "a1", "rel_path": "a.mp4", "duration_sec": 30.0},
                 {"asset_id": "a2", "rel_path": "b.mp4", "duration_sec": 60.0},
@@ -343,6 +340,8 @@ def test_run_video_index_happy_path(mock_index):
             task_id=0,
         )
 
+    assert result == (2, 0)
+    assert [c.kwargs["source_path"].name for c in mock_index.call_args_list] == ["a1.mp4", "a2.mp4"]
     assert mock_index.call_count == 2
     assert progress.advance.call_count == 2
     # Final update should show ok=2, fail=0
@@ -498,11 +497,11 @@ def test_run_video_enrich_happy_path(mock_enrich):
 
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
-        (root / "a.mp4").write_bytes(b"\x00" * 100)
+        (root / "a1.mp4").write_bytes(b"\x00" * 100)
 
         run_video_enrich(
             client=MagicMock(),
-            root_path=root,
+            source_for=lambda v: root / f"{v['asset_id']}.mp4",
             videos=[{"asset_id": "a1", "rel_path": "a.mp4"}],
             vision_provider=MagicMock(),
             vision_model_id="test-model",
@@ -520,14 +519,14 @@ def test_run_video_enrich_happy_path(mock_enrich):
 
 @patch("src.client.cli.video_index.enrich_video_scenes")
 def test_run_video_enrich_missing_source(mock_enrich):
-    """Missing source files are skipped."""
+    """Videos whose analysis proxy can't be had are skipped."""
     progress = MagicMock()
     progress.console = MagicMock()
 
     with tempfile.TemporaryDirectory() as tmpdir:
         run_video_enrich(
             client=MagicMock(),
-            root_path=Path(tmpdir),
+            source_for=lambda v: Path(tmpdir) / "gone.mp4",  # a path that isn't there
             videos=[{"asset_id": "a1", "rel_path": "missing.mp4"}],
             vision_provider=MagicMock(),
             vision_model_id="test-model",

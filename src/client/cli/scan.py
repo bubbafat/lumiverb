@@ -18,7 +18,7 @@ import logging
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from rich.console import Console
@@ -53,6 +53,11 @@ from src.shared.io_utils import resolve_source_path
 logger = logging.getLogger(__name__)
 
 
+# The macOS scanner's quarantine: a file modified this recently may still be
+# copying.
+SETTLE_SEC = 30
+
+
 @dataclass
 class ScanStats:
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -66,6 +71,8 @@ class ScanStats:
     scanned_asset_ids: list[str] = field(default_factory=list)
     # The library's root couldn't be read, so nothing was scanned.
     root_unreachable: bool = False
+    # Files written too recently to trust: left for a later scan.
+    settling: int = 0
 
 
 @dataclass
@@ -663,10 +670,19 @@ def run_scan(
         if before > len(local_files):
             console.print(f"Skipping {before - len(local_files):,} file(s) you trashed")
 
+    # Files written in the last SETTLE_SEC may still be copying, so they wait
+    # for a later scan, as on the Mac. They still count as on disk, so they
+    # are never taken for deleted.
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=SETTLE_SEC)
+    settled = [f for f in local_files if not (f.get("file_mtime") and f["file_mtime"] > cutoff)]
+    stats.settling = len(local_files) - len(settled)
+    if stats.settling:
+        console.print(f"{stats.settling:,} file(s) still being written; a later scan picks them up")
+
     # Split files: new (not on server by path) vs existing (need SHA check)
     # Default (fast): mtime+size match skips hashing. --thorough forces SHA on all.
     new_files, needs_hash, fast_unchanged = _split_files(
-        local_files, existing, thorough=thorough or force,
+        settled, existing, thorough=thorough or force,
     )
     local_rel_paths = {f["rel_path"] for f in local_files}
 

@@ -161,9 +161,13 @@ def _scan_library(
     if stats.root_unreachable:
         logger.warning("worker: %s became unreachable during the scan; changes kept", library["name"])
         return
-    if stats.failed:
-        logger.warning("worker: %d file(s) in %s failed to scan; changes kept for another try",
-                       stats.failed, library["name"])
+    if stats.failed or stats.settling:
+        logger.warning(
+            "worker: in %s, %d file(s) failed to scan and %d are still being written; changes kept for another try",
+            library["name"], stats.failed, stats.settling,
+        )
+        if prefix is None:
+            state.last_full_scan[library_id] = now
         return
     if changes:
         client.post(

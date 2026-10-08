@@ -208,3 +208,54 @@ def test_path_prefix_is_nfc() -> None:
     from src.shared.io_utils import normalize_path_prefix
 
     assert normalize_path_prefix("/" + unicodedata.normalize("NFD", "Café/") ) == unicodedata.normalize("NFC", "Café")
+
+
+# ---------------------------------------------------------------------------
+# Files still being written (ADR-016 phase 2): the brain scans as soon as the
+# Mac reports a copy, so a file still growing waits for a later scan, as the
+# macOS scanner's 30-second quarantine does.
+# ---------------------------------------------------------------------------
+
+
+def _local(rel: str, age_sec: float) -> dict:
+    from datetime import datetime, timedelta, timezone
+
+    return {"rel_path": rel, "file_size": 4, "media_type": "image", "ext": ".jpg",
+            "file_mtime": datetime.now(timezone.utc) - timedelta(seconds=age_sec)}
+
+
+@pytest.mark.fast
+def test_files_still_being_written_wait_for_a_later_scan(tmp_path: Path) -> None:
+    local = [_local("done.jpg", 600), _local("copying.jpg", 2)]
+    split = MagicMock(return_value=([], [], []))
+    _scan_with(tmp_path, on_disk=0, on_server=0, local=local, split=split)
+    passed = [f["rel_path"] for f in split.call_args.args[0]]
+    assert passed == ["done.jpg"]
+
+
+@pytest.mark.fast
+def test_a_file_being_rewritten_is_not_deleted(tmp_path: Path) -> None:
+    # It's on the server and on disk, just changing: never "missing".
+    local = [_local(f"f{i}.jpg", 600) for i in range(9)] + [_local("f9.jpg", 1)]
+    client = _scan_with(tmp_path, on_disk=0, on_server=10, local=local,
+                        split=MagicMock(return_value=([], [], [])))
+    assert _deleted_ids(client) == []
+
+
+@pytest.mark.fast
+def test_scan_counts_files_still_being_written(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    root.mkdir()
+    local = [_local("done.jpg", 600), _local("copying.jpg", 2)]
+    with (
+        patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
+        patch("src.client.cli.scan._load_library_filters", return_value=[]),
+        patch("src.client.cli.scan._walk_library", return_value=local),
+        patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value={}),
+        patch("src.client.cli.scan._fetch_ignored_paths", return_value=set()),
+        patch("src.client.cli.scan._split_files", MagicMock(return_value=([], [], []))),
+        patch("src.client.cli.scan._populate_cache_for_unchanged"),
+    ):
+        stats = run_scan(MagicMock(), {"library_id": "lib_1", "root_path": str(root)},
+                         console=Console(quiet=True), skip_moves=True)
+    assert stats.settling == 1
