@@ -96,6 +96,7 @@ def _scan_with(
     split: MagicMock | None = None,
     local: list[dict] | None = None,
     walk=None,
+    settings: dict | None = None,
     **kwargs,
 ) -> MagicMock:
     """run_scan with `on_server` images on the server, of which `on_disk` are on disk unchanged."""
@@ -113,6 +114,8 @@ def _scan_with(
     }
     existing.update(extra_server or {})
     client = MagicMock()
+    if settings is not None:
+        client.get.return_value.json.return_value = settings
     with (
         patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
         patch("src.client.cli.scan._load_library_filters", return_value=[]),
@@ -126,7 +129,7 @@ def _scan_with(
             client,
             {"library_id": "lib_1", "root_path": str(root)},
             console=Console(quiet=True),
-            skip_moves=False,
+            skip_moves=kwargs.pop("skip_moves", False),
             allow_moves=True,
             **kwargs,
         )
@@ -219,6 +222,44 @@ def test_a_library_with_no_media_on_a_present_share_is_just_empty(tmp_path: Path
     with patch("src.client.cli.scan.reachable_root", side_effect=[root, root]):
         client = _scan_with(tmp_path, on_disk=0, on_server=0)
     assert not client.scan_stats.root_unreachable
+
+
+def _moved_file_scan(tmp_path: Path, *, follow_moves: bool, **kwargs) -> tuple[MagicMock, MagicMock, MagicMock]:
+    """f1.jpg moved to moved/f1.jpg: on the server as f0 and f1, on disk as f0 and the new path."""
+    moved = {"rel_path": "moved/f1.jpg", "file_size": 4, "file_mtime": None, "media_type": "image", "ext": ".jpg"}
+    local = [{"rel_path": "f0.jpg", "file_size": 4, "file_mtime": None, "media_type": "image", "ext": ".jpg"}, moved]
+    with (
+        patch("src.client.cli.scan._detect_moves", return_value=([], [moved])) as detect,
+        patch("src.client.cli.scan._scan_one") as scan_one,
+        patch("src.client.cli.scan.ProxyCache"),
+    ):
+        client = _scan_with(tmp_path, on_disk=1, on_server=2, local=local,
+                            split=MagicMock(return_value=([moved], [], [local[0]])),
+                            settings={"follow_moves": follow_moves}, **kwargs)
+    return client, detect, scan_one
+
+
+@pytest.mark.fast
+def test_moves_off_a_moved_file_is_archived_and_scanned_as_new(tmp_path: Path) -> None:
+    """The account doesn't follow moves (Robert's call, Oct 8): the path is the identity."""
+    client, detect, scan_one = _moved_file_scan(tmp_path, follow_moves=False)
+    detect.assert_not_called()
+    assert _deleted_ids(client) == ["ast_1"]
+    assert [c.kwargs["f"]["rel_path"] for c in scan_one.call_args_list] == ["moved/f1.jpg"]
+    assert not [c for c in client.post.call_args_list if c.args and c.args[0] == "/v1/assets/batch-moves"]
+
+
+@pytest.mark.fast
+def test_moves_off_skip_moves_doesnt_hold_back_deletions(tmp_path: Path) -> None:
+    # --skip-moves skips deletions only because a delete might be half a move.
+    client, _, _ = _moved_file_scan(tmp_path, follow_moves=False, skip_moves=True)
+    assert _deleted_ids(client) == ["ast_1"]
+
+
+@pytest.mark.fast
+def test_moves_on_moves_are_looked_for(tmp_path: Path) -> None:
+    _, detect, _ = _moved_file_scan(tmp_path, follow_moves=True)
+    detect.assert_called_once()
 
 
 @pytest.mark.fast

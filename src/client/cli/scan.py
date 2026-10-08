@@ -202,6 +202,15 @@ def _mtime_size_match(local_file: dict, server: _ServerAsset) -> bool:
     return local_mtime.isoformat() == server.file_mtime
 
 
+def _fetch_follow_moves(client: LumiverbClient) -> bool:
+    """The account's "follow moves and renames" setting; on when the server
+    is too old to say."""
+    try:
+        return client.get("/v1/tenant/settings").json().get("follow_moves", True) is not False
+    except Exception:  # noqa: BLE001 — an older server: moves were always followed
+        return True
+
+
 @dataclass
 class _MoveCandidate:
     """A file that appears to have moved: same SHA, different path."""
@@ -664,6 +673,12 @@ def run_scan(
 
     stats = ScanStats()
 
+    # The account may not follow moves (the path is the identity): then a
+    # file at a new path is new, and its old path is simply gone.
+    follow_moves = _fetch_follow_moves(client)
+    if not follow_moves:
+        console.print("[dim]This account doesn't follow moves and renames: files at new paths are new assets.[/dim]")
+
     # Load path filters
     tenant_filters = _load_tenant_filters(client)
     library_filters = _load_library_filters(client, library_id)
@@ -771,7 +786,7 @@ def run_scan(
     # (a move requires an old path to disappear), and --force is not set.
     # Pre-filters by file_size before expensive SHA computation.
     moves: list[_MoveCandidate] = []
-    if new_files and deleted_ids and not force and not skip_moves:
+    if new_files and deleted_ids and not force and not skip_moves and follow_moves:
         moves, new_files = _detect_moves(
             new_files, existing, root_path, local_rel_paths,
             deleted_ids=deleted_ids, console=console,
@@ -819,7 +834,7 @@ def run_scan(
         console.print(f"[yellow]Skipping {len(deleted_ids):,} deletions: some folders couldn't be listed[/yellow]")
         deleted_ids = []
 
-    if skip_moves and deleted_ids:
+    if skip_moves and follow_moves and deleted_ids:
         console.print(f"[dim]Skipping {len(deleted_ids):,} deletions (--skip-moves)[/dim]")
         deleted_ids = []
 
