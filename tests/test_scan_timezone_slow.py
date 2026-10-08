@@ -16,9 +16,12 @@ import pytest
 from sqlalchemy import create_engine, text
 
 from src.client.cli.ingest import _walk_library
-from src.client.cli.scan import _fetch_existing_assets_with_sha, _split_files
+from src.client.cli.scan import _fetch_existing_assets_with_sha, _record_file_stat, _split_files
 from src.server.database import get_engine_for_url
-from tests.test_preserve_human_data_slow import _image, env  # noqa: F401 — the shared server fixture
+from tests.test_preserve_human_data_slow import (  # noqa: F401 — the shared server fixture
+    _image,
+    env,
+)
 
 
 class _Api:
@@ -29,6 +32,11 @@ class _Api:
 
     def get(self, path: str, **kwargs):
         r = self._client.get(path, headers=self._headers, **kwargs)
+        assert r.status_code == 200, r.text
+        return r
+
+    def post(self, path: str, **kwargs):
+        r = self._client.post(path, headers=self._headers, **kwargs)
         assert r.status_code == 200, r.text
         return r
 
@@ -68,3 +76,32 @@ def test_a_second_scan_doesnt_hash_an_unchanged_file(env, tmp_path: Path) -> Non
     assert not new
     assert not needs_hash
     assert [x["rel_path"] for x in fast_unchanged] == ["tz/clip.jpg"]
+
+
+@pytest.mark.slow
+def test_a_touched_file_is_hashed_once_then_matches_again(env, tmp_path: Path) -> None:
+    """Same content, new mtime: the scan hashes it, records the new mtime,
+    and the scan after that takes the fast path."""
+    client, headers, library_id, _ = env
+    (tmp_path / "touched").mkdir()
+    clip = tmp_path / "touched" / "clip.jpg"
+    clip.write_bytes(_image())
+    os.utime(clip, ns=(1_700_000_000_000_000_000,) * 2)
+    [before] = _walk_library(tmp_path)
+    r = client.post(
+        "/v1/ingest", headers=headers, files={"proxy": ("p.jpg", io.BytesIO(_image()), "image/jpeg")},
+        data={"library_id": library_id, "rel_path": before["rel_path"], "file_size": str(before["file_size"]),
+              "file_mtime": before["file_mtime"].isoformat(), "media_type": "image"},
+    )
+    assert r.status_code == 200, r.text
+
+    os.utime(clip, ns=(1_720_000_000_987_654_321,) * 2)  # touched
+    local = _walk_library(tmp_path)
+    api = _Api(client, headers)
+    _, needs_hash, _ = _split_files(local, _fetch_existing_assets_with_sha(api, library_id))
+    assert [f["rel_path"] for f in needs_hash] == ["touched/clip.jpg"]
+    _record_file_stat(api, library_id, local[0])
+
+    _, needs_hash, fast_unchanged = _split_files(local, _fetch_existing_assets_with_sha(api, library_id))
+    assert not needs_hash
+    assert [f["rel_path"] for f in fast_unchanged] == ["touched/clip.jpg"]

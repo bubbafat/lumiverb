@@ -209,6 +209,18 @@ def _mtime_size_match(local_file: dict, server: _ServerAsset) -> bool:
     return local_mtime == server_mtime
 
 
+def _record_file_stat(client: LumiverbClient, library_id: str, f: dict) -> None:
+    """Tell the server a file's current size and mtime, so the next scan's
+    fast check matches. A failure only costs a hash next time."""
+    data = {"library_id": library_id, "rel_path": f["rel_path"], "file_size": f["file_size"],
+            "file_mtime": f["file_mtime"].isoformat() if f.get("file_mtime") else None,
+            "media_type": f["media_type"]}
+    try:
+        client.post("/v1/assets/upsert", json=data)
+    except Exception as exc:  # noqa: BLE001 — never stops a scan
+        logger.warning("Couldn't record the new mtime of %s: %s", f["rel_path"], exc)
+
+
 @dataclass
 class _MoveCandidate:
     """A file that appears to have moved: same SHA, different path."""
@@ -958,6 +970,10 @@ def run_scan(
                 unchanged_files.append(f)
                 stats.unchanged += 1
                 scan_progress.advance(tid)
+                # Same content, new size or mtime (touched, copied back): record
+                # it, or every later scan reads the whole file again.
+                if not _mtime_size_match(f, server):
+                    _record_file_stat(client, library_id, f)
 
         while inflight:
             done, inflight = _drain(inflight)
