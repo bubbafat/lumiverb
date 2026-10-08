@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import and_, bindparam, column, func, insert, or_, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.sql import text as sa_text
 from sqlmodel import Session, select
 
@@ -949,8 +950,25 @@ class AssetRepository:
         """Lock an archived asset found at rel_path before restoring it there.
         False when, meanwhile, another ingest restored it at another path (a
         copy of the file, matched by content): rel_path is then unknown."""
-        self._session.refresh(asset, with_for_update=True)
+        try:
+            self._session.refresh(asset, with_for_update=True)
+        except InvalidRequestError:
+            # Deleted for good meanwhile (the trash emptied): nothing to restore.
+            self._session.expunge(asset)
+            return False
         return asset.rel_path == rel_path
+
+    def lock_still_deleted(self, asset_ids: list[str]) -> list[str]:
+        """Of these, the assets still deleted, locked until the transaction ends:
+        one a scan restored since they were listed is left out."""
+        if not asset_ids:
+            return []
+        rows = self._session.execute(
+            text("SELECT asset_id FROM assets WHERE asset_id = ANY(:asset_ids) AND deleted_at IS NOT NULL"
+                 " ORDER BY asset_id FOR UPDATE"),
+            {"asset_ids": asset_ids},
+        )
+        return [r[0] for r in rows]
 
     def clear_trash(self, asset: Asset) -> None:
         """Take an asset out of the trash and queue it and its scenes for the
@@ -1094,6 +1112,9 @@ class AssetRepository:
         - ``projects.cover_asset_id`` is nullable — set to NULL rather
           than deleting the project itself
         """
+        # Only what's still deleted: a scan may have restored one since it was
+        # listed, and its ratings, projects and faces stay.
+        asset_ids = self.lock_still_deleted(asset_ids)
         if not asset_ids:
             return 0
         params = {"asset_ids": asset_ids}

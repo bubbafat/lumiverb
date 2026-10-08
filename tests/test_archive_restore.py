@@ -177,6 +177,41 @@ def test_a_file_back_at_its_path_after_a_copy_claimed_it_gets_its_own_asset(env)
 
 
 @pytest.mark.slow
+def test_a_purge_leaves_alone_an_asset_restored_since_it_was_listed(env):
+    """Emptying the trash lists, then deletes: a scan restoring the asset in
+    between must not cost it its ratings (or projects, faces...)."""
+    client, headers, library_id, *_ = env
+    sha = _sha()
+    asset = _ingest(env, "purge/K001.mov", sha=sha)
+    assert client.put(f"/v1/assets/{asset}/rating", json={"stars": 5}, headers=headers).status_code == 200
+    _archive(env, asset)
+    with _sessions(env, 1) as [(session, repo)]:
+        listed = repo.list_trashed(asset_ids=[asset], include_missing=True)
+        assert [a.asset_id for a in listed] == [asset]
+        session.commit()  # the listing's read ends; nothing locked yet
+        assert _ingest(env, "purge/K001.mov", sha=sha) == asset  # the scan restores it
+        assert repo.permanently_delete([asset]) == 0
+        session.commit()
+    ratings = client.post("/v1/assets/ratings/lookup", json={"asset_ids": [asset]}, headers=headers).json()["ratings"]
+    assert ratings[asset]["stars"] == 5
+
+
+@pytest.mark.slow
+def test_a_file_back_at_its_path_after_its_asset_was_purged_gets_a_new_one(env):
+    client, headers, library_id, *_ = env
+    sha = _sha()
+    asset = _ingest(env, "purge/L001.mov", sha=sha)
+    _archive(env, asset)
+    with _sessions(env, 1) as [(_, repo)]:
+        found = repo.get_by_library_and_rel_path(library_id, "purge/L001.mov")  # read before the purge
+        r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [asset], "include_missing": True},
+                           headers=headers)
+        assert r.status_code == 200 and r.json()["deleted"] == 1, r.text
+        assert not repo.lock_for_restore(found, "purge/L001.mov")
+    assert _ingest(env, "purge/L001.mov", sha=sha) != asset
+
+
+@pytest.mark.slow
 def test_only_missing_files_count_as_archived(env):
     """Trashed with its library (or any reason but "missing") isn't archived:
     not restored by content, not counted, not purged with include_missing."""

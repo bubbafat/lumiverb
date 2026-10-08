@@ -81,6 +81,12 @@ def purge_assets(
     """Delete these trashed assets for good: rows, files, playback cuts and search
     documents. 409 in_projects when any are in projects, unless remove_from_projects."""
     asset_repo = AssetRepository(session)
+    # Lock what's still deleted; one a scan restored since it was listed keeps
+    # its files and everything else.
+    still = set(asset_repo.lock_still_deleted([a.asset_id for a in to_delete]))
+    to_delete = [a for a in to_delete if a.asset_id in still]
+    if not to_delete:
+        return 0
     asset_ids = [a.asset_id for a in to_delete]
     if not remove_from_projects:
         from src.server.api.routers.assets import project_usage_summary
