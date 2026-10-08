@@ -305,6 +305,13 @@ def test_a_manual_worker_run_finds_the_service_s_lock():
     assert 'lumiverb" config set --cache-home "${DATA_DIR}/cache"' in text
 
 
+def _env_append() -> str:
+    """update-api.sh's helper for adding a line to the env file."""
+    text = UPDATE_API.read_text()
+    start = text.index("env_append() {")
+    return text[start:text.index("\n}\n", start) + 3]
+
+
 def _update_data_dir(tmp_path: Path, env_text: str) -> tuple[str, list[str]]:
     """Run update-api.sh's data-dir step against an env file; returns it and the sudo calls."""
     env = tmp_path / "env"
@@ -317,7 +324,7 @@ def _update_data_dir(tmp_path: Path, env_text: str) -> tuple[str, list[str]]:
         'step() { :; }; ok() { :; }; warn() { :; }; chown() { :; }\n'
         f'sudo() {{ echo "$*" >> "{calls}"; }}\n'
         f'ENV_FILE="{env}"; SVC_USER=lumiverb; APP_DIR=/opt/lumiverb\n'
-        + block
+        + _env_append() + block
     )
     out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
     assert out.returncode == 0, out.stdout + out.stderr
@@ -336,6 +343,28 @@ def test_update_without_a_data_dir_leaves_caches_alone(tmp_path):
     env, calls = _update_data_dir(tmp_path, "API_PORT=8100\n")
     assert env == "API_PORT=8100\n"
     assert calls == []
+
+
+def test_settings_added_to_an_env_file_without_a_final_newline_get_their_own_line(tmp_path):
+    # An env file edited by hand often ends without one: "API_PORT=8100XDG_CACHE_HOME=..."
+    # would break both settings.
+    data = tmp_path / "data"
+    env, _ = _update_data_dir(tmp_path, f"DATA_DIR={data}\nAPI_PORT=8100")
+    assert env.splitlines() == [f"DATA_DIR={data}", "API_PORT=8100", f"XDG_CACHE_HOME={data}/cache"]
+
+    env_file = tmp_path / "env"
+    env_file.write_text(f"DATA_DIR={data}")
+    text = UPDATE_API.read_text()
+    block = text.split('step "Ports"', 1)[1].split("# ----", 1)[0]
+    script = 'step() { :; }; ok() { :; }\n' + f'ENV_FILE="{env_file}"\n' + _env_append() + block
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert env_file.read_text().splitlines() == [f"DATA_DIR={data}", "API_PORT=8000"]
+
+
+def test_every_env_file_append_goes_through_the_helper():
+    text = UPDATE_API.read_text()
+    assert text.replace(_env_append(), "").count('>> "$ENV_FILE"') == 0
 
 
 def _update_python(tmp_path: Path, venv_cfg: str | None, pin: str = "3.12\n") -> tuple[list[str], str]:

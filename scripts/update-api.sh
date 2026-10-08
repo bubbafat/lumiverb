@@ -39,6 +39,15 @@ ENV_FILE="/etc/lumiverb/env"
 SVC_USER="lumiverb"
 UV_BIN="/usr/local/bin/uv"
 
+# Adds a line to the env file, on a line of its own even when the file
+# doesn't end in a newline.
+env_append() {
+  if [[ -s "$ENV_FILE" && -n "$(tail -c1 "$ENV_FILE")" ]]; then
+    echo >> "$ENV_FILE"
+  fi
+  echo "$1" >> "$ENV_FILE"
+}
+
 [[ "$(id -u)" -eq 0 ]] || fail "Run as root"
 [[ -d "${APP_DIR}/.git" ]] || fail "${APP_DIR} is not a git repo — run deploy-api.sh first"
 
@@ -124,7 +133,7 @@ if [[ -n "$DATA_DIR" ]]; then
   chown -R "$SVC_USER":"$SVC_USER" "$DATA_DIR"
   # Caches, and the worker's lock and state, on the data disk for manual
   # runs as the service user too, so one never runs beside the service.
-  grep -q '^XDG_CACHE_HOME=' "$ENV_FILE" || echo "XDG_CACHE_HOME=${DATA_DIR}/cache" >> "$ENV_FILE"
+  grep -q '^XDG_CACHE_HOME=' "$ENV_FILE" || env_append "XDG_CACHE_HOME=${DATA_DIR}/cache"
   sudo -u "$SVC_USER" -H "$APP_DIR/.venv/bin/lumiverb" config set --cache-home "${DATA_DIR}/cache" >/dev/null
   ok "Data dir: $DATA_DIR"
 fi
@@ -141,7 +150,7 @@ fi
 # ---------------------------------------------------------------------------
 step "Ports"
 # Installs from before ports were configurable run the API on 8000.
-grep -q '^API_PORT=' "$ENV_FILE" || echo "API_PORT=8000" >> "$ENV_FILE"
+grep -q '^API_PORT=' "$ENV_FILE" || env_append "API_PORT=8000"
 API_PORT="$(grep '^API_PORT=' "$ENV_FILE" | cut -d= -f2-)"
 ok "API on port ${API_PORT}"
 
