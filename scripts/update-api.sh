@@ -66,8 +66,13 @@ ok "$(sudo -u "$SVC_USER" git log --oneline -1)"
 
 # ---------------------------------------------------------------------------
 step "Updating Python dependencies"
-sudo -u "$SVC_USER" "$UV_BIN" sync --extra cli --extra embeddings --extra face_recognition
-ok "Python venv synced (server + cli + embeddings + face_recognition)"
+EXTRAS=(--extra cli --extra embeddings --extra face_recognition)
+# uv sync removes what the extras don't list, so keep the worker's.
+if systemctl is-enabled lumiverb-worker >/dev/null 2>&1; then
+  EXTRAS+=(--extra workers)
+fi
+sudo -u "$SVC_USER" "$UV_BIN" sync "${EXTRAS[@]}"
+ok "Python venv synced (${EXTRAS[*]})"
 
 # ---------------------------------------------------------------------------
 step "Running migrations"
@@ -105,6 +110,25 @@ if [[ -f "$QW_UNIT" ]] && grep -qE '^(PrivateTmp|ProtectSystem|ReadWritePaths|Re
 fi
 
 # ---------------------------------------------------------------------------
+step "Ports"
+# Installs from before ports were configurable run the API on 8000.
+grep -q '^API_PORT=' "$ENV_FILE" || echo "API_PORT=8000" >> "$ENV_FILE"
+API_PORT="$(grep '^API_PORT=' "$ENV_FILE" | cut -d= -f2-)"
+ok "API on port ${API_PORT}"
+
+# ---------------------------------------------------------------------------
+step "Updating the worker unit"
+WORKER_UNIT="/etc/systemd/system/lumiverb-worker.service"
+if [[ -f "$WORKER_UNIT" ]]; then
+  # The old unit ran 'lumiverb pipeline', which no longer exists.
+  sed -i "s|^ExecStart=.*/lumiverb pipeline$|ExecStart=${APP_DIR}/.venv/bin/lumiverb worker|" "$WORKER_UNIT"
+  grep -q "^Environment=HOME=" "$WORKER_UNIT" || sed -i "/^Environment=PYTHONUNBUFFERED=1$/a Environment=HOME=${SVC_HOME}" "$WORKER_UNIT"
+  sed -i "s|^ReadWritePaths=\([^ ]*\)$|ReadWritePaths=\1 ${SVC_HOME}|" "$WORKER_UNIT"
+  systemctl daemon-reload
+  ok "$(grep '^ExecStart=' "$WORKER_UNIT")"
+fi
+
+# ---------------------------------------------------------------------------
 step "Installing upkeep timers"
 cat > /etc/systemd/system/lumiverb-upkeep.service <<UPKEEP_SVC
 [Unit]
@@ -115,7 +139,7 @@ Type=oneshot
 User=${SVC_USER}
 Group=${SVC_USER}
 EnvironmentFile=${ENV_FILE}
-ExecStart=/usr/bin/curl -sf -X POST http://127.0.0.1:8000/v1/upkeep -H "Authorization: Bearer \${ADMIN_KEY}" -H "Content-Type: application/json"
+ExecStart=/usr/bin/curl -sf -X POST http://127.0.0.1:\${API_PORT}/v1/upkeep -H "Authorization: Bearer \${ADMIN_KEY}" -H "Content-Type: application/json"
 TimeoutSec=120
 UPKEEP_SVC
 
@@ -141,7 +165,7 @@ Type=oneshot
 User=${SVC_USER}
 Group=${SVC_USER}
 EnvironmentFile=${ENV_FILE}
-ExecStart=/usr/bin/curl -sf -X POST "http://127.0.0.1:8000/v1/upkeep/cleanup?dry_run=false" -H "Authorization: Bearer \${ADMIN_KEY}" -H "Content-Type: application/json"
+ExecStart=/usr/bin/curl -sf -X POST "http://127.0.0.1:\${API_PORT}/v1/upkeep/cleanup?dry_run=false" -H "Authorization: Bearer \${ADMIN_KEY}" -H "Content-Type: application/json"
 TimeoutSec=300
 DAILY_SVC
 
@@ -169,7 +193,7 @@ systemctl is-enabled lumiverb-worker >/dev/null 2>&1 && systemctl restart lumive
 systemctl is-enabled lumiverb-quickwit >/dev/null 2>&1 && systemctl restart lumiverb-quickwit
 
 for i in {1..10}; do
-  if curl -sf http://127.0.0.1:8000/health >/dev/null 2>&1; then
+  if curl -sf http://127.0.0.1:${API_PORT}/health >/dev/null 2>&1; then
     break
   fi
   sleep 1
@@ -179,7 +203,7 @@ systemctl status --no-pager lumiverb-api || true
 systemctl is-enabled lumiverb-quickwit >/dev/null 2>&1 && systemctl status --no-pager lumiverb-quickwit || true
 systemctl is-enabled lumiverb-worker >/dev/null 2>&1 && systemctl status --no-pager lumiverb-worker || true
 
-if curl -sf http://127.0.0.1:8000/health >/dev/null 2>&1; then
+if curl -sf http://127.0.0.1:${API_PORT}/health >/dev/null 2>&1; then
   ok "API server healthy"
 else
   fail "API server not responding — check: journalctl -u lumiverb-api -n 50"

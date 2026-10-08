@@ -8,6 +8,11 @@
 # Usage:
 #   bash scripts/deploy-web.sh --domain app.example.com --api-upstream http://10.0.0.5:8000
 #
+# On a LAN/Tailscale box (the brain), answer on any address over HTTP and
+# leave the firewall alone:
+#   sudo bash scripts/deploy-web.sh --domain _ --api-upstream http://127.0.0.1:8100 \
+#     --no-firewall --branch feat/brain
+#
 # Idempotent: safe to run again to update an existing install.
 #
 set -euo pipefail
@@ -36,6 +41,7 @@ BRANCH="main"
 CERTBOT_EMAIL=""
 SKIP_CERTBOT=false
 CERTIFICATE_ARCHIVE=""
+NO_FIREWALL=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -46,8 +52,11 @@ while [[ $# -gt 0 ]]; do
     --email)          CERTBOT_EMAIL="${2:?Missing value for --email}"; shift 2 ;;
     --certificate)    CERTIFICATE_ARCHIVE="${2:?Missing value for --certificate}"; shift 2 ;;
     --skip-certbot)   SKIP_CERTBOT=true; shift ;;
+    --no-firewall)    NO_FIREWALL=true; shift ;;
     -h|--help)
-      echo "Usage: $0 --domain <FQDN> --api-upstream <URL> [--email <certbot-email>] [--certificate <letsencrypt.tar.gz>] [--repo <url>] [--branch <ref>] [--skip-certbot]"
+      echo "Usage: $0 --domain <FQDN|_> --api-upstream <URL> [--email <certbot-email>] [--certificate <letsencrypt.tar.gz>] [--repo <url>] [--branch <ref>] [--skip-certbot] [--no-firewall]"
+      echo "  --domain _      Answer on any host name or address, over HTTP (no certificate)"
+      echo "  --no-firewall   Leave ufw alone (the host runs other services)"
       exit 0
       ;;
     *) fail "Unknown option: $1" ;;
@@ -65,6 +74,13 @@ if [[ "$DOMAIN" == *"example.com"* ]]; then
 fi
 if [[ -n "$CERTIFICATE_ARCHIVE" ]] && [[ ! -f "$CERTIFICATE_ARCHIVE" ]]; then
   fail "Certificate archive not found: $CERTIFICATE_ARCHIVE"
+fi
+# Any host name: there's no name to get a certificate for.
+ANY_HOST=false
+if [[ "$DOMAIN" == "_" ]]; then
+  ANY_HOST=true
+  SKIP_CERTBOT=true
+  [[ -z "$CERTIFICATE_ARCHIVE" ]] || fail "--certificate needs a real --domain"
 fi
 
 [[ "$(id -u)" -eq 0 ]] || fail "This script must be run as root (try: sudo bash ...)"
@@ -93,7 +109,9 @@ if ! command -v node >/dev/null 2>&1; then
   curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash -
 fi
 
-apt-get install -y -qq nginx certbot python3-certbot-nginx git nodejs ufw
+apt-get install -y -qq nginx git nodejs
+[[ "$SKIP_CERTBOT" == "true" && -z "$CERTIFICATE_ARCHIVE" ]] || apt-get install -y -qq certbot python3-certbot-nginx
+[[ "$NO_FIREWALL" == "true" ]] || apt-get install -y -qq ufw
 
 ok "System packages installed (nginx, Node.js ${NODE_MAJOR}, certbot)"
 
@@ -146,9 +164,15 @@ step "Configuring nginx"
 # Strip trailing slash from upstream URL
 API_UPSTREAM="${API_UPSTREAM%/}"
 
+if [[ "$ANY_HOST" == "true" ]]; then
+  LISTEN="listen 80 default_server;"
+else
+  LISTEN="listen 80;"
+fi
+
 cat > /etc/nginx/sites-available/lumiverb <<NGINX
 server {
-    listen 80;
+    ${LISTEN}
     server_name ${DOMAIN};
 
     root ${APP_DIR}/src/ui/web/dist;
@@ -219,15 +243,20 @@ fi
 # ---------------------------------------------------------------------------
 # 7. Firewall
 # ---------------------------------------------------------------------------
-step "Configuring firewall (ufw)"
+if [[ "$NO_FIREWALL" == "true" ]]; then
+  step "Firewall"
+  ok "Left alone (--no-firewall)"
+else
+  step "Configuring firewall (ufw)"
 
-ufw default deny incoming
-ufw default allow outgoing
-ufw allow 22/tcp   # SSH
-ufw allow 80/tcp   # HTTP (certbot + redirect)
-ufw allow 443/tcp  # HTTPS
-ufw --force enable
-ok "Firewall active — inbound limited to SSH, HTTP, HTTPS"
+  ufw default deny incoming
+  ufw default allow outgoing
+  ufw allow 22/tcp   # SSH
+  ufw allow 80/tcp   # HTTP (certbot + redirect)
+  ufw allow 443/tcp  # HTTPS
+  ufw --force enable
+  ok "Firewall active — inbound limited to SSH, HTTP, HTTPS"
+fi
 
 # ---------------------------------------------------------------------------
 # 8. Verify
@@ -252,6 +281,8 @@ fi
 echo ""
 if [[ "$TLS_ACTIVE" == "true" ]]; then
   SITE_URL="https://${DOMAIN}"
+elif [[ "$ANY_HOST" == "true" ]]; then
+  SITE_URL="http://<this machine's address> (port 80, any host name)"
 else
   SITE_URL="http://${DOMAIN}"
 fi
