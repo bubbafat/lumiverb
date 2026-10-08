@@ -395,6 +395,9 @@ def test_a_step_stops_when_the_storage_goes_to_sleep(home: Path, library: dict, 
             return "missing"
         return "ok"
 
+    # One at a time: with several renders at once, those already started finish too.
+    cfg = CLIConfig.model_validate_json((home / ".lumiverb" / "config.json").read_text())
+    save_config(cfg.model_copy(update={"render_concurrency": 1}))
     pages = {flag: [{"asset_id": f"ast_{x}", "rel_path": f"{x}.mov"} for x in "abcd"]}
     with patch(target, side_effect=one):
         _run(MagicMock(), library, job_type, {flag: 4}, pages)

@@ -8,8 +8,9 @@ import json
 import logging
 import threading
 import multiprocessing as mp
+import os
 from collections.abc import Callable, Collection, Iterable, Iterator
-from concurrent.futures import Future, ThreadPoolExecutor, wait, FIRST_COMPLETED
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, as_completed, wait
 from typing import TYPE_CHECKING, Literal
 
 from rich.console import Console
@@ -139,6 +140,12 @@ def _ocr_one(
     except Exception as e:
         logger.exception("Failed OCR for %s: %s", rel_path, e)
         return None
+
+
+def default_render_concurrency() -> int:
+    """Analysis proxies rendered at once by default: a 4K HEVC decode uses a
+    few cores, so one per six, at most three (the storage's bandwidth)."""
+    return max(1, min(3, (os.cpu_count() or 1) // 6))
 
 
 def _probe_one(client: LumiverbClient, lib_root: "Path", asset: dict,
@@ -1098,12 +1105,21 @@ def run_repair(
         # rendered; the encoder is this machine's.
         settings = AnalysisProxySettings.for_producer(producers.settings("analysis_proxy"),
                                                       _cfg.analysis_proxy_encoder)
+        # Several at once: one render of a 4K HEVC original decodes on a few
+        # cores and leaves the rest idle.
+        render_conc = _cfg.render_concurrency or default_render_concurrency()
         progress = _make_progress(console)
         with progress:
             tid = progress.add_task("Render", total=len(assets), ok=0, fail=0)
-            for a in _until(stop, assets, _taking("render")):
-                outcome = _render_one(client, lib_root, a, settings, analysis_cache, producers,
-                                      failures.for_artifact("analysis_proxy"))
+            asleep = False
+
+            def _rendered(fut: Future) -> None:
+                nonlocal asleep
+                try:
+                    outcome = fut.result()
+                except Exception:  # noqa: BLE001 — _render_one reports its own failures
+                    logger.exception("render: failed")
+                    outcome = "failed"
                 with stats.lock:
                     if outcome == "ok":
                         stats.processed += 1
@@ -1113,8 +1129,20 @@ def run_repair(
                         stats.failed += 1
                 progress.advance(tid, 1)
                 progress.update(tid, ok=stats.processed, fail=stats.failed)
-                if outcome == "missing" and _asleep():
-                    break
+                if outcome == "missing" and not asleep and _asleep():
+                    asleep = True
+
+            with ThreadPoolExecutor(max_workers=render_conc, thread_name_prefix="render") as pool:
+                inflight: set[Future] = set()
+                for a in _until(lambda: stop() or asleep, assets, _taking("render")):
+                    inflight.add(pool.submit(_render_one, client, lib_root, a, settings, analysis_cache,
+                                             producers, failures.for_artifact("analysis_proxy")))
+                    if len(inflight) >= render_conc:
+                        done, inflight = wait(inflight, return_when=FIRST_COMPLETED)
+                        for f in done:
+                            _rendered(f)
+                for f in as_completed(inflight):
+                    _rendered(f)
 
     # The worker renders alongside the other steps: rendering is CPU work on
     # the originals, the rest mostly the GPU on proxies, and one long render

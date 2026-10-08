@@ -110,3 +110,40 @@ def test_the_worker_renders_alongside() -> None:
     from src.client.cli import worker
 
     assert "render_alongside=True" in inspect.getsource(worker._enrich_library)
+
+
+def test_several_render_at_once(library: dict, tmp_path: Path) -> None:
+    """Two renders that each need the other running at the same time finish."""
+    for name in ("c.mov", "d.mov"):
+        (tmp_path / "mnt" / "Footage" / name).write_bytes(b"original")
+    cfg = CLIConfig.model_validate_json((Path.home() / ".lumiverb" / "config.json").read_text())
+    save_config(cfg.model_copy(update={"render_concurrency": 2}))
+    both = threading.Barrier(2, timeout=10)
+
+    def render(*args, **kwargs):
+        both.wait()  # breaks (and the test fails) if they run one at a time
+        return "ok"
+
+    pages = {"missing_analysis_proxy": [{"asset_id": f"ast_{n}", "rel_path": f"{n}.mov", "duration_sec": 4.0}
+                                        for n in ("c", "d")]}
+
+    def page_missing(_client, _library_id, **flags):
+        [flag] = [k for k, v in flags.items() if v]
+        return pages.get(flag, [])
+
+    with (
+        patch("src.client.cli.repair.get_repair_summary",
+              return_value={"total_assets": 2, "missing_analysis_proxy": 2}),
+        patch("src.client.cli.repair._page_missing", side_effect=page_missing),
+        patch("src.client.cli.repair._render_one", side_effect=render) as one,
+    ):
+        run_repair(MagicMock(), library, job_type="render", console=Console(quiet=True))
+    assert one.call_count == 2 and not both.broken
+
+
+def test_render_concurrency_follows_the_cores(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.client.cli import repair
+
+    for cores, expected in ((4, 1), (12, 2), (20, 3), (64, 3)):
+        monkeypatch.setattr(repair.os, "cpu_count", lambda c=cores: c)
+        assert repair.default_render_concurrency() == expected
