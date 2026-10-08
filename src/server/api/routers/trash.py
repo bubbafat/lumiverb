@@ -65,8 +65,24 @@ def empty_trash(
     )
     if not to_delete:
         return EmptyTrashResponse(deleted=0)
+    return EmptyTrashResponse(
+        deleted=purge_assets(session, request, to_delete, user_id, remove_from_projects=body.remove_from_projects),
+    )
+
+
+def purge_assets(
+    session: Session,
+    request: Request,
+    to_delete: list,
+    user_id: str,
+    *,
+    remove_from_projects: bool,
+) -> int:
+    """Delete these trashed assets for good: rows, files, playback cuts and search
+    documents. 409 in_projects when any are in projects, unless remove_from_projects."""
+    asset_repo = AssetRepository(session)
     asset_ids = [a.asset_id for a in to_delete]
-    if not body.remove_from_projects:
+    if not remove_from_projects:
         from src.server.api.routers.assets import project_usage_summary
 
         usage = project_usage_summary(session, user_id, asset_ids=asset_ids)
@@ -117,4 +133,5 @@ def empty_trash(
                 qw.delete_tenant_documents_by_asset_id(tenant_id, aid)
     except Exception as e:
         logger.warning("Quickwit delete after empty trash failed: %s", e)
-    return EmptyTrashResponse(deleted=deleted_count)
+    return deleted_count
+

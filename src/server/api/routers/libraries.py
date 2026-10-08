@@ -1,6 +1,6 @@
 """Libraries API: create and list libraries. All routes require tenant auth (middleware)."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -293,17 +293,53 @@ def update_library(
     )
 
 
+class DeleteLibraryRequest(BaseModel):
+    # Required when the library holds archived clips (files that went missing
+    # and haven't come back): "delete" removes them for good first, "keep"
+    # leaves them archived with the library in the trash.
+    archived: Literal["keep", "delete"] | None = None
+    # Required with "delete" when any of those clips are in projects.
+    remove_from_projects: bool = False
+
+
 @router.delete("/{library_id}", status_code=204)
 def delete_library(
     library_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
+    body: DeleteLibraryRequest | None = None,
 ) -> None:
-    """Soft delete: move library to trash (status=trashed). Returns 409 if already trashed."""
+    """Soft delete: move library to trash (status=trashed). Returns 409 if already trashed.
+
+    409 archived_clips when it holds archived clips and the request doesn't
+    say what happens to them (`archived`).
+    """
     repo = LibraryRepository(session)
     library = repo.get_by_id(library_id)
     if library is None:
         raise HTTPException(status_code=404, detail="Library not found")
+    if library.status == "trashed":
+        raise HTTPException(status_code=409, detail="Library is already in trash")
+    archived = AssetRepository(session).list_archived(library_id)
+    if archived:
+        choice = body.archived if body else None
+        if choice is None:
+            n = len(archived)
+            raise DecisionRequiredError(
+                "archived_clips",
+                f"{n} {'clip' if n == 1 else 'clips'} in this library {'is' if n == 1 else 'are'} archived: "
+                "the files went missing and haven't come back. Send archived: \"delete\" to delete "
+                f"{'it' if n == 1 else 'them'} for good, or \"keep\" to keep "
+                f"{'it' if n == 1 else 'them'} with the library in the trash.",
+                {"archived_clips": n},
+            )
+        if choice == "delete":
+            from src.server.api.routers.trash import purge_assets
+
+            purge_assets(session, request, archived, user_id,
+                         remove_from_projects=body.remove_from_projects)
     was_public = library.is_public
     try:
         repo.trash(library_id)

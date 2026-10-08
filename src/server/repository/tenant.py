@@ -918,6 +918,15 @@ class AssetRepository:
         self._session.commit()
         return True
 
+    def list_archived(self, library_id: str) -> list[Asset]:
+        """The library's archived assets: missing on disk, not trashed by a person."""
+        stmt = select(Asset).where(
+            Asset.library_id == library_id,
+            Asset.deleted_at.is_not(None),
+            or_(Asset.deleted_reason.is_(None), Asset.deleted_reason != "user"),
+        )
+        return list(self._session.exec(stmt).all())
+
     def find_archived_by_sha(self, library_id: str, sha256: str | None) -> Asset | None:
         """The library's most recently archived (missing, not user-trashed) asset with this content."""
         if not sha256:

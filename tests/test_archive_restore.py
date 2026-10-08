@@ -108,3 +108,81 @@ def test_a_file_back_at_its_own_path_still_comes_back(env):
     _archive(env, asset)
     assert _ingest(env, "same/F001.mov", sha=sha) == asset
     assert _get(env, asset)["rel_path"] == "same/F001.mov"
+
+
+# ---------------------------------------------------------------------------
+# Deleting a library that still holds archived clips: the user says what happens to them
+# ---------------------------------------------------------------------------
+
+
+def _library_with_archived(env, name: str, in_project: bool = False) -> tuple[str, str, tuple]:
+    client, headers, *_ = env
+    r = client.post("/v1/libraries", json={"name": name, "root_path": f"/Volumes/media-01/{name}"}, headers=headers)
+    assert r.status_code == 200, r.text
+    lib_env = (client, headers, r.json()["library_id"], *env[3:])
+    archived = _ingest(lib_env, "gone.mov", sha=_sha())
+    _ingest(lib_env, "here.mov", sha=_sha())
+    if in_project:
+        assert client.post("/v1/projects", json={"name": f"Uses {name}", "asset_ids": [archived]},
+                           headers=headers).status_code == 201
+    _archive(lib_env, archived)
+    return lib_env[2], archived, lib_env
+
+
+def _still_archived(env, asset_id: str) -> bool:
+    """True if the asset is still there, archived: naming it for deletion finds it (then puts it back)."""
+    client, headers, *_ = env
+    r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [asset_id], "include_missing": True,
+                                                          "remove_from_projects": True}, headers=headers)
+    return r.json()["deleted"] == 1
+
+
+@pytest.mark.slow
+def test_deleting_a_library_with_archived_clips_asks_what_to_do(env):
+    client, headers, *_ = env
+    library_id, archived, _ = _library_with_archived(env, "AskFirst")
+    r = client.delete(f"/v1/libraries/{library_id}", headers=headers)
+    assert r.status_code == 409, r.text
+    err = r.json()["error"]
+    assert err["code"] == "archived_clips"
+    assert err["details"] == {"archived_clips": 1}
+    # Nothing happened yet.
+    assert client.get(f"/v1/libraries/{library_id}", headers=headers).status_code == 200
+
+
+@pytest.mark.slow
+def test_keep_leaves_archived_clips_with_the_trashed_library(env):
+    client, headers, *_ = env
+    library_id, archived, _ = _library_with_archived(env, "KeepThem")
+    r = client.request("DELETE", f"/v1/libraries/{library_id}", json={"archived": "keep"}, headers=headers)
+    assert r.status_code == 204, r.text
+    assert _still_archived(env, archived)
+
+
+@pytest.mark.slow
+def test_delete_removes_archived_clips_for_good_first(env):
+    client, headers, *_ = env
+    library_id, archived, _ = _library_with_archived(env, "DeleteThem")
+    r = client.request("DELETE", f"/v1/libraries/{library_id}", json={"archived": "delete"}, headers=headers)
+    assert r.status_code == 204, r.text
+    assert not _still_archived(env, archived)
+
+
+@pytest.mark.slow
+def test_archived_clips_in_projects_need_the_projects_say_too(env):
+    client, headers, *_ = env
+    library_id, archived, _ = _library_with_archived(env, "InProjects", in_project=True)
+    r = client.request("DELETE", f"/v1/libraries/{library_id}", json={"archived": "delete"}, headers=headers)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "in_projects"
+    r = client.request("DELETE", f"/v1/libraries/{library_id}",
+                       json={"archived": "delete", "remove_from_projects": True}, headers=headers)
+    assert r.status_code == 204, r.text
+
+
+@pytest.mark.slow
+def test_a_library_without_archived_clips_deletes_as_before(env):
+    client, headers, *_ = env
+    r = client.post("/v1/libraries", json={"name": "Plain", "root_path": "/Volumes/media-01/Plain"}, headers=headers)
+    library_id = r.json()["library_id"]
+    _ingest((client, headers, library_id, *env[3:]), "here.mov", sha=_sha())
+    assert client.delete(f"/v1/libraries/{library_id}", headers=headers).status_code == 204
