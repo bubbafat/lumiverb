@@ -8,13 +8,13 @@ Revision ID: w8x9y0z1a2b3
 Revises: v7w8x9y0z1a2
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
 revision: str = "w8x9y0z1a2b3"
-down_revision: Union[str, Sequence[str], None] = "v7w8x9y0z1a2"
+down_revision: str | Sequence[str] | None = "v7w8x9y0z1a2"
 branch_labels = None
 depends_on = None
 
