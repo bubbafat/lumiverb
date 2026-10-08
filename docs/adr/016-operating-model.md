@@ -53,7 +53,8 @@ These are the rules other docs defer to.
 6. **One producer per artifact kind.** A producer declares the milestone it needs (never another producer by name), which assets it applies to (a condition such as "only video"), which of its settings change its output, and which scarce resources it uses. AI producers also name a model and an endpoint. Producers are first-party for now.
 7. **Milestones, not a chain of workers.** Discovered (the asset exists and has an identity) → Probed (technical facts known) → Rendered (proxies and thumbnails exist) → Enriched (AI outputs exist) → Indexed (searchable). A producer whose prerequisites can never exist is disabled with a stated reason instead of failing on every asset.
 8. **Paths are resolved, not stored.** The catalog stores a library root and each asset's path relative to it, Unicode-normalized to NFC. A full path is built when needed, for whoever needs it: the brain's mount, an edit station's mount, or an export prefix. No machine-specific absolute path is treated as truth.
-9. **Surprising outcomes need explicit agreement.** When an action may do something the user doesn't expect (re-embedding a whole library, replacing edited values), the prompt spells out the outcome and the confirm button names the action ("Re-embed all 12,408 assets"), not a default Yes.
+9. **Surprising outcomes need explicit agreement.** When an action may do something the user doesn't expect (re-embedding a whole library, replacing edited values), the prompt spells out the outcome and the confirm button names the action ("Re-embed all 12,408 assets"), not a default Yes. **The API requires that agreement, not just the UI:** the request must carry the user's choice, or it's refused (409, with the facts), so every client (web, CLI, macOS, iOS) has to show the facts and ask. Moving something to the trash is reversible and needs none.
+10. **Deleting goes through the trash.** Assets, libraries and projects follow one pattern: delete → trash → restore or delete forever. Deleting for good is a separate, explicit step, and it says what else it touches (the projects a clip is in) before it runs.
 
 ### Roles
 
@@ -81,7 +82,7 @@ Where inference runs is configuration, not architecture.
 
 These are two different things, and the names are reserved:
 
-- A **project** is transient and many-to-many: a named, unordered set of whole assets for one job, such as "Customer Video 123". Create it, find media, send it to the editor, relink if needed, then archive or delete it. A clip can be in many projects. Static projects hold hand-picked clips; smart projects are saved searches. **What the code calls "collections" today are projects**, and phase 1 renames them everywhere (tables, API routes, CLI, web, macOS and iOS).
+- A **project** is transient and many-to-many: a named, unordered set of whole assets for one job, such as "Customer Video 123". Create it, find media, send it to the editor, relink if needed, then archive or delete it. Archive means done but kept: it leaves the lists and pickers and still opens and exports. Delete moves it to the trash; restoring it can bring back its trashed clips too, and deleting it for good never touches its clips. A clip can be in many projects. Static projects hold hand-picked clips; smart projects are saved searches. **What the code calls "collections" today are projects**, and phase 1 renames them everywhere (tables, API routes, CLI, web, macOS and iOS).
 - A **collection** is a long-lived container where each piece of media lives once. It doesn't exist yet; the name is kept free for it.
 
 ### v1: find, collect, send
