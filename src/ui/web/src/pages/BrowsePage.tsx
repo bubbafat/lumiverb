@@ -300,6 +300,7 @@ export default function BrowsePage() {
   });
   const revision = revisionQuery.data?.revision;
   useRevisionRefresh(
+    `library:${libraryId}`,
     revision,
     () => {
       // Every cached grid and facet set, not just this one: a grid across
@@ -309,7 +310,6 @@ export default function BrowsePage() {
       void queryClient.invalidateQueries({ queryKey: ["filtered-facets"] });
       void queryClient.invalidateQueries({ queryKey: ["directories", libraryId] });
     },
-    { scope: libraryId },
   );
 
   // Facets scoped to active filters

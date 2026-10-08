@@ -6,8 +6,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
+import type { NavigateFunction } from "react-router-dom";
 import { ScrollContainerContext } from "../context/ScrollContainerContext";
 import BrowsePage from "./BrowsePage";
 
@@ -123,6 +124,23 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+// The library's settings page, with the sidebar's revision poll: it keeps
+// polling while the grid isn't on screen.
+function SettingsWithSidebar() {
+  useQuery({
+    queryKey: ["library-revision", "lib_1"],
+    queryFn: () => api.getLibraryRevision("lib_1"),
+    refetchInterval: POLL_MS,
+  });
+  return <div>Settings</div>;
+}
+
+let navigate: NavigateFunction;
+function NavigateProbe() {
+  navigate = useNavigate();
+  return null;
+}
+
 function renderPage() {
   // The app's own defaults (main.tsx), so stale times behave as they do there.
   const client = new QueryClient({
@@ -133,8 +151,10 @@ function renderPage() {
     <QueryClientProvider client={client}>
       <ScrollContainerContext.Provider value={scroller}>
         <MemoryRouter initialEntries={["/libraries/lib_1/browse"]}>
+          <NavigateProbe />
           <Routes>
             <Route path="/libraries/:libraryId/browse" element={<BrowsePage />} />
+            <Route path="/libraries/:libraryId/settings" element={<SettingsWithSidebar />} />
           </Routes>
         </MemoryRouter>
       </ScrollContainerContext.Provider>
@@ -171,6 +191,34 @@ describe("BrowsePage revision polling", () => {
     expect(api.getFilteredFacets).toHaveBeenCalledTimes(2);
     const [filters] = api.queryAssets.mock.calls[api.queryAssets.mock.calls.length - 1];
     expect(filters).toContainEqual({ type: "library", value: "lib_1" });
+  });
+
+  it("refetches the grid on coming back from settings when the library changed meanwhile", async () => {
+    renderPage();
+    await advance(100);
+    expect(gridFetches).toEqual([1]);
+
+    act(() => navigate("/libraries/lib_1/settings"));
+    await advance(100);
+    // A scan changes the library; the sidebar's poll sees it.
+    serverRevision = 2;
+    await advance(POLL_MS);
+
+    // Back within 30 seconds: the cached grid is still fresh, so only the
+    // revision says it's out of date.
+    act(() => navigate("/libraries/lib_1/browse"));
+    await advance(100);
+    expect(gridFetches).toEqual([1, 2]);
+  });
+
+  it("doesn't refetch the grid on coming back from settings when nothing changed", async () => {
+    renderPage();
+    await advance(100);
+    act(() => navigate("/libraries/lib_1/settings"));
+    await advance(POLL_MS);
+    act(() => navigate("/libraries/lib_1/browse"));
+    await advance(100);
+    expect(gridFetches).toEqual([1]);
   });
 
   it("doesn't refetch the grid on every poll during a long ingest, and ends up current", async () => {

@@ -1,19 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { useRevisionRefresh } from "./useRevisionRefresh";
 
 const INTERVAL = 30_000;
 
 type Props = { revision: number | string | undefined; scope?: string };
 
-function setup(initial: Props) {
+function wrapperFor(client: QueryClient) {
+  return ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>
+  );
+}
+
+function setup(initial: Props, client = new QueryClient()) {
   const refresh = vi.fn();
   const hook = renderHook(
-    ({ revision, scope }: Props) =>
-      useRevisionRefresh(revision, refresh, { scope, minIntervalMs: INTERVAL }),
-    { initialProps: initial },
+    ({ revision, scope = "lib_a" }: Props) =>
+      useRevisionRefresh(scope, revision, refresh, { minIntervalMs: INTERVAL }),
+    { initialProps: initial, wrapper: wrapperFor(client) },
   );
-  return { refresh, ...hook };
+  return { refresh, client, ...hook };
 }
 
 beforeEach(() => {
@@ -101,6 +109,14 @@ describe("useRevisionRefresh", () => {
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 
+  it("refreshes on coming back to a scope that changed while away", () => {
+    const { refresh, rerender } = setup({ revision: 5, scope: "lib_a" });
+    rerender({ revision: 40, scope: "lib_b" });
+    // Back to lib_a, which moved on meanwhile.
+    rerender({ revision: 6, scope: "lib_a" });
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
   it("drops a pending refresh on unmount", () => {
     const { refresh, rerender, unmount } = setup({ revision: 1 });
     rerender({ revision: 2 });
@@ -110,13 +126,48 @@ describe("useRevisionRefresh", () => {
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 
+  describe("a page that's left and opened again", () => {
+    // The cache it comes back to may already hold a newer revision (the
+    // sidebar keeps polling), next to a grid fetched before that change.
+    it("refreshes when the revision moved on while it was away", () => {
+      const first = setup({ revision: 5 });
+      first.unmount();
+      const again = setup({ revision: 7 }, first.client);
+      expect(again.refresh).toHaveBeenCalledTimes(1);
+    });
+
+    it("refreshes for a change it hadn't refreshed for yet when it was left", () => {
+      const first = setup({ revision: 5 });
+      first.rerender({ revision: 6 }); // refreshed
+      first.rerender({ revision: 7 }); // pending
+      first.unmount();
+      const again = setup({ revision: 7 }, first.client);
+      expect(again.refresh).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves the page alone when nothing changed while it was away", () => {
+      const first = setup({ revision: 5 });
+      first.unmount();
+      const again = setup({ revision: 5 }, first.client);
+      vi.advanceTimersByTime(INTERVAL * 2);
+      expect(again.refresh).not.toHaveBeenCalled();
+    });
+
+    it("doesn't carry over to another query client (another app, another test)", () => {
+      const first = setup({ revision: 5 });
+      first.unmount();
+      const elsewhere = setup({ revision: 7 }, new QueryClient());
+      expect(elsewhere.refresh).not.toHaveBeenCalled();
+    });
+  });
+
   it("calls the latest refresh function, not the one from the render that saw the change", () => {
     const first = vi.fn();
     const latest = vi.fn();
     const { rerender } = renderHook(
       ({ revision, fn }: { revision: number; fn: () => void }) =>
-        useRevisionRefresh(revision, fn, { minIntervalMs: INTERVAL }),
-      { initialProps: { revision: 1, fn: first } },
+        useRevisionRefresh("lib_a", revision, fn, { minIntervalMs: INTERVAL }),
+      { initialProps: { revision: 1, fn: first }, wrapper: wrapperFor(new QueryClient()) },
     );
     rerender({ revision: 2, fn: first });
     rerender({ revision: 3, fn: first }); // pending

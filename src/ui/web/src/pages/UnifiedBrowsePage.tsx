@@ -229,7 +229,7 @@ export default function UnifiedBrowsePage() {
     refetchInterval: 10_000,
   });
   const revisions = libraries?.map((l) => `${l.library_id}:${l.revision ?? 0}`).join(",");
-  useRevisionRefresh(revisions, () => {
+  useRevisionRefresh("all-libraries", revisions, () => {
     void queryClient.invalidateQueries({ queryKey: ["unified-query"] });
     void queryClient.invalidateQueries({ queryKey: ["filtered-facets"] });
   });
