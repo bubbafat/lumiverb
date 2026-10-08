@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { getCurrentUser, getTenantSettings, updateTenantSettings } from "../../api/client";
+import { getCurrentUser, getTenantSettings, updateTenantSettings, type TenantSettings } from "../../api/client";
 
 const MAX_SECONDS = 86_400;
 
@@ -14,15 +14,10 @@ function describe(cap: number | null): string {
   return cap == null ? "whole video" : `first ${cap} seconds`;
 }
 
-/** One audience's choice: the whole video, or the first N seconds. */
-function useCapField(saved: number | null | undefined) {
-  const [capped, setCapped] = useState(false);
-  const [text, setText] = useState("30");
-  useEffect(() => {
-    if (saved === undefined) return;
-    setCapped(saved != null);
-    if (saved != null) setText(String(saved));
-  }, [saved]);
+/** One audience's choice, starting from what's saved: the whole video, or the first N seconds. */
+function useCapField(saved: number | null) {
+  const [capped, setCapped] = useState(saved != null);
+  const [text, setText] = useState(saved != null ? String(saved) : "30");
   const seconds = parseSeconds(text);
   return { capped, setCapped, text, setText, seconds, value: capped ? seconds : null, valid: !capped || seconds != null };
 }
@@ -32,11 +27,19 @@ const inputClass =
 
 /** Account-wide: how much of each video plays, signed in and on public pages. Admins change it. */
 export default function PlaybackSection() {
-  const queryClient = useQueryClient();
   const { data: user } = useQuery({ queryKey: ["settings", "me"], queryFn: getCurrentUser });
   const { data: settings, isLoading } = useQuery({ queryKey: ["tenant-settings"], queryFn: getTenantSettings });
-  const signedIn = useCapField(settings?.video_preview_max_seconds);
-  const pub = useCapField(settings?.public_video_preview_max_seconds);
+  if (isLoading || !settings) {
+    return <div className="h-32 rounded-lg border border-gray-700/50 bg-gray-900/50 animate-pulse" />;
+  }
+  // Built once the settings are here, so the choices start from them.
+  return <PlaybackForm settings={settings} isAdmin={user?.role === "admin"} />;
+}
+
+function PlaybackForm({ settings, isAdmin }: { settings: TenantSettings; isAdmin: boolean }) {
+  const queryClient = useQueryClient();
+  const signedIn = useCapField(settings.video_preview_max_seconds);
+  const pub = useCapField(settings.public_video_preview_max_seconds);
   const [saved, setSaved] = useState(false);
 
   const save = useMutation({
@@ -49,11 +52,6 @@ export default function PlaybackSection() {
     },
   });
 
-  if (isLoading || !settings) {
-    return <div className="h-32 rounded-lg border border-gray-700/50 bg-gray-900/50 animate-pulse" />;
-  }
-
-  const isAdmin = user?.role === "admin";
   const changed =
     signedIn.value !== settings.video_preview_max_seconds || pub.value !== settings.public_video_preview_max_seconds;
   const canSave = isAdmin && signedIn.valid && pub.valid && changed && !save.isPending;

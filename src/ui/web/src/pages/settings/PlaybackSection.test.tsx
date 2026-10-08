@@ -97,7 +97,8 @@ describe("PlaybackSection", () => {
   it("shows an existing cap", async () => {
     cap = 45;
     renderSection();
-    await waitFor(() => expect((screen.getByLabelText(/First/) as HTMLInputElement).checked).toBe(true));
+    // Right from the first frame: no flash of the defaults.
+    expect(((await screen.findByLabelText(/First/)) as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText("Seconds") as HTMLInputElement).value).toBe("45");
   });
 
