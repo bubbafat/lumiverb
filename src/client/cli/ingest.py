@@ -17,6 +17,7 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+from stat import S_ISREG
 
 from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, MofNCompleteColumn, TimeRemainingColumn, SpinnerColumn
@@ -24,7 +25,7 @@ from rich.progress import Progress, BarColumn, TextColumn, MofNCompleteColumn, T
 from src.client.cli.client import LumiverbClient
 from src.shared.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from src.shared.path_filter import PathFilter, is_path_included_merged
-from src.shared.io_utils import resolve_source_path
+from src.shared.io_utils import resolve_source_path, stat_if_present
 from src.client.workers.exif_extract import (
     compute_sha256,
     extract_exif,
@@ -432,18 +433,22 @@ def _walk_library(
     Each entry: {rel_path, file_size, file_mtime, media_type, ext}.
     Files that don't pass the merged tenant + library filters are silently skipped.
     Hidden files are listed; linked folders aren't followed. Folders that
-    can't be listed go in `unlisted` as rel paths ("" is the library root),
-    so the caller doesn't take their files for deleted.
+    can't be listed, or that hold a file that can't be checked, go in
+    `unlisted` as rel paths ("" is the library root), so the caller doesn't
+    take their files for deleted.
     """
     walk_root = root_path
     if path_prefix:
         walk_root = resolve_source_path(root_path, path_prefix)
 
-    def _unreadable(exc: OSError) -> None:
-        logger.warning("Can't list %s: %s", exc.filename or walk_root, exc)
+    def _unreadable(exc: OSError, folder: str | None = None) -> None:
+        folder = folder or exc.filename or str(walk_root)
+        logger.warning("Can't list %s: %s", folder, exc)
         if unlisted is not None:
-            rel = os.path.relpath(exc.filename or walk_root, root_path)
-            unlisted.append("" if rel == "." else unicodedata.normalize("NFC", rel))
+            rel = os.path.relpath(folder, root_path)
+            rel = "" if rel == "." else unicodedata.normalize("NFC", rel)
+            if rel not in unlisted:
+                unlisted.append(rel)
 
     has_filters = bool(tenant_filters or library_filters)
     t_filters = tenant_filters or []
@@ -455,7 +460,12 @@ def _walk_library(
 
     results = []
     for p in sorted(found):
-        if not p.is_file():
+        try:
+            stat = stat_if_present(p)
+        except OSError as exc:
+            _unreadable(exc, str(p.parent))
+            continue
+        if stat is None or not S_ISREG(stat.st_mode):
             continue
         ext = p.suffix.lower()
         if ext not in SUPPORTED_EXTENSIONS:
@@ -468,7 +478,6 @@ def _walk_library(
         if has_filters and not is_path_included_merged(rel_path, t_filters, l_filters):
             continue
 
-        stat = p.stat()
         if stat.st_size == 0:
             continue
 

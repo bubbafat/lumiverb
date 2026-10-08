@@ -20,6 +20,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
+from stat import S_ISDIR
 
 from rich.console import Console
 from rich.progress import (
@@ -48,7 +49,7 @@ from src.client.cli.ingest import (
 from src.client.proxy.proxy_cache import ProxyCache
 from src.client.workers.exif_extract import compute_sha256
 from src.client.video.probe import probe_video
-from src.shared.io_utils import is_within, resolve_source_path
+from src.shared.io_utils import is_within, resolve_source_path, stat_if_present
 
 logger = logging.getLogger(__name__)
 
@@ -330,10 +331,12 @@ def _detect_moves(
 
 def _existing_folder(root: Path, rel: str) -> str | None:
     """The deepest folder on the way to rel that's on disk, its name in either
-    Unicode form. None is the library root."""
+    Unicode form. None is the library root. Raises OSError when a folder
+    can't be checked: it may well be there."""
     parts = PurePosixPath(rel).parts
     while parts:
-        if resolve_source_path(root, "/".join(parts)).is_dir():
+        st = stat_if_present(resolve_source_path(root, "/".join(parts)))
+        if st is not None and S_ISDIR(st.st_mode):
             return "/".join(parts)
         parts = parts[:-1]
     return None
@@ -671,7 +674,12 @@ def run_scan(
     # A folder that's gone is scanned from the nearest folder still there,
     # which sees what was in it as deleted.
     if path_prefix:
-        found = _existing_folder(root_path, path_prefix)
+        try:
+            found = _existing_folder(root_path, path_prefix)
+        except OSError as exc:
+            console.print(f"[yellow]Can't check {path_prefix} ({exc}), so this scan doesn't remove anything[/yellow]")
+            stats.unlisted.append(path_prefix)
+            return stats
         if found != path_prefix:
             console.print(f"{path_prefix} isn't on disk; scanning {found or 'the whole library'}")
             path_prefix = found

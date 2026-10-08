@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import unicodedata
 from pathlib import Path
@@ -316,8 +317,8 @@ def _scan_disk(root: Path, existing: dict[str, _ServerAsset], **kwargs) -> Magic
         patch("src.client.cli.scan.ProxyCache"),
         patch("src.client.cli.scan._populate_cache_for_unchanged"),
     ):
-        run_scan(client, {"library_id": "lib_1", "root_path": str(root)}, console=Console(quiet=True),
-                 allow_moves=True, **kwargs)
+        client.stats = run_scan(client, {"library_id": "lib_1", "root_path": str(root)},
+                                console=Console(quiet=True), allow_moves=True, **kwargs)
     return client
 
 
@@ -465,3 +466,86 @@ def test_a_root_gone_mid_scan_is_reported_unreachable(tmp_path: Path) -> None:
         stats = run_scan(MagicMock(), {"library_id": "lib_1", "root_path": "/x"}, path_prefix="Day 1",
                          console=Console(quiet=True))
     assert stats.root_unreachable
+
+
+# ---------------------------------------------------------------------------
+# A file that lists but can't be checked (no permission, or the share going
+# away between listing and stat) isn't gone. Python 3.14's Path.is_file()
+# says False for any error, which made a whole folder look deleted.
+# ---------------------------------------------------------------------------
+
+UNCHECKABLE = [errno.EACCES, errno.EIO]
+
+
+@pytest.fixture
+def flaky(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> Path:
+    """A library whose Flaky/ folder lists, but whose files can't be stat'ed."""
+    root = tmp_path / "lib"
+    _write(root, "open/a.jpg")
+    _write(root, "Flaky/b.jpg")
+    _write(root, "Flaky/c.jpg")
+    real_stat = os.stat
+
+    def stat(path, *args, **kwargs):
+        if Path(os.fspath(path)).parent.name == "Flaky":
+            raise OSError(request.param, os.strerror(request.param), os.fspath(path))
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", stat)
+    return root
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("flaky", UNCHECKABLE, indirect=True)
+def test_walk_reports_a_folder_whose_files_cannot_be_checked(flaky: Path) -> None:
+    unlisted: list[str] = []
+    files = _walk_library(flaky, unlisted=unlisted)
+    assert [f["rel_path"] for f in files] == ["open/a.jpg"]
+    assert unlisted == ["Flaky"]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("flaky", UNCHECKABLE, indirect=True)
+def test_files_that_cannot_be_checked_are_not_deleted(flaky: Path) -> None:
+    client = _scan_disk(flaky, _assets("Flaky/b.jpg", "Flaky/c.jpg"), path_prefix="Flaky")
+    assert _deleted_ids(client) == []
+    assert client.stats.unlisted == ["Flaky"]
+
+
+@pytest.mark.fast
+def test_a_file_gone_between_listing_and_stat_is_just_gone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "lib"
+    _write(root, "Day/a.jpg")
+    _write(root, "Day/b.jpg")
+    real_stat = os.stat
+
+    def stat(path, *args, **kwargs):
+        if os.fspath(path).endswith("b.jpg"):
+            raise FileNotFoundError(errno.ENOENT, "gone", os.fspath(path))
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", stat)
+    unlisted: list[str] = []
+    assert [f["rel_path"] for f in _walk_library(root, unlisted=unlisted)] == ["Day/a.jpg"]
+    assert unlisted == []
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("err", UNCHECKABLE)
+def test_a_folder_that_cannot_be_checked_is_not_taken_for_gone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                               err: int) -> None:
+    # Taken for gone, its parent would be scanned instead, and what's in it
+    # deleted if the parent's walk then missed it.
+    root = tmp_path / "lib"
+    _write(root, "Shoots/Day 1/a.jpg")
+    real_stat = os.stat
+
+    def stat(path, *args, **kwargs):
+        if Path(os.fspath(path)).name == "Day 1":
+            raise OSError(err, os.strerror(err), os.fspath(path))
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", stat)
+    client = _scan_disk(root, _assets("Shoots/Day 1/a.jpg", "Shoots/Day 1/b.jpg"), path_prefix="Shoots/Day 1")
+    assert _deleted_ids(client) == []
+    assert client.stats.unlisted == ["Shoots/Day 1"]

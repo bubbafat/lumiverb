@@ -1,8 +1,27 @@
 """IO utilities shared across the codebase."""
 
+import errno
 import os
 import unicodedata
 from pathlib import Path
+
+# A stat failing with these means the path isn't there.
+_ABSENT = (errno.ENOENT, errno.ENOTDIR, errno.EBADF, errno.ELOOP)
+
+
+def stat_if_present(path: str | os.PathLike) -> os.stat_result | None:
+    """os.stat, or None if the path isn't there.
+
+    Other errors (no permission, an I/O error on a network mount) raise: a
+    path that can't be checked mustn't be taken for gone. Python 3.14's
+    Path.exists() and is_file() say False for those too.
+    """
+    try:
+        return os.stat(path)
+    except OSError as exc:
+        if exc.errno in _ABSENT:
+            return None
+        raise
 
 
 def file_non_empty(path: Path, *, min_bytes: int = 1) -> bool:
@@ -49,18 +68,19 @@ def resolve_source_path(root: Path, rel_path: str) -> Path:
     names (ext4, or NFS/SMB mounts on Linux) may hold the same name in NFD,
     which is how macOS often writes it, so fall back to the NFD form and
     then to matching each path component by its NFC form. Returns
-    root / rel_path when nothing matches.
+    root / rel_path when nothing matches; raises OSError when a path can't
+    be checked (stat_if_present).
     """
     direct = root / rel_path
-    if direct.exists():
+    if stat_if_present(direct) is not None:
         return direct
     nfd = root / unicodedata.normalize("NFD", rel_path)
-    if nfd.exists():
+    if stat_if_present(nfd) is not None:
         return nfd
     current = root
     for part in Path(rel_path).parts:
         candidate = current / part
-        if not candidate.exists():
+        if stat_if_present(candidate) is None:
             want = unicodedata.normalize("NFC", part)
             try:
                 names = os.listdir(current)

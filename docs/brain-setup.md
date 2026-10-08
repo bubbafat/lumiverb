@@ -155,6 +155,8 @@ sudo bash /opt/lumiverb/scripts/update-web.sh
 
 `update-api.sh` keeps the worker's packages and restarts it.
 
+The repo pins Python 3.12 (`.python-version`), the version the tests run on; this box's own Python is 3.14. The first update after the pin rebuilds `/opt/lumiverb/.venv` on 3.12, which uv downloads for the `lumiverb` user, so that update's dependency step takes a few minutes. Later updates reuse it.
+
 ## Mac app changes (Swift, not built yet)
 
 1. **Report changes.** `LibraryWatcher` already gets FSEvents for each library root. After its debounce and the 30-second quarantine, send the changed paths, as the Mac sees them, to `POST /v1/changes` with body `{"paths": [...]}`.

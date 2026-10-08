@@ -170,6 +170,27 @@ def test_a_folder_named_in_nfd_on_disk_is_scanned_itself(das: Path) -> None:
 
 
 @pytest.mark.fast
+def test_a_changed_folder_that_cannot_be_checked_is_scanned_from_its_parent(das: Path,
+                                                                           monkeypatch: pytest.MonkeyPatch) -> None:
+    # Its parent's scan covers it whether it's a folder or a file.
+    import errno
+    import os
+
+    (das / "Footage" / "Day 1" / "Cam A").mkdir()
+    real_stat = os.stat
+
+    def stat(path, *args, **kwargs):
+        if os.fspath(path).endswith("Cam A"):
+            raise OSError(errno.EIO, "Input/output error", os.fspath(path))
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", stat)
+    server = FakeServer([LIB], pending={"lib_1": [{**CHANGE, "rel_path": "Day 1/Cam A"}]})
+    scan, _, _ = _cycle(server)
+    assert scan.call_args.kwargs["path_prefix"] == "Day 1"
+
+
+@pytest.mark.fast
 def test_nothing_reported_and_no_full_scan_due_means_no_scan(das: Path) -> None:
     scan, _, _ = _cycle(FakeServer([LIB]))
     scan.assert_not_called()

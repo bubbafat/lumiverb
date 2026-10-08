@@ -33,6 +33,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+from stat import S_ISDIR
 from typing import TYPE_CHECKING
 
 from rich.console import Console
@@ -41,7 +42,7 @@ from src.client.cache_dir import cache_dir
 from src.client.cli.client import LumiverbClient
 from src.client.cli.roots import reachable_root
 from src.client.proxy.analysis_cache import clear_leftovers
-from src.shared.io_utils import is_within, resolve_source_path
+from src.shared.io_utils import is_within, resolve_source_path, stat_if_present
 
 if TYPE_CHECKING:
     from src.client.cli.scan import ScanStats
@@ -180,6 +181,15 @@ def _vision_configured(client: LumiverbClient) -> bool:
     return bool(url and model)
 
 
+def _is_dir(root: Path, rel: str) -> bool:
+    """False when it can't be checked: its parent's scan covers it either way."""
+    try:
+        st = stat_if_present(resolve_source_path(root, rel))
+    except OSError:
+        return False
+    return st is not None and S_ISDIR(st.st_mode)
+
+
 def _fingerprint(summary: dict, reachable: bool, skip: set[str]) -> tuple:
     skipped = {VISION_STEPS[s] for s in skip}
     return (reachable, tuple(summary.get(k, 0) for k in ENRICH_COUNTS if k not in skipped))
@@ -211,7 +221,7 @@ def _scan_library(
         prefix = None
     else:
         paths = [c["rel_path"] for c in changes] + (sorted(retry.paths) if retry_due else [])
-        prefix = scan_scope(paths, lambda rel: resolve_source_path(root, rel).is_dir())
+        prefix = scan_scope(paths, lambda rel: _is_dir(root, rel))
     logger.info(
         "worker: scanning %s%s (%d reported change(s)%s%s)",
         library["name"], f" / {prefix}" if prefix else "", len(changes),
