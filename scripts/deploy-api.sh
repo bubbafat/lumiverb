@@ -254,7 +254,7 @@ step "Creating service user and directories"
 SVC_HOME="/var/lib/lumiverb"
 id -u "$SVC_USER" >/dev/null 2>&1 || useradd --system --shell /usr/sbin/nologin --home "$SVC_HOME" "$SVC_USER"
 
-mkdir -p "$SVC_HOME" "$CONF_DIR" "$DATA_DIR"/quickwit "$DATA_DIR"/tmp "$BACKUP_DIR"
+mkdir -p "$SVC_HOME" "$CONF_DIR" "$DATA_DIR"/quickwit "$DATA_DIR"/tmp "$DATA_DIR"/worker-tmp "$BACKUP_DIR"
 chown "$SVC_USER":"$SVC_USER" "$SVC_HOME"
 chown root:"$SVC_USER" "$CONF_DIR"
 chmod 750 "$CONF_DIR"
@@ -543,6 +543,10 @@ Environment=PYTHONUNBUFFERED=1
 Environment=HOME=${SVC_HOME}
 # Proxy caches go on the data disk, not the root disk with Postgres.
 Environment=XDG_CACHE_HOME=${DATA_DIR}/cache
+# Temp files too (Whisper's WAVs): PrivateTmp's /tmp can be RAM. Not the
+# API's tmp, which each API start empties; this one each worker start.
+Environment=TMPDIR=${DATA_DIR}/worker-tmp
+ExecStartPre=-/usr/bin/find ${DATA_DIR}/worker-tmp -mindepth 1 -delete
 ExecStart=${APP_DIR}/.venv/bin/lumiverb worker
 Restart=on-failure
 RestartSec=30s

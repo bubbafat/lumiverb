@@ -104,7 +104,7 @@ ok "Tenant migrations applied"
 step "Ensuring data directory"
 DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2- || true)"
 if [[ -n "$DATA_DIR" ]]; then
-  mkdir -p "$DATA_DIR"/quickwit "$DATA_DIR"/tmp
+  mkdir -p "$DATA_DIR"/quickwit "$DATA_DIR"/tmp "$DATA_DIR"/worker-tmp
   chown -R "$SVC_USER":"$SVC_USER" "$DATA_DIR"
   # Caches, and the worker's lock and state, on the data disk for manual
   # runs as the service user too, so one never runs beside the service.
@@ -162,8 +162,15 @@ if [[ -f "$WORKER_UNIT" ]]; then
   DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2- || true)"
   if [[ -z "$DATA_DIR" ]]; then
     warn "No DATA_DIR in ${ENV_FILE}; the worker's caches stay in its home"
-  elif ! grep -q "^Environment=XDG_CACHE_HOME=" "$WORKER_UNIT"; then
-    sed -i "/^Environment=HOME=/a Environment=XDG_CACHE_HOME=${DATA_DIR}/cache" "$WORKER_UNIT"
+  else
+    grep -q "^Environment=XDG_CACHE_HOME=" "$WORKER_UNIT" \
+      || sed -i "/^Environment=HOME=/a Environment=XDG_CACHE_HOME=${DATA_DIR}/cache" "$WORKER_UNIT"
+    # Temp files (Whisper's WAVs) too: PrivateTmp's /tmp can be RAM. Not the
+    # API's tmp, which each API start empties; this one each worker start.
+    grep -q "^Environment=TMPDIR=" "$WORKER_UNIT" \
+      || sed -i "/^ExecStart=/i Environment=TMPDIR=${DATA_DIR}/worker-tmp" "$WORKER_UNIT"
+    grep -q "^ExecStartPre=-/usr/bin/find ${DATA_DIR}/worker-tmp " "$WORKER_UNIT" \
+      || sed -i "/^Environment=TMPDIR=/a ExecStartPre=-/usr/bin/find ${DATA_DIR}/worker-tmp -mindepth 1 -delete" "$WORKER_UNIT"
   fi
   systemctl daemon-reload
   ok "$(grep '^ExecStart=' "$WORKER_UNIT")"

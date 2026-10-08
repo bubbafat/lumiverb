@@ -269,7 +269,31 @@ def test_update_without_a_data_dir_leaves_the_worker_s_caches_alone(tmp_path):
     unit.write_text(WORKER_UNIT)
     out = _update_worker_unit(tmp_path, unit, "API_PORT=8100\n")
     assert "XDG_CACHE_HOME" not in unit.read_text()
+    assert "TMPDIR" not in unit.read_text()
     assert "No DATA_DIR" in out
+
+
+def test_worker_temp_files_go_on_the_data_disk():
+    # Whisper's WAVs (hundreds of MB for a long clip) went to PrivateTmp's
+    # /tmp, RAM on the brain. Not the API's tmp: each API start empties that.
+    text = DEPLOY_API.read_text()
+    worker_unit = text.split("Description=Lumiverb worker", 1)[1].split("UNIT", 1)[0]
+    assert "Environment=TMPDIR=${DATA_DIR}/worker-tmp" in worker_unit
+    assert "ExecStartPre=-/usr/bin/find ${DATA_DIR}/worker-tmp -mindepth 1 -delete" in worker_unit
+    assert '"$DATA_DIR"/worker-tmp' in text.split('step "Creating service user and directories"', 1)[1].split("ok ", 1)[0]
+
+
+def test_update_moves_an_existing_worker_s_temp_files_to_the_data_disk(tmp_path):
+    unit = tmp_path / "lumiverb-worker.service"
+    unit.write_text(WORKER_UNIT)
+    _update_worker_unit(tmp_path, unit, "DATA_DIR=/mnt/ssd2/lumiverb\n")
+    _update_worker_unit(tmp_path, unit, "DATA_DIR=/mnt/ssd2/lumiverb\n")  # reruns change nothing
+    lines = unit.read_text().splitlines()
+    assert lines.count("Environment=TMPDIR=/mnt/ssd2/lumiverb/worker-tmp") == 1
+    assert lines.count("ExecStartPre=-/usr/bin/find /mnt/ssd2/lumiverb/worker-tmp -mindepth 1 -delete") == 1
+    data = tmp_path / "data"
+    _update_data_dir(tmp_path, f"DATA_DIR={data}\n")
+    assert (data / "worker-tmp").is_dir()
 
 
 def test_a_manual_worker_run_finds_the_service_s_lock():
