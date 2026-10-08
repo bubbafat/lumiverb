@@ -38,7 +38,7 @@ beforeEach(() => {
         api_url: body.api_url,
         has_key: body.api_key === undefined ? saved.has_key : !!body.api_key,
         model: body.model,
-        status: body.api_url ? { ok: true, error: "", model: body.model, api_url: body.api_url, checked_at: new Date().toISOString() } : null,
+        status: null, // the worker checks the new settings before using them
       };
       return json(saved);
     }
@@ -94,8 +94,33 @@ describe("AiSection", () => {
 
     fireEvent.change(select, { target: { value: "qwen3-vl:8b" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(screen.getByText(/Working: qwen3-vl:8b answered just now/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Saved. The worker hasn't checked it yet/)).toBeTruthy());
     expect(calls("/tenant/vision", "PUT")).toEqual([{ api_url: URL, api_key: "sk-1", model: "qwen3-vl:8b" }]);
+    // The key typed is saved now, and never shown again.
+    expect((screen.getByLabelText("API key") as HTMLInputElement).value).toBe("");
+  });
+
+  it("clears a key once it's saved, even when nothing else changed", async () => {
+    saved = { api_url: URL, has_key: true, model: "llava:13b", status: null };
+    renderSection();
+    fireEvent.change(await screen.findByLabelText("API key"), { target: { value: "sk-2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    fireEvent.change(await screen.findByLabelText("Model"), { target: { value: "llava:13b" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(calls("/tenant/vision", "PUT")).toHaveLength(1));
+    await waitFor(() => expect((screen.getByLabelText("API key") as HTMLInputElement).value).toBe(""));
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("says when the worker found it working", async () => {
+    saved = {
+      api_url: URL,
+      has_key: false,
+      model: "qwen3-vl:8b",
+      status: { ok: true, error: "", model: "qwen3-vl:8b", api_url: URL, checked_at: new Date().toISOString() },
+    };
+    renderSection();
+    expect(await screen.findByText(/Working: qwen3-vl:8b answered just now/)).toBeTruthy();
   });
 
   it("says plainly why it couldn't connect, and offers no models", async () => {

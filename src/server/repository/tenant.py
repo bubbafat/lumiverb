@@ -847,7 +847,6 @@ class AssetRepository:
 
         # --- Build query ---
         # Lateral join only needed for tag filtering (m.tags reference).
-        # missing_vision/embeddings/faces use self-contained subqueries.
         join_metadata = tag is not None
         where_sql = " AND ".join(conditions)
 
@@ -862,6 +861,13 @@ class AssetRepository:
                 LIMIT 1
             ) m ON TRUE
             """
+
+        # The reconciler's missing_* rules read each clip's lineage (as `la`).
+        if any((missing_vision, missing_embeddings, missing_faces, missing_video_scenes, missing_ocr,
+                missing_scene_vision, missing_transcription, missing_probe, missing_analysis_proxy)):
+            from src.server.repository.lineage import LINEAGE_JOIN
+
+            lateral_join += f"\n            {LINEAGE_JOIN}\n"
 
         rating_join = ""
         if join_ratings:

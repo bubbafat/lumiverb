@@ -5,7 +5,7 @@ An admin enters the endpoint URL and an optional key and presses Connect,
 which lists the models the endpoint offers; they pick one and save, and
 the endpoint is asked again so only an offered model is saved. The key is
 never shown back. The worker checks the model before vision work and
-reports when it can't use it; Settings shows that until it's fixed.
+reports what it found; Settings shows a problem until it's fixed.
 Changing the model makes descriptions stale.
 """
 
@@ -27,7 +27,7 @@ def _endpoint(models=("qwen3-vl:8b", "llava:13b"), status=200, raises=None):
     """A fake OpenAI-compatible GET /models."""
     seen: list[dict] = []
 
-    def get(url, headers=None, timeout=None):
+    def get(url, headers=None, timeout=None, **_kwargs):
         seen.append({"url": url, "headers": headers or {}})
         if raises:
             raise raises
@@ -103,7 +103,7 @@ def test_only_a_model_the_endpoint_offers_is_saved(env, off):
     assert r.status_code == 200, r.text
     saved = r.json()
     assert (saved["api_url"], saved["has_key"], saved["model"]) == (URL, True, "qwen3-vl:8b")
-    assert saved["status"]["ok"] is True
+    assert saved["status"] is None  # until the worker has checked them
     assert "sk-1" not in r.text  # the key is never shown back
 
 
@@ -163,10 +163,15 @@ def test_the_workers_report_shows_until_fixed(env, off):
     assert client.post("/v1/tenant/vision/status", json={"ok": True},
                        headers=_key_with_role(env, "viewer")).status_code == 403
 
-    # Saving a model the endpoint offers fixes it.
+    # The worker finds it working again: the problem goes.
+    client.post("/v1/tenant/vision/status", json={"ok": True, "model": "qwen3-vl:8b", "api_url": URL + "/"},
+                headers=worker)
+    assert _get(env)["status"]["ok"] is True  # a trailing slash is the same endpoint
+
+    # Saving other settings: nothing to show until the worker checks them.
     with fake:
         _save(env, api_url=URL, model="llava:13b")
-    assert _get(env)["status"]["ok"] is True
+    assert _get(env)["status"] is None
     # A report about other settings than these says nothing about them.
     client.post("/v1/tenant/vision/status", json={"ok": False, "error": "x", "model": "qwen3-vl:8b",
                                                   "api_url": URL}, headers=worker)

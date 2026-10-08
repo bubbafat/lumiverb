@@ -50,6 +50,7 @@ def index_video_scenes(
     t0 = time.perf_counter()
     total_scenes = 0
     total_chunks = 0
+    chunk_errors: list[str] = []
 
     # 1. Init chunks (idempotent — safe for retry/repair)
     resp = client.post(
@@ -128,17 +129,22 @@ def index_video_scenes(
 
         except SyncError as e:
             logger.warning("video-index: %s chunk %d — FFmpeg sync error: %s", rel_path, work["chunk_index"], e)
+            chunk_errors.append(str(e))
             client.post(
                 f"/v1/video/chunks/{chunk_id}/fail",
                 json={"worker_id": worker_id, "error_message": str(e)},
             )
         except Exception as e:
             logger.exception("video-index: %s chunk %d — failed: %s", rel_path, work["chunk_index"], e)
+            chunk_errors.append(str(e) or type(e).__name__)
             client.post(
                 f"/v1/video/chunks/{chunk_id}/fail",
                 json={"worker_id": worker_id, "error_message": str(e)},
             )
 
+    if chunk_errors:
+        # The video isn't indexed until every chunk is: it's tried again once its turn comes.
+        raise RuntimeError(f"{len(chunk_errors)} of {total_chunks + len(chunk_errors)} chunks failed: {chunk_errors[0]}")
     elapsed = time.perf_counter() - t0
     return {"scenes": total_scenes, "chunks": total_chunks, "elapsed": elapsed}
 
@@ -222,12 +228,17 @@ def enrich_video_scenes(
     """Extract rep frames, run vision AI, and sync scenes to search.
     lineage: how the descriptions are made, recorded with each.
 
-    Returns {"enriched": N, "skipped": N, "failed": N, "elapsed": float}.
+    Returns {"enriched": N, "skipped": N, "failed": N, "errors": [...], "elapsed": float}.
+    The vision endpoint failing (CaptionError with endpoint_fault) stops the
+    video and is raised: it isn't the scenes' fault.
     """
+    from src.client.workers.captions.base import CaptionError
+
     t0 = time.perf_counter()
     enriched = 0
     skipped = 0
     failed = 0
+    errors: list[str] = []
 
     # List all scenes for this asset
     resp = client.get(f"/v1/video/{asset_id}/scenes")
@@ -258,6 +269,7 @@ def enrich_video_scenes(
                     rel_path, scene_id, rep_frame_ms,
                 )
                 failed += 1
+                errors.append(f"no frame at {rep_frame_ms} ms")
                 continue
 
             # 2. Upload rep frame artifact
@@ -304,18 +316,25 @@ def enrich_video_scenes(
                 " + vision" if vision_provider else "",
             )
 
+        except CaptionError as e:
+            if e.endpoint_fault:
+                raise
+            logger.warning("scene-enrich: %s scene %s — the model couldn't describe it: %s", rel_path, scene_id, e)
+            failed += 1
+            errors.append(str(e))
         except Exception as e:
             logger.exception(
                 "scene-enrich: %s scene %s — failed: %s",
                 rel_path, scene_id, e,
             )
             failed += 1
+            errors.append(str(e) or type(e).__name__)
         finally:
             if tmp_path is not None:
                 tmp_path.unlink(missing_ok=True)
 
     elapsed = time.perf_counter() - t0
-    return {"enriched": enriched, "skipped": skipped, "failed": failed, "elapsed": elapsed}
+    return {"enriched": enriched, "skipped": skipped, "failed": failed, "errors": errors, "elapsed": elapsed}
 
 
 def run_video_enrich(
@@ -363,12 +382,20 @@ def run_video_enrich(
                 vision_model_id=vision_model_id,
                 lineage=lineage_for(video) if lineage_for else None,
             )
-            ok += 1
             logger.info(
                 "scene-enrich: %s — %d enriched, %d skipped, %d failed (%.1fs)",
                 rel_path, result["enriched"], result["skipped"],
                 result["failed"], result["elapsed"],
             )
+            if result["failed"]:
+                # Its undescribed scenes are handed out again once its turn comes.
+                total = result["enriched"] + result["failed"]
+                errors = result.get("errors") or ["see the log"]
+                if on_fail:
+                    on_fail(asset_id, f"{result['failed']} of {total} scenes failed: {errors[0]}")
+                fail += 1
+            else:
+                ok += 1
         except Exception as e:
             logger.exception("scene-enrich: %s — failed: %s", rel_path, e)
             if on_fail:

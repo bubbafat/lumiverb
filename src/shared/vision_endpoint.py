@@ -23,7 +23,8 @@ def list_models(api_url: str, api_key: str | None = None, *, timeout: float = TI
         raise VisionEndpointError("The URL must start with http:// or https://.")
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
-        resp = requests.get(f"{url}/models", headers=headers, timeout=timeout)
+        # No redirects: the answer is the URL's own (and the key goes nowhere else).
+        resp = requests.get(f"{url}/models", headers=headers, timeout=timeout, allow_redirects=False)
     except requests.Timeout:
         raise VisionEndpointError(f"{url} didn't answer within {timeout:.0f} seconds.") from None
     except requests.RequestException as e:

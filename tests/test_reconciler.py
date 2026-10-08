@@ -294,3 +294,81 @@ def test_every_producer_sorts_a_new_clip_the_same_everywhere(env):
         assert _counts(lib, artifact)["missing"] == len(due), flag
     assert set(_due(lib, "missing_vision")) == {img}
     assert set(_due(lib, "missing_transcription")) == {vid}
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: unknown isn't changed; a replaced file resets its scenes on
+# either ingest; scenes are never handed out in place; waiting failures are
+# what the counts leave out.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_made_before_the_file_had_a_hash_is_stale_not_redone(env):
+    client, headers, *_ = env
+    lib = _library(env, "RecNoSha")
+    clip = _ingest_with(lib, "a.jpg", _sha(), None)
+    with _db(env) as s:  # made while the file's SHA-256 wasn't known
+        s.execute(text("UPDATE assets SET sha256 = NULL WHERE asset_id = :a"), {"a": clip})
+        s.commit()
+    _describe(lib, clip, None)
+    with _db(env) as s:
+        s.execute(text("UPDATE artifact_lineage SET source_sha256 = NULL WHERE asset_id = :a"), {"a": clip})
+        s.execute(text("UPDATE assets SET sha256 = :s WHERE asset_id = :a"), {"s": _sha(), "a": clip})
+        s.commit()
+    assert _due(lib, "missing_vision") == []
+    assert _counts(lib, "vision")["stale"] == 1
+
+
+@pytest.mark.slow
+def test_a_file_replaced_through_the_other_ingest_loses_its_scenes_too(env):
+    import io
+    import json
+
+    from PIL import Image
+
+    client, headers, *_ = env
+    lib = _library(env, "RecOtherIngest")
+    vid = _ingest_with(lib, "a.mov", _sha(), None, media_type="video")
+    with _db(env) as s:
+        s.execute(text("UPDATE assets SET duration_sec = 30, video_indexed = true WHERE asset_id = :a"), {"a": vid})
+        s.execute(text("INSERT INTO video_scenes (scene_id, asset_id, scene_index, start_ms, end_ms, rep_frame_ms,"
+                       " description, created_at) VALUES (:i, :a, 0, 0, 999, 0, 'a beach', now())"),
+                  {"i": f"scn_{vid}_0", "a": vid})
+        s.commit()
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 36)).save(buf, format="JPEG")
+    buf.seek(0)
+    r = client.post(f"/v1/assets/{vid}/ingest", data={"exif": json.dumps({"sha256": _sha()})},
+                    files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=headers)
+    assert r.status_code == 200, r.text
+    assert _due(lib, "missing_video_scenes") == [vid]
+    with _db(env) as s:
+        assert s.execute(text("SELECT count(*) FROM video_scenes WHERE asset_id = :a"), {"a": vid}).scalar() == 0
+
+
+@pytest.mark.slow
+def test_scenes_are_never_handed_out_to_be_redone_in_place(env):
+    """Ingest resets them when a file is replaced; a hash changed any other
+    way mustn't hand out a video whose scenes the worker can't redo."""
+    lib = _library(env, "RecScenesInPlace")
+    vid = _ingest_with(lib, "a.mov", _sha(), None, media_type="video")
+    with _db(env) as s:
+        s.execute(text("UPDATE assets SET duration_sec = 30, video_indexed = true WHERE asset_id = :a"), {"a": vid})
+        s.execute(text("INSERT INTO artifact_lineage (asset_id, artifact, producer, producer_version, settings_hash,"
+                       " source_sha256, produced_at, outcome, attempts) VALUES (:a, 'scenes', 'scene-detect', '1',"
+                       " 'h', 'old', now(), 'ok', 0)"), {"a": vid})
+        s.commit()
+    assert _due(lib, "missing_video_scenes") == []
+    assert _counts(lib, "scenes")["stale"] == 1
+
+
+@pytest.mark.slow
+def test_waiting_failures_are_what_the_counts_leave_out(env):
+    lib = _library(env, "RecWaitCount")
+    img = _ingest_with(lib, "a.jpg", _sha(), None)
+    _fail(env, [{"asset_id": img, "artifact": "vision", "error": "x"},
+                {"asset_id": img, "artifact": "transcript", "error": "x"},  # an image has no transcript
+                {"asset_id": img, "artifact": "proxy", "error": "x"}])  # the scan's, not enrich's
+    summary = _summary(lib)
+    assert summary["waiting_failures"] == 1 and summary["missing_vision"] == 0

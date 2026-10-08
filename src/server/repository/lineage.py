@@ -26,6 +26,7 @@ from sqlmodel import Session
 
 from src.shared.producers import (
     CLIP_MODEL_ID,
+    MISSING_FLAGS,
     PERSON,
     PRODUCERS,
     UNKNOWN,
@@ -111,22 +112,44 @@ def _stale_sql() -> str:
     )
 
 
-def _lineage(artifact: str, where: str) -> str:
-    """EXISTS a lineage row for this artifact on clip a, where..."""
-    return (f"EXISTS (SELECT 1 FROM artifact_lineage l WHERE l.asset_id = a.asset_id"
-            f" AND l.artifact = '{artifact}' AND {where})")
+def _lineage_cols() -> str:
+    cols = []
+    for artifact in MISSING_FLAGS.values():
+        cols.append(f"max(l.source_sha256) FILTER (WHERE l.artifact = '{artifact}'"
+                    f" AND l.producer NOT IN ('', '{PERSON}')) AS src_{artifact}")
+        cols.append(f"bool_or(l.artifact = '{artifact}' AND l.retry_at > now()) AS wait_{artifact}")
+    return ", ".join(cols)
+
+
+# Each clip's lineage, looked at once for all the rules below and joined as
+# `la`: per artifact the worker is handed, the file it was made from and
+# whether a failure is waiting its turn. A query using due(), outstanding(),
+# source_changed() or waiting() puts LINEAGE_JOIN right after
+# `FROM active_assets a`. (One index lookup per clip: the repair summary of
+# 100k clips takes about 1.4 s, against 0.75 s before lineage; a grouped
+# pass over the table was slower.)
+LINEAGE_JOIN = (f"LEFT JOIN LATERAL (SELECT {_lineage_cols()} FROM artifact_lineage l"
+                " WHERE l.asset_id = a.asset_id) la ON TRUE")
+
+
+# Ingest removes these when a file is replaced (routers/ingest.py), so they
+# come back as missing; handing them out as "changed" too could loop, since
+# the worker can't redo them in place.
+RESET_AT_INGEST = frozenset({"analysis_proxy", "scenes", "scene_vision"})
 
 
 def source_changed(artifact: str) -> str:
-    """Made from a file whose content has since changed (a person's never counts)."""
-    return ("(a.sha256 IS NOT NULL AND "
-            + _lineage(artifact, f"l.producer NOT IN ('', '{PERSON}') AND l.source_sha256 IS DISTINCT FROM a.sha256")
-            + ")")
+    """Made from a file whose content has since changed. A person's never
+    counts, nor one made before the file's SHA-256 was known (unknown isn't
+    changed: it's stale, waiting for approval like any other)."""
+    if artifact in RESET_AT_INGEST:
+        return "false"
+    return f"(a.sha256 IS NOT NULL AND la.src_{artifact} IS NOT NULL AND la.src_{artifact} <> a.sha256)"
 
 
 def waiting(artifact: str) -> str:
     """The last try failed and its turn hasn't come."""
-    return _lineage(artifact, "l.retry_at > now()")
+    return f"COALESCE(la.wait_{artifact}, false)"
 
 
 def outstanding(artifact: str) -> str:

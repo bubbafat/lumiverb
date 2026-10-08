@@ -783,18 +783,20 @@ def admin_vision_test(
     for i, img_path in enumerate(images, 1):
         console.print(f"[dim][{i}/{len(images)}][/dim] {img_path.name} ... ", end="")
 
-        # Describe (description + tags)
-        desc_result = provider.describe(img_path)
-        description = desc_result.get("description", "")
-        tags = desc_result.get("tags", [])
+        from src.client.workers.captions.base import CaptionError
 
-        # OCR
-        ocr_text = provider.extract_text(img_path)
+        try:
+            desc_result = provider.describe(img_path)  # description + tags
+            ocr_text = provider.extract_text(img_path)
+        except CaptionError as e:
+            results.append({"filename": img_path.name, "error": str(e)})
+            console.print(f"[red]failed[/red] {escape(str(e))}")
+            continue
 
         results.append({
             "filename": img_path.name,
-            "description": description,
-            "tags": tags,
+            "description": desc_result.get("description", ""),
+            "tags": desc_result.get("tags", []),
             "ocr": ocr_text,
         })
         console.print("[green]done[/green]")

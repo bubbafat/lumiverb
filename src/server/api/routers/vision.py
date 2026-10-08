@@ -100,11 +100,11 @@ def _models(api_url: str, api_key: str | None) -> list[str]:
 
 def _settings(request: Request, session: Session) -> VisionSettings:
     tenant = _tenant(request)
-    api_url = (tenant.vision_api_url if tenant else "") or ""
+    api_url = ((tenant.vision_api_url if tenant else "") or "").rstrip("/")
     model = (tenant.vision_model_id if tenant else "") or ""
     status = get_vision_status(session)
     # A check of other settings than these says nothing about them.
-    if status and (status.get("model") != model or status.get("api_url") != api_url):
+    if status and (status.get("model") != model or (status.get("api_url") or "").rstrip("/") != api_url):
         status = None
     return VisionSettings(api_url=api_url, has_key=bool(tenant and tenant.vision_api_key), model=model,
                           status=VisionStatus(**status) if status else None)
@@ -150,9 +150,8 @@ def save(body: VisionSave, request: Request, session: Annotated[Session, Depends
         tenant.vision_model_id = model
         ctrl.add(tenant)
         ctrl.commit()
-    # Connect just showed these work; the worker checks them again before using them.
-    set_vision_status(session, {"ok": True, "error": "", "model": model, "api_url": api_url,
-                                "checked_at": utcnow().isoformat()} if api_url else None)
+    # The worker checks these before using them; until it has, there's nothing to show.
+    set_vision_status(session, None)
     return _settings(request, session)
 
 

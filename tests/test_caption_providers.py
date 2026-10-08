@@ -144,3 +144,87 @@ def test_openai_provider_sends_the_settings_it_was_given() -> None:
     payload = post.call_args.kwargs["json"]
     assert (payload["temperature"], payload["max_tokens"]) == (0.7, 99)
     assert payload["messages"][0]["content"][1]["text"] == "Say what you see."
+
+
+# ---------------------------------------------------------------------------
+# When the model can't describe or read an image, the provider says so, and
+# whether the endpoint was at fault: then vision work stops and no clip is
+# charged. "" from extract_text only ever means "no text".
+# ---------------------------------------------------------------------------
+
+
+def _image(tmp_path):
+    from PIL import Image
+
+    path = tmp_path / "img.jpg"
+    Image.new("RGB", (16, 16)).save(path)
+    return path
+
+
+def _http(status: int):
+    import requests
+    from unittest.mock import MagicMock
+
+    resp = MagicMock(status_code=status, ok=False, text="nope")
+    resp.raise_for_status.side_effect = requests.HTTPError(f"{status} Error", response=resp)
+    return resp
+
+
+@pytest.mark.parametrize(("answer", "endpoint_fault"), [
+    ("connection", True),
+    (503, True),
+    (500, True),
+    (404, True),  # the model is gone
+    (401, True),
+    (400, False),  # the endpoint didn't like this image
+    ("garbage", False),  # it answered, but not with a description
+])
+def test_a_failure_says_whether_the_endpoint_was_at_fault(tmp_path, answer, endpoint_fault):
+    from unittest.mock import MagicMock, patch
+
+    import requests
+
+    from src.client.workers.captions.base import CaptionError
+    from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+
+    p = OpenAICompatibleCaptionProvider("http://localhost:1234/v1", "m", api_key=None)
+    if answer == "connection":
+        effect = requests.ConnectionError("refused")
+    elif answer == "garbage":
+        ok = MagicMock(ok=True, status_code=200)
+        ok.json.return_value = {"choices": [{"message": {"content": "I can't help with that."}}]}
+        effect = None
+    else:
+        effect = None
+    kwargs = {"side_effect": effect} if effect else {"return_value": ok if answer == "garbage" else _http(answer)}
+    with patch("requests.post", **kwargs), patch.object(OpenAICompatibleCaptionProvider, "_sleep_with_countdown"):
+        with pytest.raises(CaptionError) as e:
+            p.describe(_image(tmp_path))
+    assert e.value.endpoint_fault is endpoint_fault
+
+
+def test_ocr_that_fails_raises_instead_of_saying_no_text(tmp_path):
+    from unittest.mock import patch
+
+    import requests
+
+    from src.client.workers.captions.base import CaptionError
+    from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+
+    p = OpenAICompatibleCaptionProvider("http://localhost:1234/v1", "m", api_key=None)
+    with patch("requests.post", side_effect=requests.Timeout()), \
+            patch.object(OpenAICompatibleCaptionProvider, "_sleep_with_countdown"):
+        with pytest.raises(CaptionError) as e:
+            p.extract_text(_image(tmp_path))
+    assert e.value.endpoint_fault is True
+
+
+def test_a_missing_proxy_is_the_images_problem(tmp_path):
+    from src.client.workers.captions.base import CaptionError
+    from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+
+    p = OpenAICompatibleCaptionProvider("http://localhost:1234/v1", "m", api_key=None)
+    for call in (p.describe, p.extract_text):
+        with pytest.raises(CaptionError) as e:
+            call(tmp_path / "gone.jpg")
+        assert e.value.endpoint_fault is False

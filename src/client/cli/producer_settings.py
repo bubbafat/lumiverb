@@ -38,6 +38,11 @@ class ProducerSettings:
     def settings(self, artifact: str) -> dict[str, Any]:
         return dict(self._settings[artifact])
 
+    def with_model(self, artifact: str, model: str) -> dict[str, Any]:
+        """The settings with the model actually used: the account's, as read
+        for this step (it may have changed since these settings were read)."""
+        return {**self.settings(artifact), "model": model}
+
     def lineage(self, artifact: str, source_sha256: str | None, used: dict[str, Any] | None = None) -> dict:
         """What a write records: this producer, its version, the hash of the
         settings actually used (the server's unless `used` says otherwise),

@@ -21,7 +21,7 @@ from pathlib import Path
 import requests
 from PIL import Image
 
-from src.client.workers.captions.base import CaptionProvider
+from src.client.workers.captions.base import CaptionError, CaptionProvider, is_endpoint_fault
 
 logger = logging.getLogger(__name__)
 
@@ -166,14 +166,15 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
 
     def describe(self, proxy_path: Path) -> dict:
         """
-        Returns {} on failure.
+        {"description", "tags"}. Raises CaptionError when it can't, saying
+        whether the endpoint was at fault (then vision work stops, and the
+        clip isn't charged).
 
         Retries with exponential backoff + jitter to reduce pressure on the
         inference server under load.
         """
         if not proxy_path.exists():
-            logger.warning("Proxy not found: %s", proxy_path)
-            return {}
+            raise CaptionError(f"Proxy not found: {proxy_path.name}", endpoint_fault=False)
 
         # Precompute request inputs once; on retry we only re-call the API.
         try:
@@ -189,8 +190,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             finally:
                 img.close()
         except Exception as e:  # noqa: BLE001
-            logger.warning("OpenAI-compatible caption failed for %s: %s", proxy_path, e)
-            return {}
+            raise CaptionError(f"Couldn't read the image: {e}", endpoint_fault=False) from e
 
         prompt = self._vision["prompt"]
 
@@ -240,18 +240,20 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                     "OpenAI-compatible caption failed for %s after %d attempts: %s\n  Last raw response: %s",
                     proxy_path, self.MAX_ATTEMPTS, e, last_raw[:500] if last_raw else "(empty)",
                 )
-                return {}
+                raise CaptionError(str(e) or type(e).__name__, endpoint_fault=is_endpoint_fault(e)) from e
 
-        return {}
+        raise CaptionError(str(last_error), endpoint_fault=False)
 
     def extract_text(self, proxy_path: Path) -> str:
         """Extract visible text from an image via OCR prompt.
 
         Returns the extracted text as a string, or empty string if none found.
+        Raises CaptionError when it can't tell (as describe() does): "" is
+        only ever "no text".
         Uses the same retry logic as describe().
         """
         if not proxy_path.exists():
-            return ""
+            raise CaptionError(f"Proxy not found: {proxy_path.name}", endpoint_fault=False)
 
         try:
             img = Image.open(proxy_path)
@@ -266,8 +268,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             finally:
                 img.close()
         except Exception as e:
-            logger.warning("OCR image prep failed for %s: %s", proxy_path, e)
-            return ""
+            raise CaptionError(f"Couldn't read the image: {e}", endpoint_fault=False) from e
 
         prompt = self._ocr["prompt"]
 
@@ -308,7 +309,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                     self._sleep_with_countdown(sleep_time)
                     continue
                 logger.warning("OCR failed for %s after %d attempts: %s", proxy_path, self.MAX_ATTEMPTS, e)
-                return ""
+                raise CaptionError(str(e) or type(e).__name__, endpoint_fault=is_endpoint_fault(e)) from e
 
         return ""
 

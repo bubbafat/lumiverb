@@ -99,7 +99,11 @@ def _ocr_one(
     ocr_provider: object,
     proxy_cache: "ProxyCache | None" = None,
 ) -> dict | None:
-    """Run OCR on one asset. Returns {"asset_id", "ocr_text"} or None on failure."""
+    """Run OCR on one asset. Returns {"asset_id", "ocr_text"}, or None when
+    there's no proxy or the image can't be prepared. The model's failure
+    raises CaptionError (saying whether the endpoint was at fault)."""
+    from src.client.workers.captions.base import CaptionError
+
     import time as _time
     try:
         t0 = _time.perf_counter()
@@ -129,6 +133,8 @@ def _ocr_one(
                      rel_path, t_proxy * 1000, t_ocr * 1000)
         return {"asset_id": asset_id, "ocr_text": ocr_text or ""}
 
+    except CaptionError:
+        raise
     except Exception as e:
         logger.exception("Failed OCR for %s: %s", rel_path, e)
         return None
@@ -604,8 +610,9 @@ def _process_face_result(
         result = ar.get()
     except Exception as e:
         console.print(f"[red]Batch {batch_num} failed: {e}[/red]")
-        result = {"processed": 0, "failed": len(asset_ids), "skipped": 0,
-                  "errors": [{"asset_id": a, "rel_path": a, "error": f"face batch failed: {e}"} for a in asset_ids]}
+        # The batch's process died (the GPU, ONNX, memory): this machine's
+        # problem, not the clips', so none is charged; they're tried next run.
+        result = {"processed": 0, "failed": len(asset_ids), "skipped": 0, "errors": []}
 
     _el = result.get("elapsed", 0)
     _n = result["processed"] + result["failed"] + result["skipped"]
@@ -1183,9 +1190,11 @@ def run_repair(
             if not _vision_ready():
                 continue
             from src.client.workers.captions.factory import get_caption_provider
+            # The model the guard just read, which may be newer than the run's settings.
+            ocr_settings = producers.with_model("ocr", vision.model)
             ocr_provider = get_caption_provider(vision.model, vision.api_url, vision.api_key,
-                                                settings=producers.settings("vision"),
-                                                ocr_settings=producers.settings("ocr"))
+                                                settings=producers.with_model("vision", vision.model),
+                                                ocr_settings=ocr_settings)
             ocr_fail = vision.on_fail("ocr")
 
             assets = _filter(_page_missing(client, library_id, missing_ocr=True))
@@ -1207,7 +1216,8 @@ def run_repair(
                     item["source_sha256"] = ocr_sha.get(item["asset_id"])
                 try:
                     client.post("/v1/assets/batch-ocr", json={"items": list(batch_buf),
-                                                              "lineage": producers.lineage("ocr", None)})
+                                                              "lineage": producers.lineage("ocr", None,
+                                                                                           used=ocr_settings)})
                     t_post = _time.perf_counter() - t0
                     logger.info("ocr batch POST: %d items in %.1fms", len(batch_buf), t_post * 1000)
                 except Exception as e:
@@ -1217,7 +1227,7 @@ def run_repair(
                         try:
                             client.post(f"/v1/assets/{item['asset_id']}/ocr", json={
                                 "ocr_text": item["ocr_text"],
-                                "lineage": producers.lineage("ocr", item.get("source_sha256"))})
+                                "lineage": producers.lineage("ocr", item.get("source_sha256"), used=ocr_settings)})
                         except Exception:
                             pass
                 batch_buf.clear()
@@ -1226,18 +1236,23 @@ def run_repair(
             with progress:
                 tid = progress.add_task("OCR", total=len(assets), ok=0, fail=0)
                 for a in _until(lambda: stop() or vision.down, assets, _taking("ocr")):
-                    result = _ocr_one(
-                        asset_id=a["asset_id"],
-                        rel_path=a["rel_path"],
-                        ocr_provider=ocr_provider,
-                        proxy_cache=proxy_cache,
-                    )
+                    from src.client.workers.captions.base import CaptionError
+                    ocr_error: object = "no OCR result (no proxy, or the image couldn't be read: see the log)"
+                    try:
+                        result = _ocr_one(
+                            asset_id=a["asset_id"],
+                            rel_path=a["rel_path"],
+                            ocr_provider=ocr_provider,
+                            proxy_cache=proxy_cache,
+                        )
+                    except CaptionError as e:
+                        result, ocr_error = None, e
                     if result is not None:
                         batch_buf.append(result)
                         with stats.lock:
                             stats.processed += 1
                     else:
-                        ocr_fail(a["asset_id"], "no OCR result (no proxy, or the model failed: see the log)")
+                        ocr_fail(a["asset_id"], ocr_error)
                         with stats.lock:
                             stats.skipped += 1
 
@@ -1516,8 +1531,9 @@ def run_repair(
             if not _vision_ready():
                 continue
             from src.client.workers.captions.factory import get_caption_provider
+            scene_vision_settings = producers.with_model("scene_vision", vision.model)
             scene_vision_provider = get_caption_provider(vision.model, vision.api_url, vision.api_key,
-                                                         settings=producers.settings("scene_vision"))
+                                                         settings=scene_vision_settings)
 
             assets = _filter(_page_missing(client, library_id, missing_scene_vision=True))
             if not assets:
@@ -1545,7 +1561,8 @@ def run_repair(
                     console=console,
                     progress=progress,
                     task_id=tid,
-                    lineage_for=lambda v: producers.lineage("scene_vision", v.get("sha256")),
+                    lineage_for=lambda v: producers.lineage("scene_vision", v.get("sha256"),
+                                                            used=scene_vision_settings),
                     on_fail=vision.on_fail("scene_vision"),
                 )
             with stats.lock:

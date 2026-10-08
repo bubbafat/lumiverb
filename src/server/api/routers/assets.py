@@ -461,6 +461,17 @@ class RepairSummary(BaseModel):
     waiting_failures: int = 0
 
 
+def _waiting_failures_sql() -> str:
+    """Clip-steps the missing_* counts leave out because their last try
+    failed and their turn hasn't come."""
+    from src.server.repository import lineage
+    from src.shared.producers import MISSING_FLAGS
+
+    # waiting() first: cheap, and false for nearly every clip, so the rest is rarely looked at.
+    return " + ".join(f"COUNT(*) FILTER (WHERE {lineage.waiting(a)} AND {lineage.outstanding(a)})"
+                      for a in MISSING_FLAGS.values())
+
+
 @router.get("/repair-summary", response_model=RepairSummary, dependencies=[Depends(require_signed_in)])
 def repair_summary(
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -500,8 +511,10 @@ def repair_summary(
                             WHERE am2.asset_id = a.asset_id
                         )
                     )
-                ) AS stale_search_sync
+                ) AS stale_search_sync,
+                {_waiting_failures_sql()} AS waiting_failures
             FROM active_assets a
+            {lineage.LINEAGE_JOIN}
             WHERE library_id = :library_id
         """),
         {"library_id": library_id},
@@ -520,10 +533,7 @@ def repair_summary(
         missing_transcription=row.missing_transcription,
         missing_probe=row.missing_probe,
         missing_analysis_proxy=row.missing_analysis_proxy,
-        waiting_failures=session.execute(text(
-            "SELECT count(*) FROM artifact_lineage l JOIN active_assets a ON a.asset_id = l.asset_id"
-            " WHERE a.library_id = :library_id AND l.retry_at > now()"
-        ), {"library_id": library_id}).scalar() or 0,
+        waiting_failures=row.waiting_failures,
         stale_search_sync=row.stale_search_sync,
     )
 

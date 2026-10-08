@@ -593,9 +593,11 @@ def run_backfill_vision(
     from src.client.workers.captions.factory import get_caption_provider
 
     producers = producers or ProducerSettings(client)
+    # The model read just now, which may be newer than the settings read at the run's start.
+    vision_settings = producers.with_model("vision", vision_model_id)
     vision_provider = get_caption_provider(vision_model_id, vision_api_url, vision_api_key,
-                                           settings=producers.settings("vision"),
-                                           ocr_settings=producers.settings("ocr"))
+                                           settings=vision_settings,
+                                           ocr_settings=producers.with_model("ocr", vision_model_id))
     console.print(f"Vision AI: {vision_model_id} via {vision_api_url} ({vision_source})")
 
     # Page through assets missing vision
@@ -643,11 +645,11 @@ def run_backfill_vision(
             return
         for item in batch_buf:
             item["source_sha256"] = vision_sha.get(item["asset_id"])
-            item["lineage"] = producers.lineage("vision", item["source_sha256"])
+            item["lineage"] = producers.lineage("vision", item["source_sha256"], used=vision_settings)
         try:
             client.post("/v1/assets/batch-vision", json={
                 "items": [{k: v for k, v in item.items() if k != "lineage"} for item in batch_buf],
-                "lineage": producers.lineage("vision", None)})
+                "lineage": producers.lineage("vision", None, used=vision_settings)})
             logger.info("vision batch POST: %d items", len(batch_buf))
         except Exception as e:
             logger.warning("vision batch POST failed (%d items): %s", len(batch_buf), e)

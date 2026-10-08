@@ -129,6 +129,10 @@ function AiForm({ settings }: { settings: VisionSettings }) {
     mutationFn: (body: { api_url: string; api_key?: string; model: string }) => saveVisionSettings(body),
     onMutate: () => setProblem(null),
     onSuccess: (next) => {
+      // A typed key is saved now: it's never shown again.
+      setKey("");
+      setForgetKey(false);
+      setModels(null);
       queryClient.setQueryData(["vision-settings"], next);
     },
     onError: (e) => {
@@ -210,7 +214,11 @@ function AiForm({ settings }: { settings: VisionSettings }) {
         >
           {connect.isPending ? "Connecting…" : "Connect"}
         </button>
-        {models && <span className="text-sm text-emerald-300">Connected: {models.length} model{models.length === 1 ? "" : "s"}</span>}
+        {models && (
+          <span role="status" className="text-sm text-emerald-300">
+            Connected: {models.length} model{models.length === 1 ? "" : "s"}
+          </span>
+        )}
       </div>
 
       {models && (

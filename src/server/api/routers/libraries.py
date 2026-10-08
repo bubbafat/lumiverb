@@ -167,6 +167,7 @@ def list_library_health(
     """
     from sqlalchemy import text
 
+    from src.server.repository.lineage import LINEAGE_JOIN
     from src.server.repository.tenant import OUTSTANDING_CONDITIONS
 
     # Failures waiting their turn are pending too: not healthy.
@@ -181,6 +182,7 @@ def list_library_health(
                 a.library_id,
                 COUNT(*) FILTER (WHERE {pending_clause}) AS pending
             FROM active_assets a
+            {LINEAGE_JOIN}
             JOIN libraries l ON l.library_id = a.library_id
             WHERE l.status != 'trashed'
             GROUP BY a.library_id

@@ -214,3 +214,31 @@ def test_descriptions_say_which_file_each_came_from(tmp_path, monkeypatch):
     body = call.kwargs["json"]
     assert body["items"][0]["source_sha256"] == SHA and "lineage" not in body["items"][0]
     assert body["lineage"] == P.lineage("vision", P.effective_settings("vision", account={"model": model}), None)
+
+
+def test_descriptions_record_the_model_that_made_them(tmp_path, monkeypatch):
+    """The account's model was read for this step; the run's settings may be older."""
+    from unittest.mock import patch
+
+    from rich.console import Console
+
+    from src.client.cli import ingest
+    from src.client.cli.producer_settings import ProducerSettings
+
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    client = _client({a: {"model": "llava:13b"} for a in ("vision", "ocr", "scene_vision")})
+    producers = ProducerSettings(client)  # read when the run started
+    client.get.return_value.json.return_value = {"items": [{"asset_id": "ast_a", "rel_path": "a.jpg", "sha256": SHA}]}
+    with (
+        patch.object(ingest, "_resolve_vision_config",
+                     return_value=("http://vision", None, "qwen3-vl:8b", "account settings")),
+        patch("src.client.workers.captions.factory.get_caption_provider") as provider,
+        patch.object(ingest, "_backfill_one", return_value={"asset_id": "ast_a", "model_id": "qwen3-vl:8b",
+                                                            "description": "a dog", "tags": []}),
+    ):
+        ingest.run_backfill_vision(client, {"library_id": "lib_1", "name": "L", "root_path": str(tmp_path)},
+                                   console=Console(quiet=True), producers=producers)
+    assert provider.call_args.args[0] == "qwen3-vl:8b"
+    [call] = [c for c in client.post.call_args_list if c.args[0] == "/v1/assets/batch-vision"]
+    assert call.kwargs["json"]["lineage"]["settings_hash"] == P.settings_hash(
+        P.effective_settings("vision", account={"model": "qwen3-vl:8b"}))

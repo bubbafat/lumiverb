@@ -207,6 +207,23 @@ def _do_ingest(
 
     final_status = asset_status.PROXY_READY
 
+    # The file was replaced: its analysis proxy and scenes show the old
+    # content, so they're made again. Everything else made from it is handed
+    # out again by the reconciler (its lineage names the old file). Both
+    # ingest endpoints come through here, before the new SHA-256 is stored.
+    scenes_forgotten = False
+    new_sha = (exif_data or {}).get("sha256")
+    current = asset_repo.get_by_id(asset_id) if new_sha else None
+    if current is not None and current.sha256 and new_sha != current.sha256:
+        current.analysis_proxy_key = None
+        current.analysis_proxy_sha256 = None
+        current.analysis_proxy_generated_at = None
+        if current.video_indexed or current.media_type == "video":
+            _forget_scenes(session, asset_id)
+            current.video_indexed = False
+            scenes_forgotten = True
+        session.add(current)
+
     # --- Store EXIF if provided ---
     if exif_data is not None:
         asset_repo.update_exif(
@@ -291,6 +308,10 @@ def _do_ingest(
     # already commits; this covers the new-asset branch and the standalone
     # /v1/assets/{id}/ingest endpoint.
     session.commit()
+    if scenes_forgotten:
+        from src.server.search.quickwit_client import QuickwitClient
+
+        QuickwitClient().delete_scene_index_documents_by_asset_ids(tenant_id, [asset_id])
 
     return IngestResponse(
         asset_id=asset_id,
@@ -427,7 +448,6 @@ async def create_and_ingest(
     existing = asset_repo.get_by_library_and_rel_path(library_id, rel_path)
     reappeared = None  # set when a file the scanner marked missing is back
     created = False
-    scenes_forgotten = False  # the file was replaced: its scenes went
 
     # An archived asset back at its own path: lock it before restoring. A copy
     # of the file ingested at the same time may have claimed it by content;
@@ -481,18 +501,6 @@ async def create_and_ingest(
         if existing.deleted_at is not None:
             AssetRepository(session).clear_trash(existing)
             reappeared = existing
-        # The file was replaced: its analysis proxy and scenes show the old
-        # content, so they're made again. Everything else made from it is
-        # handed out again by the reconciler (its lineage names the old file).
-        new_sha = (exif_data or {}).get("sha256")
-        if new_sha and existing.sha256 and new_sha != existing.sha256:
-            existing.analysis_proxy_key = None
-            existing.analysis_proxy_sha256 = None
-            existing.analysis_proxy_generated_at = None
-            if existing.video_indexed or existing.media_type == "video":
-                _forget_scenes(session, asset_id)
-                existing.video_indexed = False
-                scenes_forgotten = True
         session.add(existing)
 
     result = _do_ingest(
@@ -519,10 +527,6 @@ async def create_and_ingest(
         from src.server.search.sync import index_transcript_segments
 
         index_transcript_segments(tenant_id, reappeared)
-    if scenes_forgotten:
-        from src.server.search.quickwit_client import QuickwitClient
-
-        QuickwitClient().delete_scene_index_documents_by_asset_ids(tenant_id, [asset_id])
     result.created = created
     return result
 
