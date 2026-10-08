@@ -454,11 +454,16 @@ def test_a_rating_in_flight_on_the_copy_keeps_it(env, monkeypatch):
                 conn.commit()
                 conn.close()
 
-            threading.Thread(target=commit_later).start()
-        return real_lock(self, asset_id)  # waits for the rating
+            committer = threading.Thread(target=commit_later)
+            committer.start()
+            threads.append(committer)
+        return real_lock(self, asset_id)  # waits for the rating, or gives way
 
+    threads: list = []
     monkeypatch.setattr(AssetRepository, "lock_copy", rating_in_flight_then_lock)
     _archive(env, original)
+    for thread in threads:
+        thread.join(10)
     engine.dispose()
     assert _get(env, copy)["rel_path"] == "race/copy/R001.mov"
     with _db(env) as session:  # usr_x's rating: the lookup only shows the caller's own
@@ -497,16 +502,99 @@ def test_a_person_confirmed_on_the_copy_during_the_handover_isnt_lost_silently(e
             thread = threading.Thread(target=confirm)
             thread.start()
             thread.join(0.5)
-            assert thread.is_alive(), "the confirmation didn't wait for the handover"
+            outcome["waited"] = thread.is_alive()
             outcome["thread"] = thread
         return locked
 
     monkeypatch.setattr(AssetRepository, "lock_copy", lock_then_confirm)
     _archive(env, original)
+    assert "thread" in outcome, "the handover never locked the copy"
     outcome["thread"].join(15)
+    assert outcome["waited"], "the confirmation didn't wait for the handover"
     engine.dispose()
     with _db(env) as session:
         matches = session.execute(text("SELECT count(*) FROM face_person_matches WHERE face_id = :f"),
                                   {"f": face_id}).scalar()
     assert not outcome.get("committed") or matches == 1, outcome
     assert "error" in outcome or matches == 1, outcome
+
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("action", ["unassign", "merge"])
+def test_a_person_s_action_on_the_copy_during_the_handover_wins(env, monkeypatch, action):
+    """Un-assigning a face or merging people locks matches or people first, then
+    faces: the opposite order to the handover. The handover gives way (it times
+    out and the original stays archived) rather than deadlocking the person's
+    request into an error."""
+    import threading
+    import time
+
+    from src.server.repository.tenant import AssetRepository, PersonRepository
+
+    sha = _sha()
+    original = _ingest(env, f"lockorder/{action}/A.mov", sha=sha)
+    copy = _ingest(env, f"lockorder/{action}/copy/A.mov", sha=sha)
+    face_id, s_id, t_id = f"face_{uuid.uuid4().hex}", f"per_{uuid.uuid4().hex}", f"per_{uuid.uuid4().hex}"
+    with _db(env) as session:
+        session.add(Person(person_id=s_id, display_name="S"))
+        session.add(Person(person_id=t_id, display_name="T"))
+        session.flush()
+        session.add(Face(face_id=face_id, asset_id=copy, person_id=s_id if action == "merge" else None))
+        session.flush()
+        session.add(FacePersonMatch(match_id=f"fpm_{uuid.uuid4().hex}", face_id=face_id, person_id=s_id,
+                                    confidence=0.8, confirmed=False))
+        if action == "merge":
+            session.execute(text("UPDATE people SET representative_face_id = :f WHERE person_id = :p"),
+                            {"f": face_id, "p": s_id})
+        session.commit()
+    real_check = AssetRepository.has_human_data
+    engine = create_engine(env[-1])
+    outcome: dict = {}
+
+    def act() -> None:
+        try:
+            with Session(engine) as session:
+                people = PersonRepository(session)
+                outcome["ok"] = (people.merge(t_id, s_id) is not None if action == "merge"
+                                 else people.unassign_face(face_id))
+        except Exception as exc:  # noqa: BLE001
+            outcome["error"] = f"{type(exc).__name__}: {str(exc).splitlines()[0]}"
+
+    def check_then_act(self, asset_id):
+        result = real_check(self, asset_id)
+        if asset_id == copy:
+            thread = threading.Thread(target=act)
+            thread.start()
+            time.sleep(0.5)
+            outcome["thread"] = thread
+        return result
+
+    monkeypatch.setattr(AssetRepository, "has_human_data", check_then_act)
+    _archive(env, original)
+    outcome["thread"].join(15)
+    engine.dispose()
+    assert "error" not in outcome, outcome
+    assert outcome.get("ok"), outcome
+
+
+@pytest.mark.slow
+def test_a_failure_after_the_move_committed_still_counts_as_moved(env):
+    from unittest.mock import patch
+
+    from src.server.repository.tenant import LibraryRepository
+
+    client, headers, *_ = env
+    sha = _sha()
+    original = _ingest(env, "aftercommit/A.mov", sha=sha)
+    _ingest(env, "aftercommit/copy/A.mov", sha=sha)
+
+    def boom(self, library_id):
+        raise RuntimeError("revision bump failed")
+
+    with patch.object(LibraryRepository, "bump_revision", boom):
+        r = client.request("DELETE", "/v1/assets", json={"asset_ids": [original], "reason": "missing"},
+                           headers=headers)
+    assert r.status_code == 200, r.text
+    assert _get(env, original)["rel_path"] == "aftercommit/copy/A.mov"
+    assert r.json()["handed_over"] == [original]

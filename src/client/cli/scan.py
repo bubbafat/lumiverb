@@ -840,7 +840,7 @@ def run_scan(
         console.print(f"[yellow]Skipping {len(deleted_ids):,} deletions: some folders couldn't be listed[/yellow]")
         deleted_ids = []
 
-    if skip_moves and follow_moves is True and deleted_ids:
+    if skip_moves and follow_moves is not False and deleted_ids:
         console.print(f"[dim]Skipping {len(deleted_ids):,} deletions (--skip-moves)[/dim]")
         deleted_ids = []
 

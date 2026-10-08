@@ -283,6 +283,19 @@ def _moved_file_scan_unreadable(tmp_path: Path):
 
 
 @pytest.mark.fast
+def test_settings_it_cant_read_still_let_skip_moves_hold_back_deletions(tmp_path: Path) -> None:
+    """Unsure whether moves are followed, --skip-moves keeps its promise: a
+    deletion might be half of a move, so none are sent."""
+    moved = {"rel_path": "moved/f1.jpg", "file_size": 4, "file_mtime": None, "media_type": "image", "ext": ".jpg"}
+    local = [{"rel_path": "f0.jpg", "file_size": 4, "file_mtime": None, "media_type": "image", "ext": ".jpg"}, moved]
+    with patch("src.client.cli.scan._scan_one"), patch("src.client.cli.scan.ProxyCache"):
+        client = _scan_with(tmp_path, on_disk=1, on_server=2, local=local,
+                            split=MagicMock(return_value=([moved], [], [local[0]])), settings="unreadable",
+                            skip_moves=True)
+    assert _deleted_ids(client) == []
+
+
+@pytest.mark.fast
 def test_an_archive_that_moved_to_a_copy_counts_as_moved(tmp_path: Path) -> None:
     """The server moved one of the two to an empty copy of its file (copy, then delete)."""
     client = MagicMock()

@@ -82,27 +82,53 @@ def hand_over_to_copies(session: Session, request: Request, archived_ids: list[s
     rolled back, never a failed request (the scan would stop, and the original,
     no longer listed, would never be tried again)."""
     moved: list[str] = []
+    libraries: set[str] = set()
     for asset_id in archived_ids:
         try:
-            if _hand_over(session, request, asset_id):
+            library_id = _hand_over(session, request, asset_id)
+            if library_id:
                 moved.append(asset_id)
-        except Exception:  # noqa: BLE001 — the asset stays archived, as without moves
-            logger.exception("Couldn't move asset %s to its copy; it stays archived", asset_id)
+                libraries.add(library_id)
+        except Exception as exc:  # noqa: BLE001 — the asset stays archived, as without moves
             session.rollback()
+            now = session.get(Asset, asset_id)
+            if now is not None and now.deleted_at is None:
+                # The move committed; a step after it failed.
+                logger.warning("Asset %s moved to its copy, but a step after failed: %s", asset_id, exc)
+                moved.append(asset_id)
+                libraries.add(now.library_id)
+            elif _lock_timeout(exc):
+                logger.info("Asset %s stays archived: its copy was busy (a person working on it)", asset_id)
+            else:
+                logger.exception("Couldn't move asset %s to its copy; it stays archived", asset_id)
+    for library_id in libraries:  # open grids drop the copies' tiles
+        try:
+            LibraryRepository(session).bump_revision(library_id)
+        except Exception as exc:  # noqa: BLE001 — the grid catches up on its next change
+            logger.warning("Couldn't bump library %s's revision after a handover: %s", library_id, exc)
     return moved
 
 
-def _hand_over(session: Session, request: Request, asset_id: str) -> bool:
+def _lock_timeout(exc: Exception) -> bool:
+    return getattr(getattr(exc, "orig", None), "pgcode", None) == "55P03"  # lock_not_available
+
+
+def _hand_over(session: Session, request: Request, asset_id: str) -> str | None:
+    """Move one archived asset to its empty copy. Returns its library when it moved."""
     repo = AssetRepository(session)
     archived = session.get(Asset, asset_id)  # get_by_id leaves out deleted assets
     if (archived is None or not repo.lock_for_restore(archived, archived.rel_path)
             or archived.deleted_at is None or archived.deleted_reason not in (None, "missing")):
         session.rollback()
-        return False
+        return None
+    # A person un-assigning a face or merging people locks in the other order
+    # (people or matches, then faces): give way within 200 ms, before Postgres
+    # would call it a deadlock and fail their request.
+    session.execute(text("SET LOCAL lock_timeout = '200ms'"))
     copy = repo.find_empty_newer_copy(archived)
     if copy is None:
         session.rollback()
-        return False
+        return None
     path, copy_id, library_id = copy.rel_path, copy.asset_id, archived.library_id
     # Out of the way first: (library, rel_path) is unique.
     copy.rel_path = f".lumiverb-handed-over/{copy_id}"
@@ -122,15 +148,19 @@ def _hand_over(session: Session, request: Request, asset_id: str) -> bool:
                         {"a": asset_id, "c": copy_id})
     session.flush()
     # Deletes the copy for good and commits the move with it.
-    purge_assets(session, request, [copy], "", remove_from_projects=True)
-    LibraryRepository(session).bump_revision(library_id)  # open grids drop the copy's tile
+    if purge_assets(session, request, [copy], "", remove_from_projects=True) != 1:
+        session.rollback()  # nothing was deleted, so nothing committed
+        return None
+    logger.info("Asset %s moved to its copy at %s (copy %s removed)", asset_id, path, copy_id)
     tenant_id = getattr(request.state, "tenant_id", None)
     if archived.transcript_srt and tenant_id:
-        from src.server.search.sync import index_transcript_segments
+        try:
+            from src.server.search.sync import index_transcript_segments
 
-        index_transcript_segments(tenant_id, archived)
-    logger.info("Asset %s moved to its copy at %s (copy %s removed)", asset_id, path, copy_id)
-    return True
+            index_transcript_segments(tenant_id, archived)
+        except Exception as exc:  # noqa: BLE001 — the next search sync re-indexes it
+            logger.warning("Couldn't re-index %s's transcript after the move: %s", asset_id, exc)
+    return library_id
 
 
 def purge_assets(
