@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getAsset, findSimilar, listFaces, listPeople, getNearestPeopleForFace, searchPeople, assignFace, unassignFace, uploadTranscript, deleteTranscript, updateNote, deleteNote } from "../api/client";
 import TranscriptViewer from "./TranscriptViewer";
+import VideoPlayer from "./VideoPlayer";
 import { useLocalStorage } from "../lib/useLocalStorage";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 import { usePlayback } from "../api/usePlayback";
@@ -740,27 +741,13 @@ export function Lightbox({
                 <span className="text-sm">Preview generating…</span>
               </div>
             ) : mediaUrl && isVideo ? (
-              <div className="flex max-w-full flex-col items-center gap-2">
-                <video
-                  key={asset.asset_id}
-                  ref={videoRef}
-                  src={mediaUrl}
-                  controls
-                  playsInline
-                  preload="metadata"
-                  className="max-h-[calc(100vh-6rem)] max-w-full"
-                />
-                {playback.source === "preview" ? (
-                  <p className="text-xs text-gray-400">
-                    First {Math.min(10, playback.maxSeconds ?? 10)} seconds.{" "}
-                    {playback.maxSeconds == null || playback.maxSeconds > 10
-                      ? "The rest plays once the video is processed."
-                      : null}
-                  </p>
-                ) : playback.maxSeconds != null ? (
-                  <p className="text-xs text-gray-400">Plays the first {playback.maxSeconds} seconds.</p>
-                ) : null}
-              </div>
+              <VideoPlayer
+                key={asset.asset_id}
+                src={mediaUrl}
+                source={playback.source}
+                maxSeconds={playback.maxSeconds}
+                videoRef={videoRef}
+              />
             ) : mediaUrl ? (
               <div className="relative inline-block">
                 <img

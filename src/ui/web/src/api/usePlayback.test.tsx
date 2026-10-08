@@ -58,6 +58,38 @@ describe("usePlayback", () => {
     expect(result.current.source).toBe("preview");
   });
 
+  it("keeps its link while the preview plays, and switches when the whole video is ready", async () => {
+    const answers = [
+      { url: "/v1/stream/short1", source: "preview" },
+      { url: "/v1/stream/short2", source: "preview" },
+      { url: "/v1/stream/short3", source: "preview" },
+      { url: "/v1/stream/full", source: "analysis_proxy" },
+    ];
+    let n = 0;
+    fetchMock.mockImplementation(async () => {
+      const a = answers[Math.min(n++, answers.length - 1)];
+      return new Response(JSON.stringify({ ...a, expires_at: "x", max_seconds: null }), { status: 200 });
+    });
+    const seen: (string | null)[] = [];
+    const { result } = renderHook(
+      () => {
+        const r = usePlayback("ast_1", { enabled: true, pollMs: 20 });
+        seen.push(r.src);
+        return r;
+      },
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.src).toBe("/v1/stream/full"));
+    // A fresh link for the same preview would restart the video: the first one stays.
+    const handedOut = seen.filter((src, i) => src && src !== seen[i - 1]);
+    expect(handedOut).toEqual(["/v1/stream/short1", "/v1/stream/full"]);
+    expect(n).toBeGreaterThanOrEqual(4);
+    // Once whole, it stops asking.
+    const asked = n;
+    await new Promise((r) => setTimeout(r, 100));
+    expect(n).toBe(asked);
+  });
+
   it("does nothing for photos", () => {
     const { result } = renderHook(() => usePlayback("ast_1", { enabled: false }), { wrapper });
     expect(result.current.src).toBeNull();
