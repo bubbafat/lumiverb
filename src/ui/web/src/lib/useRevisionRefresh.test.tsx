@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { StrictMode } from "react";
 import type { ReactNode } from "react";
 import { useRevisionRefresh } from "./useRevisionRefresh";
 
@@ -158,6 +159,40 @@ describe("useRevisionRefresh", () => {
       first.unmount();
       const elsewhere = setup({ revision: 7 }, new QueryClient());
       expect(elsewhere.refresh).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("under StrictMode (the app in development runs effects twice on mount)", () => {
+    function strictSetup(revision: number, client = new QueryClient()) {
+      const refresh = vi.fn();
+      const hook = renderHook(
+        ({ revision }: { revision: number }) =>
+          useRevisionRefresh("lib_a", revision, refresh, { minIntervalMs: INTERVAL }),
+        {
+          initialProps: { revision },
+          wrapper: ({ children }: { children: ReactNode }) => (
+            <StrictMode>
+              <QueryClientProvider client={client}>{children}</QueryClientProvider>
+            </StrictMode>
+          ),
+        },
+      );
+      return { refresh, client, ...hook };
+    }
+
+    it("doesn't refresh on opening, and refreshes once for a change", () => {
+      const { refresh, rerender } = strictSetup(1);
+      expect(refresh).not.toHaveBeenCalled();
+      rerender({ revision: 2 });
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+
+    it("refreshes once when opened again after a change", () => {
+      const first = strictSetup(1);
+      first.unmount();
+      const again = strictSetup(2, first.client);
+      vi.advanceTimersByTime(INTERVAL * 2);
+      expect(again.refresh).toHaveBeenCalledTimes(1);
     });
   });
 

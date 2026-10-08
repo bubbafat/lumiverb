@@ -218,17 +218,21 @@ export default function UnifiedBrowsePage() {
     staleTime: 30_000,
   });
 
-  // Follow every library's revision, from the list the sidebar polls
-  // anyway: when one changes elsewhere (another tab, another person, a
+  // Follow every library's revision, from the library list (the sidebar's
+  // query): when one changes elsewhere (another tab, another person, a
   // scan), or a library comes or goes, refetch the grid and its facets, at
   // most every 30 seconds while they keep changing. Changes made here
-  // refresh themselves (useClipActions invalidates everything).
+  // refresh themselves (useClipActions invalidates everything). Sorted:
+  // the server doesn't promise an order.
   const { data: libraries } = useQuery({
     queryKey: ["libraries", false],
     queryFn: () => listLibraries(false),
     refetchInterval: 10_000,
   });
-  const revisions = libraries?.map((l) => `${l.library_id}:${l.revision ?? 0}`).join(",");
+  const revisions = libraries
+    ?.map((l) => `${l.library_id}:${l.revision ?? 0}`)
+    .sort()
+    .join(",");
   useRevisionRefresh("all-libraries", revisions, () => {
     void queryClient.invalidateQueries({ queryKey: ["unified-query"] });
     void queryClient.invalidateQueries({ queryKey: ["filtered-facets"] });

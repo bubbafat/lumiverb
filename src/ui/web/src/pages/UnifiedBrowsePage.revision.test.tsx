@@ -124,7 +124,7 @@ function renderPage() {
     defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
   });
   const scroller = document.createElement("div");
-  return render(
+  const view = render(
     <QueryClientProvider client={client}>
       <ScrollContainerContext.Provider value={scroller}>
         <MemoryRouter initialEntries={["/browse"]}>
@@ -135,6 +135,7 @@ function renderPage() {
       </ScrollContainerContext.Provider>
     </QueryClientProvider>,
   );
+  return { ...view, client, scroller };
 }
 
 async function advance(ms: number) {
@@ -174,6 +175,59 @@ describe("UnifiedBrowsePage revision polling", () => {
     libraries = libraries.filter((l) => l.library_id !== "lib_2");
     await advance(POLL_MS);
     expect(gridFetches).toBe(2);
+  });
+
+  it("leaves the grid alone when the list comes back in another order", async () => {
+    // The server doesn't promise an order; an update can reorder the rows.
+    renderPage();
+    await advance(100);
+    libraries = [...libraries].reverse();
+    await advance(POLL_MS);
+    expect(gridFetches).toBe(1);
+  });
+
+  it("finishes the refresh when scrolling reaches the end while it runs", async () => {
+    let release: (() => void) | null = null;
+    let hold = false;
+    api.queryAssets.mockImplementation(async (_filters: unknown, opts?: { after?: string }) => {
+      const page = opts?.after ? Number(opts.after.split("@")[0].slice(1)) : 1;
+      const rev = libraries[0].revision;
+      gridFetches += 1;
+      const result = {
+        items: [{ ...clip, asset_id: `ast_p${page}_r${rev}`, rel_path: `r${rev}/p${page}.mov` }],
+        next_cursor: `p${page + 1}@r${rev}`,
+        total_estimate: 100,
+      };
+      if (hold && page === 1) {
+        hold = false;
+        await new Promise<void>((resolve) => (release = resolve));
+      }
+      return result;
+    });
+    const { client, scroller } = renderPage();
+    await advance(100);
+    act(() => {
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+    await advance(100);
+
+    hold = true;
+    bump("lib_1");
+    await advance(POLL_MS);
+    act(() => {
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+    await advance(100);
+    release!();
+    await advance(100);
+
+    const [[, data]] = client.getQueriesData<{ pages: { items: { rel_path: string }[] }[] }>({
+      queryKey: ["unified-query"],
+    });
+    expect(data!.pages.map((p) => p.items.map((i) => i.rel_path))).toEqual([
+      ["r2/p1.mov"],
+      ["r2/p2.mov"],
+    ]);
   });
 
   it("doesn't refetch the grid on every poll during a long ingest", async () => {
