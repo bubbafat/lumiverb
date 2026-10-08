@@ -26,6 +26,10 @@ class CLIConfig(BaseModel):
     # Library roots as stored on the server -> where they are on this
     # machine, by path prefix (src/client/cli/roots.py).
     root_map: dict[str, str] = {}
+    # Analysis proxies (src/client/video/analysis_proxy.py) and their cache.
+    analysis_proxy_max_edge: int = 960
+    analysis_proxy_encoder: str = "libx264"
+    analysis_cache_gb: float = 50.0
 
 
 def _config_path() -> Path:
