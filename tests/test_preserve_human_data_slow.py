@@ -1012,5 +1012,243 @@ def test_machine_transcript_never_replaces_manual(env) -> None:
 
     # Deleting the transcript is the person's call too; afterwards a machine
     # transcript may be written again.
-    assert client.delete(f"/v1/assets/{asset_id}/transcript", headers=headers).status_code == 204
+    assert client.delete(f"/v1/assets/{asset_id}/transcript", params={"which": "manual"}, headers=headers).status_code == 204
     assert post(_SRT_WHISPER, "whisper") == "transcribed"
+
+
+# ---------------------------------------------------------------------------
+# A face-model switch (ADR-016 phase 3, piece 4): embeddings from different
+# models aren't comparable, so names are re-anchored by box overlap alone.
+# ---------------------------------------------------------------------------
+
+
+def _redetect_with(client, headers, asset_id: str, faces: list[tuple[dict, object]], embedding_model: str) -> dict:
+    r = client.post(
+        f"/v1/assets/{asset_id}/faces",
+        json={
+            "detection_model": "insightface",
+            "detection_model_version": embedding_model,
+            "embedding_model": embedding_model,
+            "faces": [{"bounding_box": box, "detection_confidence": 0.9,
+                       "embedding": _unit(emb) if isinstance(emb, int) else emb} for box, emb in faces],
+        },
+        headers=headers,
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def _embedding_model(tenant_url: str, face_id: str) -> str | None:
+    with _db(tenant_url) as s:
+        return s.execute(text("SELECT embedding_model FROM faces WHERE face_id = :f"), {"f": face_id}).scalar()
+
+
+@pytest.mark.slow
+def test_a_named_face_keeps_its_name_through_a_face_model_switch(env) -> None:
+    """The new model's embedding of the same face looks nothing like the old
+    one's (another space); the box is where it was. The name stays."""
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    person_id = _seed_person(tenant_url, emb=1)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=1)
+    _seed_match(tenant_url, face_id, person_id, confirmed=True, confidence=None)
+    assert _embedding_model(tenant_url, face_id) == "buffalo_l"  # every face so far
+
+    result = _redetect_with(client, headers, asset_id, [(_box(0.11, 0.10), 300)], "antelopev2")
+
+    assert result["face_ids"] == [face_id] and result["face_count"] == 1
+    assert _match(tenant_url, face_id) == (person_id, True)
+    assert _embedding_model(tenant_url, face_id) == "antelopev2"
+
+
+@pytest.mark.slow
+def test_across_a_switch_only_a_solid_overlap_carries_a_name(env) -> None:
+    """Without comparable embeddings, of two faces the new model finds, the
+    one beside the named face (a little overlap) doesn't inherit the name;
+    the one where it was does."""
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    person_id = _seed_person(tenant_url, emb=2)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=2)
+    _seed_match(tenant_url, face_id, person_id, confirmed=True, confidence=None)
+
+    result = _redetect_with(client, headers, asset_id, [(_box(0.25, 0.10), 2), (_box(0.11, 0.11), 9)],
+                            "antelopev2")
+
+    assert result["face_ids"][1] == face_id and result["face_ids"][0] != face_id
+    assert _match(tenant_url, face_id) == (person_id, True)
+
+
+@pytest.mark.slow
+def test_across_a_switch_a_named_face_not_found_again_is_kept(env) -> None:
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    person_id = _seed_person(tenant_url, emb=6)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=6)
+    _seed_match(tenant_url, face_id, person_id, confirmed=True, confidence=None)
+
+    result = _redetect_with(client, headers, asset_id, [(_box(0.25, 0.10), 6), (_box(0.70, 0.70), 7)],
+                            "antelopev2")
+
+    assert face_id not in result["face_ids"]
+    assert _face_exists(tenant_url, face_id)  # a confirmed face that isn't found again is kept
+    assert _match(tenant_url, face_id) == (person_id, True)
+
+
+@pytest.mark.slow
+def test_one_named_face_and_one_found_by_the_new_model_are_the_same_face(env) -> None:
+    """Robert's case: the picture had one face, named; the new model finds
+    one. Its box can differ a lot (a tight box inside a loose one) and its
+    embedding can't be compared: it's the same face, and keeps the name."""
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    person_id = _seed_person(tenant_url, emb=3)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=3)
+    _seed_match(tenant_url, face_id, person_id, confirmed=True, confidence=None)
+
+    result = _redetect_with(client, headers, asset_id, [(_box(0.15, 0.15, 0.08, 0.08), 301)], "antelopev2")
+
+    assert result["face_ids"] == [face_id]
+    assert _match(tenant_url, face_id) == (person_id, True)
+
+
+@pytest.mark.slow
+def test_one_and_one_in_different_places_are_different_faces(env) -> None:
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    person_id = _seed_person(tenant_url, emb=4)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=4)
+    _seed_match(tenant_url, face_id, person_id, confirmed=True, confidence=None)
+
+    result = _redetect_with(client, headers, asset_id, [(_box(0.60, 0.60), 302)], "antelopev2")
+
+    assert face_id not in result["face_ids"]
+    assert _match(tenant_url, face_id) == (person_id, True)  # kept, beside the new face
+
+
+@pytest.mark.slow
+def test_one_and_one_with_the_same_model_still_listens_to_the_embeddings(env) -> None:
+    """With comparable embeddings that disagree, it isn't the same face."""
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    person_id = _seed_person(tenant_url, emb=5)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=5)
+    _seed_match(tenant_url, face_id, person_id, confirmed=True, confidence=None)
+
+    result = _redetect_with(client, headers, asset_id, [(_box(0.15, 0.15, 0.08, 0.08), 303)], "buffalo_l")
+
+    assert face_id not in result["face_ids"]
+
+
+@pytest.mark.slow
+def test_one_and_one_without_embeddings_and_no_switch_needs_a_solid_overlap(env) -> None:
+    """The loose one-and-one rule is for a face-model switch only. With the
+    same model and no embeddings, a small overlap isn't the same face."""
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    person_id = _seed_person(tenant_url, emb=6)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=None)
+    _seed_match(tenant_url, face_id, person_id, confirmed=True, confidence=None)
+
+    result = _redetect_with(client, headers, asset_id, [(_box(0.15, 0.15, 0.08, 0.08), None)], "buffalo_l")
+
+    assert face_id not in result["face_ids"]
+    assert _match(tenant_url, face_id) == (person_id, True)  # kept, beside the new face
+
+
+@pytest.mark.slow
+def test_a_name_carried_across_a_switch_teaches_the_new_model_that_person(env) -> None:
+    """Robert's idea, end to end. The account switches its face model. A
+    picture whose one face was named is found again by the new model: the
+    face keeps the name and the person's centroid is rebuilt from the new
+    model's embedding of it. Then the new model finds that person in a
+    picture nobody has named, and suggests them."""
+    client, headers, library_id, tenant_url = env
+    with _db(tenant_url) as s:
+        s.execute(text("INSERT INTO system_metadata (key, value, updated_at)"
+                       " VALUES ('producer.faces', '{\"model\": \"antelopev2\"}', now())"
+                       " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"))
+        s.commit()
+    try:
+        named = _seed_asset(tenant_url, library_id)
+        person_id = _seed_person(tenant_url, emb=10)
+        face_id = _seed_face(tenant_url, named, _box(0.10, 0.10), emb=10)
+        _seed_match(tenant_url, face_id, person_id, confirmed=True, confidence=None)
+
+        # The new model sees the same face as _unit(400): another space.
+        _redetect_with(client, headers, named, [(_box(0.12, 0.11), 400)], "antelopev2")
+        with _db(tenant_url) as s:
+            model = s.execute(text("SELECT centroid_model FROM people WHERE person_id = :p"),
+                              {"p": person_id}).scalar()
+        assert model == "antelopev2"
+
+        # A picture nobody named: the new model finds a face close to that one.
+        other = _seed_asset(tenant_url, library_id)
+        result = _redetect_with(client, headers, other, [(_box(0.40, 0.40), _near(400))], "antelopev2")
+        assert _match(tenant_url, result["face_ids"][0]) == (person_id, False)  # suggested, not confirmed
+    finally:
+        with _db(tenant_url) as s:
+            s.execute(text("DELETE FROM system_metadata WHERE key = 'producer.faces'"))
+            s.commit()
+
+
+@pytest.mark.slow
+def test_faces_of_another_model_are_never_matched_to_this_ones_people(env) -> None:
+    """Before the account switches, a face from another model isn't
+    compared with people's centroids (another space)."""
+    client, headers, library_id, tenant_url = env
+    person_id = _seed_person(tenant_url, emb=11)
+    other = _seed_asset(tenant_url, library_id)
+    result = _redetect_with(client, headers, other, [(_box(0.40, 0.40), _near(11))], "antelopev2")
+    assert _match(tenant_url, result["face_ids"][0]) is None
+    assert person_id
+
+
+@pytest.mark.slow
+def test_a_named_face_given_its_first_embedding_teaches_its_person(env) -> None:
+    """A Mac without the face model named a face it couldn't embed; the CLI
+    finds it again with an embedding (same model): the person's centroid is
+    built from it, so they're suggested elsewhere."""
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    person_id = _seed_person(tenant_url, emb=13)
+    with _db(tenant_url) as s:
+        s.execute(text("UPDATE people SET centroid_vector = NULL WHERE person_id = :p"), {"p": person_id})
+        s.commit()
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=None)
+    _seed_match(tenant_url, face_id, person_id, confirmed=True, confidence=None)
+
+    result = _redetect_with(client, headers, asset_id, [(_box(0.10, 0.10), 13)], "buffalo_l")
+
+    assert result["face_ids"] == [face_id]
+    with _db(tenant_url) as s:
+        has_centroid = s.execute(text("SELECT centroid_vector IS NOT NULL FROM people WHERE person_id = :p"),
+                                 {"p": person_id}).scalar()
+    assert has_centroid
+
+
+@pytest.mark.slow
+def test_mid_switch_a_face_the_new_model_hasnt_seen_gets_no_ranked_suggestions(env) -> None:
+    """After the account switches, a face the new model hasn't found again
+    is in another space than the people's centroids: ranking people by
+    distance to it would be noise. The popover falls back to its plain list."""
+    client, headers, library_id, tenant_url = env
+    with _db(tenant_url) as s:
+        s.execute(text("INSERT INTO system_metadata (key, value, updated_at)"
+                       " VALUES ('producer.faces', '{\"model\": \"antelopev2\"}', now())"
+                       " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"))
+        s.commit()
+    try:
+        person_id = _seed_person(tenant_url, emb=12)
+        with _db(tenant_url) as s:
+            s.execute(text("UPDATE people SET centroid_model = 'antelopev2' WHERE person_id = :p"), {"p": person_id})
+            s.commit()
+        face_id = _seed_face(tenant_url, _seed_asset(tenant_url, library_id), _box(0.10, 0.10), emb=12)
+
+        r = client.get(f"/v1/faces/{face_id}/nearest-people", headers=headers)
+        assert r.status_code == 200, r.text
+        assert r.json() == []
+    finally:
+        with _db(tenant_url) as s:
+            s.execute(text("DELETE FROM system_metadata WHERE key = 'producer.faces'"))
+            s.commit()

@@ -305,6 +305,7 @@ def _face_batch_worker(
         client.post(f"/v1/assets/{asset_id}/faces", json={
             "detection_model": detection_model,
             "detection_model_version": detection_model_version,
+            "embedding_model": detection_model_version,  # embeddings compare only within one model
             "faces": payload,
         })
 

@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_tenant_session
+from src.server.repository.tenant import current_face_model
 
 logger = logging.getLogger(__name__)
 
@@ -282,7 +283,7 @@ def nearest_people_for_person(
 
     repo = PersonRepository(session)
     person = repo.get_by_id(person_id)
-    if person is None or person.centroid_vector is None:
+    if person is None or person.centroid_vector is None or person.centroid_model != current_face_model(session):
         return []
 
     centroid = np.array(person.centroid_vector, dtype=np.float32)
@@ -297,10 +298,11 @@ def nearest_people_for_person(
             FROM people p
             LEFT JOIN face_person_matches m ON m.person_id = p.person_id
             WHERE p.dismissed = false AND p.centroid_vector IS NOT NULL
+                  AND p.centroid_model = :model
                   AND p.person_id != :exclude_id
             GROUP BY p.person_id
         """),
-        {"exclude_id": person_id},
+        {"exclude_id": person_id, "model": current_face_model(session)},
     ).all()
 
     if not people_rows:
@@ -768,8 +770,9 @@ def nearest_people_for_cluster(
     # Sample up to 100 faces for centroid computation
     sample_ids = face_ids[:100]
     rows = session.execute(
-        sa_text("SELECT embedding_vector::text FROM faces WHERE face_id = ANY(:fids) AND embedding_vector IS NOT NULL"),
-        {"fids": sample_ids},
+        sa_text("SELECT embedding_vector::text FROM faces WHERE face_id = ANY(:fids) AND embedding_vector IS NOT NULL"
+                " AND embedding_model = :model"),
+        {"fids": sample_ids, "model": current_face_model(session)},
     ).all()
     if not rows:
         return []
@@ -791,8 +794,10 @@ def nearest_people_for_cluster(
             FROM people p
             LEFT JOIN face_person_matches m ON m.person_id = p.person_id
             WHERE p.dismissed = false AND p.centroid_vector IS NOT NULL
+                  AND p.centroid_model = :model
             GROUP BY p.person_id
         """),
+        {"model": current_face_model(session)},
     ).all()
 
     if not people_rows:
@@ -833,8 +838,9 @@ def nearest_people_for_face(
     centroid (1 − cosine similarity, ascending).
 
     Returns an empty list — not 404 — when the face exists but has no
-    embedding, so the popover can still show the alphabetical
-    fallback list without an error path.
+    embedding, or one from another face model than the account's (mid
+    switch: another space than the people's centroids), so the popover
+    can still show the alphabetical fallback list without an error path.
     """
     import numpy as np
     from sqlalchemy import text as sa_text
@@ -846,7 +852,8 @@ def nearest_people_for_face(
     face = session.get(Face, face_id)
     if face is None:
         raise HTTPException(status_code=404, detail="Face not found")
-    if face.embedding_vector is None:
+    model = current_face_model(session)
+    if face.embedding_vector is None or face.embedding_model != model:
         return []
 
     # The pgvector adapter returns the column as a numpy array via the
@@ -868,8 +875,10 @@ def nearest_people_for_face(
             LEFT JOIN assets a
                 ON a.asset_id = f.asset_id AND a.deleted_at IS NULL
             WHERE p.dismissed = false AND p.centroid_vector IS NOT NULL
+                  AND p.centroid_model = :model
             GROUP BY p.person_id
         """),
+        {"model": model},
     ).all()
 
     if not people_rows:
