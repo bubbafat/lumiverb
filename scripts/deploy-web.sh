@@ -89,7 +89,12 @@ fi
 
 # On the API's machine, follow what deploy-api.sh remembered: both deploy
 # /opt/lumiverb, so another branch here would switch the API's code too.
-API_ENV="${LUMIVERB_CONF_DIR:-/etc/lumiverb}/env"
+API_CONF_DIR="${LUMIVERB_CONF_DIR:-/etc/lumiverb}"
+API_ENV="${API_CONF_DIR}/env"
+# It's root's (600, in a 750 folder): read as anyone else it looks absent.
+if [[ -e "$API_ENV" && ! -r "$API_ENV" ]] || [[ -d "$API_CONF_DIR" && ! -x "$API_CONF_DIR" ]]; then
+  fail "Run with sudo to see the settings remembered in ${API_ENV}"
+fi
 _api_val() { grep "^${1}=" "$API_ENV" 2>/dev/null | head -1 | cut -d= -f2- || true; }
 BRANCH="${BRANCH:-$(_api_val BRANCH)}"; BRANCH="${BRANCH:-main}"
 [[ "$NO_FIREWALL" == "true" ]] || NO_FIREWALL="$(_api_val NO_FIREWALL)"

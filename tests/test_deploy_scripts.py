@@ -250,6 +250,56 @@ def test_web_follows_the_api_install_on_the_same_machine(tmp_path):
     assert s["NO_FIREWALL"] == "true"
 
 
+needs_permissions = pytest.mark.skipif(os.geteuid() == 0, reason="root reads any file")
+
+
+@needs_permissions
+@pytest.mark.parametrize("script", [
+    [str(DEPLOY_API)],
+    [str(DEPLOY_WEB), "--domain", "_", "--api-upstream", "http://127.0.0.1:8100"],
+], ids=["api", "web"])
+@pytest.mark.parametrize("locked", ["file", "folder"])
+def test_a_dry_run_that_cannot_read_the_settings_says_so(tmp_path, script, locked):
+    # /etc/lumiverb/env is 600 in a 750 folder. Read as nobody, it looked
+    # absent, and the dry run printed defaults: Postgres on 5432 (Resolve's),
+    # branch main.
+    conf = tmp_path / "conf"
+    conf.mkdir()
+    env_file = conf / "env"
+    env_file.write_text(REMEMBERED)
+    (env_file if locked == "file" else conf).chmod(0)
+    try:
+        out = subprocess.run(["bash", *script, "--dry-run"], capture_output=True, text=True, timeout=30,
+                             env={**os.environ, "LUMIVERB_CONF_DIR": str(conf)}, check=False)
+    finally:
+        conf.chmod(0o755)
+        env_file.chmod(0o644)
+    assert out.returncode != 0
+    assert f"Run with sudo to see the settings remembered in {env_file}" in out.stderr
+    assert "BRANCH=" not in out.stdout
+
+
+@pytest.mark.parametrize(("enabled", "flag", "worker"), [
+    (True, (), "true"), (False, (), "false"), (False, ("--worker",), "true"),
+])
+def test_a_dry_run_reports_the_worker_as_a_real_run_decides(tmp_path, enabled, flag, worker):
+    # A real run keeps an installed worker without --worker.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    systemctl = bin_dir / "systemctl"
+    systemctl.write_text("#!/bin/sh\n" + ('[ "$1 $2" = "is-enabled lumiverb-worker" ] && exit 0\n' if enabled else "")
+                         + "exit 1\n")
+    systemctl.chmod(0o755)
+    assert _settings(tmp_path, *flag, env_file=REMEMBERED, path_prefix=bin_dir)["WORKER"] == worker
+
+
+def test_the_real_run_uses_the_worker_setting_the_dry_run_shows():
+    text = DEPLOY_API.read_text()
+    deps = text.split('step "Installing Python dependencies"', 1)[1].split("# ----", 1)[0]
+    assert "is-enabled" not in deps
+    assert text.index("systemctl is-enabled lumiverb-worker") < text.index('if [[ "$DRY_RUN" == "true" ]]')
+
+
 def test_web_on_its_own_machine_uses_defaults_and_flags(tmp_path):
     assert _web_settings(tmp_path)["BRANCH"] == "main"
     assert _web_settings(tmp_path)["NO_FIREWALL"] == "false"

@@ -124,6 +124,12 @@ UV_VERSION="0.7.12"
 UV_BIN="/usr/local/bin/uv"
 QUICKWIT_VERSION="0.8.2"
 
+# The env file is root's (600, in a 750 folder): read as anyone else it
+# looks absent, and the defaults would stand in for what's remembered.
+if [[ -e "$ENV_FILE" && ! -r "$ENV_FILE" ]] || [[ -d "$CONF_DIR" && ! -x "$CONF_DIR" ]]; then
+  fail "Run with sudo to see the settings remembered in ${ENV_FILE}"
+fi
+
 # Flag > value remembered from an earlier run > default.
 _existing_val() {
   grep "^${1}=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true
@@ -149,6 +155,10 @@ if [[ -z "$PG_VERSION" && -f "$ENV_FILE" ]]; then
   PG_VERSION="$(pg_lsclusters -h 2>/dev/null | awk -v p="$PG_PORT" '$3 == p { print $1; exit }' || true)"
 fi
 PG_VERSION="${PG_VERSION:-18}"
+# An installed worker stays, with its packages, without --worker.
+if [[ "$WITH_WORKER" != "true" ]] && systemctl is-enabled lumiverb-worker >/dev/null 2>&1; then
+  WITH_WORKER=true
+fi
 
 if [[ "$DRY_RUN" == "true" ]]; then
   echo "APP_HOST=${APP_HOST}"
@@ -458,10 +468,7 @@ chown -R "$SVC_USER":"$SVC_USER" "$APP_DIR"
 step "Installing Python dependencies"
 
 EXTRAS=(--extra cli --extra embeddings --extra face_recognition)
-if [[ "$WITH_WORKER" == "true" ]] || systemctl is-enabled lumiverb-worker >/dev/null 2>&1; then
-  WITH_WORKER=true
-  EXTRAS+=(--extra workers)
-fi
+[[ "$WITH_WORKER" != "true" ]] || EXTRAS+=(--extra workers)
 sudo -u "$SVC_USER" "$UV_BIN" sync "${EXTRAS[@]}"
 ok "Python venv ready (${EXTRAS[*]})"
 
