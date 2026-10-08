@@ -917,7 +917,10 @@ def test_emptied_trash_is_remembered_until_unignored(env) -> None:
 
 
 @pytest.mark.slow
-def test_emptied_missing_file_is_not_remembered(env) -> None:
+def test_a_missing_clip_is_deleted_for_good_only_through_the_trash(env) -> None:
+    """Archived because its file went missing: emptying the trash leaves it
+    alone. Moved to the trash first, it goes, and is remembered like any
+    trash a person emptied (Robert's model, Oct 8)."""
     client, headers, library_id, _ = env
     rel_path = "trash/emptied-missing.jpg"
     asset_id = _ingest(client, headers, library_id, rel_path).json()["asset_id"]
@@ -925,12 +928,14 @@ def test_emptied_missing_file_is_not_remembered(env) -> None:
         "DELETE", "/v1/assets", json={"asset_ids": [asset_id], "reason": "missing"},
         headers=headers,
     )
-    r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [asset_id], "include_missing": True},
-                       headers=headers)
-    assert r.json()["deleted"] == 1
+    r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [asset_id]}, headers=headers)
+    assert r.json()["deleted"] == 0
 
-    assert rel_path not in _ignored(client, headers, library_id)
-    assert _ingest(client, headers, library_id, rel_path).status_code == 200
+    r = client.request("DELETE", "/v1/assets", json={"asset_ids": [asset_id], "reason": "user"}, headers=headers)
+    assert r.json()["trashed"] == [asset_id]
+    r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [asset_id]}, headers=headers)
+    assert r.json()["deleted"] == 1
+    assert rel_path in _ignored(client, headers, library_id)
 
 
 @pytest.mark.slow

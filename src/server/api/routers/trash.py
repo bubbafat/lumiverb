@@ -27,9 +27,6 @@ class EmptyTrashRequest(BaseModel):
     # Required when any of the clips are in projects: deleting them for good
     # takes them out of those projects, and the user has to have said yes.
     remove_from_projects: bool = False
-    # Missing (archived) clips named in asset_ids are deleted for good only
-    # with this: otherwise only what a person trashed goes.
-    include_missing: bool = False
 
 
 class EmptyTrashResponse(BaseModel):
@@ -60,11 +57,7 @@ def empty_trash(
             trashed_before_dt = None
     if body.asset_ids is None and trashed_before_dt is None:
         trashed_before_dt = utcnow()
-    to_delete = asset_repo.list_trashed(
-        asset_ids=body.asset_ids,
-        trashed_before=trashed_before_dt,
-        include_missing=body.include_missing,
-    )
+    to_delete = asset_repo.list_trashed(asset_ids=body.asset_ids, trashed_before=trashed_before_dt)
     if not to_delete:
         return EmptyTrashResponse(deleted=0)
     return EmptyTrashResponse(

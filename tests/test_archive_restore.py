@@ -212,12 +212,12 @@ def test_two_ingests_cant_claim_the_same_archived_asset(env):
     asset = _ingest(env, "race/G001.mov", sha=sha)
     _archive(env, asset)
     with _sessions(env) as [(first_session, first), (_, second)]:
-        claimed = first.find_archived_by_sha(library_id, sha)
+        claimed = first.find_missing_by_sha(library_id, sha)
         assert claimed.asset_id == asset
         claimed.rel_path = "race/copy of G001.mov"
         first.clear_trash(claimed)
         first_session.flush()
-        waiting = _waiting(second.find_archived_by_sha, library_id, sha)
+        waiting = _waiting(second.find_missing_by_sha, library_id, sha)
         first_session.commit()
         # Claimed meanwhile: the second file gets an asset of its own.
         assert waiting.result(timeout=10) is None
@@ -232,7 +232,7 @@ def test_a_file_back_at_its_path_locks_out_a_copy_claiming_it_by_content(env):
     with _sessions(env) as [(path_session, by_path), (_, by_content)]:
         found = by_path.get_by_library_and_rel_path(library_id, "race/H001.mov")
         assert by_path.lock_for_restore(found, "race/H001.mov")
-        waiting = _waiting(by_content.find_archived_by_sha, library_id, sha)
+        waiting = _waiting(by_content.find_missing_by_sha, library_id, sha)
         by_path.clear_trash(found)
         path_session.commit()
         assert waiting.result(timeout=10) is None
@@ -248,7 +248,7 @@ def test_a_lock_from_other_work_doesnt_split_the_asset(env):
     _archive(env, asset)
     with _sessions(env) as [(other_session, _), (_, ingest)]:
         other_session.execute(text("UPDATE assets SET search_synced_at = NULL WHERE asset_id = :a"), {"a": asset})
-        waiting = _waiting(ingest.find_archived_by_sha, library_id, sha)
+        waiting = _waiting(ingest.find_missing_by_sha, library_id, sha)
         other_session.commit()
         assert waiting.result(timeout=10).asset_id == asset
 
@@ -261,7 +261,7 @@ def test_a_file_back_at_its_path_after_a_copy_claimed_it_gets_its_own_asset(env)
     _archive(env, asset)
     with _sessions(env) as [(_, by_path), (content_session, by_content)]:
         found = by_path.get_by_library_and_rel_path(library_id, "race/I001.mov")  # read before the copy's commit
-        claimed = by_content.find_archived_by_sha(library_id, sha)
+        claimed = by_content.find_missing_by_sha(library_id, sha)
         claimed.rel_path = "race/copy of I001.mov"
         by_content.clear_trash(claimed)
         content_session.commit()
@@ -271,20 +271,27 @@ def test_a_file_back_at_its_path_after_a_copy_claimed_it_gets_its_own_asset(env)
     assert _get(env, asset)["rel_path"] == "race/copy of I001.mov"
 
 
+def _trash(env, asset_id: str) -> None:
+    """A person moves the clip to the trash (archived clips too)."""
+    client, headers, *_ = env
+    r = client.request("DELETE", "/v1/assets", json={"asset_ids": [asset_id], "reason": "user",
+                                                    "remove_from_projects": True}, headers=headers)
+    assert r.status_code == 200 and r.json()["trashed"] == [asset_id], r.text
+
+
 @pytest.mark.slow
 def test_a_purge_leaves_alone_an_asset_restored_since_it_was_listed(env):
-    """Emptying the trash lists, then deletes: a scan restoring the asset in
+    """Emptying the trash lists, then deletes: a person restoring the clip in
     between must not cost it its ratings (or projects, faces...)."""
     client, headers, library_id, *_ = env
-    sha = _sha()
-    asset = _ingest(env, "purge/K001.mov", sha=sha)
+    asset = _ingest(env, "purge/K001.mov", sha=_sha())
     assert client.put(f"/v1/assets/{asset}/rating", json={"stars": 5}, headers=headers).status_code == 200
-    _archive(env, asset)
+    _trash(env, asset)
     with _sessions(env, 1) as [(session, repo)]:
-        listed = repo.list_trashed(asset_ids=[asset], include_missing=True)
+        listed = repo.list_trashed(asset_ids=[asset])
         assert [a.asset_id for a in listed] == [asset]
         session.commit()  # the listing's read ends; nothing locked yet
-        assert _ingest(env, "purge/K001.mov", sha=sha) == asset  # the scan restores it
+        assert client.post(f"/v1/assets/{asset}/restore", headers=headers).status_code == 204
         assert repo.permanently_delete([asset]) == 0
         session.commit()
     ratings = client.post("/v1/assets/ratings/lookup", json={"asset_ids": [asset]}, headers=headers).json()["ratings"]
@@ -299,13 +306,12 @@ def test_a_purge_keeps_the_files_of_an_asset_restored_since_it_was_listed(env):
     from src.server.api.routers.trash import purge_assets
 
     client, headers, library_id, storage, tenant_id, _ = env
-    sha = _sha()
-    asset = _ingest(env, "purge/R001.mov", sha=sha)
-    _archive(env, asset)
+    asset = _ingest(env, "purge/R001.mov", sha=_sha())
+    _trash(env, asset)
     with _sessions(env, 1) as [(session, repo)]:
-        listed = repo.list_trashed(asset_ids=[asset], include_missing=True)
+        listed = repo.list_trashed(asset_ids=[asset])
         session.commit()
-        assert _ingest(env, "purge/R001.mov", sha=sha) == asset  # a scan restores it
+        assert client.post(f"/v1/assets/{asset}/restore", headers=headers).status_code == 204
         keys = session.execute(text("SELECT proxy_key, thumbnail_key FROM assets WHERE asset_id = :a"),
                                {"a": asset}).one()
         assert all(k and storage.abs_path(k).exists() for k in keys)
@@ -317,40 +323,59 @@ def test_a_purge_keeps_the_files_of_an_asset_restored_since_it_was_listed(env):
 
 
 @pytest.mark.slow
-def test_a_file_back_at_its_path_after_its_asset_was_purged_gets_a_new_one(env):
+def test_a_file_back_at_its_path_after_its_asset_was_purged_doesnt_claim_it(env):
+    """Missing, then moved to the trash and deleted for good: an ingest that
+    read the row before the purge can't restore it, and the path stays
+    emptied (a person deleted it)."""
     client, headers, library_id, *_ = env
     sha = _sha()
     asset = _ingest(env, "purge/L001.mov", sha=sha)
     _archive(env, asset)
+    _trash(env, asset)
     with _sessions(env, 1) as [(_, repo)]:
         found = repo.get_by_library_and_rel_path(library_id, "purge/L001.mov")  # read before the purge
-        r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [asset], "include_missing": True},
-                           headers=headers)
+        r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [asset]}, headers=headers)
         assert r.status_code == 200 and r.json()["deleted"] == 1, r.text
         assert not repo.lock_for_restore(found, "purge/L001.mov")
-    assert _ingest(env, "purge/L001.mov", sha=sha) != asset
+    with pytest.raises(AssertionError, match="409"):
+        _ingest(env, "purge/L001.mov", sha=sha)
 
 
 @pytest.mark.slow
-def test_only_missing_files_count_as_archived(env):
-    """Trashed with its library (or any reason but "missing") isn't archived:
-    not restored by content, not counted, not purged with include_missing."""
+def test_emptying_the_trash_never_reaches_a_missing_files_clip(env):
+    """Archived: kept forever. Deleted for good only by moving it to the trash first."""
+    client, headers, *_ = env
+    asset = _ingest(env, "purge/M001.mov", sha=_sha())
+    _archive(env, asset)
+    r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [asset]}, headers=headers)
+    assert r.json()["deleted"] == 0
+    r = client.request("DELETE", "/v1/trash/empty", json={}, headers=headers)
+    with _sessions(env, 1) as [(session, _)]:
+        assert session.execute(text("SELECT deleted_reason FROM assets WHERE asset_id = :a"),
+                               {"a": asset}).scalar() == "missing"
+
+
+@pytest.mark.slow
+def test_only_missing_files_come_back_by_content(env):
+    """Trashed with its library, by a person, or archived by a person: not restored by content."""
     library_id = env[2]
     sha = _sha()
     asset = _ingest(env, "reasons/J001.mov", sha=sha)
     _archive(env, asset)
     with _sessions(env, 1) as [(session, repo)]:
-        session.execute(text("UPDATE assets SET deleted_reason = 'library' WHERE asset_id = :a"), {"a": asset})
-        session.commit()
-        assert repo.find_archived_by_sha(library_id, sha) is None
-        assert asset not in {a.asset_id for a in repo.list_archived(library_id)}
-        assert asset not in {a.asset_id for a in repo.list_trashed(asset_ids=[asset], include_missing=True)}
+        for reason in ("library", "user", "archived"):
+            session.execute(text("UPDATE assets SET deleted_reason = :r WHERE asset_id = :a"),
+                            {"r": reason, "a": asset})
+            session.commit()
+            assert repo.find_missing_by_sha(library_id, sha) is None, reason
         session.execute(text("UPDATE assets SET deleted_reason = 'missing' WHERE asset_id = :a"), {"a": asset})
         session.commit()
+        assert repo.find_missing_by_sha(library_id, sha).asset_id == asset
+        session.rollback()
 
 
 # ---------------------------------------------------------------------------
-# Deleting a library that still holds archived clips: the user says what happens to them
+# Deleting a library: it goes to the trash with everything in it
 # ---------------------------------------------------------------------------
 
 
@@ -368,50 +393,39 @@ def _library_with_archived(env, name: str, in_project: bool = False) -> tuple[st
     return lib_env[2], archived, lib_env
 
 
-def _still_archived(env, asset_id: str) -> bool:
-    """True if the asset was still there, archived. Checking deletes it for good: naming it
-    with include_missing is how the API reaches an archived asset, so check last."""
-    client, headers, *_ = env
-    r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [asset_id], "include_missing": True,
-                                                          "remove_from_projects": True}, headers=headers)
-    return r.json()["deleted"] == 1
+def _reasons(env, library_id: str) -> dict[str, str | None]:
+    with _sessions(env, 1) as [(session, _)]:
+        return dict(session.execute(text("SELECT asset_id, deleted_reason FROM assets WHERE library_id = :l"),
+                                    {"l": library_id}).all())
 
 
 @pytest.mark.slow
-def test_deleting_a_library_with_archived_clips_asks_what_to_do(env):
-    client, headers, *_ = env
-    library_id, archived, _ = _library_with_archived(env, "AskFirst")
-    r = client.delete(f"/v1/libraries/{library_id}", headers=headers)
-    assert r.status_code == 409, r.text
-    err = r.json()["error"]
-    assert err["code"] == "archived_clips"
-    assert err["details"] == {"archived_clips": 1}
-    # Nothing happened yet.
-    assert client.get(f"/v1/libraries/{library_id}", headers=headers).status_code == 200
-
-
-@pytest.mark.slow
-def test_keep_leaves_archived_clips_with_the_trashed_library(env):
-    client, headers, *_ = env
-    library_id, archived, _ = _library_with_archived(env, "KeepThem")
-    r = client.request("DELETE", f"/v1/libraries/{library_id}", json={"archived": "keep"}, headers=headers)
-    assert r.status_code == 204, r.text
-    assert _still_archived(env, archived)
-
-
-@pytest.mark.slow
-def test_keep_leaves_each_clip_with_its_own_reason(env):
-    """Kept archived clips stay "missing" (they can still come back by
-    content if the library is ever restored); the rest went with the library."""
+def test_a_library_goes_to_the_trash_with_its_archived_clips(env):
+    """No question about them: they stay archived ("missing") inside it, and the rest went with it."""
     client, headers, *_ = env
     library_id, archived, _ = _library_with_archived(env, "KeepReasons")
-    assert client.request("DELETE", f"/v1/libraries/{library_id}", json={"archived": "keep"},
-                          headers=headers).status_code == 204
-    with _sessions(env, 1) as [(session, _)]:
-        rows = dict(session.execute(text("SELECT asset_id, deleted_reason FROM assets WHERE library_id = :l"),
-                                    {"l": library_id}).all())
+    r = client.delete(f"/v1/libraries/{library_id}", headers=headers)
+    assert r.status_code == 204, r.text
+    rows = _reasons(env, library_id)
     assert rows.pop(archived) == "missing"
     assert set(rows.values()) == {"library"}
+
+
+@pytest.mark.slow
+def test_restoring_a_library_brings_back_what_went_with_it(env):
+    client, headers, *_ = env
+    library_id, archived, _ = _library_with_archived(env, "BackAgain")
+    assert client.delete(f"/v1/libraries/{library_id}", headers=headers).status_code == 204
+    r = client.post(f"/v1/libraries/{library_id}/restore", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["is_public"] is False
+    rows = _reasons(env, library_id)
+    assert rows.pop(archived) == "missing"  # still archived: back when its file is
+    assert set(rows.values()) == {None}
+    names = [lib["name"] for lib in client.get("/v1/libraries", headers=headers).json()]
+    assert "BackAgain" in names
+    r = client.post(f"/v1/libraries/{library_id}/restore", headers=headers)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "not_trashed"
 
 
 @pytest.mark.slow
@@ -420,8 +434,7 @@ def test_a_trashed_library_s_archived_clips_arent_restored_by_content(env):
     library_id, archived, lib_env = _library_with_archived(env, "TrashedLib")
     with _sessions(env, 1) as [(session, _)]:
         sha = session.execute(text("SELECT sha256 FROM assets WHERE asset_id = :a"), {"a": archived}).scalar()
-    assert client.request("DELETE", f"/v1/libraries/{library_id}", json={"archived": "keep"},
-                          headers=headers).status_code == 204
+    assert client.delete(f"/v1/libraries/{library_id}", headers=headers).status_code == 204
 
     import io
     import json
@@ -437,22 +450,15 @@ def test_a_trashed_library_s_archived_clips_arent_restored_by_content(env):
 
 
 @pytest.mark.slow
-def test_delete_removes_archived_clips_for_good_first(env):
-    client, headers, *_ = env
-    library_id, archived, _ = _library_with_archived(env, "DeleteThem")
-    r = client.request("DELETE", f"/v1/libraries/{library_id}", json={"archived": "delete"}, headers=headers)
-    assert r.status_code == 204, r.text
-    assert not _still_archived(env, archived)
-
-
-@pytest.mark.slow
-def test_archived_clips_in_projects_need_the_projects_say_too(env):
+def test_deleting_a_library_whose_clips_are_in_projects_asks_first(env):
+    """Hidden from those projects in the trash, and gone from them once deleted for good."""
     client, headers, *_ = env
     library_id, archived, _ = _library_with_archived(env, "InProjects", in_project=True)
-    r = client.request("DELETE", f"/v1/libraries/{library_id}", json={"archived": "delete"}, headers=headers)
-    assert r.status_code == 409 and r.json()["error"]["code"] == "in_projects"
-    r = client.request("DELETE", f"/v1/libraries/{library_id}",
-                       json={"archived": "delete", "remove_from_projects": True}, headers=headers)
+    r = client.delete(f"/v1/libraries/{library_id}", headers=headers)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "in_projects", r.text
+    assert r.json()["error"]["details"]["assets_in_projects"] == 1
+    assert client.get(f"/v1/libraries/{library_id}", headers=headers).status_code == 200  # nothing happened
+    r = client.request("DELETE", f"/v1/libraries/{library_id}", json={"remove_from_projects": True}, headers=headers)
     assert r.status_code == 204, r.text
 
 

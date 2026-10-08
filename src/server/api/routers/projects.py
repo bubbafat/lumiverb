@@ -13,7 +13,7 @@ from src.server.api.dependencies import get_current_user_id, get_tenant_session,
 from src.server.api.errors import DecisionRequiredError
 from src.server.database import get_control_session
 from src.server.repository.control_plane import PublicProjectRepository
-from src.server.repository.tenant import AssetRepository, ProjectRepository
+from src.server.repository.tenant import AssetRepository, LibraryRepository, ProjectRepository
 
 # Mounted at /v1/projects, and at /v1/collections (deprecated) until the
 # macOS/iOS apps move to the new path. See main.py.
@@ -68,9 +68,11 @@ class ProjectItem(BaseModel):
     # Clips a scan trashed because their file went missing; they come back
     # when the file does. Always 0 for smart projects.
     missing_asset_count: int = 0
-    # Clips whose library is in the trash: libraries have no restore, so
-    # these don't come back. Always 0 for smart projects.
+    # Clips whose library is in the trash: they come back if the library is
+    # restored. Always 0 for smart projects.
     library_trashed_asset_count: int = 0
+    # Clips a person archived: kept, and back with unarchive. Always 0 for smart projects.
+    archived_asset_count: int = 0
     created_at: str
     updated_at: str
     status: str = "active"  # active | archived
@@ -182,7 +184,7 @@ def _project_to_item(
             limit=10000,
         )
         count = len(live_assets)
-        hidden = {"trashed": 0, "missing": 0, "library_trashed": 0}
+        hidden = {"trashed": 0, "missing": 0, "library_trashed": 0, "archived": 0}
     else:
         count = repo.asset_count(col.project_id)
         hidden = repo.hidden_clip_counts(col.project_id)
@@ -202,6 +204,7 @@ def _project_to_item(
         trashed_asset_count=hidden["trashed"],
         missing_asset_count=hidden["missing"],
         library_trashed_asset_count=hidden["library_trashed"],
+        archived_asset_count=hidden["archived"],
         created_at=col.created_at.isoformat(),
         updated_at=col.updated_at.isoformat(),
         status=col.status,
@@ -482,14 +485,14 @@ def _restore_trashed_clips(request: Request, session: Session, repo: ProjectRepo
     from src.server.api.routers.assets import reindex_restored_asset
 
     asset_repo = AssetRepository(session)
-    restored = 0
-    for asset_id in repo.trashed_asset_ids(project_id):
-        if asset_repo.restore(asset_id):
-            restored += 1
-            asset = asset_repo.get_by_id(asset_id)
-            if asset is not None:
-                reindex_restored_asset(request, asset)
-    return restored
+    restored, _ = asset_repo.restore_many(repo.trashed_asset_ids(project_id))
+    for asset_id in restored:
+        asset = asset_repo.get_by_id(asset_id)
+        if asset is not None:
+            reindex_restored_asset(request, asset)
+    for library_id in asset_repo.library_ids_of(restored):
+        LibraryRepository(session).bump_revision(library_id)
+    return len(restored)
 
 
 @router.post("/{project_id}/restore-clips", response_model=RestoreClipsResponse)
@@ -865,7 +868,7 @@ def export_project(
     # videos count, since photos aren't exported anyway.
     is_smart = getattr(col, "type", "static") == "smart"
     hidden = (
-        {"trashed": 0, "missing": 0, "library_trashed": 0}
+        {"trashed": 0, "missing": 0, "library_trashed": 0, "archived": 0}
         if is_smart else repo.hidden_clip_counts(col.project_id, videos_only=True)
     )
 
@@ -923,11 +926,12 @@ def export_project(
             "X-Lumiverb-Skipped-Trashed": str(hidden["trashed"]),
             "X-Lumiverb-Skipped-Missing": str(hidden["missing"]),
             "X-Lumiverb-Skipped-Library-Trashed": str(hidden["library_trashed"]),
+            "X-Lumiverb-Skipped-Archived": str(hidden["archived"]),
             "Access-Control-Expose-Headers": (
                 "Content-Disposition, X-Lumiverb-Skipped-Stills, "
                 "X-Lumiverb-Skipped-No-Duration, X-Lumiverb-Unprobed, "
                 "X-Lumiverb-Skipped-Trashed, X-Lumiverb-Skipped-Missing, "
-                "X-Lumiverb-Skipped-Library-Trashed"
+                "X-Lumiverb-Skipped-Library-Trashed, X-Lumiverb-Skipped-Archived"
             ),
         },
     )

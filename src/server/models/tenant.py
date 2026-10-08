@@ -42,6 +42,11 @@ class Library(SQLModel, table=True):
     cover_asset_id: str | None = Field(
         default=None, foreign_key="assets.asset_id", nullable=True
     )
+    # When it went in the trash (status "trashed"); its trash days count from here.
+    trashed_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
 
 
 class LibraryChange(SQLModel, table=True):
@@ -163,9 +168,14 @@ class Asset(SQLModel, table=True):
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
-    # Why deleted_at is set: "user" (trashed by the user; survives rescans)
-    # or "missing" / None (file not found by the scanner; restored when it
-    # reappears).
+    # Why the clip is out of sight (deleted_at is when it got there).
+    # Archived, kept forever:
+    #   "archived" = a person archived it; scans leave it archived.
+    #   "missing"  = a scan no longer finds the file; restored when it reappears.
+    # In the trash, deleted for good after the account's trash days:
+    #   "user"     = a person trashed it; scans leave it trashed.
+    #   "library"  = it went with its library, and comes back with it.
+    # "handed_over" lives only inside a copy-then-delete handover.
     deleted_reason: str | None = Field(default=None, nullable=True)
     search_synced_at: datetime | None = Field(
         default=None,

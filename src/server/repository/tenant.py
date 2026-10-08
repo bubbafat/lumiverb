@@ -227,6 +227,34 @@ class LibraryRepository:
             {"library_id": library_id, "now": utcnow()},
         )
         library.status = "trashed"
+        library.trashed_at = library.updated_at = utcnow()
+        self._session.add(library)
+        self._session.commit()
+        self._session.refresh(library)
+        return library
+
+    def restore(self, library_id: str) -> Library:
+        """Take a library out of the trash with the clips that went with it.
+        Clips trashed or archived before it went stay as they were."""
+        library = self.get_by_id(library_id)
+        if library is None or library.status != "trashed":
+            raise ValueError(f"Library not in the trash: {library_id}")
+        self._session.execute(
+            text(
+                "UPDATE assets SET deleted_at = NULL, deleted_reason = NULL, search_synced_at = NULL"
+                " WHERE library_id = :lib AND deleted_reason = 'library'"
+            ),
+            {"lib": library_id},
+        )
+        self._session.execute(
+            text(
+                "UPDATE video_scenes SET search_synced_at = NULL WHERE asset_id IN"
+                " (SELECT asset_id FROM assets WHERE library_id = :lib AND deleted_at IS NULL)"
+            ),
+            {"lib": library_id},
+        )
+        library.status = "active"
+        library.trashed_at = None
         library.updated_at = utcnow()
         self._session.add(library)
         self._session.commit()
@@ -433,11 +461,24 @@ class PathFilterRepository:
             count += 1
         return count
 
-def _archived():
-    """Archived: deleted because the file went missing. Rows from before reasons
-    were recorded have none. Not a person's trash, not trashed with a library."""
-    return and_(Asset.deleted_at.is_not(None),
-                or_(Asset.deleted_reason.is_(None), Asset.deleted_reason == "missing"))
+def _missing_file():
+    """Archived because a scan no longer finds the file: it comes back when the
+    file does. Not a person's archive, not the trash."""
+    return and_(Asset.deleted_at.is_not(None), Asset.deleted_reason == "missing")
+
+
+def _under(folder: str | None) -> str | None:
+    """A LIKE pattern for every path under the folder, its name taken literally
+    (escape character backslash); None for the whole library."""
+    folder = normalize_path_prefix(folder)
+    if folder is None:
+        return None
+    return folder.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "/%"
+
+
+def _split(asked: list[str], changed: set[str]) -> tuple[list[str], list[str]]:
+    """(changed, the rest), each in the order asked."""
+    return [a for a in asked if a in changed], [a for a in asked if a not in changed]
 
 
 class AssetRepository:
@@ -863,80 +904,146 @@ class AssetRepository:
         stmt = select(Asset).where(Asset.deleted_at.is_(None))
         return list(self._session.exec(stmt).all())
 
-    def trash(self, asset_id: str, *, reason: str | None = None) -> bool:
-        """Set deleted_at = now(). Returns False if not found or already trashed.
+    def trash(self, asset_id: str, *, reason: str = "missing") -> bool:
+        """One clip out of sight; see trash_many. False if nothing changed."""
+        trashed, _ = self.trash_many([asset_id], reason=reason)
+        return bool(trashed)
 
-        reason "user" makes the trash survive rescans; "missing" or None means
-        the file wasn't found and ingest restores it if it reappears.
+    def trash_many(self, asset_ids: list[str], *, reason: str = "missing") -> tuple[list[str], list[str]]:
+        """Take clips out of sight with this reason. Returns (changed, unchanged), in the order given.
+
+        "missing" (a scan no longer finds the file) takes only clips in sight.
+        "user" (a person's trash) takes archived clips too, missing or archived
+        by hand: deleting an archived clip moves it to the trash, and its
+        trash days count from now. A clip trashed with its library stays
+        with the library, and comes back with it.
         """
-        asset = self._session.get(Asset, asset_id)
-        if asset is None:
-            return False
-        if asset.deleted_at is not None:
-            # Only the user's trash can be laid over a missing file (so it
-            # stays trashed when the drive comes back); anything else is a no-op.
-            if reason != "user" or asset.deleted_reason == "user":
-                return False
-        else:
-            asset.deleted_at = utcnow()
-        asset.deleted_reason = reason
-        self._session.add(asset)
-        self._session.commit()
-        return True
-
-    def trash_many(
-        self, asset_ids: list[str], *, reason: str | None = None
-    ) -> tuple[list[str], list[str]]:
-        """Bulk trash. Returns (trashed_ids, not_found_ids). See trash() for reason."""
         if not asset_ids:
             return [], []
-        now = utcnow()
         result = self._session.execute(
             text(
                 """
-                UPDATE assets
-                SET deleted_at = COALESCE(deleted_at, :now), deleted_reason = :reason
+                UPDATE assets SET deleted_at = :now, deleted_reason = :reason
                 WHERE asset_id = ANY(:ids)
-                  AND (
-                    deleted_at IS NULL
-                    -- the user's trash can be laid over a missing file
-                    OR (CAST(:reason AS text) = 'user' AND deleted_reason IS DISTINCT FROM 'user')
-                  )
+                  AND (deleted_at IS NULL
+                       OR (CAST(:reason AS text) = 'user' AND deleted_reason IN ('missing', 'archived')))
                 RETURNING asset_id
                 """
             ),
-            {"now": now, "reason": reason, "ids": asset_ids},
+            {"now": utcnow(), "reason": reason, "ids": asset_ids},
         )
-        trashed = [row[0] for row in result.fetchall()]
-        not_found = [aid for aid in asset_ids if aid not in trashed]
+        changed = {row[0] for row in result.fetchall()}
         self._session.commit()
-        return (trashed, not_found)
+        return _split(asset_ids, changed)
 
-    def restore(self, asset_id: str) -> bool:
-        """Clear deleted_at. Returns False if not found or not trashed.
-
-        Trashing deleted the asset's search documents, so the asset and its
-        scenes go back in the queue for the next search sync. Transcript
-        segments aren't swept; callers re-index them (reindex_restored_asset).
-        """
+    def restore(self, asset_id: str) -> str:
+        """Take one clip out of the trash. Returns "restored", "not_found",
+        "not_trashed", "library_trashed" (it comes back with its library), or
+        the clip's archive reason ("archived" or "missing"): an archive isn't
+        the trash. See restore_many."""
         asset = self._session.get(Asset, asset_id)
-        if asset is None or asset.deleted_at is None:
-            return False
-        self.clear_trash(asset)
+        if asset is None:
+            return "not_found"
+        if asset.deleted_at is None:
+            return "not_trashed"
+        if asset.deleted_reason in ("archived", "missing"):
+            return asset.deleted_reason
+        restored, _ = self.restore_many([asset_id])
+        return "restored" if restored else "library_trashed"
+
+    def restore_many(self, asset_ids: list[str]) -> tuple[list[str], list[str]]:
+        """Take clips a person trashed out of the trash, unless their library is
+        in the trash too (they come back with it). Returns (restored, skipped).
+
+        Trashing deleted their search documents, so they and their scenes go
+        back in the queue for the next search sync. Transcript segments aren't
+        swept; callers re-index them (reindex_restored_asset).
+        """
+        return self._bring_back(
+            asset_ids,
+            "a.deleted_reason = 'user'"
+            " AND NOT EXISTS (SELECT 1 FROM libraries l WHERE l.library_id = a.library_id AND l.status = 'trashed')",
+        )
+
+    def archive(self, asset_ids: list[str]) -> tuple[list[str], list[str]]:
+        """A person archives clips in sight: out of sight, kept forever, and
+        scans leave them archived. Returns (archived, skipped)."""
+        if not asset_ids:
+            return [], []
+        result = self._session.execute(
+            text(
+                "UPDATE assets SET deleted_at = :now, deleted_reason = 'archived'"
+                " WHERE asset_id = ANY(:ids) AND deleted_at IS NULL RETURNING asset_id"
+            ),
+            {"now": utcnow(), "ids": asset_ids},
+        )
+        archived = {row[0] for row in result.fetchall()}
         self._session.commit()
-        return True
+        return _split(asset_ids, archived)
 
-    def list_archived(self, library_id: str) -> list[Asset]:
-        """The library's archived assets: missing on disk, not trashed by a person."""
-        stmt = select(Asset).where(Asset.library_id == library_id, _archived())
-        return list(self._session.exec(stmt).all())
+    def archive_folder(self, library_id: str, folder: str | None) -> list[str]:
+        """Archive every clip in sight under the folder (None: the whole library).
+        The folder only picks the clips: a file added later shows up as usual."""
+        result = self._session.execute(
+            text(
+                "UPDATE assets SET deleted_at = :now, deleted_reason = 'archived'"
+                " WHERE library_id = :lib AND deleted_at IS NULL"
+                "   AND (CAST(:under AS text) IS NULL OR rel_path LIKE :under ESCAPE '\\')"
+                " RETURNING asset_id"
+            ),
+            {"now": utcnow(), "lib": library_id, "under": _under(folder)},
+        )
+        archived = [row[0] for row in result.fetchall()]
+        self._session.commit()
+        return archived
 
-    def count_archived(self, library_id: str) -> int:
-        stmt = select(func.count()).select_from(Asset).where(Asset.library_id == library_id, _archived())
-        return int(self._session.exec(stmt).one())
+    def unarchive(self, asset_ids: list[str]) -> tuple[list[str], list[str]]:
+        """Bring back clips a person archived. A missing file's clip comes back
+        with its file, not with this. Returns (unarchived, skipped)."""
+        return self._bring_back(asset_ids, "a.deleted_reason = 'archived'")
 
-    def find_archived_by_sha(self, library_id: str, sha256: str | None) -> Asset | None:
-        """The library's most recently archived (missing) asset with this content,
+    def unarchive_folder(self, library_id: str, folder: str | None) -> list[str]:
+        """Unarchive every clip a person archived under the folder (None: the whole library)."""
+        ids = list(self._session.execute(
+            text(
+                "SELECT asset_id FROM assets WHERE library_id = :lib AND deleted_reason = 'archived'"
+                "   AND (CAST(:under AS text) IS NULL OR rel_path LIKE :under ESCAPE '\\')"
+            ),
+            {"lib": library_id, "under": _under(folder)},
+        ).scalars().all())
+        return self._bring_back(ids, "a.deleted_reason = 'archived'")[0]
+
+    def _bring_back(self, asset_ids: list[str], condition: str) -> tuple[list[str], list[str]]:
+        """Clips matching condition (SQL on alias a) back in sight and queued
+        for search, with their scenes. Returns (back, skipped), in the order given."""
+        if not asset_ids:
+            return [], []
+        result = self._session.execute(
+            text(
+                "UPDATE assets a SET deleted_at = NULL, deleted_reason = NULL, search_synced_at = NULL"
+                f" WHERE a.asset_id = ANY(:ids) AND a.deleted_at IS NOT NULL AND {condition}"
+                " RETURNING a.asset_id"
+            ),
+            {"ids": asset_ids},
+        )
+        back = [row[0] for row in result.fetchall()]
+        if back:
+            self._session.execute(
+                text("UPDATE video_scenes SET search_synced_at = NULL WHERE asset_id = ANY(:ids)"), {"ids": back}
+            )
+        self._session.commit()
+        return _split(asset_ids, set(back))
+
+    def library_ids_of(self, asset_ids: list[str]) -> list[str]:
+        """The libraries these clips are in, whatever their state."""
+        if not asset_ids:
+            return []
+        return list(self._session.execute(
+            text("SELECT DISTINCT library_id FROM assets WHERE asset_id = ANY(:ids)"), {"ids": asset_ids}
+        ).scalars().all())
+
+    def find_missing_by_sha(self, library_id: str, sha256: str | None) -> Asset | None:
+        """The library's most recently missing asset with this content,
         locked for restoring. A row someone else holds is waited for, not
         skipped: if another ingest claimed it meanwhile, it no longer matches
         and this file gets its own asset; if other work held it (a re-index, an
@@ -945,7 +1052,7 @@ class AssetRepository:
             return None
         stmt = (
             select(Asset)
-            .where(Asset.library_id == library_id, Asset.sha256 == sha256, _archived())
+            .where(Asset.library_id == library_id, Asset.sha256 == sha256, _missing_file())
             .order_by(Asset.deleted_at.desc())
             .limit(1)
             .with_for_update()
@@ -1056,18 +1163,19 @@ class AssetRepository:
     def page_ignored_paths(
         self, library_id: str, *, after: str | None = None, limit: int = 500
     ) -> list[tuple[str, str]]:
-        """Paths scanners must skip, by rel_path: (rel_path, "trashed" | "emptied").
+        """Paths scanners must skip, by rel_path: (rel_path, "trashed" | "archived" | "emptied").
 
-        "trashed" = in the trash by the user's choice; "emptied" = the user
-        emptied its trash (ignored_files).
+        "trashed" = in the trash by a person's choice; "archived" = a person
+        archived it; "emptied" = a person deleted it for good (ignored_files).
         """
         rows = self._session.execute(
             text(
                 """
                 SELECT rel_path, kind FROM (
-                    SELECT rel_path, 'trashed' AS kind FROM assets
+                    SELECT rel_path, CASE deleted_reason WHEN 'user' THEN 'trashed' ELSE 'archived' END AS kind
+                    FROM assets
                     WHERE library_id = :lib AND deleted_at IS NOT NULL
-                      AND deleted_reason = 'user'
+                      AND deleted_reason IN ('user', 'archived')
                     UNION ALL
                     SELECT rel_path, 'emptied' AS kind FROM ignored_files
                     WHERE library_id = :lib
@@ -1137,21 +1245,12 @@ class AssetRepository:
         self,
         asset_ids: list[str] | None = None,
         trashed_before: datetime | None = None,
-        include_missing: bool = False,
     ) -> list[Asset]:
-        """Return trashed assets matching the given filters.
-
-        Only the user's trash: assets that are merely missing on disk (archived;
-        they come back when the file does) are left alone unless they're named
-        in asset_ids and include_missing says so.
-        """
-        stmt = select(Asset).where(Asset.deleted_at.isnot(None))
+        """Clips a person trashed, matching the filters. Archived clips (missing or
+        archived by hand) are never here: they're deleted only by trashing them first."""
+        stmt = select(Asset).where(Asset.deleted_at.isnot(None), Asset.deleted_reason == "user")
         if asset_ids is not None:
             stmt = stmt.where(Asset.asset_id.in_(asset_ids))
-        if asset_ids is None or not include_missing:
-            stmt = stmt.where(Asset.deleted_reason == "user")
-        else:
-            stmt = stmt.where(or_(Asset.deleted_reason == "user", _archived()))
         if trashed_before is not None:
             stmt = stmt.where(Asset.deleted_at < trashed_before)
         return list(self._session.exec(stmt).all())
@@ -2164,16 +2263,17 @@ class ProjectRepository:
         )
         return int(result.scalar() or 0)
 
-    # Clips still linked to a project but hidden, in three kinds that need
-    # different actions: a person trashed them (restorable), a scan found
-    # the file missing (back when the file is), or their library is in the
-    # trash (libraries have no restore; never brought back from a project).
+    # Clips still linked to a project but hidden, in kinds that need
+    # different actions: a person trashed them (restore), a person archived
+    # them (unarchive), a scan found the file missing (back when the file
+    # is), or their library is in the trash (back with the library).
     _HIDDEN_CLIPS_SQL = (
         "SELECT"
         " count(*) FILTER (WHERE l.status <> 'trashed' AND a.deleted_reason = 'user') AS trashed,"
         " count(*) FILTER (WHERE l.status <> 'trashed'"
-        "   AND a.deleted_reason IS DISTINCT FROM 'user') AS missing,"
-        " count(*) FILTER (WHERE l.status = 'trashed') AS library_trashed"
+        "   AND a.deleted_reason NOT IN ('user', 'archived')) AS missing,"
+        " count(*) FILTER (WHERE l.status = 'trashed') AS library_trashed,"
+        " count(*) FILTER (WHERE l.status <> 'trashed' AND a.deleted_reason = 'archived') AS archived"
         " FROM project_assets pa"
         " JOIN assets a ON a.asset_id = pa.asset_id"
         " JOIN libraries l ON l.library_id = a.library_id"
@@ -2181,13 +2281,14 @@ class ProjectRepository:
     )
 
     def hidden_clip_counts(self, project_id: str, *, videos_only: bool = False) -> dict[str, int]:
-        """{"trashed", "missing", "library_trashed"} for the project's hidden
-        clips, in one query. videos_only for what an export leaves out."""
+        """{"trashed", "missing", "library_trashed", "archived"} for the project's
+        hidden clips, in one query. videos_only for what an export leaves out."""
         sql = self._HIDDEN_CLIPS_SQL
         if videos_only:
             sql += " AND a.media_type = 'video'"  # as export decides what's a video
         row = self._session.execute(text(sql), {"pid": project_id}).one()
-        return {"trashed": int(row[0]), "missing": int(row[1]), "library_trashed": int(row[2])}
+        return {"trashed": int(row[0]), "missing": int(row[1]), "library_trashed": int(row[2]),
+                "archived": int(row[3])}
 
     def trashed_asset_ids(self, project_id: str) -> list[str]:
         """The clips in the project that a person trashed, whose library

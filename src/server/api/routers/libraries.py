@@ -1,6 +1,6 @@
 """Libraries API: create and list libraries. All routes require tenant auth (middleware)."""
 
-from typing import Annotated, Literal
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -12,7 +12,7 @@ from src.server.api.dependencies import (
     require_editor,
     require_signed_in,
 )
-from src.server.api.errors import DecisionRequiredError
+from src.server.api.errors import ConflictError, DecisionRequiredError
 from src.server.database import get_control_session
 from src.server.repository.control_plane import PublicLibraryRepository
 from src.server.repository.tenant import AssetRepository, LibraryRepository, PathFilterRepository
@@ -57,8 +57,10 @@ class EmptyTrashResponse(BaseModel):
 
 
 class EmptyLibraryTrashRequest(BaseModel):
-    # Required when clips in the trashed libraries are in projects: deleting
-    # them for good takes them out of those projects.
+    # Which trashed libraries to delete for good; all of them when omitted.
+    library_ids: list[str] | None = None
+    # Required when clips in those libraries are in projects: deleting them
+    # for good takes them out of those projects.
     remove_from_projects: bool = False
 
 
@@ -202,12 +204,14 @@ def empty_trash(
     user_id: Annotated[str, Depends(get_current_user_id)],
     body: EmptyLibraryTrashRequest | None = None,
 ) -> EmptyTrashResponse:
-    """Hard delete all trashed libraries for this tenant. Returns count of
-    libraries deleted. 409 in_projects, with the projects in details, when
+    """Delete trashed libraries for good: those in library_ids, or all of them.
+    Returns how many. 409 in_projects, with the projects in details, when
     their clips are in projects and remove_from_projects isn't set."""
     tenant_id = getattr(request.state, "tenant_id", None)
     repo = LibraryRepository(session)
     trashed = repo.get_trashed()
+    if body and body.library_ids is not None:
+        trashed = [lib for lib in trashed if lib.library_id in set(body.library_ids)]
     if trashed and not (body and body.remove_from_projects):
         from src.server.api.routers.assets import project_usage_summary
 
@@ -301,11 +305,8 @@ def update_library(
 
 
 class DeleteLibraryRequest(BaseModel):
-    # Required when the library holds archived clips (files that went missing
-    # and haven't come back): "delete" removes them for good first, "keep"
-    # leaves them archived with the library in the trash.
-    archived: Literal["keep", "delete"] | None = None
-    # Required with "delete" when any of those clips are in projects.
+    # Required when any of the library's clips are in projects: in the trash
+    # they're hidden there, and deleted for good with the library they leave them.
     remove_from_projects: bool = False
 
 
@@ -318,10 +319,11 @@ def delete_library(
     user_id: Annotated[str, Depends(get_current_user_id)],
     body: DeleteLibraryRequest | None = None,
 ) -> None:
-    """Soft delete: move library to trash (status=trashed). Returns 409 if already trashed.
+    """Move a library to the trash with everything in it: restorable until
+    it's deleted for good after the trash days. 409 if already trashed.
 
-    409 archived_clips when it holds archived clips and the request doesn't
-    say what happens to them (`archived`).
+    409 in_projects, with the projects in details, when any of its clips are
+    in projects and remove_from_projects isn't set.
     """
     repo = LibraryRepository(session)
     library = repo.get_by_id(library_id)
@@ -329,23 +331,19 @@ def delete_library(
         raise HTTPException(status_code=404, detail="Library not found")
     if library.status == "trashed":
         raise HTTPException(status_code=409, detail="Library is already in trash")
-    n = AssetRepository(session).count_archived(library_id)
-    if n:
-        choice = body.archived if body else None
-        if choice is None:
-            raise DecisionRequiredError(
-                "archived_clips",
-                f"{n} {'clip' if n == 1 else 'clips'} in this library {'is' if n == 1 else 'are'} archived: "
-                "the files went missing and haven't come back. Send archived: \"delete\" to delete "
-                f"{'it' if n == 1 else 'them'} for good, or \"keep\" to keep "
-                f"{'it' if n == 1 else 'them'} with the library in the trash.",
-                {"archived_clips": n},
-            )
-        if choice == "delete":
-            from src.server.api.routers.trash import purge_assets
+    if not (body and body.remove_from_projects):
+        from src.server.api.routers.assets import project_usage_summary
 
-            purge_assets(session, request, AssetRepository(session).list_archived(library_id), user_id,
-                         remove_from_projects=body.remove_from_projects)
+        usage = project_usage_summary(session, user_id, library_ids=[library_id])
+        if usage.assets_in_projects:
+            n = usage.assets_in_projects
+            raise DecisionRequiredError(
+                "in_projects",
+                f"{n} {'clip' if n == 1 else 'clips'} in this library {'is' if n == 1 else 'are'} in projects. "
+                "In the trash they're hidden there; deleted for good with the library, they leave those "
+                "projects. Send remove_from_projects: true to go ahead.",
+                usage.model_dump(),
+            )
     was_public = library.is_public
     try:
         repo.trash(library_id)
@@ -356,6 +354,28 @@ def delete_library(
     if was_public:
         with get_control_session() as ctrl_session:
             PublicLibraryRepository(ctrl_session).delete(library_id)
+
+
+@router.post("/{library_id}/restore", response_model=LibraryResponse)
+def restore_library(
+    library_id: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_editor)],
+) -> LibraryResponse:
+    """Take a library out of the trash with the clips that went with it.
+    Clips trashed or archived before it went stay as they were. It comes back
+    private: a public page doesn't reappear without a person saying so."""
+    repo = LibraryRepository(session)
+    library = repo.get_by_id(library_id)
+    if library is None:
+        raise HTTPException(status_code=404, detail="Library not found")
+    if library.status != "trashed":
+        raise ConflictError("not_trashed", "This library isn't in the trash.")
+    library.is_public = False
+    library = repo.restore(library_id)
+    repo.bump_revision(library_id)
+    return LibraryResponse(library_id=library.library_id, name=library.name,
+                           root_path=library.root_path, is_public=library.is_public)
 
 
 @router.get("/{library_id}/ignored-paths", response_model=IgnoredPathPage, dependencies=[Depends(require_signed_in)])
