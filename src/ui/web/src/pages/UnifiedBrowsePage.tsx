@@ -6,6 +6,7 @@ import {
   batchRateAssets,
   createSavedView,
   getFilteredFacets,
+  listLibraries,
   lookupRatings,
   queryAssets,
   rateAsset,
@@ -15,6 +16,7 @@ import { AssetCell } from "../components/AssetCell";
 import { ProjectPicker } from "../components/ProjectPicker";
 import { useCanEdit } from "../lib/useCanEdit";
 import { useClipActions } from "../lib/useClipActions";
+import { useRevisionRefresh } from "../lib/useRevisionRefresh";
 import { Lightbox } from "../components/Lightbox";
 import { FilterBar } from "../components/FilterBar";
 import { SelectionToolbar } from "../components/SelectionToolbar";
@@ -214,6 +216,22 @@ export default function UnifiedBrowsePage() {
     queryKey: ["filtered-facets", filters],
     queryFn: () => getFilteredFacets(filters),
     staleTime: 30_000,
+  });
+
+  // Follow every library's revision, from the list the sidebar polls
+  // anyway: when one changes elsewhere (another tab, another person, a
+  // scan), or a library comes or goes, refetch the grid and its facets, at
+  // most every 30 seconds while they keep changing. Changes made here
+  // refresh themselves (useClipActions invalidates everything).
+  const { data: libraries } = useQuery({
+    queryKey: ["libraries", false],
+    queryFn: () => listLibraries(false),
+    refetchInterval: 10_000,
+  });
+  const revisions = libraries?.map((l) => `${l.library_id}:${l.revision ?? 0}`).join(",");
+  useRevisionRefresh(revisions, () => {
+    void queryClient.invalidateQueries({ queryKey: ["unified-query"] });
+    void queryClient.invalidateQueries({ queryKey: ["filtered-facets"] });
   });
 
   const flatAssets: BrowseItem[] = useMemo(() => {

@@ -7,6 +7,8 @@ export interface LibraryListItem {
   is_public: boolean;
   /** In the trash since (status "trashed"); older servers leave it out. */
   trashed_at?: string | null;
+  /** Bumped whenever the library's clips change; older servers leave it out. */
+  revision?: number;
 }
 
 export interface DirectoryNode {
