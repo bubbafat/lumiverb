@@ -730,6 +730,16 @@ export async function getAsset(assetId: string, publicLibraryId?: string, public
   return apiFetch<AssetDetail>(`/assets/${assetId}${publicQuery(publicLibraryId, publicProjectId)}`);
 }
 
+/** Correct a clip's description, OCR or tags (editors). Only the fields sent change:
+ * a string sets the correction, null brings back the machine's; `tags` is the list to
+ * show, kept as adds and removes on the machine's. Returns the clip's detail. */
+export async function correctAsset(
+  assetId: string,
+  body: { description?: string | null; ocr_text?: string | null; tags?: string[] | null },
+): Promise<AssetDetail> {
+  return apiFetch<AssetDetail>(`/assets/${assetId}/corrections`, { method: "PATCH", body });
+}
+
 /** A signed link a <video> element can stream and seek (no auth header needed). */
 export interface Playback {
   url: string;

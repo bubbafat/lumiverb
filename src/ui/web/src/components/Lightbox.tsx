@@ -1,7 +1,9 @@
 import { useEffect, useCallback, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getAsset, findSimilar, listFaces, listPeople, getNearestPeopleForFace, searchPeople, assignFace, unassignFace, uploadTranscript, deleteTranscript, updateNote, deleteNote } from "../api/client";
+import { getAsset, findSimilar, listFaces, listPeople, getNearestPeopleForFace, searchPeople, assignFace, unassignFace, uploadTranscript, deleteTranscript, updateNote, deleteNote, correctAsset } from "../api/client";
+import { CorrectableTags, CorrectableText } from "./CorrectableFields";
+import { useCanEdit } from "../lib/useCanEdit";
 import TranscriptViewer from "./TranscriptViewer";
 import VideoPlayer from "./VideoPlayer";
 import { useLocalStorage } from "../lib/useLocalStorage";
@@ -369,6 +371,17 @@ export function Lightbox({
     enabled: !isPublic || !!publicLibraryId || !!publicProjectId,
     refetchInterval: 10_000,
   });
+
+  // Corrections: editors fix a description, the text in an image or tags; the
+  // machine's values stay underneath ("Use the AI's" brings them back).
+  const canCorrect = useCanEdit(!isPublic) && !isPublic;
+  const correctionClient = useQueryClient();
+  const correct = useMutation({
+    mutationFn: (body: { description?: string | null; ocr_text?: string | null; tags?: string[] | null }) =>
+      correctAsset(asset.asset_id, body),
+    onSuccess: () => correctionClient.invalidateQueries({ queryKey: ["asset", asset.asset_id] }),
+  });
+  const corrected = detail?.corrected ?? [];
 
   const { data: similarData, isLoading: similarLoading } = useQuery({
     queryKey: ["similar", asset.asset_id, libraryId],
@@ -1173,47 +1186,61 @@ export function Lightbox({
 
               <hr className="border-gray-700" />
 
-              {/* Section 2: AI description */}
-              <div>
-                <div className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">
-                  Description
-                </div>
-                {detailLoading ? (
+              {/* Section 2: description (a person's correction over the AI's) */}
+              {detailLoading && !detail ? (
+                <div>
+                  <div className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">Description</div>
                   <MetadataSkeleton />
-                ) : detail?.ai_description ? (
-                  <p className="italic text-gray-300">{detail.ai_description}</p>
-                ) : (
-                  <p className="text-gray-500">No description yet</p>
-                )}
-              </div>
+                </div>
+              ) : (
+                <CorrectableText
+                  label="Description"
+                  value={detail?.ai_description}
+                  machine={detail?.machine_description}
+                  corrected={corrected.includes("description")}
+                  canEdit={canCorrect}
+                  emptyText="No description yet"
+                  saving={correct.isPending}
+                  onSave={(value) => correct.mutateAsync({ description: value })}
+                  render={(value) => <p className="italic text-gray-300">{value}</p>}
+                />
+              )}
 
-              {/* Section: OCR Text */}
-              {detail?.ocr_text && (
+              {/* Section: the text in an image */}
+              {(detail?.ocr_text || corrected.includes("ocr_text") || (canCorrect && detail?.media_type === "image")) && (
                 <>
                   <hr className="border-gray-700" />
-                  <div>
-                    <div className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">
-                      Text in Image
-                    </div>
-                    <p className="text-sm text-gray-300 whitespace-pre-wrap">{detail.ocr_text}</p>
-                  </div>
+                  <CorrectableText
+                    label="Text in Image"
+                    value={detail?.ocr_text}
+                    machine={detail?.machine_ocr_text}
+                    corrected={corrected.includes("ocr_text")}
+                    canEdit={canCorrect}
+                    emptyText="No text found"
+                    saving={correct.isPending}
+                    onSave={(value) => correct.mutateAsync({ ocr_text: value })}
+                  />
                 </>
               )}
 
               {/* Section 3: Tags */}
               {(detailLoading ||
+                canCorrect ||
                 (detail?.ai_tags && detail.ai_tags.length > 0)) && (
                 <>
                   <hr className="border-gray-700" />
                   <div>
-                    <div className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">
-                      Tags
-                    </div>
                     {detailLoading && !detail ? (
                       <MetadataSkeleton />
                     ) : (
-                      <div className="mt-1 flex flex-wrap gap-1.5">
-                        {detail?.ai_tags?.map((tag) =>
+                      <CorrectableTags
+                        tags={detail?.ai_tags ?? []}
+                        machineTags={detail?.machine_tags}
+                        corrected={corrected.includes("tags")}
+                        canEdit={canCorrect}
+                        saving={correct.isPending}
+                        onSave={(tags) => correct.mutateAsync({ tags })}
+                        renderTag={(tag) =>
                           onTagClick ? (
                             <button
                               key={tag}
@@ -1233,9 +1260,9 @@ export function Lightbox({
                             >
                               {tag}
                             </span>
-                          ),
-                        )}
-                      </div>
+                          )
+                        }
+                      />
                     )}
                   </div>
                 </>
