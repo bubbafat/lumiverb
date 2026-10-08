@@ -152,10 +152,11 @@ class TestTranscriptionTypes:
 class TestCliConfig:
     """Verify new CLI config fields."""
 
-    def test_whisper_model_default(self):
+    def test_the_whisper_model_is_the_accounts_not_the_workers(self):
         from src.client.cli.config import CLIConfig
-        cfg = CLIConfig()
-        assert cfg.whisper_model == "small"
+        from src.shared.producers import PRODUCERS
+        assert "whisper_model" not in CLIConfig.model_fields
+        assert PRODUCERS["transcript"].defaults["model"] == "small"
 
     def test_transcribe_concurrency_default(self):
         from src.client.cli.config import CLIConfig
