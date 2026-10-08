@@ -1,6 +1,6 @@
 """faces.embedding_model: which model embedded each face (ADR-016 phase 3, piece 4).
 
-Revision ID: f2a3b4c5d6e7
+Revision ID: b799bec833a5
 Revises: e1a2b3c4d5f6
 Create Date: 2026-10-08
 
@@ -18,7 +18,7 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "f2a3b4c5d6e7"
+revision: str = "b799bec833a5"
 down_revision: Union[str, Sequence[str], None] = "e1a2b3c4d5f6"
 branch_labels = None
 depends_on = None
