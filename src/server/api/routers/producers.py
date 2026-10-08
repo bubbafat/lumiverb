@@ -119,34 +119,6 @@ def list_producers(
     return ProducerList(producers=items)
 
 
-class AdoptModel(BaseModel):
-    model: str = Field(min_length=1, max_length=200)
-
-
-@router.post("/vision-model", response_model=ProducerList, dependencies=[Depends(require_tenant_admin)])
-def adopt_vision_model(
-    body: AdoptModel,
-    request: Request,
-    session: Annotated[Session, Depends(get_tenant_session)],
-) -> ProducerList:
-    """Record the vision model the worker is configured with, when the account
-    has none yet: descriptions, OCR and scene descriptions are then current
-    against it. Once set, changing it is a setting change (it makes them
-    stale), not this. 409 if one is set already."""
-    from src.server.api.errors import ConflictError
-
-    current = lineage.account_settings(session, tenant_vision_model(request))["model"]
-    if current and current != body.model:
-        raise ConflictError("vision_model_set", f"The account's vision model is {current}.", {"model": current})
-    if not current:
-        session.execute(text(
-            "INSERT INTO system_metadata (key, value, updated_at) VALUES (:k, :v, now())"
-            " ON CONFLICT (key) DO NOTHING"
-        ), {"k": lineage.ACCOUNT_VISION_MODEL, "v": body.model})
-        session.commit()
-    return list_producers(request, session, counts=False)
-
-
 class Failure(BaseModel):
     asset_id: str = Field(min_length=1, max_length=64)
     artifact: Literal[PRODUCER_ARTIFACTS]  # type: ignore[valid-type]

@@ -16,7 +16,13 @@ Oct 8: nothing re-runs just because lineage arrived):
 - made by the macOS app (Apple Vision faces, FeaturePrint, the
   "openai-compatible" vision rows, whisper.cpp): an unknown producer, so stale;
 - a transcript a person wrote or pasted: a person's, current.
-The vision model the CLI used most becomes the account's vision model.
+Vision is current against the account's model (chosen in Settings → AI),
+so it goes stale until one is chosen that matches what made it.
+
+Accepted (the brain's data starts fresh from the CLI; older data is
+re-ingested): proxies, previews and probes the macOS app made, and its
+zero-face and OCR results, can't be told from the CLI's, so they count as
+the CLI's.
 """
 
 from __future__ import annotations
@@ -154,12 +160,7 @@ def upgrade() -> None:
                       " l.generated_at AS produced_at, 'ok' AS outcome"
                       f" FROM ({latest}) l JOIN assets a ON a.asset_id = l.asset_id WHERE true{extra}")
     if models:
-        # The model the CLI used most is the account's: what vision is current against.
-        conn.execute(sa.text(
-            "INSERT INTO system_metadata (key, value, updated_at) VALUES ('vision_model', :m, now())"
-            " ON CONFLICT (key) DO NOTHING"
-        ), {"m": models[0]})
-        # Scene descriptions came from the same model; which one isn't recorded.
+        # Scene descriptions came from the model the CLI used most; which one isn't recorded.
         put("scene_vision", "SELECT a.asset_id, 'scene-vision' AS producer, '1' AS version, :hash AS hash,"
                             " a.sha256 AS source, now() AS produced_at, 'ok' AS outcome FROM assets a"
                             " WHERE a.video_indexed AND EXISTS (SELECT 1 FROM video_scenes s WHERE s.asset_id = a.asset_id)"
@@ -169,6 +170,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(sa.text("DELETE FROM system_metadata WHERE key = 'vision_model'"))
     op.drop_index("ix_artifact_lineage_artifact", table_name="artifact_lineage")
     op.drop_table("artifact_lineage")

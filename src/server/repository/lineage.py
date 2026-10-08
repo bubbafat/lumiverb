@@ -62,7 +62,6 @@ MADE: dict[str, str] = {
     "transcript": "a.has_transcript IS NOT NULL",
 }
 
-ACCOUNT_VISION_MODEL = "vision_model"
 _OVERRIDES = "producer.{}"
 
 # Failures are tried again after 5 minutes, doubling up to a day.
@@ -76,9 +75,9 @@ def _meta(session: Session, key: str) -> str | None:
 
 
 def account_settings(session: Session, tenant_vision_model: str | None = None) -> dict[str, Any]:
-    """Account-wide values producers take: the vision model (this account's,
-    or the tenant's from the control plane)."""
-    return {"model": _meta(session, ACCOUNT_VISION_MODEL) or tenant_vision_model or ""}
+    """Account-wide values producers take: the vision model chosen in
+    Settings → AI (the tenant's, in the control plane)."""
+    return {"model": tenant_vision_model or ""}
 
 
 def overrides(session: Session, artifact: str) -> dict[str, Any]:

@@ -105,9 +105,9 @@ def test_lineage_is_backfilled_from_the_artifacts() -> None:
         with engine.connect() as conn:
             rows = {(r[0], r[1]): (r[2], r[3], r[4], r[5]) for r in conn.execute(text(
                 "SELECT asset_id, artifact, producer, producer_version, outcome, source_sha256 FROM artifact_lineage"))}
-            vision_model = conn.execute(text("SELECT value FROM system_metadata WHERE key = 'vision_model'")).scalar()
+            seeded = conn.execute(text("SELECT count(*) FROM system_metadata WHERE key = 'vision_model'")).scalar()
 
-        assert vision_model == "qwen3-vl:8b"
+        assert seeded == 0  # the model is chosen in Settings → AI, nowhere else
         assert rows[("img_cli", "proxy")] == ("proxy", "1", "ok", "sha-img_cli")
         assert rows[("img_cli", "faces")][:3] == ("insightface", "1", "empty")
         assert rows[("img_mac", "faces")][0] == "unknown"

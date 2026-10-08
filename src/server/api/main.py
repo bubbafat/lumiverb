@@ -43,7 +43,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
-from src.server.api.routers import admin, archive, assets, producers, changes, projects, keys, libraries, me, path_filters, tenant, trash, video
+from src.server.api.routers import admin, archive, assets, producers, changes, projects, keys, libraries, me, path_filters, tenant, trash, video, vision
 from src.server.api.routers.auth import router as auth_router
 from src.server.api.routers.users import router as users_router
 from src.server.api.routers.artifacts import router as artifacts_router
@@ -95,6 +95,7 @@ app.add_middleware(TenantResolutionMiddleware)
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(admin.router)
+app.include_router(vision.router)
 app.include_router(tenant.router)
 app.include_router(path_filters.router)
 app.include_router(libraries.router)

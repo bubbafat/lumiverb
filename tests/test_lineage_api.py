@@ -108,21 +108,6 @@ def test_every_producer_with_its_settings_and_counts(env):
     assert _producers(env, counts="false")["vision"]["counts"] is None
 
 
-@pytest.mark.slow
-def test_the_worker_records_its_vision_model_once(env):
-    client, headers, *_ = env
-    r = client.post("/v1/producers/vision-model", json={"model": "qwen3-vl:8b"}, headers=headers)
-    assert r.status_code == 200, r.text
-    vision = {p["artifact"]: p for p in r.json()["producers"]}
-    assert vision["vision"]["settings"]["model"] == "qwen3-vl:8b"
-    assert vision["ocr"]["settings"]["model"] == "qwen3-vl:8b"
-    assert vision["scene_vision"]["settings"]["model"] == "qwen3-vl:8b"
-    # The same again is fine; another is a setting change, not this.
-    assert client.post("/v1/producers/vision-model", json={"model": "qwen3-vl:8b"}, headers=headers).status_code == 200
-    r = client.post("/v1/producers/vision-model", json={"model": "llava:13b"}, headers=headers)
-    assert r.status_code == 409 and r.json()["error"]["code"] == "vision_model_set"
-
-
 # ---------------------------------------------------------------------------
 # Every write records lineage
 # ---------------------------------------------------------------------------
