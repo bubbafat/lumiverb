@@ -182,7 +182,7 @@ def test_paths_in_a_trashed_library_are_not_kept(env) -> None:
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("bad", ["relative/path.mov", f"{ROOT}/../escape.mov", ""])
+@pytest.mark.parametrize("bad", ["relative/path.mov", f"{ROOT}/../escape.mov", "", f"{ROOT}/nul\x00.mov"])
 def test_bad_paths_are_rejected(env, bad: str) -> None:
     r = _report(env, [bad])
     assert r.status_code == 422, r.text

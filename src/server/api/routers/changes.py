@@ -44,6 +44,8 @@ class ChangeReport(BaseModel):
                 raise ValueError(f"paths must be absolute: {p!r}")
             if ".." in p.split("/"):
                 raise ValueError(f"paths may not contain '..': {p!r}")
+            if "\x00" in p:
+                raise ValueError(f"paths may not contain NUL: {p!r}")
         return paths
 
 
