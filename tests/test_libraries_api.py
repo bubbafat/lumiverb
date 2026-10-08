@@ -135,6 +135,32 @@ def test_list_libraries(libraries_client: tuple[TestClient, str]) -> None:
 
 
 @pytest.mark.slow
+def test_list_libraries_carries_each_revision(libraries_client: tuple[TestClient, str]) -> None:
+    """Each library in the list has the revision /revision reports, so a page
+    across libraries can follow them all with the one list it already polls."""
+    client, api_key = libraries_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+    r = client.post("/v1/libraries", json={"name": "RevList", "root_path": "/revlist"}, headers=auth)
+    library_id = r.json()["library_id"]
+
+    def listed() -> int:
+        libs = client.get("/v1/libraries", headers=auth).json()
+        return next(lib["revision"] for lib in libs if lib["library_id"] == library_id)
+
+    def polled() -> int:
+        return client.get(f"/v1/libraries/{library_id}/revision", headers=auth).json()["revision"]
+
+    before = listed()
+    assert before == polled()
+
+    # Trash and restore: the restore bumps the revision.
+    assert client.delete(f"/v1/libraries/{library_id}", headers=auth).status_code == 204
+    assert client.post(f"/v1/libraries/{library_id}/restore", headers=auth).status_code == 200
+    assert listed() > before
+    assert listed() == polled()
+
+
+@pytest.mark.slow
 def test_create_library_requires_auth(libraries_client: tuple[TestClient, str]) -> None:
     """POST /v1/libraries without Authorization header returns 401."""
     client, _ = libraries_client

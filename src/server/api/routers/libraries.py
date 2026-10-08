@@ -54,6 +54,9 @@ class LibraryListItem(BaseModel):
     cover_asset_id: str | None = None
     # In the trash since (status "trashed"): its trash days count from here.
     trashed_at: str | None = None
+    # The counter GET /{library_id}/revision reports: bumped whenever the
+    # library's clips change, so a page across libraries can follow them all.
+    revision: int = 0
 
 
 class EmptyTrashResponse(BaseModel):
@@ -141,6 +144,7 @@ def list_libraries(
             is_public=lib.is_public,
             cover_asset_id=repo.resolve_cover(lib),
             trashed_at=lib.trashed_at.isoformat() if lib.trashed_at else None,
+            revision=lib.revision,
         )
         for lib in libraries
     ]
