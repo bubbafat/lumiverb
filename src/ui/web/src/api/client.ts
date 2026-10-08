@@ -588,11 +588,15 @@ export async function mergePerson(targetPersonId: string, sourcePersonId: string
   });
 }
 
-export async function getAsset(assetId: string, publicLibraryId?: string): Promise<AssetDetail> {
-  const qs = publicLibraryId
-    ? `?public_library_id=${encodeURIComponent(publicLibraryId)}`
-    : "";
-  return apiFetch<AssetDetail>(`/assets/${assetId}${qs}`);
+/** The query string a public page adds: its library, or its project. */
+export function publicQuery(publicLibraryId?: string, publicProjectId?: string): string {
+  if (publicProjectId) return `?public_project_id=${encodeURIComponent(publicProjectId)}`;
+  if (publicLibraryId) return `?public_library_id=${encodeURIComponent(publicLibraryId)}`;
+  return "";
+}
+
+export async function getAsset(assetId: string, publicLibraryId?: string, publicProjectId?: string): Promise<AssetDetail> {
+  return apiFetch<AssetDetail>(`/assets/${assetId}${publicQuery(publicLibraryId, publicProjectId)}`);
 }
 
 /** A signed link a <video> element can stream and seek (no auth header needed). */
@@ -605,16 +609,15 @@ export interface Playback {
   max_seconds: number | null;
 }
 
-export async function getPlayback(assetId: string, publicLibraryId?: string): Promise<Playback> {
-  const qs = publicLibraryId
-    ? `?public_library_id=${encodeURIComponent(publicLibraryId)}`
-    : "";
-  return apiFetch<Playback>(`/assets/${assetId}/playback${qs}`);
+export async function getPlayback(assetId: string, publicLibraryId?: string, publicProjectId?: string): Promise<Playback> {
+  return apiFetch<Playback>(`/assets/${assetId}/playback${publicQuery(publicLibraryId, publicProjectId)}`);
 }
 
 export interface TenantSettings {
-  /** Seconds of each video playback serves; null means the whole video. */
+  /** Seconds of each video playback serves signed in; null means the whole video. */
   video_preview_max_seconds: number | null;
+  /** The same on public pages, never more than the above; 10 until set. */
+  public_video_preview_max_seconds: number | null;
 }
 
 export async function getTenantSettings(): Promise<TenantSettings> {

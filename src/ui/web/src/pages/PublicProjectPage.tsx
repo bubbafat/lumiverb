@@ -284,7 +284,7 @@ export default function PublicProjectPage() {
                               onClick={() => handleAssetClick(asset)}
                               aspectRatio={aspectRatio}
                               isPublic
-                              publicLibraryId={projectId}
+                              publicProjectId={projectId}
                             />
                           </div>
                         );
@@ -307,7 +307,7 @@ export default function PublicProjectPage() {
           onClose={() => setLightboxAsset(null)}
           onNavigate={handleLightboxNavigate}
           isPublic
-          publicLibraryId={projectId}
+          publicProjectId={projectId}
         />
       )}
     </div>

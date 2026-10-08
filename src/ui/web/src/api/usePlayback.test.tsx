@@ -90,6 +90,26 @@ describe("usePlayback", () => {
     expect(n).toBe(asked);
   });
 
+  it("renews: a new link for the same video replaces a failed one", async () => {
+    let n = 0;
+    fetchMock.mockImplementation(async () =>
+      new Response(JSON.stringify({ url: `/v1/stream/link${++n}`, expires_at: "x", source: "analysis_proxy", max_seconds: null }), { status: 200 }),
+    );
+    const { result } = renderHook(() => usePlayback("ast_1", { enabled: true }), { wrapper });
+    await waitFor(() => expect(result.current.src).toBe("/v1/stream/link1"));
+    result.current.renew();
+    await waitFor(() => expect(result.current.src).toBe("/v1/stream/link2"));
+  });
+
+  it("asks for a public project's clip by project", async () => {
+    fetchMock.mockImplementation(async () =>
+      new Response(JSON.stringify({ url: "/v1/stream/p", expires_at: "x", source: "preview", max_seconds: 10 }), { status: 200 }),
+    );
+    const { result } = renderHook(() => usePlayback("ast_1", { enabled: true, isPublic: true, publicProjectId: "prj_7" }), { wrapper });
+    await waitFor(() => expect(result.current.src).toBe("/v1/stream/p"));
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/v1/assets/ast_1/playback?public_project_id=prj_7");
+  });
+
   it("does nothing for photos", () => {
     const { result } = renderHook(() => usePlayback("ast_1", { enabled: false }), { wrapper });
     expect(result.current.src).toBeNull();

@@ -33,8 +33,19 @@ function parseSrt(srt: string): TranscriptEntry[] {
   return entries;
 }
 
-/** `onSeek`, when given, makes each line jump the video to its time. */
-export default function TranscriptViewer({ srt, onSeek }: { srt: string; onSeek?: (seconds: number) => void }) {
+/**
+ * `onSeek`, when given, makes each line jump the video to its time; lines
+ * from `seekableUntil` on (past what plays) stay plain.
+ */
+export default function TranscriptViewer({
+  srt,
+  onSeek,
+  seekableUntil,
+}: {
+  srt: string;
+  onSeek?: (seconds: number) => void;
+  seekableUntil?: number | null;
+}) {
   const entries = useMemo(() => parseSrt(srt), [srt]);
 
   if (entries.length === 0) {
@@ -44,7 +55,7 @@ export default function TranscriptViewer({ srt, onSeek }: { srt: string; onSeek?
   return (
     <div className="max-h-60 overflow-auto rounded border border-gray-700 bg-gray-950 p-2 text-sm">
       {entries.map((entry, i) =>
-        onSeek ? (
+        onSeek && (seekableUntil == null || entry.seconds < seekableUntil) ? (
           <button
             key={i}
             type="button"

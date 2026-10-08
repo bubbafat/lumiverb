@@ -10,23 +10,38 @@ function parseSeconds(text: string): number | null {
   return n >= 1 && n <= MAX_SECONDS ? n : null;
 }
 
-/** Account-wide: how much of each video plays. Admins change it; everyone sees it. */
+function describe(cap: number | null): string {
+  return cap == null ? "whole video" : `first ${cap} seconds`;
+}
+
+/** One audience's choice: the whole video, or the first N seconds. */
+function useCapField(saved: number | null | undefined) {
+  const [capped, setCapped] = useState(false);
+  const [text, setText] = useState("30");
+  useEffect(() => {
+    if (saved === undefined) return;
+    setCapped(saved != null);
+    if (saved != null) setText(String(saved));
+  }, [saved]);
+  const seconds = parseSeconds(text);
+  return { capped, setCapped, text, setText, seconds, value: capped ? seconds : null, valid: !capped || seconds != null };
+}
+
+const inputClass =
+  "w-24 rounded-md border border-gray-700 bg-gray-950 px-2 py-1.5 text-sm text-gray-100 disabled:opacity-50";
+
+/** Account-wide: how much of each video plays, signed in and on public pages. Admins change it. */
 export default function PlaybackSection() {
   const queryClient = useQueryClient();
   const { data: user } = useQuery({ queryKey: ["settings", "me"], queryFn: getCurrentUser });
   const { data: settings, isLoading } = useQuery({ queryKey: ["tenant-settings"], queryFn: getTenantSettings });
-  const [capped, setCapped] = useState(false);
-  const [secondsText, setSecondsText] = useState("30");
+  const signedIn = useCapField(settings?.video_preview_max_seconds);
+  const pub = useCapField(settings?.public_video_preview_max_seconds);
   const [saved, setSaved] = useState(false);
 
-  useEffect(() => {
-    if (!settings) return;
-    setCapped(settings.video_preview_max_seconds != null);
-    if (settings.video_preview_max_seconds != null) setSecondsText(String(settings.video_preview_max_seconds));
-  }, [settings]);
-
   const save = useMutation({
-    mutationFn: (value: number | null) => updateTenantSettings({ video_preview_max_seconds: value }),
+    mutationFn: (next: { video_preview_max_seconds: number | null; public_video_preview_max_seconds: number | null }) =>
+      updateTenantSettings(next),
     onSuccess: (next) => {
       queryClient.setQueryData(["tenant-settings"], next);
       queryClient.invalidateQueries({ queryKey: ["playback"] });
@@ -38,70 +53,76 @@ export default function PlaybackSection() {
     return <div className="h-32 rounded-lg border border-gray-700/50 bg-gray-900/50 animate-pulse" />;
   }
 
-  const current = settings.video_preview_max_seconds;
   const isAdmin = user?.role === "admin";
-  const seconds = parseSeconds(secondsText);
-  const value = capped ? seconds : null;
-  const canSave = isAdmin && (!capped || seconds != null) && value !== current && !save.isPending;
+  const changed =
+    signedIn.value !== settings.video_preview_max_seconds || pub.value !== settings.public_video_preview_max_seconds;
+  const canSave = isAdmin && signedIn.valid && pub.valid && changed && !save.isPending;
+  const edited = () => setSaved(false);
+  const publicOverSignedIn = signedIn.value != null && (pub.value == null || pub.value > signedIn.value);
 
   return (
     <div className="rounded-lg border border-gray-700/50 bg-gray-900/50 p-6 space-y-5">
       <div>
         <h2 className="text-lg font-semibold text-gray-100">Playback</h2>
-        <p className="mt-1 text-sm text-gray-400">
-          How much of each video plays, for everyone in this account and on public pages.
-        </p>
+        <p className="mt-1 text-sm text-gray-400">How much of each video plays.</p>
       </div>
 
       {isAdmin ? (
         <form
-          className="space-y-3"
+          className="space-y-5"
           onSubmit={(e) => {
             e.preventDefault();
-            if (canSave) save.mutate(value);
+            if (canSave) {
+              save.mutate({ video_preview_max_seconds: signedIn.value, public_video_preview_max_seconds: pub.value });
+            }
           }}
         >
-          <label className="flex items-center gap-2 text-sm text-gray-200">
-            <input
-              type="radio"
-              name="video-length"
-              checked={!capped}
-              onChange={() => {
-                setCapped(false);
-                setSaved(false);
-              }}
-            />
-            Whole video
-          </label>
-          <div className="flex flex-wrap items-center gap-2 text-sm text-gray-200">
-            <label className="flex items-center gap-2">
-              <input
-                type="radio"
-                name="video-length"
-                checked={capped}
-                onChange={() => {
-                  setCapped(true);
-                  setSaved(false);
-                }}
-              />
-              First
+          <fieldset className="space-y-3">
+            <legend className="text-sm font-medium text-gray-300">Signed in</legend>
+            <label className="flex items-center gap-2 text-sm text-gray-200">
+              <input type="radio" name="signed-in" checked={!signedIn.capped}
+                onChange={() => { signedIn.setCapped(false); edited(); }} />
+              Whole video
             </label>
-            <input
-              type="text"
-              inputMode="numeric"
-              aria-label="Seconds"
-              value={secondsText}
-              disabled={!capped}
-              onChange={(e) => {
-                setSecondsText(e.target.value);
-                setCapped(true);
-                setSaved(false);
-              }}
-              className="w-24 rounded-md border border-gray-700 bg-gray-950 px-2 py-1.5 text-sm text-gray-100 disabled:opacity-50"
-            />
-            <span>seconds</span>
-          </div>
-          {capped && seconds == null && (
+            <div className="flex flex-wrap items-center gap-2 text-sm text-gray-200">
+              <label className="flex items-center gap-2">
+                <input type="radio" name="signed-in" checked={signedIn.capped}
+                  onChange={() => { signedIn.setCapped(true); edited(); }} />
+                First
+              </label>
+              <input type="text" inputMode="numeric" aria-label="Seconds" value={signedIn.text}
+                disabled={!signedIn.capped} className={inputClass}
+                onChange={(e) => { signedIn.setText(e.target.value); signedIn.setCapped(true); edited(); }} />
+              <span>seconds</span>
+            </div>
+          </fieldset>
+
+          <fieldset className="space-y-3">
+            <legend className="text-sm font-medium text-gray-300">Public pages</legend>
+            <div className="flex flex-wrap items-center gap-2 text-sm text-gray-200">
+              <label className="flex items-center gap-2">
+                <input type="radio" name="public" checked={pub.capped} aria-label="Public pages: first"
+                  onChange={() => { pub.setCapped(true); edited(); }} />
+                Show the first
+              </label>
+              <input type="text" inputMode="numeric" aria-label="Public seconds" value={pub.text}
+                disabled={!pub.capped} className={inputClass}
+                onChange={(e) => { pub.setText(e.target.value); pub.setCapped(true); edited(); }} />
+              <span>seconds</span>
+            </div>
+            <label className="flex items-center gap-2 text-sm text-gray-200">
+              <input type="radio" name="public" checked={!pub.capped} aria-label="Public pages: whole video"
+                onChange={() => { pub.setCapped(false); edited(); }} />
+              Show the whole video
+            </label>
+            {publicOverSignedIn && (
+              <p className="text-xs text-gray-500">
+                Public pages never play more than signed-in people get: {describe(signedIn.value)}.
+              </p>
+            )}
+          </fieldset>
+
+          {(!signedIn.valid || !pub.valid) && (
             <p className="text-sm text-amber-300">Enter a whole number of seconds, from 1 to {MAX_SECONDS.toLocaleString()}.</p>
           )}
           <div className="flex items-center gap-3">
@@ -118,7 +139,8 @@ export default function PlaybackSection() {
         </form>
       ) : (
         <div className="space-y-1">
-          <p className="text-sm text-gray-200">{current == null ? "Whole video" : `First ${current} seconds`}</p>
+          <p className="text-sm text-gray-200">Signed in: {describe(settings.video_preview_max_seconds)}</p>
+          <p className="text-sm text-gray-200">Public pages: {describe(settings.public_video_preview_max_seconds)}</p>
           <p className="text-sm text-gray-500">Only admins can change this.</p>
         </div>
       )}

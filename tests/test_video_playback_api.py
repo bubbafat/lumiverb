@@ -654,3 +654,25 @@ def test_the_daily_sweep_drops_cuts_of_gone_assets_and_stale_temp_files(tmp_path
 def test_the_cleanup_job_sweeps_playback_cuts():
     text = (Path(__file__).resolve().parents[1] / "src" / "server" / "search" / "cleanup.py").read_text()
     assert "sweep_cuts(" in text
+
+
+@pytest.mark.slow
+def test_public_project_pages_play_hover_and_show_details(env, media, tmp_path):
+    client, admin, *_ = env
+    asset_id = _video(env, media, "prj_clip", long=True)
+    outsider = _video(env, media, "prj_outsider")
+    r = client.post("/v1/projects", json={"name": "Public reel", "asset_ids": [asset_id], "visibility": "public"},
+                    headers=admin)
+    assert r.status_code == 201, r.text
+    params = {"public_project_id": r.json()["project_id"]}
+
+    body = client.get(f"/v1/assets/{asset_id}/playback", params=params)
+    assert body.status_code == 200, body.text
+    assert body.json()["max_seconds"] == 10
+    assert _duration(client.get(_path(body.json()["url"])).content, tmp_path) == pytest.approx(10, abs=0.6)
+    assert client.get(f"/v1/assets/{asset_id}/preview", params=params).status_code == 200
+    assert client.get(f"/v1/assets/{asset_id}", params=params).status_code == 200
+    # Only the project's own clips.
+    assert client.get(f"/v1/assets/{outsider}/playback", params=params).status_code == 403
+    assert client.get(f"/v1/assets/{outsider}/preview", params=params).status_code == 403
+    assert client.get(f"/v1/assets/{outsider}", params=params).status_code == 403

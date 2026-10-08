@@ -16,6 +16,14 @@ describe("TranscriptViewer", () => {
     expect(onSeek).toHaveBeenLastCalledWith(5);
   });
 
+  it("only lines inside the cap jump", () => {
+    const onSeek = vi.fn();
+    render(<TranscriptViewer srt={SRT} onSeek={onSeek} seekableUntil={60} />);
+    screen.getByRole("button", { name: /Hello there/ });
+    expect(screen.queryByRole("button", { name: /Much later/ })).toBeNull();
+    screen.getByText("Much later");
+  });
+
   it("is plain text when nothing plays", () => {
     render(<TranscriptViewer srt={SRT} />);
     screen.getByText("Hello there");

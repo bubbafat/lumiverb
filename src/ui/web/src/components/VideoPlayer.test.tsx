@@ -63,6 +63,43 @@ describe("VideoPlayer", () => {
     expect(frame().dataset.playback).toBe("full");
   });
 
+  it("asks for a new link when this one fails, and carries on from the same moment", () => {
+    const onRenew = vi.fn();
+    const { rerender, container } = render(
+      <VideoPlayer src="/v1/stream/old" source="analysis_proxy" maxSeconds={null} onRenew={onRenew} />,
+    );
+    const video = container.querySelector("video") as HTMLVideoElement;
+    Object.defineProperty(video, "currentTime", { value: 42, writable: true, configurable: true });
+    fireEvent.timeUpdate(video);
+    fireEvent.error(video);
+    expect(onRenew).toHaveBeenCalledTimes(1);
+    rerender(<VideoPlayer src="/v1/stream/new" source="analysis_proxy" maxSeconds={null} onRenew={onRenew} />);
+    Object.defineProperty(video, "duration", { value: 100, configurable: true });
+    fireEvent.loadedMetadata(video);
+    expect(video.currentTime).toBe(42);
+    expect(screen.queryByText(/can't play/)).toBeNull();
+  });
+
+  it("says so when a fresh link fails too", () => {
+    const onRenew = vi.fn();
+    const { rerender, container } = render(
+      <VideoPlayer src="/v1/stream/old" source="analysis_proxy" maxSeconds={null} onRenew={onRenew} />,
+    );
+    fireEvent.error(container.querySelector("video") as HTMLVideoElement);
+    rerender(<VideoPlayer src="/v1/stream/new" source="analysis_proxy" maxSeconds={null} onRenew={onRenew} />);
+    fireEvent.error(container.querySelector("video") as HTMLVideoElement);
+    expect(onRenew).toHaveBeenCalledTimes(1);
+    screen.getByText(/This video can't play right now/);
+  });
+
+  it("names a short clip's real length", () => {
+    const { container } = render(<VideoPlayer src="/v1/stream/s" source="preview" maxSeconds={null} />);
+    const video = container.querySelector("video") as HTMLVideoElement;
+    Object.defineProperty(video, "duration", { value: 6.2, configurable: true });
+    fireEvent.loadedMetadata(video);
+    screen.getByText(/Short preview: first 6 seconds/);
+  });
+
   it("doesn't start playing a paused video when it switches", () => {
     const { rerender, container } = render(<VideoPlayer src="/v1/stream/short" source="preview" maxSeconds={null} />);
     const video = container.querySelector("video") as HTMLVideoElement;

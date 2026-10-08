@@ -29,6 +29,8 @@ interface LightboxProps {
   libraryId?: string;
   isPublic?: boolean;
   publicLibraryId?: string;
+  /** On a public project's page: the project the clips are shown through. */
+  publicProjectId?: string;
   /** Highlight a specific face with a red border (e.g. the clustered face). */
   highlightFaceId?: string;
 }
@@ -246,6 +248,7 @@ export function Lightbox({
   libraryId,
   isPublic,
   publicLibraryId,
+  publicProjectId,
   highlightFaceId,
 }: LightboxProps) {
   const navigate = useNavigate();
@@ -329,8 +332,9 @@ export function Lightbox({
     enabled: !isVideo,
     isPublic,
     publicLibraryId,
+    publicProjectId,
   });
-  const playback = usePlayback(asset.asset_id, { enabled: isVideo, isPublic, publicLibraryId });
+  const playback = usePlayback(asset.asset_id, { enabled: isVideo, isPublic, publicLibraryId, publicProjectId });
   const mediaUrl = isVideo ? playback.src : image.url;
   const mediaLoading = isVideo ? playback.isLoading : image.isLoading;
   const generating = !isVideo && image.generating;
@@ -345,9 +349,10 @@ export function Lightbox({
         }
       : undefined;
   const { data: detail, isLoading: detailLoading } = useQuery({
-    queryKey: ["asset", asset.asset_id, publicLibraryId ?? null],
-    queryFn: () => getAsset(asset.asset_id, isPublic ? publicLibraryId : undefined),
-    enabled: !isPublic || !!publicLibraryId,
+    queryKey: ["asset", asset.asset_id, publicLibraryId ?? null, publicProjectId ?? null],
+    queryFn: () =>
+      getAsset(asset.asset_id, isPublic ? publicLibraryId : undefined, isPublic ? publicProjectId : undefined),
+    enabled: !isPublic || !!publicLibraryId || !!publicProjectId,
     refetchInterval: 10_000,
   });
 
@@ -747,6 +752,7 @@ export function Lightbox({
                 source={playback.source}
                 maxSeconds={playback.maxSeconds}
                 videoRef={videoRef}
+                onRenew={playback.renew}
               />
             ) : mediaUrl ? (
               <div className="relative inline-block">
@@ -1277,7 +1283,7 @@ export function Lightbox({
                     {detailLoading ? (
                       <MetadataSkeleton />
                     ) : detail?.transcript_srt ? (
-                      <TranscriptViewer srt={detail.transcript_srt} onSeek={seekVideo} />
+                      <TranscriptViewer srt={detail.transcript_srt} onSeek={seekVideo} seekableUntil={playback.maxSeconds} />
                     ) : (
                       <label className="inline-flex cursor-pointer items-center gap-1.5 rounded bg-gray-700/60 px-3 py-1.5 text-xs text-gray-300 hover:bg-indigo-600/40 hover:text-indigo-200 transition-colors">
                         Upload SRT

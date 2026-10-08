@@ -121,7 +121,7 @@ The fstab lines don't say `soft` or `hard`, so the mounts are `soft`, the CIFS d
 - **Pacing.** Enrichment runs again when a library's counts change, when its storage comes back, or hourly, so a clip that fails every time isn't retried every minute.
 - **Analysis proxies** are full-length copies at most 960 px on the long side, at most 30 fps, with every audio track ffmpeg can decode: each at most stereo, 48 kHz AAC at 48 kbps per channel. With several tracks, a stereo mix of them comes first ("Lumiverb mix"): it's what the web player plays and what transcription hears, so a lav on its own track counts. A track ffmpeg can't decode (iPhone spatial audio, for one) is left out rather than failing the clip. Scenes and scene vision read the proxies too, never the originals. They are not edit proxies.
 - **Library health.** The libraries page shows a library as pending until its videos have analysis proxies.
-- **Playback.** The web plays each video in full from its analysis proxy, with every audio track; until the proxy exists, the 10-second preview plays. To cap it, use Settings → Playback, or `lumiverb settings video-preview <seconds>` (`full` to undo). The server enforces the cap, public pages included.
+- **Playback.** Signed in, the web plays each video in full from its analysis proxy, framed in green; until the proxy exists, the 10-second preview plays, framed in amber, and switches to the whole video when it's ready. Public pages play 10 seconds unless raised. Both are in Settings → Playback, or `lumiverb settings video-preview` / `public-preview` (`full` or seconds). The server enforces them; public transcripts stop where public playback does.
 
 Useful:
 

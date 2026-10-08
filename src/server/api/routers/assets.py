@@ -649,6 +649,17 @@ def _stream_file_with_range(
     )
 
 
+def _check_public_request(request: Request, session: Session, asset) -> None:
+    """For a public page's request, raise unless its library or project shows this asset."""
+    if not getattr(request.state, "is_public_request", False):
+        return
+    from src.server.api.routers.playback import _check_public
+
+    q = request.query_params
+    _check_public(session, asset, q.get("public_library_id"),
+                  q.get("public_project_id") or q.get("public_collection_id"))
+
+
 def _trim_public_transcript(request: Request, session: Session, response: AssetResponse) -> None:
     """A public page's transcript stops where its playback does."""
     if not getattr(request.state, "is_public_request", False) or not response.transcript_srt:
@@ -872,12 +883,7 @@ def get_asset(
     asset = asset_repo.get_by_id(asset_id)
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
-    if getattr(request.state, "is_public_request", False):
-        if not public_library_id or asset.library_id != public_library_id:
-            raise HTTPException(status_code=403, detail="Asset does not belong to the requested public library")
-        lib = LibraryRepository(session).get_by_id(public_library_id)
-        if lib is None or not lib.is_public:
-            raise HTTPException(status_code=404, detail="Not found")
+    _check_public_request(request, session, asset)
     response = _to_asset_response(asset)
     ai_description: str | None = None
     ai_tags: list[str] = []
@@ -1500,13 +1506,7 @@ def stream_or_enqueue_preview(
     asset = asset_repo.get_by_id(asset_id)
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
-    if getattr(request.state, "is_public_request", False):
-        public_library_id = request.query_params.get("public_library_id")
-        if not public_library_id or asset.library_id != public_library_id:
-            raise HTTPException(status_code=403, detail="Asset does not belong to the requested public library")
-        lib = LibraryRepository(session).get_by_id(public_library_id)
-        if lib is None or not lib.is_public:
-            raise HTTPException(status_code=404, detail="Not found")
+    _check_public_request(request, session, asset)
 
     if not asset.media_type.startswith("video"):
         raise HTTPException(status_code=422, detail="Preview only supported for video assets")

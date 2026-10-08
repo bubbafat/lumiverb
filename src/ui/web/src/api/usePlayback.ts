@@ -7,13 +7,14 @@ type Source = "analysis_proxy" | "preview";
 
 /**
  * What a video's player streams: the signed playback link (full length,
- * seekable, within the account's cap), or the 10-second preview fetched as a
- * blob when no link is available.
+ * seekable, within the cap for this viewer), or the 10-second preview fetched
+ * as a blob when no link is available.
  *
  * While only the preview exists it asks again every `pollMs`, so the player
  * switches to the whole video as soon as it's processed. Each answer carries
  * a fresh link; the first link for a source is kept, since a new src would
- * restart the video.
+ * restart the video. `renew()` swaps it for a fresh one, for a link that
+ * failed (links last an hour).
  */
 export function usePlayback(
   assetId: string,
@@ -21,41 +22,59 @@ export function usePlayback(
     enabled,
     isPublic = false,
     publicLibraryId,
+    publicProjectId,
     pollMs = 30_000,
-  }: { enabled: boolean; isPublic?: boolean; publicLibraryId?: string; pollMs?: number },
+  }: { enabled: boolean; isPublic?: boolean; publicLibraryId?: string; publicProjectId?: string; pollMs?: number },
 ): {
   src: string | null;
   source: Source | null;
   maxSeconds: number | null;
   isLoading: boolean;
+  renew: () => void;
 } {
-  const canAsk = enabled && (!isPublic || !!publicLibraryId);
+  const canAsk = enabled && (!isPublic || !!publicLibraryId || !!publicProjectId);
   const playback = useQuery({
-    queryKey: ["playback", assetId, publicLibraryId ?? null],
-    queryFn: () => getPlayback(assetId, isPublic ? publicLibraryId : undefined),
+    queryKey: ["playback", assetId, publicLibraryId ?? null, publicProjectId ?? null],
+    queryFn: () =>
+      getPlayback(assetId, isPublic ? publicLibraryId : undefined, isPublic ? publicProjectId : undefined),
     enabled: canAsk,
     retry: false,
-    // Links last six hours; ask again well before that.
-    staleTime: 60 * 60_000,
+    staleTime: 30 * 60_000,
+    // A new link would restart a playing video; failures renew instead.
+    refetchOnWindowFocus: false,
     refetchInterval: (query) => (query.state.data?.source === "preview" ? pollMs : false),
   });
   const fallback = useAuthenticatedImage(assetId, "video-preview", {
     enabled: enabled && playback.isError,
     isPublic,
     publicLibraryId,
+    publicProjectId,
   });
   const kept = useRef<{ assetId: string; source: Source; url: string } | null>(null);
+  const renewing = useRef(false);
+  const renew = () => {
+    renewing.current = true;
+    void playback.refetch();
+  };
 
-  if (!enabled) return { src: null, source: null, maxSeconds: null, isLoading: false };
+  if (!enabled) return { src: null, source: null, maxSeconds: null, isLoading: false, renew };
   if (playback.data) {
     const { source, url, max_seconds } = playback.data;
-    if (!kept.current || kept.current.assetId !== assetId || kept.current.source !== source) {
+    const stale = !kept.current || kept.current.assetId !== assetId || kept.current.source !== source;
+    if (stale || (renewing.current && kept.current?.url !== url)) {
       kept.current = { assetId, source, url };
+      renewing.current = false;
     }
-    return { src: kept.current.url, source, maxSeconds: max_seconds, isLoading: false };
+    return { src: kept.current!.url, source, maxSeconds: max_seconds, isLoading: false, renew };
   }
   if (playback.isError) {
-    return { src: fallback.url, source: fallback.url ? "preview" : null, maxSeconds: null, isLoading: fallback.isLoading };
+    return {
+      src: fallback.url,
+      source: fallback.url ? "preview" : null,
+      maxSeconds: null,
+      isLoading: fallback.isLoading,
+      renew,
+    };
   }
-  return { src: null, source: null, maxSeconds: null, isLoading: canAsk };
+  return { src: null, source: null, maxSeconds: null, isLoading: canAsk, renew };
 }
