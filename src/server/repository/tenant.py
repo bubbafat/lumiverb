@@ -432,6 +432,13 @@ class PathFilterRepository:
             count += 1
         return count
 
+def _archived():
+    """Archived: deleted because the file went missing. Rows from before reasons
+    were recorded have none. Not a person's trash, not trashed with a library."""
+    return and_(Asset.deleted_at.is_not(None),
+                or_(Asset.deleted_reason.is_(None), Asset.deleted_reason == "missing"))
+
+
 class AssetRepository:
     """Repository for assets table."""
 
@@ -920,29 +927,30 @@ class AssetRepository:
 
     def list_archived(self, library_id: str) -> list[Asset]:
         """The library's archived assets: missing on disk, not trashed by a person."""
-        stmt = select(Asset).where(
-            Asset.library_id == library_id,
-            Asset.deleted_at.is_not(None),
-            or_(Asset.deleted_reason.is_(None), Asset.deleted_reason != "user"),
-        )
+        stmt = select(Asset).where(Asset.library_id == library_id, _archived())
         return list(self._session.exec(stmt).all())
 
     def find_archived_by_sha(self, library_id: str, sha256: str | None) -> Asset | None:
-        """The library's most recently archived (missing, not user-trashed) asset with this content."""
+        """The library's most recently archived (missing) asset with this content,
+        locked for restoring. One another ingest has locked is skipped, so two
+        files with this content can't both claim it."""
         if not sha256:
             return None
         stmt = (
             select(Asset)
-            .where(
-                Asset.library_id == library_id,
-                Asset.sha256 == sha256,
-                Asset.deleted_at.is_not(None),
-                or_(Asset.deleted_reason.is_(None), Asset.deleted_reason != "user"),
-            )
+            .where(Asset.library_id == library_id, Asset.sha256 == sha256, _archived())
             .order_by(Asset.deleted_at.desc())
             .limit(1)
+            .with_for_update(skip_locked=True)
         )
         return self._session.exec(stmt).first()
+
+    def lock_for_restore(self, asset: Asset, rel_path: str) -> bool:
+        """Lock an archived asset found at rel_path before restoring it there.
+        False when, meanwhile, another ingest restored it at another path (a
+        copy of the file, matched by content): rel_path is then unknown."""
+        self._session.refresh(asset, with_for_update=True)
+        return asset.rel_path == rel_path
 
     def clear_trash(self, asset: Asset) -> None:
         """Take an asset out of the trash and queue it and its scenes for the
@@ -1054,6 +1062,8 @@ class AssetRepository:
             stmt = stmt.where(Asset.asset_id.in_(asset_ids))
         if asset_ids is None or not include_missing:
             stmt = stmt.where(Asset.deleted_reason == "user")
+        else:
+            stmt = stmt.where(or_(Asset.deleted_reason == "user", _archived()))
         if trashed_before is not None:
             stmt = stmt.where(Asset.deleted_at < trashed_before)
         return list(self._session.exec(stmt).all())

@@ -389,6 +389,11 @@ async def create_and_ingest(
     reappeared = None  # set when a file the scanner marked missing is back
     created = False
 
+    # An archived asset back at its own path: lock it before restoring. A copy
+    # of the file ingested at the same time may have claimed it by content;
+    # then this path is new to the library.
+    if existing is not None and existing.deleted_at is not None and not asset_repo.lock_for_restore(existing, rel_path):
+        existing = None
     if existing is None:
         if asset_repo.is_ignored(library_id, rel_path):
             raise HTTPException(

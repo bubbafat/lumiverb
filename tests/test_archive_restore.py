@@ -12,9 +12,13 @@ searched (Robert's call, Oct 8).
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 
 import pytest
+from sqlalchemy import create_engine, text
+from sqlmodel import Session
 
+from src.server.repository.tenant import AssetRepository
 from tests.test_analysis_proxy_api import _ingest, env  # noqa: F401 — the shared server fixture
 
 
@@ -109,6 +113,85 @@ def test_a_file_back_at_its_own_path_still_comes_back(env):
     _archive(env, asset)
     assert _ingest(env, "same/F001.mov", sha=sha) == asset
     assert _get(env, asset)["rel_path"] == "same/F001.mov"
+
+
+# Two ingests at once (the scanner sends four at a time): the file back at its
+# own path and a copy of it elsewhere, or two copies. Only one may claim the
+# archived asset; the other gets an asset of its own.
+
+
+@contextmanager
+def _sessions(env, n: int = 2):
+    tenant_url = env[-1]
+    engine = create_engine(tenant_url)
+    sessions = [Session(engine) for _ in range(n)]
+    try:
+        yield [(s, AssetRepository(s)) for s in sessions]
+    finally:
+        for s in sessions:
+            s.rollback()
+            s.close()
+        engine.dispose()
+
+
+@pytest.mark.slow
+def test_two_ingests_cant_claim_the_same_archived_asset(env):
+    library_id = env[2]
+    sha = _sha()
+    asset = _ingest(env, "race/G001.mov", sha=sha)
+    _archive(env, asset)
+    with _sessions(env) as [(_, first), (_, second)]:
+        assert first.find_archived_by_sha(library_id, sha).asset_id == asset
+        # Locked by the first: skipped, not waited on.
+        assert second.find_archived_by_sha(library_id, sha) is None
+
+
+@pytest.mark.slow
+def test_a_file_back_at_its_path_locks_out_a_copy_claiming_it_by_content(env):
+    library_id = env[2]
+    sha = _sha()
+    asset = _ingest(env, "race/H001.mov", sha=sha)
+    _archive(env, asset)
+    with _sessions(env) as [(_, by_path), (_, by_content)]:
+        found = by_path.get_by_library_and_rel_path(library_id, "race/H001.mov")
+        assert by_path.lock_for_restore(found, "race/H001.mov")
+        assert by_content.find_archived_by_sha(library_id, sha) is None
+
+
+@pytest.mark.slow
+def test_a_file_back_at_its_path_after_a_copy_claimed_it_gets_its_own_asset(env):
+    library_id = env[2]
+    sha = _sha()
+    asset = _ingest(env, "race/I001.mov", sha=sha)
+    _archive(env, asset)
+    with _sessions(env) as [(path_session, by_path), (content_session, by_content)]:
+        found = by_path.get_by_library_and_rel_path(library_id, "race/I001.mov")  # read before the copy's commit
+        claimed = by_content.find_archived_by_sha(library_id, sha)
+        claimed.rel_path = "race/copy of I001.mov"
+        by_content.clear_trash(claimed)
+        content_session.commit()
+        assert not by_path.lock_for_restore(found, "race/I001.mov")
+    # Through the API: the path is now unknown, so the file there is a new asset.
+    assert _ingest(env, "race/I001.mov", sha=sha) != asset
+    assert _get(env, asset)["rel_path"] == "race/copy of I001.mov"
+
+
+@pytest.mark.slow
+def test_only_missing_files_count_as_archived(env):
+    """Trashed with its library (or any reason but "missing") isn't archived:
+    not restored by content, not counted, not purged with include_missing."""
+    library_id = env[2]
+    sha = _sha()
+    asset = _ingest(env, "reasons/J001.mov", sha=sha)
+    _archive(env, asset)
+    with _sessions(env, 1) as [(session, repo)]:
+        session.execute(text("UPDATE assets SET deleted_reason = 'library' WHERE asset_id = :a"), {"a": asset})
+        session.commit()
+        assert repo.find_archived_by_sha(library_id, sha) is None
+        assert asset not in {a.asset_id for a in repo.list_archived(library_id)}
+        assert asset not in {a.asset_id for a in repo.list_trashed(asset_ids=[asset], include_missing=True)}
+        session.execute(text("UPDATE assets SET deleted_reason = 'missing' WHERE asset_id = :a"), {"a": asset})
+        session.commit()
 
 
 # ---------------------------------------------------------------------------
