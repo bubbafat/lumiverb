@@ -590,13 +590,14 @@ def run_backfill_vision(
     skip: Collection[str] = (),
     on_take: Callable[[str], None] | None = None,
     producers: "ProducerSettings | None" = None,
+    on_fail: Callable[[str, object], None] | None = None,
 ) -> _IngestStats:
     """Backfill AI descriptions for assets that don't have them, made with the
     server's vision settings and sent with their lineage.
 
     should_stop is asked before each asset; once it says stop, no more start.
     Assets in skip are left for a later run; on_take(asset_id) hears of each
-    one taken.
+    one taken, on_fail(asset_id, error) of each it couldn't describe.
     """
     library_id = library["library_id"]
 
@@ -678,17 +679,23 @@ def run_backfill_vision(
                     pass
         batch_buf.clear()
 
+    vision_of: dict[Future, str] = {}
+
     def _collect(done: set[Future]) -> None:
         for f in done:
+            asset_id = vision_of.pop(f)
             try:
                 result = f.result()
-            except Exception:
-                result = None
+                error: object = "no description (no proxy, or the model returned nothing)"
+            except Exception as e:
+                result, error = None, e
             if result is not None:
                 batch_buf.append(result)
                 with stats.lock:
                     stats.processed += 1
             else:
+                if on_fail is not None:
+                    on_fail(asset_id, error)
                 with stats.lock:
                     stats.failed += 1
             progress.advance(tid, 1)
@@ -716,6 +723,7 @@ def run_backfill_vision(
                 proxy_cache=proxy_cache,
                 client=client,
             )
+            vision_of[fut] = a["asset_id"]
             inflight.add(fut)
             if len(inflight) >= concurrency * 2:
                 done, inflight = _wait_first(inflight)

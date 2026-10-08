@@ -5,16 +5,18 @@ them, so what it records in lineage is what's current."""
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlmodel import Session
 
-from src.server.api.dependencies import get_tenant_session, require_signed_in, require_tenant_admin
+from src.server.api.dependencies import get_tenant_session, require_editor, require_signed_in, require_tenant_admin
 from src.server.repository import lineage
 from src.shared.producers import PRODUCERS
+
+PRODUCER_ARTIFACTS = tuple(PRODUCERS)
 
 router = APIRouter(prefix="/v1/producers", tags=["producers"])
 
@@ -140,6 +142,34 @@ def adopt_vision_model(
         ), {"k": lineage.ACCOUNT_VISION_MODEL, "v": body.model})
         session.commit()
     return list_producers(request, session, counts=False)
+
+
+class Failure(BaseModel):
+    asset_id: str = Field(min_length=1, max_length=64)
+    artifact: Literal[PRODUCER_ARTIFACTS]  # type: ignore[valid-type]
+    error: str = Field(max_length=10_000)
+
+
+class FailuresIn(BaseModel):
+    items: list[Failure] = Field(max_length=500)
+
+
+@router.post("/failures", dependencies=[Depends(require_editor)])
+def report_failures(body: FailuresIn, session: Annotated[Session, Depends(get_tenant_session)]) -> dict:
+    """The worker couldn't make these: each is kept with its error and not
+    handed out again for 5 minutes, then 10, 20 and so on up to a day. An
+    artifact made earlier stays what it was. Clips that don't exist are
+    left out. Returns {"recorded"}."""
+    ids = list({f.asset_id for f in body.items})
+    known = {r[0] for r in session.execute(
+        text("SELECT asset_id FROM assets WHERE asset_id = ANY(:ids)"), {"ids": ids})} if ids else set()
+    recorded = 0
+    for f in body.items:
+        if f.asset_id in known:
+            lineage.record_failure(session, f.asset_id, f.artifact, f.error or "failed", commit=False)
+            recorded += 1
+    session.commit()
+    return {"recorded": recorded}
 
 
 def producer_or_404(artifact: str):

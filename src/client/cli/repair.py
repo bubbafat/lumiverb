@@ -144,8 +144,10 @@ def _superseded(key: str, local: object, account: object) -> None:
 
 
 def _probe_one(client: LumiverbClient, lib_root: "Path", asset: dict,
-               producers: "ProducerSettings | None" = None) -> str:
-    """Probe one video's source file and store the facet. Returns "ok", "missing" or "failed"."""
+               producers: "ProducerSettings | None" = None,
+               fail: "Callable[[str, object], None] | None" = None) -> str:
+    """Probe one video's source file and store the facet. Returns "ok", "missing" or "failed".
+    fail(asset_id, error) hears of a failure (not of a file that isn't there)."""
     source = resolve_source_path(lib_root, asset["rel_path"])
     if not source.is_file():
         logger.warning("Source file not found for %s: %s", asset["asset_id"], asset["rel_path"])
@@ -154,6 +156,8 @@ def _probe_one(client: LumiverbClient, lib_root: "Path", asset: dict,
         facet = probe_video(source)
     except Exception as exc:  # noqa: BLE001 — any ffprobe failure
         logger.warning("Probe failed for %s: %s", asset["rel_path"], exc)
+        if fail:
+            fail(asset["asset_id"], exc)
         return "failed"
     try:
         body = facet.to_dict()
@@ -162,6 +166,8 @@ def _probe_one(client: LumiverbClient, lib_root: "Path", asset: dict,
         client.put(f"/v1/assets/{asset['asset_id']}/video-facet", json=body)
     except Exception as exc:  # noqa: BLE001 — e.g. the asset was trashed mid-run
         logger.warning("Storing probe failed for %s: %s", asset["rel_path"], exc)
+        if fail:
+            fail(asset["asset_id"], exc)
         return "failed"
     return "ok"
 
@@ -173,8 +179,10 @@ def _render_one(
     settings: AnalysisProxySettings,
     cache: AnalysisProxyCache,
     producers: "ProducerSettings | None" = None,
+    fail: "Callable[[str, object], None] | None" = None,
 ) -> str:
-    """Render, upload and cache one video's analysis proxy. Returns "ok", "missing" or "failed"."""
+    """Render, upload and cache one video's analysis proxy. Returns "ok", "missing" or "failed".
+    fail(asset_id, error) hears of a failure (not of a file that isn't there)."""
     source = resolve_source_path(lib_root, asset["rel_path"])
     if not source.is_file():
         logger.warning("Source file not found for %s: %s", asset["asset_id"], asset["rel_path"])
@@ -198,9 +206,13 @@ def _render_one(
         return "ok"
     except RenderError as exc:
         logger.warning("Rendering the analysis proxy for %s failed: %s", asset["rel_path"], exc)
+        if fail:
+            fail(asset["asset_id"], exc)
         return "failed"
     except Exception as exc:  # noqa: BLE001 — e.g. the upload failed or the asset was trashed
         logger.warning("Storing the analysis proxy for %s failed: %s", asset["rel_path"], exc)
+        if fail:
+            fail(asset["asset_id"], exc)
         return "failed"
     finally:
         work.unlink(missing_ok=True)
@@ -520,7 +532,8 @@ def _face_batch_worker(
                 resp = client._client.get(client._url(f"/v1/assets/{asset_id}/proxy"))
                 if resp.status_code != 200:
                     skipped += 1
-                    errors.append({"rel_path": rel_path, "error": f"proxy HTTP {resp.status_code}"})
+                    errors.append({"asset_id": asset_id, "rel_path": rel_path,
+                                   "error": f"proxy HTTP {resp.status_code}"})
                     resp.close()
                     continue
                 image_bytes = resp.content
@@ -551,7 +564,7 @@ def _face_batch_worker(
             del detections
         except Exception as e:
             failed += 1
-            errors.append({"rel_path": rel_path, "error": str(e)})
+            errors.append({"asset_id": asset_id, "rel_path": rel_path, "error": str(e)})
 
     # Single batch POST instead of N individual requests
     if batch_items:
@@ -574,7 +587,7 @@ def _face_batch_worker(
                     processed += 1
                 except Exception as e2:
                     failed += 1
-                    errors.append({"rel_path": bi["asset_id"], "error": str(e2)})
+                    errors.append({"asset_id": bi["asset_id"], "rel_path": bi["asset_id"], "error": str(e2)})
 
     _elapsed = _time.perf_counter() - _batch_start
     return {
@@ -586,19 +599,22 @@ def _face_batch_worker(
 
 def _process_face_result(
     batch_num: int,
-    batch_size: int,
+    asset_ids: list[str],
     ar: "mp.pool.AsyncResult",
     stats: _RepairStats,
     progress,
     tid,
     console,
+    on_fail: "Callable[[str, object], None] | None" = None,
 ) -> None:
-    """Process a single completed face batch result."""
+    """Process a single completed face batch result; on_fail(asset_id, error)
+    hears of each asset it couldn't do."""
     try:
         result = ar.get()
     except Exception as e:
         console.print(f"[red]Batch {batch_num} failed: {e}[/red]")
-        result = {"processed": 0, "failed": batch_size, "skipped": 0, "errors": []}
+        result = {"processed": 0, "failed": len(asset_ids), "skipped": 0,
+                  "errors": [{"asset_id": a, "rel_path": a, "error": f"face batch failed: {e}"} for a in asset_ids]}
 
     _el = result.get("elapsed", 0)
     _n = result["processed"] + result["failed"] + result["skipped"]
@@ -610,6 +626,8 @@ def _process_face_result(
 
     for err in result.get("errors", []):
         console.print(f"[red]faces \u2717[/red] {err['rel_path']}: {err['error']}")
+        if on_fail is not None and err.get("asset_id"):
+            on_fail(err["asset_id"], err["error"])
 
     with stats.lock:
         stats.processed += result["processed"]
@@ -629,24 +647,25 @@ def _collect_face_results(
     console,
     *,
     block: bool = False,
+    on_fail: "Callable[[str, object], None] | None" = None,
 ) -> None:
     """Collect all ready face batch results. If block=True, wait for at least one."""
     # Sweep all ready results
     collected = 0
     i = 0
     while i < len(inflight):
-        batch_num, batch_size, ar = inflight[i]
+        batch_num, asset_ids, ar = inflight[i]
         if ar.ready():
             inflight.pop(i)
-            _process_face_result(batch_num, batch_size, ar, stats, progress, tid, console)
+            _process_face_result(batch_num, asset_ids, ar, stats, progress, tid, console, on_fail)
             collected += 1
         else:
             i += 1
 
     # If nothing was ready and we must block, wait on the oldest
     if collected == 0 and block and inflight:
-        batch_num, batch_size, ar = inflight.pop(0)
-        _process_face_result(batch_num, batch_size, ar, stats, progress, tid, console)
+        batch_num, asset_ids, ar = inflight.pop(0)
+        _process_face_result(batch_num, asset_ids, ar, stats, progress, tid, console, on_fail)
 
 
 def _generate_proxy_for_item(
@@ -714,6 +733,7 @@ def _run_face_pipeline(
     console,
     label: str = "faces",
     lineage: dict | None = None,
+    on_fail: "Callable[[str, object], None] | None" = None,
 ) -> None:
     """Pipeline proxy generation → face detection → result collection.
 
@@ -777,7 +797,7 @@ def _run_face_pipeline(
         while True:
             # Sweep any ready detection results (non-blocking)
             if inflight:
-                _collect_face_results(inflight, stats, progress, tid, console)
+                _collect_face_results(inflight, stats, progress, tid, console, on_fail=on_fail)
 
             # Get next item from proxy queue (short timeout so we keep sweeping)
             try:
@@ -800,12 +820,12 @@ def _run_face_pipeline(
                     _face_batch_worker,
                     (client.base_url, client.token, batch_buf, str(proxy_cache.path), lineage),
                 )
-                inflight.append((batch_num, len(batch_buf), ar))
+                inflight.append((batch_num, [b["asset_id"] for b in batch_buf], ar))
                 batch_buf = []
 
                 # If too many inflight, block until one finishes
                 while len(inflight) >= face_conc * 2:
-                    _collect_face_results(inflight, stats, progress, tid, console, block=True)
+                    _collect_face_results(inflight, stats, progress, tid, console, block=True, on_fail=on_fail)
 
         # Flush remaining partial batch
         if batch_buf:
@@ -815,11 +835,11 @@ def _run_face_pipeline(
                 _face_batch_worker,
                 (client.base_url, client.token, batch_buf, str(proxy_cache.path), lineage),
             )
-            inflight.append((batch_num, len(batch_buf), ar))
+            inflight.append((batch_num, [b["asset_id"] for b in batch_buf], ar))
 
         # Drain all remaining detection results
         while inflight:
-            _collect_face_results(inflight, stats, progress, tid, console, block=True)
+            _collect_face_results(inflight, stats, progress, tid, console, block=True, on_fail=on_fail)
 
         feeder.join(timeout=5)
 
@@ -986,6 +1006,10 @@ def run_repair(
     # so what's recorded in lineage is current.
     from src.client.cli.producer_settings import ProducerSettings
     producers = ProducerSettings(client)
+    # What a step couldn't make goes to the server, which waits before
+    # handing it out again (5 minutes, doubling up to a day).
+    from src.client.cli.failure_report import FailureReport
+    failures = FailureReport(client)
     max_conc = min(concurrency, _cfg.max_concurrency)
     embed_conc = min(max_conc, concurrency)  # embed is CPU-bound (CLIP), full concurrency
     vision_conc = min(max_conc, _cfg.vision_concurrency)
@@ -1040,6 +1064,7 @@ def run_repair(
         return True
 
     for repair_type, count, desc in plan:
+        failures.flush()  # the step before's
         if stop():
             console.print("[yellow]Stopping here; the rest waits for the next run.[/yellow]")
             break
@@ -1087,17 +1112,22 @@ def run_repair(
                             pass
                 embed_batch.clear()
 
+            embed_of: dict[Future, str] = {}
+
             def _collect_embed(done: set[Future]) -> None:
                 for f in done:
+                    asset_id = embed_of.pop(f)
                     try:
                         result = f.result()
-                    except Exception:
-                        result = None
+                        error: object = "no embedding"
+                    except Exception as e:
+                        result, error = None, e
                     if result is not None:
                         embed_batch.append(result)
                         with stats.lock:
                             stats.processed += 1
                     else:
+                        failures.add("clip", asset_id, error)
                         with stats.lock:
                             stats.failed += 1
                     progress.advance(tid, 1)
@@ -1121,6 +1151,7 @@ def run_repair(
                         clip_provider=clip_provider,
                         proxy_cache=proxy_cache,
                     )
+                    embed_of[fut] = a["asset_id"]
                     inflight.add(fut)
                     if len(inflight) >= embed_conc * 2:
                         done, inflight = wait(inflight, return_when=FIRST_COMPLETED)
@@ -1139,6 +1170,7 @@ def run_repair(
                 skip={asset_id for step, asset_id in skip_items if step == "vision"},
                 on_take=None if on_take is None else lambda asset_id: on_take("vision", asset_id),
                 producers=producers,
+                on_fail=failures.for_artifact("vision"),
             )
 
         elif repair_type == "ocr":
@@ -1204,6 +1236,7 @@ def run_repair(
                         with stats.lock:
                             stats.processed += 1
                     else:
+                        failures.add("ocr", a["asset_id"], "no OCR result (no proxy, or the model failed: see the log)")
                         with stats.lock:
                             stats.skipped += 1
 
@@ -1258,6 +1291,7 @@ def run_repair(
                         console=console,
                         label="faces",
                         lineage=producers.lineage("faces", None),
+                        on_fail=failures.for_artifact("faces"),
                     )
 
         elif repair_type == "redetect-faces":
@@ -1288,6 +1322,7 @@ def run_repair(
                     console=console,
                     label="redetect-faces",
                     lineage=producers.lineage("faces", None),
+                    on_fail=failures.for_artifact("faces"),
                 )
 
             # Clean up dismissed people left with zero face matches
@@ -1319,7 +1354,7 @@ def run_repair(
             with progress:
                 tid = progress.add_task("Probe", total=len(assets), ok=0, fail=0)
                 for a in _until(stop, assets, _taking("probe")):
-                    outcome = _probe_one(client, lib_root, a, producers)
+                    outcome = _probe_one(client, lib_root, a, producers, failures.for_artifact("probe"))
                     with stats.lock:
                         if outcome == "ok":
                             stats.processed += 1
@@ -1357,7 +1392,8 @@ def run_repair(
             with progress:
                 tid = progress.add_task("Render", total=len(assets), ok=0, fail=0)
                 for a in _until(stop, assets, _taking("render")):
-                    outcome = _render_one(client, lib_root, a, settings, analysis_cache, producers)
+                    outcome = _render_one(client, lib_root, a, settings, analysis_cache, producers,
+                                          failures.for_artifact("analysis_proxy"))
                     with stats.lock:
                         if outcome == "ok":
                             stats.processed += 1
@@ -1404,7 +1440,8 @@ def run_repair(
                     result = _transcribe_one(source_path, whisper["model"], whisper["vad_min_silence_ms"])
 
                     if result is None:
-                        # Transient failure — leave has_transcript=NULL for retry
+                        # Left missing, and tried again once its turn comes.
+                        failures.add("transcript", asset_id, "transcription failed (see the log)")
                         with stats.lock:
                             stats.failed += 1
                         progress.advance(tid, 1)
@@ -1423,6 +1460,7 @@ def run_repair(
                             stats.processed += 1
                     except Exception as e:
                         logger.warning("Failed to submit transcript for %s: %s", asset_id, e)
+                        failures.add("transcript", asset_id, e)
                         with stats.lock:
                             stats.failed += 1
 
@@ -1467,6 +1505,7 @@ def run_repair(
                     progress=progress,
                     task_id=tid,
                     lineage_for=lambda v: producers.lineage("scenes", v.get("sha256")),
+                    on_fail=failures.for_artifact("scenes"),
                 )
             with stats.lock:
                 stats.processed += done
@@ -1515,6 +1554,7 @@ def run_repair(
                     progress=progress,
                     task_id=tid,
                     lineage_for=lambda v: producers.lineage("scene_vision", v.get("sha256")),
+                    on_fail=failures.for_artifact("scene_vision"),
                 )
             with stats.lock:
                 stats.processed += done
@@ -1529,6 +1569,7 @@ def run_repair(
             sync_failed = result.get("failed", 0)
             console.print(f"  Search sync: {synced} synced, {sync_failed} failed")
 
+    failures.flush()
     # Proxy cache is persistent (shared between scan and enrich) — do not clean up.
 
     console.print(f"\n[green bold]Repair complete.[/green bold] "

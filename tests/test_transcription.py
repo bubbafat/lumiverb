@@ -125,7 +125,7 @@ class TestMissingTranscriptionCondition:
     def test_condition_checks_has_transcript(self):
         from src.server.repository.tenant import MISSING_CONDITIONS
         cond = MISSING_CONDITIONS["missing_transcription"]
-        assert "has_transcript IS NULL" in cond
+        assert "NOT (a.has_transcript IS NOT NULL)" in cond  # missing: the reconciler's MADE, negated
         assert "media_type = 'video'" in cond
         assert "duration_sec IS NOT NULL" in cond
 

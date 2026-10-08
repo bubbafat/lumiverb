@@ -1,11 +1,18 @@
-"""Lineage: how each clip's artifacts were made, and what's current (ADR-016 phase 3).
+"""Lineage and the reconciler: how each clip's artifacts were made, and what
+each clip still needs (ADR-016 phase 3).
 
-An artifact is current when its lineage names the producer registered for
-it now (src/shared/producers.py), at its version, with the hash of the
-settings in force, made from the clip's file as it is now. Otherwise it's
-stale. A clip the producer applies to with no artifact is missing. A
-person's artifact (a transcript they wrote) is current whatever the
-producer's settings: it's never regenerated over.
+An artifact is missing when it doesn't exist (MADE), whatever its lineage
+says. One that exists is current when its lineage names the producer
+registered for it now (src/shared/producers.py), at its version, with the
+hash of the settings in force, made from the clip's file as it is now;
+otherwise it's stale, and with no lineage at all it's an unknown producer's,
+so stale too. A person's artifact (a transcript they wrote) is current
+whatever the producer's settings: it's never regenerated over.
+
+What the worker is handed (`due`): what's missing, and what was made from
+a file whose content has since changed. Stale from a producer or settings
+change waits for approval. A failure waits its turn: 5 minutes, doubling
+up to a day.
 """
 
 from __future__ import annotations
@@ -32,13 +39,27 @@ APPLIES: dict[str, str] = {
     "scene_vision": ("a.media_type = 'video' AND a.video_indexed"
                      " AND EXISTS (SELECT 1 FROM video_scenes s WHERE s.asset_id = a.asset_id)"),
     "vision": "a.media_type = 'image'",
-    "ocr": "a.media_type = 'image'",
+    # OCR is kept with the description until it has a table of its own.
+    "ocr": "a.media_type = 'image' AND EXISTS (SELECT 1 FROM asset_metadata am WHERE am.asset_id = a.asset_id)",
     "clip": "a.media_type = 'image'",
     "faces": "a.media_type = 'image'",
 }
-# An artifact made in parts counts as missing until every part exists.
-INCOMPLETE: dict[str, str] = {
-    "scene_vision": "EXISTS (SELECT 1 FROM video_scenes s WHERE s.asset_id = a.asset_id AND s.description IS NULL)",
+# Whether a clip has the artifact (SQL on active_assets a). One made in
+# parts exists once every part does.
+MADE: dict[str, str] = {
+    "probe": "EXISTS (SELECT 1 FROM video_facets vf WHERE vf.asset_id = a.asset_id)",
+    "proxy": "a.proxy_key IS NOT NULL",
+    "video_preview": "a.video_preview_key IS NOT NULL",
+    "analysis_proxy": "a.analysis_proxy_key IS NOT NULL",
+    "scenes": "a.video_indexed",
+    "scene_vision": ("NOT EXISTS (SELECT 1 FROM video_scenes s"
+                     " WHERE s.asset_id = a.asset_id AND s.description IS NULL)"),
+    "vision": "EXISTS (SELECT 1 FROM asset_metadata am WHERE am.asset_id = a.asset_id)",
+    "ocr": ("EXISTS (SELECT 1 FROM asset_metadata am"
+            " WHERE am.asset_id = a.asset_id AND (am.data->>'has_text') IS NOT NULL)"),
+    "clip": "EXISTS (SELECT 1 FROM asset_embeddings ae WHERE ae.asset_id = a.asset_id)",
+    "faces": "a.face_count IS NOT NULL",
+    "transcript": "a.has_transcript IS NOT NULL",
 }
 
 ACCOUNT_VISION_MODEL = "vision_model"
@@ -84,16 +105,44 @@ def _stale_sql() -> str:
     )
 
 
+def _lineage(artifact: str, where: str) -> str:
+    """EXISTS a lineage row for this artifact on clip a, where..."""
+    return (f"EXISTS (SELECT 1 FROM artifact_lineage l WHERE l.asset_id = a.asset_id"
+            f" AND l.artifact = '{artifact}' AND {where})")
+
+
+def source_changed(artifact: str) -> str:
+    """Made from a file whose content has since changed (a person's never counts)."""
+    return ("(a.sha256 IS NOT NULL AND "
+            + _lineage(artifact, f"l.producer NOT IN ('', '{PERSON}') AND l.source_sha256 IS DISTINCT FROM a.sha256")
+            + ")")
+
+
+def waiting(artifact: str) -> str:
+    """The last try failed and its turn hasn't come."""
+    return _lineage(artifact, "l.retry_at > now()")
+
+
+def outstanding(artifact: str) -> str:
+    """Clips that need this artifact made: missing, or made from content that's changed."""
+    return f"(({APPLIES[artifact]}) AND (NOT ({MADE[artifact]}) OR {source_changed(artifact)}))"
+
+
+def due(artifact: str) -> str:
+    """What the worker is handed now: outstanding, less failures waiting their turn."""
+    return f"({outstanding(artifact)} AND NOT {waiting(artifact)})"
+
+
 def counts(session: Session, artifact: str, want: dict[str, Any], library_id: str | None = None) -> dict[str, int]:
     """{applicable, current, stale, missing, failing} for one artifact kind,
     over clips in sight (in one library when given)."""
-    missing = "(l.asset_id IS NULL OR l.producer = '')"
-    if artifact in INCOMPLETE:
-        missing = f"({missing} OR {INCOMPLETE[artifact]})"
+    if artifact not in MADE:
+        raise KeyError(artifact)
+    made = f"({MADE[artifact]})"
     row = session.execute(text(
         "SELECT count(*),"
-        f" count(*) FILTER (WHERE {missing}),"
-        f" count(*) FILTER (WHERE NOT {missing} AND {_stale_sql()}),"
+        f" count(*) FILTER (WHERE NOT {made}),"
+        f" count(*) FILTER (WHERE {made} AND (l.asset_id IS NULL OR {_stale_sql()})),"
         " count(*) FILTER (WHERE l.error IS NOT NULL)"
         " FROM active_assets a"
         " LEFT JOIN artifact_lineage l ON l.asset_id = a.asset_id AND l.artifact = :artifact"

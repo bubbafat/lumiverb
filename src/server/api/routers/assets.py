@@ -457,6 +457,8 @@ class RepairSummary(BaseModel):
     missing_probe: int = 0
     missing_analysis_proxy: int = 0
     stale_search_sync: int = 0
+    # Items whose last try failed, waiting their turn (not in the counts above).
+    waiting_failures: int = 0
 
 
 @router.get("/repair-summary", response_model=RepairSummary, dependencies=[Depends(require_signed_in)])
@@ -518,6 +520,10 @@ def repair_summary(
         missing_transcription=row.missing_transcription,
         missing_probe=row.missing_probe,
         missing_analysis_proxy=row.missing_analysis_proxy,
+        waiting_failures=session.execute(text(
+            "SELECT count(*) FROM artifact_lineage l JOIN active_assets a ON a.asset_id = l.asset_id"
+            " WHERE a.library_id = :library_id AND l.retry_at > now()"
+        ), {"library_id": library_id}).scalar() or 0,
         stale_search_sync=row.stale_search_sync,
     )
 

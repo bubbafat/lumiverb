@@ -167,10 +167,11 @@ def list_library_health(
     """
     from sqlalchemy import text
 
-    from src.server.repository.tenant import MISSING_CONDITIONS
+    from src.server.repository.tenant import OUTSTANDING_CONDITIONS
 
+    # Failures waiting their turn are pending too: not healthy.
     pending_clause = " OR ".join(
-        f"({cond})" for cond in MISSING_CONDITIONS.values()
+        f"({cond})" for cond in OUTSTANDING_CONDITIONS.values()
     )
     pending_clause = f"a.proxy_key IS NULL OR {pending_clause}"
 

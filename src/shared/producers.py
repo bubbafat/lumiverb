@@ -89,6 +89,32 @@ def _producers() -> tuple[Producer, ...]:
 PRODUCERS: dict[str, Producer] = {p.artifact: p for p in _producers()}
 ARTIFACTS: tuple[str, ...] = tuple(PRODUCERS)
 
+# The repair summary's counts and page filters (what the worker is handed)
+# and the artifact each is about.
+MISSING_FLAGS: dict[str, str] = {
+    "missing_probe": "probe",
+    "missing_analysis_proxy": "analysis_proxy",
+    "missing_embeddings": "clip",
+    "missing_vision": "vision",
+    "missing_faces": "faces",
+    "missing_ocr": "ocr",
+    "missing_transcription": "transcript",
+    "missing_video_scenes": "scenes",
+    "missing_scene_vision": "scene_vision",
+}
+# The worker's enrich steps and the artifact each makes.
+STEP_ARTIFACTS: dict[str, str] = {
+    "probe": "probe",
+    "render": "analysis_proxy",
+    "embed": "clip",
+    "vision": "vision",
+    "faces": "faces",
+    "ocr": "ocr",
+    "transcribe": "transcript",
+    "video-scenes": "scenes",
+    "scene-vision": "scene_vision",
+}
+
 # Lineage a write carries when nothing says who made it (an old client, the
 # macOS app today): never current, so the brain makes it again.
 UNKNOWN = "unknown"

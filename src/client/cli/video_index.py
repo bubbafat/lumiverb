@@ -152,8 +152,10 @@ def run_video_index(
     progress: Progress,
     task_id: object,
     lineage_for: "Callable[[dict], dict] | None" = None,
+    on_fail: "Callable[[str, object], None] | None" = None,
 ) -> tuple[int, int]:
     """Run scene detection on a batch of videos, updating progress.
+    on_fail(asset_id, error) hears of each video it couldn't do.
 
     Each video dict must have: asset_id, rel_path, duration_sec.
     Videos are processed sequentially (FFmpeg is CPU/IO heavy).
@@ -191,6 +193,8 @@ def run_video_index(
             )
         except Exception as e:
             logger.exception("video-index: %s — failed: %s", rel_path, e)
+            if on_fail:
+                on_fail(asset_id, e)
             fail += 1
             progress.console.print(f"[red]video-index \u2717[/red] {rel_path}: {e}")
 
@@ -325,8 +329,10 @@ def run_video_enrich(
     progress: Progress,
     task_id: object,
     lineage_for: "Callable[[dict], dict] | None" = None,
+    on_fail: "Callable[[str, object], None] | None" = None,
 ) -> tuple[int, int]:
     """Run scene enrichment on a batch of videos, updating progress.
+    on_fail(asset_id, error) hears of each video it couldn't do.
 
     Each video dict must have: asset_id, rel_path.
     Videos are processed sequentially (vision API is the bottleneck).
@@ -365,6 +371,8 @@ def run_video_enrich(
             )
         except Exception as e:
             logger.exception("scene-enrich: %s — failed: %s", rel_path, e)
+            if on_fail:
+                on_fail(asset_id, e)
             fail += 1
             progress.console.print(f"[red]scene-enrich \u2717[/red] {rel_path}: {e}")
 
