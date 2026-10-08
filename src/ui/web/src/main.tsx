@@ -23,6 +23,7 @@ import SettingsPage from "./pages/SettingsPage";
 import AccountSection from "./pages/settings/AccountSection";
 import PreferencesSection from "./pages/settings/PreferencesSection";
 import PlaybackSection from "./pages/settings/PlaybackSection";
+import FilesSection from "./pages/settings/FilesSection";
 import SecuritySection from "./pages/settings/SecuritySection";
 import ApiKeysSection from "./pages/settings/ApiKeysSection";
 import { getApiKey } from "./api/client";
@@ -172,6 +173,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="account" element={<AccountSection />} />
               <Route path="preferences" element={<PreferencesSection />} />
               <Route path="playback" element={<PlaybackSection />} />
+              <Route path="files" element={<FilesSection />} />
               <Route path="security" element={<SecuritySection />} />
               <Route path="keys" element={<ApiKeysSection />} />
             </Route>

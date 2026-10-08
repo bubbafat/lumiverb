@@ -12,6 +12,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/settings/account", label: "Account" },
   { to: "/settings/preferences", label: "Preferences" },
   { to: "/settings/playback", label: "Playback" },
+  { to: "/settings/files", label: "Files" },
   { to: "/settings/security", label: "Security" },
   { to: "/settings/keys", label: "API Keys", requireEditor: true },
 ];

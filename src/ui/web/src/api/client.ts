@@ -630,6 +630,8 @@ export interface TenantSettings {
   video_preview_max_seconds: number | null;
   /** The same on public pages, never more than the above; 10 until set. */
   public_video_preview_max_seconds: number | null;
+  /** The same content is the same asset (moves, renames, copy then delete). On unless turned off; older servers leave it out. */
+  follow_moves?: boolean;
 }
 
 export async function getTenantSettings(): Promise<TenantSettings> {
