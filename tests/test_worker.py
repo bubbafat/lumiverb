@@ -711,6 +711,34 @@ def test_a_run_cut_short_without_getting_anywhere_is_paced(das: Path) -> None:
 
 
 @pytest.mark.fast
+def test_a_library_whose_time_ran_out_before_it_got_going_goes_first_next_cycle(das: Path) -> None:
+    # lib_1 used most of the time; lib_2 spent the rest loading a model and
+    # took nothing. That's not stuck: it isn't paced, and it isn't sent to
+    # the back of the queue either.
+    server = FakeServer(TWO, summaries={"lib_1": WORK, "lib_2": WORK})
+    clock = Clock()
+    took: list[str] = []
+
+    def enrich(client, lib, *, should_stop, on_take, **kw):
+        if lib["library_id"] == "lib_1":
+            on_take("render", f"ast_{clock.t}")
+            clock.t += 13 * MIN
+            return
+        clock.t += 3 * MIN  # loading Whisper, listing what's missing
+        if not should_stop():
+            on_take("transcribe", "ast_x")
+            took.append(lib["library_id"])
+
+    state = WorkerState(last_full_scan=dict(BOTH_SCANNED))
+    _, first, state = _cycle(server, state, enrich=MagicMock(side_effect=enrich), clock=clock)
+    assert _enriched(first) == ["lib_1", "lib_2"] and took == []
+    server.summaries["lib_1"] = {**WORK, "missing_transcription": 2}  # a new clip: lib_1 has work too
+    _, second, state = _cycle(server, state, now=100 * HOUR + MIN, enrich=MagicMock(side_effect=enrich), clock=clock)
+    assert _enriched(second) == ["lib_2", "lib_1"]
+    assert took == ["lib_2"]
+
+
+@pytest.mark.fast
 def test_a_library_is_not_started_with_almost_no_time_left(das: Path) -> None:
     # It would run out of time getting going, and be paced as if stuck.
     server = FakeServer(TWO, summaries={"lib_1": WORK, "lib_2": WORK})

@@ -60,7 +60,7 @@ RETRY_FIRST_SEC = 300.0
 RETRY_MAX_SEC = 24 * 3600.0
 DEFAULT_ENRICH_BUDGET_SEC = 15 * 60.0
 # A library isn't started with less time left than this: it would run out
-# getting going, and be paced as if it had got nowhere.
+# getting going.
 ENRICH_MIN_START_SEC = 60.0
 
 # Enrich steps that need a vision AI endpoint, and the count each repairs.
@@ -357,15 +357,17 @@ def run_cycle(
 
     # Least recently enriched first, so one library's long backlog doesn't
     # keep the others waiting.
+    others_ran = False
     for library in sorted(libraries, key=lambda lib: state.last_enrich.get(lib["library_id"], ((), float("-inf")))[1]):
         if clock() >= deadline - ENRICH_MIN_START_SEC:
             logger.info("worker: out of time for enrichment this cycle; %s and the rest go on next cycle",
                         library["name"])
             break
         try:
-            _enrich_library(client, library, state, reachable=reachable[library["library_id"]], skip=skip,
-                            now=now, retry_every=retry_every, enrich_fn=enrich_fn, should_stop=out_of_time,
-                            console=console)
+            others_ran |= _enrich_library(
+                client, library, state, reachable=reachable[library["library_id"]], skip=skip, now=now,
+                retry_every=retry_every, enrich_fn=enrich_fn, should_stop=out_of_time, after_others=others_ran,
+                console=console)
         except Exception:  # noqa: BLE001
             logger.exception("worker: enriching %s failed; trying again next cycle", library["name"])
 
@@ -381,8 +383,13 @@ def _enrich_library(
     retry_every: float,
     enrich_fn: Callable,
     should_stop: Callable[[], bool],
+    after_others: bool = False,
     console: Console,
-) -> None:
+) -> bool:
+    """Enrich `library` if it has work and isn't paced; True if it ran.
+
+    after_others: other libraries used some of this cycle's time first.
+    """
     library_id = library["library_id"]
 
     def look() -> tuple:
@@ -391,10 +398,10 @@ def _enrich_library(
 
     before = look()
     if not any(before[1]):
-        return
+        return False
     previous = state.last_enrich.get(library_id)
     if previous is not None and previous[0] == before and now - previous[1] < retry_every:
-        return  # nothing changed since the last try
+        return False  # nothing changed since the last try
     taken = {item: due for item, due in state.taken.get(library_id, {}).items() if due > now}
     state.taken[library_id] = taken
     waiting = set(taken)
@@ -415,12 +422,17 @@ def _enrich_library(
             raise  # SIGTERM (main.py's handler): the worker is stopping
         logger.exception("worker: enriching %s failed; trying again when it changes or in an hour",
                          library["name"])
-        return
+        return True
     after = look()
-    if should_stop() and (took or after != before):
-        state.last_enrich[library_id] = (None, now)  # cut short, not stuck
-    else:
+    if not should_stop():
         state.last_enrich[library_id] = (after, now)
+    elif took or after != before:
+        state.last_enrich[library_id] = (None, now)  # cut short, not stuck
+    elif not after_others:
+        state.last_enrich[library_id] = (after, now)  # it had the cycle to itself and got nowhere
+    # Otherwise time ran out before it took anything, the others having used
+    # most of it: it isn't paced, and goes first next cycle.
+    return True
 
 
 def run_forever(
