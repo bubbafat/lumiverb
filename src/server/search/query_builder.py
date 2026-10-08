@@ -271,7 +271,9 @@ def build_quickwit_prefix_query(
 # Order: full-phrase whole-word match > per-token whole-word match > any
 # substring match (which is what we already had). Encoded as a SQL
 # expression that the fallback search uses in its ORDER BY.
-def postgres_rank_clauses(query: str, include_transcripts: bool = True) -> tuple[str, dict[str, str]]:
+def postgres_rank_clauses(
+    query: str, include_transcripts: bool = True, include_notes: bool = True,
+) -> tuple[str, dict[str, str]]:
     """Build SQL expressions + bound params for ranking the Postgres
     fallback. The fallback already retrieves rows by ILIKE; this adds an
     ORDER BY that hoists whole-word matches above incidental substring
@@ -320,8 +322,8 @@ def postgres_rank_clauses(query: str, include_transcripts: bool = True) -> tuple
     haystack = (
         "COALESCE(m.data->>'description','') || ' ' || "
         "COALESCE(CAST(m.data->'tags' AS TEXT),'') || ' ' || "
-        "COALESCE(m.data->>'ocr_text','') || ' ' || "
-        "COALESCE(a.note,'')"
+        "COALESCE(m.data->>'ocr_text','')"
+        + (" || ' ' || COALESCE(a.note,'')" if include_notes else "")
         + (" || ' ' || COALESCE(a.transcript_text,'')" if include_transcripts else "")
     )
 

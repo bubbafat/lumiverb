@@ -107,12 +107,14 @@ def _run_quickwit_search(
     library_ids: list[str] | None,
     limit: int,
     public_cap_ms: int | None = None,
+    public: bool = False,
 ) -> tuple[dict[str, float], dict[str, SearchContext], str]:
     """Run text search through Quickwit (or Postgres fallback).
 
     `public_cap_ms`: for a public page that plays only so much of each
     video, search what it shows: no whole-transcript field, and no scene
-    or transcript hits from past that point.
+    or transcript hits from past that point. `public`: a public page's
+    search never reads notes, the team's working notes.
 
     Returns:
       - scores: {asset_id: best_score}
@@ -155,16 +157,16 @@ def _run_quickwit_search(
             return ""
         return " AND ".join(f"({q})" for q in per_term)
 
-    asset_fields = ASSET_FIELDS
-    if public_cap_ms is not None:
-        asset_fields = [f for f in ASSET_FIELDS if f != "transcript_text"]
+    hidden = ({"note"} if public else set()) | ({"transcript_text"} if public_cap_ms is not None else set())
+    asset_fields = [f for f in ASSET_FIELDS if f not in hidden]
+    asset_phrase_fields = [f for f in ASSET_PHRASE_FIELDS if f not in hidden]
 
     def shown(hit: dict) -> bool:
         """Within what a capped public page plays."""
         start = hit.get("start_ms")
         return public_cap_ms is None or (start is not None and start < public_cap_ms)
 
-    asset_query = _build(asset_fields, ASSET_PHRASE_FIELDS)
+    asset_query = _build(asset_fields, asset_phrase_fields)
     scene_query = _build(SCENE_FIELDS, SCENE_PHRASE_FIELDS)
     transcript_query = _build(TRANSCRIPT_FIELDS, TRANSCRIPT_PHRASE_FIELDS)
     asset_prefix_query = _build_prefix(asset_fields)
@@ -401,12 +403,14 @@ def _run_postgres_fallback(
     library_ids: list[str] | None,
     limit: int,
     include_transcripts: bool = True,
+    include_notes: bool = True,
 ) -> tuple[dict[str, float], dict[str, SearchContext]]:
     """Postgres ILIKE fallback when Quickwit is unavailable."""
     from src.server.search.postgres_search import search_assets
 
     lib_id = library_ids[0] if library_ids and len(library_ids) == 1 else None
-    hits = search_assets(session, lib_id, combined_query, limit=limit, include_transcripts=include_transcripts)
+    hits = search_assets(session, lib_id, combined_query, limit=limit, include_transcripts=include_transcripts,
+                         include_notes=include_notes)
     scores: dict[str, float] = {}
     contexts: dict[str, SearchContext] = {}
     for hit in hits:
@@ -509,6 +513,7 @@ def unified_query(
 
         scores, contexts, source = _run_quickwit_search(
             tenant_id, search_terms, library_ids, limit=MAX_CANDIDATE_IDS, public_cap_ms=public_cap_ms,
+            public=getattr(request.state, "is_public_request", False),
         )
         search_source = source
 
@@ -518,6 +523,7 @@ def unified_query(
             scores, contexts = _run_postgres_fallback(
                 session, pg_query, library_ids, limit=MAX_CANDIDATE_IDS,
                 include_transcripts=public_cap_ms is None,
+                include_notes=not getattr(request.state, "is_public_request", False),
             )
 
         if not scores:

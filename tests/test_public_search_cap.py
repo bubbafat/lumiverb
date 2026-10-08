@@ -101,3 +101,17 @@ def test_fallback_ranking_doesnt_read_the_transcript_when_matching_doesnt():
     with_t, _ = postgres_rank_clauses("zebra")
     without, _ = postgres_rank_clauses("zebra", include_transcripts=False)
     assert "transcript_text" in with_t and "transcript_text" not in without
+
+
+def test_public_search_leaves_notes_out_even_uncapped(quickwit):
+    from src.server.api.routers.query import _run_quickwit_search
+
+    _run_quickwit_search("ten_1", [SearchTerm(q="word")], ["lib_1"], limit=50, public_cap_ms=None, public=True)
+    assert quickwit.asset_queries and all("note" not in q for q in quickwit.asset_queries)
+
+
+def test_fallback_ranking_leaves_notes_out_for_visitors():
+    from src.server.search.query_builder import postgres_rank_clauses
+
+    rank, _ = postgres_rank_clauses("zebra", include_notes=False)
+    assert "a.note" not in rank

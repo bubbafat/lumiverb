@@ -13,6 +13,7 @@ def search_assets(
     limit: int = 20,
     offset: int = 0,
     include_transcripts: bool = True,
+    include_notes: bool = True,
 ) -> list[dict]:
     """
     Simple Postgres fallback search using ILIKE across:
@@ -33,7 +34,8 @@ def search_assets(
     from src.server.search.query_builder import parse_query, postgres_rank_clauses
 
     lib_condition = "a.library_id = :library_id AND" if library_id else ""
-    rank_expr, rank_params = postgres_rank_clauses(query, include_transcripts=include_transcripts)
+    rank_expr, rank_params = postgres_rank_clauses(query, include_transcripts=include_transcripts,
+                                                   include_notes=include_notes)
 
     # Build one ILIKE group per parsed term and AND them together so
     # a quoted phrase acts as a literal substring constraint instead
@@ -46,6 +48,7 @@ def search_assets(
     # actually loosen that for unquoted input.
     # A capped public page doesn't show the whole transcript, so its search doesn't read it.
     transcript_or = "OR a.transcript_text ILIKE :{name}" if include_transcripts else ""
+    note_or = "OR a.note ILIKE :{name}" if include_notes else ""
     terms = parse_query(query)
     term_patterns: list[tuple[str, str]] = []  # (bind_name, ilike_value)
     for i, term in enumerate(terms):
@@ -61,7 +64,7 @@ def search_assets(
                OR m.data->>'description' ILIKE :{name}
                OR CAST(m.data->'tags' AS TEXT) ILIKE :{name}
                OR m.data->>'ocr_text' ILIKE :{name}
-               OR a.note ILIKE :{name}
+               {note_or.format(name=name)}
                {transcript_or.format(name=name)}
               )"""
             for name, _ in term_patterns
@@ -78,7 +81,7 @@ def search_assets(
            OR m.data->>'description' ILIKE :like_0
            OR CAST(m.data->'tags' AS TEXT) ILIKE :like_0
            OR m.data->>'ocr_text' ILIKE :like_0
-           OR a.note ILIKE :like_0
+           {note_or.format(name='like_0')}
            {transcript_or.format(name='like_0')}
           )"""
         term_patterns = [("like_0", f"%{query}%")]
