@@ -133,6 +133,13 @@ describe("ProjectDetailPage", () => {
     await waitFor(() => expect(api.restoreProjectClips).toHaveBeenCalledWith("prj_1"));
   });
 
+  it("says it, not them, for one clip", async () => {
+    withProject({ trashed_asset_count: 1 });
+    renderPage();
+    expect((await screen.findByRole("status")).textContent).toMatch(/1 clip is in the trash/);
+    expect(screen.getByRole("button", { name: "Restore it" })).toBeTruthy();
+  });
+
   it("shows no banner when nothing is in the trash", async () => {
     renderPage();
     await screen.findByAltText("camA.mov");

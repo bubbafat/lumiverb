@@ -362,7 +362,7 @@ export default function ProjectDetailPage() {
               disabled={restoreClipsMutation.isPending}
               className="rounded-md border border-amber-700/60 px-2.5 py-1 text-xs font-medium text-amber-100 hover:bg-amber-900/40 disabled:opacity-50"
             >
-              Restore them
+              {trashedClips === 1 ? "Restore it" : "Restore them"}
             </button>
           )}
         </div>
