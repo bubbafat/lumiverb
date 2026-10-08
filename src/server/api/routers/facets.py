@@ -110,15 +110,9 @@ def get_facets(
             "LEFT JOIN asset_ratings r ON r.asset_id = a.asset_id"
         )
     if needs_metadata:
-        joins.append(
-            """LEFT JOIN LATERAL (
-                SELECT data->'tags' AS tags
-                FROM asset_metadata
-                WHERE asset_id = a.asset_id
-                ORDER BY generated_at DESC
-                LIMIT 1
-            ) m ON TRUE"""
-        )
+        from src.server.repository.corrections import TAGS_JOIN
+
+        joins.append(TAGS_JOIN)  # the tags a person sees
 
     where_sql = " AND ".join(conditions) if conditions else "TRUE"
     join_sql = " ".join(joins)

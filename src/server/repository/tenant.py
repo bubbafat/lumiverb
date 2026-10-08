@@ -15,6 +15,7 @@ from sqlmodel import Session, select
 
 from src.shared.io_utils import normalize_path_prefix, normalize_rel_path
 from src.shared.utils import utcnow
+from src.server.repository import corrections as _corr
 from src.shared import asset_status
 from src.server.models.similarity import SimilarityScope
 from src.server.models.tenant import (
@@ -852,15 +853,7 @@ class AssetRepository:
 
         lateral_join = ""
         if join_metadata:
-            lateral_join = """
-            LEFT JOIN LATERAL (
-                SELECT data->'tags' AS tags
-                FROM asset_metadata
-                WHERE asset_id = a.asset_id
-                ORDER BY generated_at DESC
-                LIMIT 1
-            ) m ON TRUE
-            """
+            lateral_join = _corr.TAGS_JOIN  # the tags a person sees
 
         # The reconciler's missing_* rules read each clip's lineage (as `la`).
         if any((missing_vision, missing_embeddings, missing_faces, missing_video_scenes, missing_ocr,
@@ -1189,11 +1182,13 @@ class AssetRepository:
 
     def has_human_data(self, asset_id: str) -> bool:
         """Whether a person has worked on this asset: a note, a transcript they
-        wrote or pasted, a rating, a project, a confirmed or rejected person."""
+        wrote or pasted, a correction, a rating, a project, a confirmed or
+        rejected person."""
         return bool(self._session.execute(
             text(
                 "SELECT EXISTS (SELECT 1 FROM assets WHERE asset_id = :a"
                 "               AND (note IS NOT NULL OR transcript_source = 'manual'))"
+                " OR EXISTS (SELECT 1 FROM asset_corrections WHERE asset_id = :a)"
                 " OR EXISTS (SELECT 1 FROM asset_ratings WHERE asset_id = :a)"
                 " OR EXISTS (SELECT 1 FROM project_assets WHERE asset_id = :a)"
                 " OR EXISTS (SELECT 1 FROM faces f JOIN face_person_matches m ON m.face_id = f.face_id"
@@ -2957,15 +2952,7 @@ class UnifiedBrowseRepository:
 
         lateral_join = ""
         if join_metadata:
-            lateral_join = """
-            LEFT JOIN LATERAL (
-                SELECT data->'tags' AS tags
-                FROM asset_metadata
-                WHERE asset_id = a.asset_id
-                ORDER BY generated_at DESC
-                LIMIT 1
-            ) m ON TRUE
-            """
+            lateral_join = _corr.TAGS_JOIN  # the tags a person sees
 
         rating_join_sql = ""
         if join_ratings:
@@ -3117,15 +3104,7 @@ class UnifiedBrowseRepository:
 
         lateral_join = ""
         if join_metadata:
-            lateral_join = """
-            LEFT JOIN LATERAL (
-                SELECT data->'tags' AS tags
-                FROM asset_metadata
-                WHERE asset_id = a.asset_id
-                ORDER BY generated_at DESC
-                LIMIT 1
-            ) m ON TRUE
-            """
+            lateral_join = _corr.TAGS_JOIN  # the tags a person sees
 
         rating_join_sql = ""
         if join_ratings:

@@ -32,12 +32,15 @@ def _path_to_tokens(rel_path: str) -> str:
     return re.sub(r" +", " ", s).strip()
 
 
-def build_asset_document(asset: Asset, meta: AssetMetadata | None, ocr_text: str = "") -> dict:
-    """Build a Quickwit document for an asset, its latest AI description and
-    the text read in its image."""
-    data = meta.data if meta else {} or {}
-    description = data.get("description", "")
-    tags = data.get("tags") or []
+def build_asset_document(asset: Asset, meta: AssetMetadata | None, ocr_text: str = "",
+                         corrections: dict | None = None) -> dict:
+    """Build a Quickwit document for an asset as a person sees it: its latest
+    AI description and the text read in its image, with their corrections."""
+    from src.server.repository.corrections import apply
+
+    data = (meta.data if meta else None) or {}
+    description, tags, ocr_text, _ = apply(corrections, data.get("description", ""), data.get("tags") or [],
+                                           ocr_text)
 
     capture_ts = None
     if asset.taken_at:
@@ -50,14 +53,14 @@ def build_asset_document(asset: Asset, meta: AssetMetadata | None, ocr_text: str
         "rel_path": asset.rel_path,
         "path_tokens": _path_to_tokens(asset.rel_path),
         "media_type": asset.media_type,
-        "description": description,
+        "description": description or "",
         "tags": tags,
         "capture_ts": capture_ts,
         "camera_make": asset.camera_make,
         "camera_model": asset.camera_model,
         "gps_lat": asset.gps_lat,
         "gps_lon": asset.gps_lon,
-        "ocr_text": ocr_text,
+        "ocr_text": ocr_text or "",
         "note": asset.note or "",
         "transcript_text": asset.transcript_text or "",
         "searchable": True,
@@ -159,9 +162,11 @@ def try_sync_asset(
     try:
         if tenant_id:
             qw.ensure_tenant_index(tenant_id)
+        from src.server.repository.corrections import CorrectionsRepository
         from src.server.repository.tenant import AssetOcrRepository
 
-        doc = build_asset_document(asset, meta, AssetOcrRepository(session).text_for(asset.asset_id))
+        doc = build_asset_document(asset, meta, AssetOcrRepository(session).text_for(asset.asset_id),
+                                   CorrectionsRepository(session).get(asset.asset_id))
         if tenant_id:
             qw.ingest_tenant_documents(tenant_id, [doc])
         asset.search_synced_at = utcnow()
@@ -206,12 +211,13 @@ def try_sync_scene(
 
 # Every clip has a search document (its path, notes, transcript, description
 # and the text in its image); it's stale until synced after the latest of its
-# description and its OCR. SQL on active_assets a; the repair summary counts
+# description, its OCR and its corrections. SQL on active_assets a; the repair summary counts
 # with the same rule.
 STALE_SEARCH = (
     "(a.search_synced_at IS NULL"
     " OR a.search_synced_at < (SELECT MAX(sm.generated_at) FROM asset_metadata sm WHERE sm.asset_id = a.asset_id)"
-    " OR a.search_synced_at < (SELECT so.generated_at FROM asset_ocr so WHERE so.asset_id = a.asset_id))"
+    " OR a.search_synced_at < (SELECT so.generated_at FROM asset_ocr so WHERE so.asset_id = a.asset_id)"
+    " OR a.search_synced_at < (SELECT sc.updated_at FROM asset_corrections sc WHERE sc.asset_id = a.asset_id))"
 )
 
 
@@ -229,9 +235,12 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
 
     # --- Asset sync ---
     rows = session.execute(text(f"""
-        SELECT a.asset_id, a.library_id, COALESCE(o.text, '') AS ocr_text
+        SELECT a.asset_id, a.library_id, COALESCE(o.text, '') AS ocr_text,
+               c.description AS c_description, c.ocr_text AS c_ocr_text,
+               c.tags_added AS c_tags_added, c.tags_removed AS c_tags_removed
         FROM active_assets a
         LEFT JOIN asset_ocr o ON o.asset_id = a.asset_id
+        LEFT JOIN asset_corrections c ON c.asset_id = a.asset_id
         WHERE {STALE_SEARCH}
         ORDER BY a.library_id, a.asset_id
         LIMIT 1000
@@ -264,9 +273,12 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
             session.commit()
             # Re-query with cleared timestamps
             rows = session.execute(text(f"""
-                SELECT a.asset_id, a.library_id, COALESCE(o.text, '') AS ocr_text
+                SELECT a.asset_id, a.library_id, COALESCE(o.text, '') AS ocr_text,
+                       c.description AS c_description, c.ocr_text AS c_ocr_text,
+                       c.tags_added AS c_tags_added, c.tags_removed AS c_tags_removed
                 FROM active_assets a
                 LEFT JOIN asset_ocr o ON o.asset_id = a.asset_id
+                LEFT JOIN asset_corrections c ON c.asset_id = a.asset_id
                 WHERE {STALE_SEARCH}
                 ORDER BY a.library_id, a.asset_id
                 LIMIT 1000
@@ -283,7 +295,11 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
         if asset is None:
             continue
         meta = meta_repo.get_latest(asset_id=r.asset_id)
-        all_docs.append(build_asset_document(asset, meta, r.ocr_text))
+        corrections = None
+        if r.c_tags_added is not None:  # the clip has a corrections row
+            corrections = {"description": r.c_description, "ocr_text": r.c_ocr_text,
+                           "tags_added": r.c_tags_added, "tags_removed": r.c_tags_removed}
+        all_docs.append(build_asset_document(asset, meta, r.ocr_text, corrections))
         all_asset_ids.append(r.asset_id)
 
     if all_docs:

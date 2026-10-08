@@ -107,6 +107,12 @@ class AssetResponse(BaseModel):
     ai_description: str | None = None
     ai_tags: list[str] = []
     ocr_text: str | None = None
+    # Which of description, tags and OCR a person corrected (what's above is
+    # what they see), and for those the machine's value underneath.
+    corrected: list[str] = []
+    machine_description: str | None = None
+    machine_tags: list[str] = []
+    machine_ocr_text: str | None = None
     transcript_srt: str | None = None
     transcript_language: str | None = None
     transcribed_at: str | None = None
@@ -733,6 +739,27 @@ def _check_public_request(request: Request, session: Session, asset) -> None:
                   q.get("public_project_id") or q.get("public_collection_id"))
 
 
+def _fill_described(session: Session, asset_id: str, response: AssetResponse) -> None:
+    """The description, tags and OCR a clip shows (a person's corrections over
+    the machine's), which were corrected, and the machine's for those."""
+    from src.server.repository.corrections import CorrectionsRepository, apply
+
+    meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
+    data = (meta.data if meta else None) or {}
+    machine_description = data.get("description") or None
+    machine_tags = data.get("tags") or []
+    machine_ocr = AssetOcrRepository(session).text_for(asset_id) or None
+    description, tags, ocr_text, corrected = apply(
+        CorrectionsRepository(session).get(asset_id), machine_description, machine_tags, machine_ocr)
+    response.ai_description = description or None
+    response.ai_tags = tags
+    response.ocr_text = ocr_text or None
+    response.corrected = corrected
+    response.machine_description = machine_description if "description" in corrected else None
+    response.machine_tags = machine_tags if "tags" in corrected else []
+    response.machine_ocr_text = machine_ocr if "ocr_text" in corrected else None
+
+
 def _project_visitor_view(response: AssetResponse) -> AssetResponse:
     """What a public project's page may show of a clip: what its clip list gives
     (shape, time, length) and what's seen or heard in it. Not where it lives,
@@ -860,20 +887,7 @@ def get_asset_by_path(
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail=f"Asset not found: {rel_path}")
     response = _to_asset_response(asset)
-    ai_description: str | None = None
-    ai_tags: list[str] = []
-    ocr_text: str | None = None
-
-    meta_repo = AssetMetadataRepository(session)
-    meta = meta_repo.get_latest(asset_id=asset.asset_id)
-    if meta and meta.data:
-        ai_description = meta.data.get("description") or None
-        ai_tags = meta.data.get("tags") or []
-    ocr_text = AssetOcrRepository(session).text_for(asset.asset_id) or None
-
-    response.ai_description = ai_description
-    response.ai_tags = ai_tags
-    response.ocr_text = ocr_text
+    _fill_described(session, asset.asset_id, response)
     response.machine_transcript = asset.transcript_source == "manual" and _machine_transcript(session, asset.asset_id) is not None
     facet = AssetRepository(session).get_video_facet(asset.asset_id)
     # Stored rows are returned as they are (validation is for writes).
@@ -1056,20 +1070,7 @@ def get_asset(
         request.query_params.get("public_project_id") or request.query_params.get("public_collection_id")
     )
     response = _to_asset_response(asset)
-    ai_description: str | None = None
-    ai_tags: list[str] = []
-    ocr_text: str | None = None
-
-    meta_repo = AssetMetadataRepository(session)
-    meta = meta_repo.get_latest(asset_id=asset.asset_id)
-    if meta and meta.data:
-        ai_description = meta.data.get("description") or None
-        ai_tags = meta.data.get("tags") or []
-    ocr_text = AssetOcrRepository(session).text_for(asset.asset_id) or None
-
-    response.ai_description = ai_description
-    response.ai_tags = ai_tags
-    response.ocr_text = ocr_text
+    _fill_described(session, asset.asset_id, response)
     response.machine_transcript = asset.transcript_source == "manual" and _machine_transcript(session, asset.asset_id) is not None
     facet = AssetRepository(session).get_video_facet(asset.asset_id)
     # Stored rows are returned as they are (validation is for writes).
@@ -1437,6 +1438,48 @@ def submit_batch_vision(
             lib_repo.bump_revision(lid)
 
     return {"updated": updated, "skipped": skipped}
+
+
+class CorrectionsRequest(BaseModel):
+    """Only the fields sent change. A string sets the correction (it wins
+    over the machine's); null removes it (back to the machine's). `tags` is
+    the list the person wants shown, kept as adds and removes on top of the
+    machine's list; null removes the tag edits."""
+
+    description: str | None = Field(default=None, max_length=10_000)
+    ocr_text: str | None = Field(default=None, max_length=20_000)
+    tags: list[Annotated[str, Field(max_length=100)]] | None = Field(default=None, max_length=200)
+
+
+@router.patch("/{asset_id}/corrections", response_model=AssetResponse, dependencies=[Depends(require_editor)])
+def correct_asset(
+    asset_id: str,
+    body: CorrectionsRequest,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> AssetResponse:
+    """A person corrects a clip's description, OCR or tags. Kept beside the
+    machine's values: describing or reading the clip again changes what's
+    underneath, never the correction. Returns the clip's detail."""
+    from src.server.repository.corrections import CorrectionsRepository
+
+    asset = AssetRepository(session).get_by_id(asset_id)
+    if asset is None or asset.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
+    machine_tags = ((meta.data if meta else None) or {}).get("tags") or []
+    CorrectionsRepository(session).update(asset_id, body.model_dump(include=body.model_fields_set),
+                                          machine_tags, user_id)
+
+    from src.server.search.sync import try_sync_asset
+
+    try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
+    LibraryRepository(session).bump_revision(asset.library_id)
+
+    response = _to_asset_response(asset)
+    _fill_described(session, asset_id, response)
+    return response
 
 
 class TranscriptSubmitRequest(BaseModel):

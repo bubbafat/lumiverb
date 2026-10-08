@@ -318,11 +318,12 @@ def postgres_rank_clauses(
     token_pattern = r"\m(" + token_alt + r")\M"
 
     # Concatenate the searchable text fields once so the regex is cheap
-    # — the fallback query already joins asset_metadata (m) and asset_ocr (o).
+    # — the fallback query already joins asset_metadata (m), asset_ocr (o),
+    # asset_corrections (c) and the tags a clip shows (et).
     haystack = (
-        "COALESCE(m.data->>'description','') || ' ' || "
-        "COALESCE(CAST(m.data->'tags' AS TEXT),'') || ' ' || "
-        "COALESCE(o.text,'')"
+        "COALESCE(c.description, m.data->>'description','') || ' ' || "
+        "COALESCE(CAST(et.tags AS TEXT),'') || ' ' || "
+        "COALESCE(c.ocr_text, o.text,'')"
         + (" || ' ' || COALESCE(a.note,'')" if include_notes else "")
         + (" || ' ' || COALESCE(a.transcript_text,'')" if include_transcripts else "")
     )
