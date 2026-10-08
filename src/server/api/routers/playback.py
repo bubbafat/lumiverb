@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import subprocess
 import tempfile
 import time
@@ -91,7 +92,9 @@ def mint_stream_token(
     public_library_id: str | None = None,
     public_project_id: str | None = None,
 ) -> str:
-    claims: dict = {"t": tenant_id, "a": asset_id, "e": int(time.time()) + ttl_seconds}
+    # "n": every link is new, so a renewed one reloads the player.
+    claims: dict = {"t": tenant_id, "a": asset_id, "e": int(time.time()) + ttl_seconds,
+                    "n": secrets.token_urlsafe(6)}
     if public_library_id:
         claims["pl"] = public_library_id
     if public_project_id:

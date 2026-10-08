@@ -676,3 +676,15 @@ def test_public_project_pages_play_hover_and_show_details(env, media, tmp_path):
     assert client.get(f"/v1/assets/{outsider}/playback", params=params).status_code == 403
     assert client.get(f"/v1/assets/{outsider}/preview", params=params).status_code == 403
     assert client.get(f"/v1/assets/{outsider}", params=params).status_code == 403
+
+
+@pytest.mark.fast
+def test_every_link_is_new_even_within_a_second(monkeypatch):
+    # The player renews a failed link; an identical one wouldn't reload.
+    monkeypatch.setenv("JWT_SECRET", "x")
+    get_settings.cache_clear()
+    from src.server.api.routers.playback import mint_stream_token, read_stream_token
+
+    a, b = mint_stream_token("ten_1", "ast_1"), mint_stream_token("ten_1", "ast_1")
+    assert a != b
+    assert read_stream_token(a)["a"] == read_stream_token(b)["a"] == "ast_1"

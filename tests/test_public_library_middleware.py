@@ -156,15 +156,24 @@ def test_unauthenticated_assets_page_public_library(public_lib_client) -> None:
 @pytest.mark.slow
 def test_unauthenticated_query_public_library(public_lib_client) -> None:
     """
-    GET /v1/query?f=library:<id> for a public library without auth.
-    Today this 401s because get_current_user_id requires a user identity
-    (public requests have neither user_id nor key_id). The 401 is the
-    current defense; the explicit guard in the query handler is defense
-    in depth for if user_id is later relaxed for public browsing.
+    GET /v1/query?f=library:<id> for a public library without auth: what a
+    public library's page browses with. (It 401'd from April to October
+    2026, so the web's public library pages showed nothing.) The handler's
+    guard keeps the request to that one public library.
     """
     client, _, library_id, _ = public_lib_client
     r = client.get("/v1/query", params=[("f", f"library:{library_id}")])
-    assert r.status_code == 401
+    assert r.status_code == 200, r.text
+    assert isinstance(r.json()["items"], list)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("private_filter", ["favorite:true", "stars:3+", "person:per_nope"])
+def test_public_queries_cant_use_signed_in_filters(public_lib_client, private_filter) -> None:
+    """Ratings belong to signed-in people, and who's in a photo isn't for visitors to probe."""
+    client, _, library_id, _ = public_lib_client
+    r = client.get("/v1/query", params=[("f", f"library:{library_id}"), ("f", private_filter)])
+    assert r.status_code == 403, (r.status_code, r.text)
 
 
 @pytest.mark.slow
@@ -262,10 +271,8 @@ def test_query_public_request_cannot_leak_private_library(public_lib_client) -> 
             ("f", f"library:{private_library_id}"),
         ],
     )
-    # Must be blocked. 401 (current: get_current_user_id) or 404 (the
-    # explicit guard once user_id is allowed for public requests). Both
-    # are safe. A 200 with items from the private library would be a leak.
-    assert r.status_code in (401, 404), (r.status_code, r.text)
+    # The handler's guard: a 200 with items from the private library would be a leak.
+    assert r.status_code == 404, (r.status_code, r.text)
 
 
 @pytest.mark.slow

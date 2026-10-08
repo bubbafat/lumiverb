@@ -427,7 +427,8 @@ export default function BrowsePage() {
   const ratingsQuery = useQuery({
     queryKey: ["ratings", orderedAssetIds.slice(0, 500)],
     queryFn: () => lookupRatings(orderedAssetIds.slice(0, 500)),
-    enabled: orderedAssetIds.length > 0,
+    // Ratings are a signed-in person's; a public page's visitor has none.
+    enabled: orderedAssetIds.length > 0 && !isPublicMode,
     staleTime: 30_000,
   });
   const ratingsMap: Record<string, AssetRating> = ratingsQuery.data?.ratings ?? {};

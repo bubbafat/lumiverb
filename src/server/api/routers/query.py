@@ -16,9 +16,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlmodel import Session
 
-from src.server.api.dependencies import get_current_user_id, get_tenant_session
+from src.server.api.dependencies import get_optional_user_id, get_tenant_session
 from src.server.models.filter_registry import parse_f_params
-from src.server.models.query_filter import LibraryScope, SearchTerm
+from src.server.models.query_filter import LibraryScope, PersonFilter, SearchTerm
 from src.server.repository.tenant import LibraryRepository, UnifiedBrowseRepository
 
 logger = logging.getLogger(__name__)
@@ -397,7 +397,7 @@ def _run_postgres_fallback(
 def unified_query(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
-    user_id: Annotated[str, Depends(get_current_user_id)],
+    user_id: Annotated[str | None, Depends(get_optional_user_id)],
     f: Annotated[list[str], Query(alias="f")] = [],  # noqa: B006
     sort: str = "taken_at",
     dir: str = "desc",
@@ -421,11 +421,11 @@ def unified_query(
     # would authorize the request for the public library while the
     # query handler returned content from the private one too.
     #
-    # Today this is also blocked by `get_current_user_id` 401-ing public
-    # requests, but that's a coincidental defense — this guard makes the
-    # endpoint safe even if the user_id requirement is later relaxed for
-    # anonymous public browsing.
+    # Visitors have no user: ratings are someone's, and who's in a photo
+    # isn't for them to probe, so those filters are refused.
     if getattr(request.state, "is_public_request", False):
+        if spec.needs_rating_join or any(isinstance(leaf, PersonFilter) for leaf in spec.leaves):
+            raise HTTPException(status_code=403, detail="That filter isn't available on public pages")
         lib_repo = LibraryRepository(session)
         scoped_lib_ids: set[str] = set()
         for leaf in spec.leaves:

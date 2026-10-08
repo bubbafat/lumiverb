@@ -73,6 +73,13 @@ def require_signed_in(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Sign in required")
 
 
+def get_optional_user_id(request: Request) -> str | None:
+    """The caller's identity, or None on a public page (a visitor has none)."""
+    if getattr(request.state, "is_public_request", False):
+        return None
+    return get_current_user_id(request)
+
+
 def get_current_user_id(request: Request) -> str:
     """Return user_id from JWT or API key context. Raises 401 if not available."""
     user_id = getattr(request.state, "user_id", None)
