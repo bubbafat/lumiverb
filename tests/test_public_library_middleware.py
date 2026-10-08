@@ -456,6 +456,14 @@ def test_a_public_projects_clip_detail_is_privacy_stripped(public_lib_client, sh
     for field in ("gps_lat", "gps_lon", "sha256", "camera_make", "camera_model", "proxy_key", "thumbnail_key",
                   "video_preview_key", "note", "note_author", "note_updated_at", "file_size"):
         assert d.get(field) in (None, ""), (field, d.get(field))
+    # What's seen or heard still comes through, within the public cap.
+    srt = "1\n00:00:02,000 --> 00:00:04,000\nearly words\n\n2\n00:01:00,000 --> 00:01:02,000\nlate words\n"
+    auth = {"Authorization": f"Bearer {api_key}"}
+    assert client.post(f"/v1/assets/{asset_id}/transcript", json={"srt": srt, "language": "en"},
+                       headers=auth).status_code == 200
+    shown = client.get(f"/v1/assets/{asset_id}", params={"public_project_id": project_id}).json()
+    assert "early words" in shown["transcript_srt"] and "late words" not in shown["transcript_srt"]
+    assert shown["transcript_language"] == "en"
     # Signed in, it's all there.
     full = client.get(f"/v1/assets/{asset_id}", headers={"Authorization": f"Bearer {api_key}"}).json()
     assert full["gps_lat"] == 40.7 and full["note"] == "internal: reshoot" and full["library_id"] == private_library_id

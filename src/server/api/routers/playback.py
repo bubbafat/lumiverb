@@ -197,47 +197,56 @@ def capped(
     asset_id: str,
     source: Source,
     version: str,
+    strip: bool = False,
 ) -> Path:
     """`path`, or a copy of its first `max_seconds` when it runs longer.
 
-    Cuts are made with stream copy (no re-encoding, every track kept) and
-    stored under {tenant}/playback, outside the library folders cleanup
-    walks. Whether the file runs longer is the file's own say, not a
-    stored duration that may be wrong; unknown means cut.
+    Copies are made with stream copy (no re-encoding, every track kept),
+    without the file's metadata, and stored under {tenant}/playback,
+    outside the library folders cleanup walks. Whether the file runs longer
+    is the file's own say, not a stored duration that may be wrong; unknown
+    means cut. `strip`: a public page's request, which never gets the
+    original's metadata (GPS, say), even whole: previews made before scan
+    stripped it still have it. Analysis proxies are rendered without it.
     """
-    if max_seconds is None:
+    strip = strip and source == "preview"
+    if max_seconds is not None:
+        duration = _served_duration(str(path), version)
+        if duration is not None and duration <= max_seconds + _CAP_SLACK_SEC:
+            max_seconds = None
+    if max_seconds is None and not strip:
         return path
-    cut = _playback_dir(storage, tenant_id) / f"{asset_id}_{source}_{version}_{max_seconds}s.mp4"
+    label = f"{max_seconds}s" if max_seconds is not None else "whole"
+    cut = _playback_dir(storage, tenant_id) / f"{asset_id}_{source}_{version}_{label}.mp4"
     if cut.is_file():
         return cut
-    duration = _served_duration(str(path), version)
-    if duration is not None and duration <= max_seconds + _CAP_SLACK_SEC:
-        return path
     cut.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=cut.parent, prefix=f".{asset_id}_", suffix=".mp4")
     os.close(fd)
     tmp = Path(tmp_name)
     failed = HTTPException(status_code=503, detail={"code": "playback_cut_failed",
                                                     "message": "Couldn't prepare the capped video"})
+    length = ["-t", str(max_seconds)] if max_seconds is not None else []
     try:
         result = subprocess.run(
             ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(path),
-             "-map", "0:v", "-map", "0:a?", "-c", "copy", "-t", str(max_seconds),
+             "-map", "0:v", "-map", "0:a?", "-c", "copy", *length,
+             "-map_metadata", "-1", "-map_chapters", "-1",
              "-movflags", "+faststart", "-f", "mp4", str(tmp)],
             capture_output=True, timeout=300, check=False,
         )
         if result.returncode != 0 or tmp.stat().st_size == 0:
-            logger.warning("Couldn't cut %s to %ss: %s", path, max_seconds,
+            logger.warning("Couldn't cut %s to %s: %s", path, label,
                            result.stderr.decode(errors="replace")[-300:])
             raise failed
         tmp.replace(cut)
     except (subprocess.SubprocessError, OSError) as exc:
-        logger.warning("Couldn't cut %s to %ss: %s", path, max_seconds, exc)
+        logger.warning("Couldn't cut %s to %s: %s", path, label, exc)
         raise failed from exc
     finally:
         tmp.unlink(missing_ok=True)
     # Older versions of this cut, and temp files a killed API left.
-    for old in cut.parent.glob(f"{asset_id}_{source}_*_{max_seconds}s.mp4"):
+    for old in cut.parent.glob(f"{asset_id}_{source}_*_{label}.mp4"):
         if old != cut:
             old.unlink(missing_ok=True)
     for tmp_old in cut.parent.glob(f".{asset_id}_*.mp4"):
@@ -384,7 +393,7 @@ def stream(token: str, request: Request) -> StreamingResponse:
         max_seconds = playback_cap(session, public=bool(claims.get("pl") or claims.get("pp")))
 
     path = capped(path, max_seconds, storage=storage, tenant_id=tenant_id, asset_id=asset_id,
-                  source=source, version=version)
+                  source=source, version=version, strip=bool(claims.get("pl") or claims.get("pp")))
     # Names the bytes: a cap change or a new proxy mid-play mustn't splice two files.
     etag = f'"{source}-{version}-{max_seconds or "whole"}"'
     response = _stream_file_with_range(path, request, media_type="video/mp4", etag=etag)

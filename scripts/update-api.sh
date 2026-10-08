@@ -94,15 +94,13 @@ fi
 # them only for the swap, which the warm cache makes quick.
 HAVE_PY="$(sed -n 's/^version_info *= *\([0-9]*\.[0-9]*\).*/\1/p' "$APP_DIR/.venv/pyvenv.cfg" 2>/dev/null || true)"
 WANT_PY="$(grep -oE '[0-9]+\.[0-9]+' "$APP_DIR/.python-version" 2>/dev/null | head -1 || true)"
-PY_CHANGED=""
-SERVICES_STOPPED=""
+# From here a failure may leave Lumiverb stopped (now, or by an earlier run): say so.
+trap 'rc=$?; if [[ $rc -ne 0 ]] && ! systemctl is-active --quiet lumiverb-api; then echo -e "${RED}  ✗ Lumiverb isn'"'"'t running. Fix the error above, then run update-api.sh again: it carries on from here.${NC}" >&2; fi' EXIT
 if [[ -n "$HAVE_PY" && -n "$WANT_PY" && "$HAVE_PY" != "$WANT_PY" ]]; then
-  PY_CHANGED=1
   warn "Python changes from ${HAVE_PY} to ${WANT_PY}: building the new environment (a few GB) while Lumiverb keeps running"
   sudo -u "$SVC_USER" "$UV_BIN" python install "$WANT_PY"
+  rm -rf "$APP_DIR/.venv-next"  # uv won't build into what an interrupted run left
   sudo -u "$SVC_USER" env UV_PROJECT_ENVIRONMENT="$APP_DIR/.venv-next" "$UV_BIN" sync "${EXTRAS[@]}"
-  trap 'if [[ -n "$SERVICES_STOPPED" ]]; then echo -e "${RED}  ✗ The API and worker are stopped. Fix the error above, then run update-api.sh again: it carries on from here.${NC}" >&2; fi' EXIT
-  SERVICES_STOPPED=1
   if systemctl is-enabled lumiverb-worker >/dev/null 2>&1; then
     systemctl stop lumiverb-worker
   fi
@@ -268,11 +266,9 @@ step "Restarting services"
 systemctl restart lumiverb-api
 systemctl is-enabled lumiverb-worker >/dev/null 2>&1 && systemctl restart lumiverb-worker
 systemctl is-enabled lumiverb-quickwit >/dev/null 2>&1 && systemctl restart lumiverb-quickwit
-SERVICES_STOPPED=""
-if [[ -n "$PY_CHANGED" ]]; then
-  # The old Python's packages: prune keeps them; the venv doesn't need the cache.
-  sudo -u "$SVC_USER" "$UV_BIN" cache clean || warn "Couldn't clear uv's cache of the old Python's packages"
-fi
+# uv's cache: an old Python's packages stay in it for good (prune keeps
+# them), and the venv doesn't need it. Every update, so a rerun gets there.
+sudo -u "$SVC_USER" "$UV_BIN" cache clean || warn "Couldn't clear uv's cache"
 
 for i in {1..10}; do
   if curl -sf http://127.0.0.1:${API_PORT}/health >/dev/null 2>&1; then

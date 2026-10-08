@@ -387,7 +387,10 @@ def _update_python(tmp_path: Path, venv_cfg: str | None, pin: str = "3.12\n", fa
     script = (
         "RED=''; NC=''\n"
         'step() { :; }; ok() { :; }; warn() { echo "warn: $1"; }\n'
-        f'systemctl() {{ echo "systemctl $*" >> "{calls}"; }}\n'
+        # systemctl remembers what it stopped, so is-active can say so.
+        f'systemctl() {{ echo "systemctl $*" >> "{calls}"; '
+        f'if [[ "$1" == stop ]]; then touch "{tmp_path}/stopped"; fi; '
+        f'if [[ "$1" == is-active ]]; then [[ ! -e "{tmp_path}/stopped" ]]; fi; }}\n'
         f'sudo() {{ echo "sudo $*" >> "{calls}"; [[ -z "{fail_on}" || "$*" != *"{fail_on}"* ]]; }}\n'
         f'APP_DIR="{app}"; SVC_USER=lumiverb; UV_BIN=/usr/local/bin/uv\n'
         + block
@@ -426,24 +429,47 @@ def test_update_on_the_same_python_keeps_the_services_running(tmp_path, cfg):
 
 @pytest.mark.parametrize("step", ["python install", "UV_PROJECT_ENVIRONMENT"])
 def test_a_failed_side_build_leaves_lumiverb_running(tmp_path, step):
-    calls, _, _ = _update_python(tmp_path, VENV_CFG.format("3.14.4"), fail_on=step, ok=False)
+    calls, _, err = _update_python(tmp_path, VENV_CFG.format("3.14.4"), fail_on=step, ok=False)
     assert not [c for c in calls if c.startswith("systemctl stop")]
+    assert "stopped" not in err
+
+
+def test_a_half_made_side_venv_is_cleared_before_building(tmp_path):
+    # uv refuses a non-empty folder that isn't a venv (an interrupted run).
+    (tmp_path / "app" / ".venv-next").mkdir(parents=True)
+    (tmp_path / "app" / ".venv-next" / "junk").write_text("x")
+    _update_python(tmp_path, VENV_CFG.format("3.14.4"), fail_on="UV_PROJECT_ENVIRONMENT", ok=False)
+    assert not (tmp_path / "app" / ".venv-next" / "junk").exists()
 
 
 def test_a_failure_while_stopped_says_how_to_recover(tmp_path):
     # The swap fails after the services were stopped: say so plainly.
     calls, _, err = _update_python(tmp_path, VENV_CFG.format("3.14.4"), fail_on="lumiverb /usr/local/bin/uv sync", ok=False)
     assert "systemctl stop lumiverb-api" in calls
-    assert "The API and worker are stopped" in err and "update-api.sh" in err
+    assert "isn't running" in err and "update-api.sh" in err
 
 
-def test_after_a_python_change_the_old_packages_are_cleaned_out_once_running():
-    # uv cache prune keeps them (the cache entries are still "used"); clean
-    # frees them, and the venv's own files don't depend on the cache.
+def test_a_rerun_that_fails_while_still_stopped_says_so_too(tmp_path):
+    # Python already swapped (3.12 = 3.12), the API still down from last time.
+    (tmp_path / "stopped").write_text("")
+    _, _, err = _update_python(tmp_path, VENV_CFG.format("3.12.15"), fail_on="lumiverb /usr/local/bin/uv sync", ok=False)
+    assert "isn't running" in err
+
+
+def test_every_update_cleans_uvs_cache_once_running():
+    # uv cache prune keeps an old Python's packages (still "used"); clean
+    # frees them, and the venv's own files don't depend on the cache. Every
+    # update, so a rerun after a failure still gets there.
     text = UPDATE_API.read_text()
     restart = text.split('step "Restarting services"', 1)[1]
-    assert "cache clean" in restart and "PY_CHANGED" in restart
+    clean = restart.index("cache clean")
+    assert restart.index("systemctl restart lumiverb-api") < clean
+    assert "PY_CHANGED" not in restart[clean - 200:clean]
     assert "cache prune" not in text
+
+
+def test_the_side_venv_isnt_tracked():
+    assert ".venv-next/" in (REPO / ".gitignore").read_text().splitlines()
 
 
 DEPLOY_WEB = REPO / "scripts" / "deploy-web.sh"

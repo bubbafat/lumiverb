@@ -74,7 +74,13 @@ def test_the_public_guard_takes_only_a_plain_and_of_filters():
     from fastapi import HTTPException
 
     from src.server.api.routers.query import guard_public_spec
-    from src.server.models.query_filter import Combinator, GroupFilter, LibraryScope, MediaType, QuerySpec
+    from src.server.models.query_filter import (
+        Combinator,
+        GroupFilter,
+        LibraryScope,
+        MediaType,
+        QuerySpec,
+    )
 
     request = MagicMock()
     request.state.is_public_request = True

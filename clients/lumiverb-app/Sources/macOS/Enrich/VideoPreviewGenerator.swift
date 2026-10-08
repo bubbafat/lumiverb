@@ -37,6 +37,8 @@ enum VideoPreviewGenerator {
             duration: CMTime(seconds: previewDuration, preferredTimescale: 600)
         )
         session.shouldOptimizeForNetworkUse = true  // faststart equivalent
+        // No location or device metadata: previews reach public pages.
+        session.metadataItemFilter = AVMetadataItemFilter.forSharing()
 
         // Use the modern async throwing API (macOS 15+) with fallback
         if #available(macOS 15, *) {

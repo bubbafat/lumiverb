@@ -18,7 +18,13 @@ from sqlmodel import Session
 
 from src.server.api.dependencies import get_optional_user_id, get_tenant_session
 from src.server.models.filter_registry import parse_f_params
-from src.server.models.query_filter import Combinator, GroupFilter, LibraryScope, PersonFilter, SearchTerm
+from src.server.models.query_filter import (
+    Combinator,
+    GroupFilter,
+    LibraryScope,
+    PersonFilter,
+    SearchTerm,
+)
 from src.server.repository.tenant import LibraryRepository, UnifiedBrowseRepository
 
 logger = logging.getLogger(__name__)

@@ -66,6 +66,21 @@ describe("Lightbox on a public page", () => {
     expect(screen.queryByText("Notes")).toBeNull();
   });
 
+  it("offers a visitor no faces on a photo that has some", async () => {
+    const photo = { ...asset, asset_id: "ast_2", media_type: "image", face_count: 3 } as AssetPageItem;
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <Lightbox asset={photo} assets={[photo]} onClose={() => {}} onNavigate={() => {}} isPublic publicLibraryId="lib_1" />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await screen.findByText(/Dimensions/);
+    expect(screen.queryByText(/Show faces/)).toBeNull();
+    expect(screen.queryByText("Faces")).toBeNull();
+  });
+
   it("signed in, the editing controls are there", async () => {
     renderLightbox(false);
     await screen.findByText(/Dimensions/);

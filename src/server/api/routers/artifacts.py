@@ -338,7 +338,7 @@ def download_artifact(
         path = capped(
             path, playback_cap(session, public=getattr(request.state, "is_public_request", False)),
             storage=storage, tenant_id=request.state.tenant_id, asset_id=asset_id, source="preview",
-            version=f"{int(st.st_mtime)}-{st.st_size}",
+            version=f"{int(st.st_mtime)}-{st.st_size}", strip=getattr(request.state, "is_public_request", False),
         )
         return _stream_file_with_range(path, request, media_type=CONTENT_TYPES[artifact_type])
 

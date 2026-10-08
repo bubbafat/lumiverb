@@ -241,6 +241,8 @@ def _generate_video_preview(source_path: Path) -> bytes:
         "-vf", f"scale=-2:'min({PREVIEW_MAX_HEIGHT},ih)',format=yuv420p",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
         "-c:a", "aac", "-ac", "2", "-b:a", "128k",
+        # No metadata: phones and drones write where they were (GPS) into the file.
+        "-map_metadata", "-1", "-map_chapters", "-1",
         "-movflags", "+faststart",
         str(preview_path),
     ]
@@ -255,7 +257,7 @@ def _generate_video_preview(source_path: Path) -> bytes:
             "-t", str(PREVIEW_DURATION_SEC),
             "-vf", f"scale=-2:'min({PREVIEW_MAX_HEIGHT},ih)',format=yuv420p",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
-            "-an", "-movflags", "+faststart",
+            "-an", "-map_metadata", "-1", "-map_chapters", "-1", "-movflags", "+faststart",
             str(preview_path),
         ]
         subprocess.run(no_audio_cmd, check=True, capture_output=True)

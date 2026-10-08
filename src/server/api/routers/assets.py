@@ -1567,6 +1567,7 @@ def stream_or_enqueue_preview(
                 path, playback_cap(session, public=getattr(request.state, "is_public_request", False)),
                 storage=storage, tenant_id=request.state.tenant_id, asset_id=asset_id, source="preview",
                 version=f"{int(path.stat().st_mtime)}-{path.stat().st_size}",
+                strip=getattr(request.state, "is_public_request", False),
             )
             return _stream_file_with_range(path, request, media_type="video/mp4")
 

@@ -766,3 +766,40 @@ def test_clearing_cuts_for_deleted_assets_leaves_the_rest(tmp_path, monkeypatch)
     monkeypatch.setattr(playback, "get_storage", lambda: LocalStorage(str(tmp_path)))
     playback.clear_cuts("ten_1", [a])
     assert [p.name for p in folder.iterdir()] == [f"{b}_analysis_proxy_x_5s.mp4"]
+
+
+@pytest.fixture(scope="module")
+def gps_preview(tmp_path_factory) -> bytes:
+    out = tmp_path_factory.mktemp("gps") / "preview.mp4"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc2=size=320x180:rate=30:duration=3", "-f", "lavfi", "-i", "sine=duration=3",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-g", "30", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                    "-metadata", "location=+40.7000-074.0000/", "-movflags", "+faststart", str(out)], check=True)
+    return out.read_bytes()
+
+
+def _has_location(body: bytes, tmp_path: Path) -> bool:
+    f = tmp_path / "probe.mp4"
+    f.write_bytes(body)
+    out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format_tags:stream_tags", "-of", "json",
+                          str(f)], capture_output=True, text=True, check=True).stdout
+    return "location" in out.lower()
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("public_cap", [10, 2, None], ids=["default", "short", "lifted"])
+def test_public_pages_never_serve_where_a_clip_was_shot(env, gps_preview, tmp_path, public_cap):
+    # Previews made before the CLI stripped metadata still carry GPS.
+    client, admin, *_ = env
+    asset_id = _ingest(env, f"gps_{public_cap}.mov")
+    _upload(env, asset_id, "video_preview", gps_preview)
+    assert _has_location(gps_preview, tmp_path)
+    client.patch("/v1/tenant/settings", json={"public_video_preview_max_seconds": public_cap}, headers=admin)
+    params = _public(env)
+    for body in (
+        client.get(_path(client.get(f"/v1/assets/{asset_id}/playback", params=params).json()["url"])).content,
+        client.get(f"/v1/assets/{asset_id}/preview", params=params).content,
+        client.get(f"/v1/assets/{asset_id}/artifacts/video_preview", params=params).content,
+    ):
+        assert body[:12].find(b"ftyp") != -1
+        assert not _has_location(body, tmp_path)
