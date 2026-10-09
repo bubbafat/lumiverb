@@ -183,16 +183,21 @@ class MachinePool:
             self._report(machine, [])
 
     def _check(self, machine: Machine) -> None:
+        model = self.model
         if machine.built_in:
             models, serves, error = self._check_built_in()
         else:
             try:
                 models = list_models(machine.api_url, machine.api_key)
-                serves = served_as(models, self.model) or ""
-                error = "" if serves else f"{machine.api_url} doesn't offer {self.model}."
+                serves = served_as(models, model) or ""
+                error = "" if serves else f"{machine.api_url} doesn't offer {model}."
             except VisionEndpointError as e:
                 models, serves, error = [], "", str(e)
         with self._cond:
+            if self.model != model:  # the model changed meanwhile: checked again, with it
+                machine.checking = False
+                self._cond.notify_all()
+                return
             machine.online = not error
             machine.error = error
             machine.serves = serves
@@ -256,6 +261,9 @@ class _OnAMachine:
     def __init__(self, pool: MachinePool, make: Callable[[Machine], Any]) -> None:
         self._pool = pool
         self._make = make
+        # The model its work is saved as made with: once the job's model
+        # changes, nothing more is asked of it (the next model would answer).
+        self.model = pool.model
         self._providers: dict[tuple, Any] = {}
         self._lock = threading.Lock()
 
@@ -284,6 +292,12 @@ class _OnAMachine:
                 why = self._pool.error if self._pool.down else None
                 raise self.error(why or (f"Every machine failed it; the last: {last}" if last else "No machine is online."),
                                  endpoint_fault=True)
+            if self._pool.model != self.model:
+                self._pool.release(machine)
+                changed = self.error(f"The model changed to {self._pool.model}: this clip waits for work with it.",
+                                     endpoint_fault=False)
+                changed.model_changed = True
+                raise changed
             tried.append(machine)
             try:
                 return call(self._provider(machine))

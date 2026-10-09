@@ -275,7 +275,9 @@ def scan_pass(
     """Scan what's due in each library whose storage is reachable; each
     library's storage on this machine (None: not reachable). on_roots hears
     where each one's storage is before any scan, so work on the originals
-    needn't wait for a long one."""
+    needn't wait for a long one, and again whenever a library's changes.
+    Each library is looked at again right before its scan: a share can
+    sleep during another library's long scan."""
     if scan_fn is None:
         from src.client.cli.scan import run_scan as scan_fn
     console = console or Console(quiet=True)
@@ -285,8 +287,14 @@ def scan_pass(
         library["library_id"]: reachable_root(library, require_entries=True) for library in libraries}
     if on_roots is not None:
         on_roots(dict(roots))
-    for library in libraries:
+    for i, library in enumerate(libraries):
         root = roots[library["library_id"]]
+        if i > 0 and root is not None:  # the first was looked at just now
+            root = reachable_root(library, require_entries=True)
+            if root != roots[library["library_id"]]:
+                roots[library["library_id"]] = root
+                if on_roots is not None:
+                    on_roots(dict(roots))
         if root is None:
             logger.info("scheduler: %s isn't reachable from here; not scanning it", library["name"])
             continue

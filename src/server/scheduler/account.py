@@ -124,6 +124,15 @@ class Account:
         with self._lock:
             self.roots[library_id] = None
 
+    def storage_gone(self, library_id: str) -> bool:
+        """The library's storage can't be read now, looked at as the scan pass
+        does (with a timeout; an unmounted mount point is an empty folder)."""
+        from src.client.cli.roots import reachable_root
+
+        with self._lock:
+            library = self.libraries.get(library_id)
+        return library is None or reachable_root(library, require_entries=True) is None
+
     def library_ids(self, *, storage: bool) -> list[str]:
         """Libraries a kind's jobs can run in: those whose storage was reachable at the last look, when it reads originals."""
         with self._lock:

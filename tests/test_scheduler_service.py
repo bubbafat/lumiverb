@@ -715,10 +715,13 @@ def test_losing_the_database_lock_stops_the_scheduler() -> None:
         return len(checks) < 2
 
     t = threading.Thread(target=run, kwargs={"stop": stop, "scheduler": s, "tick_sec": 0.01, "holds_lock": holds,
-                                             "lock_check_sec": 0})
+                                             "lock_check_sec": 0}, daemon=True)
     t.start()
-    t.join(5)
-    assert not t.is_alive() and stop.is_set() and len(checks) == 2
+    try:
+        t.join(5)
+        assert not t.is_alive() and len(checks) == 2
+    finally:
+        stop.set()
 
 
 @pytest.mark.fast
@@ -732,3 +735,84 @@ def test_the_program_exits_without_waiting_on_jobs_past_their_grace(monkeypatch:
     monkeypatch.setattr(service.os, "_exit", exited.append)
     service.entry()
     assert exited == [3]
+
+    def boom() -> int:
+        raise RuntimeError("a surprise")
+
+    monkeypatch.setattr(service, "main", boom)
+    with pytest.raises(RuntimeError):
+        service.entry()
+    assert exited == [3, 1]  # out at once all the same
+
+
+@pytest.mark.fast
+def test_running_the_module_runs_the_program() -> None:
+    # The unit's ExecStart is python -m src.server.scheduler.
+    import runpy
+    from unittest.mock import patch
+
+    with patch("src.server.scheduler.service.entry") as entry:
+        runpy.run_module("src.server.scheduler.__main__", run_name="__main__")
+    entry.assert_called_once_with()
+
+
+@pytest.mark.fast
+def test_a_lock_connection_that_doesnt_answer_counts_as_lost() -> None:
+    # Review round 3: a dead TCP connection can block SELECT 1 for many minutes.
+    from src.server.scheduler.service import _still_holds
+
+    hung = MagicMock()
+    hung.execute.side_effect = lambda *a, **kw: threading.Event().wait(5)
+    started = time.monotonic()
+    assert _still_holds(hung, timeout=0.1) is False
+    assert time.monotonic() - started < 2
+    assert _still_holds(MagicMock(), timeout=1) is True
+    gone = MagicMock()
+    gone.execute.side_effect = ConnectionError("server closed the connection")
+    assert _still_holds(gone, timeout=1) is False
+
+
+@pytest.mark.fast
+def test_one_failure_flush_at_a_time_per_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.server.scheduler import service
+
+    monkeypatch.setattr(service, "FLUSH_EVERY_SEC", 0)
+    gate = threading.Event()
+    acct = FakeAccount()
+    acct.failures.flush.side_effect = lambda: gate.wait(5)
+    s = Scheduler(lambda: {"t1": acct}, capacity={"scan": 0}, candidates=lambda *a, **kw: [],
+                  runners=Recorder().all(), scan=MagicMock())
+    for _ in range(3):
+        s.tick()
+    gate.set()
+    s.stop()
+    assert acct.failures.flush.call_count == 1
+
+
+@pytest.mark.fast
+def test_a_save_the_server_refuses_is_the_clips_failure() -> None:
+    # Review round 3: a result the API can't take (400 "Invalid SRT format")
+    # was made again every hour, never shown as failing.
+    from src.client.cli.client import LumiverbAPIError
+
+    def refused(acct, job):
+        raise LumiverbAPIError("bad_request", "Invalid SRT format", 400)
+
+    def gone(acct, job):
+        raise LumiverbAPIError("not_found", "Asset not found", 404)
+
+    acct = FakeAccount()
+    clock = Clock()
+    due = {"transcript": [_item("t")], "render": [_item("r")]}
+    s = Scheduler(lambda: {"t1": acct}, capacity={"scan": 0, "render": 1},
+                  candidates=lambda t, k, libs, skip=(): [i for i in due.get(k.name, []) if i["asset_id"] not in skip],
+                  runners={**Recorder().all(), "transcript": refused, "render": gone}, scan=MagicMock(),
+                  inline_refill=True, clock=clock)
+    s.tick()
+    _settle(s)
+    acct.failures.add.assert_called_once()
+    assert acct.failures.add.call_args.args[:2] == ("transcript", "t")
+    assert "Invalid SRT format" in str(acct.failures.add.call_args.args[2])
+    clock.now += s.dispatcher.settle_after + 1
+    assert s.dispatcher.held("t1", "transcript") == []  # reported: the server says when to try again
+    assert s.dispatcher.held("t1", "render") == ["r"]  # gone meanwhile: it waits

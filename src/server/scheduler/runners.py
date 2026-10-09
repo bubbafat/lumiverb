@@ -49,15 +49,6 @@ def _out_of_memory(error: object) -> bool:
     return "out of memory" in text or "failed to allocate" in text
 
 
-def _storage_gone(root: Any) -> bool:
-    """The library's storage went away since the last look (an unmounted
-    share is an empty folder)."""
-    try:
-        return next(iter(root.iterdir()), None) is None
-    except OSError:
-        return True
-
-
 class _Progress:
     """What the step functions report progress to: nothing to show here."""
 
@@ -87,7 +78,7 @@ def _on_storage(acct: Account, job: Job, step: Callable[[Any, dict], str]) -> Ou
         if acct.stopping.is_set() or (root := _root_or_not_tried(acct, a)) is None:
             return NOT_TRIED
         if step(root, a) == "missing":
-            if _storage_gone(root):
+            if acct.storage_gone(a["library_id"]):
                 logger.info("scheduler: %s's storage went away; its storage work waits", a["rel_path"])
                 acct.unreachable(a["library_id"])
                 return NOT_TRIED
@@ -338,6 +329,8 @@ class FaceRunner:
                 ready.append(item)
         if not ready:
             return waiting or None
+        if acct.stopping.is_set():  # no new process for an account let go of meanwhile
+            return NOT_TRIED
         with self._lock:
             if self._pool is None:
                 self._pool = self._pool_factory()
@@ -358,6 +351,8 @@ class FaceRunner:
                     if self._clock() >= deadline:
                         raise
         except Exception:  # noqa: BLE001
+            if self._pool is not pool:  # let go of before it could start
+                return NOT_TRIED
             # The batch's process died or hung (the GPU, ONNX, memory): this
             # machine's problem, not the clips', so none is charged; they're
             # tried again later, by a new process.
