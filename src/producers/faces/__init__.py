@@ -15,7 +15,8 @@ PRODUCER = ProducerSpec(
         # and under the detector's 640 it would only be scaled up again.
         Setting("max_detect_edge", 1280, "Image size looked at", minimum=640, maximum=1280, unit="px",
                 advanced=True),
-        Setting("min_confidence", 0.5, "Least confidence", kind="float", minimum=0.05, maximum=0.99),
+        # Under 0.3 the detector hands back so many boxes that detection slows a lot.
+        Setting("min_confidence", 0.5, "Least confidence", kind="float", minimum=0.3, maximum=0.99),
         Setting("min_area_fraction", 0.003, "Smallest face (share of the photo)", kind="float", minimum=0,
                 maximum=0.5, advanced=True),
         # Measured in the image looked at, as the sharpness is.
@@ -28,7 +29,7 @@ PRODUCER = ProducerSpec(
                 advanced=True),
     ),
     uniform=True, needs=("proxy",),
-    redo_note=("Faces people named, or said aren't someone, are kept; the rest are found again, and ones the "
+    redo_note=("Faces people named, or said aren't a certain person, are kept; the rest are found again, and ones the "
                "new settings don't find go."),
     kind="faces", flag="missing_faces", run="src.server.scheduler.runners:faces", pool="gpu", batch=25,
 )

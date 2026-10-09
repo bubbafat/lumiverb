@@ -336,7 +336,7 @@ def _reject(tenant_url: str, face_id: str, person_id: str) -> None:
 
 
 @pytest.mark.slow
-def test_redetect_keeps_a_face_someone_said_isnt_a_person(env) -> None:
+def test_redetect_keeps_a_face_someone_said_isnt_a_certain_person(env) -> None:
     """Stricter face settings that don't find it keep the face and its "not
     them"; looser ones that find it again don't put it back on them (Oct 9:
     face settings are two clicks now)."""

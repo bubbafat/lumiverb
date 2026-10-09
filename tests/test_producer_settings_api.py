@@ -224,7 +224,7 @@ def test_faces_settings_ask_saying_what_a_redo_keeps(env):
     try:
         r = _put(env, "faces", settings={"min_confidence": 0.7})
         assert r.status_code == 409, r.text
-        assert "Faces people named, or said aren't someone, are kept" in r.json()["error"]["message"]
+        assert "Faces people named, or said aren't a certain person, are kept" in r.json()["error"]["message"]
         assert r.json()["error"]["details"]["clips"] >= 1
         r = _put(env, "faces", settings={"min_confidence": 0.7}, redo=True)
         assert r.status_code == 200 and r.json()["settings"]["min_confidence"] == 0.7, r.text
