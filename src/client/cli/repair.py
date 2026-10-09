@@ -1628,6 +1628,7 @@ def run_repair(
                 continue
 
             from src.client.cli.video_index import run_video_index
+            found_with = producers.settings("scenes")  # one read: what's found and its lineage agree
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Scenes", total=len(indexable), ok=0, fail=0)
@@ -1638,8 +1639,9 @@ def run_repair(
                     console=console,
                     progress=progress,
                     task_id=tid,
-                    lineage_for=lambda v: producers.lineage("scenes", v.get("sha256")),
+                    lineage_for=lambda v, used=found_with: producers.lineage("scenes", v.get("sha256"), used=used),
                     on_fail=failures.for_artifact("scenes"),
+                    settings=found_with,
                 )
             with stats.lock:
                 stats.processed += done

@@ -242,12 +242,14 @@ def scenes(acct: Account, job: Job) -> Outcome:
     if acct.stopping.is_set():
         return NOT_TRIED
     reported: set[str] = set()
+    # One read of the settings for the job: what's found and what its lineage says agree.
+    used = acct.producers.settings("scenes")
     videos = [{"asset_id": a["asset_id"], "rel_path": a["rel_path"], "duration_sec": a.get("duration_sec"),
-               "sha256": a.get("sha256")} for a in job.items if a.get("duration_sec")]
+               "sha256": a.get("sha256"), "redo": bool(a.get("redo"))} for a in job.items if a.get("duration_sec")]
     run_video_index(client=acct.client, source_for=lambda v: acct.analysis_cache.get(v["asset_id"]),
                     videos=videos, console=_QUIET, progress=_Progress(), task_id=None,
-                    lineage_for=lambda v: acct.producers.lineage("scenes", v.get("sha256")),
-                    on_fail=_noting(acct.failures.for_artifact("scenes"), reported))
+                    lineage_for=lambda v: acct.producers.lineage("scenes", v.get("sha256"), used=used),
+                    on_fail=_noting(acct.failures.for_artifact("scenes"), reported), settings=used)
     return [i for i in job.asset_ids if i not in reported] or None
 
 

@@ -1,6 +1,6 @@
 """FFmpeg-based video scanner for scene detection.
 
-Outputs raw RGB24 keyframes at proxy resolution with PTS.
+Outputs raw RGB24 keyframes with PTS, at most the scenes' frame width wide.
 
 See docs/reference/video_scene_segmentation.md for the pipe contract and constants.
 """
@@ -89,14 +89,20 @@ def _scaled_height(width: int, height: int, out_width: int = OUT_WIDTH) -> int:
 class VideoScanner:
     """
     Scan a video file via a single FFmpeg process.
-    Outputs raw RGB24 frames at 1 FPS, scaled to OUT_WIDTH, with PTS from showinfo.
+    Outputs raw RGB24 keyframes, scaled down to `width` (never up), with PTS from showinfo.
     """
 
-    def __init__(self, source: Path) -> None:
+    def __init__(self, source: Path, width: int | None = OUT_WIDTH) -> None:
         self._source = Path(source)
         if not self._source.exists():
             raise FileNotFoundError(str(self._source))
-        self._width, self._height = _get_video_size(self._source)
+        src_w, src_h = _get_video_size(self._source)
+        out_w = width - width % 2 if width else 0
+        self._scale = 0 < out_w < src_w
+        if self._scale:
+            self._width, self._height = out_w, _scaled_height(src_w, src_h, out_w)
+        else:
+            self._width, self._height = src_w, src_h
 
     def scan(
         self,
@@ -137,7 +143,9 @@ class VideoScanner:
             "-i",
             str(self._source),
             "-vf",
-            "select='eq(pict_type\\,I)',showinfo",
+            "select='eq(pict_type\\,I)'"
+            + (f",scale={self._width}:{self._height}" if self._scale else "")
+            + ",showinfo",
             "-vsync",
             "0",
             "-f",

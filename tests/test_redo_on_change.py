@@ -294,12 +294,12 @@ def test_only_admins_stop_or_resume_and_only_they_see_who(env):
 def test_what_isnt_redone_yet_cant_be_stopped_and_says_why(env):
     lib = _library(env, "RedoCant")
     client, headers, *_ = lib
-    for artifact in ("scenes", "proxy", "video_preview"):
+    for artifact in ("proxy", "video_preview"):
         p = _producer(lib, artifact)
         assert p["redoable"] is False and p["why_not"]
         r = client.post(f"/v1/producers/{artifact}/redo/stop", headers=headers)
         assert r.status_code == 409 and _error(r)["code"] == "cant_redo"
-    assert _producer(lib, "vision")["redoable"] is True
+    assert _producer(lib, "vision")["redoable"] is True and _producer(lib, "scenes")["redoable"] is True
     assert client.post("/v1/producers/nope/redo/stop", headers=headers).status_code == 404
 
 

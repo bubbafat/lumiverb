@@ -36,7 +36,7 @@ def test_short_scene_chooses_sharpest_candidate():
     with (
         patch(
             "src.client.video.scene_segmenter._frame_to_phash",
-            side_effect=lambda _: "aabbccdd" * 8,
+            side_effect=lambda *_: "aabbccdd" * 8,
         ),
         patch(
             "src.client.video.scene_segmenter._frame_sharpness",
@@ -69,7 +69,7 @@ def test_long_scene_skips_first_two_frames():
     with (
         patch(
             "src.client.video.scene_segmenter._frame_to_phash",
-            side_effect=lambda _: "aabbccdd" * 8,
+            side_effect=lambda *_: "aabbccdd" * 8,
         ),
         patch(
             "src.client.video.scene_segmenter._frame_sharpness",

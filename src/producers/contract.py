@@ -113,11 +113,14 @@ class ProducerSpec:
     job: str = ""
     # Why it can't be made again in place yet; its stale artifacts wait.
     cant_redo: str = ""
+    # What's made from it and goes when it's made again (made anew after it):
+    # the 409 before new settings names them.
+    redo_also: tuple[str, ...] = ()
     # What making it again keeps, in plain words: the question before new settings says it.
     redo_note: str = ""
     # Handed out again when its clip's file changes. Not the analysis copy
-    # and what's made from it: scenes can't be found again in place, and a
-    # new copy would leave them describing the old file.
+    # and what's made from it: a file with other content is a new clip
+    # (#37), so a change in place isn't a reason to find scenes again.
     redo_on_source_change: bool = True
     # Where it shows in lists (Settings → Processing); one without sorts last.
     order: int = 1000

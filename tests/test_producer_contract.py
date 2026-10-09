@@ -110,7 +110,7 @@ def test_a_producer_is_one_folder(tmp_path):
     (('artifact="example"', 'artifact="clip"'), "Two producers share a artifact"),
     (('kind="example"', 'kind="clip"'), "Two producers share a kind"),
     (('run="example_runner:run", ', ''), "needs a flag, a run and a pool"),
-    (('needs=("proxy",)', 'needs=("teleport",)'), "needs what no producer makes"),
+    (('needs=("proxy",)', 'needs=("teleport",)'), "names what no producer makes"),
     (('pool="example-pool", slots=2', 'pool="gpu", per_account=True, job="vision"'), "pool = job"),
     (("PRODUCER = ProducerSpec(", "NOT_A_PRODUCER = ProducerSpec("), "declares no PRODUCER"),
 ])

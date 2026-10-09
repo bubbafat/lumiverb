@@ -335,6 +335,9 @@ fi
 
 # ---------------------------------------------------------------------------
 step "Restarting services"
+# The scheduler stops first: while the API restarts, its jobs couldn't save,
+# and each would count against its clip as a failure.
+systemctl is-enabled lumiverb-scheduler >/dev/null 2>&1 && systemctl stop lumiverb-scheduler
 systemctl is-enabled lumiverb-quickwit >/dev/null 2>&1 && systemctl restart lumiverb-quickwit
 systemctl restart lumiverb-api
 # uv's cache: an old Python's packages stay in it for good (prune keeps
@@ -348,7 +351,7 @@ for i in {1..10}; do
   sleep 1
 done
 # The scheduler last, once the API answers: its jobs save through the API.
-systemctl is-enabled lumiverb-scheduler >/dev/null 2>&1 && systemctl restart lumiverb-scheduler
+systemctl is-enabled lumiverb-scheduler >/dev/null 2>&1 && systemctl start lumiverb-scheduler
 
 systemctl status --no-pager lumiverb-api || true
 systemctl is-enabled lumiverb-quickwit >/dev/null 2>&1 && systemctl status --no-pager lumiverb-quickwit || true

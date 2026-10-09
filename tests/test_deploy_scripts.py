@@ -745,7 +745,7 @@ def test_update_restarts_the_scheduler_only_once_the_api_answers():
     text = UPDATE_API.read_text()
     step = text[text.index('step "Restarting services"'):]
     api, health, scheduler = (step.index("systemctl restart lumiverb-api"), step.index("/health"),
-                              step.index("systemctl restart lumiverb-scheduler"))
+                              step.index("systemctl start lumiverb-scheduler"))
     assert api < health < scheduler
 
 
@@ -858,4 +858,36 @@ def test_without_docker_the_step_does_nothing(tmp_path):
 def test_the_gpu_comes_back_after_the_last_reload_and_before_the_scheduler_restarts():
     text = UPDATE_API.read_text()
     gpu = text.index('step "Giving the GPU back to containers"')
-    assert text.rindex("systemctl daemon-reload") < gpu < text.index("systemctl restart lumiverb-scheduler")
+    assert text.rindex("systemctl daemon-reload") < gpu < text.index("systemctl start lumiverb-scheduler")
+
+
+# --- The scheduler is stopped while the API restarts --------------------------
+# Running on, its jobs couldn't save while the API was down, and each counted
+# against its clip as a failure ("Connection refused" after the 08:49 update, Oct 9).
+
+
+def _restart_calls(tmp_path: Path) -> list[str]:
+    calls = tmp_path / "calls"
+    calls.write_text("")
+    text = UPDATE_API.read_text()
+    block = text.split('step "Restarting services"', 1)[1].split('echo -e "${GREEN}${BOLD}API update complete', 1)[0]
+    script = (
+        'step() { :; }; ok() { :; }; warn() { :; }; fail() { echo "fail: $1"; exit 1; }\n'
+        f'systemctl() {{ echo "systemctl $*" >> "{calls}"; }}\n'
+        f'curl() {{ echo "curl $*" >> "{calls}"; }}\n'
+        'sudo() { :; }\n'
+        'API_PORT=8100; SVC_USER=lumiverb; UV_BIN=uv\n'
+        + block
+    )
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stdout + out.stderr
+    return [c for c in calls.read_text().splitlines() if not c.startswith(("systemctl is-enabled", "systemctl status"))]
+
+
+def test_the_scheduler_stops_before_the_api_restarts_and_starts_once_it_answers(tmp_path):
+    calls = _restart_calls(tmp_path)
+    stop = calls.index("systemctl stop lumiverb-scheduler")
+    api = calls.index("systemctl restart lumiverb-api")
+    health = next(i for i, c in enumerate(calls) if c.startswith("curl") and "/health" in c)
+    start = calls.index("systemctl start lumiverb-scheduler")
+    assert stop < api < health < start

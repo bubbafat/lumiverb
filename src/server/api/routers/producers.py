@@ -265,9 +265,11 @@ def set_settings(
         if clips and not body.redo:
             stopped = artifact in lineage.paused(session)
             session.rollback()
+            also = " and ".join(PRODUCERS[a].title.lower() for a in p.redo_also)
             raise DecisionRequiredError(
                 "redo_on_change",
-                f"New settings make {clips:,} clip{'' if clips == 1 else 's'} of {p.title.lower()} again. That "
+                f"New settings make {clips:,} clip{'' if clips == 1 else 's'} of {p.title.lower()} again"
+                + (f", and their {also} with them" if also else "") + ". That "
                 "runs after anything missing; until it's done, results mix the old settings and the new."
                 + (f" {p.redo_note}" if p.redo_note else "")
                 + (" Its stopped redo starts again." if stopped else ""),
