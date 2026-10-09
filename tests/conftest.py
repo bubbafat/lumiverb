@@ -27,10 +27,12 @@ import os
 import subprocess
 import sys
 
-# Use NullPool for all test engines so connections are never held idle.
-# This prevents "server closed the connection unexpectedly" errors that occur
-# when testcontainer Postgres stops before SQLAlchemy's pool flushes idle connections.
-os.environ.setdefault("SQLALCHEMY_NULLPOOL", "1")
+# Test engines pool their connections, as the server's do (no
+# SQLALCHEMY_NULLPOOL). A new connection per session opened ~26k of them in a
+# full parallel run, each leaving a host port in TIME_WAIT, and that used up
+# the ephemeral range: Docker then couldn't map a port for a container started
+# mid-run. A database's pooled connections end when it's dropped (WITH FORCE),
+# and its name is never used again in the run.
 # Sessions default to a timezone that isn't UTC, as on the brain (Ubuntu's
 # Postgres takes the machine's), so code that leans on UTC fails here first.
 os.environ.setdefault("PGTZ", "America/New_York")
