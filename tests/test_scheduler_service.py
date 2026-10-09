@@ -85,7 +85,8 @@ def _scheduler(accounts: dict, due: dict[str, list[dict]], recorder: Recorder, *
     return Scheduler(lambda: accounts, capacity=capacity or {"scan": 1, "probe": 2, "render": 1, "gpu": 1,
                                                             "scenes": 1},
                      candidates=candidates, runners=recorder.all(), scan=scan or MagicMock(), inline_refill=True,
-                     paused=lambda tenant_id: set(paused or ()))
+                     paused=lambda tenant_id: set(paused or ()),
+                     retry_requested=lambda tenant_id: None)
 
 
 def _settle(s: Scheduler) -> None:
@@ -231,7 +232,8 @@ def test_a_job_that_fails_frees_its_slot_and_the_rest_go_on() -> None:
     runners["clip"] = boom
     s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"gpu": 1, "scan": 1},
                   candidates=lambda t, k, libs, skip=(): [_item("c1"), _item("c2", "2026-10-02")] if k.name == "clip" else [],
-                  runners=runners, scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set())
+                  runners=runners, scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set(),
+                  retry_requested=lambda tenant_id: None)
     s.tick()
     _settle(s)
     assert s.dispatcher.free("gpu") == 1
@@ -360,7 +362,8 @@ def test_a_job_that_couldnt_try_is_offered_again_and_one_that_tried_waits() -> N
     runners["probe"] = probe
     s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"probe": 1, "scan": 0},
                   candidates=lambda t, k, libs, skip=(): [i for i in [_item("p")] if i["asset_id"] not in skip]
-                  if k.name == "probe" else [], runners=runners, scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set())
+                  if k.name == "probe" else [], runners=runners, scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set(),
+                  retry_requested=lambda tenant_id: None)
     for _ in range(4):
         s.tick()
         _settle(s)
@@ -408,7 +411,8 @@ def test_the_database_is_asked_to_leave_out_clips_in_hand_or_just_tried() -> Non
             if kind.name == "vision" else []
 
     s = Scheduler(lambda: {"t1": FakeAccount(vision=1)}, capacity={"scan": 0}, candidates=candidates,
-                  runners=rec.all(), scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set())
+                  runners=rec.all(), scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set(),
+                  retry_requested=lambda tenant_id: None)
     s.tick()
     s.dispatcher._all_known_at.clear()
     s.dispatcher._buffers.clear()
@@ -428,7 +432,8 @@ def test_one_kinds_trouble_doesnt_hold_up_the_others() -> None:
         return [_item("c")] if kind.name == "clip" else []
 
     s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"probe": 1, "gpu": 1, "scan": 0},
-                  candidates=candidates, runners=rec.all(), scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set())
+                  candidates=candidates, runners=rec.all(), scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set(),
+                  retry_requested=lambda tenant_id: None)
     s.tick()
     _settle(s)
     assert [kind for _, kind, _ in rec.ran] == ["clip"]
@@ -443,7 +448,8 @@ def test_refills_happen_off_the_dispatching_thread() -> None:
     acct.refresh = lambda: gate.wait(5)
     s = Scheduler(lambda: {"t1": acct}, capacity={"gpu": 1, "scan": 0},
                   candidates=lambda t, k, libs, skip=(): [_item("c")] if k.name == "clip" else [],
-                  runners=rec.all(), scan=MagicMock(), paused=lambda tenant_id: set())
+                  runners=rec.all(), scan=MagicMock(), paused=lambda tenant_id: set(),
+                  retry_requested=lambda tenant_id: None)
     start = time.monotonic()
     s.tick()
     assert time.monotonic() - start < 1
@@ -553,6 +559,28 @@ def test_stopping_a_redo_clears_what_was_waiting_at_once() -> None:
     s.tick()
     _settle(s)
     assert [ids for _, kind, ids in rec.ran] == [("a",)]
+
+
+@pytest.mark.fast
+def test_asking_to_try_failing_clips_again_lets_go_of_the_hour() -> None:
+    # The scheduler keeps a clip that waited without saying why for an hour;
+    # someone asking to try again shouldn't wait that out.
+    rec = Recorder()
+    asked: list[str | None] = [None]
+    s = _scheduler({"t1": FakeAccount()}, {"clip": [_item("c")]}, rec)
+    clip = s._runners["clip"]
+    s._runners["clip"] = lambda acct, job: clip(acct, job) or list(job.asset_ids)  # it waits
+    s._retry_requested = lambda tenant_id: asked[0]
+    for _ in range(2):
+        s.tick()
+        _settle(s)
+        s.dispatcher._all_known_at.clear()
+    assert [ids for _, kind, ids in rec.ran if kind == "clip"] == [("c",)]  # held for the hour
+    asked[0] = "2026-10-09T01:00:00"
+    for _ in range(2):
+        s.tick()
+        _settle(s)
+    assert [ids for _, kind, ids in rec.ran if kind == "clip"] == [("c",), ("c",)]
 
 
 @pytest.mark.fast

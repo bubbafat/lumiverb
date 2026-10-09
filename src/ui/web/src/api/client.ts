@@ -884,6 +884,8 @@ export interface ProducerCounts {
   missing: number;
   /** The last try failed. */
   failing: number;
+  /** Failing, and no longer tried (after 10 tries) until someone asks. */
+  given_up?: number;
 }
 
 /** What makes one kind of artifact (Settings → Processing). */
@@ -914,6 +916,41 @@ export async function getProducers(scope: { libraryId?: string; projectId?: stri
   if (scope.projectId) qs.set("project_id", scope.projectId);
   const q = qs.toString();
   return (await apiFetch<{ producers: Producer[] }>(`/producers${q ? `?${q}` : ""}`)).producers;
+}
+
+/** A clip whose last try failed (Settings → Processing). */
+export interface FailingClip {
+  asset_id: string;
+  artifact: string;
+  title: string;
+  rel_path: string;
+  library_id: string;
+  library_name: string;
+  media_type: string;
+  error: string;
+  attempts: number;
+  failed_at: string | null;
+  /** When it's tried again; null once it's given up. */
+  retry_at: string | null;
+  given_up: boolean;
+}
+
+/** Clips whose last try failed, newest failure first (signed in). */
+export async function getFailures(params: { artifact?: string; libraryId?: string; after?: string; limit?: number } = {}):
+    Promise<{ items: FailingClip[]; next_cursor: string | null }> {
+  const qs = new URLSearchParams();
+  if (params.artifact) qs.set("artifact", params.artifact);
+  if (params.libraryId) qs.set("library_id", params.libraryId);
+  if (params.after) qs.set("after", params.after);
+  if (params.limit) qs.set("limit", String(params.limit));
+  const q = qs.toString();
+  return apiFetch(`/producers/failures${q ? `?${q}` : ""}`);
+}
+
+/** Try failing clips again now, given up or not (editors and admins). */
+export async function retryFailures(body: { artifact?: string; library_id?: string; asset_ids?: string[] }):
+    Promise<{ retried: number }> {
+  return apiFetch(`/producers/failures/retry`, { method: "POST", body });
 }
 
 /** Stop redoing a producer's stale clips (admins); what's missing is still made. 409 cant_redo. */

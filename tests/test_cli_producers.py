@@ -131,3 +131,48 @@ def test_refusals_say_why(client, status, body, says):
 def test_the_upgrade_commands_are_gone(client):
     assert _run("upgrade", "vision").exit_code != 0
     assert _run("cancel", "vision").exit_code != 0
+
+
+FAILING = {"items": [
+    {"asset_id": "ast_1", "artifact": "vision", "title": "Descriptions and tags", "rel_path": "Day 1/a.jpg",
+     "library_id": "lib_1", "library_name": "Footage", "media_type": "image", "error": "the model said nothing",
+     "attempts": 10, "failed_at": "2026-10-09T01:00:00Z", "retry_at": None, "given_up": True},
+    {"asset_id": "ast_2", "artifact": "ocr", "title": "Text in images (OCR)", "rel_path": "b.jpg",
+     "library_id": "lib_1", "library_name": "Footage", "media_type": "image", "error": "timed out",
+     "attempts": 2, "failed_at": "2026-10-09T01:00:00Z", "retry_at": "2026-10-09T01:10:00Z", "given_up": False}],
+    "next_cursor": None}
+
+
+def test_failures_say_why_and_when_the_next_try_is(client):
+    client.raw.return_value = _response(200, FAILING)
+    result = _run("failures")
+    assert result.exit_code == 0, result.output
+    # The table folds long cells at 80 columns: compare without the spacing and borders.
+    out = "".join(ch for ch in result.output if ch.isalnum() or ch in ":-")
+    assert "themodelsaid" in out and "givenup" in out and "2026-10-0901:10" in out and "timedout" in out
+    assert client.raw.call_args.args == ("GET", "/v1/producers/failures")
+    assert client.raw.call_args.kwargs["params"] == {"limit": 50}
+
+
+def test_failures_of_one_producer_in_one_library(client):
+    client.raw.return_value = _response(200, {"items": [], "next_cursor": None})
+    result = _run("failures", "vision", "--library", "Footage")
+    assert "Nothing is failing." in result.output
+    assert client.raw.call_args.kwargs["params"] == {"limit": 50, "artifact": "vision", "library_id": "lib_1"}
+
+
+def test_retry_some_or_all(client):
+    client.raw.return_value = _response(200, {"retried": 1})
+    result = _run("retry", "vision", "--asset", "ast_1")
+    assert result.exit_code == 0 and "1 clip will be tried again shortly." in result.output
+    assert client.raw.call_args.kwargs["json"] == {"artifact": "vision", "asset_ids": ["ast_1"]}
+    client.raw.return_value = _response(200, {"retried": 0})
+    result = _run("retry")
+    assert "Nothing was failing." in result.output
+    assert client.raw.call_args.kwargs["json"] == {}
+
+
+def test_retry_refused_says_why(client):
+    client.raw.return_value = _response(403, {"detail": "Editors only"})
+    result = _run("retry")
+    assert result.exit_code == 1 and "Editors only" in result.output

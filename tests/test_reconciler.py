@@ -85,7 +85,8 @@ def test_missing_until_made_then_current(env):
     clip = _ingest_with(lib, "a.jpg", sha, {"proxy": _want(env, "proxy", sha)})
     assert _due(lib, "missing_vision") == [clip]
     assert _summary(lib)["missing_vision"] == 1
-    assert _counts(lib, "vision") == {"applicable": 1, "current": 0, "stale": 0, "missing": 1, "failing": 0}
+    assert _counts(lib, "vision") == {"applicable": 1, "current": 0, "stale": 0, "missing": 1, "failing": 0,
+                                      "given_up": 0}
 
     _describe(lib, clip, sha)
     assert _due(lib, "missing_vision") == []
@@ -241,7 +242,8 @@ def test_a_failure_waits_then_is_handed_out_again(env):
     assert attempts == 2 and timedelta(minutes=9) < wait <= timedelta(minutes=10)
 
     _describe(lib, clip, sha)  # made at last: the failure is behind it
-    assert _counts(lib, "vision") == {"applicable": 1, "current": 1, "stale": 0, "missing": 0, "failing": 0}
+    assert _counts(lib, "vision") == {"applicable": 1, "current": 1, "stale": 0, "missing": 0, "failing": 0,
+                                      "given_up": 0}
 
 
 @pytest.mark.slow

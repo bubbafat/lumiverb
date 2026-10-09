@@ -77,6 +77,7 @@ class Scheduler:
         capacity: Mapping[str, int],
         candidates: Callable[..., list[dict]] | None = None,
         paused: Callable[[str], set[str]] | None = None,
+        retry_requested: Callable[[str], str | None] | None = None,
         runners: Mapping[str, Callable[..., Outcome]] | None = None,
         scan: Callable[..., None] | None = None,
         clock: Callable[[], float] = time.monotonic,
@@ -89,6 +90,8 @@ class Scheduler:
         self._accounts = accounts
         self._candidates = candidates or _from_database
         self._paused = paused or _paused_in_database
+        self._retry_requested = retry_requested or _retry_requested_in_database
+        self._retry_seen: dict[str, str | None] = {}
         self._runners = dict(runners or runner_mod.RUNNERS)
         self._scan = scan or runner_mod.scan
         self._clock = clock
@@ -154,6 +157,16 @@ class Scheduler:
             if not slots:
                 for kind in AI_JOB_KINDS[job]:
                     self.dispatcher.clear(tenant_id, kind)
+        # Failing clips someone asked to try again aren't held back by the
+        # hour this scheduler keeps a clip it just tried.
+        try:
+            asked = self._retry_requested(tenant_id)
+        except Exception:  # noqa: BLE001
+            logger.exception("scheduler: reading %s's retry requests failed", tenant_id)
+            asked = self._retry_seen.get(tenant_id)
+        if tenant_id in self._retry_seen and asked != self._retry_seen[tenant_id]:
+            self.dispatcher.forget_taken(tenant_id)
+        self._retry_seen[tenant_id] = asked
         # A redo an admin stopped hands out nothing more, at once.
         try:
             stopped = self._paused(tenant_id)
@@ -280,6 +293,17 @@ def _job_models(tenant_id: str) -> dict[str, str]:
 
     with get_control_session() as ctrl:
         return job_models(TenantRepository(ctrl).get_by_id(tenant_id))
+
+
+def _retry_requested_in_database(tenant_id: str) -> str | None:
+    """When someone last asked for failing clips to be tried again (lineage.retry)."""
+    from sqlalchemy import text
+    from sqlmodel import Session
+
+    from src.server.database import get_engine_for_url
+
+    with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
+        return session.execute(text("SELECT value FROM system_metadata WHERE key = 'scheduler.retry_at'")).scalar()
 
 
 def _paused_in_database(tenant_id: str) -> set[str]:

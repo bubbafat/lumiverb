@@ -75,9 +75,12 @@ MADE: dict[str, str] = {
 
 _OVERRIDES = "producer.{}"
 
-# Failures are tried again after 5 minutes, doubling up to a day.
+# Failures are tried again after 5 minutes, doubling up to a day...
 RETRY_FIRST = timedelta(minutes=5)
 RETRY_MAX = timedelta(days=1)
+# ...and given up after this many tries (about two days), until someone
+# asks for it to be tried again (Robert, Oct 9).
+GIVE_UP_AFTER = 10
 
 
 def _meta(session: Session, key: str) -> str | None:
@@ -179,8 +182,9 @@ def _stale_params(artifact: str, want: dict[str, Any], library_id: str | None,
 
 def counts(session: Session, artifact: str, want: dict[str, Any], library_id: str | None = None,
            asset_ids: list[str] | None = None) -> dict[str, int]:
-    """{applicable, current, stale, missing, failing} for one artifact kind,
-    over clips in sight (in one library, or among asset_ids, when given)."""
+    """{applicable, current, stale, missing, failing, given_up} for one
+    artifact kind, over clips in sight (in one library, or among asset_ids,
+    when given). given_up: failing ones no longer tried (after GIVE_UP_AFTER tries)."""
     if artifact not in MADE:
         raise KeyError(artifact)
     made = f"({MADE[artifact]})"
@@ -188,14 +192,15 @@ def counts(session: Session, artifact: str, want: dict[str, Any], library_id: st
         "SELECT count(*),"
         f" count(*) FILTER (WHERE NOT {made}),"
         f" count(*) FILTER (WHERE {made} AND (l.asset_id IS NULL OR {_stale_sql()})),"
-        " count(*) FILTER (WHERE l.error IS NOT NULL)"
+        " count(*) FILTER (WHERE l.error IS NOT NULL),"
+        " count(*) FILTER (WHERE l.error IS NOT NULL AND l.retry_at = 'infinity')"
         " FROM active_assets a"
         " LEFT JOIN artifact_lineage l ON l.asset_id = a.asset_id AND l.artifact = :artifact"
         f" WHERE {APPLIES[artifact]} AND {_scope_sql()}"
     ), _stale_params(artifact, want, library_id, asset_ids)).one()
-    applicable, n_missing, stale, failing = (int(v) for v in row)
+    applicable, n_missing, stale, failing, given_up = (int(v) for v in row)
     return {"applicable": applicable, "current": applicable - n_missing - stale, "stale": stale,
-            "missing": n_missing, "failing": failing}
+            "missing": n_missing, "failing": failing, "given_up": given_up}
 
 
 # ---------------------------------------------------------------------------
@@ -315,7 +320,9 @@ def forget(session: Session, asset_ids: list[str], artifact: str, *, commit: boo
 
 def record_failure(session: Session, asset_id: str, artifact: str, error: str, *, commit: bool = True) -> None:
     """A try that failed: kept with its error, and tried again after 5 minutes,
-    doubling up to a day. An artifact made earlier stays what it was."""
+    doubling up to a day; given up after GIVE_UP_AFTER tries (retry_at
+    'infinity') until someone asks for it to be tried again. An artifact
+    made earlier stays what it was."""
     now = utcnow()
     row = session.execute(text(
         "SELECT attempts FROM artifact_lineage WHERE asset_id = :a AND artifact = :artifact FOR UPDATE"
@@ -324,11 +331,61 @@ def record_failure(session: Session, asset_id: str, artifact: str, error: str, *
     wait = min(RETRY_FIRST * (2 ** (attempts - 1)), RETRY_MAX)
     session.execute(text(
         "INSERT INTO artifact_lineage (asset_id, artifact, producer, producer_version, settings_hash,"
-        " source_sha256, produced_at, outcome, error, attempts, retry_at)"
-        " VALUES (:a, :artifact, '', '', '', NULL, :now, 'failed', :error, :attempts, :retry)"
+        " source_sha256, produced_at, outcome, error, attempts, retry_at, failed_at)"
+        " VALUES (:a, :artifact, '', '', '', NULL, :now, 'failed', :error, :attempts,"
+        "         CASE WHEN :give_up THEN 'infinity'::timestamptz ELSE :retry END, :now)"
         " ON CONFLICT (asset_id, artifact) DO UPDATE SET error = EXCLUDED.error,"
-        "   attempts = EXCLUDED.attempts, retry_at = EXCLUDED.retry_at"
+        "   attempts = EXCLUDED.attempts, retry_at = EXCLUDED.retry_at, failed_at = EXCLUDED.failed_at"
     ), {"a": asset_id, "artifact": artifact, "now": now, "error": error[:2000], "attempts": attempts,
-        "retry": now + wait})
+        "retry": now + wait, "give_up": attempts >= GIVE_UP_AFTER})
     if commit:
         session.commit()
+
+
+def failures(session: Session, *, artifact: str | None = None, library_id: str | None = None,
+             asset_ids: list[str] | None = None, limit: int = 50, after: str | None = None) -> list[dict[str, Any]]:
+    """Clips in sight whose last try failed, newest failure first: why, how
+    many tries, and when the next one is (None when given up). after: the
+    cursor the last page ended with."""
+    rows = session.execute(text(
+        "SELECT l.asset_id, l.artifact, l.error, l.attempts, l.failed_at, l.retry_at,"
+        " a.rel_path, a.library_id, a.media_type, lib.name AS library_name"
+        " FROM artifact_lineage l JOIN active_assets a ON a.asset_id = l.asset_id"
+        " JOIN libraries lib ON lib.library_id = a.library_id"
+        " WHERE l.error IS NOT NULL"
+        "   AND (CAST(:artifact AS text) IS NULL OR l.artifact = :artifact)"
+        "   AND (CAST(:lib AS text) IS NULL OR a.library_id = :lib)"
+        "   AND (CAST(:ids AS text[]) IS NULL OR a.asset_id = ANY(CAST(:ids AS text[])))"
+        "   AND (CAST(:after AS text) IS NULL"
+        "        OR (COALESCE(l.failed_at, l.produced_at), l.asset_id || '/' || l.artifact)"
+        "           < (CAST(split_part(:after, '|', 1) AS timestamptz), split_part(:after, '|', 2)))"
+        " ORDER BY COALESCE(l.failed_at, l.produced_at) DESC, l.asset_id || '/' || l.artifact DESC"
+        " LIMIT :n"
+    ), {"artifact": artifact, "lib": library_id, "ids": asset_ids, "after": after, "n": limit}).mappings().all()
+    out = []
+    for r in rows:
+        given_up = r["retry_at"] is not None and r["retry_at"].year >= 9999
+        when = r["failed_at"]
+        out.append({**r, "given_up": given_up, "retry_at": None if given_up else r["retry_at"],
+                    "cursor": f"{when.isoformat() if when else ''}|{r['asset_id']}/{r['artifact']}"})
+    return out
+
+
+def retry(session: Session, *, artifact: str | None = None, library_id: str | None = None,
+          asset_ids: list[str] | None = None) -> int:
+    """Try these failing clips again now, given up or not (the back-off starts
+    over). Doesn't commit. Returns how many."""
+    r = session.execute(text(
+        "UPDATE artifact_lineage l SET retry_at = NULL, attempts = 0 FROM active_assets a"
+        " WHERE a.asset_id = l.asset_id AND l.error IS NOT NULL"
+        "   AND (CAST(:artifact AS text) IS NULL OR l.artifact = :artifact)"
+        "   AND (CAST(:lib AS text) IS NULL OR a.library_id = :lib)"
+        "   AND (CAST(:ids AS text[]) IS NULL OR l.asset_id = ANY(CAST(:ids AS text[])))"
+    ), {"artifact": artifact, "lib": library_id, "ids": asset_ids})
+    if r.rowcount:
+        # The scheduler doesn't wait out its own hour for clips it just tried.
+        session.execute(text(
+            "INSERT INTO system_metadata (key, value, updated_at) VALUES ('scheduler.retry_at', :now, now())"
+            " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"),
+            {"now": utcnow().isoformat()})
+    return int(r.rowcount or 0)

@@ -55,6 +55,8 @@ Entry point: `lumiverb = "src.client.cli:main"` (setuptools); `main()` invokes t
 - `lumiverb producers [--library NAME | --project NAME]` — What each producer has made (the web's Settings → Processing): current, missing, stale (made with another producer, model or settings than now: made again after anything missing) and failing, and whether each one's redo is going or stopped. Producers are named as in the listing (`vision`, `ocr`, `clip`, `faces`, `transcript`, `analysis_proxy`, ...).
 - `lumiverb producers stop <producer>` — Stop redoing a producer's stale clips (admins); what's missing is still made. Resumed by `resume`, or by a new model for it.
 - `lumiverb producers resume <producer>` — Redo a producer's stale clips again (admins), after anything missing.
+- `lumiverb producers failures [<producer>] [--library NAME] [--limit N]` — Clips whose last try failed: the error, how many tries, when the next one is, or that it was given up (after 10 tries).
+- `lumiverb producers retry [<producer>] [--asset ID ...] [--library NAME]` — Try failing clips again now, given up or not (editors and admins).
 
 #### Library
 - `lumiverb library create --name <name> --path <path>` — Create a library.

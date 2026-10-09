@@ -3,11 +3,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiError,
   getCurrentUser,
+  getFailures,
   getProducers,
   listLibraries,
   listProjects,
   resumeRedo,
+  retryFailures,
   stopRedo,
+  type FailingClip,
   type Producer,
 } from "../../api/client";
 
@@ -42,6 +45,7 @@ export default function ProcessingSection() {
     refetchInterval: 30_000,
   });
   const admin = user?.role === "admin";
+  const canRetry = user?.role === "admin" || user?.role === "editor";
 
   return (
     <div className="rounded-lg border border-gray-700/50 bg-gray-900/50 p-6 space-y-6">
@@ -91,7 +95,13 @@ export default function ProcessingSection() {
       {producers && (
         <ul className="space-y-3">
           {producers.map((p) => (
-            <ProducerRow key={`${p.artifact}|${scopeValue}`} producer={p} admin={admin} />
+            <ProducerRow
+              key={`${p.artifact}|${scopeValue}`}
+              producer={p}
+              admin={admin}
+              canRetry={canRetry}
+              libraryId={kind === "library" ? id : undefined}
+            />
           ))}
         </ul>
       )}
@@ -113,7 +123,18 @@ function CountsBar({ producer }: { producer: Producer }) {
   );
 }
 
-function ProducerRow({ producer, admin }: { producer: Producer; admin: boolean }) {
+function ProducerRow({
+  producer,
+  admin,
+  canRetry,
+  libraryId,
+}: {
+  producer: Producer;
+  admin: boolean;
+  canRetry: boolean;
+  libraryId?: string;
+}) {
+  const [showFailures, setShowFailures] = useState(false);
   const c = producer.counts;
   const headingId = `producer-${producer.artifact}`;
   return (
@@ -136,14 +157,118 @@ function ProducerRow({ producer, admin }: { producer: Producer; admin: boolean }
             <>
               <span className="text-gray-200">{n(c.current)}</span> current · {n(c.missing)} missing ·{" "}
               <span className={c.stale ? "text-amber-300" : undefined}>{n(c.stale)} stale</span>
-              {c.failing > 0 && <span className="text-red-300"> · {n(c.failing)} failing</span>}
+              {c.failing > 0 && (
+                <span className="text-red-300">
+                  {" "}
+                  · {n(c.failing)} failing
+                  {!!c.given_up && ` (${n(c.given_up)} given up)`}
+                </span>
+              )}
             </>
           )}
         </p>
       )}
+      {c && c.failing > 0 && (
+        <button
+          type="button"
+          className={linkClass}
+          aria-expanded={showFailures}
+          aria-label={`${showFailures ? "Hide" : "Show"} failures: ${producer.title}`}
+          onClick={() => setShowFailures((v) => !v)}
+        >
+          {showFailures ? "Hide failures" : "Show failures"}
+        </button>
+      )}
+      {showFailures && <FailureList producer={producer} canRetry={canRetry} libraryId={libraryId} />}
       {c && c.stale > 0 && <RedoLine producer={producer} stale={c.stale} admin={admin} />}
       <Settings producer={producer} />
     </li>
+  );
+}
+
+function when(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+/** A producer's failing clips: why, how many tries, when the next one is; Try again (editors and admins). */
+function FailureList({ producer, canRetry, libraryId }: { producer: Producer; canRetry: boolean; libraryId?: string }) {
+  const queryClient = useQueryClient();
+  const key = ["failures", producer.artifact, libraryId ?? "all"];
+  const { data, isLoading, error } = useQuery({
+    queryKey: key,
+    queryFn: () => getFailures({ artifact: producer.artifact, libraryId, limit: 50 }),
+  });
+  const [notice, setNotice] = useState<string | null>(null);
+  const retry = useMutation({
+    mutationFn: (assetIds?: string[]) =>
+      retryFailures({ artifact: producer.artifact, ...(libraryId ? { library_id: libraryId } : {}),
+                      ...(assetIds ? { asset_ids: assetIds } : {}) }),
+    onSuccess: (r) => {
+      setNotice(`${clips(r.retried)} will be tried again shortly.`);
+      queryClient.invalidateQueries({ queryKey: key });
+      queryClient.invalidateQueries({ queryKey: PRODUCERS_QUERY_KEY });
+    },
+  });
+  const items: FailingClip[] = data?.items ?? [];
+  return (
+    <div className="space-y-2 rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-sm" aria-label={`Failures: ${producer.title}`}>
+      {isLoading && <p className="text-gray-400">Loading…</p>}
+      {error && (
+        <p role="alert" className="text-red-300">
+          {message(error)}
+        </p>
+      )}
+      {items.length > 0 && canRetry && (
+        <button type="button" className={linkClass} disabled={retry.isPending} onClick={() => retry.mutate(undefined)}>
+          Try all again
+        </button>
+      )}
+      {notice && (
+        <p role="status" className="text-emerald-300">
+          {notice}
+        </p>
+      )}
+      {retry.error && (
+        <p role="alert" className="text-red-300">
+          {message(retry.error)}
+        </p>
+      )}
+      <ul className="space-y-2">
+        {items.map((f) => (
+          <li key={`${f.asset_id}|${f.artifact}`} className="min-w-0 border-t border-gray-800 pt-2 first:border-0 first:pt-0">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+              <span className="min-w-0 text-gray-200">
+                <span className="[overflow-wrap:anywhere]">{f.rel_path}</span>{" "}
+                <span className="whitespace-nowrap text-gray-500">· {f.library_name}</span>
+              </span>
+              {canRetry && (
+                <button
+                  type="button"
+                  className={linkClass}
+                  disabled={retry.isPending}
+                  aria-label={`Try again: ${f.rel_path}`}
+                  onClick={() => retry.mutate([f.asset_id])}
+                >
+                  Try again
+                </button>
+              )}
+            </div>
+            <p className="whitespace-pre-wrap break-words text-red-200">{f.error}</p>
+            <p className="text-xs text-gray-500">
+              {f.given_up
+                ? `Gave up after ${f.attempts} tries.`
+                : f.retry_at
+                  ? `Tried ${f.attempts} time${f.attempts === 1 ? "" : "s"}; next try ${when(f.retry_at)}.`
+                  : "Being tried again."}
+              {f.failed_at && ` Last failed ${when(f.failed_at)}.`}
+            </p>
+          </li>
+        ))}
+      </ul>
+      {data?.next_cursor && <p className="text-xs text-gray-500">Showing the 50 most recent.</p>}
+    </div>
   );
 }
 

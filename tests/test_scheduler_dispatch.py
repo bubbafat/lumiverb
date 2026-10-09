@@ -293,3 +293,18 @@ def test_a_job_that_couldnt_try_holds_nothing_back() -> None:
     assert d.held("t1", "probe") == []
     d.offer("t1", "probe", [_item("p", "2026-10-01")])
     assert d.take("probe") is not None
+
+
+@pytest.mark.fast
+def test_forgetting_an_accounts_taken_clips() -> None:
+    d = _d()
+    d.offer("t1", "vision", [_item("a", "2026-10-01")])
+    d.offer("t2", "vision", [_item("b", "2026-10-01")])
+    d.done(d.take("vision"))
+    d.done(d.take("vision"))
+    d.forget_taken("t1")
+    d.offer("t1", "vision", [_item("a", "2026-10-01")])
+    d.offer("t2", "vision", [_item("b", "2026-10-01")])
+    job = d.take("vision")
+    assert (job.tenant_id, job.items[0]["asset_id"]) == ("t1", "a")
+    assert d.take("vision") is None  # t2's still waits its hour
