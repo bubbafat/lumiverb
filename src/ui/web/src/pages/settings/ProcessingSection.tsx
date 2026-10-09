@@ -51,6 +51,9 @@ export default function ProcessingSection() {
       getProducers(kind === "library" ? { libraryId: id } : kind === "project" ? { projectId: id } : {}),
     refetchInterval: 30_000,
   });
+  // What the scheduler is doing (it says every few seconds): asked once for the page.
+  const { data: status } = useQuery({ queryKey: ["scheduler-status"], queryFn: getSchedulerStatus,
+                                      refetchInterval: 5_000 });
   const admin = user?.role === "admin";
   const canRetry = user?.role === "admin" || user?.role === "editor";
 
@@ -60,11 +63,11 @@ export default function ProcessingSection() {
         <h2 className="text-lg font-semibold text-gray-100">Processing</h2>
         <p className="mt-1 text-sm text-gray-400">
           What each producer has made for your clips. Stale ones were made with another model or settings than now:
-          they're made again after anything missing. Changing a model in Settings → AI is what starts that.
+          they're made again after anything missing. Changing a model in Settings → AI, or a producer's settings below, is what starts that.
         </p>
       </div>
 
-      <NowPanel />
+      {status && <NowPanel status={status} />}
 
       <label className="block text-sm text-gray-300">
         <span className="mb-1 block">Counts for</span>
@@ -110,6 +113,9 @@ export default function ProcessingSection() {
               admin={admin}
               canRetry={canRetry}
               libraryId={kind === "library" ? id : undefined}
+              timeLeft={kind === "all" && status?.live ? status.eta?.producers[p.artifact] : undefined}
+              timeNotKnown={kind === "all" && !!status?.live && !!status.eta?.not_counted?.some(
+                (n) => n.artifact === p.artifact && n.why === "not_known_yet")}
             />
           ))}
         </ul>
@@ -137,14 +143,21 @@ function ProducerRow({
   admin,
   canRetry,
   libraryId,
+  timeLeft,
+  timeNotKnown = false,
 }: {
   producer: Producer;
   admin: boolean;
   canRetry: boolean;
   libraryId?: string;
+  // Seconds until it's caught up: the whole account's, so only with its counts.
+  timeLeft?: number | null;
+  // It has work and no pace yet (one waiting for a machine says so already).
+  timeNotKnown?: boolean;
 }) {
   const [showFailures, setShowFailures] = useState(false);
   const c = producer.counts;
+  const left = timeLeft;
   const headingId = `producer-${producer.artifact}`;
   return (
     <li className="rounded-md border border-gray-700/60 bg-gray-950/40 px-4 py-3 space-y-2" aria-labelledby={headingId}>
@@ -174,6 +187,8 @@ function ProducerRow({
                   {!!c.given_up && ` (${n(c.given_up)} given up)`}
                 </span>
               )}
+              {!!left && <span> · {about(left)} left</span>}
+              {timeNotKnown && <span> · time left not known yet</span>}
             </>
           )}
         </p>
@@ -238,6 +253,51 @@ export function kindCount(kind: string, count: number): string {
   return `${n(count)} ${count === 1 ? one : many}`;
 }
 
+/** One job of a kind: "analysis copy", "redo of transcripts". */
+function jobLabel(kind: string): string {
+  if (kind.startsWith("redo_")) return `redo of ${KIND_LABELS[kind.slice(5)]?.[1] ?? kind.slice(5)}`;
+  return KIND_LABELS[kind]?.[0] ?? kind;
+}
+
+/** A span of time, roughly: "under a minute", "4 min", "2 h 5 min", "13 h", "2 days 3 h". */
+export function duration(seconds: number): string {
+  if (seconds < 60) return "under a minute";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 10) return minutes % 60 ? `${hours} h ${minutes % 60} min` : `${hours} h`;
+  if (hours < 48) return `${Math.round(minutes / 60)} h`;
+  const days = Math.floor(hours / 24);
+  if (days > 30) return "over a month";
+  return hours % 24 ? `${days} days ${hours % 24} h` : `${days} days`;
+}
+
+const JOBS_SHOWN = 8;
+
+/** The headline: when everything is made, leaving out (and naming) what has no time. */
+function caughtUp(eta: NonNullable<SchedulerStatus["eta"]>): string {
+  const left = (eta.not_counted ?? []).map(
+    (n) => `${n.title.charAt(0).toLowerCase()}${n.title.slice(1)} (${n.why === "no_machine" ? "no machine doing them now" : "not known yet"})`,
+  );
+  if (eta.caught_up === null) {
+    return "How long until everything is made isn't known yet: it's learned from the jobs as they finish.";
+  }
+  if (eta.caught_up === 0 && left.length === 0) return "Caught up: everything is made.";
+  const except = left.length ? `, not counting ${left.slice(0, -1).join(", ")}${left.length > 1 ? " and " : ""}${left[left.length - 1]}` : "";
+  return eta.caught_up === 0 ? `Caught up${except}.` : `Caught up in ${about(eta.caught_up)}${except}.`;
+}
+
+/** A video's length: "45 s", "24 min", "1 h 10 min". */
+function videoLength(seconds: number): string {
+  return seconds < 60 ? `${Math.round(seconds)} s` : duration(seconds);
+}
+
+/** "about 2 h 5 min", or "under a minute" (no "about" in front of that). */
+function about(seconds: number): string {
+  const span = duration(seconds);
+  return seconds < 60 || span === "over a month" ? span : `about ${span}`;
+}
+
 function listKinds(counts: Record<string, number>): string {
   return Object.entries(counts)
     .filter(([, c]) => c > 0)
@@ -246,10 +306,7 @@ function listKinds(counts: Record<string, number>): string {
 }
 
 /** What the scheduler is doing right now (it says every few seconds). */
-function NowPanel() {
-  const { data } = useQuery({ queryKey: ["scheduler-status"], queryFn: getSchedulerStatus, refetchInterval: 5_000 });
-  if (!data) return null;
-  const status: SchedulerStatus = data;
+function NowPanel({ status }: { status: SchedulerStatus }) {
   if (!status.live) {
     return (
       <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
@@ -261,12 +318,29 @@ function NowPanel() {
   }
   const running = listKinds(status.running);
   const waiting = listKinds(status.waiting);
+  const eta = status.eta;
   return (
     <div className="space-y-1 rounded-md border border-gray-700/60 bg-gray-950/40 px-3 py-2 text-sm" aria-label="Now">
+      {eta && <p className="font-medium text-gray-100">{caughtUp(eta)}</p>}
       <p className="text-gray-200">
         <span className="text-gray-400">Now: </span>
         {running || "nothing to make"}
       </p>
+      {eta && eta.jobs.length > 0 && (
+        <ul className="space-y-0.5 pl-3 text-gray-400">
+          {eta.jobs.slice(0, JOBS_SHOWN).map((job, i) => (
+            <li key={i}>
+              {jobLabel(job.kind)}
+              {job.unit === "second" && job.units > 0 && ` of ${videoLength(job.units)} of video`}
+              {" · "}
+              {job.late
+                ? "taking longer than usual"
+                : job.left === null ? "time left not known yet" : job.left < 1 ? "about to finish" : `${about(job.left)} left`}
+            </li>
+          ))}
+          {eta.jobs.length > JOBS_SHOWN && <li>and {eta.jobs.length - JOBS_SHOWN} more</li>}
+        </ul>
+      )}
       {waiting && (
         <p className="text-gray-400">
           <span>Next: </span>

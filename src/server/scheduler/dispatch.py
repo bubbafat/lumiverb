@@ -23,7 +23,8 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Callable, Collection, Mapping
+from collections import deque
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass
 
 # A kind's buffer is topped up once fewer than this are waiting.
@@ -46,6 +47,9 @@ class KindSpec:
     # Kinds that make the same thing share one: a clip is never in hand for
     # two of them at once (descriptions, and redoing descriptions).
     same_as: str = ""
+    # Its work grows with the length of the video (a render, a transcript),
+    # not the number of clips: its pace is per second of video.
+    by_seconds: bool = False
 
 
 @dataclass(frozen=True)
@@ -78,6 +82,20 @@ def _order(tier: int, item: dict) -> tuple:
     return (tier, str(item.get("created_at") or ""), item["asset_id"])
 
 
+def units(spec: KindSpec, items: Iterable[dict]) -> float:
+    """How much work these clips are for the kind: seconds of video, or clips."""
+    items = list(items)
+    if spec.by_seconds:
+        return float(sum(float(i.get("duration_sec") or 0) for i in items))
+    return float(len(items))
+
+
+# A kind's pace (seconds a slot spends per unit of work) is its last jobs'
+# time over their size, so a long clip counts for more than a short one's
+# fixed start-up, and one odd job doesn't swing it.
+PACE_JOBS = 30
+
+
 class Dispatcher:
     def __init__(self, kinds: Mapping[str, KindSpec], capacity: Mapping[str, int], *,
                  retake_after: float = 3600.0, settle_after: float = 60.0,
@@ -95,6 +113,10 @@ class Dispatcher:
         self._taken_until: dict[tuple[str, str, str], float] = {}
         self._busy: dict[str, int] = {}
         self._running_kinds: dict[tuple[str, str], int] = {}
+        # Jobs in hand (by id) and when each was taken; each kind's last
+        # jobs as (seconds, units made), its pace.
+        self._started: dict[int, tuple[Job, float]] = {}
+        self._paces: dict[tuple[str, str], deque[tuple[float, float]]] = {}
 
     # -- capacity -----------------------------------------------------------
 
@@ -199,7 +221,9 @@ class Dispatcher:
                 self._in_hand.add((tenant_id, _same(kind, spec), i["asset_id"]))
             self._busy[pool] = self._busy.get(pool, 0) + 1
             self._running_kinds[(tenant_id, kind)] = self._running_kinds.get((tenant_id, kind), 0) + 1
-            return Job(tenant_id, kind, spec.tier, tuple(items))
+            job = Job(tenant_id, kind, spec.tier, tuple(items))
+            self._started[id(job)] = (job, self._clock())
+            return job
 
     def status(self, tenant_id: str) -> dict:
         """What's running and waiting for the account, per kind, and each of
@@ -211,7 +235,22 @@ class Dispatcher:
             for spec in self._kinds.values():
                 key = pool_key(spec, tenant_id)
                 pools[spec.pool] = [self._busy.get(key, 0), self._capacity.get(key, 0)]
-            return {"running": running, "waiting": waiting, "pools": pools}
+            now = self._clock()
+            jobs = [{"kind": job.kind, "units": units(self._kinds[job.kind], job.items), "elapsed": now - at}
+                    for job, at in self._started.values() if job.tenant_id == tenant_id]
+            pace = {k: sum(e for e, _ in v) / sum(u for _, u in v)
+                    for (t, k), v in self._paces.items() if t == tenant_id and v}
+            return {"running": running, "waiting": waiting, "pools": pools, "jobs": jobs, "pace": pace}
+
+    def seed_pace(self, tenant_id: str, pace: Mapping[str, object]) -> None:
+        """Paces known before a restart (the last status): where each kind
+        starts, counting as one unit of work, so its first real job outweighs
+        it. Unknown kinds and nonsense are left out."""
+        with self._lock:
+            for kind, value in pace.items():
+                if kind in self._kinds and isinstance(value, (int, float)) and value > 0 \
+                        and (tenant_id, kind) not in self._paces:
+                    self._paces[(tenant_id, kind)] = deque([(float(value), 1.0)], maxlen=PACE_JOBS)
 
     def held(self, tenant_id: str, kind: str) -> list[str]:
         """The account's clips of this kind in hand or just tried: what the
@@ -230,10 +269,12 @@ class Dispatcher:
             for key in [k for k in self._all_known_at if k[0] == tenant_id]:
                 del self._all_known_at[key]
 
-    def done(self, job: Job, *, tried: bool = True, waiting: Collection[str] | None = None) -> None:
+    def done(self, job: Job, *, tried: bool = True, waiting: Collection[str] | None = None,
+             failed: Collection[str] = ()) -> None:
         """The job's slot is free; its clips aren't taken again for a while
         (unless it couldn't try at all). waiting: the clips neither saved nor
-        reported (None: it can't say, so all of them)."""
+        reported (None: it can't say, so all of them); failed: those reported
+        as failing. Its kind learns its pace from the rest: the clips it made."""
         spec = self._kinds[job.kind]
         wait = self._retake_after if spec.retake_after is None else spec.retake_after
         pool = pool_key(spec, job.tenant_id)
@@ -243,6 +284,16 @@ class Dispatcher:
             key = (job.tenant_id, job.kind)
             self._running_kinds[key] = max(0, self._running_kinds.get(key, 0) - 1)
             now = self._clock()
+            _, started = self._started.pop(id(job), (job, None))
+            # Its pace: what it made, over the time it held the slot. A job
+            # that couldn't try, can't say, or made nothing teaches nothing,
+            # and a failure, however fast, isn't work done.
+            if tried and waiting is not None and started is not None:
+                gone = waits | set(failed)
+                made = units(spec, (i for i in job.items if i["asset_id"] not in gone))
+                if made > 0 and now > started and not gone & set(job.asset_ids):
+                    key = (job.tenant_id, _same(job.kind, spec))
+                    self._paces.setdefault(key, deque(maxlen=PACE_JOBS)).append((now - started, made))
             for asset_id in job.asset_ids:
                 key = (job.tenant_id, _same(job.kind, spec), asset_id)
                 self._in_hand.discard(key)

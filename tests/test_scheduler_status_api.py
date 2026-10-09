@@ -65,3 +65,80 @@ def test_a_machine_can_share_the_gpu_and_the_built_in_one_always_does(env):
         for m in client.get("/v1/ai", headers=headers).json()["machines"]:
             if not m.get("built_in"):
                 client.delete(f"/v1/ai/machines/{m['machine_id']}", headers=headers)
+
+
+def test_the_queue_says_how_long_until_each_producer_and_everything_is_made(env):
+    from tests.test_lineage_api import _ingest_with, _sha
+    from tests.test_reconciler import _library
+
+    client, headers, *_ = env
+    lib = _library(env, "Eta")
+    _ingest_with(lib, "a.jpg", _sha(), None)  # a photo nothing has described yet
+    _write(env, {"at": utcnow().isoformat(), "running": {"vision": 1}, "waiting": {},
+                 "pools": {"vision": [1, 3], "gpu": [0, 1], "probe": [0, 1]},
+                 "pace": {"vision": 6.0, "ocr": 3.0, "clip": 0.5, "faces": 0.5},
+                 "jobs": [{"kind": "vision", "units": 1.0, "elapsed": 2.0}]})
+    from src.server.api.routers import producers as producers_router
+
+    producers_router._work_left_cache.clear()
+    body = client.get("/v1/producers/queue", headers=headers).json()
+    eta = body["eta"]
+    left = client.get("/v1/producers", params={"library_id": lib[2]}, headers=headers).json()
+    vision_pool = (6.0 * _missing(client, headers, "vision") + 3.0 * _missing(client, headers, "ocr")) / 3
+    assert eta["pools"]["vision"] == pytest.approx(vision_pool)
+    assert eta["producers"]["vision"] == eta["producers"]["ocr"] == pytest.approx(vision_pool)  # they share it
+    assert eta["caught_up"] == pytest.approx(max(eta["pools"].values()))
+    # Producers with work and no pace (transcripts, scenes...) are named, not guessed.
+    assert all(n["why"] in ("no_machine", "not_known_yet") for n in eta["not_counted"])
+    [job] = eta["jobs"]
+    assert job["artifact"] == "vision" and job["left"] == pytest.approx(4.0, abs=1.0)
+    assert {p["artifact"]: p["unit"] for p in left["producers"]}["transcript"] == "second"
+    # A scheduler that stopped saying: nothing to time.
+    _write(env, {"at": (utcnow() - timedelta(minutes=2)).isoformat(), "running": {}, "waiting": {}, "pools": {}})
+    assert client.get("/v1/producers/queue", headers=headers).json()["eta"] is None
+
+
+def _missing(client, headers, artifact: str) -> int:
+    counts = {p["artifact"]: p["counts"] for p in client.get("/v1/producers", headers=headers).json()["producers"]}
+    return counts[artifact]["missing"] + counts[artifact]["stale"] - counts[artifact]["given_up"]
+
+
+def _work(env, artifact: str, **kw) -> dict:
+    from src.server.repository import lineage
+    from src.server.scheduler.service import _job_models
+
+    with _db(env) as s:
+        return lineage.work_left(s, artifact, lineage.desired(s, artifact, _job_models(env[4])), **kw)
+
+
+def test_work_left_is_what_the_scheduler_will_do(env):
+    """Not clips waiting out a failure, nor those given up, nor those whose
+    first step was given up (they can't be made), nor storage that's away."""
+    from tests.test_lineage_api import _ingest_with, _sha
+    from tests.test_reconciler import _library
+
+    lib = _library(env, "WorkLeft")
+    client, headers, library_id, *_ = lib
+    clips = [_ingest_with(lib, f"v{i}.mov", _sha(), None, media_type="video") for i in range(4)]
+    with _db(env) as s:
+        s.execute(text("UPDATE assets SET duration_sec = 60 WHERE asset_id = ANY(:a)"), {"a": clips})
+        s.commit()
+    base = _work(env, "transcript", redo=False)
+    with _db(env) as s:
+        for clip, retry in ((clips[0], "now() + interval '1 hour'"), (clips[1], "'infinity'")):
+            s.execute(text(
+                "INSERT INTO artifact_lineage (asset_id, artifact, producer, producer_version, settings_hash,"
+                " produced_at, outcome, error, attempts, retry_at)"
+                f" VALUES (:a, 'transcript', 'whisper', '1', 'h', now(), 'failed', 'no', 1, {retry})"), {"a": clip})
+        # The third can't be heard: its analysis copy was given up.
+        s.execute(text(
+            "INSERT INTO artifact_lineage (asset_id, artifact, producer, producer_version, settings_hash,"
+            " produced_at, outcome, error, attempts, retry_at)"
+            " VALUES (:a, 'analysis_proxy', 'analysis-proxy', '1', 'h', now(), 'failed', 'no', 10, 'infinity')"),
+            {"a": clips[2]})
+        s.commit()
+    now = _work(env, "transcript", redo=False)
+    assert base["clips"] - now["clips"] == 3 and base["seconds"] - now["seconds"] == 180
+    # Its library's storage is away: nothing it reads the originals for is counted.
+    away = _work(env, "analysis_proxy", redo=False, away=[library_id])
+    assert away["clips"] == _work(env, "analysis_proxy", redo=False)["clips"] - 3  # all but the given-up one

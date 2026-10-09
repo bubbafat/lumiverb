@@ -6,7 +6,7 @@ transcribes the speech (src/client/workers/transcripts/speech.py)."""
 from src.producers.contract import ITS_JOBS, VIDEO, ProducerSpec, Setting
 
 PRODUCER = ProducerSpec(
-    artifact="transcript", producer="whisper", version="1", media=VIDEO, title="Transcripts", order=110,
+    artifact="transcript", producer="whisper", version="1", media=VIDEO, unit="second", title="Transcripts", order=110,
     # The probe's duration first.
     applies="a.media_type = 'video' AND a.duration_sec IS NOT NULL",
     made="a.has_transcript IS NOT NULL",

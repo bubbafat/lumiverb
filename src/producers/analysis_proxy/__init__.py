@@ -4,7 +4,7 @@ are made from (src/client/video/analysis_proxy.py)."""
 from src.producers.contract import PREPARE, VIDEO, ProducerSpec, Setting
 
 PRODUCER = ProducerSpec(
-    artifact="analysis_proxy", producer="analysis-proxy", version="1", media=VIDEO, title="Analysis proxies",
+    artifact="analysis_proxy", producer="analysis-proxy", version="1", media=VIDEO, unit="second", title="Analysis proxies",
     order=40,
     applies="a.media_type = 'video'",
     made="a.analysis_proxy_key IS NOT NULL",

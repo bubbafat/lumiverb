@@ -235,8 +235,7 @@ def _noting(fail: Callable[[str, object], Any], reported: set[str]) -> Callable[
 
 
 def scenes(acct: Account, job: Job) -> Outcome:
-    """A video's scenes. What's made isn't seen here (the server stops
-    listing it), so every clip not reported waits the long while."""
+    """A video's scenes. A clip neither made nor reported waits the long while."""
     from src.client.cli.video_index import run_video_index
 
     if acct.stopping.is_set():
@@ -249,12 +248,13 @@ def scenes(acct: Account, job: Job) -> Outcome:
     run_video_index(client=acct.client, source_for=lambda v: acct.analysis_cache.get(v["asset_id"]),
                     videos=videos, console=_QUIET, progress=_Progress(), task_id=None,
                     lineage_for=lambda v: acct.producers.lineage("scenes", v.get("sha256"), used=used),
-                    on_fail=_noting(acct.failures.for_artifact("scenes"), reported), settings=used)
+                    on_fail=_noting(acct.failures.for_artifact("scenes"), reported), settings=used,
+                    on_done=reported.add)
     return [i for i in job.asset_ids if i not in reported] or None
 
 
 def scene_vision(acct: Account, job: Job) -> Outcome:
-    """A video's scenes described (as scenes(): what's made isn't seen here)."""
+    """A video's scenes described (as scenes(): a clip neither made nor reported waits)."""
     from src.client.cli.video_index import run_video_enrich
 
     if acct.stopping.is_set():
@@ -271,7 +271,7 @@ def scene_vision(acct: Account, job: Job) -> Outcome:
                      vision_provider=scene_provider, vision_model_id=model, console=_QUIET,
                      progress=_Progress(), task_id=None,
                      lineage_for=lambda v: acct.producers.lineage("scene_vision", v.get("sha256"), used=used),
-                     on_fail=_noting(acct.vision.on_fail("scene_vision"), reported))
+                     on_fail=_noting(acct.vision.on_fail("scene_vision"), reported), on_done=reported.add)
     return [i for i in job.asset_ids if i not in reported] or None
 
 

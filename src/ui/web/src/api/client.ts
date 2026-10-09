@@ -950,6 +950,8 @@ export interface Producer {
   paused_at: string | null;
   /** Why its work waits now: its AI job is off, or has no machine (or none online). */
   waiting: string | null;
+  /** What its work grows with: seconds of video, or clips. */
+  unit?: "second" | "clip";
 }
 
 /** Change a producer's settings (admins): null puts one back to its default.
@@ -984,6 +986,21 @@ export interface SchedulerStatus {
   pools: Record<string, [number, number]>;
   /** Requests AI machines sharing its GPU give up while video is decoded there. */
   gpu_hold: number;
+  /** How long until things are made; null or absent when it isn't running. */
+  eta?: Eta | null;
+}
+
+/** Seconds until each producer, pool and everything is caught up. A producer
+ * with work and no time is in not_counted, saying why, and caught_up leaves it
+ * out (null: nothing with work is counted). */
+export interface Eta {
+  producers: Record<string, number | null>;
+  pools: Record<string, number>;
+  caught_up: number | null;
+  not_counted?: { artifact: string; title: string; why: "no_machine" | "not_known_yet" }[];
+  /** Jobs running now: their size in their producer's unit, seconds run and left, and whether well past its pace. */
+  jobs: { kind: string; artifact: string | null; unit: "second" | "clip"; units: number; elapsed: number;
+          left: number | null; late?: boolean }[];
 }
 
 export async function getSchedulerStatus(): Promise<SchedulerStatus> {

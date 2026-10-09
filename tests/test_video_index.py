@@ -661,3 +661,17 @@ def test_each_scene_records_its_own_videos_lineage(mock_enrich):
     assert (ok, failed) == (2, 0)
     assert sorted((c.kwargs["asset_id"], c.kwargs["lineage"]["source_sha256"]) for c in mock_enrich.call_args_list) == \
         [("a1", "sha_a1")] * 3 + [("a2", "sha_a2")] * 3
+
+
+@patch("src.client.cli.video_index.index_video_scenes")
+def test_run_video_index_says_which_videos_it_made(mock_index):
+    made, failed = [], []
+    mock_index.side_effect = [{"scenes": 1, "chunks": 1, "elapsed": 0.1}, RuntimeError("bad")]
+    source = MagicMock()
+    source.is_file.return_value = True
+    run_video_index(client=MagicMock(), source_for=lambda v: source,
+                    videos=[{"asset_id": "a", "rel_path": "a.mp4", "duration_sec": 5.0},
+                            {"asset_id": "b", "rel_path": "b.mp4", "duration_sec": 5.0}],
+                    console=MagicMock(), progress=MagicMock(), task_id=None,
+                    on_fail=lambda a, e: failed.append(a), on_done=made.append)
+    assert made == ["a"] and failed == ["b"]

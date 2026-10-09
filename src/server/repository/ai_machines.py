@@ -28,6 +28,17 @@ def set_job_model(tenant: Tenant, job: str, model: str) -> None:
     setattr(tenant, JOB_MODEL_FIELDS[job], model)
 
 
+def account_job_models(tenant_id: str) -> dict[str, str]:
+    """An account's model per AI job (Settings → AI), from the control plane."""
+    from src.server.database import get_control_session
+    from src.server.repository.control_plane import TenantRepository
+
+    if not tenant_id:
+        return {}
+    with get_control_session() as ctrl:
+        return job_models(TenantRepository(ctrl).get_by_id(tenant_id))
+
+
 def job_models(tenant: Tenant | None) -> dict[str, str]:
     """{job: model} for the tenant, for the producers (src/shared/producers.py)."""
     return {job: job_model(tenant, job) for job in JOB_MODEL_FIELDS}
