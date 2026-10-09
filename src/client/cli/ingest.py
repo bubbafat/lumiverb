@@ -263,8 +263,11 @@ def _face_batch_worker(
     token: str,
     batch: list[dict],
     cache_dir: str | None = None,
+    lineage: dict | None = None,
 ) -> dict:
     """Run face detection on a batch of assets in a subprocess.
+    lineage: how the faces are found, sent with them (each item's file hash,
+    its ``sha256``, its own); the server's settings when not given.
 
     ONNX Runtime leaks ~35MB per inference call in its C++ layer with no
     Python-level fix. Running in a subprocess ensures all native memory is
@@ -284,6 +287,10 @@ def _face_batch_worker(
     from PIL import Image as PILImage
 
     client = LumiverbClient(base_url=base_url, token=token)
+    if lineage is None:  # the server refuses faces that don't say how they were found
+        from src.client.cli.producer_settings import ProducerSettings
+
+        lineage = ProducerSettings(client).lineage("faces", None)
     provider = InsightFaceProvider()
     provider.ensure_loaded()
 
@@ -301,12 +308,14 @@ def _face_batch_worker(
     submit_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="face-submit")
     pending: list[tuple[str, str, Future]] = []  # (asset_id, rel_path, future)
 
-    def _submit(asset_id: str, detection_model: str, detection_model_version: str, payload: list[dict]):
+    def _submit(asset_id: str, source_sha256: str | None, detection_model: str, detection_model_version: str,
+                payload: list[dict]):
         client.post(f"/v1/assets/{asset_id}/faces", json={
             "detection_model": detection_model,
             "detection_model_version": detection_model_version,
             "embedding_model": detection_model_version,  # embeddings compare only within one model
             "faces": payload,
+            "lineage": {**lineage, "source_sha256": source_sha256 or lineage.get("source_sha256")},
         })
 
     processed = failed = skipped = 0
@@ -351,7 +360,8 @@ def _face_batch_worker(
             ]
             del detections
 
-            fut = submit_pool.submit(_submit, asset_id, provider.model_id, provider.model_version, payload)
+            fut = submit_pool.submit(_submit, asset_id, item.get("sha256"), provider.model_id,
+                                     provider.model_version, payload)
             pending.append((asset_id, rel_path, fut))
         except Exception as e:
             failed += 1

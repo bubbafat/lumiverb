@@ -18,6 +18,7 @@ from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
 from tests.conftest import PG_IMAGE, _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
+from tests.machine_lineage import made
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +150,8 @@ def vision_env(tmp_path_factory):
 
 
 def _post(auth: _AuthClient, asset_id: str, **kwargs):
-    body = {"model_id": "test-vision-model", "description": "a sunset", "tags": ["landscape"]}
+    body = {"model_id": "test-vision-model", "description": "a sunset", "tags": ["landscape"],
+            "lineage": made("vision")}
     body.update(kwargs)
     return auth.post(f"/v1/assets/{asset_id}/vision", json=body)
 

@@ -19,6 +19,7 @@ from src.server.database import _engines, get_control_session
 from src.server.repository.control_plane import TenantDbRoutingRepository
 from src.server.repository.tenant import AssetRepository, LibraryRepository
 from tests.conftest import PG_IMAGE, _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
+from tests.machine_lineage import made
 
 
 @pytest.fixture(scope="module")
@@ -108,6 +109,7 @@ def test_submit_faces(face_client: Tuple[_AuthClient, str, str]) -> None:
     r = auth_client.post(
         f"/v1/assets/{asset_id}/faces",
         json={
+            "lineage": made("faces"),
             "detection_model": "insightface",
             "detection_model_version": "buffalo_l",
             "faces": [
@@ -140,6 +142,7 @@ def test_list_faces(face_client: Tuple[_AuthClient, str, str]) -> None:
     auth_client.post(
         f"/v1/assets/{asset_id}/faces",
         json={
+            "lineage": made("faces"),
             "faces": [
                 {
                     "bounding_box": {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.3},
@@ -171,6 +174,7 @@ def test_submit_faces_idempotent(face_client: Tuple[_AuthClient, str, str]) -> N
     auth_client.post(
         f"/v1/assets/{asset_id}/faces",
         json={
+            "lineage": made("faces"),
             "faces": [
                 {"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "detection_confidence": 0.9},
                 {"bounding_box": {"x": 0.5, "y": 0.5, "w": 0.1, "h": 0.1}, "detection_confidence": 0.8},
@@ -182,6 +186,7 @@ def test_submit_faces_idempotent(face_client: Tuple[_AuthClient, str, str]) -> N
     r = auth_client.post(
         f"/v1/assets/{asset_id}/faces",
         json={
+            "lineage": made("faces"),
             "faces": [
                 {"bounding_box": {"x": 0.3, "y": 0.3, "w": 0.2, "h": 0.2}, "detection_confidence": 0.99},
             ],
@@ -203,7 +208,7 @@ def test_submit_no_faces_sets_zero(face_client: Tuple[_AuthClient, str, str]) ->
 
     r = auth_client.post(
         f"/v1/assets/{asset_id}/faces",
-        json={"faces": []},
+        json={"faces": [], "lineage": made("faces")},
     )
     assert r.status_code == 201
     assert r.json()["face_count"] == 0
@@ -215,7 +220,7 @@ def test_submit_faces_not_found(face_client: Tuple[_AuthClient, str, str]) -> No
     auth_client, _, _ = face_client
     r = auth_client.post(
         "/v1/assets/nonexistent_asset_id/faces",
-        json={"faces": []},
+        json={"faces": [], "lineage": made("faces")},
     )
     assert r.status_code == 404
 
@@ -253,7 +258,8 @@ def test_page_missing_faces_filter(face_client: Tuple[_AuthClient, str, str]) ->
     asset_with = _create_asset(auth_client, library_id, "face_page_with")
     auth_client.post(
         f"/v1/assets/{asset_with}/faces",
-        json={"faces": [{"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "detection_confidence": 0.9}]},
+        json={"faces": [{"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "detection_confidence": 0.9}],
+              "lineage": made("faces")},
     )
 
     # Create asset without faces
@@ -277,6 +283,7 @@ def test_submit_faces_without_embedding(face_client: Tuple[_AuthClient, str, str
     r = auth_client.post(
         f"/v1/assets/{asset_id}/faces",
         json={
+            "lineage": made("faces"),
             "faces": [
                 {
                     "bounding_box": {"x": 0.2, "y": 0.2, "w": 0.3, "h": 0.3},
@@ -302,12 +309,13 @@ def test_has_faces_filter_on_page(face_client: Tuple[_AuthClient, str, str]) -> 
     asset_with = _create_asset(auth_client, library_id, "has_faces_with")
     auth_client.post(
         f"/v1/assets/{asset_with}/faces",
-        json={"faces": [{"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "detection_confidence": 0.9}]},
+        json={"faces": [{"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "detection_confidence": 0.9}],
+              "lineage": made("faces")},
     )
 
     # Asset with no faces (processed, face_count=0)
     asset_zero = _create_asset(auth_client, library_id, "has_faces_zero")
-    auth_client.post(f"/v1/assets/{asset_zero}/faces", json={"faces": []})
+    auth_client.post(f"/v1/assets/{asset_zero}/faces", json={"faces": [], "lineage": made("faces")})
 
     # has_faces=true -> only asset_with
     r = auth_client.get(f"/v1/assets/page?library_id={library_id}&has_faces=true")
@@ -338,12 +346,13 @@ def test_has_faces_filter_on_browse(face_client: Tuple[_AuthClient, str, str]) -
     asset_with = _create_asset(auth_client, library_id, "browse_faces_with")
     auth_client.post(
         f"/v1/assets/{asset_with}/faces",
-        json={"faces": [{"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "detection_confidence": 0.9}]},
+        json={"faces": [{"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "detection_confidence": 0.9}],
+              "lineage": made("faces")},
     )
 
     # Asset without faces (processed)
     asset_zero = _create_asset(auth_client, library_id, "browse_faces_zero")
-    auth_client.post(f"/v1/assets/{asset_zero}/faces", json={"faces": []})
+    auth_client.post(f"/v1/assets/{asset_zero}/faces", json={"faces": [], "lineage": made("faces")})
 
     # has_faces=true -> only asset_with
     r = auth_client.get("/v1/query?f=has_faces:yes")
@@ -364,7 +373,8 @@ def test_has_faces_filter_on_search(face_client: Tuple[_AuthClient, str, str]) -
     asset_with = _create_asset(auth_client, library_id, "search_faces_sunset")
     auth_client.post(
         f"/v1/assets/{asset_with}/faces",
-        json={"faces": [{"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "detection_confidence": 0.9}]},
+        json={"faces": [{"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "detection_confidence": 0.9}],
+              "lineage": made("faces")},
     )
     engine = create_engine(tenant_url)
     with engine.begin() as conn:
@@ -377,7 +387,7 @@ def test_has_faces_filter_on_search(face_client: Tuple[_AuthClient, str, str]) -
 
     # Create asset without faces but also searchable
     asset_no = _create_asset(auth_client, library_id, "search_nofaces_sunset")
-    auth_client.post(f"/v1/assets/{asset_no}/faces", json={"faces": []})
+    auth_client.post(f"/v1/assets/{asset_no}/faces", json={"faces": [], "lineage": made("faces")})
     engine = create_engine(tenant_url)
     with engine.begin() as conn:
         conn.execute(text(
@@ -409,7 +419,8 @@ def test_facets_has_face_count(face_client: Tuple[_AuthClient, str, str]) -> Non
     asset_id = _create_asset(auth_client, library_id, "facets_face")
     auth_client.post(
         f"/v1/assets/{asset_id}/faces",
-        json={"faces": [{"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "detection_confidence": 0.9}]},
+        json={"faces": [{"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "detection_confidence": 0.9}],
+              "lineage": made("faces")},
     )
 
     r = auth_client.get(f"/v1/assets/facets?library_id={library_id}")
@@ -428,6 +439,7 @@ def test_list_faces_response_shape(face_client: Tuple[_AuthClient, str, str]) ->
     auth_client.post(
         f"/v1/assets/{asset_id}/faces",
         json={
+            "lineage": made("faces"),
             "faces": [
                 {
                     "bounding_box": {"x": 0.1, "y": 0.2, "w": 0.15, "h": 0.25},
@@ -475,6 +487,7 @@ def test_resubmit_faces_with_person_assignment(face_client: Tuple[_AuthClient, s
     r = auth_client.post(
         f"/v1/assets/{asset_id}/faces",
         json={
+            "lineage": made("faces"),
             "faces": [
                 {
                     "bounding_box": {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.3},
@@ -499,6 +512,7 @@ def test_resubmit_faces_with_person_assignment(face_client: Tuple[_AuthClient, s
     r = auth_client.post(
         f"/v1/assets/{asset_id}/faces",
         json={
+            "lineage": made("faces"),
             "faces": [
                 {
                     "bounding_box": {"x": 0.2, "y": 0.2, "w": 0.3, "h": 0.3},
@@ -539,6 +553,7 @@ def test_cleanup_empty_dismissed(face_client: Tuple[_AuthClient, str, str]) -> N
     r = auth_client.post(
         f"/v1/assets/{asset_id}/faces",
         json={
+            "lineage": made("faces"),
             "faces": [
                 {
                     "bounding_box": {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.3},

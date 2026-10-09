@@ -44,6 +44,7 @@ from tests.conftest import (
     _provision_tenant_db,
     _run_control_migrations,
 )
+from tests.machine_lineage import made
 
 
 @pytest.fixture(scope="module")
@@ -217,6 +218,7 @@ def test_redetection_keeps_refound_representative_face(people_client) -> None:
         json={
             "detection_model": "apple_vision",
             "detection_model_version": "1",
+            "lineage": made("faces"),
             "faces": [
                 {
                     "bounding_box": {"x1": 0.1, "y1": 0.1, "x2": 0.4, "y2": 0.4},
@@ -294,6 +296,7 @@ def test_redetection_repicks_representative_face(people_client) -> None:
         json={
             "detection_model": "apple_vision",
             "detection_model_version": "1",
+            "lineage": made("faces"),
             "faces": [
                 {
                     "bounding_box": {"x1": 0.6, "y1": 0.6, "x2": 0.8, "y2": 0.8},

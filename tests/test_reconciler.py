@@ -4,7 +4,8 @@ was made (ADR-016 phase 3, piece 2).
 
 An artifact is missing when it doesn't exist, whatever lineage says. One
 that exists is current or stale by its lineage; with none it's an unknown
-producer's, so stale. The worker is handed what's missing, and what was
+producer's, so stale (a write can't leave one now: it must say how it was
+made, so only a lineage row lost since does). The worker is handed what's missing, and what was
 made from a file whose content has since changed; stale from a settings or
 producer change waits for approval (piece 5). A failure waits its turn
 (5 minutes, doubling to a day) and is reported by the worker. The repair
@@ -59,11 +60,9 @@ def _pending(env) -> int:
     return {x["library_id"]: x["pending"] for x in r.json()}[library_id]
 
 
-def _describe(env, clip: str, sha: str | None, lineage: bool = True):
+def _describe(env, clip: str, sha: str | None):
     client, headers, *_ = env
-    body = {"model_id": "m", "description": "a dog on a beach"}
-    if lineage:
-        body["lineage"] = _want(env, "vision", sha)
+    body = {"model_id": "m", "description": "a dog on a beach", "lineage": _want(env, "vision", sha)}
     r = client.post(f"/v1/assets/{clip}/vision", json=body, headers=headers)
     assert r.status_code == 200, r.text
 
@@ -112,8 +111,8 @@ def test_an_artifact_nobody_said_how_was_made_is_stale_not_missing(env):
     lib = _library(env, "RecUnknown")
     sha = _sha()
     clip = _ingest_with(lib, "a.jpg", sha, None)
-    _describe(lib, clip, sha, lineage=False)
-    with _db(env) as s:  # and no lineage row at all
+    _describe(lib, clip, sha)
+    with _db(env) as s:  # the description stayed, its lineage went
         s.execute(text("DELETE FROM artifact_lineage WHERE asset_id = :a AND artifact = 'vision'"), {"a": clip})
         s.commit()
     c = _counts(lib, "vision")
@@ -201,7 +200,7 @@ def test_a_persons_transcript_stays_when_the_file_changes(env):
     with _db(env) as s:
         s.execute(text("UPDATE assets SET duration_sec = 30 WHERE asset_id = :a"), {"a": vid})
         s.commit()
-    r = client.post(f"/v1/assets/{vid}/transcript", json={"srt": "1\n00:00:00,000 --> 00:00:01,000\nmine\n"},
+    r = client.post(f"/v1/assets/{vid}/transcript", json={"source": "manual", "srt": "1\n00:00:00,000 --> 00:00:01,000\nmine\n"},
                     headers=headers)
     assert r.status_code == 200, r.text
     _ingest_with(lib, "a.mov", _sha(), None, media_type="video")
@@ -331,7 +330,9 @@ def test_a_file_replaced_through_the_other_ingest_loses_its_scenes_too(env):
     buf = io.BytesIO()
     Image.new("RGB", (64, 36)).save(buf, format="JPEG")
     buf.seek(0)
-    r = client.post(f"/v1/assets/{vid}/ingest", data={"exif": json.dumps({"sha256": _sha()})},
+    new = _sha()
+    r = client.post(f"/v1/assets/{vid}/ingest", data={"exif": json.dumps({"sha256": new}),
+                                                      "lineage": json.dumps({"proxy": _want(env, "proxy", new)})},
                     files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=headers)
     assert r.status_code == 200, r.text
     assert _due(lib, "missing_video_scenes") == [vid]

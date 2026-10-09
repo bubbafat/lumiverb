@@ -21,6 +21,7 @@ from sqlalchemy import create_engine, text
 from sqlmodel import Session
 
 from src.server.repository.tenant import AssetRepository
+from tests.machine_lineage import ingest_made
 from tests.test_analysis_proxy_api import _ingest, env  # noqa: F401 — the shared server fixture
 
 
@@ -168,7 +169,7 @@ def test_a_path_the_user_emptied_from_the_trash_isnt_a_way_back(env):
 
     r = client.post("/v1/ingest", headers=headers, files={"proxy": ("p.jpg", io.BytesIO(_jpeg()), "image/jpeg")},
                     data={"library_id": env[2], "rel_path": "ignored/O001.mov", "file_size": "1000",
-                          "media_type": "video", "exif": json.dumps({"sha256": sha})})
+                          "media_type": "video", "exif": json.dumps({"sha256": sha}), "lineage": ingest_made()})
     assert r.status_code == 409
     assert _get(env, archived) == {"status_code": 404}  # not restored at the ignored path
 
@@ -438,7 +439,7 @@ def test_a_trashed_library_s_archived_clips_arent_restored_by_content(env):
 
     r = client.post("/v1/ingest", headers=headers, files={"proxy": ("p.jpg", io.BytesIO(_jpeg()), "image/jpeg")},
                     data={"library_id": library_id, "rel_path": "back.mov", "file_size": "1000",
-                          "media_type": "video", "exif": json.dumps({"sha256": sha})})
+                          "media_type": "video", "exif": json.dumps({"sha256": sha}), "lineage": ingest_made()})
     assert r.status_code == 409
     with _sessions(env, 1) as [(session, _)]:
         row = session.execute(text("SELECT rel_path, deleted_reason FROM assets WHERE asset_id = :a"),

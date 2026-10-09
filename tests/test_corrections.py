@@ -215,8 +215,8 @@ def _image(env, name: str) -> tuple[tuple, str, str]:
 
 def _describe_as(env, clip: str, description: str, tags: list[str], model: str = "qwen3-vl:8b"):
     client, headers, *_ = env
-    r = client.post(f"/v1/assets/{clip}/vision", json={"model_id": model, "description": description, "tags": tags},
-                    headers=headers)
+    r = client.post(f"/v1/assets/{clip}/vision", json={"model_id": model, "description": description, "tags": tags,
+                                                        "lineage": _want(env, "vision", None)}, headers=headers)
     assert r.status_code == 200, r.text
 
 
@@ -326,9 +326,13 @@ def test_undoing_every_edit_while_search_is_down_still_reaches_search(env, monke
 def test_a_persons_ocr_is_the_one_copy(env):
     client, headers, *_ = env
     lib, clip, sha = _image(env, "CorrOcr")
-    client.post(f"/v1/assets/{clip}/ocr", json={"ocr_text": "PLATFORN 9"}, headers=headers)
+    r = client.post(f"/v1/assets/{clip}/ocr", json={"ocr_text": "PLATFORN 9", "lineage": _want(env, "ocr", sha)},
+                    headers=headers)
+    assert r.status_code == 200, r.text
     _correct(env, clip, ocr_text="PLATFORM 9")
-    client.post(f"/v1/assets/{clip}/ocr", json={"ocr_text": "PLATF0RM 9"}, headers=headers)
+    r = client.post(f"/v1/assets/{clip}/ocr", json={"ocr_text": "PLATF0RM 9", "lineage": _want(env, "ocr", sha)},
+                    headers=headers)
+    assert r.status_code == 200, r.text
     d = _detail(env, clip)
     assert d["ocr_text"] == "PLATFORM 9" and "machine_ocr_text" not in d
     with _db(env) as s:

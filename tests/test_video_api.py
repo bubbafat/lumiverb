@@ -15,6 +15,7 @@ from src.server.config import get_settings
 from src.server.database import _engines
 
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
+from tests.machine_lineage import made
 
 
 @pytest.fixture(scope="module")
@@ -180,6 +181,7 @@ def test_complete_chunk(video_api_client: tuple[TestClient, str, str, str, str])
             ],
             "next_anchor_phash": "abc123",
             "next_scene_start_ms": 5000,
+            "lineage": made("scenes"),
         },
         headers=auth,
     )
@@ -312,6 +314,7 @@ def test_get_scenes_after_completion(video_api_client: tuple[TestClient, str, st
             ],
             "next_anchor_phash": None,
             "next_scene_start_ms": None,
+            "lineage": made("scenes"),
         },
         headers=auth,
     )
@@ -373,6 +376,7 @@ def test_update_scene_vision(video_api_client: tuple[TestClient, str, str, str, 
                 ],
                 "next_anchor_phash": None,
                 "next_scene_start_ms": None,
+                "lineage": made("scenes"),
             },
             headers=auth,
         )
@@ -396,6 +400,7 @@ def test_update_scene_vision(video_api_client: tuple[TestClient, str, str, str, 
                 ],
                 "next_anchor_phash": None,
                 "next_scene_start_ms": None,
+                "lineage": made("scenes"),
             },
             headers=auth,
         )
@@ -413,6 +418,7 @@ def test_update_scene_vision(video_api_client: tuple[TestClient, str, str, str, 
             "model_version": "1",
             "description": "AI-generated description of the scene",
             "tags": ["indoor", "people"],
+            "lineage": made("scene_vision"),
         },
         headers=auth,
     )

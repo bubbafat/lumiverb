@@ -17,6 +17,7 @@ from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
+from tests.machine_lineage import ingest_made
 
 
 def _ingest_asset(client, api_key, library_id, rel_path, media_type="image") -> str:
@@ -31,6 +32,7 @@ def _ingest_asset(client, api_key, library_id, rel_path, media_type="image") -> 
     r = client.post(
         "/v1/ingest",
         data={
+            "lineage": ingest_made(),
             "library_id": library_id,
             "rel_path": rel_path,
             "file_size": "1000",
@@ -741,7 +743,7 @@ def _ingest_taken(client, api_key, library_id, rel_path, taken_at) -> str:
     PILImage.new("RGB", (64, 64), color=(10, 20, 30)).save(buf, format="JPEG")
     buf.seek(0)
     data = {"library_id": library_id, "rel_path": rel_path, "file_size": "1000",
-            "media_type": "image"}
+            "media_type": "image", "lineage": ingest_made()}
     if taken_at:
         data["exif"] = json.dumps({"taken_at": taken_at})
     r = client.post(
@@ -1559,7 +1561,8 @@ def test_a_scan_cant_bring_back_clips_of_a_trashed_library(projects_env):
         buf.seek(0)
         r = client.post(
             "/v1/ingest",
-            data={"library_id": lib, "rel_path": rel_path, "file_size": "1000", "media_type": "image"},
+            data={"library_id": lib, "rel_path": rel_path, "file_size": "1000", "media_type": "image",
+                  "lineage": ingest_made()},
             files={"proxy": ("proxy.jpg", buf, "image/jpeg")},
             headers=_headers(api_key),
         )

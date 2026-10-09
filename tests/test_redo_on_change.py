@@ -130,13 +130,31 @@ def test_a_clip_whose_file_changed_is_due_as_missing_not_as_a_redo(env):
     assert _due(lib, "redo_vision") == []
 
 
-def test_an_artifact_nobody_said_how_was_made_is_redone(env):
+def test_a_description_nobody_said_how_was_made_isnt_kept_so_its_made_not_redone(env):
     lib = _library(env, "RedoUnknown")
     client, headers, *_ = lib
     clip = _ingest_with(lib, "a.jpg", _sha(), None)
     r = client.post(f"/v1/assets/{clip}/vision", json={"model_id": "m", "description": "from the Mac"},
                     headers=headers)
-    assert r.status_code == 200, r.text
+    assert r.status_code == 422 and r.json()["error"]["code"] == "lineage_required", r.text
+    with _db(lib) as s:
+        assert s.execute(text("SELECT count(*) FROM asset_metadata WHERE asset_id = :a"), {"a": clip}).scalar() == 0
+        assert s.execute(text("SELECT count(*) FROM artifact_lineage WHERE asset_id = :a AND artifact = 'vision'"),
+                         {"a": clip}).scalar() == 0
+    # Still missing: made like any other, never redone.
+    assert _due(lib, "vision") == [clip]
+    assert _due(lib, "redo_vision") == []
+
+
+def test_a_description_whose_lineage_row_went_missing_is_redone(env):
+    # Review: written before lineage was kept (no row): it exists, so it's
+    # stale, not missing, and it's redone after anything missing.
+    lib = _library(env, "RedoNoRow")
+    clip, sha = _stale_clip(lib, "a.jpg")
+    with _db(lib) as s:
+        s.execute(text("DELETE FROM artifact_lineage WHERE asset_id = :a AND artifact = 'vision'"), {"a": clip})
+        s.commit()
+    assert _due(lib, "vision") == []
     assert _due(lib, "redo_vision") == [clip]
 
 

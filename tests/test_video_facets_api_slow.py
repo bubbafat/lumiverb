@@ -24,6 +24,7 @@ from src.server.database import _engines, get_control_session
 from src.server.repository.control_plane import TenantDbRoutingRepository
 from src.server.storage.local import LocalStorage
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
+from tests.machine_lineage import ingest_made, made
 
 FACET = {
     "duration_sec": 7.07,
@@ -40,6 +41,11 @@ FACET = {
     "audio_channels": 2,
     "audio_sample_rate": 48000,
 }
+
+
+def _probed(facet: dict) -> dict:
+    """A probe's PUT body: the facet and how it was found."""
+    return {**facet, "lineage": made("probe")}
 
 
 @pytest.fixture(scope="module")
@@ -105,7 +111,7 @@ def _jpeg() -> bytes:
 
 def _ingest(client, headers, library_id: str, rel_path: str, media_type: str, **extra):
     data = {"library_id": library_id, "rel_path": rel_path, "file_size": "5000",
-            "media_type": media_type, **extra}
+            "media_type": media_type, "lineage": ingest_made(), **extra}
     r = client.post(
         "/v1/ingest",
         headers=headers,
@@ -132,7 +138,7 @@ def test_put_facet_is_returned_and_sets_duration(env) -> None:
     asset_id = _ingest(client, headers, library_id, "v/put.mov", "video")
     assert asset_id in _missing_probe(client, headers, library_id)
 
-    r = client.put(f"/v1/assets/{asset_id}/video-facet", json=FACET, headers=headers)
+    r = client.put(f"/v1/assets/{asset_id}/video-facet", json=_probed(FACET), headers=headers)
     assert r.status_code == 200, r.text
 
     detail = client.get(f"/v1/assets/{asset_id}", headers=headers).json()
@@ -145,10 +151,10 @@ def test_put_facet_is_returned_and_sets_duration(env) -> None:
 def test_put_facet_replaces_previous(env) -> None:
     client, headers, library_id = env
     asset_id = _ingest(client, headers, library_id, "v/replace.mov", "video")
-    client.put(f"/v1/assets/{asset_id}/video-facet", json=FACET, headers=headers)
+    client.put(f"/v1/assets/{asset_id}/video-facet", json=_probed(FACET), headers=headers)
 
     updated = dict(FACET, frame_rate_num=25, frame_rate_den=1, start_timecode=None, drop_frame=None)
-    r = client.put(f"/v1/assets/{asset_id}/video-facet", json=updated, headers=headers)
+    r = client.put(f"/v1/assets/{asset_id}/video-facet", json=_probed(updated), headers=headers)
     assert r.status_code == 200, r.text
 
     assert client.get(f"/v1/assets/{asset_id}", headers=headers).json()["video_facet"] == updated
@@ -171,7 +177,7 @@ def test_facet_rejected_for_images(env) -> None:
     client, headers, library_id = env
     asset_id = _ingest(client, headers, library_id, "i/photo.jpg", "image")
 
-    r = client.put(f"/v1/assets/{asset_id}/video-facet", json=FACET, headers=headers)
+    r = client.put(f"/v1/assets/{asset_id}/video-facet", json=_probed(FACET), headers=headers)
 
     assert r.status_code == 400
     assert asset_id not in _missing_probe(client, headers, library_id)
@@ -182,7 +188,7 @@ def test_facet_rejected_for_images(env) -> None:
 def test_facet_for_unknown_asset_is_404(env) -> None:
     client, headers, _ = env
 
-    r = client.put("/v1/assets/ast_nope/video-facet", json=FACET, headers=headers)
+    r = client.put("/v1/assets/ast_nope/video-facet", json=_probed(FACET), headers=headers)
 
     assert r.status_code == 404
 
@@ -219,7 +225,7 @@ def test_invalid_facets_are_rejected(env, bad) -> None:
     client, headers, library_id = env
     asset_id = _ingest(client, headers, library_id, f"v/bad-{abs(hash(str(bad)))}.mov", "video")
 
-    r = client.put(f"/v1/assets/{asset_id}/video-facet", json=dict(FACET, **bad), headers=headers)
+    r = client.put(f"/v1/assets/{asset_id}/video-facet", json=_probed(dict(FACET, **bad)), headers=headers)
     assert r.status_code == 422, r.text
 
 
@@ -233,7 +239,7 @@ def test_ingest_keeps_the_video_when_its_facet_is_invalid(env) -> None:
         "/v1/ingest", headers=headers,
         files={"proxy": ("p.jpg", io.BytesIO(_jpeg()), "image/jpeg")},
         data={"library_id": library_id, "rel_path": "v/odd-probe.mov", "file_size": "5000",
-              "media_type": "video", "video_facet": json.dumps(dict(FACET, width=0))},
+              "media_type": "video", "video_facet": json.dumps(dict(FACET, width=0)), "lineage": ingest_made()},
     )
 
     assert r.status_code == 200, r.text
@@ -249,7 +255,7 @@ def test_infinite_duration_is_rejected(env) -> None:
 
     r = client.put(
         f"/v1/assets/{asset_id}/video-facet",
-        content=json.dumps(dict(FACET, duration_sec=float("inf"))),
+        content=json.dumps(_probed(dict(FACET, duration_sec=float("inf")))),
         headers={**headers, "Content-Type": "application/json"},
     )
 

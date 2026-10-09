@@ -158,8 +158,10 @@ def default_render_concurrency() -> int:
 def _probe_one(client: LumiverbClient, lib_root: "Path", asset: dict,
                producers: "ProducerSettings | None" = None,
                fail: "Callable[[str, object], None] | None" = None) -> str:
-    """Probe one video's source file and store the facet. Returns "ok", "missing" or "failed".
-    fail(asset_id, error) hears of a failure (not of a file that isn't there)."""
+    """Probe one video's source file and store the facet with how it was
+    found (the server's settings when producers isn't given). Returns "ok",
+    "missing" or "failed". fail(asset_id, error) hears of a failure (not of
+    a file that isn't there)."""
     source = resolve_source_path(lib_root, asset["rel_path"])
     if not source.is_file():
         logger.warning("Source file not found for %s: %s", asset["asset_id"], asset["rel_path"])
@@ -172,9 +174,11 @@ def _probe_one(client: LumiverbClient, lib_root: "Path", asset: dict,
             fail(asset["asset_id"], exc)
         return "failed"
     try:
-        body = facet.to_dict()
-        if producers is not None:
-            body["lineage"] = producers.lineage("probe", asset.get("sha256"))
+        if producers is None:  # the server refuses a probe that doesn't say how it was made
+            from src.client.cli.producer_settings import ProducerSettings
+
+            producers = ProducerSettings(client)
+        body = {**facet.to_dict(), "lineage": producers.lineage("probe", asset.get("sha256"))}
         client.put(f"/v1/assets/{asset['asset_id']}/video-facet", json=body)
     except Exception as exc:  # noqa: BLE001 — e.g. the asset was trashed mid-run
         logger.warning("Storing probe failed for %s: %s", asset["rel_path"], exc)
@@ -193,8 +197,10 @@ def _render_one(
     producers: "ProducerSettings | None" = None,
     fail: "Callable[[str, object], None] | None" = None,
 ) -> str:
-    """Render, upload and cache one video's analysis proxy. Returns "ok", "missing" or "failed".
-    fail(asset_id, error) hears of a failure (not of a file that isn't there)."""
+    """Render, upload and cache one video's analysis proxy, saying how it was
+    made (the server's settings when producers isn't given). Returns "ok",
+    "missing" or "failed". fail(asset_id, error) hears of a failure (not of
+    a file that isn't there)."""
     source = resolve_source_path(lib_root, asset["rel_path"])
     if not source.is_file():
         logger.warning("Source file not found for %s: %s", asset["asset_id"], asset["rel_path"])
@@ -205,9 +211,12 @@ def _render_one(
     work.parent.mkdir(parents=True, exist_ok=True)
     try:
         render_analysis_proxy(source, work, settings, timeout=render_timeout(asset.get("duration_sec")))
-        data = {}
-        if producers is not None:
-            data["lineage"] = json.dumps(producers.lineage("analysis_proxy", asset.get("sha256"), used=settings.output()))
+        if producers is None:  # the server refuses a copy that doesn't say how it was made
+            from src.client.cli.producer_settings import ProducerSettings
+
+            producers = ProducerSettings(client)
+        data = {"lineage": json.dumps(producers.lineage("analysis_proxy", asset.get("sha256"),
+                                                        used=settings.output()))}
         with open(work, "rb") as f:
             client.post(
                 f"/v1/assets/{asset['asset_id']}/artifacts/analysis_proxy",
@@ -435,7 +444,8 @@ def _face_batch_worker(
     lineage: dict | None = None,
 ) -> dict:
     """Run face detection on a batch of assets in a subprocess.
-    lineage: how the faces are found, sent with them (each item's file hash its own).
+    lineage: how the faces are found, sent with them (each item's file hash
+    its own); the server's settings when not given.
 
     ONNX Runtime leaks ~35MB per inference call with no fix available.
     Running in a subprocess ensures all native memory is reclaimed by
@@ -533,6 +543,10 @@ def _face_batch_worker(
 
     # Single batch POST instead of N individual requests
     if batch_items:
+        if lineage is None:  # the server refuses faces that don't say how they were found
+            from src.client.cli.producer_settings import ProducerSettings
+
+            lineage = ProducerSettings(client).lineage("faces", None)
         try:
             resp = client.post("/v1/assets/batch-faces", json={"items": batch_items, "lineage": lineage})
             result_data = resp.json()
@@ -548,7 +562,7 @@ def _face_batch_worker(
                         "detection_model_version": bi["detection_model_version"],
                         "embedding_model": bi["embedding_model"],
                         "faces": bi["faces"],
-                        "lineage": {**lineage, "source_sha256": bi.get("source_sha256")} if lineage else None,
+                        "lineage": {**lineage, "source_sha256": bi.get("source_sha256")},
                     })
                     processed += 1
                 except Exception as e2:

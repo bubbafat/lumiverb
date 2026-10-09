@@ -165,8 +165,8 @@ def test_describing_again_keeps_the_ocr_in_its_search_document(env):
     _ocr(lib, clip, "NO ENTRY", None)
     qw = MagicMock()
     with patch("src.server.search.sync._get_quickwit", return_value=qw):
-        r = client.post(f"/v1/assets/{clip}/vision", json={"model_id": "m", "description": "a door"},
-                        headers=headers)
+        r = client.post(f"/v1/assets/{clip}/vision", json={"model_id": "m", "description": "a door",
+                                                            "lineage": _want(env, "vision", None)}, headers=headers)
     assert r.status_code == 200, r.text
     [docs] = [c.args[1] for c in qw.ingest_tenant_documents.call_args_list]
     assert docs[0]["ocr_text"] == "NO ENTRY" and docs[0]["description"] == "a door"

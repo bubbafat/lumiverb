@@ -34,6 +34,7 @@ from src.server.config import get_settings
 from src.server.database import _engines
 from src.server.storage.local import LocalStorage
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
+from tests.machine_lineage import ingest_made, made_json
 
 _STORAGE_USERS = ("artifacts", "assets", "trash", "ingest", "playback")
 
@@ -135,7 +136,8 @@ def _ingest(env, rel_path: str, media_type: str = "video") -> str:
     Image.new("RGB", (64, 36), color=(10, 20, 30)).save(buf, format="JPEG")
     buf.seek(0)
     data = {"library_id": library_id, "rel_path": rel_path, "file_size": "1000", "media_type": media_type,
-            "width": "64", "height": "36", "exif": json.dumps({"sha256": os.urandom(32).hex()})}
+            "width": "64", "height": "36", "exif": json.dumps({"sha256": os.urandom(32).hex()}),
+            "lineage": ingest_made()}
     r = client.post("/v1/ingest", data=data, files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=headers)
     assert r.status_code == 200, r.text
     return r.json()["asset_id"]
@@ -144,7 +146,8 @@ def _ingest(env, rel_path: str, media_type: str = "video") -> str:
 def _upload(env, asset_id: str, artifact_type: str, body: bytes) -> None:
     client, headers, *_ = env
     r = client.post(f"/v1/assets/{asset_id}/artifacts/{artifact_type}",
-                    files={"file": ("a.mp4", io.BytesIO(body), "video/mp4")}, headers=headers)
+                    files={"file": ("a.mp4", io.BytesIO(body), "video/mp4")},
+                    data={"lineage": made_json(artifact_type)}, headers=headers)
     assert r.status_code == 200, r.text
 
 
@@ -505,7 +508,7 @@ def test_public_transcripts_stop_at_the_public_cap(env, media):
     srt = ("1\n00:00:02,000 --> 00:00:04,000\nearly words\n\n"
            "2\n00:00:09,500 --> 00:00:12,000\nstraddling\n\n"
            "3\n00:00:20,000 --> 00:00:22,000\nlate secret\n")
-    r = client.post(f"/v1/assets/{asset_id}/transcript", json={"srt": srt, "language": "en"}, headers=admin)
+    r = client.post(f"/v1/assets/{asset_id}/transcript", json={"source": "manual", "srt": srt, "language": "en"}, headers=admin)
     assert r.status_code == 200, r.text
     params = _public(env)
     public = client.get(f"/v1/assets/{asset_id}", params=params).json()["transcript_srt"]
@@ -720,7 +723,8 @@ def test_the_cap_goes_by_the_file_not_a_stored_duration(env, media, tmp_path):
     Image.new("RGB", (64, 36)).save(buf, format="JPEG")
     buf.seek(0)
     data = {"library_id": library_id, "rel_path": "lies.mov", "file_size": "1000", "media_type": "video",
-            "width": "64", "height": "36", "exif": json.dumps({"sha256": os.urandom(32).hex(), "duration_sec": 2})}
+            "width": "64", "height": "36", "exif": json.dumps({"sha256": os.urandom(32).hex(), "duration_sec": 2}),
+            "lineage": ingest_made()}
     r = client.post("/v1/ingest", data=data, files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=admin)
     assert r.status_code == 200, r.text
     asset_id = r.json()["asset_id"]

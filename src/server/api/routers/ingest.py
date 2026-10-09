@@ -111,9 +111,12 @@ def _parse_optional_json(field: str | None, field_name: str) -> dict | None:
     if field is None:
         return None
     try:
-        return json.loads(field)
+        data = json.loads(field)
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail=f"{field_name} must be valid JSON")
+    if data is not None and not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail=f"{field_name} must be a JSON object")
+    return data
 
 
 def _parse_optional_json_list(field: str | None, field_name: str) -> list[dict] | None:
@@ -135,6 +138,25 @@ def _per_kind(raw: str | None) -> dict:
     except ValueError:
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _required_lineage(raw: str | None, vision_data: dict | None, embeddings_data: list[dict] | None,
+                      facet_data: dict | None = None) -> dict[str, dict]:
+    """The lineage of each kind the ingest stores, which it must give
+    (422 lineage_required, before anything is saved): the proxy always, a
+    description with a model, CLIP's vectors, a probe."""
+    from src.server.api.routers.producers import require_lineage
+    from src.shared.producers import CLIP_MODEL_ID
+
+    by_kind = _per_kind(raw)
+    kinds = ["proxy"]
+    if vision_data is not None and vision_data.get("model_id"):
+        kinds.append("vision")
+    if embeddings_data and any(e.get("model_id") == CLIP_MODEL_ID for e in embeddings_data):
+        kinds.append("clip")
+    if facet_data is not None:
+        kinds.append("probe")
+    return {kind: require_lineage(by_kind.get(kind), kind) for kind in kinds}
 
 
 def _forget_scenes(session: Session, asset_id: str) -> None:
@@ -166,8 +188,7 @@ def _do_ingest(
 ) -> IngestResponse:
     """Core ingest logic shared by both endpoints. Records how the proxy (and
     any vision or embeddings sent along) were made: lineage_by_kind maps an
-    artifact kind to its lineage; one not given is an unknown producer's."""
-    from src.server.api.routers.producers import lineage_dict
+    artifact kind to its lineage, checked by _required_lineage."""
     from src.server.repository.lineage import record as record_lineage
     from src.shared.producers import CLIP_MODEL_ID
 
@@ -294,13 +315,13 @@ def _do_ingest(
     # --- Bump library revision for UI polling ---
     LibraryRepository(session).bump_revision(library_id)
 
-    record_lineage(session, asset_id, "proxy", lineage_dict(lineage_by_kind.get("proxy")), commit=False)
+    record_lineage(session, asset_id, "proxy", lineage_by_kind.get("proxy"), commit=False)
     # Only what was stored: a description with no model is dropped above,
     # and only the CLIP producer's vectors are its artifact.
     if vision_data is not None and vision_data.get("model_id"):
-        record_lineage(session, asset_id, "vision", lineage_dict(lineage_by_kind.get("vision")), commit=False)
+        record_lineage(session, asset_id, "vision", lineage_by_kind.get("vision"), commit=False)
     if embeddings_data and any(e.get("model_id") == CLIP_MODEL_ID for e in embeddings_data):
-        record_lineage(session, asset_id, "clip", lineage_dict(lineage_by_kind.get("clip")), commit=False)
+        record_lineage(session, asset_id, "clip", lineage_by_kind.get("clip"), commit=False)
 
     # Commit all changes atomically. The tenant session does NOT auto-commit
     # (SQLModel's `with Session` rolls back on exit), so every write path
@@ -434,6 +455,7 @@ async def create_and_ingest(
     vision_data = _parse_optional_json(vision, "vision")
     embeddings_data = _parse_optional_json_list(embeddings, "embeddings")
     facet_data = _parse_video_facet(video_facet, media_type)
+    made = _required_lineage(lineage, vision_data, embeddings_data, facet_data)
 
     # Parse mtime
     file_mtime_dt: datetime | None = None
@@ -515,14 +537,13 @@ async def create_and_ingest(
         vision_data=vision_data,
         embeddings_data=embeddings_data,
         session=session,
-        lineage_by_kind=_per_kind(lineage),
+        lineage_by_kind=made,
     )
     if facet_data is not None:
         asset_repo.upsert_video_facet(asset_id, facet_data)
-        from src.server.api.routers.producers import lineage_dict
         from src.server.repository.lineage import record as record_lineage
 
-        record_lineage(session, asset_id, "probe", lineage_dict(_per_kind(lineage).get("probe")))
+        record_lineage(session, asset_id, "probe", made["probe"])
     if reappeared is not None and reappeared.transcript_srt:
         from src.server.search.sync import index_transcript_segments
 
@@ -566,6 +587,7 @@ async def ingest_asset(
     exif_data = _parse_optional_json(exif, "exif")
     vision_data = _parse_optional_json(vision, "vision")
     embeddings_data = _parse_optional_json_list(embeddings, "embeddings")
+    made = _required_lineage(lineage, vision_data, embeddings_data)
 
     return _do_ingest(
         asset_id=asset_id,
@@ -579,5 +601,5 @@ async def ingest_asset(
         vision_data=vision_data,
         embeddings_data=embeddings_data,
         session=session,
-        lineage_by_kind=_per_kind(lineage),
+        lineage_by_kind=made,
     )

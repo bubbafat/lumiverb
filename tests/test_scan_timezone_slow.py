@@ -18,6 +18,7 @@ from sqlalchemy import create_engine, text
 from src.client.cli.ingest import _walk_library
 from src.client.cli.scan import _fetch_existing_assets_with_sha, _record_file_stat, _split_files
 from src.server.database import get_engine_for_url
+from tests.machine_lineage import ingest_made
 from tests.test_preserve_human_data_slow import (  # noqa: F401 — the shared server fixture
     _image,
     env,
@@ -67,7 +68,7 @@ def test_a_second_scan_doesnt_hash_an_unchanged_file(env, tmp_path: Path) -> Non
         headers=headers,
         files={"proxy": ("p.jpg", io.BytesIO(_image()), "image/jpeg")},
         data={"library_id": library_id, "rel_path": f["rel_path"], "file_size": str(f["file_size"]),
-              "file_mtime": f["file_mtime"].isoformat(), "media_type": "image"},
+              "file_mtime": f["file_mtime"].isoformat(), "media_type": "image", "lineage": ingest_made()},
     )
     assert r.status_code == 200, r.text
 
@@ -91,7 +92,7 @@ def test_a_touched_file_is_hashed_once_then_matches_again(env, tmp_path: Path) -
     r = client.post(
         "/v1/ingest", headers=headers, files={"proxy": ("p.jpg", io.BytesIO(_image()), "image/jpeg")},
         data={"library_id": library_id, "rel_path": before["rel_path"], "file_size": str(before["file_size"]),
-              "file_mtime": before["file_mtime"].isoformat(), "media_type": "image"},
+              "file_mtime": before["file_mtime"].isoformat(), "media_type": "image", "lineage": ingest_made()},
     )
     assert r.status_code == 200, r.text
 

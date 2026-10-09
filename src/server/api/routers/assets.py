@@ -5,7 +5,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Any, Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -21,7 +21,7 @@ from src.server.repository.tenant import AssetMetadataRepository, AssetOcrReposi
 from src.server.repository import lineage
 from src.shared.producers import CLIP_MODEL_ID
 from src.shared.producers import PERSON as P_PERSON
-from src.server.api.routers.producers import LineageIn, lineage_dict
+from src.server.api.routers.producers import LineageIn, require_lineage, with_source
 from src.server.models.tenant import Asset
 from src.server.storage.local import get_storage
 from src.shared.utils import utcnow
@@ -260,7 +260,7 @@ class VisionSubmitRequest(BaseModel):
     description: str
     tags: list[str] = []
     client_proxy_sha256: str | None = None
-    lineage: LineageIn | None = None
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
 class VisionSubmitResponse(BaseModel):
@@ -1078,7 +1078,7 @@ def get_asset(
 class VideoFacetSubmit(VideoFacetModel):
     """A probe result, with how it was made."""
 
-    lineage: LineageIn | None = None
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
 @router.put("/{asset_id}/video-facet", response_model=VideoFacetModel)
@@ -1088,6 +1088,7 @@ def put_video_facet(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> VideoFacetModel:
     """Store a video's probe result (replaces any earlier one). Sets duration_sec."""
+    made = require_lineage(body.lineage, "probe")  # before anything is saved
     asset_repo = AssetRepository(session)
     asset = asset_repo.get_by_id(asset_id)
     if asset is None or asset.deleted_at is not None:
@@ -1096,7 +1097,7 @@ def put_video_facet(
         raise HTTPException(status_code=400, detail="Video facets are only for video assets")
     facet = body.model_dump(exclude={"lineage"})
     asset_repo.upsert_video_facet(asset_id, facet)
-    lineage.record(session, asset_id, "probe", lineage_dict(body.lineage))
+    lineage.record(session, asset_id, "probe", made)
     LibraryRepository(session).bump_revision(asset.library_id)
     return VideoFacetModel(**facet)
 
@@ -1248,6 +1249,7 @@ def submit_vision(
     match — otherwise 409. If the server hash is null (pre-Phase 1 or no proxy yet),
     the check is skipped for backwards compatibility.
     """
+    made = require_lineage(body.lineage, "vision")  # before anything is saved
     asset = AssetRepository(session).get_by_id(asset_id)
     if asset is None:
         raise HTTPException(status_code=404, detail="Asset not found")
@@ -1271,7 +1273,7 @@ def submit_vision(
         data={"description": body.description, "tags": body.tags},
     )
     AssetRepository(session).set_status(asset_id, asset_status.DESCRIBED)
-    lineage.record(session, asset_id, "vision", lineage_dict(body.lineage))
+    lineage.record(session, asset_id, "vision", made)
 
     # Inline search sync (best-effort)
     meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
@@ -1289,7 +1291,7 @@ class OcrSubmitRequest(BaseModel):
     ocr_text: str
     # The vision model that read it.
     model_id: str = Field(default="", max_length=200)
-    lineage: LineageIn | None = None
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
 @router.post("/{asset_id}/ocr", status_code=200)
@@ -1302,12 +1304,13 @@ def submit_ocr(
     """Submit the text read in an asset's image ("" when there's none). Kept
     apart from its description: no description needed, and describing it
     again leaves this alone."""
+    made = require_lineage(body.lineage, "ocr")  # before anything is saved
     asset = AssetRepository(session).get_by_id(asset_id)
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
 
     AssetOcrRepository(session).upsert(asset_id, body.ocr_text, body.model_id, commit=False)
-    lineage.record(session, asset_id, "ocr", lineage_dict(body.lineage), outcome="ok" if body.ocr_text else "empty",
+    lineage.record(session, asset_id, "ocr", made, outcome="ok" if body.ocr_text else "empty",
                    commit=False)
     session.commit()  # the text and how it was made, together
 
@@ -1331,7 +1334,7 @@ class BatchOcrRequest(BaseModel):
     items: list[BatchOcrItem]
     # The vision model that read them.
     model_id: str = Field(default="", max_length=200)
-    lineage: LineageIn | None = None
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
 @router.post("/batch-ocr", status_code=200)
@@ -1342,6 +1345,7 @@ def submit_batch_ocr(
 ) -> dict:
     """Submit OCR text for multiple assets in one request. Assets that don't
     exist (or are in the trash) are skipped."""
+    made = require_lineage(body.lineage, "ocr")  # before anything is saved
     ocr_repo = AssetOcrRepository(session)
     asset_repo = AssetRepository(session)
     updated = 0
@@ -1353,7 +1357,7 @@ def submit_batch_ocr(
             skipped += 1
             continue
         ocr_repo.upsert(item.asset_id, item.ocr_text, body.model_id, commit=False)
-        lineage.record(session, item.asset_id, "ocr", lineage_dict(body.lineage, item.source_sha256),
+        lineage.record(session, item.asset_id, "ocr", with_source(made, item.source_sha256),
                        outcome="ok" if item.ocr_text else "empty", commit=False)
         updated += 1
     session.commit()
@@ -1389,7 +1393,7 @@ class BatchVisionItem(BaseModel):
 
 class BatchVisionRequest(BaseModel):
     items: list[BatchVisionItem]
-    lineage: LineageIn | None = None
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
 @router.post("/batch-vision", status_code=200)
@@ -1399,6 +1403,7 @@ def submit_batch_vision(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> dict:
     """Submit AI vision results for multiple assets in one request."""
+    made = require_lineage(body.lineage, "vision")  # before anything is saved
     meta_repo = AssetMetadataRepository(session)
     asset_repo = AssetRepository(session)
     updated = 0
@@ -1416,7 +1421,7 @@ def submit_batch_vision(
             data={"description": item.description, "tags": item.tags},
         )
         asset_repo.set_status(item.asset_id, asset_status.DESCRIBED)
-        lineage.record(session, item.asset_id, "vision", lineage_dict(body.lineage, item.source_sha256))
+        lineage.record(session, item.asset_id, "vision", with_source(made, item.source_sha256))
         updated += 1
 
     if updated > 0:
@@ -1482,11 +1487,11 @@ def correct_asset(
 class TranscriptSubmitRequest(BaseModel):
     srt: str
     language: str | None = None
-    # "manual" for a person's transcript; a provider id (e.g. "whisper") for
-    # machine output, which never replaces a person's.
-    source: str = "manual"
+    # Whose it is, which every upload says: "manual" for a person's; a provider
+    # id (e.g. "whisper") for machine output, which never replaces a person's.
+    source: str = Field(min_length=1, max_length=64)
     # How a machine transcript was made (a person's needs none).
-    lineage: LineageIn | None = None
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
 class TranscriptSubmitResponse(BaseModel):
@@ -1496,10 +1501,11 @@ class TranscriptSubmitResponse(BaseModel):
 
 def _transcript_lineage(body: TranscriptSubmitRequest) -> dict:
     """record() arguments: a person's transcript is a person's (current,
-    never made again over); a machine's says how it was made."""
+    never made again over); a machine's must say how it was made (422
+    lineage_required, checked before anything is saved)."""
     if body.source == "manual":
         return {"lineage": None, "person": True}
-    return {"lineage": lineage_dict(body.lineage)}
+    return {"lineage": require_lineage(body.lineage, "transcript")}
 
 
 def _lock_transcript(session: Session, asset: Asset) -> None:
@@ -1549,6 +1555,7 @@ def submit_transcript(
 
     if body.source == "manual":
         require_editor(request)
+    made = _transcript_lineage(body)  # a machine's says how it was made, before anything is saved
     asset_repo = AssetRepository(session)
     asset = asset_repo.get_by_id(asset_id)
     if asset is None or asset.deleted_at is not None:
@@ -1570,7 +1577,7 @@ def submit_transcript(
         asset.updated_at = utcnow()
         session.add(asset)
         session.commit()
-        lineage.record(session, asset_id, "transcript", **_transcript_lineage(body), outcome="empty")
+        lineage.record(session, asset_id, "transcript", **made, outcome="empty")
         _transcript_searched(session, request, asset, None)
         return TranscriptSubmitResponse(asset_id=asset_id, status="no_speech")
 
@@ -1588,8 +1595,7 @@ def submit_transcript(
     asset.updated_at = utcnow()
     session.add(asset)
     session.commit()
-    lineage.record(session, asset_id, "transcript", **_transcript_lineage(body),
-                   outcome="ok" if asset.has_transcript else "empty")
+    lineage.record(session, asset_id, "transcript", **made, outcome="ok" if asset.has_transcript else "empty")
     _transcript_searched(session, request, asset, body.srt)
     return TranscriptSubmitResponse(asset_id=asset_id, status="transcribed")
 
@@ -1752,7 +1758,7 @@ class EmbeddingSubmitRequest(BaseModel):
     model_id: str
     model_version: str
     vector: list[float]
-    lineage: LineageIn | None = None
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
 @router.post("/{asset_id}/embeddings", status_code=201)
@@ -1761,8 +1767,10 @@ def submit_embedding(
     body: EmbeddingSubmitRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> dict:
-    """Submit an embedding vector for an asset."""
+    """Submit an embedding vector for an asset. CLIP's (the producer's
+    artifact) must say how it was made (lineage)."""
     from src.server.repository.tenant import AssetEmbeddingRepository
+    made = require_lineage(body.lineage, "clip") if body.model_id == CLIP_MODEL_ID else None
     asset = AssetRepository(session).get_by_id(asset_id)
     if asset is None:
         raise HTTPException(status_code=404, detail="Asset not found")
@@ -1774,7 +1782,7 @@ def submit_embedding(
         vector=[float(x) for x in body.vector],
     )
     if body.model_id == CLIP_MODEL_ID:  # another model's vectors aren't the CLIP producer's artifact
-        lineage.record(session, asset_id, "clip", lineage_dict(body.lineage))
+        lineage.record(session, asset_id, "clip", made)
     return {"ok": True}
 
 
@@ -1788,7 +1796,7 @@ class BatchEmbeddingItem(BaseModel):
 
 class BatchEmbeddingRequest(BaseModel):
     items: list[BatchEmbeddingItem]
-    lineage: LineageIn | None = None
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
 @router.post("/batch-embeddings", status_code=200)
@@ -1797,8 +1805,10 @@ def submit_batch_embeddings(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> dict:
-    """Submit embedding vectors for multiple assets in one request."""
+    """Submit embedding vectors for multiple assets in one request. CLIP's
+    (the producer's artifact) must say how they were made (lineage)."""
     from src.server.repository.tenant import AssetEmbeddingRepository
+    made = require_lineage(body.lineage, "clip") if any(i.model_id == CLIP_MODEL_ID for i in body.items) else None
     asset_repo = AssetRepository(session)
     emb_repo = AssetEmbeddingRepository(session)
     updated = 0
@@ -1816,7 +1826,7 @@ def submit_batch_embeddings(
             vector=[float(x) for x in item.vector],
         )
         if item.model_id == CLIP_MODEL_ID:
-            lineage.record(session, item.asset_id, "clip", lineage_dict(body.lineage, item.source_sha256),
+            lineage.record(session, item.asset_id, "clip", with_source(made, item.source_sha256),
                            commit=False)
         updated += 1
 
@@ -1928,6 +1938,7 @@ def stream_or_enqueue_preview(
 
 class ThumbnailKeyUpdateRequest(BaseModel):
     thumbnail_key: str
+    lineage: Any = None  # the proxy producer's: it makes thumbnails
 
 
 @router.post("/{asset_id}/thumbnail-key")
@@ -1936,7 +1947,9 @@ def set_thumbnail_key(
     body: ThumbnailKeyUpdateRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> dict:
-    """Record a thumbnail_key for a video asset after the index worker extracts the first frame."""
+    """Record a thumbnail_key for a video asset after the index worker extracts
+    the first frame; it says how it was made (the proxy producer's lineage)."""
+    require_lineage(body.lineage, "proxy")
     asset_repo = AssetRepository(session)
     asset_repo.update_thumbnail_key(asset_id, body.thumbnail_key)
     return {"asset_id": asset_id, "thumbnail_key": body.thumbnail_key}
@@ -2035,7 +2048,7 @@ class FaceSubmitRequest(BaseModel):
     # The model that embedded the faces (the faces producer's `model`).
     embedding_model: str = Field(default="buffalo_l", max_length=100)
     faces: list[FaceDetectionItem]
-    lineage: LineageIn | None = None
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
 class FaceSubmitResponse(BaseModel):
@@ -2142,7 +2155,7 @@ class BatchFaceItem(BaseModel):
 
 class BatchFaceRequest(BaseModel):
     items: list[BatchFaceItem]
-    lineage: LineageIn | None = None
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
 @router.post("/batch-faces", status_code=200)
@@ -2152,6 +2165,7 @@ def submit_batch_faces(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> dict:
     """Submit face detections for multiple assets in one request."""
+    made = require_lineage(body.lineage, "faces")  # before anything is saved
     from src.server.repository.tenant import FaceRepository
 
     asset_repo = AssetRepository(session)
@@ -2182,7 +2196,7 @@ def submit_batch_faces(
             faces=faces_data,
             embedding_model=item.embedding_model,
         )
-        lineage.record(session, item.asset_id, "faces", lineage_dict(body.lineage, item.source_sha256),
+        lineage.record(session, item.asset_id, "faces", with_source(made, item.source_sha256),
                        outcome="ok" if faces_data else "empty")
 
         if tenant_id and asset.proxy_key:
@@ -2211,6 +2225,7 @@ def submit_faces(
     Faces the new detections re-find keep their ids and confirmed assignments;
     confirmed faces that aren't re-found are kept. See FaceRepository.submit_faces.
     """
+    made = require_lineage(body.lineage, "faces")  # before anything is saved
     from src.server.repository.tenant import FaceRepository
 
     asset = AssetRepository(session).get_by_id(asset_id)
@@ -2233,7 +2248,7 @@ def submit_faces(
         faces=faces_data,
         embedding_model=body.embedding_model,
     )
-    lineage.record(session, asset_id, "faces", lineage_dict(body.lineage), outcome="ok" if faces_data else "empty")
+    lineage.record(session, asset_id, "faces", made, outcome="ok" if faces_data else "empty")
 
     # Generate face crop thumbnails
     tenant_id = getattr(request.state, "tenant_id", None)

@@ -20,6 +20,7 @@ from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
+from tests.machine_lineage import ingest_made
 
 SRT = "1\n00:00:00,000 --> 00:00:02,000\nthe quick brown fox\n\n2\n00:00:02,000 --> 00:00:04,000\njumps over\n"
 
@@ -116,7 +117,7 @@ def test_restore_queues_the_asset_and_its_scenes_for_search_sync(env):
 def test_restore_reindexes_transcript_segments(env):
     client, auth, library_id, _ = env
     asset_id = _video(client, auth, library_id, "restore/transcribed.mov")
-    r = client.post(f"/v1/assets/{asset_id}/transcript", json={"srt": SRT, "language": "en"}, headers=auth)
+    r = client.post(f"/v1/assets/{asset_id}/transcript", json={"source": "manual", "srt": SRT, "language": "en"}, headers=auth)
     assert r.status_code == 200, r.text
     assert client.delete(f"/v1/assets/{asset_id}", headers=auth).status_code == 204
 
@@ -141,7 +142,7 @@ def _ingest_video(client, auth, library_id, rel_path) -> str:
     r = client.post(
         "/v1/ingest",
         data={"library_id": library_id, "rel_path": rel_path, "file_size": "1000", "media_type": "video",
-              "width": "64", "height": "64"},
+              "width": "64", "height": "64", "lineage": ingest_made()},
         files={"proxy": ("proxy.jpg", buf, "image/jpeg")},
         headers=auth,
     )
@@ -157,7 +158,7 @@ def _synced(engine, asset_id):
 
 
 def _mark_synced_with_transcript(client, auth, engine, asset_id):
-    r = client.post(f"/v1/assets/{asset_id}/transcript", json={"srt": SRT, "language": "en"}, headers=auth)
+    r = client.post(f"/v1/assets/{asset_id}/transcript", json={"source": "manual", "srt": SRT, "language": "en"}, headers=auth)
     assert r.status_code == 200, r.text
     with engine.begin() as conn:
         conn.execute(text("UPDATE assets SET search_synced_at = now() WHERE asset_id = :a"), {"a": asset_id})

@@ -91,6 +91,10 @@ def test_face_batch_worker_processes_assets() -> None:
     items = call_args.kwargs["json"]["items"]
     assert len(items) == 3
     assert [item["asset_id"] for item in items] == ["ast_001", "ast_002", "ast_003"]
+    # Nobody handed it lineage: it says how the faces were found, with the server's settings.
+    from src.client.cli.producer_settings import ProducerSettings
+
+    assert call_args.kwargs["json"]["lineage"] == ProducerSettings(None).lineage("faces", None)
 
 
 @pytest.mark.fast
