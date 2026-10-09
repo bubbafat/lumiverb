@@ -1,9 +1,11 @@
-"""Producers and the lineage of what they make (ADR-016 phase 3).
+"""Producers and the lineage of what they make (ADR-016 phases 3 and 4).
 
 Every derived artifact is a function of four inputs: the original (its
 SHA-256), the producer, the producer's version and the settings that change
-its output. A producer is registered here once, for its one artifact kind,
-with the media it applies to and its output-affecting settings. Whatever
+its output. Each producer declares itself in its own folder
+(src/producers/<artifact>/), for its one artifact kind, with the media it
+applies to and its output-affecting settings; this module is the view of
+them both sides use, and the lineage rules. Whatever
 writes an artifact records those four inputs beside it (its lineage); when
 any of them differs from what's registered now, the artifact is stale.
 
@@ -22,105 +24,25 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass, field
 from typing import Any
 
-# The prompts are output-affecting settings: changing one makes descriptions stale.
-VISION_PROMPT = (
-    "Describe this image in 2-3 sentences, being specific about "
-    "the subject, setting, and mood. Then provide 5-10 descriptive "
-    "tags. Respond only with valid JSON in this exact format:\n"
-    '{"description": "...", "tags": ["tag1", "tag2", ...]}'
-)
-OCR_PROMPT = (
-    "What text is visible in this image? "
-    "Include text from signs, labels, products, screens, documents, or watermarks. "
-    "If none, say NONE."
+from src.producers import registry
+from src.producers.clip import CLIP_MODEL_ID  # noqa: F401 — the vectors' model_id
+from src.producers.contract import ALL, IMAGE, VIDEO, ProducerSpec  # noqa: F401
+from src.producers.prompts import (  # noqa: F401 — output-affecting settings
+    OCR_PROMPT,
+    VISION_PROMPT,
 )
 
-IMAGE = ("image",)
-VIDEO = ("video",)
-ALL = ("image", "video")
+# A producer, as each one declares itself (src/producers/<artifact>/).
+Producer = ProducerSpec
 
-
-@dataclass(frozen=True)
-class Producer:
-    artifact: str  # the one artifact kind it makes
-    producer: str  # its id, recorded in lineage
-    version: str  # bump when the code changes its output
-    media: tuple[str, ...]  # the media types it applies to
-    title: str  # for people: "Transcripts"
-    defaults: Mapping[str, Any] = field(default_factory=dict)  # output-affecting settings
-    # Its output must come from one model across the library (an embedding
-    # space): an upgrade can't be partial.
-    uniform: bool = False
-    # The AI job whose model is its "model" (the account's, on the server).
-    job: str = ""
-
-
-def _producers() -> tuple[Producer, ...]:
-    vision = {"model": "", "prompt": VISION_PROMPT, "max_edge": 1280, "temperature": 0.2, "max_tokens": 500}
-    return (
-        Producer("probe", "ffprobe", "1", VIDEO, "Video facts (probe)"),
-        Producer("proxy", "proxy", "1", ALL, "Proxies and thumbnails",
-                 {"long_edge": 2048, "jpeg_quality": 75, "webp_quality": 80, "thumbnail_edge": 512}),
-        Producer("video_preview", "preview", "1", VIDEO, "Video previews",
-                 {"seconds": 10, "max_height": 720, "crf": 28, "audio_kbps": 128}),
-        Producer("analysis_proxy", "analysis-proxy", "1", VIDEO, "Analysis proxies",
-                 {"max_edge": 960, "fps_max": 30, "crf": 28, "audio_kbps_per_channel": 48}),
-        Producer("scenes", "scene-detect", "1", VIDEO, "Scenes",
-                 {"frame_width": 480, "frames": "keyframes", "phash_threshold": 51, "phash_hash_size": 16,
-                  "temporal_ceiling_sec": 30.0, "debounce_sec": 3.0}),
-        Producer("scene_vision", "scene-vision", "1", VIDEO, "Scene descriptions", vision, job="vision"),
-        Producer("vision", "vision", "1", IMAGE, "Descriptions and tags", vision, job="vision"),
-        Producer("ocr", "ocr", "1", IMAGE, "Text in images (OCR)",
-                 {"model": "", "prompt": OCR_PROMPT, "max_edge": 1280, "temperature": 0.2, "max_tokens": 500},
-                 job="vision"),
-        Producer("clip", "clip", "1", IMAGE, "Visual search (CLIP)",
-                 {"model": "ViT-B-32", "pretrained": "openai", "input_edge": 1280}, uniform=True),
-        Producer("faces", "insightface", "1", IMAGE, "Faces",
-                 {"model": "buffalo_l", "det_size": 640, "max_detect_edge": 1280, "min_confidence": 0.5,
-                  "min_area_fraction": 0.003, "min_face_pixels": 40, "min_relative_size": 0.15,
-                  "min_sharpness": 15.0}, uniform=True),
-        # The silences skipped (VAD) are found on the worker, whichever machine
-        # transcribes the speech (src/client/workers/transcripts/speech.py).
-        Producer("transcript", "whisper", "1", VIDEO, "Transcripts",
-                 {"model": "small", "vad_min_silence_ms": 500}, job="transcripts"),
-    )
-
-
-PRODUCERS: dict[str, Producer] = {p.artifact: p for p in _producers()}
+PRODUCERS: dict[str, Producer] = registry()
 ARTIFACTS: tuple[str, ...] = tuple(PRODUCERS)
 
-# The model_id the CLIP producer's vectors are stored under (asset_embeddings);
-# other models' vectors (the macOS app's FeaturePrint) aren't its artifact.
-CLIP_MODEL_ID = "clip"
-
-# The repair summary's counts and page filters (what the worker is handed)
-# and the artifact each is about.
-MISSING_FLAGS: dict[str, str] = {
-    "missing_probe": "probe",
-    "missing_analysis_proxy": "analysis_proxy",
-    "missing_embeddings": "clip",
-    "missing_vision": "vision",
-    "missing_faces": "faces",
-    "missing_ocr": "ocr",
-    "missing_transcription": "transcript",
-    "missing_video_scenes": "scenes",
-    "missing_scene_vision": "scene_vision",
-}
-# The worker's enrich steps and the artifact each makes.
-STEP_ARTIFACTS: dict[str, str] = {
-    "probe": "probe",
-    "render": "analysis_proxy",
-    "embed": "clip",
-    "vision": "vision",
-    "faces": "faces",
-    "ocr": "ocr",
-    "transcribe": "transcript",
-    "video-scenes": "scenes",
-    "scene-vision": "scene_vision",
-}
+# The repair summary's counts and page filters (what the scheduler is
+# handed) and the artifact each is about.
+MISSING_FLAGS: dict[str, str] = {p.flag: p.artifact for p in PRODUCERS.values() if p.flag}
 
 # Lineage a write carries when nothing says who made it (an old client, the
 # macOS app today): never current, so the brain makes it again.

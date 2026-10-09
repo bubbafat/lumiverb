@@ -57,10 +57,12 @@ _JOB_OF = {kind: job for job, kinds in AI_JOB_KINDS.items() for kind in kinds}
 
 
 def default_capacity(cfg: Any) -> dict[str, int]:
-    """The shared pools' slots: today's limits, which the brain handles."""
+    """The shared pools' slots: today's limits, which the brain handles; a
+    pool only a producer names gets the slots it declares."""
     from src.client.cli.repair import default_render_concurrency
+    from src.shared.producers import PRODUCERS
 
-    return {
+    sized = {
         "scan": 1,  # each scan is parallel inside
         "probe": 2,
         "render": cfg.render_concurrency or default_render_concurrency(),
@@ -69,6 +71,10 @@ def default_capacity(cfg: Any) -> dict[str, int]:
         "gpu": 1,
         "scenes": 1,
     }
+    for p in PRODUCERS.values():
+        if p.scheduled and not p.per_account and p.pool not in sized:
+            sized[p.pool] = p.slots
+    return sized
 
 
 class Scheduler:
@@ -96,7 +102,7 @@ class Scheduler:
         self._paused = paused or _paused_in_database
         self._retry_requested = retry_requested or _retry_requested_in_database
         self._retry_seen: dict[str, str | None] = {}
-        self._runners = dict(runners or runner_mod.RUNNERS)
+        self._runners = dict(runners or runner_mod.runners())
         self._scan = scan or runner_mod.scan
         self._clock = clock
         self._wall = wall
