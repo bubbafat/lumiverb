@@ -375,27 +375,29 @@ function ClusterCard({
             e.preventDefault();
             if (newName.trim()) nameMutation.mutate(newName.trim());
           }}
-          className="flex gap-2"
+          className="flex flex-wrap gap-2"
         >
           <input
             type="text"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             placeholder="Enter name..."
-            className="flex-1 rounded-lg border border-gray-600 bg-gray-800 px-3 py-1.5 text-xs text-white focus:border-indigo-500 focus:outline-none"
+            // An input keeps its own width unless told otherwise, which pushed
+            // Save and Cancel out of the card; in a narrow one they wrap below.
+            className="min-w-[8rem] flex-1 rounded-lg border border-gray-600 bg-gray-800 px-3 py-1.5 text-xs text-white focus:border-indigo-500 focus:outline-none"
             autoFocus
           />
           <button
             type="submit"
             disabled={nameMutation.isPending || !newName.trim()}
-            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+            className="shrink-0 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
           >
             {nameMutation.isPending ? "..." : "Save"}
           </button>
           <button
             type="button"
             onClick={() => { setMode("idle"); setNewName(""); }}
-            className="rounded-lg border border-gray-600 px-2 py-1.5 text-xs text-gray-400 hover:text-white"
+            className="shrink-0 rounded-lg border border-gray-600 px-2 py-1.5 text-xs text-gray-400 hover:text-white"
           >
             Cancel
           </button>
@@ -428,8 +430,8 @@ function ClusterCard({
             </div>
           )}
           {/* Search for more */}
-          <div className="flex gap-2">
-            <div className="relative flex-1">
+          <div className="flex flex-wrap gap-2">
+            <div className="relative min-w-[8rem] flex-1">
               <input
                 type="text"
                 value={assignSearch}
@@ -462,7 +464,7 @@ function ClusterCard({
             <button
               type="button"
               onClick={() => { setMode("idle"); setAssignSearch(""); setSearchResults([]); }}
-              className="rounded-lg border border-gray-600 px-2 py-1.5 text-xs text-gray-400 hover:text-white"
+              className="shrink-0 rounded-lg border border-gray-600 px-2 py-1.5 text-xs text-gray-400 hover:text-white"
             >
               Cancel
             </button>
