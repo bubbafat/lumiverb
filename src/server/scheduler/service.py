@@ -163,11 +163,30 @@ class Scheduler:
         self._pool.shutdown(wait=False, cancel_futures=True)
 
 
+_tenant_urls: dict[str, str] = {}
+
+
+def tenant_url(tenant_id: str) -> str:
+    """The account's database, as its routing says (what requests use)."""
+    if tenant_id not in _tenant_urls:
+        from src.server.database import get_control_session
+        from src.server.repository.control_plane import TenantDbRoutingRepository
+
+        with get_control_session() as ctrl:
+            routing = TenantDbRoutingRepository(ctrl).get_by_tenant_id(tenant_id)
+            if routing is None:
+                raise LookupError(f"no database for {tenant_id}")
+            _tenant_urls[tenant_id] = routing.connection_string
+    return _tenant_urls[tenant_id]
+
+
 def _from_database(tenant_id: str, kind: Any, libraries: list[str]) -> list[dict]:
-    from src.server.database import get_tenant_session
+    from sqlmodel import Session
+
+    from src.server.database import get_engine_for_url
     from src.server.scheduler.queue import candidates
 
-    with get_tenant_session(tenant_id) as session:
+    with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
         return candidates(session, kind, libraries)
 
 
