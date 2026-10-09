@@ -45,6 +45,17 @@ os.environ.setdefault("PGTZ", "America/New_York")
 os.environ["QUICKWIT_ENABLED"] = "false"
 os.environ["QUICKWIT_URL"] = "http://127.0.0.1:9"
 os.environ["QUICKWIT_FALLBACK_TO_POSTGRES"] = "true"
+# Nor does it lean on the developer's .env.local for the settings the app
+# requires: a fresh checkout has none. The database URLs point at a host that
+# can't resolve (tests that want a database start one and set their own), so a
+# test that opens the database without one fails at once instead of reaching
+# the developer's. Exported values still win (setdefault); .env.local doesn't,
+# since variables beat the env files in Settings.
+os.environ.setdefault("CONTROL_PLANE_DATABASE_URL", "postgresql://tests-start-their-own-db.invalid/control")
+os.environ.setdefault(
+    "TENANT_DATABASE_URL_TEMPLATE", "postgresql://tests-start-their-own-db.invalid/{tenant_id}"
+)
+os.environ.setdefault("JWT_SECRET", "lumiverb-test-jwt-secret")
 
 # pyvips imports libvips via cffi.dlopen, which on macOS only searches the
 # system dyld paths. uv's standalone Python builds do not have

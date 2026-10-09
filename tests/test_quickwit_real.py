@@ -17,6 +17,7 @@ skip if Docker isn't there.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 import uuid
@@ -42,6 +43,36 @@ QUICKWIT_IMAGE = os.environ.get("QUICKWIT_TEST_IMAGE", "quickwit/quickwit:0.8.1"
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
+def _start(container) -> None:
+    """container.start(), again if Docker picked a host port that was taken.
+
+    Docker takes host ports from the kernel's ephemeral range, which the
+    run's own Postgres connections are using too; late in a busy `-n auto`
+    run, binding one (for this container, or for the worker's first Ryuk)
+    can fail with "address already in use". What failed is left made but not
+    started, under a fixed name, so remove it before trying again."""
+    import docker
+    from testcontainers.core.container import Reaper
+
+    for attempt in range(5):
+        try:
+            container.start()
+            return
+        except docker.errors.APIError as e:
+            if "address already in use" not in str(e) or attempt == 4:
+                raise
+        if Reaper._instance is None and Reaper._container is not None:
+            if Reaper._container._container is not None:
+                with contextlib.suppress(docker.errors.APIError):
+                    Reaper._container._container.remove(force=True)
+            Reaper._container = None
+        if container._container is not None:
+            with contextlib.suppress(docker.errors.APIError):
+                container._container.remove(force=True)
+            container._container = None
+        time.sleep(0.5)
+
+
 @pytest.fixture(scope="module")
 def quickwit_url():
     """A Quickwit of the run's own, gone when the module is done."""
@@ -59,7 +90,7 @@ def quickwit_url():
         .with_env("QW_DISABLE_TELEMETRY", "1")
         .with_exposed_ports(7280)
     )
-    container.start()
+    _start(container)
     try:
         url = f"http://{container.get_container_host_ip()}:{container.get_exposed_port(7280)}"
         deadline = time.monotonic() + 60
@@ -81,13 +112,11 @@ def quickwit_url():
 def qw(quickwit_url: str):
     """Quickwit on, at the throwaway one, with no Postgres fallback to hide a miss.
     Run from the repo root, where QuickwitClient looks for its schemas. No
-    database: Settings wants the URLs, nothing here opens them."""
+    database: the URLs Settings wants come from conftest, nothing here opens them."""
     env = {
         "QUICKWIT_ENABLED": "true",
         "QUICKWIT_URL": quickwit_url,
         "QUICKWIT_FALLBACK_TO_POSTGRES": "false",
-        "CONTROL_PLANE_DATABASE_URL": os.environ.get("CONTROL_PLANE_DATABASE_URL", "postgresql://unused/none"),
-        "TENANT_DATABASE_URL_TEMPLATE": os.environ.get("TENANT_DATABASE_URL_TEMPLATE", "postgresql://unused/{tenant_id}"),
     }
     saved = {k: os.environ.get(k) for k in env}
     cwd = os.getcwd()
@@ -109,22 +138,12 @@ def qw(quickwit_url: str):
 
 
 def _make_indexes(qw: QuickwitClient, tenant_id: str) -> None:
-    """The tenant's three indexes, made as the server makes them, and ready.
-    Quickwit can answer an ingest with 404 for a moment after it makes an
-    index; wait that out here so the tests don't fail on it (the server's
-    first sync into a new index can hit it too, and the sweep retries)."""
-    made = [
-        (qw.ensure_tenant_index, qw.tenant_index_id),
-        (qw.ensure_tenant_scene_index, qw.tenant_scene_index_id),
-        (qw.ensure_tenant_transcript_index, qw.tenant_transcript_index_id),
-    ]
-    for ensure, index_id in made:
-        ensure(tenant_id)
-        url = f"{qw._base_url}/api/v1/{index_id(tenant_id)}/ingest"
-        deadline = time.monotonic() + 30
-        while requests.post(url, data="", timeout=5).status_code == 404:  # an empty ingest adds nothing
-            assert time.monotonic() < deadline, f"{index_id(tenant_id)} never took an ingest"
-            time.sleep(0.2)
+    """The tenant's three indexes, made as the server makes them. The client
+    waits until each new index takes an ingest (QuickwitClient._wait_until_ready),
+    so nothing here needs to."""
+    qw.ensure_tenant_index(tenant_id)
+    qw.ensure_tenant_scene_index(tenant_id)
+    qw.ensure_tenant_transcript_index(tenant_id)
 
 
 def _ids() -> tuple[str, str]:
