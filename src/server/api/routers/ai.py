@@ -38,7 +38,8 @@ from src.server.api.dependencies import (
 )
 from src.server.api.errors import ConflictError, DecisionRequiredError, UpstreamError
 from src.server.models.control_plane import AiMachine, Tenant
-from src.server.repository.ai_machines import first_vision_machine, job_model, machines, set_job_model as _store_model
+from src.server.repository.ai_machines import first_vision_machine, job_model, machines
+from src.server.repository.ai_machines import set_job_model as _store_model
 from src.shared.ai_jobs import BUILT_IN_JOBS, JOBS
 from src.shared.utils import utcnow
 from src.shared.vision_endpoint import VisionEndpointError, list_models

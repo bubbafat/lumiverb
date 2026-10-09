@@ -284,7 +284,7 @@ def approve_upgrade(
         session.commit()
     except IntegrityError:
         session.rollback()
-        raise ConflictError("upgrade_changed", "Someone approved this upgrade at the same moment. Look again.")
+        raise ConflictError("upgrade_changed", "Someone approved this upgrade at the same moment. Look again.") from None
     return UpgradeOut(upgrade_id=upgrade_id, artifact=artifact, scope=scope, edits=edits, upgrading=len(items),
                       skipped_edited=skipped, edits_to_replace=len(edited) if edits == "replace" else 0)
 
