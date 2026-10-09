@@ -108,8 +108,14 @@ def _run_quickwit_search(
     limit: int,
     public_cap_ms: int | None = None,
     public: bool = False,
+    capped: set[str] | None = None,
 ) -> tuple[dict[str, float], dict[str, SearchContext], str]:
     """Run text search through Quickwit (or Postgres fallback).
+
+    `capped`: when given, gets the name of each index search that came back
+    full (its max_hits): matches past it were left out. Each search is
+    capped on its own and counts documents (scenes, segments), not clips,
+    so the merged scores alone can't tell.
 
     `public_cap_ms`: for a public page that plays only so much of each
     video, search what it shows: no whole-transcript field, and no scene
@@ -212,6 +218,8 @@ def _run_quickwit_search(
                 library_ids=library_ids,
                 max_hits=limit,
             )
+            if capped is not None and len(asset_hits) >= limit:
+                capped.add("assets")
             for hit in asset_hits:
                 aid = hit["asset_id"]
                 score = hit.get("score", 0.0)
@@ -246,6 +254,8 @@ def _run_quickwit_search(
                     library_ids=library_ids,
                     max_hits=limit,
                 )
+                if capped is not None and len(prefix_hits) >= limit:
+                    capped.add("asset prefixes")
                 # Apply prefix penalty so a prefix rank-0 ties with
                 # exact rank-1 (1/(1+1)=0.5). High-rank prefix matches
                 # still surface above low-rank exact matches.
@@ -277,6 +287,8 @@ def _run_quickwit_search(
                 library_ids=library_ids,
                 max_hits=limit,
             )
+            if capped is not None and len(scene_hits) >= limit:
+                capped.add("scenes")
             for hit in scene_hits:
                 if not shown(hit):
                     continue
@@ -319,6 +331,8 @@ def _run_quickwit_search(
                     library_ids=library_ids,
                     max_hits=limit,
                 )
+                if capped is not None and len(scene_prefix_hits) >= limit:
+                    capped.add("scene prefixes")
                 PREFIX_PENALTY = 0.5
                 for hit in scene_prefix_hits:
                     if not shown(hit):
@@ -352,6 +366,8 @@ def _run_quickwit_search(
                 library_ids=library_ids,
                 max_hits=limit * 3,
             )
+            if capped is not None and len(transcript_hits) >= limit * 3:
+                capped.add("transcripts")
             # Deduplicate: keep best per asset
             for hit in transcript_hits:
                 if not shown(hit):

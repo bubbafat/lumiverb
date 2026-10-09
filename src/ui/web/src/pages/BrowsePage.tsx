@@ -740,6 +740,7 @@ export default function BrowsePage() {
         onClearAll={handleClearAll}
         facets={facets}
         onSaveAsProject={canEdit ? () => setShowSaveAsProject(true) : undefined}
+        folder={pathPrefix}
         isPublic={isPublicMode}
       />
 

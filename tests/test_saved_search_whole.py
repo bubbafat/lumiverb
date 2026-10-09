@@ -90,6 +90,43 @@ def test_a_text_search_whose_matches_were_capped_is_refused(env) -> None:
     assert _projects_named(client, headers, "Capped") == 0
 
 
+def test_a_full_scene_search_is_refused_though_few_clips_match(env) -> None:
+    # Review round 2: each index's search is capped on its own and counts
+    # scenes, not clips. 50 scenes over 10 videos filled the scene search:
+    # more scenes (other videos) were left out, so it's refused.
+    client, headers, library_id, _storage, _tid, tenant_url = env
+    base = _ingest(env, "scn/base.mp4", media_type="video")
+    ids = [base] + _clone(tenant_url, base, 9, "scn")
+    qw = _quickwit([])
+    qw.search_tenant_scenes.side_effect = lambda **kw: [
+        {"asset_id": ids[i // 5], "score": 1.0 - i / 1000, "start_ms": i * 1000, "end_ms": i * 1000 + 500}
+        for i in range(min(kw["max_hits"], 50))
+    ]
+    with (patch("src.server.api.routers.query.MAX_CANDIDATE_IDS", 50),
+          patch("src.server.search.quickwit_client.QuickwitClient", return_value=qw)):
+        r = client.post("/v1/projects", json={"name": "Scenes", "from_search": {"filters": [
+            {"type": "query", "value": "dog"}, {"type": "library", "value": library_id}]}}, headers=headers)
+    assert r.status_code == 422 and r.json()["error"]["code"] == "search_too_big", r.text
+
+
+def test_searches_that_came_back_short_are_saved_whole_however_many_together(env) -> None:
+    # 30 exact and 25 other prefix matches: 55 clips past a cap of 50, but
+    # neither search was cut, so nothing was left out.
+    client, headers, library_id, _storage, _tid, tenant_url = env
+    base = _ingest(env, "both/base.jpg", media_type="image")
+    ids = [base] + _clone(tenant_url, base, 54, "both")
+    qw = _quickwit([])
+    qw.search_tenant.side_effect = lambda **kw: (
+        [{"asset_id": a, "score": 1.0} for a in ids[:30]] if "*" not in kw["query"]
+        else [{"asset_id": a, "score": 0.9} for a in ids[30:]])
+    with (patch("src.server.api.routers.query.MAX_CANDIDATE_IDS", 50),
+          patch("src.server.search.quickwit_client.QuickwitClient", return_value=qw)):
+        r = client.post("/v1/projects", json={"name": "Both", "from_search": {"filters": [
+            {"type": "query", "value": "beach"}, {"type": "library", "value": library_id}]}}, headers=headers)
+    assert r.status_code == 201, r.text
+    assert r.json()["asset_count"] == 55
+
+
 def test_a_search_is_saved_in_the_order_it_shows_up_to_the_cap(env) -> None:
     client, headers, library_id, _storage, _tid, tenant_url = env
     base = _ingest(env, "many/base.jpg", media_type="image")
@@ -124,6 +161,12 @@ def test_a_search_is_saved_in_the_order_it_shows_up_to_the_cap(env) -> None:
     {"filters": [], "direction": None},
     {"filters": [], "sort": "colour"},
     {"filters": "camera_make:Canon"},
+    {"filter": [{"type": "camera_make", "value": "NoSuchCamera"}]},  # a typo for filters: everything
+    {"filters": [{"type": "camera_make", "value": 5}]},
+    {"filters": [{"type": "query", "value": ["beach"]}]},
+    {"filters": [{"type": "tag", "value": {"a": 1}}]},
+    {"filters": [{"type": "camera_make", "value": "Canon", "negate": True}]},
+    {"filters": [{"type": "path", "value": "a\x00b"}]},
 ])
 def test_a_search_it_cant_read_is_refused(env, search) -> None:
     client, headers, *_ = env

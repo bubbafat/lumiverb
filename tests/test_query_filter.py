@@ -759,10 +759,15 @@ class TestFromJson:
         ({"filters": ["camera_make:Canon"]}, "A filter is an object"),
         ({"filters": "camera_make:Canon"}, "filters must be a list"),
         ("not a dict", "A search is an object"),
-        ({"filters": [{"type": "media", "value": 5}]}, "Can't read the media filter"),
+        ({"filters": [{"type": "media", "value": 5}]}, "value is text"),
+        ({"filters": [{"type": "stars", "value": "lots"}]}, "Can't read the stars filter"),
         ({"filters": [], "direction": None}, "direction must be"),
         ({"filters": [], "direction": "up"}, "direction must be"),
         ({"filters": [], "sort": 3}, "sort must be"),
+        ({"filter": []}, "Unknown key 'filter'"),
+        ({"filters": [{"type": "camera_make", "value": 5}]}, "value is text"),
+        ({"filters": [{"type": "camera_make", "value": "x", "negate": True}]}, "A filter is an object"),
+        ({"filters": [{"type": "path", "value": "a\x00b"}]}, "value is text"),
     ])
     def test_what_it_cant_read_is_refused(self, data, says):
         with pytest.raises(ValueError, match=re.escape(says)):

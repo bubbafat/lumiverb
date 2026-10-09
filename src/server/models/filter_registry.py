@@ -142,18 +142,23 @@ def from_json(data: object) -> QuerySpec:
     """
     if not isinstance(data, dict):
         raise ValueError("A search is an object with a filters list")
+    unknown = sorted(set(data) - {"filters", "sort", "direction"})
+    if unknown:  # a typo'd "filter" would otherwise be a search of everything
+        raise ValueError(f"Unknown key {unknown[0]!r}: a search has filters, sort and direction")
     raw_filters = data.get("filters", [])
     if not isinstance(raw_filters, list):
         raise ValueError("filters must be a list")
 
     leaves: list[LeafFilter] = []
     for item in raw_filters:
-        if not isinstance(item, dict):
+        if not isinstance(item, dict) or set(item) != {"type", "value"}:
             raise ValueError(f"A filter is an object with a type and a value, not {item!r}")
-        type_name = item.get("type", "")
+        type_name, value = item["type"], item["value"]
         cls = TYPE_MAP.get(type_name) if isinstance(type_name, str) else None
         if cls is None:
             raise ValueError(f"Unknown filter type {type_name!r}")
+        if not isinstance(value, str) or "\x00" in value:
+            raise ValueError(f"The {type_name} filter's value is text, as in GET /v1/query: not {value!r}")
         try:
             leaves.append(cls.from_json(item))
         except (ValueError, KeyError, TypeError, AttributeError) as exc:
@@ -161,7 +166,7 @@ def from_json(data: object) -> QuerySpec:
 
     sort = data.get("sort", "taken_at")
     direction = data.get("direction", "desc")
-    if not isinstance(sort, str):
+    if not isinstance(sort, str) or "\x00" in sort:
         raise ValueError("sort must be a column name")
     if direction not in ("asc", "desc"):
         raise ValueError('direction must be "asc" or "desc"')

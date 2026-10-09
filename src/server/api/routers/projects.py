@@ -554,8 +554,8 @@ def _search_matches(saved: dict, request: Request, session: Session, user_id: st
     """The clips a search matches now, in its order and as the caller sees
     them (their ratings): what saving it as a project puts in. 422
     bad_search for a search it can't read; 422 search_too_big past
-    _MAX_NEW_CLIPS, or for a text search whose matches were capped (some
-    would be left out without anyone knowing)."""
+    _MAX_NEW_CLIPS, or for a text search any of whose index searches came
+    back full (some matches would be left out without anyone knowing)."""
     from src.server.api.errors import InvalidChoiceError
     from src.server.api.routers.query import (
         MAX_CANDIDATE_IDS,
@@ -593,16 +593,18 @@ def _search_matches(saved: dict, request: Request, session: Session, user_id: st
             if isinstance(leaf, LibraryScope):
                 library_ids = list(leaf.library_ids)
                 break
+        capped: set[str] = set()  # each index's search is capped on its own
         scores, _contexts, source = _run_quickwit_search(
-            request.state.tenant_id, spec.search_terms, library_ids, limit=MAX_CANDIDATE_IDS,
+            request.state.tenant_id, spec.search_terms, library_ids, limit=MAX_CANDIDATE_IDS, capped=capped,
         )
         if source == "postgres_fallback":
             pg_query = " ".join(st.q for st in spec.search_terms if st.q)
             scores, _contexts = _run_postgres_fallback(session, pg_query, library_ids, limit=MAX_CANDIDATE_IDS)
+            capped = {"postgres"} if len(scores) >= MAX_CANDIDATE_IDS else set()
+        if capped:  # some matches were left out: refused, never cut
+            raise too_big(MAX_CANDIDATE_IDS, text_search=True)
         if not scores:
             return []
-        if len(scores) >= MAX_CANDIDATE_IDS:
-            raise too_big(MAX_CANDIDATE_IDS, text_search=True)
         assets = repo.query_page(spec=spec, candidate_ids=list(scores), candidate_scores=scores,
                                  rating_user_id=rating_user_id, after=None, limit=len(scores))
         return list(dict.fromkeys(a.asset_id for a in assets))

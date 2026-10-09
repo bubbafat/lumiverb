@@ -98,6 +98,9 @@ interface FilterBarProps {
   facets: FacetsResponse | null;
   /** Called when user clicks "Save as project" (the clips the search finds now). */
   onSaveAsProject?: () => void;
+  /** The folder the page is narrowed to, outside the filters (the library
+   * page's folder tree): enough on its own to save as a project. */
+  folder?: string | null;
   /** A public page's visitor: no rating or people filters (those are signed-in people's). */
   isPublic?: boolean;
 }
@@ -195,6 +198,7 @@ export function FilterBar({
   onClearAll,
   facets,
   onSaveAsProject,
+  folder,
   isPublic = false,
 }: FilterBarProps) {
   // --- Read individual values from filter array ---
@@ -562,24 +566,22 @@ export function FilterBar({
               );
             })}
           {hasActiveChiclets && (
-            <>
-              <button
-                type="button"
-                onClick={onClearAll}
-                className="text-xs text-gray-500 hover:text-gray-300 whitespace-nowrap"
-              >
-                Clear filters
-              </button>
-              {onSaveAsProject && !isPublic && (
-                <button
-                  type="button"
-                  onClick={onSaveAsProject}
-                  className="text-xs text-indigo-400 hover:text-indigo-300 whitespace-nowrap"
-                >
-                  Save as project
-                </button>
-              )}
-            </>
+            <button
+              type="button"
+              onClick={onClearAll}
+              className="text-xs text-gray-500 hover:text-gray-300 whitespace-nowrap"
+            >
+              Clear filters
+            </button>
+          )}
+          {(hasActiveChiclets || folder) && onSaveAsProject && !isPublic && (
+            <button
+              type="button"
+              onClick={onSaveAsProject}
+              className="text-xs text-indigo-400 hover:text-indigo-300 whitespace-nowrap"
+            >
+              Save as project
+            </button>
           )}
         </div>
       </div>
@@ -869,7 +871,7 @@ export function FilterBar({
           </div>
           )}
 
-          {hasActiveFilters && (
+          {hasActiveChiclets && (
             <FilterMenu
               onClearAll={onClearAll}
               onSaveAsProject={isPublic ? undefined : onSaveAsProject}
