@@ -24,6 +24,7 @@ import { SelectionToolbar } from "../components/SelectionToolbar";
 import { ZoomControl } from "../components/ZoomControl";
 import { DrawerOverlay } from "../components/DrawerOverlay";
 import { DirectoryTree } from "../components/DirectoryTree";
+import { directoriesKey } from "../lib/directoriesKey";
 import type { AssetPageItem, AssetRating, FacetsResponse, RatingColor } from "../api/types";
 import { HeartButton, StarPicker, ColorPicker } from "../components/RatingControls";
 import { buildSavedQuery, composeDate, composeNear } from "../lib/queryFilter";
@@ -288,7 +289,8 @@ export default function BrowsePage() {
 
   // Poll the library's revision every 10 seconds: the server bumps it when
   // the library's clips change (another tab, another person, a scan). Then
-  // refetch the grid, its facets and the folder counts, at most every 30
+  // refetch the grid, its facets and the folder counts (the folder tree's
+  // top level and every folder open in it), at most every 30
   // seconds while it keeps changing, so a long ingest doesn't reload every
   // loaded page on every poll. Changes made here refresh themselves
   // (useClipActions invalidates everything).
@@ -395,7 +397,7 @@ export default function BrowsePage() {
       : undefined
     : undefined;
   const { data: parentDirNodes } = useQuery({
-    queryKey: ["directories", libraryId, dirParent ?? null],
+    queryKey: directoriesKey(libraryId!, dirParent ?? null),
     queryFn: () => listDirectories(libraryId!, dirParent),
     enabled: !!libraryId && !!pathPrefix && canFetchAssets,
   });
@@ -727,7 +729,6 @@ export default function BrowsePage() {
               setParam("path", path);
               setDrawerOpen(false);
             }}
-            revision={revision}
             onExcludeFolder={(path) => {
               setDrawerOpen(false);
               navigate(
