@@ -620,7 +620,6 @@ def run_backfill_vision(
             "missing_vision": "true",
             "sort": "asset_id",
             "dir": "asc",
-            "upgrades": "true",  # an approved upgrade's clips too, after what's missing
         }
         if cursor:
             params["after"] = cursor
@@ -633,7 +632,6 @@ def run_backfill_vision(
         cursor = data.get("next_cursor")
         if not cursor:
             break
-    to_backfill.sort(key=lambda a: bool(a.get("upgrade")))  # what's missing first
 
     stats = _IngestStats()
 

@@ -18,7 +18,7 @@ KINDS = {
     "render": KindSpec(tier=2, pool="render"),
     "vision": KindSpec(tier=3, pool="vision"),
     "ocr": KindSpec(tier=3, pool="vision"),
-    "redo_vision": KindSpec(tier=4, pool="vision"),
+    "redo_vision": KindSpec(tier=4, pool="vision", same_as="vision"),
     "faces": KindSpec(tier=3, pool="faces", batch=3),
 }
 
@@ -215,3 +215,19 @@ def test_an_accounts_own_pool_serves_only_it() -> None:
     assert d.take("vision@t2") is None
     assert d.take("vision@t1").items[0]["asset_id"] == "a"
     assert d.pools(["t1", "t2"]) == ["vision@t1", "vision@t2"]
+
+
+@pytest.mark.fast
+def test_a_clip_is_never_in_hand_for_its_first_making_and_its_redo_at_once() -> None:
+    d = _d({"vision": 3})
+    d.offer("t1", "vision", [_item("a", "2026-10-01")])
+    d.offer("t1", "redo_vision", [_item("a", "2026-10-01"), _item("b", "2026-10-02")])
+    first = d.take("vision")
+    second = d.take("vision")
+    assert (first.kind, first.items[0]["asset_id"]) == ("vision", "a")
+    assert (second.kind, second.items[0]["asset_id"]) == ("redo_vision", "b")
+    assert d.take("vision") is None
+    d.done(first)
+    # Just made: its redo doesn't take it again at once either.
+    d.offer("t1", "redo_vision", [_item("a", "2026-10-01")])
+    assert d.take("vision") is None

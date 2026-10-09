@@ -447,10 +447,10 @@ def run_video_enrich(
                 continue
 
             v = _VideoScenes(video=video, t0=time.perf_counter())
-            # An upgrade's video with every scene described as this run would:
+            # A redo's video with every scene described as this run would:
             # what's stale is the video's own record (made before its file had
             # a hash, say), so describe them all again and it's recorded.
-            again = (bool(video.get("upgrade")) and lineage is not None and bool(scenes)
+            again = (bool(video.get("redo")) and lineage is not None and bool(scenes)
                      and all(_described(scene, lineage) for scene in scenes))
             for scene in scenes:
                 if not again and _described(scene, lineage):

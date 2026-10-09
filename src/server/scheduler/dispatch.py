@@ -35,6 +35,9 @@ class KindSpec:
     retake_after: float | None = None  # the dispatcher's default when None
     # The pool is each account's own (its AI machines), named "<pool>@<account>".
     per_account: bool = False
+    # Kinds that make the same thing share one: a clip is never in hand for
+    # two of them at once (descriptions, and redoing descriptions).
+    same_as: str = ""
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,10 @@ class Job:
     @property
     def asset_ids(self) -> list[str]:
         return [i["asset_id"] for i in self.items]
+
+
+def _same(kind: str, spec: KindSpec) -> str:
+    return spec.same_as or kind
 
 
 def pool_key(spec: KindSpec, tenant_id: str) -> str:
@@ -122,9 +129,10 @@ class Dispatcher:
         now = self._clock()
         with self._lock:
             self._taken_until = {k: t for k, t in self._taken_until.items() if t > now}
+            same = _same(kind, self._kinds[kind])
             fresh = [i for i in items
-                     if (tenant_id, kind, i["asset_id"]) not in self._in_hand
-                     and (tenant_id, kind, i["asset_id"]) not in self._taken_until]
+                     if (tenant_id, same, i["asset_id"]) not in self._in_hand
+                     and (tenant_id, same, i["asset_id"]) not in self._taken_until]
             fresh.sort(key=lambda i: _order(tier, i))
             self._buffers[key] = fresh
             if complete or not fresh:
@@ -146,7 +154,12 @@ class Dispatcher:
             best: tuple | None = None
             for (tenant_id, kind), buffer in self._buffers.items():
                 spec = self._kinds[kind]
-                if pool_key(spec, tenant_id) != pool or not buffer:
+                if pool_key(spec, tenant_id) != pool:
+                    continue
+                # A clip another kind took meanwhile (its redo, say) waits for it.
+                same = _same(kind, spec)
+                buffer[:] = [i for i in buffer if (tenant_id, same, i["asset_id"]) not in self._in_hand]
+                if not buffer:
                     continue
                 rank = _order(spec.tier, buffer[0])
                 if best is None or rank < best[0]:
@@ -158,7 +171,7 @@ class Dispatcher:
             buffer = self._buffers[(tenant_id, kind)]
             items, self._buffers[(tenant_id, kind)] = buffer[:spec.batch], buffer[spec.batch:]
             for i in items:
-                self._in_hand.add((tenant_id, kind, i["asset_id"]))
+                self._in_hand.add((tenant_id, _same(kind, spec), i["asset_id"]))
             self._busy[pool] = self._busy.get(pool, 0) + 1
             return Job(tenant_id, kind, spec.tier, tuple(items))
 
@@ -171,6 +184,6 @@ class Dispatcher:
             self._busy[pool] = max(0, self._busy.get(pool, 0) - 1)
             until = self._clock() + wait
             for asset_id in job.asset_ids:
-                key = (job.tenant_id, job.kind, asset_id)
+                key = (job.tenant_id, _same(job.kind, spec), asset_id)
                 self._in_hand.discard(key)
                 self._taken_until[key] = until

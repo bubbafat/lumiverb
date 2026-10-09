@@ -64,6 +64,7 @@ class Scheduler:
         *,
         capacity: Mapping[str, int],
         candidates: Callable[[str, Any, list[str]], list[dict]] | None = None,
+        paused: Callable[[str], set[str]] | None = None,
         runners: Mapping[str, Callable[..., None]] | None = None,
         scan: Callable[..., None] | None = None,
         clock: Callable[[], float] = time.monotonic,
@@ -74,6 +75,7 @@ class Scheduler:
 
         self._accounts = accounts
         self._candidates = candidates or _from_database
+        self._paused = paused or _paused_in_database
         self._runners = dict(runners or runner_mod.RUNNERS)
         self._scan = scan or runner_mod.scan
         self._clock = clock
@@ -119,12 +121,19 @@ class Scheduler:
             if not slots:
                 for kind in AI_JOB_KINDS[job]:
                     self.dispatcher.clear(tenant_id, kind)
+        # A redo an admin stopped hands out nothing more, at once.
+        stopped = self._paused(tenant_id)
+        for kind in QUEUED:
+            if kind.redo and kind.artifact in stopped:
+                self.dispatcher.clear(tenant_id, kind.name)
         if self.dispatcher.wanted(tenant_id, "scan"):
             self.dispatcher.offer(tenant_id, "scan", [{"asset_id": f"scan:{tenant_id}", "created_at": ""}],
                                   complete=False)
         for kind in QUEUED:
             job = _JOB_OF.get(kind.name)
             if job is not None and not acct.capacity(job):
+                continue
+            if kind.redo and kind.artifact in stopped:
                 continue
             if not self.dispatcher.wanted(tenant_id, kind.name):
                 continue
@@ -137,7 +146,7 @@ class Scheduler:
             if job.kind == "scan":
                 self._scan(acct, job, now=self._wall())
             else:
-                self._runners[job.kind](acct, job)
+                self._runners[KINDS[job.kind].base](acct, job)
         except Exception:  # noqa: BLE001 — a job's surprise is logged; its clips are tried again later
             logger.exception("scheduler: %s for %s failed", job.kind, ", ".join(job.asset_ids[:3]))
 
@@ -187,7 +196,33 @@ def _from_database(tenant_id: str, kind: Any, libraries: list[str]) -> list[dict
     from src.server.scheduler.queue import candidates
 
     with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
-        return candidates(session, kind, libraries)
+        if not kind.redo:
+            return candidates(session, kind, libraries)
+        from src.server.repository import lineage
+
+        if kind.artifact in lineage.paused(session):
+            return []
+        return candidates(session, kind, libraries, want=lineage.desired(session, kind.artifact, _job_models(tenant_id)))
+
+
+def _job_models(tenant_id: str) -> dict[str, str]:
+    """The account's model per AI job (Settings → AI)."""
+    from src.server.database import get_control_session
+    from src.server.repository.ai_machines import job_models
+    from src.server.repository.control_plane import TenantRepository
+
+    with get_control_session() as ctrl:
+        return job_models(TenantRepository(ctrl).get_by_id(tenant_id))
+
+
+def _paused_in_database(tenant_id: str) -> set[str]:
+    from sqlmodel import Session
+
+    from src.server.database import get_engine_for_url
+    from src.server.repository import lineage
+
+    with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
+        return set(lineage.paused(session))
 
 
 # ---------------------------------------------------------------------------
