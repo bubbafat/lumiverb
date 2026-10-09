@@ -273,19 +273,18 @@ def test_a_scheduler_status_that_cant_be_read_isnt_called_never_run(env):
     assert row["state"] == "yellow" and "Couldn't read" in row["reason"]
 
 
-def test_processing_says_how_much_is_paused_in_the_switchs_words(env):
-    """#50's states: Running, Partly paused (scans, or producers alone), All paused."""
+def test_processing_follows_the_pause_switches(env):
+    """GET /v1/producers/queue's state: running, partly (yellow), paused (red)."""
     client, headers, *_ = env
     _status(env)
     assert _rows(env)["processing"]["reason"] == "Running."
     try:
         assert client.post("/v1/producers/scans/pause", headers=headers).status_code == 204
-        assert client.post("/v1/producers/vision/pause", headers=headers).status_code == 204
         row = _rows(env)["processing"]
-        assert row["state"] == "yellow" and row["reason"].startswith("Partly paused: scans and ")
-        assert client.post("/v1/producers/pause", headers=headers).status_code == 204
+        assert row["state"] == "yellow" and row["reason"].startswith("Partly paused: Scans")
+        assert client.post("/v1/producers/all/pause", headers=headers).status_code == 204
         row = _rows(env)["processing"]
-        assert row["state"] == "red" and row["reason"].startswith("All paused")
+        assert row["state"] == "red" and row["reason"].startswith("Paused")
     finally:
-        assert client.post("/v1/producers/resume", headers=headers).status_code == 204
+        assert client.post("/v1/producers/all/resume", headers=headers).status_code == 204
     assert _rows(env)["processing"]["state"] == "green"

@@ -162,13 +162,10 @@ def _processing(session: Session, tenant_id: str, status: Any, now: datetime, un
             "SELECT count(*) FROM artifact_lineage l JOIN active_assets a ON a.asset_id = l.asset_id"
             " WHERE l.error IS NOT NULL AND l.failed_at > :since"), {"since": now - h.FAILING_WINDOW}).scalar() or 0
 
-    paused_producers = [p.get("title") if isinstance(p, dict) else getattr(p, "title", str(p))
-                        for p in getattr(status, "paused_producers", None) or []]
     return h.processing_row(
         at=status.at if status else None, now=now,
-        paused_all=bool(getattr(status, "paused", False)),
-        scans_paused=bool(getattr(status, "scans_paused", False)),
-        paused_producers=paused_producers,
+        pause_state=status.state if status else "running",
+        paused=[sw.title for sw in status.switches if sw.paused] if status else [],
         failing=_kept(tenant_id, "failing", COUNTS_EVERY_SEC, failing),
         unreadable=unreadable,
     )

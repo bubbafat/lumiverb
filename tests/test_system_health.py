@@ -68,14 +68,13 @@ def test_processing_is_red_when_the_scheduler_is_silent_past_30_seconds():
 
 
 def test_processing_is_red_when_all_is_paused():
-    row = h.processing_row(at=ago(seconds=5), now=NOW, paused_all=True)
-    assert row.state == h.RED and row.reason.startswith("All paused")
+    row = h.processing_row(at=ago(seconds=5), now=NOW, pause_state="paused")
+    assert row.state == h.RED and row.reason.startswith("Paused:")
 
 
 def test_processing_is_yellow_when_partly_paused():
-    row = h.processing_row(at=ago(seconds=5), now=NOW, scans_paused=True, paused_producers=["Faces"])
-    assert row.state == h.YELLOW and row.reason.startswith("Partly paused")
-    assert "scans" in row.reason and "Faces" in row.reason
+    row = h.processing_row(at=ago(seconds=5), now=NOW, pause_state="partly", paused=["Scans", "Faces"])
+    assert row.state == h.YELLOW and row.reason == "Partly paused: Scans and Faces."
 
 
 def test_processing_is_yellow_when_clips_failed_lately():
@@ -85,7 +84,7 @@ def test_processing_is_yellow_when_clips_failed_lately():
 
 
 def test_a_silent_scheduler_outranks_a_pause():
-    row = h.processing_row(at=ago(minutes=5), now=NOW, paused_all=True)
+    row = h.processing_row(at=ago(minutes=5), now=NOW, pause_state="paused")
     assert row.state == h.RED and "hasn't reported" in row.reason
 
 

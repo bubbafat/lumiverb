@@ -93,12 +93,13 @@ def website_row(*, db_error: str | None, now: datetime, maintenance: str | None 
 # -- Processing -----------------------------------------------------------------
 
 
-def processing_row(*, at: datetime | None, now: datetime, paused_all: bool = False,
-                   scans_paused: bool = False, paused_producers: Sequence[str] = (), failing: int = 0,
-                   unreadable: bool = False) -> Row:
-    """Red when the scheduler is silent past 30 seconds or all processing is
-    paused; yellow when it's partly paused (scans, or producers on their own)
-    or clips failed in the last day; green while it runs."""
+def processing_row(*, at: datetime | None, now: datetime, pause_state: str = "running",
+                   paused: Sequence[str] = (), failing: int = 0, unreadable: bool = False) -> Row:
+    """Red when the scheduler is silent past 30 seconds, or every pause switch
+    is on (pause_state "paused", GET /v1/producers/queue's state); yellow
+    when some are ("partly"; paused: their titles) or clips failed in the
+    last day; green ("Running.") otherwise. The words are Settings →
+    Processing's: Running, Partly paused, Paused."""
     row = Row("processing", "Processing", GREEN, "Running.", link="/settings/processing", checked_at=at)
     if unreadable:
         row.state, row.reason = YELLOW, "Couldn't read the scheduler's status."
@@ -109,13 +110,12 @@ def processing_row(*, at: datetime | None, now: datetime, paused_all: bool = Fal
     if now - at >= SCHEDULER_SILENT:
         row.state, row.reason = RED, f"The scheduler hasn't reported for {ago(now - at)}: nothing new is processed."
         return row
-    if paused_all:
-        row.state, row.reason = RED, "All paused: nothing new is processed until an admin resumes it."
+    if pause_state == "paused":
+        row.state, row.reason = RED, "Paused: nothing new is processed until an admin resumes it."
         return row
     notes = []
-    paused = (["scans"] if scans_paused else []) + list(paused_producers)
-    if paused:
-        notes.append(f"Partly paused: {_names(paused)}.")
+    if pause_state == "partly":
+        notes.append(f"Partly paused: {_names(paused)}." if paused else "Partly paused.")
     if failing:
         notes.append(f"{_clips(failing)} failed in the last day.")
     if notes:
