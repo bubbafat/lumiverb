@@ -248,8 +248,14 @@ def test_while_everything_is_paused_upkeep_deletes_and_changes_nothing_but_searc
 
 
 def test_while_everything_is_paused_no_files_are_cleaned_up_but_a_dry_run_still_reports(env, tmp_path):
-    from src.server.search.cleanup import run_cleanup_for_tenant
+    from unittest.mock import MagicMock, patch
+
+    from src.server.search.cleanup import run_cleanup_single_tenant
     from tests.test_lineage_api import _db
+
+    def run_cleanup_for_tenant(data_dir, tenant_id, session, *, dry_run):
+        with patch("src.server.config.get_settings", return_value=MagicMock(data_dir=str(data_dir))):
+            return run_cleanup_single_tenant(tenant_id, session, dry_run=dry_run)
 
     client, headers, *_ = env
     tenant_id = env[4]

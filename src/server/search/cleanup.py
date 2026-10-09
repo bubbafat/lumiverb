@@ -147,15 +147,8 @@ def run_cleanup_for_tenant(
     *,
     dry_run: bool = True,
 ) -> CleanupResult:
-    """Run file cleanup for a single tenant. Session must be for the tenant DB.
-    While an admin paused all its processing (the kill switch), nothing is
-    deleted; a dry run still reports."""
-    from src.server.repository import lineage
-
+    """Run file cleanup for a single tenant. Session must be for the tenant DB."""
     result = CleanupResult()
-    if not dry_run and lineage.all_paused(session):
-        logger.info("cleanup: %s is paused; nothing deleted", tenant_id)
-        return result
     tenant_dir = data_dir / tenant_id
     storage = LocalStorage(str(data_dir))
 
@@ -304,6 +297,8 @@ def run_cleanup_all_tenants(*, dry_run: bool = True) -> CleanupResult:
         # Tenant exists — check its libraries and files
         try:
             with get_tenant_session(tenant_dir_name) as session:
+                if _paused(session, tenant_dir_name, dry_run):
+                    continue
                 tenant_result = run_cleanup_for_tenant(
                     data_dir, tenant_dir_name, session, dry_run=dry_run,
                 )
@@ -333,5 +328,17 @@ def run_cleanup_single_tenant(
     data_dir = Path(get_settings().data_dir)
     if not data_dir.is_dir():
         return CleanupResult(errors=[f"Data dir does not exist: {data_dir}"])
-
+    if _paused(session, tenant_id, dry_run):
+        return CleanupResult()
     return run_cleanup_for_tenant(data_dir, tenant_id, session, dry_run=dry_run)
+
+
+def _paused(session: Session, tenant_id: str, dry_run: bool) -> bool:
+    """An admin paused all of the account's processing (the kill switch,
+    Robert Oct 9): its files aren't cleaned up meanwhile; a dry run still reports."""
+    from src.server.repository import lineage
+
+    if dry_run or not lineage.all_paused(session):
+        return False
+    logger.info("cleanup: %s is paused; nothing deleted", tenant_id)
+    return True
