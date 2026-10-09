@@ -338,8 +338,9 @@ class FaceRunner:
                 self._pool = self._pool_factory()
             pool = self._pool
         try:
-            pending = pool.apply_async(_face_batch_worker, (self._client.base_url, self._client.token, ready,
-                                                            cache_path, acct.producers.lineage("faces", None)))
+            used = acct.producers.settings("faces")  # one read: what's found and its lineage agree
+            pending = pool.apply_async(_face_batch_worker, (self._client.base_url, self._client.token, ready, cache_path,
+                                                            acct.producers.lineage("faces", None, used=used), used))
             # A process killed mid-batch (out of memory, a segfault) never
             # answers: give up on the batch rather than wait forever.
             deadline = self._clock() + FACE_BATCH_TIMEOUT_SEC
