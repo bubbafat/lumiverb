@@ -21,9 +21,9 @@ runs at a time, on any machine (a lock in the control-plane database).
 
 from __future__ import annotations
 
+import itertools
 import logging
 import os
-import itertools
 import signal
 import threading
 import time
@@ -395,9 +395,8 @@ def _from_database(tenant_id: str, kind: Any, libraries: list[str], skip: list[s
     from sqlmodel import Session
 
     from src.server.database import get_engine_for_url
-    from src.server.scheduler.queue import candidates
-
     from src.server.repository import lineage
+    from src.server.scheduler.queue import candidates
 
     with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
         if {PAUSE_ALL, kind.artifact} & set(lineage.processing_paused(session)):
@@ -690,7 +689,13 @@ def main() -> int:
     from src.client.cache_dir import cache_dir
     from src.client.cli.config import load_config
     from src.client.proxy.analysis_cache import clear_leftovers
-    from src.server.scheduler.scans import STATE_FILE, ServiceLock, load_state, save_state, saved_form
+    from src.server.scheduler.scans import (
+        STATE_FILE,
+        ServiceLock,
+        load_state,
+        save_state,
+        saved_form,
+    )
 
     configure_logging()
     lock = ServiceLock()
