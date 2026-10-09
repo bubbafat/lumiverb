@@ -913,6 +913,20 @@ export interface ProducerCounts {
 }
 
 /** What makes one kind of artifact (Settings → Processing). */
+/** A producer's setting as Settings → Processing shows it. fixed: why it can't be changed here. */
+export interface SettingField {
+  key: string;
+  label: string;
+  kind: "int" | "float" | "text";
+  value: unknown;
+  default: unknown;
+  minimum: number | null;
+  maximum: number | null;
+  unit: string;
+  advanced: boolean;
+  fixed: string | null;
+}
+
 export interface Producer {
   artifact: string;
   producer: string;
@@ -923,6 +937,8 @@ export interface Producer {
   uniform: boolean;
   settings: Record<string, unknown>;
   settings_hash: string;
+  /** Its settings with their bounds; the ones its code reads can be changed (admins). */
+  fields?: SettingField[];
   counts: ProducerCounts | null;
   /** Its stale clips are made again (after anything missing); if they can't be yet, why_not says why. */
   redoable: boolean;
@@ -934,6 +950,20 @@ export interface Producer {
   paused_at: string | null;
   /** Why its work waits now: its AI job is off, or has no machine (or none online). */
   waiting: string | null;
+}
+
+/** Change a producer's settings (admins): null puts one back to its default.
+ * 409 redo_on_change (details.clips) until redo says yes; 422 bad_setting,
+ * unknown_setting or setting_fixed say what's wrong. */
+export async function setProducerSettings(
+  artifact: string,
+  settings: Record<string, unknown>,
+  redo = false,
+): Promise<Producer> {
+  return apiFetch<Producer>(`/producers/${artifact}/settings`, {
+    method: "PUT",
+    body: redo ? { settings, redo: true } : { settings },
+  });
 }
 
 export async function getProducers(scope: { libraryId?: string; projectId?: string } = {}): Promise<Producer[]> {

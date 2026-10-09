@@ -40,6 +40,10 @@ class FakeAccount:
         self.settings_ready = True
         self.stopping = threading.Event()
         self.gpu_holds: list[int] = []
+        self.followed: list[tuple[str, str | None]] = []
+
+    def follow_settings(self, artifact: str, settings_hash: str | None) -> None:
+        self.followed.append((artifact, settings_hash))
 
     def set_gpu_hold(self, hold: int) -> None:
         if not self.gpu_holds or self.gpu_holds[-1] != hold:
@@ -816,3 +820,14 @@ def test_a_save_the_server_refuses_is_the_clips_failure() -> None:
     clock.now += s.dispatcher.settle_after + 1
     assert s.dispatcher.held("t1", "transcript") == []  # reported: the server says when to try again
     assert s.dispatcher.held("t1", "render") == ["r"]  # gone meanwhile: it waits
+
+
+@pytest.mark.fast
+def test_a_redo_is_listed_with_its_settings_and_the_account_follows_them() -> None:
+    rec = Recorder()
+    acct = FakeAccount()
+    s = _scheduler({"t1": acct}, {"redo_vision": [{**_item("old"), "settings_hash": "new"}],
+                                  "clip": [_item("c")]}, rec)
+    s.tick()
+    _settle(s)
+    assert acct.followed == [("vision", "new")]  # before its clips are handed out

@@ -18,6 +18,12 @@ function producer(over: Partial<Producer>): Producer {
   return {
     artifact: "vision", producer: "vision", version: "1", title: "Descriptions and tags", media: ["image"],
     uniform: false, settings: { model: "qwen3-vl:8b-instruct", temperature: 0.2 }, settings_hash: "h",
+    fields: [
+      { key: "model", label: "Model", kind: "text", value: "qwen3-vl:8b-instruct", default: "", minimum: null,
+        maximum: null, unit: "", advanced: false, fixed: "Chosen in Settings → AI, for every producer its machines run." },
+      { key: "temperature", label: "Temperature", kind: "float", value: 0.2, default: 0.2, minimum: 0, maximum: 2,
+        unit: "", advanced: true, fixed: null },
+    ],
     counts: { applicable: 10, current: 6, stale: 3, missing: 1, failing: 0 }, redoable: true, why_not: null,
     paused: false, paused_by: null, paused_at: null, waiting: null, ...over,
   };
@@ -47,6 +53,12 @@ beforeEach(() => {
     if (path === "/producers/failures/retry" && method === "POST") {
       const n = body.asset_ids ? body.asset_ids.length : failures.length;
       return json({ retried: n });
+    }
+    const set = path.match(/^\/producers\/([^/]+)\/settings$/);
+    if (set && method === "PUT") {
+      const next = answers.shift();
+      if (next) return next;
+      return json(producers.find((p) => p.artifact === set[1]));
     }
     const m = path.match(/^\/producers\/([^/]+)\/redo\/(stop|resume)$/);
     if (m && method === "POST") {
@@ -97,7 +109,7 @@ describe("ProcessingSection", () => {
     renderSection();
     const vision = await row("Descriptions and tags");
     expect(vision.textContent).toContain("6 current · 1 missing · 3 stale");
-    expect(within(vision).getByText("qwen3-vl:8b-instruct")).toBeTruthy();
+    expect(within(vision).getByText(/qwen3-vl:8b-instruct/)).toBeTruthy();
     expect((await row("Visual search (CLIP)")).textContent).toContain("one model for all");
     const scenes = await row("Scenes");
     expect(scenes.textContent).toContain("Not made again yet. Finding a video's scenes again isn't built yet.");
@@ -261,5 +273,138 @@ describe("ProcessingSection", () => {
     fireEvent.click(within(vision).getByRole("button", { name: "Show failures: Descriptions and tags" }));
     expect(await within(vision).findByText(/Being tried again\./)).toBeTruthy();
     expect(vision.textContent).not.toContain("Tried 0 times");
+  });
+});
+
+
+describe("ProcessingSection settings", () => {
+  const fields = [
+    { key: "model", label: "Model", kind: "text", value: "small", default: "small", minimum: null, maximum: null,
+      unit: "", advanced: false, fixed: "Chosen in Settings → AI, for every producer its machines run." },
+    { key: "vad_min_silence_ms", label: "Shortest silence skipped", kind: "int", value: 500, default: 500,
+      minimum: 100, maximum: 2000, unit: "ms", advanced: false, fixed: null },
+  ] as Producer["fields"];
+
+  async function openSettings() {
+    producers = [producer({ artifact: "transcript", title: "Transcripts", media: ["video"], fields })];
+    renderSection();
+    fireEvent.click(await screen.findByText("Settings · version 1"));
+  }
+
+  it("lets an admin change what the producer reads, and says why the rest can't change", async () => {
+    await openSettings();
+    expect(screen.getByText(/Chosen in Settings → AI/)).toBeTruthy();
+    expect(screen.queryByLabelText(/^Model/)).toBeNull();  // no input for it
+    fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "800" } });
+    expect(screen.getByText(/made again with the new ones/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save the settings of Transcripts" }));
+    await waitFor(() => expect(sent.some((r) => r.method === "PUT")).toBe(true));
+    const put = sent.find((r) => r.method === "PUT")!;
+    expect(put.url).toContain("/producers/transcript/settings");
+    expect(put.body).toEqual({ settings: { vad_min_silence_ms: 800 } });
+  });
+
+  it("asks before making again what the old settings made", async () => {
+    answers = [err(409, "redo_on_change", "New settings make 12 clips of transcripts again.", { clips: 12 })];
+    await openSettings();
+    fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "800" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save the settings of Transcripts" }));
+    expect(await screen.findByText(/make 12 clips of transcripts again/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save and make them again" }));
+    await waitFor(() => expect(sent.filter((r) => r.method === "PUT")).toHaveLength(2));
+    expect(sent.filter((r) => r.method === "PUT")[1].body).toEqual({ settings: { vad_min_silence_ms: 800 }, redo: true });
+  });
+
+  it("sends a default as null, so the account goes back to following it", async () => {
+    await openSettings();
+    fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "700" } });
+    fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "500" } });
+    expect((screen.getByRole("button", { name: "Save the settings of Transcripts" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("says why the server refused a value", async () => {
+    // The browser's own bounds stop most; the server's word is final.
+    answers = [err(422, "bad_setting", "Shortest silence skipped is from 100 to 2000 ms")];
+    await openSettings();
+    fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "700" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save the settings of Transcripts" }));
+    expect(await screen.findByText(/is from 100 to 2000 ms/)).toBeTruthy();
+  });
+
+  it("goes back to a setting's default when its field is emptied, as the CLI's KEY= does", async () => {
+    producers = [producer({ artifact: "transcript", title: "Transcripts", media: ["video"],
+                            fields: [{ ...fields![1], value: 800 }] })];
+    renderSection();
+    fireEvent.click(await screen.findByText("Settings · version 1"));
+    fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save the settings of Transcripts" }));
+    await waitFor(() => expect(sent.some((r) => r.method === "PUT")).toBe(true));
+    expect(sent.find((r) => r.method === "PUT")!.body).toEqual({ settings: { vad_min_silence_ms: null } });
+  });
+
+  it("an empty field that's already the default is no change", async () => {
+    await openSettings();
+    fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "" } });
+    expect((screen.getByRole("button", { name: "Save the settings of Transcripts" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("cancels the question, sending nothing more", async () => {
+    answers = [err(409, "redo_on_change", "New settings make 12 clips of transcripts again.", { clips: 12 })];
+    await openSettings();
+    fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "800" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save the settings of Transcripts" }));
+    expect(await screen.findByText(/make 12 clips of transcripts again/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByText(/make 12 clips of transcripts again/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save and make them again" })).toBeNull();
+    expect(sent.filter((r) => r.method === "PUT")).toHaveLength(1);
+  });
+
+  it("a change after the question takes the question away: its answer was for other values", async () => {
+    answers = [err(409, "redo_on_change", "New settings make 12 clips of transcripts again.", { clips: 12 })];
+    await openSettings();
+    fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "800" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save the settings of Transcripts" }));
+    expect(await screen.findByText(/make 12 clips of transcripts again/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "900" } });
+    expect(screen.queryByRole("button", { name: "Save and make them again" })).toBeNull();
+  });
+
+  it("after saving shows what the server saved, so 1.50 isn't a change from 1.5", async () => {
+    const temperature = { key: "temperature", label: "Temperature", kind: "float", value: 0.2, default: 0.2,
+                          minimum: 0, maximum: 2, unit: "", advanced: false, fixed: null } as NonNullable<Producer["fields"]>[number];
+    producers = [producer({ fields: [temperature] })];
+    answers = [json(producer({ fields: [{ ...temperature, value: 1.5 }] }))];
+    renderSection();
+    fireEvent.click(await screen.findByText("Settings · version 1"));
+    fireEvent.change(screen.getByLabelText(/Temperature/), { target: { value: "1.50" } });
+    producers = [producer({ fields: [{ ...temperature, value: 1.5 }] })];  // what the refetch reads
+    fireEvent.click(screen.getByRole("button", { name: "Save the settings of Descriptions and tags" }));
+    await waitFor(() => expect((screen.getByLabelText(/Temperature/) as HTMLInputElement).value).toBe("1.5"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save the settings of Descriptions and tags" })
+      .textContent).toBe("Save"));
+    expect((screen.getByRole("button", { name: "Save the settings of Descriptions and tags" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByText(/made again with the new ones/)).toBeNull();
+  });
+
+  it("says why settings can't change in words, not only on hover (phones can't hover)", async () => {
+    const why = "Not read by this producer yet: changing it would change nothing it makes.";
+    producers = [producer({ artifact: "faces", title: "Faces", fields: [
+      { key: "det_size", label: "Detection size", kind: "int", value: 640, default: 640, minimum: null, maximum: null,
+        unit: "px", advanced: false, fixed: why },
+      { key: "min_confidence", label: "Least confidence", kind: "float", value: 0.5, default: 0.5, minimum: null,
+        maximum: null, unit: "", advanced: false, fixed: why },
+    ] })];
+    renderSection();
+    fireEvent.click(await screen.findByText("Settings · version 1"));
+    expect(screen.getAllByText(why)).toHaveLength(1);  // said once for all of them
+  });
+
+  it("shows editors the settings, not a form", async () => {
+    role = "editor";
+    await openSettings();
+    expect(screen.getByText("Shortest silence skipped")).toBeTruthy();
+    expect(screen.getByText("500 ms")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Save the settings of Transcripts" })).toBeNull();
   });
 });

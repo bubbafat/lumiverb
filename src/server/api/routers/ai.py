@@ -407,7 +407,7 @@ def _ask_before_redoing(session: Session, tenant: Tenant | None, job: str, model
     changed = [a for a in lineage.JOB_ARTIFACTS.get(job, ())
                if lineage.redoable(a)
                and lineage.desired(session, a, then)["settings_hash"] != lineage.desired(session, a, now)["settings_hash"]]
-    made = {a: n for a, n in lineage.made_by_a_producer(session, changed).items() if n}
+    made = {a: n for a in changed if (n := lineage.would_redo(session, a, lineage.desired(session, a, then)))}
     if not made:
         return
     clips = sum(made.values())

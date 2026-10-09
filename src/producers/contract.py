@@ -23,8 +23,9 @@ SQL fragments are conditions on ``active_assets a``.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 # Tiers, highest first (Robert, Oct 9): 1 see it (scans, which make
@@ -38,6 +39,61 @@ VIDEO = ("video",)
 ALL = ("image", "video")
 
 
+# Why a setting can't be changed here.
+ITS_JOBS = "Chosen in Settings → AI, for every producer its machines run."
+NOT_READ_YET = "Not read by this producer yet: changing it would change nothing it makes."
+
+
+@dataclass(frozen=True)
+class Setting:
+    """An output-affecting setting: its default goes into the lineage hash,
+    and Settings → Processing shows it from this (bounds, advanced or not)."""
+
+    key: str
+    default: Any
+    label: str
+    kind: str = "int"  # "int" | "float" | "text"
+    minimum: float | None = None
+    maximum: float | None = None
+    unit: str = ""
+    advanced: bool = False  # folded away until asked for
+    # Why it can't be changed here ("" = it can): only what the producer's
+    # code reads is offered, or lineage would claim settings nothing used.
+    fixed: str = ""
+
+    def check(self, value: Any) -> Any:
+        """The value as stored, or ValueError saying what's wrong with it."""
+        if self.kind == "text":
+            if not isinstance(value, str):
+                raise ValueError(f"{self.label} is text")
+            if not value.strip():
+                raise ValueError(f"{self.label} can't be empty")
+            if "\x00" in value or len(value) > 4000:
+                raise ValueError(f"{self.label} is text, up to 4,000 characters")
+            return value
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{self.label} is a number")
+        try:
+            number = float(value)
+        except OverflowError:  # a whole number too big for a float
+            number = math.inf
+        # NaN and infinity are within no bounds (JSON parsers take them).
+        if not math.isfinite(number) or (self.minimum is not None and number < self.minimum) \
+                or (self.maximum is not None and number > self.maximum):
+            raise ValueError(self.bounds())
+        if self.kind == "int":
+            if not number.is_integer():
+                raise ValueError(f"{self.label} is a whole number")
+            return int(number)
+        return number
+
+    def bounds(self) -> str:
+        unit = f" {self.unit}" if self.unit else ""
+        if self.minimum is None or self.maximum is None:
+            return f"{self.label} is a finite number"
+        return f"{self.label} is from {self.minimum:g} to {self.maximum:g}{unit}"
+
+
 @dataclass(frozen=True)
 class ProducerSpec:
     artifact: str  # the one artifact kind it makes
@@ -47,7 +103,7 @@ class ProducerSpec:
     title: str  # for people: "Transcripts"
     applies: str  # which clips it applies to (SQL)
     made: str  # whether a clip has the artifact (SQL); one made in parts once every part is
-    defaults: Mapping[str, Any] = field(default_factory=dict)  # output-affecting settings
+    settings: tuple[Setting, ...] = ()  # output-affecting
     # The artifacts it's made from: the queue waits until a clip has them.
     needs: tuple[str, ...] = ()
     # Its output must come from one model across the library (an embedding
@@ -81,3 +137,10 @@ class ProducerSpec:
     @property
     def scheduled(self) -> bool:
         return bool(self.kind)
+
+    @property
+    def defaults(self) -> Mapping[str, Any]:
+        return {s.key: s.default for s in self.settings}
+
+    def setting(self, key: str) -> Setting | None:
+        return next((s for s in self.settings if s.key == key), None)

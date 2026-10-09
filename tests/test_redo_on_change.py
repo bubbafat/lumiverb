@@ -239,8 +239,10 @@ def test_a_video_is_redone_until_every_scene_is_described_again(env):
     vid, sha, (first, second) = _video_with_scenes(lib)
     with _db(lib) as s:
         k = KINDS["redo_scene_vision"]
-        [item] = candidates(s, k, [lib[2]], want=lineage.desired(s, k.artifact, _job_models(env[4])))
+        want = lineage.desired(s, k.artifact, _job_models(env[4]))
+        [item] = candidates(s, k, [lib[2]], want=want)
     assert item["asset_id"] == vid and item["redo"] is True  # the scheduler redescribes every scene
+    assert item["settings_hash"] == want["settings_hash"]  # what it's to be made with, for the scheduler to check
     _describe_scene(lib, first, sha)
     assert _due(lib, "redo_scene_vision") == [vid]  # half new, half old
     _describe_scene(lib, second, sha)

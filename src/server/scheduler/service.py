@@ -242,6 +242,8 @@ class Scheduler:
             except Exception:  # noqa: BLE001 — one kind's trouble doesn't hold up the others
                 logger.exception("scheduler: listing %s for %s failed", kind.name, tenant_id)
                 items = []
+            if kind.redo and items:
+                acct.follow_settings(kind.artifact, items[0].get("settings_hash"))
             self.dispatcher.offer(tenant_id, kind.name, items, complete=len(items) < BUFFER)
 
     def _run(self, acct: Any, job: Job) -> Outcome:

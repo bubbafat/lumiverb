@@ -73,10 +73,26 @@ class Account:
         self._transcriber: tuple[str, Any] | None = None
         self._refreshed_at: float | None = None
         self._job_checked_at: dict[str, float] = {}
+        self._followed_at: float | None = None
         self._used: dict[str, float] = {}
         self.ready = {"vision": False, "transcripts": False}
 
     # -- settings and machines ----------------------------------------------
+
+    def follow_settings(self, artifact: str, settings_hash: str | None) -> None:
+        """A redo is to be made with settings_hash: when that isn't what these
+        settings make (an admin changed them since they were read), read them
+        again now rather than within the minute, so the redo isn't made with
+        the old ones. At most every RETRY_SEC, should they still differ."""
+        from src.shared.producers import lineage
+
+        if not settings_hash or lineage(artifact, self.producers.settings(artifact), None)["settings_hash"] == settings_hash:
+            return
+        now = self._clock()
+        if self._followed_at is not None and now - self._followed_at < RETRY_SEC:
+            return
+        self._followed_at = now
+        self.producers.refresh()
 
     def refresh(self, force: bool = False) -> None:
         """Read the settings and libraries again when due, check the AI

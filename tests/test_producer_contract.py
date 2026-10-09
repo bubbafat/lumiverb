@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 from src.producers import load, registry
-from src.producers.contract import ProducerSpec
+from src.producers.contract import ProducerSpec, Setting
 
 pytestmark = pytest.mark.fast
 
@@ -51,11 +51,11 @@ def test_the_scheduler_waits_for_what_a_producer_is_made_from():
 
 
 _EXAMPLE = '''
-from src.producers.contract import IMAGE, ProducerSpec
+from src.producers.contract import IMAGE, ProducerSpec, Setting
 
 PRODUCER = ProducerSpec(
     artifact="example", producer="example", version="1", media=IMAGE, title="An example", order=999,
-    applies="a.media_type = 'image'", made="false", defaults={"strength": 3}, needs=("proxy",),
+    applies="a.media_type = 'image'", made="false", settings=(Setting("strength", 3, "Strength"),), needs=("proxy",),
     kind="example", flag="missing_example", run="example_runner:run", pool="example-pool", slots=2,
 )
 '''
@@ -139,3 +139,38 @@ def test_two_producers_cant_make_one_artifact(tmp_path, monkeypatch):
     monkeypatch.setattr(producers, "_registry", None)
     with pytest.raises(ValueError, match="Two producers share a artifact"):
         producers.registry()
+
+
+# ── A setting checks what an admin gives it ──────────────────────────────
+
+_TEMP = Setting("temperature", 0.2, "Temperature", kind="float", minimum=0, maximum=2)
+_WHOLE = Setting("vad", 500, "Silence", minimum=100, maximum=2000, unit="ms")
+_TEXT = Setting("prompt", "Describe", "Prompt", kind="text")
+
+
+@pytest.mark.parametrize("setting, value", [
+    (_TEMP, float("nan")), (_TEMP, float("inf")), (_TEMP, float("-inf")), (_TEMP, 10**400),
+    (_WHOLE, float("nan")), (_WHOLE, float("inf")), (_WHOLE, 10**400),
+])
+def test_a_number_that_isnt_finite_is_refused_as_out_of_bounds(setting, value):
+    with pytest.raises(ValueError, match="from"):
+        setting.check(value)
+
+
+def test_a_whole_number_given_as_800_point_0_is_800():
+    assert _WHOLE.check(800.0) == 800 and isinstance(_WHOLE.check(800.0), int)
+
+
+@pytest.mark.parametrize("value, says", [("", "empty"), ("   \n", "empty"), ("x" * 4001, "4,000"),
+                                         ("a\x00b", "4,000"), (5, "text")])
+def test_text_says_whats_wrong_with_it(value, says):
+    with pytest.raises(ValueError, match=says):
+        _TEXT.check(value)
+
+
+def test_the_image_size_sent_goes_no_larger_than_the_proxies_it_comes_from():
+    from src.client.cli.repair import PROXY_CACHE_EDGE
+    from src.shared.producers import PRODUCERS
+
+    for artifact in ("vision", "ocr", "scene_vision"):
+        assert PRODUCERS[artifact].setting("max_edge").maximum <= PROXY_CACHE_EDGE, artifact

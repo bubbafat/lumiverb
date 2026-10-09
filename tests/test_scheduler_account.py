@@ -136,3 +136,24 @@ def test_storage_is_looked_at_as_the_scan_pass_does(acct, tmp_path: Path, monkey
     assert acct.storage_gone("lib_1") is False and acct.storage_gone("lib_2") is True
     assert acct.storage_gone("lib_unknown") is True
     assert seen == [("lib_1", True), ("lib_2", True)]
+
+
+def test_a_redo_made_with_settings_newer_than_those_read_reads_them_again(acct) -> None:
+    from src.shared.producers import PRODUCERS, lineage
+
+    acct.client.get.return_value.json.return_value = {"producers": []}
+    acct.producers.refresh()
+    now = lineage("transcript", acct.producers.settings("transcript"), None)["settings_hash"]
+    calls = acct.client.get.call_count
+    acct.follow_settings("transcript", now)  # what it has: nothing to read
+    assert acct.client.get.call_count == calls
+    newer = {**PRODUCERS["transcript"].defaults, "vad_min_silence_ms": 800}
+    acct.client.get.return_value.json.return_value = {"producers": [{"artifact": "transcript", "settings": newer}]}
+    acct.follow_settings("transcript", lineage("transcript", newer, None)["settings_hash"])
+    assert acct.producers.settings("transcript")["vad_min_silence_ms"] == 800
+    calls = acct.client.get.call_count
+    acct.follow_settings("transcript", "another")  # still not what it has: not again so soon
+    assert acct.client.get.call_count == calls
+    acct.clock.now += account_mod.RETRY_SEC
+    acct.follow_settings("transcript", "another")
+    assert acct.client.get.call_count == calls + 1

@@ -74,6 +74,19 @@ def overrides(session: Session, artifact: str) -> dict[str, Any]:
         return {}
 
 
+def set_overrides(session: Session, artifact: str, values: Mapping[str, Any]) -> None:
+    """Store the settings an admin changed (only those that differ from the
+    producer's defaults). Doesn't commit."""
+    key = _OVERRIDES.format(artifact)
+    if values:
+        session.execute(text(
+            "INSERT INTO system_metadata (key, value, updated_at) VALUES (:k, :v, now())"
+            " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"),
+            {"k": key, "v": json.dumps(dict(values), sort_keys=True)})
+    else:
+        session.execute(text("DELETE FROM system_metadata WHERE key = :k"), {"k": key})
+
+
 def desired(session: Session, artifact: str, job_models: Mapping[str, str] | None = None) -> dict[str, Any]:
     """What a current artifact of this kind is made with now: producer,
     version, settings and their hash. job_models: the account's model per AI job."""
@@ -229,6 +242,13 @@ def resume(session: Session, artifacts: list[str] | tuple[str, ...]) -> None:
     """Redo the producers' stale clips again. Doesn't commit."""
     if artifacts:
         session.execute(text("DELETE FROM producer_redo_paused WHERE artifact = ANY(:a)"), {"a": list(artifacts)})
+
+
+def would_redo(session: Session, artifact: str, want: dict[str, Any]) -> int:
+    """Clips in sight whose artifact would be made again if it were made as
+    want says (desired): those a producer made another way. What the 409
+    before a new model or new settings counts."""
+    return counts(session, artifact, want)["stale"] if redoable(artifact) else 0
 
 
 def made_by_a_producer(session: Session, artifacts: list[str] | tuple[str, ...]) -> dict[str, int]:
