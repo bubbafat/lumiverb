@@ -553,7 +553,10 @@ ExecStartPre=-/usr/bin/find ${DATA_DIR}/worker-tmp -mindepth 1 -delete
 ExecStart=${APP_DIR}/.venv/bin/python -m src.server.scheduler
 Restart=on-failure
 RestartSec=30s
-# It lets jobs in hand finish for up to 25 s.
+# It lets jobs in hand finish for up to 25 s, saving nothing more; only the
+# scheduler hears the stop, so ffmpeg under a job isn't killed mid-clip
+# (its output read as "no audio"). What's left is killed at the end.
+KillMode=mixed
 TimeoutStopSec=40s
 LimitNOFILE=65535
 NoNewPrivileges=true

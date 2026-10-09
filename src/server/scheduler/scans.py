@@ -268,17 +268,18 @@ def scan_pass(
     full_scan_every: float = DEFAULT_FULL_SCAN_EVERY_SEC,
     scan_fn: Callable | None = None,
     console: Console | None = None,
-) -> dict[str, bool]:
-    """Scan what's due in each library whose storage is reachable; which are."""
+) -> dict[str, Path | None]:
+    """Scan what's due in each library whose storage is reachable; each
+    library's storage on this machine (None: not reachable)."""
     if scan_fn is None:
         from src.client.cli.scan import run_scan as scan_fn
     console = console or Console(quiet=True)
-    reachable: dict[str, bool] = {}
+    roots: dict[str, Path | None] = {}
     for library in libraries:
         # require_entries: an unmounted mount point is an empty folder, and
         # scanning it would mark every file missing.
         root = reachable_root(library, require_entries=True)
-        reachable[library["library_id"]] = root is not None
+        roots[library["library_id"]] = root
         if root is None:
             logger.info("scheduler: %s isn't reachable from here; not scanning it", library["name"])
             continue
@@ -287,4 +288,4 @@ def scan_pass(
                          scan_fn=scan_fn, console=console)
         except Exception:  # noqa: BLE001 — one library's trouble doesn't stop the rest
             logger.exception("scheduler: scanning %s failed; trying again at the next look", library["name"])
-    return reachable
+    return roots

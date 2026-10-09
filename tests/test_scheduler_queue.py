@@ -100,3 +100,14 @@ def test_an_item_says_what_its_job_needs(env) -> None:
 
 def test_scans_are_not_in_the_database(env) -> None:
     assert _due(env, "scan") == []
+
+
+def test_clips_in_hand_or_just_tried_are_left_out_so_the_rest_are_reached(env):
+    # Otherwise the oldest ones, held back, would fill every answer and the
+    # clips behind them would never be listed (review, Oct 9).
+    lib = _library(env, "Skip")
+    first = _ingest(lib, "a.mov")
+    second = _ingest(lib, "b.mov")
+    with _db(env) as s:
+        assert [r["asset_id"] for r in candidates(s, KINDS["probe"], [lib[2]], limit=1)] == [first]
+        assert [r["asset_id"] for r in candidates(s, KINDS["probe"], [lib[2]], limit=1, skip=[first])] == [second]

@@ -274,8 +274,14 @@ def _transcribe_one(
             if "does not contain any stream" in stderr or "Output file #0 does not contain" in stderr:
                 logger.info("No audio track in %s", source_path)
                 return ("", "")  # deterministic: no audio
-            logger.warning("ffmpeg audio extraction failed for %s: %s", source_path, stderr[:500])
-            return ("", "")  # treat as no audio (deterministic)
+            # Anything else isn't known to be silence: ffmpeg killed by a stop
+            # (an update, a reboot), the analysis proxy evicted from the cache
+            # mid-read, a stream it couldn't decode. Saving "" would say the
+            # clip has no speech, for good; it's tried again later instead
+            # (and given up on, if it keeps failing).
+            logger.warning("Reading the audio of %s failed (ffmpeg exit %s); trying again later: %s",
+                           source_path, result.returncode, stderr[:500])
+            return None
         if not wav.exists() or wav.stat().st_size < 1000:  # < 1KB = essentially empty
             logger.info("Audio track too short/empty for %s", source_path)
             return ("", "")

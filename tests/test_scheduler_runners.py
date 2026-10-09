@@ -41,9 +41,17 @@ class FakeAccount:
         self.roots = {"lib_1": tmp_path}
         self.cache = MagicMock()
         self.cache.path = tmp_path / "proxies"
+        import threading
+
+        self.stopping = threading.Event()
+        self.gone: list[str] = []
 
     def root(self, library_id: str):
         return self.roots.get(library_id)
+
+    def unreachable(self, library_id: str) -> None:
+        self.gone.append(library_id)
+        self.roots[library_id] = None
 
     def proxy_cache(self, library_id: str):
         return self.cache
@@ -73,16 +81,25 @@ def _posted(acct: FakeAccount) -> dict[str, dict]:
     return {c.args[0]: c.kwargs["json"] for c in acct.client.post.call_args_list}
 
 
+def _item_posted(acct: FakeAccount, route: str) -> tuple[dict, dict]:
+    """(the one item, the batch's lineage) a batch route was sent."""
+    body = _posted(acct)[route]
+    [item] = body["items"]
+    return item, body["lineage"]
+
+
 @pytest.mark.fast
 def test_a_description_is_saved_with_its_lineage(acct: FakeAccount, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("src.client.cli.ingest._backfill_one", lambda **kw: {
         "asset_id": kw["asset_id"], "model_id": kw["vision_model_id"], "model_version": "1",
         "description": "a dog on a beach", "tags": ["dog"]})
-    runners.vision(acct, _job("vision", "ast_1"))
-    body = _posted(acct)["/v1/assets/ast_1/vision"]
-    assert body["description"] == "a dog on a beach"
-    assert body["lineage"] == acct.producers.lineage("vision", SHA,
-                                                     used=acct.producers.with_model("vision", acct.vision.model))
+    assert runners.vision(acct, _job("vision", "ast_1")) is None
+    # The batch route, one clip: search is left to the upkeep sweep, not committed per clip.
+    item, lineage = _item_posted(acct, "/v1/assets/batch-vision")
+    assert item["description"] == "a dog on a beach" and item["asset_id"] == "ast_1"
+    assert item["source_sha256"] == SHA
+    assert lineage == acct.producers.lineage("vision", None,
+                                             used=acct.producers.with_model("vision", acct.vision.model))
 
 
 @pytest.mark.fast
@@ -100,9 +117,9 @@ def test_text_in_an_image_is_saved_with_its_lineage(acct: FakeAccount, monkeypat
     monkeypatch.setattr("src.client.cli.repair._ocr_one", lambda **kw: {"asset_id": kw["asset_id"],
                                                                         "ocr_text": "STOP"})
     runners.ocr(acct, _job("ocr", "ast_1"))
-    body = _posted(acct)["/v1/assets/ast_1/ocr"]
-    assert body["ocr_text"] == "STOP" and body["model_id"] == acct.vision.model
-    assert body["lineage"]["producer"] == "ocr" and body["lineage"]["source_sha256"] == SHA
+    body = _posted(acct)["/v1/assets/batch-ocr"]
+    assert body["items"] == [{"asset_id": "ast_1", "ocr_text": "STOP", "source_sha256": SHA}]
+    assert body["model_id"] == acct.vision.model and body["lineage"]["producer"] == "ocr"
 
 
 @pytest.mark.fast
@@ -117,9 +134,9 @@ def test_a_clip_embedding_is_saved_with_its_lineage(acct: FakeAccount, monkeypat
     monkeypatch.setattr("src.client.cli.repair._repair_embed_one", lambda **kw: {
         "asset_id": kw["asset_id"], "model_id": "clip", "model_version": "ViT-B-32", "vector": [0.1, 0.2]})
     runners.clip(acct, _job("clip", "ast_1"))
-    body = _posted(acct)["/v1/assets/ast_1/embeddings"]
-    assert body["vector"] == [0.1, 0.2] and body["source_sha256"] == SHA
-    assert body["lineage"]["producer"] == "clip"
+    item, lineage = _item_posted(acct, "/v1/assets/batch-embeddings")
+    assert item["vector"] == [0.1, 0.2] and item["source_sha256"] == SHA
+    assert lineage["producer"] == "clip"
 
 
 @pytest.mark.fast
@@ -134,9 +151,10 @@ def test_probing_waits_while_the_storage_is_away(acct: FakeAccount, monkeypatch:
     probe = MagicMock()
     monkeypatch.setattr("src.client.cli.repair._probe_one", probe)
     acct.roots = {}
-    runners.probe(acct, _job("probe", "ast_1"))
+    assert runners.probe(acct, _job("probe", "ast_1")) == runners.NOT_TRIED
     probe.assert_not_called()
     acct.failures.add.assert_not_called()
+    assert acct.gone == ["lib_1"]  # storage work there waits for the next look
 
 
 @pytest.mark.fast
@@ -166,7 +184,7 @@ def test_a_transcript_is_saved_with_its_lineage(acct: FakeAccount, monkeypatch: 
     acct.analysis_cache.get.return_value = tmp_path / "a.mp4"
     heard = MagicMock(return_value=("1\n00:00:00,000 --> 00:00:01,000\nhola\n", "es"))
     monkeypatch.setattr("src.client.cli.repair._transcribe_one", heard)
-    runners.transcript(acct, _job("transcript", "ast_1"))
+    assert runners.transcript(acct, _job("transcript", "ast_1")) is None
     assert heard.call_args.args == (tmp_path / "a.mp4", "transcriber", 500)
     body = _posted(acct)["/v1/assets/ast_1/transcript"]
     assert body["language"] == "es" and body["source"] == "whisper"
@@ -221,15 +239,16 @@ def test_faces_run_in_a_kept_subprocess_and_report_the_clips_that_failed(acct: F
                                                                         monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("src.client.cli.repair._generate_proxy_for_item", lambda item, root, cache: item)
     pool = MagicMock()
-    pool.apply.side_effect = [{"processed": 1, "failed": 1, "skipped": 0,
-                               "errors": [{"asset_id": "ast_2", "rel_path": "b.jpg", "error": "bad image"}]},
-                              {"processed": 1, "failed": 0, "skipped": 0, "errors": []}]
+    pool.apply_async.return_value.get.side_effect = [
+        {"processed": 1, "failed": 1, "skipped": 0,
+         "errors": [{"asset_id": "ast_2", "rel_path": "b.jpg", "error": "bad image"}]},
+        {"processed": 1, "failed": 0, "skipped": 0, "errors": []}]
     made: list[int] = []
     face_runner = runners.FaceRunner(acct.client, acct.cfg, pool_factory=lambda: made.append(1) or pool)
     face_runner.run(acct, _job("faces", "ast_1", "ast_2"))
     face_runner.run(acct, _job("faces", "ast_3"))
     assert made == [1]  # the model's process is kept between batches
-    args = pool.apply.call_args_list[0].args[1]
+    args = pool.apply_async.call_args_list[0].args[1]
     assert [i["asset_id"] for i in args[2]] == ["ast_1", "ast_2"]
     assert args[4]["producer"] == "insightface"
     acct.failures.add.assert_called_once_with("faces", "ast_2", "bad image")
@@ -239,15 +258,19 @@ def test_faces_run_in_a_kept_subprocess_and_report_the_clips_that_failed(acct: F
 def test_a_face_process_that_dies_charges_no_clip_and_is_replaced(acct: FakeAccount,
                                                                   monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("src.client.cli.repair._generate_proxy_for_item", lambda item, root, cache: item)
+    import multiprocessing as mp
+
     dead, fresh = MagicMock(), MagicMock()
-    dead.apply.side_effect = RuntimeError("CUDA out of memory")
-    fresh.apply.return_value = {"errors": []}
+    # A process killed mid-batch never answers: the wait times out.
+    dead.apply_async.return_value.get.side_effect = mp.TimeoutError()
+    fresh.apply_async.return_value.get.return_value = {"errors": []}
     pools = iter([dead, fresh])
     face_runner = runners.FaceRunner(acct.client, acct.cfg, pool_factory=lambda: next(pools))
     face_runner.run(acct, _job("faces", "ast_1"))
     face_runner.run(acct, _job("faces", "ast_2"))
     dead.terminate.assert_called_once()
-    assert fresh.apply.called
+    assert fresh.apply_async.called
+    assert dead.apply_async.return_value.get.call_args.kwargs["timeout"] == runners.FACE_BATCH_TIMEOUT_SEC
     acct.failures.add.assert_not_called()
 
 
@@ -256,8 +279,42 @@ def test_a_scan_look_notes_which_libraries_can_be_reached(acct: FakeAccount, mon
     libs = [{"library_id": "lib_1", "name": "Footage"}]
     acct.client.get.return_value.json.return_value = libs
     acct.set_libraries = MagicMock()
+    acct.set_reachable = MagicMock()
     acct.scan_state = MagicMock()
-    monkeypatch.setattr("src.server.scheduler.scans.scan_pass", lambda *a, **kw: {"lib_1": True})
+    monkeypatch.setattr("src.server.scheduler.scans.scan_pass", lambda *a, **kw: {"lib_1": Path("/mnt/x")})
     runners.scan(acct, _job("scan", "scan:t1"), now=123.0)
     acct.set_libraries.assert_called_once_with(libs)
-    assert acct.reachable == {"lib_1": True}
+    acct.set_reachable.assert_called_once_with({"lib_1": Path("/mnt/x")})
+
+
+
+@pytest.mark.fast
+def test_once_stopping_nothing_more_is_saved(acct: FakeAccount, monkeypatch: pytest.MonkeyPatch,
+                                             tmp_path: Path) -> None:
+    # A stop (an update, a reboot) kills ffmpeg mid-clip; what a job made of
+    # that mustn't be saved as the clip's (an empty transcript, for good).
+    monkeypatch.setattr("src.client.cli.ingest._backfill_one", lambda **kw: {
+        "asset_id": kw["asset_id"], "model_id": "m", "model_version": "1", "description": "x", "tags": []})
+    acct.analysis_cache.get.return_value = tmp_path / "a.mp4"
+    monkeypatch.setattr("src.client.cli.repair._transcribe_one", lambda *a: ("", ""))
+    acct.stopping.set()
+    assert runners.vision(acct, _job("vision", "ast_1")) == runners.NOT_TRIED
+    assert runners.transcript(acct, _job("transcript", "ast_2")) == runners.NOT_TRIED
+    assert runners.probe(acct, _job("probe", "ast_3")) == runners.NOT_TRIED
+    acct.client.post.assert_not_called()
+
+
+@pytest.mark.fast
+def test_the_gpu_running_out_of_memory_charges_no_clip(acct: FakeAccount, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.client.cli.repair._repair_embed_one",
+                        MagicMock(side_effect=RuntimeError("CUDA out of memory. Tried to allocate 20 MiB")))
+    runners.clip(acct, _job("clip", "ast_1"))
+    acct.failures.add.assert_not_called()
+    acct.client.post.assert_not_called()
+
+
+@pytest.mark.fast
+def test_a_transcript_whose_analysis_copy_cant_be_read_is_a_failure(acct: FakeAccount) -> None:
+    acct.analysis_cache.get.return_value = None
+    runners.transcript(acct, _job("transcript", "ast_1"))
+    assert acct.failures.add.call_args.args[:2] == ("transcript", "ast_1")

@@ -407,3 +407,56 @@ def test_a_clip_one_server_refuses_goes_to_the_others_first():
     with pytest.raises(TranscriptError) as e:
         transcriber.transcribe("bad.wav")
     assert e.value.endpoint_fault is False and sorted(calls[2:]) == ["Built in", "Speaches"]
+
+
+# ---------------------------------------------------------------------------
+# Checked again while requests are in flight (the scheduler checks every minute)
+# ---------------------------------------------------------------------------
+
+
+def test_checking_again_keeps_what_requests_in_flight_hold():
+    client = _client()
+    with _offering({"http://brain/v1": (QWEN,), "http://studio/v1": (QWEN,)}):
+        pool = MachinePool(client, "vision")
+        pool.check()
+        held = [pool.acquire() for _ in range(6)]  # every slot: 2 on the brain, 4 on the studio
+        assert all(held)
+        pool.check()
+    # Still full: a new request waits rather than overloading a machine.
+    assert {m.name: m.busy for m in pool.machines} == {"Brain": 2, "Studio": 4}
+    for m in held:
+        pool.release(m)
+    assert {m.name: m.busy for m in pool.machines} == {"Brain": 0, "Studio": 0}
+
+
+def test_a_machine_whose_address_changed_is_checked_again_and_gets_a_new_provider():
+    client = _client()
+    with _offering({"http://brain/v1": (QWEN,), "http://studio/v1": (QWEN,), "http://brain2/v1": (QWEN,)}):
+        pool = MachinePool(client, "vision")
+        pool.check()
+        made = []
+
+        def make(machine):
+            made.append(machine.api_url)
+            p = MagicMock()
+            p.describe.return_value = {"description": "", "tags": []}
+            return p
+
+        provider = PooledCaptionProvider(pool, make)
+        provider.describe("a.jpg")
+        client.get.return_value.json.return_value = {"job": "vision", "model": QWEN, "machines": [
+            {**BRAIN, "api_url": "http://brain2/v1"}]}
+        pool.check()
+        assert [m.api_url for m in pool.machines] == ["http://brain2/v1"] and pool.machines[0].online
+        provider.describe("b.jpg")
+    assert made[-1] == "http://brain2/v1"
+
+
+def test_a_machine_no_longer_listed_is_dropped():
+    client = _client()
+    with _offering({"http://brain/v1": (QWEN,), "http://studio/v1": (QWEN,)}):
+        pool = MachinePool(client, "vision")
+        pool.check()
+        client.get.return_value.json.return_value = {"job": "vision", "model": QWEN, "machines": [BRAIN]}
+        pool.check()
+    assert [m.name for m in pool.machines] == ["Brain"] and pool.capacity() == 2

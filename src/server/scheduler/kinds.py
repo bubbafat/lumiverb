@@ -41,12 +41,13 @@ KINDS: dict[str, Kind] = {k.name: k for k in (
     Kind("scan", KindSpec(SEE, "scan", retake_after=SCAN_EVERY_SEC)),
     Kind("probe", KindSpec(SEE, "probe"), "missing_probe", storage=True),
     Kind("render", KindSpec(PREPARE, "render"), "missing_analysis_proxy", storage=True),
-    Kind("clip", KindSpec(FIND, "clip"), "missing_embeddings", _HAS_PROXY),
+    # CLIP and face detection take turns on this machine's GPU.
+    Kind("clip", KindSpec(FIND, "gpu"), "missing_embeddings", _HAS_PROXY),
     # The AI machines are each account's own (Settings → AI).
     Kind("vision", KindSpec(FIND, "vision", per_account=True), "missing_vision", _HAS_PROXY),
     Kind("ocr", KindSpec(FIND, "vision", per_account=True), "missing_ocr", _HAS_PROXY),
     Kind("scene_vision", KindSpec(FIND, "vision", per_account=True), "missing_scene_vision", _HAS_ANALYSIS_PROXY),
-    Kind("faces", KindSpec(FIND, "faces", batch=25), "missing_faces", _HAS_PROXY),
+    Kind("faces", KindSpec(FIND, "gpu", batch=25), "missing_faces", _HAS_PROXY),
     Kind("transcript", KindSpec(FIND, "transcripts", per_account=True), "missing_transcription",
          _HAS_ANALYSIS_PROXY),
     Kind("scenes", KindSpec(FIND, "scenes"), "missing_video_scenes", _HAS_ANALYSIS_PROXY),

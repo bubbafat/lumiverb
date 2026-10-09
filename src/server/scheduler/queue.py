@@ -17,8 +17,10 @@ from src.server.scheduler.kinds import Kind
 BUFFER = 200  # due clips listed per kind at a time
 
 
-def candidates(session: Session, kind: Kind, library_ids: list[str], limit: int = BUFFER) -> list[dict]:
-    """The kind's due clips in these libraries, oldest first, at most limit."""
+def candidates(session: Session, kind: Kind, library_ids: list[str], limit: int = BUFFER,
+               skip: list[str] | None = None) -> list[dict]:
+    """The kind's due clips in these libraries, oldest first, at most limit,
+    less skip (clips in hand or just tried: they mustn't fill the answer)."""
     from src.server.repository.lineage import LINEAGE_JOIN
     from src.server.repository.tenant import MISSING_CONDITIONS
 
@@ -29,6 +31,7 @@ def candidates(session: Session, kind: Kind, library_ids: list[str], limit: int 
         " a.created_at, a.analysis_proxy_key IS NOT NULL AS has_analysis_proxy"
         f" FROM active_assets a {LINEAGE_JOIN}"
         f" WHERE a.library_id = ANY(:libs) AND ({MISSING_CONDITIONS[kind.flag]}) AND ({kind.extra})"
+        "   AND a.asset_id <> ALL(CAST(:skip AS text[]))"
         " ORDER BY a.created_at, a.asset_id LIMIT :n"
-    ), {"libs": library_ids, "n": limit}).mappings().all()
+    ), {"libs": library_ids, "n": limit, "skip": list(skip or [])}).mappings().all()
     return [{**r, "created_at": r["created_at"].isoformat() if r["created_at"] else ""} for r in rows]
