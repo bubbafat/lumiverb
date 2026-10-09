@@ -84,7 +84,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("video_scenes", "lineage")
+    op.execute("ALTER TABLE video_scenes DROP COLUMN IF EXISTS lineage")
     op.drop_table("correction_history")
     op.drop_table("producer_upgrade_items")
     op.drop_table("producer_upgrades")
