@@ -45,10 +45,12 @@ ARTIFACTS: tuple[str, ...] = tuple(PRODUCERS)
 # and resumed on its own: Scans (finding files, thumbnails, video previews),
 # Upkeep (the trash purge, file cleanup, spreading face names) and each
 # producer the scheduler makes. Pause all pauses every switch; nothing stores
-# it. The account's state is derived from the switches (pause_state).
+# it. The account's state is derived from the switches (pause_state). "all"
+# is named, never inferred from a missing target (Robert, Oct 9).
+PAUSE_ALL = "all"
 PAUSE_SCANS = "scans"
 PAUSE_UPKEEP = "upkeep"
-assert not {PAUSE_SCANS, PAUSE_UPKEEP} & set(PRODUCERS), "a producer can't be named what Scans or Upkeep is"
+assert not {PAUSE_ALL, PAUSE_SCANS, PAUSE_UPKEEP} & set(PRODUCERS), "a producer can't be named all, scans or upkeep"
 
 
 def pause_targets() -> tuple[str, ...]:

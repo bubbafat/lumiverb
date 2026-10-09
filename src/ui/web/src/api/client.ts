@@ -1073,15 +1073,15 @@ export async function resumeRedo(artifact: string): Promise<void> {
   await apiFetch<void>(`/producers/${artifact}/redo/resume`, { method: "POST" });
 }
 
-/** Pause one switch ("scans", "upkeep" or a producer's artifact), or every one with no target (admins).
- * What's running finishes. 409 not_scheduled for what scans make. */
-export async function pauseProcessing(target?: string): Promise<void> {
-  await apiFetch<void>(target ? `/producers/${target}/pause` : "/producers/pause", { method: "POST" });
+/** Pause one switch ("scans", "upkeep" or a producer's artifact), or "all" (admins). The target is always
+ * named. What's running finishes. 409 not_scheduled for what scans make. */
+export async function pauseProcessing(target: string): Promise<void> {
+  await apiFetch<void>(`/producers/${target}/pause`, { method: "POST" });
 }
 
-/** Resume one switch, or every one with no target (admins). */
-export async function resumeProcessing(target?: string): Promise<void> {
-  await apiFetch<void>(target ? `/producers/${target}/resume` : "/producers/resume", { method: "POST" });
+/** Resume one switch, or "all" (admins). */
+export async function resumeProcessing(target: string): Promise<void> {
+  await apiFetch<void>(`/producers/${target}/resume`, { method: "POST" });
 }
 
 export async function findSimilar(params: {

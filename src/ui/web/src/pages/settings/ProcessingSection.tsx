@@ -67,7 +67,7 @@ export default function ProcessingSection() {
       <div>
         <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
           <h2 className="text-lg font-semibold text-gray-100">Processing</h2>
-          {status && <Switch name="All processing" state={status.state} admin={admin} />}
+          {status && <Switch name="All processing" target="all" state={status.state} admin={admin} />}
         </div>
         <p className="mt-1 text-sm text-gray-400">
           What each producer has made for your clips. Stale ones were made with another model or settings than now:
@@ -350,11 +350,10 @@ const SWITCH_ABOUT: Record<string, string> = {
 const STATE_DOT = { running: "bg-emerald-500", partly: "bg-amber-400", paused: "bg-red-500" };
 const STATE_WORDS = { running: "Running", partly: "Partly paused", paused: "Paused" };
 
-/** A pause switch (Robert, Oct 9): one row's (a target: green running, yellow
- * paused) or all of them (no target: green, yellow when some are paused, red
- * when all are). The global one pauses every row from green or yellow and
+/** A pause switch (Robert, Oct 9): one row's (green running, yellow paused)
+ * or "all" (green, yellow when some are paused, red when all are). The global one pauses every row from green or yellow and
  * resumes every row from red. Admins flip it; everyone sees it. */
-function Switch({ name, target, state, admin }: { name: string; target?: string;
+function Switch({ name, target, state, admin }: { name: string; target: string;
                                                    state: "running" | "partly" | "paused"; admin: boolean }) {
   const queryClient = useQueryClient();
   const toggle = useMutation({
@@ -365,7 +364,7 @@ function Switch({ name, target, state, admin }: { name: string; target?: string;
         queryClient.invalidateQueries({ queryKey: PRODUCERS_QUERY_KEY }),
       ]),
   });
-  const dot = target && state === "paused" ? STATE_DOT.partly : STATE_DOT[state];
+  const dot = target !== "all" && state === "paused" ? STATE_DOT.partly : STATE_DOT[state];
   const face = (
     <>
       <span aria-hidden="true" className={`inline-block h-2.5 w-2.5 rounded-full ${dot}`} />

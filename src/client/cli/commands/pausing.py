@@ -47,8 +47,7 @@ def _act(command: str, name: str | None) -> None:
     client = LumiverbClient()
     if not name:
         _usage(client, command)
-    path = f"/v1/producers/{command}" if name == "all" else f"/v1/producers/{name}/{command}"
-    r = client.raw("POST", path)
+    r = client.raw("POST", f"/v1/producers/{name}/{command}")  # "all" is a target like any other
     if r.status_code >= 400:
         console.print(f"[red]Couldn't {command} {escape(name or '')}: {escape(_error(r))}[/red]")
         raise typer.Exit(1)

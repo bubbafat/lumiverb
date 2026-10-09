@@ -47,8 +47,8 @@ def _run(*args: str):
     (["resume", "vision"], "/v1/producers/vision/resume"),
     (["pause", "scans"], "/v1/producers/scans/pause"),
     (["resume", "upkeep"], "/v1/producers/upkeep/resume"),
-    (["pause", "all"], "/v1/producers/pause"),
-    (["resume", "all"], "/v1/producers/resume"),
+    (["pause", "all"], "/v1/producers/all/pause"),
+    (["resume", "all"], "/v1/producers/all/resume"),
 ])
 def test_pause_or_resume_one_switch_or_all_and_say_the_state(client, args, path):
     result = _run(*args)

@@ -80,7 +80,7 @@ beforeEach(() => {
       producers = producers.map((p) => (p.artifact === m[1] ? { ...p, redo_stopped: m[2] === "stop" } : p));
       return new Response(null, { status: 204 });
     }
-    const all = path.match(/^\/producers\/(pause|resume)$/);
+    const all = path.match(/^\/producers\/all\/(pause|resume)$/);
     if (all && method === "POST") {
       const next = answers.shift();
       if (next) return next;
@@ -252,9 +252,9 @@ describe("ProcessingSection", () => {
     await waitFor(() => expect(state("All processing")).toBe("running"));
     expect(state("Scans")).toBe("running");
     expect(sent.filter((r) => r.method === "POST").map((r) => new URL(r.url, "http://x").pathname)).toEqual([
-      "/v1/producers/vision/pause", "/v1/producers/pause", "/v1/producers/scans/resume",
+      "/v1/producers/vision/pause", "/v1/producers/all/pause", "/v1/producers/scans/resume",
       "/v1/producers/upkeep/resume", "/v1/producers/vision/resume", "/v1/producers/ocr/resume",
-      "/v1/producers/pause", "/v1/producers/resume"]);
+      "/v1/producers/all/pause", "/v1/producers/all/resume"]);
   });
 
   it("a paused producer's row says Paused, and its redo waits", async () => {
