@@ -1227,8 +1227,8 @@ export async function createProject(
     sort_order?: string;
     visibility?: string;
     asset_ids?: string[];
-    type?: string;
-    saved_query?: Record<string, unknown>;
+    /** A search saved as a project: the clips it matches now (filter JSON, as buildSavedQuery makes). */
+    from_search?: Record<string, unknown>;
   },
 ): Promise<ProjectItem> {
   return apiFetch<ProjectItem>("/projects", {
@@ -1245,7 +1245,6 @@ export async function updateProject(
     visibility?: string;
     sort_order?: string;
     cover_asset_id?: string | null;
-    saved_query?: { q?: string; filters: Record<string, unknown>; library_id?: string } | null;
   },
 ): Promise<ProjectItem> {
   return apiFetch<ProjectItem>(`/projects/${projectId}`, {

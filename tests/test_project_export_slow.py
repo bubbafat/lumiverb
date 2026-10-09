@@ -254,7 +254,7 @@ def test_unknown_project_is_404(env) -> None:
 
 
 @pytest.mark.slow
-def test_smart_project_over_1000_clips_exports_whole(env) -> None:
+def test_a_project_over_1000_clips_exports_whole(env) -> None:
     """The phase 1 gate: no 1,000-clip cap anywhere between the project and the file."""
     from sqlalchemy import create_engine, text
 
@@ -273,8 +273,7 @@ def test_smart_project_over_1000_clips_exports_whole(env) -> None:
     engine.dispose()
     project_id = client.post(
         "/v1/projects",
-        json={"name": "Everything", "type": "smart",
-              "saved_query": {"filters": [{"type": "library", "value": big}]}},
+        json={"name": "Everything", "from_search": {"filters": [{"type": "library", "value": big}]}},
         headers=headers,
     ).json()["project_id"]
 

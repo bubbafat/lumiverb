@@ -25,7 +25,8 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 
-_VALID_TYPES = {"static", "smart"}
+# The most clips a project is made with at once (asset_ids, or a search's matches).
+_MAX_NEW_CLIPS = 10_000
 
 
 class CreateProjectRequest(BaseModel):
@@ -33,9 +34,11 @@ class CreateProjectRequest(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
     sort_order: str = "manual"
     visibility: str = "private"  # private | shared | public
-    type: str = "static"  # static | smart
-    saved_query: dict | None = None
-    asset_ids: list[str] | None = Field(default=None, max_length=10_000)
+    asset_ids: list[str] | None = Field(default=None, max_length=_MAX_NEW_CLIPS)
+    # A search saved as a project (Robert, Oct 9): the clips that match it now,
+    # an explicit list from then on. The query as GET /v1/query takes it, saved
+    # as JSON (filter_registry.from_json).
+    from_search: dict | None = None
 
 
 class UpdateProjectRequest(BaseModel):
@@ -44,7 +47,6 @@ class UpdateProjectRequest(BaseModel):
     visibility: str | None = None
     sort_order: str | None = None
     cover_asset_id: str | None = None
-    saved_query: dict | None = None
     # Lifecycle: archived projects leave the default list (sidebar, pickers)
     # but keep their clips and stay readable and exportable.
     status: Literal["active", "archived"] | None = None
@@ -59,19 +61,17 @@ class ProjectItem(BaseModel):
     visibility: str
     ownership: str  # "own" | "shared"
     sort_order: str
-    type: str = "static"
-    saved_query: dict | None = None
     asset_count: int
     # Clips still in the project but in the trash: hidden and not exported
-    # until restored. Always 0 for smart projects, which are a search.
+    # until restored.
     trashed_asset_count: int = 0
     # Clips a scan trashed because their file went missing; they come back
-    # when the file does. Always 0 for smart projects.
+    # when the file does.
     missing_asset_count: int = 0
     # Clips whose library is in the trash: they come back if the library is
-    # restored. Always 0 for smart projects.
+    # restored.
     library_trashed_asset_count: int = 0
-    # Clips a person archived: kept, and back with unarchive. Always 0 for smart projects.
+    # Clips a person archived: kept, and back with unarchive.
     archived_asset_count: int = 0
     created_at: str
     updated_at: str
@@ -164,25 +164,8 @@ def _ownership_label(col, user_id: str) -> str:
 def _project_to_item(
     col, repo: ProjectRepository, user_id: str, *, session: Session | None = None
 ) -> ProjectItem:
-    col_type = getattr(col, "type", "static") or "static"
-
-    # Smart projects compute asset_count via live query
-    if col_type == "smart" and col.saved_query and session is not None:
-        from src.server.models.filter_registry import from_json
-        from src.server.repository.tenant import UnifiedBrowseRepository
-
-        spec = from_json(col.saved_query)
-        browse_repo = UnifiedBrowseRepository(session)
-        live_assets = browse_repo.query_page(
-            spec=spec,
-            rating_user_id=_rating_user(col, user_id) if spec.needs_rating_join else None,
-            limit=10000,
-        )
-        count = len(live_assets)
-        hidden = {"trashed": 0, "missing": 0, "library_trashed": 0, "archived": 0}
-    else:
-        count = repo.asset_count(col.project_id)
-        hidden = repo.hidden_clip_counts(col.project_id)
+    count = repo.asset_count(col.project_id)
+    hidden = repo.hidden_clip_counts(col.project_id)
 
     return ProjectItem(
         project_id=col.project_id,
@@ -193,8 +176,6 @@ def _project_to_item(
         visibility=col.visibility,
         ownership=_ownership_label(col, user_id),
         sort_order=col.sort_order,
-        type=col_type,
-        saved_query=getattr(col, "saved_query", None),
         asset_count=count,
         trashed_asset_count=hidden["trashed"],
         missing_asset_count=hidden["missing"],
@@ -245,15 +226,6 @@ def _can_view(col, user_id: str) -> bool:
     return col.visibility in ("shared", "public")
 
 
-def _require_static(col) -> None:
-    """Raise 400 if project is smart (dynamic)."""
-    if getattr(col, "type", "static") == "smart":
-        raise HTTPException(
-            status_code=400,
-            detail="Smart projects do not support manual asset management",
-        )
-
-
 # ---------------------------------------------------------------------------
 # Project CRUD
 # ---------------------------------------------------------------------------
@@ -267,17 +239,27 @@ def create_project(
     _: Annotated[None, Depends(require_editor)],
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> ProjectItem:
-    """Create a project owned by the current user."""
+    """Create a project owned by the current user: with asset_ids, or with
+    the clips that match a search now (from_search; 422 search_too_big past
+    10,000). A project is an explicit list either way (Robert, Oct 9)."""
     if body.sort_order not in _VALID_SORT_ORDERS:
         raise HTTPException(status_code=400, detail=f"Invalid sort_order. Must be one of: {', '.join(_VALID_SORT_ORDERS)}")
     if body.visibility not in _VALID_VISIBILITIES:
         raise HTTPException(status_code=400, detail=f"Invalid visibility. Must be one of: {', '.join(_VALID_VISIBILITIES)}")
-    if body.type not in _VALID_TYPES:
-        raise HTTPException(status_code=400, detail=f"Invalid type. Must be one of: {', '.join(_VALID_TYPES)}")
-    if body.type == "smart" and not body.saved_query:
-        raise HTTPException(status_code=400, detail="Smart projects require a saved_query")
-    if body.type == "static" and body.saved_query is not None:
-        raise HTTPException(status_code=400, detail="Static projects must not have a saved_query")
+    if body.asset_ids and body.from_search is not None:
+        raise HTTPException(status_code=400, detail="Give asset_ids or from_search, not both")
+    asset_ids = body.asset_ids
+    if body.from_search is not None:
+        asset_ids = _search_matches(body.from_search, request, session, user_id)
+    if asset_ids:  # before the project exists, so a refusal leaves none behind
+        from sqlalchemy import text as sa_text
+
+        found = set(session.execute(
+            sa_text("SELECT asset_id FROM active_assets WHERE asset_id = ANY(:ids)"), {"ids": list(asset_ids)},
+        ).scalars())
+        gone = next((a for a in asset_ids if a not in found), None)
+        if gone is not None:
+            raise HTTPException(status_code=404, detail=f"Asset {gone} not found or trashed")
 
     repo = ProjectRepository(session)
     col = repo.create(
@@ -286,19 +268,12 @@ def create_project(
         description=body.description,
         sort_order=body.sort_order,
         visibility=body.visibility,
-        type=body.type,
-        saved_query=body.saved_query,
     )
     if col.visibility == "public":
         _sync_public_index(request, col.project_id, public=True)
 
-    if body.asset_ids:
-        asset_repo = AssetRepository(session)
-        for aid in body.asset_ids:
-            asset = asset_repo.get_by_id(aid)
-            if asset is None:
-                raise HTTPException(status_code=404, detail=f"Asset {aid} not found or trashed")
-        repo.add_assets(col.project_id, body.asset_ids)
+    if asset_ids:
+        repo.add_assets(col.project_id, asset_ids)
 
     return _project_to_item(col, repo, user_id, session=session)
 
@@ -414,8 +389,6 @@ def update_project(
         kwargs["cover_asset_id"] = body.cover_asset_id
     else:
         kwargs["cover_asset_id"] = _SENTINEL
-    if "saved_query" in raw:
-        kwargs["saved_query"] = body.saved_query
     if body.status is not None:
         kwargs["status"] = body.status
 
@@ -550,7 +523,6 @@ def add_assets_to_project(
     repo = ProjectRepository(session)
     col = _get_project_or_404(repo, project_id)
     _require_owner(col, user_id)
-    _require_static(col)
 
     asset_repo = AssetRepository(session)
     for aid in body.asset_ids:
@@ -574,31 +546,17 @@ def remove_assets_from_project(
     repo = ProjectRepository(session)
     col = _get_project_or_404(repo, project_id)
     _require_owner(col, user_id)
-    _require_static(col)
     removed = repo.remove_assets(project_id, body.asset_ids)
     return BatchRemoveResponse(removed=removed)
 
 
-def _rating_user(col, viewer_id: str) -> str:
-    """Whose ratings a smart project's rating filters read: the owner's.
-
-    A shared smart project such as "my favorites" must show everyone the
-    same clips, not each viewer's own favorites. Legacy projects without
-    an owner fall back to the viewer.
-    """
-    return col.owner_user_id or viewer_id
-
-
-def _smart_project_page(
-    col, request: Request, session: Session, user_id: str, *, after: str | None, limit: int
-) -> tuple[list, str | None]:
-    """One page of a smart project's live results, and the cursor for the next.
-
-    With a text filter, results come from a capped candidate set ordered
-    by relevance and aren't paginated (the caller asks for up to
-    MAX_CANDIDATE_IDS); otherwise they page by (sort column, asset_id) like
-    GET /v1/query.
-    """
+def _search_matches(saved: dict, request: Request, session: Session, user_id: str) -> list[str]:
+    """The clips a search matches now, in its order and as the caller sees
+    them (their ratings): what saving it as a project puts in. 422
+    bad_search for a search it can't read; 422 search_too_big past
+    _MAX_NEW_CLIPS, or for a text search any of whose index searches came
+    back full (some matches would be left out without anyone knowing)."""
+    from src.server.api.errors import InvalidChoiceError
     from src.server.api.routers.query import (
         MAX_CANDIDATE_IDS,
         SORT_COLUMNS,
@@ -610,49 +568,62 @@ def _smart_project_page(
     from src.server.models.query_filter import LibraryScope
     from src.server.repository.tenant import UnifiedBrowseRepository
 
-    spec = from_json(col.saved_query)
+    try:
+        spec = from_json(saved)
+    except ValueError as exc:
+        raise InvalidChoiceError("bad_search", str(exc)) from None
+    if spec.sort not in SORT_COLUMNS:
+        raise InvalidChoiceError("bad_search", f"Unknown sort {spec.sort!r}")
+    repo = UnifiedBrowseRepository(session)
+    rating_user_id = user_id if spec.needs_rating_join else None
 
-    candidate_ids: list[str] | None = None
-    candidate_scores: dict[str, float] | None = None
+    def too_big(limit: int, text_search: bool = False) -> InvalidChoiceError:
+        what = "a text search's matches" if text_search else "clips match"
+        return InvalidChoiceError(
+            "search_too_big",
+            f"More than {limit:,} {what}: narrow the search to save it as a project.",
+            {"max": limit},
+        )
+
     if spec.search_terms:
-        tenant_id = getattr(request.state, "tenant_id", None)
+        # A text search's matches are a capped set ordered by relevance, all
+        # at once: as GET /v1/query shows them, without a cursor.
         library_ids: list[str] | None = None
         for leaf in spec.leaves:
             if isinstance(leaf, LibraryScope):
                 library_ids = list(leaf.library_ids)
                 break
-        if tenant_id:
-            scores, _contexts, source = _run_quickwit_search(
-                tenant_id, spec.search_terms, library_ids, limit=MAX_CANDIDATE_IDS,
-            )
-            if source == "postgres_fallback":
-                pg_query = " ".join(st.q for st in spec.search_terms if st.q)
-                scores, _contexts = _run_postgres_fallback(
-                    session, pg_query, library_ids, limit=MAX_CANDIDATE_IDS,
-                )
-            if not scores:
-                return [], None
-            candidate_ids = list(scores.keys())
-            candidate_scores = scores
+        capped: set[str] = set()  # each index's search is capped on its own
+        scores, _contexts, source = _run_quickwit_search(
+            request.state.tenant_id, spec.search_terms, library_ids, limit=MAX_CANDIDATE_IDS, capped=capped,
+        )
+        if source == "postgres_fallback":
+            pg_query = " ".join(st.q for st in spec.search_terms if st.q)
+            scores, _contexts = _run_postgres_fallback(session, pg_query, library_ids, limit=MAX_CANDIDATE_IDS)
+            capped = {"postgres"} if len(scores) >= MAX_CANDIDATE_IDS else set()
+        if capped:  # some matches were left out: refused, never cut
+            raise too_big(MAX_CANDIDATE_IDS, text_search=True)
+        if not scores:
+            return []
+        assets = repo.query_page(spec=spec, candidate_ids=list(scores), candidate_scores=scores,
+                                 rating_user_id=rating_user_id, after=None, limit=len(scores))
+        return list(dict.fromkeys(a.asset_id for a in assets))
 
-    assets = UnifiedBrowseRepository(session).query_page(
-        spec=spec,
-        candidate_ids=candidate_ids,
-        candidate_scores=candidate_scores,
-        rating_user_id=_rating_user(col, user_id) if spec.needs_rating_join else None,
-        after=after if candidate_ids is None else None,
-        limit=limit,
-    )
-
-    next_cursor: str | None = None
-    if candidate_ids is None and len(assets) == limit:
-        sort_col = spec.sort if spec.sort in SORT_COLUMNS else "taken_at"
+    ids: dict[str, None] = {}
+    cursor: str | None = None
+    page_size = 1000
+    while True:
+        assets = repo.query_page(spec=spec, rating_user_id=rating_user_id, after=cursor, limit=page_size)
+        ids.update((a.asset_id, None) for a in assets)
+        if len(ids) > _MAX_NEW_CLIPS:
+            raise too_big(_MAX_NEW_CLIPS)
+        if len(assets) < page_size:
+            return list(ids)
         last = assets[-1]
-        sort_value = getattr(last, sort_col, None)
+        sort_value = getattr(last, spec.sort, None)
         if sort_value is not None and hasattr(sort_value, "isoformat"):
             sort_value = sort_value.isoformat()
-        next_cursor = _encode_cursor(sort_col, sort_value, last.asset_id)
-    return assets, next_cursor
+        cursor = _encode_cursor(spec.sort, sort_value, last.asset_id)
 
 
 @router.get("/{project_id}/assets", response_model=ProjectAssetsResponse)
@@ -665,38 +636,12 @@ def list_project_assets(
     after: str | None = Query(None, description="Pagination cursor"),
     limit: int = Query(200, ge=1, le=1000),
 ) -> ProjectAssetsResponse:
-    """List assets in a project. Must be owner or project must be shared.
-
-    For smart projects, executes the saved query to return live results.
-    """
+    """List assets in a project. Must be owner or project must be shared."""
     repo = ProjectRepository(session)
     col = _get_project_or_404(repo, project_id)
     if not _can_view(col, user_id):
         raise HTTPException(status_code=404, detail="Project not found")
 
-    if getattr(col, "type", "static") == "smart" and col.saved_query:
-        assets, next_cursor = _smart_project_page(
-            col, request, session, user_id, after=after, limit=limit
-        )
-        items = [
-            ProjectAssetItem(
-                asset_id=a.asset_id,
-                rel_path=a.rel_path,
-                file_size=a.file_size,
-                media_type=a.media_type,
-                width=a.width,
-                height=a.height,
-                taken_at=a.taken_at.isoformat() if a.taken_at else None,
-                status=a.status,
-                duration_sec=a.duration_sec,
-                camera_make=a.camera_make,
-                camera_model=a.camera_model,
-            )
-            for a in assets
-        ]
-        return ProjectAssetsResponse(items=items, next_cursor=next_cursor)
-
-    # Static project: list manual assets
     assets, next_cursor = repo.list_assets(
         project_id, sort_order=col.sort_order, after_cursor=after, limit=limit
     )
@@ -738,7 +683,6 @@ def reorder_project(
     repo = ProjectRepository(session)
     col = _get_project_or_404(repo, project_id)
     _require_owner(col, user_id)
-    _require_static(col)
 
     try:
         repo.reorder(project_id, body.asset_ids)
@@ -758,19 +702,6 @@ _UNSAFE_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f\x7f]')
 
 def _all_project_assets(col, request: Request, session: Session, user_id: str) -> list:
     """Every live clip in a project, paging through to the end (no 1,000 cap)."""
-    if getattr(col, "type", "static") == "smart" and col.saved_query:
-        from src.server.api.routers.query import MAX_CANDIDATE_IDS
-
-        assets, cursor = _smart_project_page(
-            col, request, session, user_id, after=None, limit=MAX_CANDIDATE_IDS
-        )
-        while cursor:
-            page, cursor = _smart_project_page(
-                col, request, session, user_id, after=cursor, limit=MAX_CANDIDATE_IDS
-            )
-            assets += page
-        return assets
-
     repo = ProjectRepository(session)
     assets, cursor = repo.list_assets(col.project_id, sort_order=col.sort_order, limit=_EXPORT_PAGE)
     while cursor:
@@ -843,12 +774,8 @@ def export_project(
 
     assets = _all_project_assets(col, request, session, user_id)
     videos = [a for a in assets if a.media_type == "video"]
-    # Hidden clips are still in a static project but never exported.
-    is_smart = getattr(col, "type", "static") == "smart"
-    hidden = (
-        {"trashed": 0, "missing": 0, "library_trashed": 0, "archived": 0}
-        if is_smart else repo.hidden_clip_counts(col.project_id)
-    )
+    # Hidden clips are still in the project but never exported.
+    hidden = repo.hidden_clip_counts(col.project_id)
 
     roots = {
         lib.library_id: lib.root_path

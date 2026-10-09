@@ -126,7 +126,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function renderPage() {
+function renderPage(at = "/browse") {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
   });
@@ -135,7 +135,7 @@ function renderPage() {
   const view = render(
     <QueryClientProvider client={client}>
       <ScrollContainerContext.Provider value={scroller}>
-        <MemoryRouter initialEntries={["/browse"]}>
+        <MemoryRouter initialEntries={[at]}>
           <Routes>
             <Route path="/browse" element={<UnifiedBrowsePage />} />
           </Routes>
@@ -248,6 +248,21 @@ describe("UnifiedBrowsePage revision polling", () => {
     }
     expect(gridFetches - 1).toBeGreaterThan(0);
     expect(gridFetches - 1).toBeLessThanOrEqual(polls / 3);
+  });
+});
+
+describe("saving a search as a project", () => {
+  it("is offered to editors", async () => {
+    const { queryByRole } = renderPage("/browse?f=path:Shoots");
+    await advance(100);
+    expect(queryByRole("button", { name: "Save as project" })).not.toBeNull();
+  });
+
+  it("isn't offered to viewers, who can't make projects", async () => {
+    api.getCurrentUser.mockResolvedValue({ role: "viewer" });
+    const { queryByRole } = renderPage("/browse?f=path:Shoots");
+    await advance(100);
+    expect(queryByRole("button", { name: "Save as project" })).toBeNull();
   });
 });
 

@@ -28,7 +28,7 @@ export interface FilterCapability {
   enum_values?: string[];
 }
 
-/** Saved query format for smart projects. */
+/** A search as kept: a saved search, or what a project is made from (from_search). */
 export interface SavedQueryV2 {
   filters: LeafFilter[];
   sort?: string;
@@ -252,7 +252,7 @@ export function composeDate(from: string | null, to: string | null): string | nu
 }
 
 // ---------------------------------------------------------------------------
-// Smart project serialization
+// Saved search serialization
 // ---------------------------------------------------------------------------
 
 /** Build a SavedQueryV2 from the current filter state. */

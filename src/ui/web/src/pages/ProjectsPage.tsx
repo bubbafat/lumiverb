@@ -86,11 +86,6 @@ function ProjectCard({ project, actions }: { project: ProjectItem; actions: Reac
               {trashedClips > 0 && (
                 <span className="text-xs text-amber-400/80">{trashedClips} in trash</span>
               )}
-              {project.type === "smart" && (
-                <span className="rounded bg-indigo-900/60 px-1.5 py-0.5 text-[10px] text-indigo-300">
-                  Smart
-                </span>
-              )}
               {project.ownership === "shared" && (
                 <span className="rounded bg-gray-700/60 px-1.5 py-0.5 text-[10px] text-gray-400">
                   Shared

@@ -41,7 +41,7 @@ function renderBar(isPublic: boolean) {
           onSetSort={() => {}}
           onClearAll={() => {}}
           facets={facets}
-          onSaveSmartProject={() => {}}
+          onSaveAsProject={() => {}}
           isPublic={isPublic}
         />
       </MemoryRouter>
@@ -77,5 +77,40 @@ describe("FilterBar for a public page's visitor", () => {
     openFilters();
     screen.getByText("Favorites");
     screen.getByTitle("3 stars");
+  });
+});
+
+describe("FilterBar saving a search", () => {
+  function barWith(filters: { type: string; value: string }[], onSaveAsProject = vi.fn(), folder?: string) {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <FilterBar filters={filters} sort="taken_at" dir="desc" onSetFilter={() => {}} onSetSort={() => {}}
+            onClearAll={() => {}} facets={facets} onSaveAsProject={onSaveAsProject} folder={folder} isPublic={false} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    return onSaveAsProject;
+  }
+
+  it("a folder's search can be saved as a project", () => {
+    const save = barWith([{ type: "library", value: "lib_1" }, { type: "path", value: "Shoots/2026" }]);
+    fireEvent.click(screen.getByRole("button", { name: "Save as project" }));
+    expect(save).toHaveBeenCalled();
+    screen.getByRole("button", { name: "Clear filters" });
+  });
+
+  it("a folder picked in the library's tree can be saved as a project", () => {
+    // The library page narrows by ?path=, outside the filters.
+    const save = barWith([{ type: "library", value: "lib_1" }], vi.fn(), "Shoots/2026");
+    fireEvent.click(screen.getByRole("button", { name: "Save as project" }));
+    expect(save).toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Clear filters" })).toBeNull();  // nothing to clear
+  });
+
+  it("a library alone isn't a search to save", () => {
+    barWith([{ type: "library", value: "lib_1" }]);
+    expect(screen.queryByRole("button", { name: "Save as project" })).toBeNull();
   });
 });

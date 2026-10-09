@@ -785,7 +785,7 @@ def test_static_project_pages_by_capture_time(projects_env):
 
 
 @pytest.mark.slow
-def test_smart_project_pages_past_one_page(projects_env):
+def test_a_project_saved_from_a_search_pages_past_one_page(projects_env):
     client, api_key, _ = projects_env
     lib = client.post(
         "/v1/libraries", json={"name": "SmartPaging", "root_path": "/smart-paging"},
@@ -794,8 +794,7 @@ def test_smart_project_pages_past_one_page(projects_env):
     expected = {_ingest_asset(client, api_key, lib, f"s/{i}.jpg") for i in range(5)}
     project_id = client.post(
         "/v1/projects",
-        json={"name": "Smart paging", "type": "smart",
-              "saved_query": {"filters": [{"type": "library", "value": lib}]}},
+        json={"name": "Saved search paging", "from_search": {"filters": [{"type": "library", "value": lib}]}},
         headers=_headers(api_key),
     ).json()["project_id"]
 
@@ -803,33 +802,6 @@ def test_smart_project_pages_past_one_page(projects_env):
 
     assert len(ids) == len(set(ids)) == 5
     assert set(ids) == expected
-
-
-@pytest.mark.slow
-def test_shared_smart_project_uses_owner_ratings(projects_env):
-    client, api_key, _ = projects_env
-    lib = client.post(
-        "/v1/libraries", json={"name": "OwnerRatings", "root_path": "/owner-ratings"},
-        headers=_headers(api_key),
-    ).json()["library_id"]
-    favorite = _ingest_asset(client, api_key, lib, "r/fav.jpg")
-    _ingest_asset(client, api_key, lib, "r/other.jpg")
-    client.put(f"/v1/assets/{favorite}/rating", json={"favorite": True}, headers=_headers(api_key))
-    project_id = client.post(
-        "/v1/projects",
-        json={"name": "Owner favorites", "type": "smart", "visibility": "shared",
-              "saved_query": {"filters": [{"type": "library", "value": lib},
-                                          {"type": "favorite", "value": "yes"}]}},
-        headers=_headers(api_key),
-    ).json()["project_id"]
-    viewer_key = client.post(
-        "/v1/keys", json={"label": "viewer", "role": "editor"}, headers=_headers(api_key)
-    ).json()["plaintext"]
-
-    as_owner = _all_pages(client, api_key, project_id, limit=50)
-    as_viewer = _all_pages(client, viewer_key, project_id, limit=50)
-
-    assert as_owner == as_viewer == [favorite]
 
 
 @pytest.mark.slow
@@ -863,16 +835,16 @@ def test_paging_with_undated_clips_returns_each_clip_once(projects_env, directio
                 return ids
         raise AssertionError("pagination did not end")
 
-    # Smart project (the export path)
+    # A search saved as a project (its matches, in its order)
     project_id = client.post(
         "/v1/projects",
-        json={"name": f"Mixed {direction}", "type": "smart",
-              "saved_query": {"filters": [{"type": "library", "value": lib}],
+        json={"name": f"Mixed {direction}",
+              "from_search": {"filters": [{"type": "library", "value": lib}],
                               "sort": "taken_at", "direction": direction}},
         headers=_headers(api_key),
     ).json()["project_id"]
-    smart = _all_pages(client, api_key, project_id, limit=2)
-    assert sorted(smart) == expected
+    saved = _all_pages(client, api_key, project_id, limit=2)
+    assert sorted(saved) == expected
     # Unified query and the asset page endpoint share the cursor logic
     query = pages("/v1/query", {"f": f"library:{lib}", "sort": "taken_at", "dir": direction})
     assert sorted(query) == expected
@@ -1597,23 +1569,6 @@ def test_a_trashed_public_projects_thumbnails_are_gone_until_restored(projects_e
     assert client.get(url).status_code == 404
     client.post(f"/v1/projects/{project_id}/restore", headers=_headers(api_key))
     assert client.get(url).status_code == 200
-
-
-@pytest.mark.slow
-def test_a_smart_project_goes_through_the_trash_too(projects_env):
-    client, api_key, _ = projects_env
-    lib = _library(client, api_key, "Smart-trash")
-    clip = _ingest_asset(client, api_key, lib, "smart/clip.mov", "video")
-    project_id = _project(client, api_key, "Smart in the trash", type="smart",
-                          saved_query={"filters": [{"type": "library", "value": lib}]})
-    client.delete(f"/v1/projects/{project_id}", headers=_headers(api_key))
-    trashed = _trashed(client, api_key)[project_id]
-    assert (trashed["type"], trashed["asset_count"]) == ("smart", 1)
-    r = client.post(f"/v1/projects/{project_id}/restore", headers=_headers(api_key))
-    assert r.json() == {"restored_clips": 0, "trashed_clips": 0, "missing_clips": 0, "archived_clips": 0}
-    assert _clip_ids(client, api_key, project_id) == [clip]
-    r = client.get(f"/v1/projects/{project_id}/export", params={"format": "fcp7"}, headers=_headers(api_key))
-    assert r.status_code == 200, r.text
 
 
 @pytest.mark.slow

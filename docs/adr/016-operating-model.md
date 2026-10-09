@@ -82,7 +82,7 @@ Where inference runs is configuration, not architecture.
 
 These are two different things, and the names are reserved:
 
-- A **project** is transient and many-to-many: a named, unordered set of whole assets for one job, such as "Customer Video 123". Create it, find media, send it to the editor, relink if needed, then archive or delete it. Archive means done but kept: it leaves the lists and pickers and still opens and exports. Delete moves it to the trash; restoring it can bring back its trashed clips too, and deleting it for good never touches its clips. A clip can be in many projects. Static projects hold hand-picked clips; smart projects are saved searches. **What the code calls "collections" today are projects**, and phase 1 renames them everywhere (tables, API routes, CLI, web, macOS and iOS).
+- A **project** is transient and many-to-many: a named, unordered set of whole assets for one job, such as "Customer Video 123". Create it, find media, send it to the editor, relink if needed, then archive or delete it. Archive means done but kept: it leaves the lists and pickers and still opens and exports. Delete moves it to the trash; restoring it can bring back its trashed clips too, and deleting it for good never touches its clips. A clip can be in many projects. A project holds the clips put in it (Robert, Oct 9: projects are explicit); a search is kept as a saved search, and can be saved as a project of the clips it finds then. **What the code calls "collections" today are projects**, and phase 1 renames them everywhere (tables, API routes, CLI, web, macOS and iOS).
 - A **collection** is a long-lived container where each piece of media lives once. It doesn't exist yet; the name is kept free for it.
 
 ### v1: find, collect, send
@@ -213,7 +213,7 @@ A project becomes a bin in Resolve, Premiere or Final Cut, with media online.
 
 **Done when:** one project mixing two cameras and frame rates imports into Resolve, Premiere and Final Cut with every clip online at the right duration; a smart project over 1,000 clips exports whole; an archived project can still be exported.
 
-**Where it stands:** built, and the full suite passes with every marker. Tests show a smart project over 1,000 clips exporting whole and an archived project exporting. Both export files are read back by OpenTimelineIO's FCP7 and FCPXML adapters with every clip finding its media, but the real imports into Resolve, Premiere and Final Cut still need a check on a Mac. The macOS and iOS apps aren't renamed (they can't be built here); since Oct 9 the API is what it should be, without `/v1/collections` or `collection_id` for them. Browsing the result on a phone led to fixes for phone layouts and to project trash (principles 9 and 10): delete, trash, restore or delete forever, with the API requiring the user's say before surprising deletes and restores.
+**Where it stands:** built, and the full suite passes with every marker. Tests show a project over 1,000 clips exporting whole and an archived project exporting. Smart projects are gone since (Robert, Oct 9: projects are explicit): a search is kept as a saved search, or saved as a project of the clips it finds then. Both export files are read back by OpenTimelineIO's FCP7 and FCPXML adapters with every clip finding its media, but the real imports into Resolve, Premiere and Final Cut still need a check on a Mac. The macOS and iOS apps aren't renamed (they can't be built here); since Oct 9 the API is what it should be, without `/v1/collections` or `collection_id` for them. Browsing the result on a phone led to fixes for phone layouts and to project trash (principles 9 and 10): delete, trash, restore or delete forever, with the API requiring the user's say before surprising deletes and restores.
 
 ### Phase 2 — The brain
 
@@ -285,7 +285,7 @@ Proposed answers; each needs a decision before its phase.
 |---|---|---|
 | When does the old DAM (ResourceSpace) switch off? | After phase 2, once find, projects and send work on the brain against the whole library | 2 |
 | Storage unreachable? | Keep enriching from analysis proxies; only discovery, probing and rendering wait | 2 |
-| Re-sending a smart project? | A new bin each time, since the export is a file | 1 |
+| Re-sending a project? | A new bin each time, since the export is a file | 1 |
 | Can a project span libraries? | Yes; the code already allows it | 1 |
 | How do corrections survive output that changes shape? | Anchored in media terms and re-applied by overlap (see Upgrades and corrections) | 3 |
 | Can an upgrade be narrowed to one library or project? | Yes | 3 |

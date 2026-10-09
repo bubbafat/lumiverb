@@ -456,7 +456,7 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette }: Sidebar
             </svg>
             {showLabels && <span>Favorites</span>}
           </Link>
-          {/* Saved views */}
+          {/* Saved searches */}
           {savedViews.map((sv) => {
             const viewPath = `/browse?${sv.query_params}`;
             const isActive = location.pathname === "/browse" && location.search === `?${sv.query_params}`;

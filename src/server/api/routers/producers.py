@@ -190,7 +190,7 @@ def list_producers(
 
 
 def _project_clips(request: Request, session: Session, user_id: str, project_id: str) -> list[str]:
-    """Every clip in a project the caller can see (a smart project's live results too); 404 otherwise."""
+    """Every clip in a project the caller can see; 404 otherwise."""
     from src.server.api.routers.projects import _all_project_assets, _can_view
     from src.server.repository.tenant import ProjectRepository
 

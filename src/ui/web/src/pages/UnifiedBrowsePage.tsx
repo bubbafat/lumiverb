@@ -20,7 +20,7 @@ import { useRevisionRefresh } from "../lib/useRevisionRefresh";
 import { Lightbox } from "../components/Lightbox";
 import { FilterBar } from "../components/FilterBar";
 import { SelectionToolbar } from "../components/SelectionToolbar";
-import { SaveSmartProjectModal } from "../components/SaveSmartProjectModal";
+import { SaveSearchAsProjectModal } from "../components/SaveSearchAsProjectModal";
 import { ZoomControl } from "../components/ZoomControl";
 import type { AssetPageItem, AssetRating, BrowseItem, RatingColor } from "../api/types";
 import { HeartButton, StarPicker, ColorPicker } from "../components/RatingControls";
@@ -316,7 +316,7 @@ export default function UnifiedBrowsePage() {
   const canEdit = useCanEdit();
   const clipActions = useClipActions(selection.clear);
   const [pickerAssetIds, setPickerAssetIds] = useState<string[] | null>(null);
-  const [showSmartColModal, setShowSmartColModal] = useState(false);
+  const [showSaveAsProject, setShowSaveAsProject] = useState(false);
 
   // ---------------------------------------------------------------------------
   // Ratings
@@ -493,24 +493,24 @@ export default function UnifiedBrowsePage() {
               }}
               className="rounded-md bg-gray-700 px-2.5 py-1 text-xs font-medium text-gray-200 hover:bg-gray-600"
             >
-              Save view
+              Save search
             </button>
           )}
           <ZoomControl value={zoomLevel} onChange={setZoomLevel} />
         </div>
       </div>
 
-      {/* Save view modal */}
+      {/* Save search modal (a saved search: GET /v1/views) */}
       {showSaveModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowSaveModal(false)}>
           <div className="w-80 rounded-lg border border-gray-700 bg-gray-900 p-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="mb-3 text-sm font-semibold text-gray-200">Save current filters as a view</h3>
+            <h3 className="mb-3 text-sm font-semibold text-gray-200">Save this search</h3>
             <input
               type="text"
               value={saveViewName}
               onChange={(e) => setSaveViewName(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") handleSaveView(); }}
-              placeholder="View name"
+              placeholder="Search name"
               autoFocus
               className="mb-3 w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             />
@@ -544,13 +544,13 @@ export default function UnifiedBrowsePage() {
         onSetSort={handleSetSort}
         onClearAll={handleClearAll}
         facets={facetsQuery.data ?? null}
-        onSaveSmartProject={() => setShowSmartColModal(true)}
+        onSaveAsProject={canEdit ? () => setShowSaveAsProject(true) : undefined}
       />
 
-      {showSmartColModal && (
-        <SaveSmartProjectModal
+      {showSaveAsProject && (
+        <SaveSearchAsProjectModal
           savedQuery={buildSavedQuery(filters, browseSort, browseDir)}
-          onClose={() => setShowSmartColModal(false)}
+          onClose={() => setShowSaveAsProject(false)}
         />
       )}
 
