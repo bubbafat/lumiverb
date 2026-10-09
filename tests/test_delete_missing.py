@@ -142,3 +142,30 @@ def test_projects_are_asked_about_before_any_clip_goes(env, monkeypatch):
     r = _delete_missing(env, library_id=library_id, path="dm-batches", **asked)
     assert r.status_code == 409 and r.json()["error"]["code"] == "in_projects"
     assert _exists(env, free) and _exists(env, used)  # nothing went
+
+
+def test_a_clip_back_and_missing_again_while_deleting_isnt_deleted(env, monkeypatch):
+    # Review round 2: the purge re-checks, under its lock, that each clip has
+    # been missing since before the admin looked.
+    from sqlalchemy import text
+
+    from src.server.repository.tenant import AssetRepository
+
+    client, headers, library_id, *_ = env
+    clip = _ingest(env, "dm-again/a.jpg", media_type="image", sha=_sha())
+    _missing(env, clip)
+    asked = _confirm(env, library_id=library_id, path="dm-again")
+    listed = AssetRepository.list_missing
+
+    def list_then_it_comes_back_and_goes_again(self, **kw):
+        found = listed(self, **kw)  # listed while missing since before the admin looked
+        with _db(env) as s:  # then back, and missing again: since the admin looked
+            s.execute(text("UPDATE assets SET deleted_at = now() + interval '1 second' WHERE asset_id = :a"),
+                      {"a": clip})
+            s.commit()
+        return found
+
+    monkeypatch.setattr(AssetRepository, "list_missing", list_then_it_comes_back_and_goes_again)
+    r = _delete_missing(env, library_id=library_id, path="dm-again", **asked)
+    assert r.status_code == 200 and r.json() == {"deleted": 0}
+    assert _exists(env, clip)
