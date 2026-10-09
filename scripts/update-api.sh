@@ -106,6 +106,13 @@ if [[ -n "$HAVE_PY" && -n "$WANT_PY" && "$HAVE_PY" != "$WANT_PY" ]]; then
   sudo -u "$SVC_USER" "$UV_BIN" python install "$WANT_PY"
   rm -rf "$APP_DIR/.venv-next"  # uv won't build into what an interrupted run left
   sudo -u "$SVC_USER" env UV_PROJECT_ENVIRONMENT="$APP_DIR/.venv-next" "$UV_BIN" sync "${EXTRAS[@]}"
+  # The old worker's stop reaches only its main process (as when the scheduler
+  # replaces it below): killed with its ffmpeg, it would save an empty transcript.
+  if [[ -f /etc/systemd/system/lumiverb-worker.service ]]; then
+    mkdir -p /etc/systemd/system/lumiverb-worker.service.d
+    printf '[Service]\nKillMode=mixed\n' > /etc/systemd/system/lumiverb-worker.service.d/stop.conf
+    systemctl daemon-reload
+  fi
   for unit in lumiverb-scheduler lumiverb-worker; do
     systemctl is-enabled "$unit" >/dev/null 2>&1 && systemctl stop "$unit"
   done
