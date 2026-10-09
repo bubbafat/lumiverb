@@ -2629,7 +2629,8 @@ class ProjectRepository:
                 ProjectAsset.project_id == project_id
             )
         )
-        next_pos = (max_pos_result.scalar() or -1) + 1
+        max_pos = max_pos_result.scalar()
+        next_pos = 0 if max_pos is None else max_pos + 1  # 0 is a position too
 
         inserted = 0
         for asset_id in asset_ids:
