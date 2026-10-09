@@ -72,7 +72,7 @@ def _scheduler(accounts: dict, due: dict[str, list[dict]], recorder: Recorder, *
     return Scheduler(lambda: accounts, capacity=capacity or {"scan": 1, "probe": 2, "render": 1, "clip": 1,
                                                             "faces": 1, "scenes": 1},
                      candidates=candidates, runners=recorder.all(), scan=scan or MagicMock(),
-                     paused=lambda tenant_id: set(paused or ()))
+                     paused=lambda tenant_id: set(paused or ()), retry_requested=lambda tenant_id: None)
 
 
 def _settle(s: Scheduler) -> None:
@@ -210,7 +210,8 @@ def test_a_job_that_fails_frees_its_slot_and_the_rest_go_on() -> None:
     runners["clip"] = boom
     s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"clip": 1, "scan": 1},
                   candidates=lambda t, k, libs: [_item("c1"), _item("c2", "2026-10-02")] if k.name == "clip" else [],
-                  runners=runners, scan=MagicMock(), paused=lambda tenant_id: set())
+                  runners=runners, scan=MagicMock(), paused=lambda tenant_id: set(),
+                  retry_requested=lambda tenant_id: None)
     s.tick()
     _settle(s)
     assert s.dispatcher.free("clip") == 1
@@ -357,3 +358,24 @@ def test_stopping_a_redo_clears_what_was_waiting_at_once() -> None:
     s.tick()
     _settle(s)
     assert [ids for _, kind, ids in rec.ran] == [("a",)]
+
+
+@pytest.mark.fast
+def test_asking_to_try_failing_clips_again_lets_go_of_the_hour() -> None:
+    # The scheduler keeps a clip it just tried for an hour (in case it failed
+    # without saying so); someone asking to try again shouldn't wait that out.
+    rec = Recorder()
+    asked: list[str | None] = [None]
+    s = _scheduler({"t1": FakeAccount()}, {"clip": [_item("c")]}, rec)
+    s._retry_requested = lambda tenant_id: asked[0]
+    s.tick()
+    _settle(s)
+    s.tick()
+    _settle(s)
+    assert [ids for _, kind, ids in rec.ran if kind == "clip"] == [("c",)]  # held for the hour
+    asked[0] = "2026-10-09T01:00:00"
+    s.tick()
+    _settle(s)
+    s.tick()
+    _settle(s)
+    assert [ids for _, kind, ids in rec.ran if kind == "clip"] == [("c",), ("c",)]

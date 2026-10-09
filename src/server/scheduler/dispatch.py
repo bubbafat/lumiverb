@@ -175,6 +175,14 @@ class Dispatcher:
             self._busy[pool] = self._busy.get(pool, 0) + 1
             return Job(tenant_id, kind, spec.tier, tuple(items))
 
+    def forget_taken(self, tenant_id: str) -> None:
+        """Someone asked for failing clips to be tried again: none of the
+        account's clips waits out its hour any more."""
+        with self._lock:
+            self._taken_until = {k: t for k, t in self._taken_until.items() if k[0] != tenant_id}
+            for key in [k for k in self._all_known_at if k[0] == tenant_id]:
+                del self._all_known_at[key]
+
     def done(self, job: Job) -> None:
         """The job's slot is free; its clips aren't taken again for a while."""
         spec = self._kinds[job.kind]

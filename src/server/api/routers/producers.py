@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlmodel import Session
@@ -78,6 +78,7 @@ class ProducerCounts(BaseModel):
     stale: int  # made with another producer, version, settings or source
     missing: int  # not made yet (or only failed so far)
     failing: int  # the last try failed (whether or not an older artifact exists)
+    given_up: int = 0  # failing, and no longer tried (after 10 tries) until someone asks
 
 
 class ProducerItem(BaseModel):
@@ -202,7 +203,8 @@ class FailuresIn(BaseModel):
 @router.post("/failures", dependencies=[Depends(require_editor)])
 def report_failures(body: FailuresIn, session: Annotated[Session, Depends(get_tenant_session)]) -> dict:
     """The scheduler couldn't make these: each is kept with its error and not
-    handed out again for 5 minutes, then 10, 20 and so on up to a day. An
+    handed out again for 5 minutes, then 10, 20 and so on up to a day, and
+    given up after 10 tries until someone asks for it to be tried again. An
     artifact made earlier stays what it was. Clips that don't exist are
     left out. Returns {"recorded"}."""
     ids = list({f.asset_id for f in body.items})
@@ -215,6 +217,70 @@ def report_failures(body: FailuresIn, session: Annotated[Session, Depends(get_te
             recorded += 1
     session.commit()
     return {"recorded": recorded}
+
+
+class FailingClip(BaseModel):
+    asset_id: str
+    artifact: str
+    title: str  # the producer's
+    rel_path: str
+    library_id: str
+    library_name: str
+    media_type: str
+    error: str
+    attempts: int
+    failed_at: datetime | None = None
+    # When it's tried again; None once it's given up.
+    retry_at: datetime | None = None
+    given_up: bool = False
+
+
+class FailingClips(BaseModel):
+    items: list[FailingClip]
+    next_cursor: str | None = None
+
+
+@router.get("/failures", response_model=FailingClips, dependencies=[Depends(require_signed_in)])
+def list_failures(
+    session: Annotated[Session, Depends(get_tenant_session)],
+    artifact: str | None = None,
+    library_id: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 50,
+    after: str | None = None,
+) -> FailingClips:
+    """Clips in sight whose last try failed, newest failure first, with the
+    error, how many tries and when the next one is (none once given up)."""
+    if artifact is not None:
+        producer_or_404(artifact)
+    rows = lineage.failures(session, artifact=artifact, library_id=library_id, limit=limit + 1, after=after)
+    more = len(rows) > limit
+    rows = rows[:limit]
+    items = [FailingClip(asset_id=r["asset_id"], artifact=r["artifact"], title=PRODUCERS[r["artifact"]].title,
+                         rel_path=r["rel_path"], library_id=r["library_id"], library_name=r["library_name"],
+                         media_type=r["media_type"], error=r["error"] or "", attempts=int(r["attempts"] or 0),
+                         failed_at=r["failed_at"], retry_at=r["retry_at"], given_up=r["given_up"])
+             for r in rows if r["artifact"] in PRODUCERS]
+    return FailingClips(items=items, next_cursor=rows[-1]["cursor"] if more and rows else None)
+
+
+class RetryIn(BaseModel):
+    """Which failing clips to try again: one producer's, one library's, or
+    these clips' (any combination; nothing given = every failing clip)."""
+
+    artifact: str | None = Field(default=None, max_length=64)
+    library_id: str | None = Field(default=None, max_length=64)
+    asset_ids: list[str] | None = Field(default=None, max_length=10_000)
+
+
+@router.post("/failures/retry", dependencies=[Depends(require_editor)])
+def retry_failures(body: RetryIn, session: Annotated[Session, Depends(get_tenant_session)]) -> dict:
+    """Try failing clips again now, given up or not; the back-off starts
+    over. Returns {"retried"}."""
+    if body.artifact is not None:
+        producer_or_404(body.artifact)
+    n = lineage.retry(session, artifact=body.artifact, library_id=body.library_id, asset_ids=body.asset_ids)
+    session.commit()
+    return {"retried": n}
 
 
 def producer_or_404(artifact: str):

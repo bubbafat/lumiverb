@@ -231,3 +231,18 @@ def test_a_clip_is_never_in_hand_for_its_first_making_and_its_redo_at_once() -> 
     # Just made: its redo doesn't take it again at once either.
     d.offer("t1", "redo_vision", [_item("a", "2026-10-01")])
     assert d.take("vision") is None
+
+
+@pytest.mark.fast
+def test_forgetting_an_accounts_taken_clips() -> None:
+    d = _d()
+    d.offer("t1", "vision", [_item("a", "2026-10-01")])
+    d.offer("t2", "vision", [_item("b", "2026-10-01")])
+    d.done(d.take("vision"))
+    d.done(d.take("vision"))
+    d.forget_taken("t1")
+    d.offer("t1", "vision", [_item("a", "2026-10-01")])
+    d.offer("t2", "vision", [_item("b", "2026-10-01")])
+    job = d.take("vision")
+    assert (job.tenant_id, job.items[0]["asset_id"]) == ("t1", "a")
+    assert d.take("vision") is None  # t2's still waits its hour
