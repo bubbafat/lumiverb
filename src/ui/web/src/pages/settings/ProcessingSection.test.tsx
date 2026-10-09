@@ -10,6 +10,7 @@ let producers: Producer[] = [];
 // What the next stop or resume answers (then 204).
 let answers: Response[] = [];
 let failures: unknown[] = [];
+let queue: unknown = { live: false, at: null, running: {}, waiting: {}, pools: {}, gpu_hold: 0 };
 const sent: { method: string; url: string; body: unknown }[] = [];
 
 function producer(over: Partial<Producer>): Producer {
@@ -40,6 +41,7 @@ beforeEach(() => {
     if (path === "/libraries") return json([{ library_id: "lib_1", name: "Footage", root_path: "/f", status: "active" }]);
     if (path === "/projects") return json({ items: [{ project_id: "col_1", name: "Wedding" }] });
     if (path === "/producers") return json({ producers });
+    if (path === "/producers/queue") return json(queue);
     if (path === "/producers/failures" && method === "GET") return json({ items: failures, next_cursor: null });
     if (path === "/producers/failures/retry" && method === "POST") {
       const n = body.asset_ids ? body.asset_ids.length : failures.length;
@@ -64,6 +66,7 @@ afterEach(() => {
   producers = [];
   answers = [];
   failures = [];
+  queue = { live: false, at: null, running: {}, waiting: {}, pools: {}, gpu_hold: 0 };
   sent.length = 0;
 });
 
@@ -207,5 +210,27 @@ describe("ProcessingSection", () => {
     const vision = await row("Descriptions and tags");
     fireEvent.click(await within(vision).findByRole("button", { name: "Show failures: Descriptions and tags" }));
     await waitFor(() => expect(sent.some((s) => s.url.includes("/producers/failures?artifact=vision&library_id=lib_1"))).toBe(true));
+  });
+
+  it("shows what the scheduler is doing now and what's next", async () => {
+    queue = { live: true, at: new Date().toISOString(), running: { render: 1, vision: 2, redo_transcript: 1 },
+              waiting: { vision: 40, scan: 1 }, pools: {}, gpu_hold: 1 };
+    renderSection();
+    const now = await screen.findByLabelText("Now");
+    expect(now.textContent).toContain("Now: 1 analysis copy, 2 descriptions, 1 redo of transcripts");
+    expect(now.textContent).toContain("Next: 40 descriptions, 1 scan");
+    expect(now.textContent).toContain("AI machines sharing it take 1 fewer request meanwhile");
+  });
+
+  it("says when the scheduler isn't running", async () => {
+    queue = { live: false, at: "2026-10-09T01:00:00Z", running: {}, waiting: {}, pools: {}, gpu_hold: 0 };
+    renderSection();
+    expect(await screen.findByText(/The scheduler isn't running: last heard from/)).toBeTruthy();
+  });
+
+  it("says when there's nothing to make", async () => {
+    queue = { live: true, at: new Date().toISOString(), running: {}, waiting: {}, pools: {}, gpu_hold: 0 };
+    renderSection();
+    expect((await screen.findByLabelText("Now")).textContent).toContain("Now: nothing to make");
   });
 });

@@ -198,8 +198,27 @@ describe("AiSection", () => {
     await waitFor(() => expect(add.disabled).toBe(false));
     fireEvent.click(add);
     await waitFor(() => expect(screen.queryByRole("form", { name: "Add a machine" })).toBeNull());
-    expect(lastSent("POST", "/ai/machines")!.body).toEqual({ name: "Mac Studio", api_url: STUDIO, api_key: "", jobs: ["vision"], at_once: 4, enabled: true });
+    expect(lastSent("POST", "/ai/machines")!.body).toEqual({ name: "Mac Studio", api_url: STUDIO, api_key: "", jobs: ["vision"], at_once: 4, enabled: true,
+                                                            shares_gpu: false });
     expect(await screen.findByText("Mac Studio")).toBeTruthy();
+  });
+
+  it("marks a machine as sharing the GPU video work runs on", async () => {
+    machines = [machine({ name: "Brain" })];
+    offers = { [STUDIO]: [QWEN] };
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Add machine" }));
+    const form = screen.getByRole("form", { name: "Add a machine" });
+    fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "GPU box" } });
+    fireEvent.change(within(form).getByLabelText("Endpoint URL"), { target: { value: STUDIO } });
+    fireEvent.click(within(form).getByLabelText(/Shares the GPU with video work here/));
+    fireEvent.click(within(form).getByRole("button", { name: "Connect" }));
+    await within(form).findByText(/Connected: offers/);
+    const add = within(form).getByRole("button", { name: "Add" }) as HTMLButtonElement;
+    await waitFor(() => expect(add.disabled).toBe(false));
+    fireEvent.click(add);
+    await waitFor(() => expect(screen.queryByRole("form", { name: "Add a machine" })).toBeNull());
+    expect((lastSent("POST", "/ai/machines")!.body as { shares_gpu: boolean }).shares_gpu).toBe(true);
   });
 
   it("says why Connect couldn't, and won't give a machine a job whose model it lacks", async () => {

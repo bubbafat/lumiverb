@@ -219,6 +219,38 @@ def report_failures(body: FailuresIn, session: Annotated[Session, Depends(get_te
     return {"recorded": recorded}
 
 
+class SchedulerStatus(BaseModel):
+    """What the scheduler is doing for the account (written every few seconds)."""
+
+    # It wrote in the last 30 seconds: it's running.
+    live: bool = False
+    at: datetime | None = None
+    running: dict[str, int] = Field(default_factory=dict)  # jobs running now, by kind
+    waiting: dict[str, int] = Field(default_factory=dict)  # jobs lined up next, by kind
+    pools: dict[str, list[int]] = Field(default_factory=dict)  # each pool's [busy, slots]
+    # Requests the AI machines sharing its GPU give up while video is decoded there.
+    gpu_hold: int = 0
+
+
+@router.get("/queue", response_model=SchedulerStatus, dependencies=[Depends(require_signed_in)])
+def scheduler_status(session: Annotated[Session, Depends(get_tenant_session)]) -> SchedulerStatus:
+    """What the scheduler is doing now; live is false when it hasn't said for 30 seconds."""
+    import json
+    from datetime import timedelta
+
+    from src.shared.utils import utcnow
+
+    raw = session.execute(text("SELECT value FROM system_metadata WHERE key = 'scheduler.status'")).scalar()
+    if not raw:
+        return SchedulerStatus()
+    try:
+        status = SchedulerStatus(**json.loads(raw))
+    except (ValueError, TypeError):
+        return SchedulerStatus()
+    status.live = status.at is not None and utcnow() - status.at < timedelta(seconds=30)
+    return status
+
+
 class FailingClip(BaseModel):
     asset_id: str
     artifact: str

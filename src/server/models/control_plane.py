@@ -45,6 +45,8 @@ class AiMachine(SQLModel, table=True):
     at_once: int = Field(default=2, nullable=False)
     enabled: bool = Field(default=True, nullable=False)
     built_in: bool = Field(default=False, nullable=False)
+    # It shares the GPU the scheduler decodes video on: video work comes first there.
+    shares_gpu: bool = Field(default=False, nullable=False)
     online: bool | None = Field(default=None, nullable=True)
     status_error: str = Field(default="", nullable=False)
     models: list[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))

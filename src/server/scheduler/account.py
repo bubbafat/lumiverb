@@ -134,6 +134,11 @@ class Account:
         with self._lock:
             return self.roots.get(library_id)
 
+    def set_gpu_hold(self, hold: int) -> None:
+        """Requests AI machines sharing this machine's GPU give up while video is decoded on it."""
+        self.vision.pool.set_gpu_hold(hold)
+        self.transcripts.pool.set_gpu_hold(hold)
+
     def capacity(self, job: str) -> int:
         """Requests the job's online machines take at once (0 while none can be used)."""
         guard = self.vision if job == "vision" else self.transcripts

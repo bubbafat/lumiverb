@@ -64,6 +64,9 @@ class MachineOut(BaseModel):
     enabled: bool
     # The worker's own computer: no URL or key; can't be removed.
     built_in: bool = False
+    # It shares the GPU the scheduler decodes video on: it gets fewer requests
+    # while video is decoded there (the built-in one always does).
+    shares_gpu: bool = False
     # The latest check (the worker's, or Connect's when saved); None until there is one.
     status: MachineStatus | None = None
 
@@ -107,6 +110,7 @@ class MachineIn(BaseModel):
     jobs: list[str] = Field(default_factory=list)
     at_once: int = Field(default=2, ge=1, le=32)
     enabled: bool = True
+    shares_gpu: bool = False
 
     _jobs = field_validator("jobs")(_clean_jobs)
     _name = field_validator("name")(_clean_name)
@@ -120,6 +124,7 @@ class MachinePatch(BaseModel):
     jobs: list[str] | None = None
     at_once: int | None = Field(default=None, ge=1, le=32)
     enabled: bool | None = None
+    shares_gpu: bool | None = None
 
     @field_validator("jobs")
     @classmethod
@@ -164,6 +169,8 @@ class WorkerMachine(BaseModel):
     at_once: int
     # The worker's own computer: it does the job itself.
     built_in: bool
+    # It shares the GPU the scheduler decodes video on (the built-in one always does).
+    shares_gpu: bool = False
 
 
 class WorkerJob(BaseModel):
@@ -222,7 +229,7 @@ def _settings(ctrl: Session, tenant_id: str) -> AiSettings:
     return AiSettings(
         machines=[MachineOut(machine_id=m.machine_id, name=m.name, api_url=m.api_url, has_key=bool(m.api_key),
                              jobs=list(m.jobs), at_once=m.at_once, enabled=m.enabled, built_in=m.built_in,
-                             status=_status(m))
+                             shares_gpu=m.shares_gpu or m.built_in, status=_status(m))
                   for m in machines],
         jobs=jobs,
     )
@@ -333,7 +340,8 @@ def add_machine(body: MachineIn, request: Request) -> AiSettings:
         models = _models_or_502(api_url, body.api_key)
         _check_jobs(ctrl.get(Tenant, tenant_id), body.jobs, models)
         machine = AiMachine(machine_id=f"aim_{ULID()}", tenant_id=tenant_id, name=body.name, api_url=api_url,
-                            api_key=body.api_key, jobs=body.jobs, at_once=body.at_once, enabled=body.enabled)
+                            api_key=body.api_key, jobs=body.jobs, at_once=body.at_once, enabled=body.enabled,
+                            shares_gpu=body.shares_gpu)
         _record(machine, models, "")
         ctrl.add(machine)
         _commit_named(ctrl, body.name)
@@ -380,6 +388,8 @@ def update_machine(machine_id: str, body: MachinePatch, request: Request, leave_
             machine.at_once = body.at_once
         if body.enabled is not None:
             machine.enabled = body.enabled
+        if body.shares_gpu is not None and not machine.built_in:
+            machine.shares_gpu = body.shares_gpu
         _ask_before_leaving_jobs(ctrl, tenant_id, machine, leave_jobs, did)
         # Asked again only for what needs it: where it is or its key changed,
         # a job it hadn't, or turned back on. A rename or a new limit doesn't.
@@ -502,7 +512,7 @@ def job_machines(job: str, request: Request) -> WorkerJob:
         tenant = ctrl.get(Tenant, tenant_id)
         return WorkerJob(job=job, model=_job_model(tenant, job), machines=[
             WorkerMachine(machine_id=m.machine_id, name=m.name, api_url=m.api_url, api_key=m.api_key,
-                          at_once=m.at_once, built_in=m.built_in)
+                          at_once=m.at_once, built_in=m.built_in, shares_gpu=m.shares_gpu or m.built_in)
             for m in _machines(ctrl, tenant_id) if m.enabled and job in m.jobs])
 
 

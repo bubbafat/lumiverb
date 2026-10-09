@@ -83,6 +83,7 @@ class Dispatcher:
         self._in_hand: set[tuple[str, str, str]] = set()
         self._taken_until: dict[tuple[str, str, str], float] = {}
         self._busy: dict[str, int] = {}
+        self._running_kinds: dict[tuple[str, str], int] = {}
 
     # -- capacity -----------------------------------------------------------
 
@@ -186,7 +187,20 @@ class Dispatcher:
             for i in items:
                 self._in_hand.add((tenant_id, _same(kind, spec), i["asset_id"]))
             self._busy[pool] = self._busy.get(pool, 0) + 1
+            self._running_kinds[(tenant_id, kind)] = self._running_kinds.get((tenant_id, kind), 0) + 1
             return Job(tenant_id, kind, spec.tier, tuple(items))
+
+    def status(self, tenant_id: str) -> dict:
+        """What's running and waiting for the account, per kind, and each of
+        its pools' slots (the shared ones and its own): Settings → Processing shows it."""
+        with self._lock:
+            running = {k: n for (t, k), n in self._running_kinds.items() if t == tenant_id and n}
+            waiting = {k: len(b) for (t, k), b in self._buffers.items() if t == tenant_id and b}
+            pools = {}
+            for spec in self._kinds.values():
+                key = pool_key(spec, tenant_id)
+                pools[spec.pool] = [self._busy.get(key, 0), self._capacity.get(key, 0)]
+            return {"running": running, "waiting": waiting, "pools": pools}
 
     def held(self, tenant_id: str, kind: str) -> list[str]:
         """The account's clips of this kind in hand or just tried: what the
@@ -213,6 +227,8 @@ class Dispatcher:
         pool = pool_key(spec, job.tenant_id)
         with self._lock:
             self._busy[pool] = max(0, self._busy.get(pool, 0) - 1)
+            key = (job.tenant_id, job.kind)
+            self._running_kinds[key] = max(0, self._running_kinds.get(key, 0) - 1)
             until = self._clock() + wait
             for asset_id in job.asset_ids:
                 key = (job.tenant_id, _same(job.kind, spec), asset_id)
