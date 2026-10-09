@@ -21,7 +21,7 @@ afterEach(cleanup);
 function actions(props: Partial<Parameters<typeof TranscriptActions>[0]> = {}) {
   const onChanged = vi.fn();
   render(
-    <TranscriptActions assetId="ast_1" source="whisper" machineUnderneath={false} canEdit
+    <TranscriptActions assetId="ast_1" source="whisper" canEdit
       onDownload={vi.fn()} onChanged={onChanged} {...props} />,
   );
   return onChanged;
@@ -31,36 +31,33 @@ describe("TranscriptActions", () => {
   it("removes the machine's, saying it's the machine's", async () => {
     remove.mockResolvedValue(undefined);
     const onChanged = actions();
-    fireEvent.click(screen.getByRole("button", { name: "Remove the machine's transcript" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove the machine's transcript for good" }));
     await waitFor(() => expect(remove).toHaveBeenCalledWith("ast_1", "machine"));
     expect(onChanged).toHaveBeenCalled();
   });
 
-  it("removing a person's says the machine's comes back", async () => {
+  it("removing a person's says the machine makes one again", async () => {
+    // Robert, Oct 9: one transcript, no machine copy kept under a person's.
     remove.mockResolvedValue(undefined);
-    actions({ source: "manual", machineUnderneath: true });
-    const button = screen.getByRole("button", { name: "Remove your transcript and use the machine's" });
-    expect(button.textContent).toBe("Use the machine's");
+    actions({ source: "manual" });
+    const button = screen.getByRole("button", { name: "Remove your transcript (the machine makes one again)" });
+    expect(button.textContent).toBe("Remove");
     fireEvent.click(button);
     await waitFor(() => expect(remove).toHaveBeenCalledWith("ast_1", "manual"));
+    expect(screen.queryByText(/Use the machine's/)).toBeNull();
   });
 
   it("a transcript from before sources were kept is the machine's", async () => {
     remove.mockResolvedValue(undefined);
     actions({ source: null });
-    fireEvent.click(screen.getByRole("button", { name: "Remove the machine's transcript" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove the machine's transcript for good" }));
     await waitFor(() => expect(remove).toHaveBeenCalledWith("ast_1", "machine"));
-  });
-
-  it("a person's alone is just removed", () => {
-    actions({ source: "manual" });
-    expect(screen.getByRole("button", { name: "Remove your transcript" }).textContent).toBe("Remove");
   });
 
   it("can't be clicked twice while removing", async () => {
     let finish: () => void = () => {};
     remove.mockReturnValue(new Promise<void>((resolve) => (finish = resolve)));
-    actions({ source: "manual", machineUnderneath: true });
+    actions({ source: "manual" });
     const button = screen.getByRole("button", { name: /Remove your transcript/ });
     fireEvent.click(button);
     expect((button as HTMLButtonElement).disabled).toBe(true);
@@ -73,7 +70,7 @@ describe("TranscriptActions", () => {
   it("when it changed meanwhile, says nothing was removed and shows the new one", async () => {
     remove.mockRejectedValue(new ApiError(409, "The clip now shows the machine's transcript", "transcript_changed"));
     const onChanged = actions({ source: "manual" });
-    fireEvent.click(screen.getByRole("button", { name: "Remove your transcript" }));
+    fireEvent.click(screen.getByRole("button", { name: /Remove your transcript/ }));
     expect((await screen.findByRole("alert")).textContent).toContain("nothing was removed");
     expect(onChanged).toHaveBeenCalled();
   });
@@ -81,7 +78,7 @@ describe("TranscriptActions", () => {
   it("says when removing fails", async () => {
     remove.mockRejectedValue(new ApiError(403, "Editor access required"));
     const onChanged = actions();
-    fireEvent.click(screen.getByRole("button", { name: "Remove the machine's transcript" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove the machine's transcript for good" }));
     expect((await screen.findByRole("alert")).textContent).toContain("Editor access required");
     expect(onChanged).not.toHaveBeenCalled();
   });

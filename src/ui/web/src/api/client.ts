@@ -730,9 +730,9 @@ export async function getAsset(assetId: string, publicLibraryId?: string, public
   return apiFetch<AssetDetail>(`/assets/${assetId}${publicQuery(publicLibraryId, publicProjectId)}`);
 }
 
-/** Correct a clip's description, OCR or tags (editors). Only the fields sent change:
- * a string sets the correction, null brings back the machine's; `tags` is the list to
- * show, kept as adds and removes on the machine's. Returns the clip's detail. */
+/** Write a clip's description, OCR or tags (editors): the one copy, which the
+ * machine never replaces; `tags` is the whole list. Only the fields sent change;
+ * null removes what a person wrote (the machine makes it again). Returns the clip's detail. */
 export async function correctAsset(
   assetId: string,
   body: { description?: string | null; ocr_text?: string | null; tags?: string[] | null },
@@ -1419,8 +1419,9 @@ export async function uploadTranscript(
   );
 }
 
-/** Remove the transcript a video asset shows: a person's ("manual") or the
- * machine's. 409 transcript_changed when it shows the other one. */
+/** Remove the transcript a video shows, saying whose: a person's ("manual"; the
+ * machine makes one again) or the machine's (for good). 409 transcript_changed
+ * when it shows the other one. */
 export async function deleteTranscript(assetId: string, which: "manual" | "machine"): Promise<void> {
   await apiFetch<void>(`/assets/${assetId}/transcript?which=${which}`, { method: "DELETE" });
 }

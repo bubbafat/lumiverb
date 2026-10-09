@@ -56,8 +56,6 @@ interface ActionsProps {
   assetId: string;
   /** Whose transcript is shown: "manual" (a person's) or the machine that made it. */
   source: string | null | undefined;
-  /** A person's is shown with the machine's kept under it. */
-  machineUnderneath: boolean;
   canEdit: boolean;
   onDownload: () => void;
   /** The clip's transcript changed: reload it. */
@@ -67,14 +65,13 @@ interface ActionsProps {
 /** Download, and for editors Replace and Remove, beside a transcript. Goes in
  * a wrapping flex row after its label: the buttons move under the label when
  * they don't fit beside it, and a message takes a line of its own. */
-export function TranscriptActions({ assetId, source, machineUnderneath, canEdit, onDownload, onChanged }: ActionsProps) {
+export function TranscriptActions({ assetId, source, canEdit, onDownload, onChanged }: ActionsProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const mine = source === "manual";
-  // Removing a person's brings back the machine's, when it's kept under theirs.
-  const remove = mine && machineUnderneath
-    ? { text: "Use the machine's", label: "Remove your transcript and use the machine's" }
-    : { text: "Remove", label: mine ? "Remove your transcript" : "Remove the machine's transcript" };
+  // A clip has one transcript (Robert, Oct 9). Removing a person's lets the
+  // machine make one again; removing the machine's is for good.
+  const label = mine ? "Remove your transcript (the machine makes one again)" : "Remove the machine's transcript for good";
 
   return (
     <>
@@ -94,8 +91,8 @@ export function TranscriptActions({ assetId, source, machineUnderneath, canEdit,
             <button
               type="button"
               className="text-xs text-red-400 hover:text-red-300 disabled:opacity-50"
-              aria-label={remove.label}
-              title={remove.label}
+              aria-label={label}
+              title={label}
               disabled={busy}
               onClick={async () => {
                 setBusy(true);
@@ -115,7 +112,7 @@ export function TranscriptActions({ assetId, source, machineUnderneath, canEdit,
                 }
               }}
             >
-              {remove.text}
+              Remove
             </button>
           </>
         )}
