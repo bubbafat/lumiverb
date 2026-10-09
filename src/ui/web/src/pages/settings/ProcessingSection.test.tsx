@@ -45,7 +45,7 @@ beforeEach(() => {
       if (next) return next;
       return json({ upgrade_id: "upg_1", artifact: m[1], scope: { kind: "all", id: null, name: null },
                     edits: body.edits ?? "keep", upgrading: 3, skipped_edited: body.edits === "skip" ? 1 : 0,
-                    replaced_edits: body.edits === "replace" ? 1 : 0 });
+                    edits_to_replace: body.edits === "replace" ? 1 : 0 });
     }
     if (m && method === "DELETE") return new Response(null, { status: 204 });
     return json({}, 404);
@@ -98,7 +98,7 @@ describe("ProcessingSection", () => {
   it("upgrades the stale ones once the admin says yes", async () => {
     producers = [producer({})];
     renderSection();
-    fireEvent.click(await screen.findByRole("button", { name: "Upgrade Descriptions and tags" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Upgrade 3 stale: Descriptions and tags" }));
     const form = screen.getByRole("form", { name: "Upgrade Descriptions and tags" });
     expect(form.textContent).toContain("Make 3 clips' descriptions and tags again?");
     fireEvent.click(within(form).getByRole("button", { name: "Upgrade" }));
@@ -112,7 +112,7 @@ describe("ProcessingSection", () => {
     await screen.findByRole("option", { name: "Footage" });
     fireEvent.change(screen.getByLabelText("Counts for"), { target: { value: "library:lib_1" } });
     await waitFor(() => expect(sent.some((s) => s.url.includes("/producers?library_id=lib_1"))).toBe(true));
-    fireEvent.click(await screen.findByRole("button", { name: "Upgrade Descriptions and tags" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Upgrade 3 stale: Descriptions and tags" }));
     const form = screen.getByRole("form", { name: "Upgrade Descriptions and tags" });
     expect(form.textContent).toContain("again in Footage?");
     fireEvent.click(within(form).getByRole("button", { name: "Upgrade" }));
@@ -125,7 +125,7 @@ describe("ProcessingSection", () => {
     answers = [err(409, "edited_clips", "1 of the 3 clips have your edits.",
                    { stale: 3, edited: 1, choices: ["keep", "replace", "skip"] })];
     renderSection();
-    fireEvent.click(await screen.findByRole("button", { name: "Upgrade Descriptions and tags" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Upgrade 3 stale: Descriptions and tags" }));
     fireEvent.click(screen.getByRole("button", { name: "Upgrade" }));
     expect(await screen.findByText("1 of the 3 clips have your edits.")).toBeTruthy();
     const keep = screen.getByRole("radio", { name: /Keep my edits/ }) as HTMLInputElement;
@@ -136,6 +136,22 @@ describe("ProcessingSection", () => {
     expect(posted()).toEqual([{}, { edits: "skip" }]);
   });
 
+  it("keeps each answer when the server asks another question", async () => {
+    producers = [producer({ edited: 1 })];
+    answers = [
+      err(409, "edited_clips", "1 of the 3 clips have your edits.", { stale: 3, edited: 1 }),
+      err(409, "redo_everything", "All 3 clips will be made again.", { stale: 3 }),
+    ];
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Upgrade 3 stale: Descriptions and tags" }));
+    fireEvent.click(screen.getByRole("button", { name: "Upgrade" }));
+    fireEvent.click(await screen.findByRole("radio", { name: /Replace my edits/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Upgrade" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Redo all 3 clips" }));
+    await screen.findByText(/Your edits on 1 clip go to history as each is made again\./);
+    expect(posted()).toEqual([{}, { edits: "replace" }, { edits: "replace", confirm: true }]);
+  });
+
   it("confirms a producer upgraded all at once with a button naming the count, whatever the counts are for", async () => {
     producers = [producer({ artifact: "clip", title: "Visual search (CLIP)", uniform: true })];
     answers = [err(409, "redo_everything", "All 1,200 clips' visual search (clip) will be made again.",
@@ -143,7 +159,8 @@ describe("ProcessingSection", () => {
     renderSection();
     await screen.findByRole("option", { name: "Footage" });
     fireEvent.change(screen.getByLabelText("Counts for"), { target: { value: "library:lib_1" } });
-    fireEvent.click(await screen.findByRole("button", { name: "Upgrade Visual search (CLIP)" }));
+    // Narrowed counts, but CLIP is upgraded everywhere: the button says so.
+    fireEvent.click(await screen.findByRole("button", { name: "Upgrade everywhere: Visual search (CLIP)" }));
     expect(screen.getByRole("form").textContent).toContain("upgraded everywhere at once");
     fireEvent.click(screen.getByRole("button", { name: "Upgrade" }));
     fireEvent.click(await screen.findByRole("button", { name: "Re-embed all 1,200 clips" }));
@@ -155,7 +172,7 @@ describe("ProcessingSection", () => {
     producers = [producer({})];
     answers = [err(409, "nothing_stale", "Nothing was made with older descriptions and tags settings.")];
     renderSection();
-    fireEvent.click(await screen.findByRole("button", { name: "Upgrade Descriptions and tags" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Upgrade 3 stale: Descriptions and tags" }));
     fireEvent.click(screen.getByRole("button", { name: "Upgrade" }));
     expect((await screen.findByRole("alert")).textContent).toContain("Nothing was made with older");
     fireEvent.click(screen.getByRole("button", { name: "Not now" }));

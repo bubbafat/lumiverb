@@ -125,8 +125,8 @@ export default function AiSection() {
         ))}
         {replaced && (
           <p role="status" className="text-sm text-amber-200">
-            {replaced.label} made with {replaced.model} are now stale. They're made again only when you upgrade them
-            in{" "}
+            What {replaced.label.toLowerCase()} made with {replaced.model} is now stale: it's made again only when you
+            upgrade it in{" "}
             <Link to="/settings/processing" className="text-indigo-300 underline hover:text-indigo-200">
               Processing
             </Link>
@@ -492,19 +492,26 @@ function JobModel({
   const [changing, setChanging] = useState(false);
   const [model, setModel] = useState(job.model);
   const [problem, setProblem] = useState<string | null>(null);
+  // 409 upgrades_stop: the model change would stop upgrades under way; ask first.
+  const [stopping, setStopping] = useState<string | null>(null);
   const doing = ai.machines.filter((m) => m.enabled && m.jobs.includes(job.job));
   // What the machines doing it offered when last checked.
   const offered = [...new Set(doing.flatMap((m) => m.status?.models ?? []))].sort();
   const save = useMutation({
-    mutationFn: (next: string) => setJobModel(job.job, next),
-    onMutate: () => setProblem(null),
-    onSuccess: (next, chosen) => {
+    mutationFn: ({ next, stop }: { next: string; stop?: boolean }) => setJobModel(job.job, next, stop),
+    onMutate: () => {
+      setProblem(null);
+      setStopping(null);
+    },
+    onSuccess: (next, { next: chosen }) => {
       onChanged(job.model && chosen && chosen !== job.model ? job.model : null);
       queryClient.setQueryData(AI_QUERY_KEY, next);
       setChanging(false);
     },
     onError: (e) => {
-      if (e instanceof ApiError && e.code === "model_not_offered") {
+      if (e instanceof ApiError && e.code === "upgrades_stop") {
+        setStopping(e.message);
+      } else if (e instanceof ApiError && e.code === "model_not_offered") {
         const machines = (e.details?.machines as { name: string; models: string[]; error: string }[] | undefined) ?? [];
         setProblem(
           `${e.message} ` +
@@ -535,7 +542,7 @@ function JobModel({
           className="space-y-3"
           onSubmit={(e) => {
             e.preventDefault();
-            if (model && model !== job.model) save.mutate(model);
+            if (model && model !== job.model) save.mutate({ next: model });
           }}
         >
           <select aria-label={`Model for ${job.label}`} value={model} className={inputClass} onChange={(e) => setModel(e.target.value)}>
@@ -558,6 +565,19 @@ function JobModel({
               {problem}
             </p>
           )}
+          {stopping && (
+            <div role="alert" className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2">
+              <p className="text-sm text-amber-100">{stopping}</p>
+              <button
+                type="button"
+                disabled={save.isPending}
+                className={`${buttonClass} bg-amber-600 text-white hover:bg-amber-500`}
+                onClick={() => save.mutate({ next: model, stop: true })}
+              >
+                Change it and stop them
+              </button>
+            </div>
+          )}
           <div className="flex flex-wrap gap-3">
             <button
               type="submit"
@@ -567,7 +587,7 @@ function JobModel({
               {save.isPending ? "Saving…" : "Save"}
             </button>
             {job.model && (
-              <button type="button" disabled={save.isPending} className={`${buttonClass} text-gray-300 hover:bg-gray-800`} onClick={() => save.mutate("")}>
+              <button type="button" disabled={save.isPending} className={`${buttonClass} text-gray-300 hover:bg-gray-800`} onClick={() => save.mutate({ next: "" })}>
                 Turn off {job.label.toLowerCase()}
               </button>
             )}
@@ -578,6 +598,7 @@ function JobModel({
                 setChanging(false);
                 setModel(job.model);
                 setProblem(null);
+                setStopping(null);
               }}
             >
               Cancel

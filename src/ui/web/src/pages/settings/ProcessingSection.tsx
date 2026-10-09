@@ -49,7 +49,7 @@ function everythingLabel(artifact: string, count: number): string {
 
 const EDIT_LABELS: Record<EditsChoice, { label: string; hint: string }> = {
   keep: { label: "Keep my edits", hint: "The new one is made underneath; your edits stay on top." },
-  replace: { label: "Replace my edits", hint: "Your edits go (kept in history) and the new one shows." },
+  replace: { label: "Replace my edits", hint: "As each is made again, your edits go to history and the new one shows." },
   skip: { label: "Skip edited clips", hint: "Clips you edited stay as they are." },
 };
 
@@ -189,13 +189,13 @@ function ProducerRow({ producer, scope, admin }: { producer: Producer; scope: Sc
         <button
           type="button"
           className={linkClass}
-          aria-label={`Upgrade ${producer.title}`}
+          aria-label={`${upgradeLabel(producer, scope, c.stale)}: ${producer.title}`}
           onClick={() => {
             setNotice(null);
             setOpen(true);
           }}
         >
-          Upgrade {n(c.stale)} stale
+          {upgradeLabel(producer, scope, c.stale)}
         </button>
       )}
       {open && c && (
@@ -214,10 +214,15 @@ function ProducerRow({ producer, scope, admin }: { producer: Producer; scope: Sc
   );
 }
 
+/** A producer upgraded all at once is upgraded everywhere, whatever the counts are for. */
+function upgradeLabel(producer: Producer, scope: Scope, stale: number): string {
+  return producer.uniform && scope.kind !== "all" ? "Upgrade everywhere" : `Upgrade ${n(stale)} stale`;
+}
+
 function upgradedNotice(r: UpgradeResult): string {
   const parts = [r.upgrading ? `Upgrading ${clips(r.upgrading)}.` : "Nothing to upgrade: every stale clip has your edits."];
   if (r.skipped_edited) parts.push(`Skipped ${clips(r.skipped_edited)} with your edits.`);
-  if (r.replaced_edits) parts.push(`Moved ${clips(r.replaced_edits)}' edits to history.`);
+  if (r.edits_to_replace) parts.push(`Your edits on ${clips(r.edits_to_replace)} go to history as each is made again.`);
   return parts.join(" ");
 }
 
@@ -230,11 +235,13 @@ function UpgradeLine({ producer, upgrade, admin }: { producer: Producer; upgrade
   const where = upgrade.scope.kind === "all" ? "everywhere" : `in ${upgrade.scope.name ?? "a deleted scope"}`;
   const done = upgrade.total - upgrade.remaining;
   return (
-    <div role="status" className="rounded-md border border-indigo-500/30 bg-indigo-500/10 px-3 py-2 text-sm text-indigo-100">
+    <div className="rounded-md border border-indigo-500/30 bg-indigo-500/10 px-3 py-2 text-sm text-indigo-100">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <span>
           Upgrading {where}: {n(done)} of {n(upgrade.total)} done
-          {upgrade.edits !== "keep" && (upgrade.edits === "skip" ? " · edited clips skipped" : " · edits replaced")}
+          {upgrade.edits !== "keep" &&
+            (upgrade.edits === "skip" ? " · edited clips skipped" : " · edits replaced as each is made")}
+          {!!upgrade.still_stale && ` · ${n(upgrade.still_stale)} made again but still stale`}
         </span>
         {admin && (
           <button
@@ -277,6 +284,8 @@ function UpgradePanel({
   const queryClient = useQueryClient();
   const [step, setStep] = useState<Step>({ kind: "ask" });
   const [edits, setEdits] = useState<EditsChoice>("keep");
+  // Answers already given, sent again with each try: the API may ask more than one question.
+  const [answered, setAnswered] = useState<{ edits?: boolean; confirm?: boolean }>({});
   const [problem, setProblem] = useState<string | null>(null);
   // A producer upgraded all at once ignores the scope the counts are for.
   const narrowed = !producer.uniform && scope.kind !== "all";
@@ -299,11 +308,11 @@ function UpgradePanel({
     },
   });
 
-  const body = (extra: UpgradeRequest = {}): UpgradeRequest => ({
+  const body = (now: { edits?: boolean; confirm?: boolean }): UpgradeRequest => ({
     ...(narrowed && scope.kind === "library" ? { library_id: scope.id } : {}),
     ...(narrowed && scope.kind === "project" ? { project_id: scope.id } : {}),
-    ...(step.kind === "edits" ? { edits } : {}),
-    ...extra,
+    ...(now.edits ? { edits } : {}),
+    ...(now.confirm ? { confirm: true } : {}),
   });
 
   return (
@@ -312,7 +321,13 @@ function UpgradePanel({
       className="space-y-3 rounded-md border border-gray-700 bg-gray-900/70 p-3"
       onSubmit={(e) => {
         e.preventDefault();
-        upgrade.mutate(body(step.kind === "everything" ? { confirm: true } : {}));
+        const now = {
+          ...answered,
+          ...(step.kind === "edits" ? { edits: true } : {}),
+          ...(step.kind === "everything" ? { confirm: true } : {}),
+        };
+        setAnswered(now);
+        upgrade.mutate(body(now));
       }}
     >
       {step.kind === "ask" && (

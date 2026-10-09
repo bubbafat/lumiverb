@@ -855,9 +855,14 @@ export async function removeMachine(machineId: string, leaveJobs = false): Promi
 }
 
 /** Set a job's model (admins); "" turns the job off. Every machine doing it is
- * asked: 409 model_not_offered (details.machines: name, models, error) when none offers it. */
-export async function setJobModel(job: string, model: string): Promise<AiSettings> {
-  return apiFetch<AiSettings>(`/ai/jobs/${job}`, { method: "PUT", body: { model } });
+ * asked: 409 model_not_offered (details.machines: name, models, error) when none offers it.
+ * 409 upgrades_stop (details.upgrades: artifact, title, remaining) when upgrades to the
+ * current model are under way, unless stopUpgrades. */
+export async function setJobModel(job: string, model: string, stopUpgrades = false): Promise<AiSettings> {
+  return apiFetch<AiSettings>(`/ai/jobs/${job}`, {
+    method: "PUT",
+    body: stopUpgrades ? { model, stop_upgrades: true } : { model },
+  });
 }
 
 /** A producer's artifacts over the clips in sight (in one library or project when asked). */
@@ -889,6 +894,8 @@ export interface ProducerUpgrade {
   approved_at: string;
   total: number;
   remaining: number;
+  /** Made again since, but still not what it upgrades to: stale, not handed out again. */
+  still_stale?: number;
 }
 
 /** What makes one kind of artifact (Settings → Processing). */
@@ -932,7 +939,8 @@ export interface UpgradeResult {
   edits: EditsChoice;
   upgrading: number;
   skipped_edited: number;
-  replaced_edits: number;
+  /** edits=replace: clips whose edits move to history as each is made again. */
+  edits_to_replace: number;
 }
 
 /** Approve making a producer's stale artifacts again (admins). 409
