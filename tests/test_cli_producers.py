@@ -40,7 +40,7 @@ def _decision(code: str, message: str, details: dict) -> MagicMock:
 
 def _ok(**over) -> MagicMock:
     body = {"upgrade_id": "upg_1", "artifact": "vision", "scope": {"kind": "all", "id": None, "name": None},
-            "edits": "keep", "upgrading": 3, "skipped_edited": 0, "replaced_edits": 0}
+            "edits": "keep", "upgrading": 3, "skipped_edited": 0, "edits_to_replace": 0}
     body.update(over)
     return _response(200, body)
 
@@ -63,6 +63,7 @@ def _get(path, params=None):
     if path == "/v1/libraries":
         r.json.return_value = LIBRARIES
     elif path == "/v1/projects":
+        assert params == {"status": "all"}  # archived projects can be named too
         r.json.return_value = PROJECTS
     else:
         r.json.return_value = {"producers": [_producer()]}
@@ -90,7 +91,7 @@ def test_lists_each_producer_with_its_counts(client):
             _producer(edited=2, upgrades=[{"upgrade_id": "upg_1", "scope": {"kind": "library", "id": "lib_1",
                                                                               "name": "Footage"},
                                            "edits": "keep", "approved_at": "2026-10-08T22:00:00Z",
-                                           "total": 5, "remaining": 2}]),
+                                           "total": 5, "remaining": 2, "still_stale": 1}]),
             _producer("scenes", "Scenes", upgradable=False, why_not="Not yet.",
                       counts={"applicable": 4, "current": 2, "stale": 2, "missing": 0, "failing": 0}),
         ]}
@@ -103,6 +104,7 @@ def test_lists_each_producer_with_its_counts(client):
     out = result.output
     assert "Descriptions and tags" in out and "vision" in out
     assert "upgrading in Footage, 2 left of 5" in out
+    assert "1 were made again but are still stale" in out
     assert "2 of the stale have your edits" in out
     assert "Scenes can't be upgraded yet: Not yet." in out
 
@@ -168,12 +170,12 @@ def test_edited_clips_default_to_keeping_the_edits(client):
     assert _posted(client)[-1] == {"edits": "keep"}
 
 
-def test_replace_says_where_the_edits_went(client):
-    client.raw.return_value = _ok(edits="replace", replaced_edits=2)
+def test_replace_says_where_the_edits_go(client):
+    client.raw.return_value = _ok(edits="replace", edits_to_replace=2)
     result = _run("upgrade", "vision", "--edits", "replace")
     assert result.exit_code == 0, result.output
     assert _posted(client) == [{"edits": "replace"}]
-    assert "Moved 2 clips' edits to history" in result.output
+    assert "Your edits on 2 clips move to history as each is made again" in result.output
 
 
 def test_with_yes_nobody_is_asked(client):

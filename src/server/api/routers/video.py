@@ -1,5 +1,6 @@
 """Video chunk API: init chunks, claim next, complete, fail. All require tenant auth."""
 
+import json
 import shutil
 import uuid
 from pathlib import Path
@@ -224,6 +225,10 @@ class SceneListItem(BaseModel):
     sharpness_score: float | None
     keep_reason: str | None
     phash: str | None
+    # How its description was made ({producer, version, settings_hash}); null
+    # when it has none, or one made without saying. The worker describes a
+    # scene again when this isn't what it would record.
+    lineage: dict | None = None
 
 
 class ScenesResponse(BaseModel):
@@ -251,6 +256,7 @@ def get_scenes_for_asset(
                 sharpness_score=s.sharpness_score,
                 keep_reason=s.keep_reason,
                 phash=s.phash,
+                lineage=s.lineage,
             )
             for s in scenes
         ]
@@ -281,6 +287,7 @@ def update_scene_vision(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> SceneVisionUpdateResponse:
     """Update vision results on a scene after describing its rep frame."""
+    made = lineage_dict(body.lineage)
     scene_repo = VideoSceneRepository(session)
     scene_repo.update_vision(
         scene_id=scene_id,
@@ -288,13 +295,33 @@ def update_scene_vision(
         model_version=body.model_version,
         description=body.description,
         tags=body.tags,
+        lineage=_scene_lineage(made),
     )
-    # One record for the clip's scene descriptions: missing until every scene has one.
+    # One record for the clip's scene descriptions, made once every scene's
+    # description was made the same way: a video described half with old
+    # settings and half with new isn't current, and an upgrade isn't done with it.
     asset_id = session.execute(text("SELECT asset_id FROM video_scenes WHERE scene_id = :s"),
                                {"s": scene_id}).scalar()
     if asset_id:
-        record_lineage(session, asset_id, "scene_vision", lineage_dict(body.lineage))
+        others = session.execute(text(
+            "SELECT count(*) FROM video_scenes WHERE asset_id = :a"
+            " AND (description IS NULL OR lineage IS DISTINCT FROM CAST(:l AS jsonb))"
+        ), {"a": asset_id, "l": json.dumps(_scene_lineage(made))}).scalar()
+        if not others:
+            record_lineage(session, asset_id, "scene_vision", made)
     return SceneVisionUpdateResponse(scene_id=scene_id, status="updated")
+
+
+def _scene_lineage(made: dict | None) -> dict:
+    """A scene's own record of how its description was made (as the clip's
+    is recorded: a write that doesn't say, or names another producer, is unknown's)."""
+    from src.shared.producers import PRODUCERS, UNKNOWN
+
+    made = made or {}
+    if made.get("producer") != PRODUCERS["scene_vision"].producer:
+        return {"producer": UNKNOWN, "version": "", "settings_hash": ""}
+    return {"producer": made["producer"], "version": str(made.get("version") or ""),
+            "settings_hash": str(made.get("settings_hash") or "")}
 
 
 # ---------------------------------------------------------------------------

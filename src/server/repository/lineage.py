@@ -15,11 +15,13 @@ change waits for approval. A failure waits its turn: 5 minutes, doubling
 up to a day.
 
 An approval is an upgrade (piece 5): the clips stale in its scope when an
-admin said yes, each handed out (`upgrade_due`) until it's made again
-after the approval, and only once nothing is missing for that step in the
-library (`work_conditions`). A change to the producer's settings before it
-finishes drops the rest (`retire_outdated`): the new change is asked about
-on its own.
+admin said yes, each handed out (`upgrade_due`) until its producer makes it
+again after the approval (a write that doesn't say how it was made doesn't
+count). Only the brain's worker asks for upgrade work (`work`, upgrades=true);
+it does what's missing first. A change to the producer's settings before it
+finishes drops the rest (`retire_outdated`): the new change is asked about on
+its own. "Replace my edits" happens as each clip is made again
+(`replace_edits_as_made`).
 """
 
 from __future__ import annotations
@@ -123,9 +125,11 @@ def _lineage_cols() -> str:
         cols.append(f"max(l.source_sha256) FILTER (WHERE l.artifact = '{artifact}'"
                     f" AND l.producer NOT IN ('', '{PERSON}')) AS src_{artifact}")
         cols.append(f"bool_or(l.artifact = '{artifact}' AND l.retry_at > now()) AS wait_{artifact}")
-        # When it was last made (a failed try leaves this alone).
+        # When its producer last made it (a failed try, or a write that
+        # doesn't say how it was made, such as the macOS app's, leaves this alone).
         cols.append(f"max(l.produced_at) FILTER (WHERE l.artifact = '{artifact}'"
-                    f" AND l.producer <> '' AND l.outcome <> 'failed') AS made_{artifact}")
+                    f" AND l.producer = '{PRODUCERS[artifact].producer}' AND l.outcome <> 'failed')"
+                    f" AS made_{artifact}")
     return ", ".join(cols)
 
 
@@ -220,6 +224,9 @@ EDITED: dict[str, str] = {
                " AND (c.description IS NOT NULL OR c.tags_added <> '[]'::jsonb OR c.tags_removed <> '[]'::jsonb))"),
     "ocr": "EXISTS (SELECT 1 FROM asset_corrections c WHERE c.asset_id = a.asset_id AND c.ocr_text IS NOT NULL)",
 }
+# What each AI job's model makes (Settings → AI): a new model makes these stale.
+JOB_ARTIFACTS: dict[str, tuple[str, ...]] = {"vision": ("vision", "ocr", "scene_vision")}
+
 # The corrections each artifact's edits are, as they're kept in correction_history.
 EDIT_FIELDS: dict[str, tuple[str, ...]] = {"vision": ("description", "tags"), "ocr": ("ocr_text",)}
 
@@ -239,7 +246,8 @@ def stale_ids(session: Session, artifact: str, want: dict[str, Any], library_id:
 
 
 def upgrading(artifact: str) -> str:
-    """In an upgrade, and not made again since it was approved."""
+    """In an upgrade, and not made again by its producer since it was approved."""
+    assert artifact in MISSING_FLAGS.values(), artifact  # LINEAGE_JOIN has made_<artifact> for these only
     return (f"(({APPLIES[artifact]}) AND ({MADE[artifact]}) AND EXISTS (SELECT 1 FROM producer_upgrade_items ui"
             " JOIN producer_upgrades u ON u.upgrade_id = ui.upgrade_id"
             f" WHERE ui.asset_id = a.asset_id AND u.artifact = '{artifact}'"
@@ -253,6 +261,10 @@ def upgrade_due(artifact: str) -> str:
 
 def upgrading_artifacts(session: Session) -> set[str]:
     return {r[0] for r in session.execute(text("SELECT DISTINCT artifact FROM producer_upgrades"))}
+
+
+def any_upgrades(session: Session) -> bool:
+    return session.execute(text("SELECT 1 FROM producer_upgrades LIMIT 1")).first() is not None
 
 
 def retire_outdated(session: Session, tenant_vision_model: str | None) -> None:
@@ -276,69 +288,137 @@ def retire_outdated(session: Session, tenant_vision_model: str | None) -> None:
         session.commit()
 
 
-def work_conditions(session: Session, flags: list[str], library_id: str,
-                    tenant_vision_model: str | None) -> dict[str, str]:
-    """The page filter for each flag a step asks for: what's missing first;
-    an upgrade's clips once nothing is missing for it in the library."""
+def work(flag: str, upgrading_now: set[str]) -> str:
+    """What a step is handed when the caller takes upgrades (the brain's
+    worker): what's missing, and an approved upgrade's clips. A caller that
+    doesn't ask (the macOS app) gets what's missing only: it can't make an
+    upgrade's artifact the way the upgrade means."""
     from src.server.repository.tenant import MISSING_CONDITIONS
 
+    artifact = MISSING_FLAGS.get(flag)
+    if artifact in upgrading_now:
+        return f"({MISSING_CONDITIONS[flag]} OR {upgrade_due(artifact)})"
+    return MISSING_CONDITIONS[flag]
+
+
+def prepare(session: Session, tenant_vision_model: str | None) -> set[str]:
+    """Before handing out upgrade work: drop outdated and finished upgrades;
+    the artifacts still being upgraded."""
+    if not any_upgrades(session):
+        return set()
     retire_outdated(session, tenant_vision_model)
-    live = upgrading_artifacts(session)
-    out = {}
-    for flag in flags:
-        artifact = MISSING_FLAGS.get(flag)
-        if artifact not in live:
-            out[flag] = MISSING_CONDITIONS[flag]
-            continue
-        any_missing = session.execute(text(
-            f"SELECT 1 FROM active_assets a {LINEAGE_JOIN}"
-            f" WHERE a.library_id = :lib AND {MISSING_CONDITIONS[flag]} LIMIT 1"), {"lib": library_id}).first()
-        out[flag] = MISSING_CONDITIONS[flag] if any_missing else upgrade_due(artifact)
-    return out
+    for artifact in upgrading_artifacts(session):
+        upgrades(session, artifact)  # drops finished ones
+    return upgrading_artifacts(session)
+
+
+def missing_among(session: Session, asset_ids: list[str], flags: list[str]) -> set[str]:
+    """Which of these clips are missing what one of the flags asks for (the rest are an upgrade's)."""
+    from src.server.repository.tenant import MISSING_CONDITIONS
+
+    if not asset_ids or not flags:
+        return set()
+    either = " OR ".join(MISSING_CONDITIONS[f] for f in flags)
+    return {r[0] for r in session.execute(text(
+        f"SELECT a.asset_id FROM active_assets a {LINEAGE_JOIN} WHERE a.asset_id = ANY(:ids) AND ({either})"
+    ), {"ids": asset_ids})}
 
 
 def upgrades(session: Session, artifact: str) -> list[dict[str, Any]]:
-    """The artifact's upgrades with how many clips each has left; finished ones are dropped."""
+    """The artifact's upgrades: how many clips each has left, and how many
+    were made again but still aren't what it upgrades to. Finished ones
+    (nothing left) are dropped."""
     rows = session.execute(text(
         "SELECT u.upgrade_id, u.scope, u.library_id, u.project_id, u.edits, u.approved_by, u.approved_at,"
-        " COALESCE(lib.name, p.name),"
-        " (SELECT count(*) FROM producer_upgrade_items ui WHERE ui.upgrade_id = u.upgrade_id)"
+        " COALESCE(lib.name, p.name), u.producer, u.producer_version, u.settings_hash"
         " FROM producer_upgrades u"
         " LEFT JOIN libraries lib ON lib.library_id = u.library_id"
         " LEFT JOIN projects p ON p.project_id = u.project_id"
         " WHERE u.artifact = :artifact ORDER BY u.approved_at, u.upgrade_id"
     ), {"artifact": artifact}).all()
     out, finished = [], []
-    for upgrade_id, scope, library_id, project_id, edits, by, at, name, total in rows:
-        remaining = int(session.execute(text(
-            f"SELECT count(*) FROM producer_upgrade_items ui JOIN active_assets a ON a.asset_id = ui.asset_id"
-            f" {LINEAGE_JOIN}"
-            f" WHERE ui.upgrade_id = :u AND ({APPLIES[artifact]}) AND ({MADE[artifact]})"
-            f" AND (la.made_{artifact} IS NULL OR la.made_{artifact} < :at)"
-        ), {"u": upgrade_id, "at": at}).scalar() or 0)
-        if remaining == 0:
+    for upgrade_id, scope, library_id, project_id, edits, by, at, name, producer, version, h in rows:
+        # Over clips in sight: one trashed or archived meanwhile leaves the
+        # upgrade, and shows as stale again if it comes back.
+        total, remaining, mismatched = session.execute(text(
+            "SELECT count(*),"
+            f" count(*) FILTER (WHERE ({APPLIES[artifact]}) AND ({MADE[artifact]})"
+            "   AND NOT COALESCE(l.producer = :producer AND l.outcome <> 'failed' AND l.produced_at >= :at, false)),"
+            " count(*) FILTER (WHERE l.producer = :producer AND l.produced_at >= :at AND l.outcome <> 'failed'"
+            "   AND (l.producer_version <> :version OR l.settings_hash <> :hash))"
+            " FROM producer_upgrade_items ui JOIN active_assets a ON a.asset_id = ui.asset_id"
+            " LEFT JOIN artifact_lineage l ON l.asset_id = a.asset_id AND l.artifact = :artifact"
+            " WHERE ui.upgrade_id = :u"
+        ), {"u": upgrade_id, "at": at, "artifact": artifact, "producer": producer, "version": version,
+            "hash": h}).one()
+        if not remaining:
             finished.append(upgrade_id)
             continue
         out.append({"upgrade_id": upgrade_id, "scope": {"kind": scope, "id": library_id or project_id, "name": name},
                     "edits": edits, "approved_by": by, "approved_at": at, "total": int(total),
-                    "remaining": remaining})
+                    "remaining": int(remaining), "still_stale": int(mismatched)})
     if finished:
         session.execute(text("DELETE FROM producer_upgrades WHERE upgrade_id = ANY(:ids)"), {"ids": finished})
         session.commit()
     return out
 
 
+def edited_stale_count(session: Session, artifact: str, want: dict[str, Any], library_id: str | None = None,
+                       asset_ids: list[str] | None = None) -> int:
+    """Stale clips in scope with a person's edits on top."""
+    if artifact not in EDITED:
+        return 0
+    return int(session.execute(text(
+        "SELECT count(*) FROM active_assets a"
+        " LEFT JOIN artifact_lineage l ON l.asset_id = a.asset_id AND l.artifact = :artifact"
+        f" WHERE {APPLIES[artifact]} AND ({MADE[artifact]}) AND (l.asset_id IS NULL OR {_stale_sql()})"
+        f" AND {_scope_sql()} AND {EDITED[artifact]}"
+    ), _stale_params(artifact, want, library_id, asset_ids)).scalar() or 0)
+
+
+def replace_edits_as_made(session: Session, artifact: str, asset_ids: list[str], made: dict[str, Any] | None) -> int:
+    """'Replace my edits' happens as each clip is made again: when the
+    producer writes what an upgrade approved with edits=replace asked for,
+    the person's edits on those clips move to correction_history in the
+    same transaction. Doesn't commit. Returns how many clips had some."""
+    if artifact not in EDIT_FIELDS or not asset_ids or not made:
+        return 0
+    if made.get("producer") != PRODUCERS[artifact].producer:
+        return 0
+    if session.execute(text("SELECT 1 FROM producer_upgrades WHERE artifact = :artifact AND edits = 'replace' LIMIT 1"),
+                       {"artifact": artifact}).first() is None:
+        return 0
+    rows = session.execute(text(
+        "SELECT DISTINCT ui.asset_id, u.approved_by FROM producer_upgrade_items ui"
+        " JOIN producer_upgrades u ON u.upgrade_id = ui.upgrade_id"
+        " WHERE ui.asset_id = ANY(:ids) AND u.artifact = :artifact AND u.edits = 'replace'"
+        " AND u.producer_version = :version AND u.settings_hash = :hash"
+        # Only the first time it's made again: edits a person makes after that stay.
+        " AND NOT EXISTS (SELECT 1 FROM artifact_lineage l WHERE l.asset_id = ui.asset_id AND l.artifact = :artifact"
+        "   AND l.producer = :producer AND l.outcome <> 'failed' AND l.produced_at >= u.approved_at)"
+    ), {"ids": asset_ids, "artifact": artifact, "version": str(made.get("version") or ""),
+        "hash": str(made.get("settings_hash") or ""), "producer": PRODUCERS[artifact].producer}).all()
+    replaced = 0
+    for by in {r[1] for r in rows}:
+        replaced += replace_edits(session, artifact, sorted(r[0] for r in rows if r[1] == by), by=by)
+    return replaced
+
+
 def replace_edits(session: Session, artifact: str, asset_ids: list[str], *, by: str | None) -> int:
-    """'Replace my edits': the artifact's corrections on these clips move to
-    correction_history and stop showing. Returns how many clips had some."""
+    """The artifact's corrections on these clips move to correction_history
+    and stop showing. Locks the clips first, as a correction does, so a
+    person's edit at the same moment isn't lost or brought back. Doesn't
+    commit. Returns how many clips had some."""
     from ulid import ULID
 
     fields = EDIT_FIELDS.get(artifact, ())
     if not asset_ids or not fields:
         return 0
+    session.execute(text("SELECT 1 FROM assets WHERE asset_id = ANY(:ids) ORDER BY asset_id FOR UPDATE"),
+                    {"ids": asset_ids})
     rows = session.execute(text(
         "SELECT asset_id, description, ocr_text, tags_added, tags_removed, updated_by, updated_at"
-        " FROM asset_corrections WHERE asset_id = ANY(:ids) FOR UPDATE"), {"ids": asset_ids}).all()
+        " FROM asset_corrections WHERE asset_id = ANY(:ids)"), {"ids": asset_ids}).all()
     now = utcnow()
     touched = []
     for asset_id, description, ocr_text, added, removed, edited_by, edited_at in rows:
@@ -362,8 +442,8 @@ def replace_edits(session: Session, artifact: str, asset_ids: list[str], *, by: 
             clear = "description = NULL, tags_added = '[]'::jsonb, tags_removed = '[]'::jsonb"
         else:
             clear = "ocr_text = NULL"
-        session.execute(text(f"UPDATE asset_corrections SET {clear}, updated_by = :by, updated_at = :now"
-                             " WHERE asset_id = ANY(:ids)"), {"ids": touched, "by": by, "now": now})
+        # Who last edited what's left stays as it was.
+        session.execute(text(f"UPDATE asset_corrections SET {clear} WHERE asset_id = ANY(:ids)"), {"ids": touched})
         session.execute(text(
             "DELETE FROM asset_corrections WHERE asset_id = ANY(:ids) AND description IS NULL AND ocr_text IS NULL"
             " AND tags_added = '[]'::jsonb AND tags_removed = '[]'::jsonb"), {"ids": touched})
@@ -374,14 +454,17 @@ def replace_edits(session: Session, artifact: str, asset_ids: list[str], *, by: 
 
 
 def approve(session: Session, artifact: str, want: dict[str, Any], *, scope: str, library_id: str | None,
-            project_id: str | None, edits: str, asset_ids: list[str], by: str | None) -> str:
-    """Record an upgrade of these clips (replacing one for the same scope). Doesn't commit."""
+            project_id: str | None, edits: str, asset_ids: list[str], by: str | None) -> str | None:
+    """Record an upgrade of these clips, replacing one for the same scope
+    (none at all when there are no clips). Doesn't commit."""
     from ulid import ULID
 
     session.execute(text(
         "DELETE FROM producer_upgrades WHERE artifact = :artifact AND scope = :scope"
         " AND library_id IS NOT DISTINCT FROM :lib AND project_id IS NOT DISTINCT FROM :proj"
     ), {"artifact": artifact, "scope": scope, "lib": library_id, "proj": project_id})
+    if not asset_ids:
+        return None
     upgrade_id = f"upg_{ULID()}"
     session.execute(text(
         "INSERT INTO producer_upgrades (upgrade_id, artifact, producer, producer_version, settings_hash, scope,"

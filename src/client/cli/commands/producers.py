@@ -32,7 +32,7 @@ EDIT_CHOICES = ("keep", "replace", "skip")
 
 def _project_id_for(client: LumiverbClient, project: str) -> str:
     """A project's id from its name or id; exits 1 if there's none."""
-    for p in client.get("/v1/projects").json().get("items", []):
+    for p in client.get("/v1/projects", params={"status": "all"}).json().get("items", []):
         if project in (p.get("project_id"), p.get("name")):
             return p["project_id"]
     console.print(f"[red]Project not found: {escape(project)}[/red]")
@@ -83,6 +83,9 @@ def producers_list(
         for u in ups:
             notes.append(f"{p['title']}: upgrading{_where(u['scope']) or ' everything'}, {u['remaining']:,} left "
                          f"of {u['total']:,} ({u['edits']} edits; id {u['upgrade_id']}).")
+            if u.get("still_stale"):
+                notes.append(f"  {u['still_stale']:,} were made again but are still stale (settings changed "
+                             "while they were made); they aren't handed out again.")
         if p.get("edited"):
             notes.append(f"{p['title']}: {p['edited']:,} of the stale have your edits.")
         if c.get("stale") and not p.get("upgradable", True):
@@ -138,7 +141,7 @@ def producers_upgrade(
                 console.print("[red]Add --edits keep, --edits replace or --edits skip to go ahead.[/red]")
                 raise typer.Exit(2)
             console.print("  keep: the new one is made underneath; your edits stay on top.")
-            console.print("  replace: your edits go (kept in history); the new one shows.")
+            console.print("  replace: as each is made again, your edits go to history and the new one shows.")
             console.print("  skip: clips with your edits stay as they are.")
             body["edits"] = typer.prompt("Keep, replace or skip", default="keep",
                                          type=click.Choice(list(EDIT_CHOICES), case_sensitive=False)).lower()
@@ -163,8 +166,8 @@ def producers_upgrade(
         console.print("Nothing to upgrade: every stale clip has your edits.")
     if data.get("skipped_edited"):
         console.print(f"Skipped {clips(data['skipped_edited'])} with your edits.")
-    if data.get("replaced_edits"):
-        console.print(f"Moved {clips(data['replaced_edits'])}' edits to history.")
+    if data.get("edits_to_replace"):
+        console.print(f"Your edits on {clips(data['edits_to_replace'])} move to history as each is made again.")
 
 
 @producers_app.command("cancel")

@@ -97,8 +97,11 @@ class Upgrade(BaseModel):
     edits: Literal["keep", "replace", "skip"]
     approved_by: str | None = None
     approved_at: datetime
-    total: int  # clips it took on
+    total: int  # clips it took on (still in sight)
     remaining: int  # not made again yet
+    # Made again since, but still not what it upgrades to (e.g. a worker that
+    # read the settings before they changed): stale, and not handed out again.
+    still_stale: int = 0
 
 
 class ProducerItem(BaseModel):
@@ -149,9 +152,13 @@ def list_producers(
     """Every producer with its settings now and its upgrades; counts (in one
     library or project when given) unless counts=false, as the worker asks."""
     vision_model = tenant_vision_model(request)
-    asset_ids = _project_clips(request, session, user_id, project_id) if counts and project_id else None
+    asset_ids = None
+    if counts and project_id:
+        require_editor(request)  # like every project route
+        asset_ids = _project_clips(request, session, user_id, project_id)
     if counts:
         lineage.retire_outdated(session, vision_model)
+    admin = getattr(request.state, "role", None) == "admin"
     items = []
     for artifact, p in PRODUCERS.items():
         want = lineage.desired(session, artifact, vision_model)
@@ -162,9 +169,10 @@ def list_producers(
         )
         if counts:
             item.counts = ProducerCounts(**lineage.counts(session, artifact, want, library_id, asset_ids))
-            if item.counts.stale and artifact in lineage.EDITED:
-                item.edited = len(lineage.stale_ids(session, artifact, want, library_id, asset_ids)[1])
-            item.upgrades = [Upgrade(**u) for u in lineage.upgrades(session, artifact)]
+            if item.counts.stale:
+                item.edited = lineage.edited_stale_count(session, artifact, want, library_id, asset_ids)
+            item.upgrades = [Upgrade(**{**u, "approved_by": u["approved_by"] if admin else None})
+                             for u in lineage.upgrades(session, artifact)]
         items.append(item)
     return ProducerList(producers=items)
 
@@ -198,7 +206,8 @@ class UpgradeOut(BaseModel):
     edits: Literal["keep", "replace", "skip"]
     upgrading: int  # clips handed to the worker to make again
     skipped_edited: int = 0  # left as they are: a person edited them
-    replaced_edits: int = 0  # edits moved to history
+    # edits=replace: clips whose edits move to history as each is made again.
+    edits_to_replace: int = 0
 
 
 @router.post("/{artifact}/upgrade", response_model=UpgradeOut, dependencies=[Depends(require_tenant_admin)])
@@ -211,7 +220,8 @@ def approve_upgrade(
 ) -> UpgradeOut:
     """Approve making the producer's stale artifacts again, in scope. Takes
     the clips stale there now; the worker makes them after anything missing.
-    Approving the same scope again replaces the earlier approval."""
+    Approving the same scope again replaces the earlier approval. With
+    edits=replace, a clip's edits move to history when it's made again."""
     p = producer_or_404(artifact)
     if body.library_id and body.project_id:
         raise InvalidChoiceError("one_scope", "Narrow an upgrade to a library or a project, not both.")
@@ -264,17 +274,18 @@ def approve_upgrade(
     edits = body.edits or "keep"
     items = [a for a in stale if a not in edited] if edits == "skip" else stale
     skipped = len(stale) - len(items)
-    if not items:
-        return UpgradeOut(upgrade_id=None, artifact=artifact, scope=scope, edits=edits, upgrading=0,
-                          skipped_edited=skipped)
-    replaced = 0
-    if edits == "replace" and edited:
-        replaced = lineage.replace_edits(session, artifact, sorted(edited), by=user_id)
-    upgrade_id = lineage.approve(session, artifact, want, scope=scope.kind, library_id=body.library_id,
-                                 project_id=body.project_id, edits=edits, asset_ids=items, by=user_id)
-    session.commit()
+    from sqlalchemy.exc import IntegrityError
+
+    try:
+        # Replaces an earlier approval for the same scope (with nothing, when every clip was skipped).
+        upgrade_id = lineage.approve(session, artifact, want, scope=scope.kind, library_id=body.library_id,
+                                     project_id=body.project_id, edits=edits, asset_ids=items, by=user_id)
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise ConflictError("upgrade_changed", "Someone approved this upgrade at the same moment. Look again.")
     return UpgradeOut(upgrade_id=upgrade_id, artifact=artifact, scope=scope, edits=edits, upgrading=len(items),
-                      skipped_edited=skipped, replaced_edits=replaced)
+                      skipped_edited=skipped, edits_to_replace=len(edited) if edits == "replace" else 0)
 
 
 @router.delete("/{artifact}/upgrade", status_code=204, dependencies=[Depends(require_tenant_admin)])
@@ -284,7 +295,7 @@ def cancel_upgrade(
     upgrade_id: str | None = None,
 ) -> None:
     """Stop an upgrade (or every upgrade of the producer): what it hasn't made
-    again yet stays stale. Edits it already replaced stay in history."""
+    again yet stays stale, with its edits. Edits it already replaced stay in history."""
     producer_or_404(artifact)
     r = session.execute(text(
         "DELETE FROM producer_upgrades WHERE artifact = :artifact AND (CAST(:u AS text) IS NULL OR upgrade_id = :u)"

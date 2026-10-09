@@ -710,7 +710,7 @@ class AssetRepository:
         if tag is not None:
             conditions.append("m.tags @> jsonb_build_array(:tag)")
             params["tag"] = tag
-        # What each step is handed: missing first, then an approved upgrade's clips (work).
+        # What each step is handed: what's missing, and for the brain's worker an approved upgrade's clips (work).
         cond = {**MISSING_CONDITIONS, **(work or {})}
         if missing_vision:
             conditions.append(cond["missing_vision"])
@@ -2003,13 +2003,15 @@ class VideoSceneRepository:
         model_version: str,
         description: str,
         tags: list[str],
+        lineage: dict | None = None,
     ) -> None:
-        """Write vision results back to a scene row."""
+        """Write vision results back to a scene row, with how they were made."""
         scene = self._session.get(VideoScene, scene_id)
         if scene is None:
             raise ValueError(f"Scene not found: {scene_id}")
         scene.description = description
         scene.tags = tags
+        scene.lineage = lineage
         self._session.add(scene)
         self._session.commit()
 

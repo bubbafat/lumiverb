@@ -401,7 +401,8 @@ def _enrich_library(
     library_id = library["library_id"]
 
     def look() -> tuple:
-        summary = client.get("/v1/assets/repair-summary", params={"library_id": library_id}).json()
+        summary = client.get("/v1/assets/repair-summary", params={"library_id": library_id,
+                                                                   "upgrades": "true"}).json()
         return _fingerprint(summary, reachable, skip)
 
     before = look()

@@ -218,6 +218,19 @@ def run_video_index(
 # ---------------------------------------------------------------------------
 
 
+def _described(scene: dict, lineage: dict | None) -> bool:
+    """Whether a scene is already described the way this run would describe
+    it, so it's skipped. A scene described another way (an older model, an
+    upgrade's) is described again; a server that doesn't say how a scene was
+    made gets the old rule: described is done."""
+    if scene.get("description") is None:
+        return False
+    if lineage is None or "lineage" not in scene:
+        return True
+    made = scene.get("lineage") or {}
+    return all(made.get(k) == lineage.get(k) for k in ("producer", "version", "settings_hash"))
+
+
 class _NoFrameError(Exception):
     """The scene's representative frame couldn't be read from the proxy."""
 
@@ -434,12 +447,8 @@ def run_video_enrich(
                 continue
 
             v = _VideoScenes(video=video, t0=time.perf_counter())
-            # Only an approved upgrade hands out a video with every scene
-            # described: describe them all again. Otherwise pick up where it
-            # left off, skipping scenes already described.
-            again = bool(scenes) and all(scene.get("description") for scene in scenes)
             for scene in scenes:
-                if scene.get("description") and not again:
+                if _described(scene, lineage):
                     v.skipped += 1
                     continue
                 if fault is not None:

@@ -15,13 +15,20 @@ stale.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, StrictBool, field_validator
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
-from src.server.api.dependencies import require_editor, require_signed_in, require_tenant_admin
+from src.server.api.dependencies import (
+    get_tenant_session,
+    require_editor,
+    require_signed_in,
+    require_tenant_admin,
+)
 from src.server.api.errors import ConflictError, DecisionRequiredError, UpstreamError
 from src.server.models.control_plane import AiMachine, Tenant
 from src.server.repository.ai_machines import first_vision_machine, machines
@@ -125,6 +132,8 @@ class Models(BaseModel):
 class JobModelIn(BaseModel):
     # "": the job is off.
     model: str = Field(default="", max_length=200)
+    # Answers 409 upgrades_stop: a new model stops upgrades to the old one.
+    stop_upgrades: bool = False
 
 
 class StatusIn(BaseModel):
@@ -361,11 +370,36 @@ def remove_machine(machine_id: str, request: Request, leave_jobs: bool = False) 
         return _settings(ctrl, request.state.tenant_id)
 
 
+def _stop_upgrades(session: Session, job: str, stop: bool) -> None:
+    """A new model makes what upgrades under way would make stale: they stop,
+    once the request says so (409 upgrades_stop with each one's count left)."""
+    from src.server.repository import lineage
+    from src.shared.producers import PRODUCERS
+
+    artifacts = lineage.JOB_ARTIFACTS.get(job, ())
+    running = [{"artifact": a, "title": PRODUCERS[a].title, "remaining": sum(u["remaining"] for u in ups)}
+               for a in artifacts if (ups := lineage.upgrades(session, a))]
+    if not running:
+        return
+    if not stop:
+        what = " and ".join(f"{r['title'].lower()} ({r['remaining']:,} clips left)" for r in running)
+        raise DecisionRequiredError(
+            "upgrades_stop",
+            f"Upgrades under way stop with a new model: {what}. What they haven't made yet stays stale.",
+            {"upgrades": running},
+        )
+    session.execute(text("DELETE FROM producer_upgrades WHERE artifact = ANY(:a)"), {"a": list(artifacts)})
+    session.commit()
+
+
 @router.put("/jobs/{job}", response_model=AiSettings, dependencies=[Depends(require_tenant_admin)])
-def set_job_model(job: str, body: JobModelIn, request: Request) -> AiSettings:
+def set_job_model(job: str, body: JobModelIn, request: Request,
+                  session: Annotated[Session, Depends(get_tenant_session)]) -> AiSettings:
     """Set a job's model; "" turns the job off. Every enabled machine doing
     the job is asked (what it says is its status): 409 model_not_offered,
-    with each machine's models or why it couldn't say, when none offers it."""
+    with each machine's models or why it couldn't say, when none offers it.
+    409 upgrades_stop when upgrades to the current model are under way,
+    unless stop_upgrades says to stop them."""
     if job not in JOBS:
         raise HTTPException(status_code=404, detail="Unknown job")
     tenant_id = request.state.tenant_id
@@ -386,6 +420,8 @@ def set_job_model(job: str, body: JobModelIn, request: Request) -> AiSettings:
                 raise ConflictError("model_not_offered",
                                     f"No machine doing {JOBS[job].lower()} offers {model}.",
                                     {"job": job, "model": model, "machines": asked})
+        if model != _job_model(tenant, job):
+            _stop_upgrades(session, job, body.stop_upgrades)
         _set_job_model(tenant, job, model)
         ctrl.add(tenant)
         ctrl.commit()

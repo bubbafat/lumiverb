@@ -139,6 +139,21 @@ def test_page_missing_paginates() -> None:
     assert after_params == [None, "c1", "c2"]
 
 
+def test_page_missing_takes_upgrades_after_what_is_missing() -> None:
+    """The server hands an approved upgrade's clips (marked) to a caller that
+    asks; the worker does what's missing first, across pages."""
+    client = _mock_client(
+        get_responses=[
+            {"items": [{"asset_id": "a1", "upgrade": True}, {"asset_id": "a2", "upgrade": False}],
+             "next_cursor": "c1"},
+            {"items": [{"asset_id": "a3", "upgrade": True}, {"asset_id": "a4"}], "next_cursor": None},
+        ]
+    )
+    out = _page_missing(client, "lib_u", missing_vision=True)
+    assert [a["asset_id"] for a in out] == ["a2", "a4", "a1", "a3"]
+    assert all(c.kwargs["params"]["upgrades"] == "true" for c in client.get.call_args_list)
+
+
 def test_page_missing_breaks_on_empty_items() -> None:
     client = _mock_client(get_responses=[{"items": [], "next_cursor": "should_not_follow"}])
     out = _page_missing(client, "lib_e", missing_ocr=True)
@@ -180,8 +195,9 @@ def test_get_repair_summary_calls_endpoint() -> None:
     client.get.return_value = MagicMock(json=MagicMock(return_value={"total_assets": 5}))
     out = get_repair_summary(client, "lib_s")
     assert out == {"total_assets": 5}
+    # The brain's worker takes approved upgrades' clips too (ADR-016 phase 3).
     client.get.assert_called_once_with(
-        "/v1/assets/repair-summary", params={"library_id": "lib_s"}
+        "/v1/assets/repair-summary", params={"library_id": "lib_s", "upgrades": "true"}
     )
 
 

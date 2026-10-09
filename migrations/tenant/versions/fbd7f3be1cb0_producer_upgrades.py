@@ -11,6 +11,10 @@ the clips that were stale in that scope then (its items). The reconciler
 hands an item out until it's made again after the approval.
 
 correction_history keeps the edits "Replace my edits" took away.
+
+video_scenes.lineage: how each scene's description was made, so a video's
+descriptions are current only once every scene's are (and an upgrade
+redoes just the scenes made otherwise). Backfilled from the clip's.
 """
 
 from __future__ import annotations
@@ -47,6 +51,9 @@ def upgrade() -> None:
         sa.CheckConstraint("edits IN ('keep', 'replace', 'skip')", name="ck_producer_upgrades_edits"),
     )
     op.create_index("ix_producer_upgrades_artifact", "producer_upgrades", ["artifact"])
+    # One upgrade per producer and scope: approving it again replaces it.
+    op.execute("CREATE UNIQUE INDEX uq_producer_upgrades_scope ON producer_upgrades"
+               " (artifact, scope, COALESCE(library_id, ''), COALESCE(project_id, ''))")
     op.create_table(
         "producer_upgrade_items",
         sa.Column("upgrade_id", sa.String(),
@@ -67,9 +74,17 @@ def upgrade() -> None:
         sa.Column("replaced_at", sa.DateTime(timezone=True), nullable=False),
     )
     op.create_index("ix_correction_history_asset", "correction_history", ["asset_id"])
+    op.add_column("video_scenes", sa.Column("lineage", postgresql.JSONB(), nullable=True))
+    op.execute(
+        "UPDATE video_scenes s SET lineage = jsonb_build_object('producer', l.producer,"
+        " 'version', l.producer_version, 'settings_hash', l.settings_hash)"
+        " FROM artifact_lineage l WHERE l.asset_id = s.asset_id AND l.artifact = 'scene_vision'"
+        " AND s.description IS NOT NULL AND l.producer <> ''"
+    )
 
 
 def downgrade() -> None:
+    op.drop_column("video_scenes", "lineage")
     op.drop_table("correction_history")
     op.drop_table("producer_upgrade_items")
     op.drop_table("producer_upgrades")

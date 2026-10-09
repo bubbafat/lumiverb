@@ -19,6 +19,7 @@ from src.shared import asset_status
 from src.shared.io_utils import normalize_path_prefix
 from src.server.repository.tenant import AssetMetadataRepository, AssetOcrRepository, AssetRepository, LibraryRepository
 from src.server.repository import lineage
+from src.shared.producers import MISSING_FLAGS
 from src.shared.producers import CLIP_MODEL_ID
 from src.server.api.routers.producers import LineageIn, lineage_dict
 from src.server.models.tenant import Asset
@@ -153,6 +154,8 @@ class AssetPageItem(BaseModel):
     face_count: int | None = None
     created_at: str | None = None  # ISO8601
     has_analysis_proxy: bool = False
+    # With upgrades=true: handed out for an approved upgrade, not because it's missing.
+    upgrade: bool = False
 
 
 class AssetPageResponse(BaseModel):
@@ -291,6 +294,7 @@ def page_assets(
     missing_transcription: bool = False,
     missing_probe: bool = False,
     missing_analysis_proxy: bool = False,
+    upgrades: bool = False,
     has_faces: bool | None = None,
     person_id: str | None = None,
     sort: str = "taken_at",
@@ -371,11 +375,17 @@ def page_assets(
                              ("missing_ocr", missing_ocr), ("missing_scene_vision", missing_scene_vision),
                              ("missing_transcription", missing_transcription), ("missing_probe", missing_probe),
                              ("missing_analysis_proxy", missing_analysis_proxy)) if on]
+    # The brain's worker takes an approved upgrade's clips too (upgrades=true);
+    # other callers (the macOS app) get what's missing only.
     work = None
-    if flags:
+    upgrading_now: set[str] = set()
+    if flags and upgrades:
         from src.server.api.routers.producers import tenant_vision_model
 
-        work = lineage.work_conditions(session, flags, library_id, tenant_vision_model(request))
+        if lineage.any_upgrades(session):
+            lineage.retire_outdated(session, tenant_vision_model(request))
+            upgrading_now = lineage.upgrading_artifacts(session)
+            work = {f: lineage.work(f, upgrading_now) for f in flags}
     assets = asset_repo.page_by_library(
         library_id=library_id,
         work=work,
@@ -451,6 +461,10 @@ def page_assets(
         )
         for a in assets
     ]
+    if any(MISSING_FLAGS.get(f) in upgrading_now for f in flags):
+        missing = lineage.missing_among(session, [i.asset_id for i in items], flags)
+        for i in items:
+            i.upgrade = i.asset_id not in missing
 
     next_cursor: str | None = None
     if items and len(items) == limit:
@@ -501,9 +515,11 @@ def repair_summary(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     library_id: str,
+    upgrades: bool = False,
 ) -> RepairSummary:
-    """Count assets missing various pipeline outputs for a library. Each
-    step's count includes an approved upgrade's clips not made again yet."""
+    """Count assets missing various pipeline outputs for a library. With
+    upgrades=true (the brain's worker), each step's count includes an
+    approved upgrade's clips not made again yet."""
     from sqlalchemy import text
     lib = LibraryRepository(session).get_by_id(library_id)
     if lib is None:
@@ -512,12 +528,10 @@ def repair_summary(
     from src.server.repository.tenant import MISSING_CONDITIONS
     from src.shared.producers import MISSING_FLAGS
 
-    lineage.retire_outdated(session, tenant_vision_model(request))
-    live = lineage.upgrading_artifacts(session)
+    live = lineage.prepare(session, tenant_vision_model(request)) if upgrades else set()
     c = dict(MISSING_CONDITIONS)
-    for flag, artifact in MISSING_FLAGS.items():
-        if artifact in live:
-            c[flag] = f"({MISSING_CONDITIONS[flag]} OR {lineage.upgrade_due(artifact)})"
+    for flag in MISSING_FLAGS:
+        c[flag] = lineage.work(flag, live)
     from src.server.search.sync import STALE_SEARCH  # the search sweep's own rule
     row = session.execute(
         text(f"""
@@ -1308,6 +1322,8 @@ def submit_vision(
         data={"description": body.description, "tags": body.tags},
     )
     AssetRepository(session).set_status(asset_id, asset_status.DESCRIBED)
+    # An upgrade that replaces a person's edits does it now, with the new one.
+    lineage.replace_edits_as_made(session, "vision", [asset_id], lineage_dict(body.lineage))
     lineage.record(session, asset_id, "vision", lineage_dict(body.lineage))
 
     # Inline search sync (best-effort)
@@ -1344,6 +1360,7 @@ def submit_ocr(
         raise HTTPException(status_code=404, detail="Asset not found")
 
     AssetOcrRepository(session).upsert(asset_id, body.ocr_text, body.model_id, commit=False)
+    lineage.replace_edits_as_made(session, "ocr", [asset_id], lineage_dict(body.lineage))
     lineage.record(session, asset_id, "ocr", lineage_dict(body.lineage), outcome="ok" if body.ocr_text else "empty",
                    commit=False)
     session.commit()  # the text and how it was made, together
@@ -1390,6 +1407,7 @@ def submit_batch_ocr(
             skipped += 1
             continue
         ocr_repo.upsert(item.asset_id, item.ocr_text, body.model_id, commit=False)
+        lineage.replace_edits_as_made(session, "ocr", [item.asset_id], lineage_dict(body.lineage, item.source_sha256))
         lineage.record(session, item.asset_id, "ocr", lineage_dict(body.lineage, item.source_sha256),
                        outcome="ok" if item.ocr_text else "empty", commit=False)
         updated += 1
@@ -1453,6 +1471,8 @@ def submit_batch_vision(
             data={"description": item.description, "tags": item.tags},
         )
         asset_repo.set_status(item.asset_id, asset_status.DESCRIBED)
+        lineage.replace_edits_as_made(session, "vision", [item.asset_id],
+                                      lineage_dict(body.lineage, item.source_sha256))
         lineage.record(session, item.asset_id, "vision", lineage_dict(body.lineage, item.source_sha256))
         updated += 1
 
