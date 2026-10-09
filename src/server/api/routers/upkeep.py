@@ -42,6 +42,8 @@ class SearchSyncResult(BaseModel):
     failed: int = 0
     scenes_synced: int = 0
     scenes_failed: int = 0
+    transcripts_synced: int = 0
+    transcripts_failed: int = 0
 
 
 class CleanupResultModel(BaseModel):
@@ -218,10 +220,11 @@ def _purge_expired_trash_single_tenant(authorization: str | None) -> dict:
 
 
 def _reset_search_synced_at(session) -> None:
-    """Clear search_synced_at on all assets and scenes to force full re-index."""
-    from sqlalchemy import text
-    session.execute(text("UPDATE assets SET search_synced_at = NULL"))
-    session.execute(text("UPDATE video_scenes SET search_synced_at = NULL"))
+    """Clear the sync times of all assets, scenes and transcripts to force full re-index."""
+    from src.server.search.sync import REINDEX_RESETS
+
+    for reset in REINDEX_RESETS.values():
+        session.execute(text(reset))
     session.commit()
 
 
@@ -231,7 +234,8 @@ def _run_sweep_all_tenants(force: bool = False) -> dict:
     from src.server.repository.control_plane import TenantRepository
     from src.server.search.sync import run_search_sync_sweep
 
-    totals = {"synced": 0, "failed": 0, "scenes_synced": 0, "scenes_failed": 0}
+    totals = {"synced": 0, "failed": 0, "scenes_synced": 0, "scenes_failed": 0,
+              "transcripts_synced": 0, "transcripts_failed": 0}
 
     with get_control_session() as control_session:
         tenants = TenantRepository(control_session).list_all()
@@ -316,7 +320,7 @@ def run_search_sync(
     """Run search sync sweep.
 
     With admin key: sweeps all tenants. With tenant API key: sweeps that tenant only.
-    force=true: clears search_synced_at on all assets/scenes so everything is re-indexed.
+    force=true: clears the sync times of all assets, scenes and transcripts so everything is re-indexed.
     """
     if _is_admin_key(authorization):
         result = _run_sweep_all_tenants(force=force)
@@ -460,16 +464,15 @@ def recreate_search_indexes(
             errors.append(f"{tenant_id}: {exc}")
             logger.warning("Recreate Quickwit indexes failed for %s: %s", tenant_id, exc)
 
-    # Reset every search_synced_at so the next search-sync sweep
-    # actually does the work.
+    # Marked for a reindex: the next search-sync sweep clears the sync times and does the work.
+    from src.server.search.sync import REINDEX_RESETS, mark_reindex
+
     for tenant_id in tenant_ids:
         try:
             with get_tenant_session(tenant_id) as tsession:
-                tsession.execute(text("UPDATE assets SET search_synced_at = NULL"))
-                tsession.execute(text("UPDATE video_scenes SET search_synced_at = NULL"))
-                tsession.commit()
+                mark_reindex(tsession, list(REINDEX_RESETS))
         except Exception as exc:
-            logger.warning("Failed to reset search_synced_at for tenant %s: %s", tenant_id, exc)
+            logger.warning("Failed to mark tenant %s's search for a reindex: %s", tenant_id, exc)
 
     return RecreateSearchIndexesResult(tenants_processed=processed, errors=errors)
 

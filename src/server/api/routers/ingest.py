@@ -572,7 +572,7 @@ async def create_and_ingest(
     if reappeared is not None and reappeared.transcript_srt:
         from src.server.search.sync import index_transcript_segments
 
-        index_transcript_segments(tenant_id, reappeared)
+        index_transcript_segments(session, tenant_id, reappeared)
     if created and handed_to is None and sha and get_follow_moves(session):
         # A clip with this content may have gone missing while this one was
         # made (a copy and the overwritten original in one scan, ingested at

@@ -554,6 +554,8 @@ def unified_query(
             search_health.note(session, search_health.FALLBACK, problems[0])
         elif problems and not scores:  # Quickwit failed and the fallback is off: nothing found
             search_health.note(session, search_health.FAILURE, problems[0])
+        elif problems:  # the clip search failed; scenes and transcripts answered
+            search_health.note(session, search_health.FAILURE, f"{problems[0]}; only scenes and transcripts answered")
 
         if source == "postgres_fallback":
             # Join raw terms for ILIKE — no parentheses (those are Quickwit syntax)

@@ -369,7 +369,7 @@ def test_a_handed_over_clip_keeps_its_transcript_in_search(env):
     _ingest(env, "ncr-ts/copy.mp4", media_type="video", sha=sha)
     calls: list[tuple[str, tuple]] = []
 
-    def index(tenant_id, asset):
+    def index(session, tenant_id, asset):
         calls.append(("index", (asset.asset_id,)))
 
     def delete(self, tenant_id, asset_ids):

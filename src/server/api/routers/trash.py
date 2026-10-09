@@ -210,7 +210,7 @@ def _hand_over(session: Session, request: Request, asset_id: str) -> str | None:
         try:
             from src.server.search.sync import index_transcript_segments
 
-            index_transcript_segments(tenant_id, archived)
+            index_transcript_segments(session, tenant_id, archived)
         except Exception as exc:  # noqa: BLE001 — the next search sync re-indexes it
             logger.warning("Couldn't re-index %s's transcript after the move: %s", asset_id, exc)
     return library_id

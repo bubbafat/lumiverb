@@ -479,7 +479,7 @@ def _restore_trashed_clips(
             continue  # back in the archive: not in search
         asset = asset_repo.get_by_id(asset_id)
         if asset is not None:
-            reindex_restored_asset(request, asset)
+            reindex_restored_asset(request, session, asset)
     for library_id in asset_repo.library_ids_of(restored):
         LibraryRepository(session).bump_revision(library_id)
     return len(restored) - len(to_archive), len(to_archive)
