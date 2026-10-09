@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import threading
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass, field, fields
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +19,28 @@ MIN_BBOX_AREA_FRACTION = 0.003  # 0.3% of image area
 MIN_FACE_PIXELS = 40            # minimum width in pixels
 MIN_RELATIVE_SIZE = 0.15        # must be ≥ 15% area of the largest face
 MIN_LAPLACIAN_VARIANCE = 15.0   # sharpness floor (tune from logged values)
+DET_SIZE = 640                  # the detector's input, square
+MAX_DETECT_EDGE = 1280          # the image looked at, at most (larger inputs only waste memory)
+
+
+@dataclass(frozen=True)
+class FaceSettings:
+    """How faces are found: the faces producer's settings (src/producers/faces),
+    which the account changes in Settings → Processing. The model isn't one."""
+
+    det_size: int = DET_SIZE
+    max_detect_edge: int = MAX_DETECT_EDGE
+    min_confidence: float = MIN_DETECTION_CONFIDENCE
+    min_area_fraction: float = MIN_BBOX_AREA_FRACTION
+    min_face_pixels: int = MIN_FACE_PIXELS
+    min_relative_size: float = MIN_RELATIVE_SIZE
+    min_sharpness: float = MIN_LAPLACIAN_VARIANCE
+
+    @classmethod
+    def for_producer(cls, settings: Mapping[str, Any]) -> FaceSettings:
+        """The account's settings (GET /v1/producers); ones this version doesn't know are left out."""
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in settings.items() if k in known})
 
 
 def _cuda_device_available() -> bool:
@@ -56,7 +80,9 @@ class InsightFaceProvider:
     (Linux + NVIDIA GPU), CoreML (macOS), or CPU.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, settings: FaceSettings | None = None) -> None:
+        # The gates can change between calls; the detector's size only with a new provider.
+        self.settings = settings or FaceSettings()
         self._app = None
         self._lock = threading.Lock()
         # FaceAnalysis wraps ONNX Runtime; InferenceSession is not safe for concurrent
@@ -97,7 +123,7 @@ class InsightFaceProvider:
                         name=MODEL_VERSION,
                         providers=providers,
                     )
-                    app.prepare(ctx_id=0, det_size=(640, 640))
+                    app.prepare(ctx_id=0, det_size=(self.settings.det_size, self.settings.det_size))
                     self._app = app
                     # What the session actually got — ORT falls back to CPU silently.
                     active = app.det_model.session.get_providers()[0]
@@ -108,10 +134,11 @@ class InsightFaceProvider:
         """Force model loading now (fail fast). Thread-safe."""
         self._load()
 
-    # Max long edge for face detection input. InsightFace resizes to 640x640
-    # internally for detection anyway — larger inputs just waste memory.
-    # Bounding boxes are returned as fractions, so resizing is transparent.
-    _MAX_DETECT_EDGE = 1280
+    # Max long edge for face detection input (settings.max_detect_edge).
+    # InsightFace resizes to det_size internally for detection anyway — larger
+    # inputs just waste memory. Bounding boxes are returned as fractions, so
+    # resizing is transparent.
+    _MAX_DETECT_EDGE = MAX_DETECT_EDGE
 
     def detect_faces(self, pil_image: "PIL.Image.Image") -> list[FaceDetection]:
         """Detect faces and generate ArcFace embeddings in one pass.
@@ -126,13 +153,14 @@ class InsightFaceProvider:
         import numpy as np
 
         app = self._load()
+        gates = self.settings
 
-        # Downscale if larger than _MAX_DETECT_EDGE to reduce memory.
+        # Downscale if larger than max_detect_edge to reduce memory.
         # Bounding boxes are normalized to fractions, so this is transparent.
         w_orig, h_orig = pil_image.size
         long_edge = max(w_orig, h_orig)
-        if long_edge > self._MAX_DETECT_EDGE:
-            scale = self._MAX_DETECT_EDGE / long_edge
+        if long_edge > gates.max_detect_edge:
+            scale = gates.max_detect_edge / long_edge
             new_w = int(w_orig * scale)
             new_h = int(h_orig * scale)
             pil_image = pil_image.resize((new_w, new_h))
@@ -162,11 +190,11 @@ class InsightFaceProvider:
             x1, y1, x2, y2 = bbox
 
             confidence = float(face.det_score)
-            if confidence < MIN_DETECTION_CONFIDENCE:
+            if confidence < gates.min_confidence:
                 continue
 
             face_px_w = float(x2 - x1)
-            if face_px_w < MIN_FACE_PIXELS:
+            if face_px_w < gates.min_face_pixels:
                 continue
 
             # Normalize to fractions of image dimensions, clamp to [0, 1]
@@ -176,7 +204,7 @@ class InsightFaceProvider:
             bh = max(0.0, min(1.0, float(y2 - y1) / h))
 
             bbox_area = bw * bh
-            if bbox_area < MIN_BBOX_AREA_FRACTION:
+            if bbox_area < gates.min_area_fraction:
                 continue
 
             # ArcFace embedding — already L2-normalized by InsightFace
@@ -201,7 +229,7 @@ class InsightFaceProvider:
                 confidence, bbox_area, face_px_w, sharpness,
             )
 
-            if sharpness < MIN_LAPLACIAN_VARIANCE:
+            if sharpness < gates.min_sharpness:
                 continue
 
             vec = np.asarray(embedding, dtype=float).tolist()
@@ -224,7 +252,7 @@ class InsightFaceProvider:
         max_area = max(area for _, area in candidates)
         results: list[FaceDetection] = []
         for det, area in candidates:
-            if area < max_area * MIN_RELATIVE_SIZE:
+            if area < max_area * gates.min_relative_size:
                 logger.debug(
                     "dropping face (relative size): area=%.4f max=%.4f ratio=%.3f",
                     area, max_area, area / max_area,

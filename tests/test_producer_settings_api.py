@@ -46,8 +46,8 @@ def test_each_setting_comes_with_its_bounds_and_whether_it_can_change(env):
         "key": "vad_min_silence_ms", "label": "Shortest silence skipped", "kind": "int", "value": 500,
         "default": 500, "minimum": 100, "maximum": 2000, "unit": "ms", "advanced": False, "fixed": None}
     assert "Settings → AI" in fields["model"]["fixed"]
-    faces = {f["key"]: f for f in _producer(env, "faces")["fields"]}
-    assert all(f["fixed"] for f in faces.values())  # face detection doesn't read them yet
+    clip = {f["key"]: f for f in _producer(env, "clip")["fields"]}
+    assert all(f["fixed"] for f in clip.values())  # CLIP doesn't read them yet
 
 
 def test_an_admin_changes_a_setting_and_the_hash_follows(env):
@@ -77,7 +77,7 @@ def test_what_cant_be_set_is_refused_saying_why(env, settings, code):
 
 
 def test_a_setting_the_code_doesnt_read_cant_be_changed(env):
-    r = _put(env, "faces", settings={"min_confidence": 0.7})
+    r = _put(env, "clip", settings={"input_edge": 1024})
     assert r.status_code == 422 and r.json()["error"]["code"] == "setting_fixed", r.text
     assert "Not read by this producer yet" in r.json()["error"]["message"]
 
@@ -207,3 +207,13 @@ def test_a_new_prompt_is_saved_whole_with_its_equals_signs(env):
     r = _put(env, "vision", settings={"prompt": prompt}, redo=True)
     assert r.status_code == 200, r.text
     assert _producer(env, "vision")["settings"]["prompt"] == prompt
+
+
+def test_faces_settings_change_and_ask_before_finding_faces_again(env):
+    r = _put(env, "faces", settings={"min_confidence": 0.7}, redo=True)
+    assert r.status_code == 200 and r.json()["settings"]["min_confidence"] == 0.7, r.text
+    r = _put(env, "faces", settings={"model": "antelopev2"})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "setting_fixed", r.text
+    r = _put(env, "faces", settings={"max_detect_edge": 2048})  # past the proxies' size
+    assert r.status_code == 422 and r.json()["error"]["code"] == "bad_setting", r.text
+    _put(env, "faces", settings={"min_confidence": None}, redo=True)

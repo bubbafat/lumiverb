@@ -36,12 +36,7 @@ def test_the_workers_constants_are_the_registrys_settings():
     assert "select='eq(pict_type\\\\,I)'" in inspect.getsource(video_scanner) and scenes["frames"] == "keyframes"
     faces = P.PRODUCERS["faces"].defaults
     assert face.MODEL_VERSION == faces["model"]
-    assert face.InsightFaceProvider._MAX_DETECT_EDGE == faces["max_detect_edge"]
-    assert f"det_size=({faces['det_size']}, {faces['det_size']})" in inspect.getsource(face)
-    assert (face.MIN_DETECTION_CONFIDENCE, face.MIN_BBOX_AREA_FRACTION, face.MIN_FACE_PIXELS,
-            face.MIN_RELATIVE_SIZE, face.MIN_LAPLACIAN_VARIANCE) == (
-        faces["min_confidence"], faces["min_area_fraction"], faces["min_face_pixels"],
-        faces["min_relative_size"], faces["min_sharpness"])
+    assert {k: v for k, v in faces.items() if k != "model"} == face.FaceSettings().__dict__
     clip = P.PRODUCERS["clip"].defaults
     assert clip_provider.MODEL_VERSION == f"{clip['model']}-{clip['pretrained']}"
     from src.client.cli import repair
