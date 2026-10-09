@@ -113,7 +113,7 @@ def producers_list(
         caught_up = eta.get("caught_up")
         console.print("How long until everything is made isn't known yet: it's learned from the jobs as they finish."
                       if caught_up is None else "Caught up: everything is made." if caught_up == 0
-                      else f"Caught up in about {_duration(caught_up)}.")
+                      else f"Caught up in {'under a minute' if caught_up < 60 else 'about ' + _duration(caught_up)}.")
     for note in notes:
         console.print(escape(note))
     console.print("[dim]Stale ones were made with another model or settings than now; they're made again "

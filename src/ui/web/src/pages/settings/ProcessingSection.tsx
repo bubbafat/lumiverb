@@ -60,7 +60,7 @@ export default function ProcessingSection() {
         <h2 className="text-lg font-semibold text-gray-100">Processing</h2>
         <p className="mt-1 text-sm text-gray-400">
           What each producer has made for your clips. Stale ones were made with another model or settings than now:
-          they're made again after anything missing. Changing a model in Settings → AI is what starts that.
+          they're made again after anything missing. Changing a model in Settings → AI, or a producer's settings below, is what starts that.
         </p>
       </div>
 
@@ -181,7 +181,7 @@ function ProducerRow({
                   {!!c.given_up && ` (${n(c.given_up)} given up)`}
                 </span>
               )}
-              {!!left && <span> · about {duration(left)} left</span>}
+              {!!left && <span> · {about(left)} left</span>}
             </>
           )}
         </p>
@@ -264,6 +264,11 @@ export function duration(seconds: number): string {
   return hours % 24 ? `${days} days ${hours % 24} h` : `${days} days`;
 }
 
+/** "about 2 h 5 min", or "under a minute" (no "about" in front of that). */
+function about(seconds: number): string {
+  return seconds < 60 ? "under a minute" : `about ${duration(seconds)}`;
+}
+
 function listKinds(counts: Record<string, number>): string {
   return Object.entries(counts)
     .filter(([, c]) => c > 0)
@@ -296,7 +301,7 @@ function NowPanel() {
             ? "How long until everything is made isn't known yet: it's learned from the jobs as they finish."
             : eta.caught_up === 0
               ? "Caught up: everything is made."
-              : `Caught up in about ${duration(eta.caught_up)}.`}
+              : `Caught up in ${about(eta.caught_up)}.`}
         </p>
       )}
       <p className="text-gray-200">
@@ -310,7 +315,7 @@ function NowPanel() {
               {jobLabel(job.kind)}
               {job.unit === "second" && job.units > 0 && ` of ${duration(job.units)} of video`}
               {" · "}
-              {job.left === null ? "time left not known yet" : job.left < 1 ? "about to finish" : `about ${duration(job.left)} left`}
+              {job.left === null ? "time left not known yet" : job.left < 1 ? "about to finish" : `${about(job.left)} left`}
             </li>
           ))}
         </ul>

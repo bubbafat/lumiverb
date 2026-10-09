@@ -136,7 +136,7 @@ describe("ProcessingSection", () => {
     const vision = await row("Descriptions and tags");
     expect(vision.textContent).toContain("Redoing 3 clips, after anything missing.");
     expect(screen.queryByRole("button", { name: /Upgrade/ })).toBeNull();
-    expect(screen.getByText(/Changing a model in Settings → AI is what starts that/)).toBeTruthy();
+    expect(screen.getByText(/Changing a model in Settings → AI, or a producer.s settings below, is what starts that/)).toBeTruthy();
   });
 
   it("says nothing about redoing when nothing is stale", async () => {
