@@ -1,0 +1,158 @@
+"""Which job runs next (ADR-016 phase 4).
+
+The scheduler keeps one ranked queue of every job, in every account: by
+tier (1 see it, 2 prepare, 3 find it, 4 redo), then oldest first. Each
+resource is a pool with so many slots (the probes, the renders, the vision
+machines' requests at once, ...); a free slot takes the best job that uses
+it, so a lower tier fills what a higher one leaves idle.
+
+The jobs come from the database (queue.py): each kind's due clips, a
+buffer's worth at a time, offered here. A job in hand isn't offered again,
+and one just run isn't taken again for a while (retake_after): made, the
+database stops listing it; not made (it failed and nothing said so), it
+would otherwise be first again at once.
+"""
+
+from __future__ import annotations
+
+import threading
+import time
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+
+# A kind's buffer is topped up once fewer than this are waiting.
+LOW = 10
+# A kind whose every due clip is known (the database listed fewer than it
+# was asked for) isn't asked again for this long.
+EMPTY_WAIT = 15.0
+
+
+@dataclass(frozen=True)
+class KindSpec:
+    tier: int
+    pool: str
+    batch: int = 1  # items per job (faces: one subprocess call)
+    retake_after: float | None = None  # the dispatcher's default when None
+
+
+@dataclass(frozen=True)
+class Job:
+    tenant_id: str
+    kind: str
+    tier: int
+    items: tuple[dict, ...]
+
+    @property
+    def asset_ids(self) -> list[str]:
+        return [i["asset_id"] for i in self.items]
+
+
+def _order(tier: int, item: dict) -> tuple:
+    return (tier, str(item.get("created_at") or ""), item["asset_id"])
+
+
+class Dispatcher:
+    def __init__(self, kinds: Mapping[str, KindSpec], capacity: Mapping[str, int], *,
+                 retake_after: float = 3600.0, clock: Callable[[], float] = time.monotonic) -> None:
+        self._kinds = dict(kinds)
+        self._capacity = dict(capacity)
+        self._retake_after = retake_after
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._buffers: dict[tuple[str, str], list[dict]] = {}
+        self._all_known_at: dict[tuple[str, str], float] = {}
+        self._in_hand: set[tuple[str, str, str]] = set()
+        self._taken_until: dict[tuple[str, str, str], float] = {}
+        self._busy: dict[str, int] = {}
+
+    # -- capacity -----------------------------------------------------------
+
+    def set_capacity(self, pool: str, slots: int) -> None:
+        with self._lock:
+            self._capacity[pool] = max(0, slots)
+
+    def free(self, pool: str) -> int:
+        with self._lock:
+            return self._free(pool)
+
+    def _free(self, pool: str) -> int:
+        return max(0, self._capacity.get(pool, 0) - self._busy.get(pool, 0))
+
+    def running(self, pool: str) -> int:
+        with self._lock:
+            return self._busy.get(pool, 0)
+
+    def waiting(self, pool: str) -> int:
+        with self._lock:
+            return sum(len(b) for (_, kind), b in self._buffers.items() if self._kinds[kind].pool == pool)
+
+    # -- the queue ----------------------------------------------------------
+
+    def wanted(self, tenant_id: str, kind: str) -> bool:
+        """Whether to ask the database for more of this kind now."""
+        key = (tenant_id, kind)
+        with self._lock:
+            known_at = self._all_known_at.get(key)
+            if known_at is not None and self._clock() - known_at < EMPTY_WAIT:
+                return False
+            return len(self._buffers.get(key, ())) < LOW
+
+    def offer(self, tenant_id: str, kind: str, items: list[dict], *, complete: bool = True) -> None:
+        """The kind's due clips as the database lists them now, oldest
+        first: they replace what was waiting. complete: that's all of them
+        (fewer than asked for), so it isn't asked again for a while."""
+        key = (tenant_id, kind)
+        tier = self._kinds[kind].tier
+        now = self._clock()
+        with self._lock:
+            self._taken_until = {k: t for k, t in self._taken_until.items() if t > now}
+            fresh = [i for i in items
+                     if (tenant_id, kind, i["asset_id"]) not in self._in_hand
+                     and (tenant_id, kind, i["asset_id"]) not in self._taken_until]
+            fresh.sort(key=lambda i: _order(tier, i))
+            self._buffers[key] = fresh
+            if complete or not fresh:
+                self._all_known_at[key] = now
+            else:
+                self._all_known_at.pop(key, None)
+
+    def clear(self, tenant_id: str, kind: str) -> None:
+        """Hand out none of this kind for now (its machines can't do it)."""
+        with self._lock:
+            self._buffers.pop((tenant_id, kind), None)
+
+    def take(self, pool: str) -> Job | None:
+        """The best job a free slot of this pool can run, now in hand; None if none."""
+        with self._lock:
+            if self._free(pool) <= 0:
+                return None
+            best: tuple | None = None
+            for (tenant_id, kind), buffer in self._buffers.items():
+                spec = self._kinds[kind]
+                if spec.pool != pool or not buffer:
+                    continue
+                rank = _order(spec.tier, buffer[0])
+                if best is None or rank < best[0]:
+                    best = (rank, tenant_id, kind)
+            if best is None:
+                return None
+            _, tenant_id, kind = best
+            spec = self._kinds[kind]
+            buffer = self._buffers[(tenant_id, kind)]
+            items, self._buffers[(tenant_id, kind)] = buffer[:spec.batch], buffer[spec.batch:]
+            for i in items:
+                self._in_hand.add((tenant_id, kind, i["asset_id"]))
+            self._busy[pool] = self._busy.get(pool, 0) + 1
+            return Job(tenant_id, kind, spec.tier, tuple(items))
+
+    def done(self, job: Job) -> None:
+        """The job's slot is free; its clips aren't taken again for a while."""
+        spec = self._kinds[job.kind]
+        wait = self._retake_after if spec.retake_after is None else spec.retake_after
+        with self._lock:
+            self._busy[spec.pool] = max(0, self._busy.get(spec.pool, 0) - 1)
+            until = self._clock() + wait
+            for asset_id in job.asset_ids:
+                key = (job.tenant_id, job.kind, asset_id)
+                self._in_hand.discard(key)
+                self._taken_until[key] = until
