@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.server.scheduler.service import Scheduler, run
+from src.shared.producers import pause_targets
 
 
 @pytest.fixture(autouse=True)
@@ -584,7 +585,7 @@ def test_a_paused_account_starts_nothing_and_asks_for_nothing() -> None:
     asked: list = []
     scan = MagicMock()
     s = _scheduler({"t1": FakeAccount()}, {"probe": [_item("p")], "vision": [_item("v")]}, rec,
-                   asked=asked, held={"all"}, scan=scan)
+                   asked=asked, held=set(pause_targets()), scan=scan)
     s.tick()
     _settle(s)
     assert rec.ran == [] and asked == [] and not scan.called
@@ -594,7 +595,7 @@ def test_a_paused_account_starts_nothing_and_asks_for_nothing() -> None:
 @pytest.mark.fast
 def test_a_paused_account_still_says_what_its_doing() -> None:
     written: list = []
-    s = _scheduler({"t1": FakeAccount()}, {}, Recorder(), held={"all"})
+    s = _scheduler({"t1": FakeAccount()}, {}, Recorder(), held=set(pause_targets()))
     s._write_status = lambda tenant_id, status: written.append(tenant_id)
     s.tick()
     assert written == ["t1"]
@@ -621,7 +622,7 @@ def test_pausing_lets_running_jobs_finish_and_starts_nothing_more() -> None:
     s = _scheduler({"t1": FakeAccount(vision=1)}, {"vision": [_item("a"), _item("b", "2026-10-02")]}, rec)
     s._on_hold = lambda tenant_id: held
     s.tick()  # a in hand, b waiting
-    held.add("all")
+    held.update(pause_targets())
     s.tick()
     assert s.status("t1")["waiting"] == {}
     rec.hold.set()
@@ -635,7 +636,7 @@ def test_pausing_lets_running_jobs_finish_and_starts_nothing_more() -> None:
 def test_other_accounts_go_on_while_one_is_paused() -> None:
     rec = Recorder()
     s = _scheduler({"t1": FakeAccount("t1"), "t2": FakeAccount("t2")}, {"clip": [_item("c")]}, rec)
-    s._on_hold = lambda tenant_id: {"all"} if tenant_id == "t1" else set()
+    s._on_hold = lambda tenant_id: set(pause_targets()) if tenant_id == "t1" else set()
     s.tick()
     _settle(s)
     assert [(t, kind) for t, kind, _ in rec.ran] == [("t2", "clip")]

@@ -40,7 +40,7 @@ class CleanupResult:
     bytes_freed: int = 0
     skipped_libraries: int = 0
     errors: list[str] = field(default_factory=list)
-    # Skipped because all processing is paused (not "nothing to clean up"), and which accounts.
+    # Skipped because Upkeep is paused (not "nothing to clean up"), and which accounts.
     paused: bool = False
     paused_tenants: list[str] = field(default_factory=list)
 
@@ -339,11 +339,11 @@ def run_cleanup_single_tenant(
 
 
 def _paused(session: Session, tenant_id: str, dry_run: bool) -> bool:
-    """An admin paused all of the account's processing (the kill switch,
-    Robert Oct 9): its files aren't cleaned up meanwhile; a dry run still reports."""
+    """An admin paused the account's Upkeep switch (Robert, Oct 9): its files
+    aren't cleaned up meanwhile; a dry run still reports."""
     from src.server.repository import lineage
 
-    if dry_run or not lineage.all_paused(session):
+    if dry_run or not lineage.upkeep_paused(session):
         return False
     logger.info("cleanup: %s is paused; nothing deleted", tenant_id)
     return True

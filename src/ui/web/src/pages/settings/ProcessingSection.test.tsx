@@ -11,9 +11,19 @@ let producers: Producer[] = [];
 // What the next stop, resume, pause or save answers (then 204).
 let answers: Response[] = [];
 let failures: unknown[] = [];
-let queue: Record<string, unknown> = { live: false, at: null, running: {}, waiting: {}, pools: {}, gpu_hold: 0,
-                                       paused: false, paused_by: null, paused_at: null, scans_paused: false,
-                                       scans_paused_by: null, scans_paused_at: null };
+let queue: Record<string, unknown> = { live: false, at: null, running: {}, waiting: {}, pools: {}, gpu_hold: 0 };
+// The pause switches paused, as the server keeps them (Scans, Upkeep, each producer the scheduler makes).
+let paused = new Set<string>();
+
+/** As the server: each switch, and the state they make (running, partly, paused). */
+function switches() {
+  const rows = [{ target: "scans", title: "Scans" }, { target: "upkeep", title: "Upkeep" },
+                ...producers.filter((p) => p.scheduled).map((p) => ({ target: p.artifact, title: p.title }))]
+    .map((r) => ({ ...r, paused: paused.has(r.target), paused_at: paused.has(r.target) ? "2026-10-09T10:00:00Z" : null,
+                   paused_by: null }));
+  const n = rows.filter((r) => r.paused).length;
+  return { switches: rows, state: n === 0 ? "running" : n === rows.length ? "paused" : "partly" };
+}
 const sent: { method: string; url: string; body: unknown }[] = [];
 
 function producer(over: Partial<Producer>): Producer {
@@ -50,11 +60,8 @@ beforeEach(() => {
     if (path === "/me") return json({ email: "a@b.c", role });
     if (path === "/libraries") return json([{ library_id: "lib_1", name: "Footage", root_path: "/f", status: "active" }]);
     if (path === "/projects") return json({ items: [{ project_id: "col_1", name: "Wedding" }] });
-    if (path === "/producers") return json({ producers });
-    if (path === "/producers/queue") {  // as the server: the producers paused on their own, whatever the scope
-      return json({ paused_producers: producers.filter((p) => p.paused).map((p) => ({ artifact: p.artifact, title: p.title })),
-                    ...queue });
-    }
+    if (path === "/producers") return json({ producers: producers.map((p) => ({ ...p, paused: paused.has(p.artifact) })) });
+    if (path === "/producers/queue") return json({ ...switches(), ...queue });
     if (path === "/producers/failures" && method === "GET") return json({ items: failures, next_cursor: null });
     if (path === "/producers/failures/retry" && method === "POST") {
       const n = body.asset_ids ? body.asset_ids.length : failures.length;
@@ -77,27 +84,15 @@ beforeEach(() => {
     if (all && method === "POST") {
       const next = answers.shift();
       if (next) return next;
-      const paused = all[1] === "pause";
-      queue = { ...queue, paused, paused_at: paused ? "2026-10-09T10:00:00Z" : null };
-      if (!paused) {  // Resume all turns everything on: no paused part is kept
-        queue = { ...queue, scans_paused: false, scans_paused_at: null };
-        producers = producers.map((p) => ({ ...p, paused: false, paused_at: null }));
-      }
-      return new Response(null, { status: 204 });
-    }
-    const scans = path.match(/^\/producers\/scans\/(pause|resume)$/);
-    if (scans && method === "POST") {
-      const scansPaused = scans[1] === "pause";
-      queue = { ...queue, scans_paused: scansPaused, scans_paused_at: scansPaused ? "2026-10-09T11:00:00Z" : null };
+      paused = all[1] === "pause" ? new Set(switches().switches.map((r) => r.target)) : new Set();
       return new Response(null, { status: 204 });
     }
     const one = path.match(/^\/producers\/([^/]+)\/(pause|resume)$/);
     if (one && method === "POST") {
       const next = answers.shift();
       if (next) return next;
-      const paused = one[2] === "pause";
-      producers = producers.map((p) => (p.artifact === one[1]
-        ? { ...p, paused, paused_at: paused ? "2026-10-09T10:00:00Z" : null } : p));
+      if (one[2] === "pause") paused.add(one[1]);
+      else paused.delete(one[1]);
       return new Response(null, { status: 204 });
     }
     return json({}, 404);
@@ -112,8 +107,8 @@ afterEach(() => {
   producers = [];
   answers = [];
   failures = [];
-  queue = { live: false, at: null, running: {}, waiting: {}, pools: {}, gpu_hold: 0, paused: false, paused_by: null,
-            paused_at: null, scans_paused: false, scans_paused_by: null, scans_paused_at: null };
+  queue = { live: false, at: null, running: {}, waiting: {}, pools: {}, gpu_hold: 0 };
+  paused = new Set();
   sent.length = 0;
 });
 
@@ -220,130 +215,109 @@ describe("ProcessingSection", () => {
     expect(screen.queryByRole("button", { name: /Stop|Resume/ })).toBeNull();
   });
 
-  it("pauses all processing and resumes it (admins)", async () => {
-    queue = { ...queue, live: true, at: new Date().toISOString() };
-    producers = [producer({})];
+  // Pause switches (Robert, Oct 9): one per processing action; the global one's color is derived from them.
+  const state = (name: string) => screen.getByRole("switch", { name }).getAttribute("data-state");
+  const flip = (name: string) => fireEvent.click(screen.getByRole("switch", { name }));
+
+  it("shows a green switch for all processing, and one each for scans, upkeep and each producer (admins)", async () => {
+    producers = [producer({}), producer({ artifact: "proxy", title: "Proxies and thumbnails", scheduled: false })];
     renderSection();
-    expect(await screen.findByText("Running")).toBeTruthy();
-    fireEvent.click(await screen.findByRole("button", { name: "Pause all processing" }));
-    await waitFor(() => expect(sent.some((s) => s.method === "POST" && s.url.endsWith("/producers/pause"))).toBe(true));
-    expect((await screen.findByText(/All processing is paused/)).textContent).toContain(
-      "nothing starts, scans included, and upkeep changes nothing, until it's resumed. What's running finishes; " +
-      "the website stays up.");
-    expect(await screen.findByText("All paused")).toBeTruthy();
-    // The kill switch is on: its parts aren't switched alone meanwhile.
-    expect(screen.queryByRole("button", { name: "Pause scans" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Pause Descriptions and tags" })).toBeNull();
-    fireEvent.click(await screen.findByRole("button", { name: "Resume all processing" }));
-    await waitFor(() => expect(sent.some((s) => s.method === "POST" && s.url.endsWith("/producers/resume"))).toBe(true));
-    await waitFor(() => expect(screen.queryByText(/All processing is paused/)).toBeNull());
-    expect(await screen.findByRole("button", { name: "Pause all processing" })).toBeTruthy();
+    await screen.findByRole("switch", { name: "Descriptions and tags" });
+    expect(state("All processing")).toBe("running");
+    for (const name of ["Scans", "Upkeep", "Descriptions and tags"]) expect(state(name)).toBe("running");
+    expect(screen.getByRole("switch", { name: "All processing" }).textContent).toBe("Running");
+    expect(screen.queryByRole("switch", { name: "Proxies and thumbnails" })).toBeNull();  // Scans pauses it
   });
 
-  it("says all processing is paused while the scheduler isn't running too", async () => {
-    queue = { ...queue, live: false, at: "2026-10-09T01:00:00Z", paused: true, paused_at: "2026-10-09T00:30:00Z" };
-    renderSection();
-    expect(await screen.findByText(/All processing is paused/)).toBeTruthy();
-    expect(screen.getByText(/The scheduler isn't running/)).toBeTruthy();
-  });
-
-  it("pauses one producer and resumes it (admins)", async () => {
+  it("green → yellow → red → yellow → green → red → green, as the rows are flipped", async () => {
     producers = [producer({}), producer({ artifact: "ocr", title: "Text in images (OCR)" })];
     renderSection();
-    fireEvent.click(await screen.findByRole("button", { name: "Pause Descriptions and tags" }));
-    await waitFor(() => expect(sent.some((s) => s.method === "POST" && s.url.endsWith("/producers/vision/pause"))).toBe(true));
-    const vision = await row("Descriptions and tags");
-    await waitFor(() => expect(vision.textContent).toContain("Paused: nothing more of it starts until it's resumed."));
-    expect(vision.textContent).toContain("Redoes 3 clips once it's resumed, after anything missing.");
-    expect((await row("Text in images (OCR)")).textContent).not.toContain("Paused");
-    fireEvent.click(await screen.findByRole("button", { name: "Resume Descriptions and tags" }));
-    await waitFor(() => expect(sent.some((s) => s.method === "POST" && s.url.endsWith("/producers/vision/resume"))).toBe(true));
-    await waitFor(() => expect(vision.textContent).not.toContain("Paused"));
+    await screen.findByRole("switch", { name: "Descriptions and tags" });
+    flip("Descriptions and tags");  // one row paused: yellow
+    await waitFor(() => expect(state("All processing")).toBe("partly"));
+    expect(state("Descriptions and tags")).toBe("paused");
+    expect(screen.getByRole("switch", { name: "All processing" }).textContent).toBe("Partly paused");
+    flip("All processing");  // from yellow: every row paused, red
+    await waitFor(() => expect(state("All processing")).toBe("paused"));
+    for (const name of ["Scans", "Upkeep", "Descriptions and tags", "Text in images (OCR)"]) {
+      expect(state(name)).toBe("paused");
+    }
+    flip("Scans");  // the rows stay usable while all are paused: one on again, yellow
+    await waitFor(() => expect(state("All processing")).toBe("partly"));
+    for (const name of ["Upkeep", "Descriptions and tags", "Text in images (OCR)"]) flip(name);
+    await waitFor(() => expect(state("All processing")).toBe("running"));  // the rest on, one by one: green
+    flip("All processing");
+    await waitFor(() => expect(state("All processing")).toBe("paused"));
+    flip("All processing");  // from red: every row on, green
+    await waitFor(() => expect(state("All processing")).toBe("running"));
+    expect(state("Scans")).toBe("running");
+    expect(sent.filter((r) => r.method === "POST").map((r) => new URL(r.url, "http://x").pathname)).toEqual([
+      "/v1/producers/vision/pause", "/v1/producers/pause", "/v1/producers/scans/resume",
+      "/v1/producers/upkeep/resume", "/v1/producers/vision/resume", "/v1/producers/ocr/resume",
+      "/v1/producers/pause", "/v1/producers/resume"]);
   });
 
-  it("while all processing is paused, the redo waits for it and Now says so", async () => {
-    queue = { ...queue, live: true, at: new Date().toISOString(), paused: true, paused_at: "2026-10-09T10:00:00Z" };
+  it("a paused producer's row says Paused, and its redo waits", async () => {
+    paused = new Set(["vision"]);
     producers = [producer({})];
     renderSection();
-    expect((await row("Descriptions and tags")).textContent).toContain(
-      "Redoes 3 clips once processing is resumed, after anything missing.");
-    expect((await screen.findByLabelText("Now")).textContent).toContain("Now: nothing more starts while paused");
+    await waitFor(async () => expect((await row("Descriptions and tags")).textContent).toContain(
+      "Redoes 3 clips once it's resumed, after anything missing."));
+    expect(state("Descriptions and tags")).toBe("paused");
+    expect(screen.getByRole("switch", { name: "Descriptions and tags" }).textContent).toBe("Paused");
   });
 
-  it("pauses scans alone and resumes them (admins)", async () => {
-    queue = { ...queue, live: true, at: new Date().toISOString() };
-    producers = [producer({}), producer({ artifact: "proxy", title: "Proxies and thumbnails", scheduled: false,
-                                          redoable: false, why_not: "Made by scans." })];
+  it("what scans make says Paused with scans", async () => {
+    paused = new Set(["scans"]);
+    producers = [producer({ artifact: "proxy", title: "Proxies and thumbnails", scheduled: false })];
     renderSection();
-    fireEvent.click(await screen.findByRole("button", { name: "Pause scans" }));
-    await waitFor(() => expect(sent.some((s) => s.method === "POST" && s.url.endsWith("/producers/scans/pause"))).toBe(true));
-    expect((await screen.findByText(/Scans are paused/)).textContent).toContain(
-      "no new or changed files are found, and no thumbnails or video previews made, until they're resumed.");
-    expect(screen.queryByText(/All processing is paused/)).toBeNull();
     expect((await row("Proxies and thumbnails")).textContent).toContain("Paused with scans");
-    expect((await row("Descriptions and tags")).textContent).not.toContain("Paused");
-    fireEvent.click(await screen.findByRole("button", { name: "Resume scans" }));
-    await waitFor(() => expect(sent.some((s) => s.method === "POST" && s.url.endsWith("/producers/scans/resume"))).toBe(true));
-    await waitFor(() => expect(screen.queryByText(/Scans are paused/)).toBeNull());
-  });
-
-  it("offers no pause for what scans make: pausing scans stops it", async () => {
-    producers = [producer({ artifact: "proxy", title: "Proxies and thumbnails", scheduled: false, redoable: false,
-                            why_not: "Made by scans." })];
-    renderSection();
-    const proxies = await row("Proxies and thumbnails");
-    expect(within(proxies).queryByRole("button", { name: /Pause|Resume/ })).toBeNull();
   });
 
   it("says why the server refused a pause", async () => {
     producers = [producer({})];
     answers = [err(403, "forbidden", "Admins only.")];
     renderSection();
-    fireEvent.click(await screen.findByRole("button", { name: "Pause Descriptions and tags" }));
-    expect((await within(await row("Descriptions and tags")).findByRole("alert")).textContent).toContain("Admins only.");
+    fireEvent.click(await screen.findByRole("switch", { name: "Descriptions and tags" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("Admins only.");
   });
 
-  it("shows a yellow Partly paused naming the parts; Pause all then Resume all turns them all on", async () => {
-    queue = { ...queue, live: true, at: new Date().toISOString(), scans_paused: true };
-    producers = [producer({}), producer({ artifact: "ocr", title: "Text in images (OCR)", paused: true })];
-    renderSection();
-    const partly = await screen.findByText("Partly paused");
-    expect(partly.closest("[data-state]")?.getAttribute("data-state")).toBe("partly");
-    expect((await screen.findByText(/^Paused on their own:/)).textContent).toBe(
-      "Paused on their own: scans, Text in images (OCR). Pause all stops everything; Resume all then turns " +
-      "everything back on, these included.");
-    fireEvent.click(screen.getByRole("button", { name: "Pause all processing" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Resume all processing" }));
-    expect(await screen.findByText("Running")).toBeTruthy();
-    expect(screen.queryByText(/Scans are paused/)).toBeNull();
-    await waitFor(async () => expect((await row("Text in images (OCR)")).textContent).not.toContain("Paused"));
+  it("the switches follow the queue, so a pause from the CLI shows without a reload", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      producers = [producer({})];
+      renderSection();
+      await screen.findByRole("switch", { name: "Descriptions and tags" });
+      paused = new Set(["scans", "upkeep", "vision"]);  // lumiverb pause all, elsewhere
+      await vi.advanceTimersByTimeAsync(5_500);
+      await waitFor(() => expect(state("All processing")).toBe("paused"));
+      paused = new Set();  // lumiverb resume all
+      await vi.advanceTimersByTimeAsync(5_500);
+      await waitFor(() => expect(state("All processing")).toBe("running"));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it("the header says what's paused even when the counts can't load or are for another scope", async () => {
-    queue = { ...queue, live: true, at: new Date().toISOString(),
-              paused_producers: [{ artifact: "ocr", title: "Text in images (OCR)" }] };
+  it("the header follows the queue even when the counts can't load", async () => {
+    paused = new Set(["upkeep"]);
     const base = fetchMock.getMockImplementation()!;
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) =>
       new URL(url, "http://x").pathname === "/v1/producers" ? err(403, "forbidden", "Editors only.") : base(url, init));
     renderSection();
-    expect(await screen.findByText("Partly paused")).toBeTruthy();
-    expect((await screen.findByText(/^Paused on their own:/)).textContent).toContain("Text in images (OCR)");
+    await waitFor(() => expect(state("All processing")).toBe("partly"));
+    expect(state("Upkeep")).toBe("paused");
   });
 
-  it("shows everyone what's paused; only admins pause or resume", async () => {
+  it("shows everyone each switch's state; only admins flip them", async () => {
     role = "viewer";
-    queue = { ...queue, live: true, at: new Date().toISOString(), scans_paused: true,
-              scans_paused_at: "2026-10-09T10:00:00Z" };
-    producers = [producer({ paused: true, paused_at: "2026-10-09T10:00:00Z" })];
+    paused = new Set(["scans"]);
+    producers = [producer({})];
     renderSection();
-    expect(await screen.findByText(/Scans are paused/)).toBeTruthy();
-    expect(await screen.findByText("Partly paused")).toBeTruthy();
-    expect((await row("Descriptions and tags")).textContent).toContain("Paused: nothing more of it starts");
-    expect(screen.queryByRole("button", { name: /Pause|Resume/ })).toBeNull();
+    expect((await screen.findByLabelText("All processing")).textContent).toBe("Partly paused");
+    expect(screen.getByLabelText("Scans").textContent).toBe("Paused");
+    expect(screen.queryByRole("switch")).toBeNull();
     expect(screen.getByText("Only admins can pause processing or stop a redo.")).toBeTruthy();
-    // What Pause all and Resume all would do is for those who can press them.
-    expect((await screen.findByText(/^Paused on their own:/)).textContent).toBe(
-      "Paused on their own: scans, Descriptions and tags.");
   });
 
   it("says one clip right", async () => {

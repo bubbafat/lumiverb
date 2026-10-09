@@ -43,6 +43,10 @@ app.add_typer(archive_app, name="archive")
 app.add_typer(trash_app, name="trash")
 app.add_typer(producers_app, name="producers")
 
+from src.client.cli.commands.pausing import register as _register_pausing  # noqa: E402
+
+_register_pausing(app)
+
 console = Console()
 
 

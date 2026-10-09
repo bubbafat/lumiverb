@@ -43,8 +43,8 @@ def cleanup(
     mode = "[bold red]EXECUTE[/bold red]" if execute else "[bold yellow]DRY RUN[/bold yellow]"
     console.print(f"\n  Cleanup mode: {mode}\n")
     if result.get("paused"):
-        console.print("  [yellow]Skipped: all processing is paused, so no files were deleted. "
-                      "`lumiverb producers resume` turns it back on.[/yellow]\n")
+        console.print("  [yellow]Skipped: Upkeep is paused, so no files were deleted. "
+                      "`lumiverb resume upkeep` turns it back on.[/yellow]\n")
 
     table = Table(show_header=False, box=None, padding=(0, 2))
     table.add_column(style="dim")

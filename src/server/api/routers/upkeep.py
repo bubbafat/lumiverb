@@ -52,7 +52,7 @@ class CleanupResultModel(BaseModel):
     skipped_libraries: int = 0
     errors: list[str] = []
     dry_run: bool = True
-    # Skipped because all processing is paused, not "nothing to do"; with the admin key, which accounts.
+    # Skipped because Upkeep is paused, not "nothing to do"; with the admin key, which accounts.
     paused: bool = False
     paused_tenants: list[str] = Field(default_factory=list)
 
@@ -60,7 +60,7 @@ class CleanupResultModel(BaseModel):
 class FacePropagateResult(BaseModel):
     assigned: int = 0
     scanned: int = 0
-    # Skipped because all processing is paused, not "nothing to do"; with the admin key, which accounts.
+    # Skipped because Upkeep is paused, not "nothing to do"; with the admin key, which accounts.
     paused: bool = False
     paused_tenants: list[str] = Field(default_factory=list)
 
@@ -70,7 +70,7 @@ class TrashPurgeResult(BaseModel):
     clips: int = 0
     libraries: int = 0
     projects: int = 0
-    # Skipped because all processing is paused, not "nothing to do"; with the admin key, which accounts.
+    # Skipped because Upkeep is paused, not "nothing to do"; with the admin key, which accounts.
     paused: bool = False
     paused_tenants: list[str] = Field(default_factory=list)
 
@@ -113,18 +113,18 @@ def _tenant_for_key(authorization: str | None) -> tuple[str, str, str] | None:
         return api_key.tenant_id, routing.connection_string, api_key.role
 
 
-def _all_paused(session) -> bool:
-    """An admin paused all of the account's processing (the kill switch):
-    upkeep that changes data waits; search sync goes on (Robert, Oct 9)."""
+def _upkeep_paused(session) -> bool:
+    """An admin paused the account's Upkeep switch: upkeep that changes data
+    waits; search sync goes on (Robert, Oct 9)."""
     from src.server.repository import lineage
 
-    return lineage.all_paused(session)
+    return lineage.upkeep_paused(session)
 
 
 def _skipped(what: str, tenant_id: str, paused: list[str] | None = None) -> dict:
-    """An account's upkeep skipped for its Pause all: logged, and said in the result
+    """An account's upkeep skipped for its paused Upkeep switch: logged, and said in the result
     (paused), so it reads apart from a run with nothing to do."""
-    logger.info("%s for tenant %s: all processing is paused", what, tenant_id)
+    logger.info("%s for tenant %s: upkeep is paused", what, tenant_id)
     if paused is not None:
         paused.append(tenant_id)
     return {"paused": True, "paused_tenants": [tenant_id]}
@@ -145,7 +145,7 @@ def _propagate_faces_all_tenants() -> dict:
     for tenant in tenants:
         try:
             with get_tenant_session(tenant.tenant_id) as session:
-                if _all_paused(session):
+                if _upkeep_paused(session):
                     _skipped("Face names aren't spread", tenant.tenant_id, paused)
                     continue
                 result = FaceRepository(session).propagate_assignments()
@@ -168,7 +168,7 @@ def _propagate_faces_single_tenant(authorization: str | None) -> dict:
         return {"assigned": 0, "scanned": 0}
     _, connection_string, _ = tenant
     with TenantSession(get_engine_for_url(connection_string)) as session:
-        if _all_paused(session):
+        if _upkeep_paused(session):
             return {"assigned": 0, "scanned": 0, **_skipped("Face names aren't spread", tenant[0])}
         return FaceRepository(session).propagate_assignments()
 
@@ -186,7 +186,7 @@ def _purge_expired_trash_all_tenants() -> dict:
     for tenant in tenants:
         try:
             with get_tenant_session(tenant.tenant_id) as session:
-                if _all_paused(session):
+                if _upkeep_paused(session):
                     _skipped("The expired trash isn't emptied", tenant.tenant_id, paused)
                     continue
                 for key, n in purge_expired_trash(session, tenant.tenant_id).items():
@@ -209,7 +209,7 @@ def _purge_expired_trash_single_tenant(authorization: str | None) -> dict:
     tenant_id, connection_string, _ = tenant
     try:
         with TenantSession(get_engine_for_url(connection_string)) as session:
-            if _all_paused(session):
+            if _upkeep_paused(session):
                 return _skipped("The expired trash isn't emptied", tenant_id)
             return purge_expired_trash(session, tenant_id)
     except Exception as exc:

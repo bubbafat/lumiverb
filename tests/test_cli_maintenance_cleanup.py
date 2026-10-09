@@ -1,5 +1,5 @@
-"""`lumiverb maintenance cleanup` says when the server skipped it because all
-processing is paused, so it doesn't read as "nothing to clean up" (Robert, Oct 9)."""
+"""`lumiverb maintenance cleanup` says when the server skipped it because the
+Upkeep switch is paused, so it doesn't read as "nothing to clean up" (Robert, Oct 9)."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ def _run(monkeypatch, result: dict) -> str:
 
 def test_a_cleanup_skipped_for_a_pause_says_so(monkeypatch):
     out = _run(monkeypatch, {**RESULT, "paused": True})
-    assert "Skipped: all processing is paused" in out and "lumiverb producers resume" in out
+    assert "Skipped: Upkeep is paused" in out and "lumiverb resume upkeep" in out
 
 
 def test_a_cleanup_with_nothing_to_do_says_no_pause(monkeypatch):
