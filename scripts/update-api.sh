@@ -312,6 +312,28 @@ systemctl enable --now lumiverb-upkeep.timer lumiverb-upkeep-daily.timer
 ok "Upkeep timers installed and started"
 
 # ---------------------------------------------------------------------------
+step "Giving the GPU back to containers"
+# systemd reloading its units (daemon-reload, above) takes the GPU from
+# running containers that use it (nvidia-container-toolkit with systemd's
+# cgroups): the brain's Ollama then runs its model on the CPU, with no error,
+# until it's restarted (Oct 9). One that can't say (no nvidia-smi) is left alone.
+if command -v docker >/dev/null 2>&1; then
+  for c in $(docker ps --format '{{.Names}}'); do
+    [[ "$(docker inspect --format '{{range .HostConfig.DeviceRequests}}{{.Driver}}{{end}}' "$c" 2>/dev/null)" == *nvidia* ]] \
+      || continue
+    if says=$(docker exec "$c" nvidia-smi -L 2>&1); then
+      ok "$c has the GPU"
+    elif [[ "$says" != *"Failed to initialize NVML"* ]]; then
+      continue
+    elif docker restart "$c" >/dev/null && docker exec "$c" nvidia-smi -L >/dev/null 2>&1; then
+      ok "$c had lost the GPU: restarted, it has the GPU again"
+    else
+      warn "$c has no GPU: try docker restart $c, then docker exec $c nvidia-smi"
+    fi
+  done
+fi
+
+# ---------------------------------------------------------------------------
 step "Restarting services"
 systemctl is-enabled lumiverb-quickwit >/dev/null 2>&1 && systemctl restart lumiverb-quickwit
 systemctl restart lumiverb-api
