@@ -274,17 +274,15 @@ def resume(session: Session, artifacts: list[str] | tuple[str, ...]) -> None:
 
 
 def processing_paused(session: Session) -> dict[str, dict[str, Any]]:
-    """What an admin paused (Robert, Oct 9): all of the account's processing
-    (PAUSE_ALL), its scans (PAUSE_SCANS) or a producer's, {target:
-    {paused_by, paused_at}}. The
-    scheduler starts nothing more of it; what's running finishes."""
+    """The pause switches an admin paused (Robert, Oct 9): Scans (PAUSE_SCANS),
+    Upkeep (PAUSE_UPKEEP) or a producer's, {target: {paused_by, paused_at}}.
+    Nothing more of it starts; what's running finishes."""
     return {r[0]: {"paused_by": r[1], "paused_at": r[2]} for r in session.execute(text(
         "SELECT target, paused_by, paused_at FROM processing_paused"))}
 
 
 def pause_processing(session: Session, target: str, *, by: str | None) -> None:
-    """Pause all of the account's processing (PAUSE_ALL), its scans (PAUSE_SCANS) or a producer's.
-    Pausing it again keeps who paused it first, and when. Doesn't commit."""
+    """Pause one switch. Pausing it again keeps who paused it first, and when. Doesn't commit."""
     session.execute(text(
         "INSERT INTO processing_paused (target, paused_by, paused_at) VALUES (:t, :by, :now)"
         " ON CONFLICT (target) DO NOTHING"), {"t": target, "by": by, "now": utcnow()})
@@ -295,19 +293,26 @@ def resume_processing(session: Session, target: str) -> None:
     session.execute(text("DELETE FROM processing_paused WHERE target = :t"), {"t": target})
 
 
+def pause_everything(session: Session, *, by: str | None) -> None:
+    """Pause all: every switch paused (each keeps who paused it first). Doesn't commit."""
+    from src.shared.producers import pause_targets
+
+    for target in pause_targets():
+        pause_processing(session, target, by=by)
+
+
 def resume_everything(session: Session) -> None:
-    """Resume all (Robert, Oct 9): everything is on again, scans and
-    producers paused on their own included; no paused part is kept. Doesn't commit."""
+    """Resume all: every switch running again. Doesn't commit."""
     session.execute(text("DELETE FROM processing_paused"))
 
 
-def all_paused(session: Session) -> bool:
-    """The kill switch is on: everything but the website stops, upkeep that
-    changes data (face names spread, the trash emptied, files cleaned up) included."""
-    from src.shared.producers import PAUSE_ALL
+def upkeep_paused(session: Session) -> bool:
+    """The Upkeep switch is paused: the trash purge, file cleanup and spreading
+    face names wait; search sync goes on, so the site keeps up with edits."""
+    from src.shared.producers import PAUSE_UPKEEP
 
     return session.execute(text("SELECT 1 FROM processing_paused WHERE target = :t"),
-                           {"t": PAUSE_ALL}).first() is not None
+                           {"t": PAUSE_UPKEEP}).first() is not None
 
 
 def would_redo(session: Session, artifact: str, want: dict[str, Any]) -> int:

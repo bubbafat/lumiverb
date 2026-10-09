@@ -993,20 +993,22 @@ export interface SchedulerStatus {
   pools: Record<string, [number, number]>;
   /** Requests AI machines sharing its GPU give up while video is decoded there. */
   gpu_hold: number;
-  /** The kill switch: an admin paused everything but the website until it's resumed. */
+  /** The account's pause state, derived from its switches: none paused, some, or all. */
+  state: "running" | "partly" | "paused";
+  /** Every pause switch: Scans, Upkeep, then each producer the scheduler makes. */
+  switches: PauseSwitch[];
+  /** How long until things are made; null or absent when it isn't running. */
+  eta?: Eta | null;
+}
+
+/** One pause switch (Robert, Oct 9): "scans", "upkeep" or a producer's artifact. */
+export interface PauseSwitch {
+  target: string;
+  title: string;
   paused: boolean;
   /** Admins only. */
   paused_by: string | null;
   paused_at: string | null;
-  /** An admin paused scans alone; the rest goes on. */
-  scans_paused: boolean;
-  /** Admins only. */
-  scans_paused_by: string | null;
-  scans_paused_at: string | null;
-  /** Producers an admin paused on their own, whatever scope the counts are for. */
-  paused_producers: { artifact: string; title: string }[];
-  /** How long until things are made; null or absent when it isn't running. */
-  eta?: Eta | null;
 }
 
 /** Seconds until each producer, pool and everything is caught up. A producer
@@ -1071,17 +1073,15 @@ export async function resumeRedo(artifact: string): Promise<void> {
   await apiFetch<void>(`/producers/${artifact}/redo/resume`, { method: "POST" });
 }
 
-/** Pause everything but the website (no artifact: the kill switch), scans
- * ("scans") or one producer (admins): nothing more of it starts until it's
- * resumed; what's running finishes. 409 not_scheduled for what scans make,
- * all_paused for a part while everything is paused. */
-export async function pauseProcessing(artifact?: string): Promise<void> {
-  await apiFetch<void>(artifact ? `/producers/${artifact}/pause` : "/producers/pause", { method: "POST" });
+/** Pause one switch ("scans", "upkeep" or a producer's artifact), or every one with no target (admins).
+ * What's running finishes. 409 not_scheduled for what scans make. */
+export async function pauseProcessing(target?: string): Promise<void> {
+  await apiFetch<void>(target ? `/producers/${target}/pause` : "/producers/pause", { method: "POST" });
 }
 
-/** Turn everything back on (no artifact: every pause goes), or scans or one producer (admins). */
-export async function resumeProcessing(artifact?: string): Promise<void> {
-  await apiFetch<void>(artifact ? `/producers/${artifact}/resume` : "/producers/resume", { method: "POST" });
+/** Resume one switch, or every one with no target (admins). */
+export async function resumeProcessing(target?: string): Promise<void> {
+  await apiFetch<void>(target ? `/producers/${target}/resume` : "/producers/resume", { method: "POST" });
 }
 
 export async function findSimilar(params: {
