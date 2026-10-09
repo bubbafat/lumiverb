@@ -78,6 +78,8 @@ class JobGuard:
         only when a check started after its failure finds one offering the model.
         It returns whether the clip was charged (else it waits, uncharged)."""
         def fail(asset_id: str, error: object) -> bool:
+            if getattr(error, "model_changed", False):  # caught in a model change: it waits
+                return False
             if getattr(error, "endpoint_fault", False):
                 with self._lock:
                     if not self.down:

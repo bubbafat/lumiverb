@@ -420,6 +420,8 @@ def _update_python(tmp_path: Path, venv_cfg: str | None, pin: str = "3.12\n", fa
         (app / ".venv" / "pyvenv.cfg").write_text(venv_cfg)
     calls = tmp_path / "calls"
     calls.write_text("")
+    units = tmp_path / "units"
+    units.mkdir(exist_ok=True)
     env_file = tmp_path / "env"
     env_file.write_text("DATA_DIR=/mnt/ssd2/lumiverb\n")
     text = UPDATE_API.read_text()
@@ -433,7 +435,8 @@ def _update_python(tmp_path: Path, venv_cfg: str | None, pin: str = "3.12\n", fa
         f'if [[ "$1" == is-active ]]; then [[ ! -e "{tmp_path}/stopped" ]]; fi; }}\n'
         f'sudo() {{ echo "sudo $*" >> "{calls}"; [[ -z "{fail_on}" || "$*" != *"{fail_on}"* ]]; }}\n'
         f'APP_DIR="{app}"; SVC_USER=lumiverb; UV_BIN=/usr/local/bin/uv; ENV_FILE="{env_file}"\n'
-        + block
+        # Never this machine's own units (the brain's may be here).
+        + block.replace("/etc/systemd/system/", f"{units}/")
     )
     out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
     assert (out.returncode == 0) == ok, out.stdout + out.stderr
@@ -763,3 +766,11 @@ def test_an_update_without_a_data_dir_stops_before_changing_anything(tmp_path):
     out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
     assert out.returncode != 0 and "fail: No DATA_DIR" in out.stdout
     assert "sync" not in out.stdout  # nothing installed first
+
+
+def test_a_python_change_stops_the_old_worker_gently_too():
+    # Review round 3: that path stopped lumiverb-worker before the drop-in existed.
+    text = UPDATE_API.read_text()
+    block = text.split('if [[ -n "$HAVE_PY" && -n "$WANT_PY" && "$HAVE_PY" != "$WANT_PY" ]]; then', 1)[1].split("\nfi\n", 1)[0]
+    assert block.index("KillMode=mixed") < block.index("systemctl daemon-reload") < block.index(
+        'systemctl stop "$unit"')
