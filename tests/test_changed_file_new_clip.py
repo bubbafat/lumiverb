@@ -286,9 +286,154 @@ def test_a_path_remembers_each_file_deleted_there_for_good(env):
     r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [first, second]}, headers=headers)
     assert r.status_code == 200 and r.json()["deleted"] == 2, r.text
     items = client.get(f"/v1/libraries/{library_id}/ignored-paths", headers=headers).json()["items"]
-    assert {"rel_path": path, "reason": "emptied", "contents": sorted([first_sha, second_sha])} in items
+    item = next(i for i in items if i["rel_path"] == path)
+    assert item["reason"] == "emptied"
+    assert sorted(f["sha256"] for f in item["files"]) == sorted([first_sha, second_sha])
+    assert all(f["file_size"] == 1000 for f in item["files"])
     for sha in (first_sha, second_sha):
         with pytest.raises(AssertionError, match="409"):
             _ingest(env, path, media_type="image", sha=sha)
     third = _ingest(env, path, media_type="image", sha=_sha())  # another file: a new clip
     assert _row(env, third)[0] is None
+
+
+
+# Review round 2: a copy and the overwritten original ingested at once; a
+# handed-over clip's search; races on a path; a library back after a path was taken.
+
+
+def _post(client, env, rel_path: str, sha: str):
+    import io
+    import json
+
+    from PIL import Image
+
+    from tests.machine_lineage import ingest_made
+
+    _, headers, library_id, *_ = env
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 36)).save(buf, format="JPEG")
+    buf.seek(0)
+    return client.post("/v1/ingest", headers=headers, files={"proxy": ("p.jpg", buf, "image/jpeg")},
+                       data={"library_id": library_id, "rel_path": rel_path, "file_size": "1000",
+                             "media_type": "image", "exif": json.dumps({"sha256": sha}), "lineage": ingest_made(sha)})
+
+
+def test_a_copy_and_the_overwrite_ingested_at_once_keep_the_clip(env):
+    # The copy's ingest looks for a missing clip with its content before the
+    # original is archived; the original's handover looks for the copy before
+    # the copy has its content. Whichever commits second moves the clip.
+    from unittest.mock import patch
+
+    from fastapi.testclient import TestClient
+
+    from src.server.api.main import app
+    from src.server.repository.tenant import AssetRepository
+
+    client, *_ = env
+    sha = _sha()
+    original = _ingest(env, "ncr-race/a.jpg", media_type="image", sha=sha)
+    _note(env, original, "keep me")
+    real = AssetRepository.find_missing_by_sha
+    fired = []
+
+    def find_missing_by_sha(self, library_id, s):
+        found = real(self, library_id, s)  # the original is still in sight: nothing
+        if s == sha and not fired:
+            fired.append(1)
+            r = _post(TestClient(app), env, "ncr-race/a.jpg", _sha())  # meanwhile the overwrite runs to the end
+            assert r.status_code == 200, r.text
+        return found
+
+    with patch.object(AssetRepository, "find_missing_by_sha", find_missing_by_sha):
+        r = _post(client, env, "ncr-race/copy-of-a.jpg", sha)
+    assert fired and r.status_code == 200, r.text
+    assert r.json()["asset_id"] == original and r.json()["created"] is False
+    assert _row(env, original)[0] is None and _row(env, original)[2] == "ncr-race/copy-of-a.jpg"
+
+
+def test_a_handed_over_clip_keeps_its_transcript_in_search(env):
+    from unittest.mock import patch
+
+    from sqlalchemy import text
+
+    from src.server.search.quickwit_client import QuickwitClient
+    from tests.test_archive_by_hand import _db
+
+    sha = _sha()
+    original = _ingest(env, "ncr-ts/a.mp4", media_type="video", sha=sha)
+    with _db(env) as s:
+        s.execute(text("UPDATE assets SET transcript_srt = :t WHERE asset_id = :a"),
+                  {"t": "1\n00:00:00,000 --> 00:00:01,000\nhello\n", "a": original})
+        s.commit()
+    _ingest(env, "ncr-ts/copy.mp4", media_type="video", sha=sha)
+    calls: list[tuple[str, tuple]] = []
+
+    def index(tenant_id, asset):
+        calls.append(("index", (asset.asset_id,)))
+
+    def delete(self, tenant_id, asset_ids):
+        calls.append(("delete", tuple(asset_ids)))
+
+    with (patch("src.server.search.sync.index_transcript_segments", index),
+          patch.object(QuickwitClient, "delete_tenant_documents_by_asset_ids", delete)):
+        _ingest(env, "ncr-ts/a.mp4", media_type="video", sha=_sha())  # overwritten
+    assert _row(env, original)[2] == "ncr-ts/copy.mp4"  # handed over
+    about = [c[0] for c in calls if original in c[1]]
+    assert about and about[-1] == "index", about
+
+
+def _someone_else_takes(env, rel_path: str):
+    from unittest.mock import patch
+
+    from src.server.models.tenant import Asset
+    from src.server.repository.tenant import AssetRepository
+    from tests.test_archive_by_hand import _db
+
+    real = AssetRepository.is_ignored
+
+    def is_ignored(self, library_id, path, sha=None):
+        with _db(env) as s:  # another ingest commits a clip at this path meanwhile
+            s.add(Asset(asset_id="ast_other_" + _sha()[:8], library_id=library_id, rel_path=path, file_size=1,
+                        media_type="image", status="pending", availability="online"))
+            s.commit()
+        return real(self, library_id, path, sha)
+
+    return patch.object(AssetRepository, "is_ignored", is_ignored)
+
+
+def test_a_new_clip_racing_another_at_its_path_is_409(env):
+    client, *_ = env
+    with _someone_else_takes(env, "ncr-race2/new.jpg"):
+        r = _post(client, env, "ncr-race2/new.jpg", _sha())
+    assert r.status_code == 409, r.text
+
+
+def test_a_missing_clip_moving_onto_a_path_just_taken_is_409(env):
+    client, *_ = env
+    sha = _sha()
+    gone = _ingest(env, "ncr-race2/old.jpg", media_type="image", sha=sha)
+    _missing(env, gone)
+    with _someone_else_takes(env, "ncr-race2/moved.jpg"):
+        r = _post(client, env, "ncr-race2/moved.jpg", sha)
+    assert r.status_code == 409, r.text
+    assert _row(env, gone)[1] == "missing"
+
+
+def test_a_library_back_from_the_trash_onto_a_taken_path_archives_that_clip(env):
+    from sqlalchemy import text
+
+    from tests.test_archive_by_hand import _db
+
+    client, headers, *rest = env
+    lib = client.post("/v1/libraries", json={"name": "NcrBack", "root_path": "/tmp/ncr-back"},
+                      headers=headers).json()["library_id"]
+    clip = _ingest((client, headers, lib, *rest[1:]), "a.jpg", media_type="image", sha=_sha())
+    assert client.request("DELETE", f"/v1/libraries/{lib}", json={}, headers=headers).status_code == 204
+    with _db(env) as s:  # an ingest that got past the library check as it went
+        s.execute(text("INSERT INTO assets (asset_id, library_id, rel_path, file_size, media_type, status,"
+                       " availability, created_at, updated_at) VALUES ('ast_ncr_taken', :lib, 'a.jpg', 1, 'image', 'pending',"
+                       " 'online', now(), now())"), {"lib": lib})
+        s.commit()
+    assert client.post(f"/v1/libraries/{lib}/restore", headers=headers).status_code == 200
+    assert _row(env, clip)[1] == "missing" and _row(env, "ast_ncr_taken")[0] is None

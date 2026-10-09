@@ -1039,7 +1039,6 @@ def batch_trash_assets(
             # Only about clips this would trash: one already in the trash needs no answer.
             _ask_about_projects(session, request, asset_repo.trashable(body.asset_ids))
     trashed_ids, not_found_ids = asset_repo.trash_many(body.asset_ids, reason=reason)
-    _out_of_search(background, request, trashed_ids)
     handed_over: list[str] = []
     if trashed_ids and reason == "missing":
         # Copy, then delete the original: the asset moves to its empty copy.
@@ -1048,6 +1047,8 @@ def batch_trash_assets(
 
         if get_follow_moves(session):
             handed_over = hand_over_to_copies(session, request, trashed_ids)
+    # Not those that moved: they're back in search, transcripts and all.
+    _out_of_search(background, request, [a for a in trashed_ids if a not in handed_over])
     if trashed_ids and reason == "user":
         _refresh_grids(session, trashed_ids)
     return BatchTrashResponse(trashed=trashed_ids, not_found=not_found_ids, handed_over=handed_over)

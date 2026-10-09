@@ -404,8 +404,10 @@ def test_scan_skips_trashed_paths(tmp_path: Path) -> None:
 @pytest.mark.fast
 def test_another_file_at_a_trashed_path_is_scanned(tmp_path: Path) -> None:
     # A changed file is a new clip: only the file a person removed is skipped.
+    from src.client.cli.scan import _ServerAsset
+
     split = MagicMock(return_value=([], [], []))
-    removed = frozenset({"a" * 64})
+    removed = [_ServerAsset(asset_id="", sha256="a" * 64)]
     with patch("src.client.cli.scan.compute_sha256",
                side_effect=lambda p: "a" * 64 if p.name == "f1.jpg" else "b" * 64) as hashed:
         _scan_with(tmp_path, on_disk=4, on_server=4, ignored={"f1.jpg": removed, "f2.jpg": removed}, split=split)
@@ -413,6 +415,24 @@ def test_another_file_at_a_trashed_path_is_scanned(tmp_path: Path) -> None:
     scanned = {f["rel_path"] for f in split.call_args[0][0]}
     assert scanned == {"f0.jpg", "f2.jpg", "f3.jpg"}
     assert {c.args[0].name for c in hashed.call_args_list} == {"f1.jpg", "f2.jpg"}  # only those are hashed
+
+
+@pytest.mark.fast
+def test_a_removed_file_left_as_it_was_isnt_read_again(tmp_path: Path) -> None:
+    # Review round 2: archives kept on disk were hashed on every scan.
+    from datetime import datetime, timezone
+
+    from src.client.cli.scan import _ServerAsset
+
+    when = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+    local = [{"rel_path": f"f{i}.jpg", "file_size": 4, "file_mtime": when, "media_type": "image", "ext": ".jpg"}
+             for i in range(3)]
+    removed = [_ServerAsset(asset_id="", sha256="a" * 64, file_size=4, file_mtime="2026-10-01T08:00:00-04:00")]
+    split = MagicMock(return_value=([], [], []))
+    with patch("src.client.cli.scan.compute_sha256", return_value="b" * 64) as hashed:
+        _scan_with(tmp_path, on_disk=3, on_server=3, local=local, ignored={"f1.jpg": removed}, split=split)
+    assert hashed.call_count == 0
+    assert {f["rel_path"] for f in split.call_args[0][0]} == {"f0.jpg", "f2.jpg"}
 
 
 @pytest.mark.fast

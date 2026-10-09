@@ -315,8 +315,8 @@ def test_made_before_the_file_had_a_hash_is_stale_not_redone(env):
 
 @pytest.mark.slow
 def test_scenes_are_never_handed_out_to_be_redone_in_place(env):
-    """Ingest resets them when a file is replaced; a hash changed any other
-    way mustn't hand out a video whose scenes the worker can't redo."""
+    """A different file is a new clip, so a hash changes only some other
+    way: that mustn't hand out a video whose scenes the worker can't redo."""
     lib = _library(env, "RecScenesInPlace")
     vid = _ingest_with(lib, "a.mov", _sha(), None, media_type="video")
     with _db(env) as s:

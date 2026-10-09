@@ -126,12 +126,12 @@ def _fetch_existing_assets_with_sha(
     return existing
 
 
-def _fetch_ignored_paths(client: LumiverbClient, library_id: str) -> dict[str, frozenset[str] | None]:
-    """Files a person trashed, archived or deleted for good, by rel_path: the
-    SHA-256s skipped there, or None for whatever is at the path. Scans skip
-    them: Lumiverb never deletes originals, so they may still be on disk.
-    Another file at the path is a new clip."""
-    ignored: dict[str, frozenset[str] | None] = {}
+def _fetch_ignored_paths(client: LumiverbClient, library_id: str) -> dict[str, list[_ServerAsset] | None]:
+    """Files a person trashed, archived or deleted for good, by rel_path: each
+    one's content, size and time, or None for whatever is at the path. Scans
+    skip them: Lumiverb never deletes originals, so they may still be on
+    disk. Another file at the path is a new clip."""
+    ignored: dict[str, list[_ServerAsset] | None] = {}
     cursor: str | None = None
     while True:
         params: dict[str, str] = {"limit": "1000"}
@@ -139,23 +139,30 @@ def _fetch_ignored_paths(client: LumiverbClient, library_id: str) -> dict[str, f
             params["after"] = cursor
         data = client.get(f"/v1/libraries/{library_id}/ignored-paths", params=params).json()
         for item in data.get("items", []):
-            contents = item.get("contents")
-            ignored[item["rel_path"]] = frozenset(contents) if contents is not None else None
+            files = item.get("files")
+            ignored[item["rel_path"]] = None if files is None else [
+                _ServerAsset(asset_id="", sha256=f["sha256"], file_size=f.get("file_size"),
+                             file_mtime=f.get("file_mtime"))
+                for f in files
+            ]
         cursor = data.get("next_cursor")
         if not cursor:
             return ignored
 
 
-def _skipped(f: dict, ignored: dict[str, frozenset[str] | None], root_path: Path) -> bool:
-    """Whether this file is one a person removed. Only files at those paths
-    are hashed here."""
+def _skipped(f: dict, ignored: dict[str, list[_ServerAsset] | None], root_path: Path) -> bool:
+    """Whether this file is one a person removed. Hashed only when it isn't
+    one of them untouched (same size and time), so archives kept on disk
+    aren't read on every scan."""
     if f["rel_path"] not in ignored:
         return False
-    contents = ignored[f["rel_path"]]
-    if contents is None:
+    removed = ignored[f["rel_path"]]
+    if removed is None:
+        return True
+    if any(_mtime_size_match(f, r) for r in removed):
         return True
     sha = compute_sha256(resolve_source_path(root_path, f["rel_path"]))
-    return sha is None or sha in contents
+    return sha is None or any(sha == r.sha256 for r in removed)
 
 
 # A scan that would archive more than 50 clips AND more than half of the

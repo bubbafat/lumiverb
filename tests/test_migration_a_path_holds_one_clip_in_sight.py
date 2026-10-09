@@ -53,3 +53,23 @@ def test_a_path_is_unique_only_among_clips_in_sight_and_it_goes_back_down() -> N
         assert [k for k in _ignored_files_keys(engine) if "ignored_files_pkey" in k][0].endswith(
             "(library_id, rel_path)")
         engine.dispose()
+
+
+@pytest.mark.migration
+def test_going_down_keeps_one_file_a_path_had_emptied() -> None:
+    # Review round 2: one emptying records two files at one path with the same time.
+    with PostgresContainer(PG_IMAGE) as pg:
+        url = _ensure_psycopg2(pg.get_connection_url())
+        engine = create_engine(url)
+        with engine.begin() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        _alembic(url, "upgrade", AFTER)
+        with engine.begin() as conn:
+            conn.execute(text("SET session_replication_role = replica"))  # skip the library FK
+            conn.execute(text(
+                "INSERT INTO ignored_files (library_id, rel_path, sha256, file_size, created_at) VALUES"
+                " ('lib_x', 'a.jpg', 'aa', 1, '2026-10-09T00:00:00Z'), ('lib_x', 'a.jpg', 'bb', 2, '2026-10-09T00:00:00Z')"))
+        _alembic(url, "downgrade", BEFORE)
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT sha256 FROM ignored_files")).scalars().all() == ["bb"]
+        engine.dispose()
