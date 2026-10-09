@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
 
+from src.client.cli.producer_settings import ProducerSettings
 from src.client.cli.video_index import index_video_scenes, run_video_index, run_video_enrich
 
 
@@ -104,6 +105,8 @@ def test_index_video_scenes_single_chunk(mock_segmenter_cls, mock_scanner_cls):
     body = complete_call[0].kwargs["json"]
     assert len(body["scenes"]) == 2
     assert body["next_anchor_phash"] == "deadbeef"
+    # Nobody said how the scenes are found: the server's settings (one that doesn't say: the registry's).
+    assert body["lineage"] == ProducerSettings(None).lineage("scenes", None)
 
 
 @patch("src.client.cli.video_index.VideoScanner")
@@ -426,6 +429,10 @@ def test_enrich_video_scenes_with_vision(mock_extract):
     assert body["description"] == "A sunset"
     assert body["tags"] == ["sunset", "sky"]
     assert body["model_id"] == "test-model"
+    # Nobody said how to describe it: the server's settings, with the model that did.
+    producers = ProducerSettings(None)
+    assert body["lineage"] == producers.lineage("scene_vision", None,
+                                                used=producers.with_model("scene_vision", "test-model"))
 
     # Sync was called for scn_1
     sync_calls = [c for c in client.post.call_args_list if "sync" in str(c)]

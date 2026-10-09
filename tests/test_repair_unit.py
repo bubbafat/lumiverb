@@ -654,6 +654,7 @@ def test_run_repair_redetect_faces_dry_run_pages_all_images(tmp_path: Path) -> N
 
 def test_probe_one_puts_facet(tmp_path: Path) -> None:
     from src.client.cli.repair import _probe_one
+    from src.shared import producers as P
     from src.client.video.probe import VideoFacet
 
     (tmp_path / "a.mov").write_bytes(b"x")
@@ -663,11 +664,16 @@ def test_probe_one_puts_facet(tmp_path: Path) -> None:
         drop_frame=None, audio_codec=None, audio_channels=None, audio_sample_rate=None,
     )
     client = MagicMock()
+    client.get.return_value.json.return_value = {"producers": []}  # the server's settings: the registry's
     with patch("src.client.cli.repair.probe_video", return_value=facet):
-        result = _probe_one(client, tmp_path, {"asset_id": "ast_1", "rel_path": "a.mov"})
+        result = _probe_one(client, tmp_path, {"asset_id": "ast_1", "rel_path": "a.mov", "sha256": "abc"})
 
     assert result == "ok"
-    client.put.assert_called_once_with("/v1/assets/ast_1/video-facet", json=facet.to_dict())
+    # Nobody handed it the settings: it reads the server's and says how the facet was found.
+    assert client.get.call_args.args[0] == "/v1/producers"
+    made = {"producer": "ffprobe", "version": "1", "settings_hash": P.settings_hash(P.effective_settings("probe")),
+            "source_sha256": "abc"}
+    client.put.assert_called_once_with("/v1/assets/ast_1/video-facet", json={**facet.to_dict(), "lineage": made})
 
 
 def test_probe_one_missing_source(tmp_path: Path) -> None:
@@ -723,3 +729,28 @@ def test_probe_one_api_failure_is_a_failed_clip(tmp_path: Path) -> None:
         result = _probe_one(client, tmp_path, {"asset_id": "ast_1", "rel_path": "a.mov"})
 
     assert result == "failed"
+
+
+def test_render_one_says_how_the_analysis_copy_was_made(tmp_path: Path) -> None:
+    """The server refuses an analysis copy that doesn't say how it was made:
+    with no settings handed to it, it reads the server's."""
+    import json
+
+    from src.client.cli.repair import _render_one
+    from src.shared import producers as P
+
+    (tmp_path / "a.mov").write_bytes(b"x")
+    client = MagicMock()
+    client.get.return_value.json.return_value = {"producers": []}  # the server's settings: the registry's
+    cache = MagicMock()
+    cache.path_for.return_value = tmp_path / "cache" / "ast_1"
+    settings = MagicMock()
+    settings.output.return_value = {"max_edge": 960}
+    with patch("src.client.cli.repair.render_analysis_proxy", side_effect=lambda src, work, *a, **k: work.write_bytes(b"v")):
+        result = _render_one(client, tmp_path, {"asset_id": "ast_1", "rel_path": "a.mov", "sha256": "abc"},
+                             settings, cache)
+
+    assert result == "ok"
+    sent = json.loads(client.post.call_args.kwargs["data"]["lineage"])
+    assert sent == {"producer": "analysis-proxy", "version": "1", "settings_hash": P.settings_hash({"max_edge": 960}),
+                    "source_sha256": "abc"}

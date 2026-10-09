@@ -45,10 +45,16 @@ def index_video_scenes(
     lineage: dict | None = None,
 ) -> dict:
     """Run scene detection on a single video and submit results to server.
-    lineage: how the scenes are found, recorded when the last chunk completes.
+    lineage: how the scenes are found, sent with every chunk and recorded
+    when the last completes; the server's settings when not given (it
+    refuses a chunk that doesn't say).
 
     Returns {"scenes": N, "chunks": N, "elapsed": float}.
     """
+    if lineage is None:
+        from src.client.cli.producer_settings import ProducerSettings
+
+        lineage = ProducerSettings(client).lineage("scenes", None)
 
     t0 = time.perf_counter()
     total_scenes = 0
@@ -247,7 +253,9 @@ def enrich_scene(
     lineage: dict | None = None,
 ) -> None:
     """Extract one scene's rep frame, run vision AI, and sync it to search.
-    lineage: how the description is made, recorded with it.
+    lineage: how the description is made, recorded with it; the server's
+    settings with this model when not given (the server refuses a
+    description that doesn't say).
 
     Raises when it can't be done. The vision endpoint failing raises
     CaptionError with endpoint_fault: it isn't the scene's fault.
@@ -286,6 +294,12 @@ def enrich_scene(
                 ]
 
                 # 4. PATCH scene with vision results
+                if lineage is None:
+                    from src.client.cli.producer_settings import ProducerSettings
+
+                    producers = ProducerSettings(client)
+                    lineage = producers.lineage("scene_vision", None,
+                                                used=producers.with_model("scene_vision", vision_model_id))
                 client.patch(
                     f"/v1/video/scenes/{scene_id}",
                     json={
