@@ -48,9 +48,9 @@ def _check(found: list[ProducerSpec]) -> None:
             raise ValueError(f"{p.artifact}: a producer the scheduler runs needs a flag, a run and a pool")
         if p.per_account and not (p.job and p.pool == p.job):
             raise ValueError(f"{p.artifact}: an account's pool is its AI job's machines (pool = job)")
-        missing = [n for n in p.needs if n not in {q.artifact for q in found}]
+        missing = [n for n in (*p.needs, *p.redo_also) if n not in {q.artifact for q in found}]
         if missing:
-            raise ValueError(f"{p.artifact} needs what no producer makes: {missing}")
+            raise ValueError(f"{p.artifact} names what no producer makes: {missing}")
 
 
 def load(path: str):
