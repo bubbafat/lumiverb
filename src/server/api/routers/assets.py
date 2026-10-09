@@ -573,9 +573,7 @@ def _stream_asset_file(
         raise HTTPException(status_code=404, detail="Asset not found")
     if is_public:
         public_library_id = request.query_params.get("public_library_id")
-        public_project_id = request.query_params.get("public_project_id") or request.query_params.get(
-            "public_collection_id"  # pre-rename name
-        )
+        public_project_id = request.query_params.get("public_project_id")
         if public_library_id:
             if asset.library_id != public_library_id:
                 raise HTTPException(status_code=403, detail="Asset does not belong to the requested public library")
@@ -734,7 +732,7 @@ def _check_public_request(request: Request, session: Session, asset) -> None:
 
     q = request.query_params
     _check_public(session, asset, q.get("public_library_id"),
-                  q.get("public_project_id") or q.get("public_collection_id"))
+                  q.get("public_project_id"))
 
 
 def _fill_described(session: Session, asset_id: str, response: AssetResponse) -> None:
@@ -1091,7 +1089,7 @@ def get_asset(
         raise HTTPException(status_code=404, detail="Asset not found")
     _check_public_request(request, session, asset)
     via_project = getattr(request.state, "is_public_request", False) and bool(
-        request.query_params.get("public_project_id") or request.query_params.get("public_collection_id")
+        request.query_params.get("public_project_id")
     )
     response = _asset_detail(session, request, asset)
     return _project_visitor_view(response) if via_project else response

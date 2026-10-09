@@ -318,10 +318,11 @@ _EXPORT_FORMATS = ("fcp7", "fcpxml")
 def project_export(
     project_id: Annotated[str, typer.Option("--id", help="Project ID.")],
     format: Annotated[str, typer.Option("--format", "-f", help="fcp7 (DaVinci Resolve / Premiere Pro) or fcpxml (Final Cut Pro).")],
-    prefix: Annotated[str | None, typer.Option("--prefix", help="Where the originals live on the editing machine (default: each library's root).")] = None,
     output: Annotated[str | None, typer.Option("--output", "-o", help="File to write (default: the project name, in the current directory).")] = None,
 ) -> None:
-    """Export a project as a bin of master clips for an editor."""
+    """Export a project as a bin of master clips for an editor: videos, and
+    photos as stills. Clips point at the originals as the libraries know them
+    (relink in the editor when its paths differ)."""
     import re
     from pathlib import Path
 
@@ -330,8 +331,6 @@ def project_export(
         raise typer.Exit(1)
 
     params = {"format": format}
-    if prefix:
-        params["prefix"] = prefix
     client = LumiverbClient()
     resp = client.get(f"/v1/projects/{project_id}/export", params=params)
 
@@ -351,9 +350,9 @@ def project_export(
     path.write_bytes(resp.content)
     console.print(f"[green]Exported to {path}[/green]")
 
-    skipped = int(resp.headers.get("x-lumiverb-skipped-stills", "0") or 0)
-    if skipped:
-        console.print(f"[yellow]{skipped} photos weren't included: exports are video only for now.[/yellow]")
+    stills = int(resp.headers.get("x-lumiverb-stills", "0") or 0)
+    if stills:
+        console.print(f"{_plural(stills, 'photo is', 'photos are')} in it as stills.")
     no_duration = int(resp.headers.get("x-lumiverb-skipped-no-duration", "0") or 0)
     if no_duration:
         console.print(f"[yellow]{no_duration} videos with no known length weren't included.[/yellow]")

@@ -56,12 +56,12 @@ def test_archive_and_restore(command: str, status: str) -> None:
     client.patch.assert_called_once_with("/v1/projects/prj_1", json={"status": status})
 
 
-def _export_client(skipped: str = "0") -> MagicMock:
+def _export_client(stills: str = "0") -> MagicMock:
     client = _client()
     client.get.return_value.content = b"<xmeml/>"
     client.get.return_value.headers = {
         "content-disposition": 'attachment; filename="Customer Video 123.xml"',
-        "x-lumiverb-skipped-stills": skipped,
+        "x-lumiverb-stills": stills,
     }
     return client
 
@@ -82,22 +82,18 @@ def test_export_writes_the_file(tmp_path) -> None:
     assert (tmp_path / "Customer Video 123.xml").read_bytes() == b"<xmeml/>"
 
 
-def test_export_with_prefix_and_output(tmp_path) -> None:
-    client = _export_client(skipped="2")
+def test_export_with_output_says_photos_are_stills(tmp_path) -> None:
+    # Photos export as stills; there's no media location to give (Robert, Oct 9).
+    client = _export_client(stills="2")
     out = tmp_path / "bin.fcpxml"
 
-    result = _run(
-        client, "export", "--id", "prj_1", "--format", "fcpxml",
-        "--prefix", "/Volumes/Travel SSD", "--output", str(out),
-    )
+    result = _run(client, "export", "--id", "prj_1", "--format", "fcpxml", "--output", str(out))
 
     assert result.exit_code == 0, result.output
-    client.get.assert_called_once_with(
-        "/v1/projects/prj_1/export",
-        params={"format": "fcpxml", "prefix": "/Volumes/Travel SSD"},
-    )
+    client.get.assert_called_once_with("/v1/projects/prj_1/export", params={"format": "fcpxml"})
     assert out.read_bytes() == b"<xmeml/>"
-    assert "2 photos" in result.output
+    assert "2 photos are in it as stills." in result.output
+    assert _run(client, "export", "--id", "prj_1", "--format", "fcpxml", "--prefix", "/x").exit_code != 0
 
 
 def test_export_rejects_unknown_format() -> None:
@@ -117,7 +113,7 @@ def test_export_uses_the_real_name_and_reports_what_was_left_out(tmp_path) -> No
         "content-disposition": (
             "attachment; filename=\"project-export.xml\"; filename*=UTF-8''%E6%9D%B1%E4%BA%AC.xml"
         ),
-        "x-lumiverb-skipped-stills": "0",
+        "x-lumiverb-stills": "0",
         "x-lumiverb-skipped-no-duration": "2",
         "x-lumiverb-unprobed": "3",
     }

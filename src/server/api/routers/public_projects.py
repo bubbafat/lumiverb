@@ -5,14 +5,13 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_tenant_session
 from src.server.repository.tenant import ProjectRepository
 
-# Mounted at /v1/public/projects, and at /v1/public/collections (deprecated)
-# for existing share links and app builds. See main.py.
+# Mounted at /v1/public/projects. See main.py.
 router = APIRouter()
 
 
@@ -22,13 +21,6 @@ class PublicProjectDetail(BaseModel):
     description: str | None
     cover_asset_id: str | None
     asset_count: int
-    # Pre-rename name of project_id, for macOS/iOS builds that still read it.
-    collection_id: str | None = None
-
-    @model_validator(mode="after")
-    def _legacy_collection_id(self):
-        self.collection_id = self.project_id
-        return self
 
 
 class PublicProjectAssetItem(BaseModel):

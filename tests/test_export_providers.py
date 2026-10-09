@@ -335,15 +335,79 @@ def test_independent_reader_sees_clip_lengths(provider_id: str) -> None:
     assert seconds["pal.mxf"] == 4.0
 
 
-def test_media_bases_tolerate_a_relative_library_root() -> None:
-    """A library created with a relative root must not break exports of
-    projects that also hold other libraries."""
-    from src.server.api.routers.projects import _media_bases
+def test_a_photo_is_a_five_second_still_in_the_bin_and_on_the_timeline() -> None:
+    # Robert, Oct 9: exports include photos.
+    from src.server.export import STILL_SEC, still
+    from src.server.export.fcp7 import Fcp7XmlProvider
+    from src.server.export.fcpxml import FcpxmlProvider
 
-    bases = _media_bases({"a": "/mnt/das/2024", "b": "relative/x"}, "/Volumes/DAS")
+    photo = still("ast_p", "beach.jpg", "/Volumes/DAS/beach.jpg", 4032, 3024)
+    assert STILL_SEC == 5.0 and photo.duration_frames == 150 and photo.audio_channels is None
+    bin_ = ExportBin(name="Mixed", clips=[photo, PAL])
 
-    assert bases["a"].startswith("/Volumes/DAS")
-    assert bases["b"].startswith("/Volumes/DAS")
+    root = ET.fromstring(Fcp7XmlProvider().render(bin_))
+    seq = root.find("bin/children/sequence")
+    assert seq.findtext("rate/timebase") == "25"  # the video leads the timeline, not the photo
+    items = seq.findall("media/video/track/clipitem")
+    assert [i.findtext("name") for i in items] == ["beach.jpg", PAL.name]
+    assert items[0].findtext("duration") == "125"  # 5 s at 25 fps
+    master = next(c for c in root.findall("bin/children/clip") if c.findtext("name") == "beach.jpg")
+    assert master.find("media/audio") is None
+
+    root = ET.fromstring(FcpxmlProvider().render(bin_))
+    asset = next(a for a in root.iter("asset") if a.get("name") == "beach.jpg")
+    assert asset.get("duration") == "0s" and asset.get("hasAudio") == "0"
+    fmt = next(f for f in root.iter("format") if f.get("id") == asset.get("format"))
+    assert fmt.get("name") == "FFVideoFormatRateUndefined" and fmt.get("frameDuration") is None
+    on_timeline = root.find("library/event/project/sequence/spine/video")
+    assert on_timeline.get("ref") == asset.get("id") and on_timeline.get("duration") == "125/25s"
+
+
+def test_a_bin_of_only_photos_still_has_a_timeline() -> None:
+    from src.server.export import still
+    from src.server.export.fcp7 import Fcp7XmlProvider
+
+    bin_ = ExportBin(name="Photos", clips=[still("a", "a.jpg", "/a.jpg", 100, 100)])
+    root = ET.fromstring(Fcp7XmlProvider().render(bin_))
+    assert root.find("bin/children/sequence/duration").text == "150"
+
+
+def test_a_timeline_of_only_photos_has_a_frame_rate_in_fcpxml() -> None:
+    # Review: the sequence took the photo's rate-less format, and a sequence needs one.
+    from src.server.export import still
+    from src.server.export.fcpxml import FcpxmlProvider
+
+    root = ET.fromstring(FcpxmlProvider().render(ExportBin(name="Photos", clips=[
+        still("a", "a.jpg", "/a.jpg", 4032, 3024), still("b", "b.jpg", "/b.jpg", 3024, 4032)])))
+    sequence = root.find("library/event/project/sequence")
+    fmt = root.find(f"resources/format[@id='{sequence.get('format')}']")
+    assert fmt.get("frameDuration") == "1/30s" and fmt.get("name") is None
+    assert (fmt.get("width"), fmt.get("height")) == ("1920", "1080")
+    assert [v.get("duration") for v in sequence.findall("spine/video")] == ["150/30s", "150/30s"]
+    assert sequence.get("duration") == "300/30s"
+
+
+def test_a_timeline_led_by_a_video_of_unknown_size_is_hd_in_fcpxml() -> None:
+    from src.server.export import still
+
+    root = _render("fcpxml", ExportBin(name="x", clips=[UNPROBED, still("p", "p.jpg", "/p.jpg", 4032, 3024)]))
+    sequence = root.find("library/event/project/sequence")
+    fmt = root.find(f"resources/format[@id='{sequence.get('format')}']")
+    assert (fmt.get("width"), fmt.get("height"), fmt.get("frameDuration")) == ("1920", "1080", "1/30s")
+
+
+@pytest.mark.parametrize("num, den, frames", [(30000, 1001, 150), (24000, 1001, 120), (25, 1, 125)])
+def test_a_still_is_five_seconds_to_the_nearest_frame(num: int, den: int, frames: int) -> None:
+    # A still has no end of media to stay inside: 5 s on a 29.97 timeline is
+    # 150 frames, not 149 (4.97 s).
+    from src.server.export import still
+
+    lead = ExportClip(**{**PAL.__dict__, "frame_rate_num": num, "frame_rate_den": den, "start_timecode": None})
+    bin_ = ExportBin(name="x", clips=[lead, still("p", "p.jpg", "/p.jpg", 100, 100)])
+    item = _render("fcp7", bin_).findall("bin/children/sequence/media/video/track/clipitem")[1]
+    assert int(item.findtext("end")) - int(item.findtext("start")) == frames
+    video = _render("fcpxml", bin_).find("library/event/project/sequence/spine/video")
+    assert video.get("duration") == f"{frames * den}/{num}s"
 
 
 def test_timeline_never_runs_past_a_clips_media() -> None:

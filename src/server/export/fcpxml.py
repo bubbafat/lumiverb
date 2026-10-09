@@ -5,7 +5,11 @@ both Final Cut and Resolve import across releases.
 
 The project lays every clip end to end in bin order on the first clip's
 frame grid: Resolve imports FCPXML as timelines too. It holds the clips;
-it isn't an edit (ADR-016).
+it isn't an edit (ADR-016). A photo is an image asset (no length of its
+own, a format with no frame rate), STILL_SEC long in the event and on the
+timeline (a <video> there, as Final Cut writes stills). A project of only
+photos gets an HD timeline at 30 fps; so does one led by a video of unknown
+size, at its rate.
 """
 
 from __future__ import annotations
@@ -37,12 +41,13 @@ class FcpxmlProvider:
         next_id = 1
         for clip in bin_.clips:
             num, den = clip.rate
-            key = (num, den, clip.width, clip.height)
+            key = ("still", clip.width, clip.height) if clip.still else (num, den, clip.width, clip.height)
             if key not in formats:
                 format_id = f"r{next_id}"
                 next_id += 1
                 formats[key] = format_id
-                attrs = {"id": format_id, "frameDuration": f"{den}/{num}s"}
+                attrs = ({"id": format_id, "name": "FFVideoFormatRateUndefined"} if clip.still
+                         else {"id": format_id, "frameDuration": f"{den}/{num}s"})
                 if clip.width and clip.height:
                     attrs.update(width=str(clip.width), height=str(clip.height))
                 ET.SubElement(resources, "format", attrs)
@@ -57,8 +62,8 @@ class FcpxmlProvider:
                 {
                     "id": asset_id,
                     "name": clip.name,
-                    "start": start,
-                    "duration": duration,
+                    "start": "0s" if clip.still else start,
+                    "duration": "0s" if clip.still else duration,
                     "hasVideo": "1",
                     "src": clip.file_url,
                     "format": formats[key],
@@ -90,6 +95,14 @@ class FcpxmlProvider:
             lead = timeline_lead([clip for clip, _, _ in assets])
             lead_format = next(f for clip, _, f in assets if clip is lead)
             num, den = lead.rate
+            if lead.still or not (lead.width and lead.height):
+                # Only photos: a photo's format has no frame rate, and a
+                # sequence needs one; an unprobed video's has no size. An HD
+                # timeline at the lead's rate (the fallback for photos).
+                lead_format = f"r{next_id}"
+                next_id += 1
+                ET.SubElement(resources, "format", {"id": lead_format, "frameDuration": f"{den}/{num}s",
+                                                    "width": "1920", "height": "1080"})
             project = ET.SubElement(event, "project", name=bin_.name)
             sequence = ET.SubElement(
                 project, "sequence", format=lead_format, tcStart="0s", tcFormat="NDF"
@@ -98,17 +111,21 @@ class FcpxmlProvider:
             position = 0
             for clip, asset_id, format_id in assets:
                 length = timeline_frames(clip, lead)
-                ET.SubElement(
-                    spine,
-                    "asset-clip",
-                    ref=asset_id,
-                    name=clip.name,
-                    offset=f"{position * den}/{num}s",
-                    start=_seconds(clip.start_frames, clip),
-                    duration=f"{length * den}/{num}s",
-                    format=format_id,
-                    tcFormat="DF" if clip.is_drop_frame else "NDF",
-                )
+                if clip.still:
+                    ET.SubElement(spine, "video", ref=asset_id, name=clip.name, offset=f"{position * den}/{num}s",
+                                  start="0s", duration=f"{length * den}/{num}s")
+                else:
+                    ET.SubElement(
+                        spine,
+                        "asset-clip",
+                        ref=asset_id,
+                        name=clip.name,
+                        offset=f"{position * den}/{num}s",
+                        start=_seconds(clip.start_frames, clip),
+                        duration=f"{length * den}/{num}s",
+                        format=format_id,
+                        tcFormat="DF" if clip.is_drop_frame else "NDF",
+                    )
                 position += length
             sequence.set("duration", f"{position * den}/{num}s")
 

@@ -5,7 +5,7 @@ master clips. Resolve imports FCP7 XML as timelines, so the sequence is
 what brings the clips in; it holds them, it isn't an edit (ADR-016).
 Importers resolve <file id> references in reading order, so the sequence
 comes first and carries each file's full definition; the master clips
-refer back to it by id.
+refer back to it by id. A photo is a video-only clip of STILL_SEC.
 """
 
 from __future__ import annotations

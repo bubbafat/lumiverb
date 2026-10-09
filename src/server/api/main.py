@@ -113,11 +113,6 @@ app.include_router(playback_router)
 app.include_router(assets.router)
 app.include_router(projects.router, prefix="/v1/projects", tags=["projects"])
 app.include_router(public_projects_router, prefix="/v1/public/projects", tags=["public_projects"])
-# Pre-rename paths, kept until the macOS/iOS apps use /v1/projects (ADR-016).
-app.include_router(projects.router, prefix="/v1/collections", deprecated=True, include_in_schema=False)
-app.include_router(
-    public_projects_router, prefix="/v1/public/collections", deprecated=True, include_in_schema=False
-)
 app.include_router(export_router)
 app.include_router(video.router)
 app.include_router(keys.router)

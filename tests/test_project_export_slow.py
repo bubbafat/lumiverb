@@ -1,8 +1,8 @@
 """Send to editor (ADR-016 phase 1): a project exports as a bin of master clips.
 
-GET /v1/projects/{id}/export?format=fcp7|fcpxml[&prefix=...] returns the
-file. Clips point at the originals: the library's ingest root (or a
-prefix given at export time, such as a travel SSD) plus rel_path.
+GET /v1/projects/{id}/export?format=fcp7|fcpxml returns the file. Clips
+point at the originals as the libraries know them (Robert, Oct 9: just the
+brain's paths), plus rel_path; photos are in it as stills.
 """
 
 from __future__ import annotations
@@ -156,28 +156,33 @@ def test_fcp7_export_points_at_originals(env, job) -> None:
     assert r.status_code == 200, r.text
     assert r.headers["content-type"].startswith("application/xml")
     assert 'filename="Customer Video 123.xml"' in r.headers["content-disposition"]
-    assert r.headers["x-lumiverb-skipped-stills"] == "1"
+    assert r.headers["x-lumiverb-stills"] == "1"
     root = ET.fromstring(r.content)
     assert root.findtext("bin/name") == "Customer Video 123"
     urls = sorted(f.findtext("pathurl") for f in root.iter("file") if f.find("pathurl") is not None)
     assert urls == [
         "file://localhost/Volumes/DAS/shoot/A001%20take.mov",
         "file://localhost/Volumes/DAS/shoot/A002.mov",
+        "file://localhost/Volumes/DAS/shoot/still.jpg",  # a photo, as a still (Robert, Oct 9)
     ]
     probed = next(c for c in root.findall("bin/children/clip") if c.findtext("name") == "A001 take.mov")
     assert probed.findtext("duration") == "212"
     assert probed.findtext("rate/ntsc") == "TRUE"
+    still = next(c for c in root.findall("bin/children/clip") if c.findtext("name") == "still.jpg")
+    assert still.findtext("duration") == "150"  # 5 s
+    assert still.find("media/audio") is None
 
 
 @pytest.mark.slow
-def test_prefix_replaces_library_root(env, job) -> None:
+def test_there_is_no_media_location_to_give(env, job) -> None:
+    # Robert, Oct 9: just the brain's paths (the libraries'); the editor relinks.
     client, headers, _, _ = env
 
     r = _export(client, headers, job, format="fcp7", prefix="/Volumes/Travel SSD/")
 
     urls = sorted(f.findtext("pathurl") for f in ET.fromstring(r.content).iter("file")
                   if f.find("pathurl") is not None)
-    assert urls[0] == "file://localhost/Volumes/Travel%20SSD/shoot/A001%20take.mov"
+    assert urls[0] == "file://localhost/Volumes/DAS/shoot/A001%20take.mov"
 
 
 @pytest.mark.slow
@@ -190,7 +195,8 @@ def test_fcpxml_export(env, job) -> None:
     assert 'filename="Customer Video 123.fcpxml"' in r.headers["content-disposition"]
     root = ET.fromstring(r.content)
     assert root.find("library/event").get("name") == "Customer Video 123"
-    assert len(root.findall("library/event/asset-clip")) == 2
+    assert len(root.findall("library/event/asset-clip")) == 3  # the photo too
+    assert len(root.findall("library/event/project/sequence/spine/video")) == 1  # it, on the timeline
 
 
 @pytest.mark.slow
@@ -301,20 +307,7 @@ def test_names_outside_latin1_export(env) -> None:
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("prefix", ["Footage", "~/Footage", "D:\\\\Footage", "../up"])
-def test_media_location_must_be_an_absolute_path(env, job, prefix) -> None:
-    client, headers, _, _ = env
-
-    r = _export(client, headers, job, format="fcp7", prefix=prefix)
-
-    assert r.status_code == 400, r.text
-
-
-@pytest.mark.slow
-def test_media_location_keeps_each_library_folder(env) -> None:
-    """Libraries at /mnt/das/2024 and /mnt/das/2025, media location
-    /Volumes/DAS: the location replaces their common parent, so each clip
-    keeps its year folder."""
+def test_each_library_keeps_its_own_folder(env) -> None:
     client, headers, _, _ = env
     libs = [
         client.post("/v1/libraries", json={"name": f"Y{y}", "root_path": f"/mnt/das/{y}"},
@@ -324,13 +317,13 @@ def test_media_location_keeps_each_library_folder(env) -> None:
     assets = [_ingest(client, headers, lib, "a/clip.mov", "video", FACET) for lib in libs]
     project_id = _project(client, headers, "Two years", assets)
 
-    r = _export(client, headers, project_id, format="fcp7", prefix="/Volumes/DAS")
+    r = _export(client, headers, project_id, format="fcp7")
 
     urls = sorted(f.findtext("pathurl") for f in ET.fromstring(r.content).iter("file")
                   if f.find("pathurl") is not None)
     assert urls == [
-        "file://localhost/Volumes/DAS/2024/a/clip.mov",
-        "file://localhost/Volumes/DAS/2025/a/clip.mov",
+        "file://localhost/mnt/das/2024/a/clip.mov",
+        "file://localhost/mnt/das/2025/a/clip.mov",
     ]
 
 
