@@ -4,7 +4,7 @@ const labelClass = "text-xs font-medium uppercase tracking-wide text-gray-500";
 const linkClass = "text-xs text-indigo-300 hover:text-indigo-200 disabled:opacity-50";
 const buttonClass = "rounded-md px-3 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50";
 
-/** "Edited" beside a value a person corrected. */
+/** "Edited" beside a value a person wrote (the one copy: Robert, Oct 9). */
 function EditedBadge() {
   return (
     <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-300">
@@ -39,21 +39,21 @@ function SaveError({ error }: { error: string | null }) {
 
 interface TextProps {
   label: string;
-  /** What's shown: the person's correction, else the machine's. */
+  /** What's shown: what a person wrote, else the machine's. */
   value: string | null | undefined;
-  /** The machine's value under a correction (shown smaller, to compare). */
-  machine?: string | null;
   corrected: boolean;
   canEdit: boolean;
   emptyText: string;
   saving?: boolean;
-  /** A string sets the correction; null brings back the machine's. */
-  onSave: (value: string | null) => Promise<unknown> | void;
+  /** What the person wrote: it replaces the machine's, which never comes back over it. */
+  onSave: (value: string) => Promise<unknown> | void;
+  /** Removes what a person wrote: none is left, and the machine writes it again. */
+  onRemove?: () => Promise<unknown> | void;
   render?: (value: string) => ReactNode;
 }
 
 /** A description or the text in an image: shown, and for editors correctable. */
-export function CorrectableText({ label, value, machine, corrected, canEdit, emptyText, saving, onSave, render }: TextProps) {
+export function CorrectableText({ label, value, corrected, canEdit, emptyText, saving, onSave, onRemove, render }: TextProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const { error, run, clear } = useSave();
@@ -65,15 +65,16 @@ export function CorrectableText({ label, value, machine, corrected, canEdit, emp
         {corrected && <EditedBadge />}
         {canEdit && !editing && (
           <span className="ml-auto flex gap-3">
-            {corrected && (
+            {corrected && onRemove && (
               <button
                 type="button"
                 className={linkClass}
                 disabled={saving}
-                aria-label={`Use the AI's ${label.toLowerCase()}`}
-                onClick={() => run(() => onSave(null))}
+                aria-label={`Remove your ${label.toLowerCase()} (the machine writes it again)`}
+                title={`Remove your ${label.toLowerCase()} (the machine writes it again)`}
+                onClick={() => run(() => onRemove())}
               >
-                Use the AI's
+                Remove
               </button>
             )}
             <button
@@ -95,6 +96,11 @@ export function CorrectableText({ label, value, machine, corrected, canEdit, emp
           className="space-y-2"
           onSubmit={async (e) => {
             e.preventDefault();
+            // Unchanged, nothing is saved: a Save alone doesn't make the machine's the person's.
+            if (!corrected && draft.trim() === (value ?? "").trim()) {
+              setEditing(false);
+              return;
+            }
             if (await run(() => onSave(draft))) setEditing(false);
           }}
         >
@@ -127,11 +133,6 @@ export function CorrectableText({ label, value, machine, corrected, canEdit, emp
       ) : (
         <p className="text-gray-500">{emptyText}</p>
       )}
-      {corrected && machine && !editing && (
-        <p className="mt-1 text-xs text-gray-500">
-          The AI's: <span className="italic">{machine}</span>
-        </p>
-      )}
       <SaveError error={error} />
     </div>
   );
@@ -139,17 +140,18 @@ export function CorrectableText({ label, value, machine, corrected, canEdit, emp
 
 interface TagsProps {
   tags: string[];
-  machineTags?: string[];
   corrected: boolean;
   canEdit: boolean;
   saving?: boolean;
-  /** The tags to show (kept as adds and removes on the machine's); null brings back the machine's. */
-  onSave: (tags: string[] | null) => Promise<unknown> | void;
+  /** The whole list, as the person wants it: the machine no longer changes it. */
+  onSave: (tags: string[]) => Promise<unknown> | void;
+  /** Removes the person's list: the machine tags it again. */
+  onRemove?: () => Promise<unknown> | void;
   renderTag: (tag: string) => ReactNode;
 }
 
-/** Tags: shown, and for editors correctable (remove some, add your own). */
-export function CorrectableTags({ tags, machineTags, corrected, canEdit, saving, onSave, renderTag }: TagsProps) {
+/** Tags: shown, and for editors editable (remove some, add your own); a saved list stays as written. */
+export function CorrectableTags({ tags, corrected, canEdit, saving, onSave, onRemove, renderTag }: TagsProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<string[]>([]);
   const [adding, setAdding] = useState("");
@@ -172,15 +174,16 @@ export function CorrectableTags({ tags, machineTags, corrected, canEdit, saving,
         {corrected && <EditedBadge />}
         {canEdit && !editing && (
           <span className="ml-auto flex gap-3">
-            {corrected && (
+            {corrected && onRemove && (
               <button
                 type="button"
                 className={linkClass}
                 disabled={saving}
-                aria-label="Use the AI's tags"
-                onClick={() => run(() => onSave(null))}
+                aria-label="Remove your tags (the machine tags it again)"
+                title="Remove your tags (the machine tags it again)"
+                onClick={() => run(() => onRemove())}
               >
-                Use the AI's
+                Remove
               </button>
             )}
             <button
@@ -202,10 +205,15 @@ export function CorrectableTags({ tags, machineTags, corrected, canEdit, saving,
           className="space-y-2"
           onSubmit={async (e) => {
             e.preventDefault();
-            const tags = withTyped();
-            setDraft(tags);
+            const next = withTyped();
+            setDraft(next);
             setAdding("");
-            if (await run(() => onSave(tags))) setEditing(false);
+            // Unchanged, nothing is saved: a Save alone doesn't make the machine's list the person's.
+            if (!corrected && next.length === tags.length && next.every((t, i) => t === tags[i])) {
+              setEditing(false);
+              return;
+            }
+            if (await run(() => onSave(next))) setEditing(false);
           }}
         >
           <div className="flex flex-wrap gap-1.5">
@@ -256,9 +264,6 @@ export function CorrectableTags({ tags, machineTags, corrected, canEdit, saving,
         <div className="mt-1 flex flex-wrap gap-1.5">{tags.map((tag) => renderTag(tag))}</div>
       ) : (
         <p className="text-gray-500">No tags yet</p>
-      )}
-      {corrected && machineTags && !editing && (
-        <p className="mt-1 text-xs text-gray-500">The AI's: {machineTags.length ? machineTags.join(", ") : "none"}</p>
       )}
       <SaveError error={error} />
     </div>

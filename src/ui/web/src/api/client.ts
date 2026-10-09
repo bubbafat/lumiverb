@@ -730,9 +730,9 @@ export async function getAsset(assetId: string, publicLibraryId?: string, public
   return apiFetch<AssetDetail>(`/assets/${assetId}${publicQuery(publicLibraryId, publicProjectId)}`);
 }
 
-/** Correct a clip's description, OCR or tags (editors). Only the fields sent change:
- * a string sets the correction, null brings back the machine's; `tags` is the list to
- * show, kept as adds and removes on the machine's. Returns the clip's detail. */
+/** Write a clip's description, OCR or tags (editors): the one copy, which the
+ * machine never replaces; `tags` is the whole list. Only the fields sent change;
+ * null removes what a person wrote (the machine makes it again). Returns the clip's detail. */
 export async function correctAsset(
   assetId: string,
   body: { description?: string | null; ocr_text?: string | null; tags?: string[] | null },
@@ -852,18 +852,18 @@ export async function addMachine(body: MachineFields): Promise<AiSettings> {
   return apiFetch<AiSettings>("/ai/machines", { method: "POST", body });
 }
 
-/** Change a machine (admins): only the fields sent. 409
- * job_left_without_machine (details.jobs) unless leaveJobs, when it's the last
- * machine doing a job; otherwise as addMachine. The built-in machine takes no
+/** Change a machine (admins): only the fields sent, as addMachine. Turning
+ * off the last machine doing a job, or taking the job from it, never asks:
+ * the job's work waits (Processing says why). The built-in machine takes no
  * api_url or api_key, and only the jobs it can do (409 built_in_machine). */
-export async function updateMachine(machineId: string, body: Partial<MachineFields>, leaveJobs = false): Promise<AiSettings> {
-  return apiFetch<AiSettings>(`/ai/machines/${machineId}${leaveJobs ? "?leave_jobs=true" : ""}`, { method: "PATCH", body });
+export async function updateMachine(machineId: string, body: Partial<MachineFields>): Promise<AiSettings> {
+  return apiFetch<AiSettings>(`/ai/machines/${machineId}`, { method: "PATCH", body });
 }
 
-/** Remove a machine (admins). 409 job_left_without_machine unless leaveJobs;
+/** Remove a machine (admins); the last doing a job too (its work waits).
  * 409 built_in_machine for the built-in one (turn it off instead). */
-export async function removeMachine(machineId: string, leaveJobs = false): Promise<AiSettings> {
-  return apiFetch<AiSettings>(`/ai/machines/${machineId}${leaveJobs ? "?leave_jobs=true" : ""}`, { method: "DELETE" });
+export async function removeMachine(machineId: string): Promise<AiSettings> {
+  return apiFetch<AiSettings>(`/ai/machines/${machineId}`, { method: "DELETE" });
 }
 
 /** Set a job's model (admins); "" turns the job off. Every machine doing it is
@@ -912,6 +912,8 @@ export interface Producer {
   /** Admins only. */
   paused_by: string | null;
   paused_at: string | null;
+  /** Why its work waits now: its AI job is off, or has no machine (or none online). */
+  waiting: string | null;
 }
 
 export async function getProducers(scope: { libraryId?: string; projectId?: string } = {}): Promise<Producer[]> {
@@ -1417,8 +1419,9 @@ export async function uploadTranscript(
   );
 }
 
-/** Remove the transcript a video asset shows: a person's ("manual") or the
- * machine's. 409 transcript_changed when it shows the other one. */
+/** Remove the transcript a video shows, saying whose: a person's ("manual"; the
+ * machine makes one again) or the machine's (for good). 409 transcript_changed
+ * when it shows the other one. */
 export async function deleteTranscript(assetId: string, which: "manual" | "machine"): Promise<void> {
   await apiFetch<void>(`/assets/${assetId}/transcript?which=${which}`, { method: "DELETE" });
 }

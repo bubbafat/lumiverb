@@ -29,16 +29,16 @@ describe("CorrectableText", () => {
     await waitFor(() => expect(screen.queryByLabelText("Description")).toBeNull());
   });
 
-  it("says it was edited, shows the AI's, and can go back to it", () => {
-    const onSave = vi.fn();
+  it("says a person wrote it, with no machine copy and no going back to one", () => {
+    // Robert, Oct 9: edits keep only the latest.
     render(
-      <CorrectableText label="Description" value="Mittens" machine="a cat" corrected canEdit
-        emptyText="No description yet" onSave={onSave} />,
+      <CorrectableText label="Description" value="Mittens" corrected canEdit
+        emptyText="No description yet" onSave={vi.fn()} />,
     );
     expect(screen.getByText("Edited")).toBeTruthy();
-    expect(screen.getByText("a cat")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Use the AI's description" }));
-    expect(onSave).toHaveBeenCalledWith(null);
+    expect(screen.queryByText(/The AI's/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Use the AI's/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Edit description" })).toBeTruthy();
   });
 
   it("says when a save fails, and keeps what was typed", async () => {
@@ -68,15 +68,31 @@ describe("CorrectableText", () => {
     await waitFor(() => expect(screen.queryByLabelText("Description")).toBeNull());
   });
 
-  it("says when going back to the AI's fails", async () => {
-    const onSave = vi.fn().mockRejectedValue(new Error("Network down"));
+  it("an unchanged Save saves nothing: the machine's stays the machine's", async () => {
+    // Review: a Save alone made the field a person's for good.
+    const onSave = vi.fn();
     render(
-      <CorrectableText label="Text in Image" value="EXIT 9" machine="EXIT" corrected canEdit
-        emptyText="No text found" onSave={onSave} />,
+      <CorrectableText label="Text in Image" value={null} corrected={false} canEdit emptyText="No text found" onSave={onSave} />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Use the AI's text in image" }));
-    expect((await screen.findByRole("alert")).textContent).toContain("Network down");
-    expect(screen.getByText("EXIT 9")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Edit text in image" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByLabelText("Text in Image")).toBeNull());
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("removes what a person wrote, and says the machine writes it again", async () => {
+    const onRemove = vi.fn().mockResolvedValue(undefined);
+    const { rerender } = render(
+      <CorrectableText label="Description" value="Mittens" corrected canEdit emptyText="No description yet"
+        onSave={vi.fn()} onRemove={onRemove} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Remove your description (the machine writes it again)" }));
+    await waitFor(() => expect(onRemove).toHaveBeenCalled());
+    rerender(
+      <CorrectableText label="Description" value="a cat" corrected={false} canEdit emptyText="No description yet"
+        onSave={vi.fn()} onRemove={onRemove} />,
+    );
+    expect(screen.queryByRole("button", { name: /Remove your description/ })).toBeNull();  // only a person's
   });
 
   it("cancels without saving", () => {
@@ -127,13 +143,27 @@ describe("CorrectableTags", () => {
     expect(screen.getByRole("button", { name: "Remove dog" })).toBeTruthy();
   });
 
-  it("shows the AI's under edited tags and can go back to them", () => {
-    const onSave = vi.fn();
-    render(<CorrectableTags tags={["dog", "Rex"]} machineTags={["dog", "ocean"]} corrected canEdit onSave={onSave} renderTag={renderTag} />);
+  it("says a person's tags are theirs, with no machine list beside them", () => {
+    render(<CorrectableTags tags={["dog", "Rex"]} corrected canEdit onSave={vi.fn()} renderTag={renderTag} />);
     expect(screen.getByText("Edited")).toBeTruthy();
-    expect(screen.getByText("The AI's: dog, ocean")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Use the AI's tags" }));
-    expect(onSave).toHaveBeenCalledWith(null);
+    expect(screen.queryByText(/The AI's/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Use the AI's/ })).toBeNull();
+  });
+
+  it("an unchanged Save of the machine's tags saves nothing", async () => {
+    const onSave = vi.fn();
+    render(<CorrectableTags tags={["dog", "beach"]} corrected={false} canEdit onSave={onSave} renderTag={renderTag} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit tags" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByLabelText("Add a tag")).toBeNull());
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("removes a person's tags (the machine tags it again)", async () => {
+    const onRemove = vi.fn().mockResolvedValue(undefined);
+    render(<CorrectableTags tags={["Rex"]} corrected canEdit onSave={vi.fn()} onRemove={onRemove} renderTag={renderTag} />);
+    fireEvent.click(screen.getByRole("button", { name: "Remove your tags (the machine tags it again)" }));
+    await waitFor(() => expect(onRemove).toHaveBeenCalled());
   });
 
   it("says when there are none", () => {

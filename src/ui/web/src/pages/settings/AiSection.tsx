@@ -57,13 +57,6 @@ function message(error: unknown): string {
   return error instanceof ApiError ? error.message : "Couldn't reach the server. Try again.";
 }
 
-/** What leaving a job without a machine would stop, from a 409 job_left_without_machine. */
-function leftJobs(error: unknown): string | null {
-  if (!(error instanceof ApiError) || error.code !== "job_left_without_machine") return null;
-  const jobs = (error.details?.jobs as { label: string }[] | undefined) ?? [];
-  return jobs.map((j) => j.label.toLowerCase()).join(" and ") || "a job";
-}
-
 /** Account-wide: the GPU machines AI work runs on, and each job's model. Admins change them. */
 export default function AiSection() {
   const { data: user } = useQuery({ queryKey: ["settings", "me"], queryFn: getCurrentUser });
@@ -182,18 +175,13 @@ function MachineStatusLine({ machine }: { machine: AiMachine }) {
 function MachineRow({ ai, machine, admin }: { ai: AiSettings; machine: AiMachine; admin: boolean }) {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
-  const [confirm, setConfirm] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const labels = ai.jobs.filter((j) => machine.jobs.includes(j.job)).map((j) => j.label);
   const remove = useMutation({
-    mutationFn: (leaveJobs: boolean) => removeMachine(machine.machine_id, leaveJobs),
+    mutationFn: () => removeMachine(machine.machine_id),
     onMutate: () => setProblem(null),
     onSuccess: (next) => queryClient.setQueryData(AI_QUERY_KEY, next),
-    onError: (e) => {
-      const left = leftJobs(e);
-      if (left) setConfirm(left);
-      else setProblem(message(e));
-    },
+    onError: (e) => setProblem(message(e)),
   });
   const offline = machine.enabled && machine.jobs.length > 0 && machine.status && !machine.status.online;
 
@@ -223,7 +211,7 @@ function MachineRow({ ai, machine, admin }: { ai: AiSettings; machine: AiMachine
                 className="text-sm text-red-300 hover:text-red-200 disabled:opacity-50"
                 aria-label={`Remove ${machine.name}`}
                 disabled={remove.isPending}
-                onClick={() => remove.mutate(false)}
+                onClick={() => remove.mutate()}
               >
                 Remove
               </button>
@@ -241,28 +229,6 @@ function MachineRow({ ai, machine, admin }: { ai: AiSettings; machine: AiMachine
         {machine.shares_gpu && " · video work comes first on its GPU"}
       </p>
       <MachineStatusLine machine={machine} />
-      {confirm && (
-        <div role="alert" className="mt-2 space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">
-          <p>
-            No other machine does {confirm}: without {machine.name}, {confirm} wait{confirm.includes(" and ") ? "" : "s"}.
-          </p>
-          <div className="flex gap-3">
-            <button
-              type="button"
-              className={`${buttonClass} bg-red-600 text-white hover:bg-red-500`}
-              onClick={() => {
-                setConfirm(null);
-                remove.mutate(true);
-              }}
-            >
-              Remove anyway
-            </button>
-            <button type="button" className={`${buttonClass} text-gray-200 hover:bg-gray-800`} onClick={() => setConfirm(null)}>
-              Keep it
-            </button>
-          </div>
-        </div>
-      )}
       {problem && (
         <p role="alert" className="text-sm text-red-300">
           {problem}
@@ -291,7 +257,6 @@ function MachineForm({ ai, machine, onDone }: { ai: AiSettings; machine?: AiMach
   // What it offered at the last Connect; null until connected (again).
   const [models, setModels] = useState<string[] | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
-  const [confirm, setConfirm] = useState<string | null>(null);
 
   const sameUrl = !!machine && url.trim().replace(/\/+$/, "") === machine.api_url;
   // A key typed now; "" to save none; undefined keeps the saved one.
@@ -326,25 +291,21 @@ function MachineForm({ ai, machine, onDone }: { ai: AiSettings; machine?: AiMach
   });
 
   const save = useMutation({
-    mutationFn: ({ leaveJobs }: { leaveJobs: boolean }) => {
+    mutationFn: () => {
       if (builtIn && machine) {
-        return updateMachine(machine.machine_id, { name: name.trim(), jobs, at_once: atOnce, enabled }, leaveJobs);
+        return updateMachine(machine.machine_id, { name: name.trim(), jobs, at_once: atOnce, enabled });
       }
       const fields: MachineFields = { name: name.trim(), api_url: url.trim(), jobs, at_once: atOnce, enabled,
                                       shares_gpu: sharesGpu };
       if (keyToSend !== undefined) fields.api_key = keyToSend;
-      return machine ? updateMachine(machine.machine_id, fields, leaveJobs) : addMachine(fields);
+      return machine ? updateMachine(machine.machine_id, fields) : addMachine(fields);
     },
     onMutate: () => setProblem(null),
     onSuccess: (next) => {
       queryClient.setQueryData(AI_QUERY_KEY, next);
       onDone();
     },
-    onError: (e) => {
-      const left = leftJobs(e);
-      if (left) setConfirm(left);
-      else setProblem(message(e));
-    },
+    onError: (e) => setProblem(message(e)),
   });
 
   // A job whose model this machine doesn't offer can't be given to it.
@@ -361,7 +322,7 @@ function MachineForm({ ai, machine, onDone }: { ai: AiSettings; machine?: AiMach
       className="space-y-4 rounded-md border border-indigo-500/40 bg-gray-950/60 p-4"
       onSubmit={(e) => {
         e.preventDefault();
-        if (canSave) save.mutate({ leaveJobs: false });
+        if (canSave) save.mutate();
       }}
     >
       <p className="font-medium text-gray-100">{title}</p>
@@ -486,26 +447,6 @@ function MachineForm({ ai, machine, onDone }: { ai: AiSettings; machine?: AiMach
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
           Use this machine
         </label>
-      )}
-      {confirm && (
-        <div role="alert" className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">
-          <p>No other machine does {confirm}: without this one, it waits.</p>
-          <div className="flex gap-3">
-            <button
-              type="button"
-              className={`${buttonClass} bg-amber-600 text-white hover:bg-amber-500`}
-              onClick={() => {
-                setConfirm(null);
-                save.mutate({ leaveJobs: true });
-              }}
-            >
-              Save anyway
-            </button>
-            <button type="button" className={`${buttonClass} text-gray-200 hover:bg-gray-800`} onClick={() => setConfirm(null)}>
-              Go back
-            </button>
-          </div>
-        </div>
       )}
       {problem && (
         <p role="alert" className="text-sm text-red-300">

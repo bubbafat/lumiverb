@@ -103,7 +103,7 @@ Only output-affecting changes (a model, a prompt, a setting in the lineage hash)
 2. If any carry user edits: "M of them have your edits." **Keep my edits** (the default: regenerate underneath and re-apply them), **Replace my edits** (kept in history), or **Skip edited assets**.
 3. A uniform model (CLIP, faces) can't be upgraded in part. The prompt says every asset will be re-embedded in the background, similarity and clustering use the old model until it finishes, and face names carry over. The confirm button names the action; Cancel keeps the current model.
 
-Proposed (not yet decided): whole-value overrides (a description, OCR text) win and keep the regenerated value underneath; tag edits are stored as adds and removes on top of model output; corrections tied to a region (faces, transcript words, scenes) are anchored in media terms (a time range or bounding box), re-applied by overlap after regeneration, and each ends as re-applied, satisfied or needs review, never dropped silently. Faces get full anchoring first, including "not this person".
+Decided (Robert, Oct 9): changing a setting or a model is the approval (stale work is redone after anything missing, with a Stop per producer), and edits keep only the latest: a person's description, tags, OCR text or transcript is the one copy, the machine's is dropped and never comes back over it, and a tag edit fixes the whole list. Removing what a person wrote leaves none, and the machine makes it again. Earlier proposal, superseded for those: whole-value overrides that keep the regenerated value underneath, and tag edits as adds and removes on top of model output. Still proposed: corrections tied to a region (faces, transcript words, scenes) are anchored in media terms (a time range or bounding box), re-applied by overlap after regeneration, and each ends as re-applied, satisfied or needs review, never dropped silently. Faces get full anchoring first, including "not this person".
 
 ### What changes from today
 
@@ -239,7 +239,7 @@ Every derived artifact says how it was made, and the system works out what is mi
 - A lineage record on every artifact kind (probe, proxy, thumbnail, preview, scenes, vision, OCR, CLIP, faces, transcripts, search documents): producer, producer version, output-affecting settings hash, source SHA-256
 - A reconciler replacing `MISSING_CONDITIONS` and the `enrich` repair loop
 - One producer per artifact; OCR stored apart from vision descriptions
-- Human corrections kept beside the derived values they correct
+- Human corrections are the one copy: the derived value they replace is dropped and never regenerated over them (Robert, Oct 9)
 - Per-producer counts of current, missing and stale, with the upgrade flow above
 
 **Done when:** changing one producer setting marks exactly the artifacts it affects as stale, approving rebuilds them at low priority, no human data changes, and named faces keep their names through a face-model switch.

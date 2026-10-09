@@ -373,8 +373,8 @@ export function Lightbox({
     refetchInterval: 10_000,
   });
 
-  // Corrections: editors fix a description, the text in an image or tags; the
-  // machine's values stay underneath ("Use the AI's" brings them back).
+  // Editors write a description, the text in an image or tags: the one copy,
+  // which the machine never replaces (Robert, Oct 9).
   const canCorrect = useCanEdit(!isPublic) && !isPublic;
   const correctionClient = useQueryClient();
   // The clip rides with each save: a save that returns after moving on
@@ -1202,12 +1202,12 @@ export function Lightbox({
                   key={asset.asset_id}
                   label="Description"
                   value={detail?.ai_description}
-                  machine={detail?.machine_description}
                   corrected={corrected.includes("description")}
                   canEdit={canCorrect}
                   emptyText="No description yet"
                   saving={correct.isPending}
                   onSave={(value) => correct.mutateAsync({ assetId: asset.asset_id, body: { description: value } })}
+                  onRemove={() => correct.mutateAsync({ assetId: asset.asset_id, body: { description: null } })}
                   render={(value) => <p className="italic text-gray-300">{value}</p>}
                 />
               )}
@@ -1220,12 +1220,12 @@ export function Lightbox({
                     key={asset.asset_id}
                     label="Text in Image"
                     value={detail?.ocr_text}
-                    machine={detail?.machine_ocr_text}
                     corrected={corrected.includes("ocr_text")}
                     canEdit={canCorrect}
                     emptyText="No text found"
                     saving={correct.isPending}
                     onSave={(value) => correct.mutateAsync({ assetId: asset.asset_id, body: { ocr_text: value } })}
+                    onRemove={() => correct.mutateAsync({ assetId: asset.asset_id, body: { ocr_text: null } })}
                   />
                 </>
               )}
@@ -1243,11 +1243,11 @@ export function Lightbox({
                       <CorrectableTags
                         key={asset.asset_id}
                         tags={detail?.ai_tags ?? []}
-                        machineTags={detail?.machine_tags}
                         corrected={corrected.includes("tags")}
                         canEdit={canCorrect}
                         saving={correct.isPending}
                         onSave={(tags) => correct.mutateAsync({ assetId: asset.asset_id, body: { tags } })}
+                        onRemove={() => correct.mutateAsync({ assetId: asset.asset_id, body: { tags: null } })}
                         renderTag={(tag) =>
                           onTagClick ? (
                             <button
@@ -1293,7 +1293,6 @@ export function Lightbox({
                           key={asset.asset_id}
                           assetId={asset.asset_id}
                           source={detail.transcript_source}
-                          machineUnderneath={!!detail.machine_transcript}
                           canEdit={canCorrect}
                           onChanged={() => queryClient.invalidateQueries({ queryKey: ["asset", asset.asset_id] })}
                           onDownload={() => {

@@ -192,9 +192,9 @@ def test_a_persons_transcript_is_current_whatever_the_settings(env):
     client.post(f"/v1/assets/{clip}/transcript", json={"srt": "1\n00:00:00,000 --> 00:00:01,000\nmine\n"},
                 headers=headers)
     assert _row(env, clip, "transcript")[0] == P.PERSON and _state(env, clip, "transcript") == "current"
-    # Deleting it is a person's choice too: nothing regenerates it.
+    # Removing theirs leaves none, and it's missing again: the machine makes one (Robert, Oct 9).
     client.delete(f"/v1/assets/{clip}/transcript", params={"which": "manual"}, headers=headers)
-    assert _row(env, clip, "transcript")[0] == P.PERSON and _row(env, clip, "transcript")[4] == "empty"
+    assert _row(env, clip, "transcript") is None and _state(env, clip, "transcript") == "missing"
 
 
 @pytest.mark.slow

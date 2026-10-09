@@ -100,24 +100,27 @@ class ProducerItem(BaseModel):
     paused: bool = False
     paused_by: str | None = None  # admins only
     paused_at: datetime | None = None
+    # Why its work waits now (its AI job has no machine, none online, or is off).
+    waiting: str | None = None
 
 
 class ProducerList(BaseModel):
     producers: list[ProducerItem]
 
 
-def tenant_job_models(request: Request) -> dict[str, str]:
-    """The tenant's model per AI job (Settings → AI), from the control plane."""
+def tenant_ai(request: Request) -> tuple[dict[str, str], dict[str, str | None]]:
+    """The tenant's model per AI job (Settings → AI), and why each job's
+    work waits now (None: it doesn't), from the control plane."""
     from src.server.database import get_control_session
-    from src.server.repository.ai_machines import job_models
+    from src.server.repository.ai_machines import job_models, why_jobs_wait
     from src.server.repository.control_plane import TenantRepository
 
     tenant_id = getattr(request.state, "tenant_id", None)
     if not tenant_id:
-        return {}
+        return {}, {}
     with get_control_session() as ctrl:
         tenant = TenantRepository(ctrl).get_by_id(tenant_id)
-    return job_models(tenant)
+        return job_models(tenant), why_jobs_wait(ctrl, tenant_id)
 
 
 @router.get("", response_model=ProducerList, dependencies=[Depends(require_signed_in)])
@@ -131,7 +134,7 @@ def list_producers(
 ) -> ProducerList:
     """Every producer with its settings now and whether its redo is stopped;
     counts (in one library or project when given) unless counts=false, as the scheduler asks."""
-    models = tenant_job_models(request)
+    models, waits = tenant_ai(request)
     asset_ids = None
     if counts and project_id:
         require_editor(request)  # like every project route
@@ -145,6 +148,7 @@ def list_producers(
             artifact=artifact, producer=p.producer, version=p.version, title=p.title, media=list(p.media),
             uniform=p.uniform, settings=want["settings"], settings_hash=want["settings_hash"],
             redoable=lineage.redoable(artifact), why_not=lineage.CANT_REDO.get(artifact),
+            waiting=waits.get(p.job) if p.job else None,
         )
         if artifact in stopped:
             item.paused = True

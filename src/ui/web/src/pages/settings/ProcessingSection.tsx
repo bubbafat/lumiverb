@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiError,
@@ -153,6 +154,7 @@ function ProducerRow({
         </span>
       </div>
       <CountsBar producer={producer} />
+      {producer.waiting && <WaitingLine why={producer.waiting} />}
       {c && (
         <p className="text-sm text-gray-400">
           {c.applicable === 0 ? (
@@ -187,6 +189,25 @@ function ProducerRow({
       {c && c.stale > 0 && <RedoLine producer={producer} stale={c.stale} admin={admin} />}
       <Settings producer={producer} />
     </li>
+  );
+}
+
+/** Why a producer's work waits (its AI job is off or has no machine), with
+ * Settings → AI as a link: leaving a job without a machine never asks. */
+function WaitingLine({ why }: { why: string }) {
+  const [before, ...rest] = why.split("Settings → AI");
+  return (
+    <p role="status" className="text-sm text-amber-300">
+      {before}
+      {rest.length > 0 && (
+        <>
+          <Link to="/settings/ai" className="underline hover:text-amber-200">
+            Settings → AI
+          </Link>
+          {rest.join("Settings → AI")}
+        </>
+      )}
+    </p>
   );
 }
 
