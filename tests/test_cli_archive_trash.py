@@ -197,7 +197,8 @@ def test_trash_list_says_when_the_trash_is_emptied_by_hand():
 
 def test_deleting_missing_clips_says_how_many_and_asks():
     client = _client()
-    asks = _answer(409, {"error": {"code": "confirm_delete_missing", "message": "3 clips", "details": {"count": 3}}})
+    asks = _answer(409, {"error": {"code": "confirm_delete_missing", "message": "3 clips",
+                                   "details": {"count": 3, "listed_at": "2026-10-09T06:00:00+00:00"}}})
     client.raw.side_effect = [asks]
     result = _run(client, "archive", "delete-missing", "--library", "Media", input="n\n")
     assert result.exit_code == 0 and "Delete 3 clips whose files are missing in Media for good?" in result.output
@@ -209,6 +210,7 @@ def test_deleting_missing_clips_says_how_many_and_asks():
     assert result.exit_code == 0, result.output
     assert client.raw.call_args.args == ("DELETE", "/v1/archive/missing")
     assert client.raw.call_args.kwargs["json"] == {"library_id": "lib_1", "path": "licensed", "count": 3,
+                                                   "missing_before": "2026-10-09T06:00:00+00:00",
                                                    "remove_from_projects": False}
     assert "Deleted 3 clips whose files were missing, for good." in result.output
 
@@ -216,7 +218,7 @@ def test_deleting_missing_clips_says_how_many_and_asks():
 def test_deleting_missing_clips_in_projects_asks_about_them_too():
     client = _client()
     client.raw.side_effect = [
-        _answer(409, {"error": {"code": "confirm_delete_missing", "details": {"count": 1}}}),
+        _answer(409, {"error": {"code": "confirm_delete_missing", "details": {"count": 1, "listed_at": "t"}}}),
         _answer(409, {"error": {"code": "in_projects", "details": {"assets_in_projects": 1, "projects": [
             {"project_id": "col_1", "name": "Promo", "asset_count": 1}]}}}),
         _answer(200, {"deleted": 1}),
@@ -224,7 +226,7 @@ def test_deleting_missing_clips_in_projects_asks_about_them_too():
     result = _run(client, "archive", "delete-missing", input="y\ny\n")
     assert result.exit_code == 0, result.output
     assert "Promo" in result.output
-    assert client.raw.call_args.kwargs["json"] == {"count": 1, "remove_from_projects": True}
+    assert client.raw.call_args.kwargs["json"] == {"count": 1, "missing_before": "t", "remove_from_projects": True}
 
 
 def test_emptying_asks_first_and_names_what_goes():

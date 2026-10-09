@@ -981,7 +981,7 @@ def scan(
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would happen without making changes.")] = False,
     allow_moves: Annotated[bool, typer.Option("--allow-moves", help="Automatically apply detected file moves (update paths on server).")] = False,
     skip_moves: Annotated[bool, typer.Option("--skip-moves", help="Skip detected file moves (don't update paths, don't treat as new/deleted).")] = False,
-    allow_mass_delete: Annotated[bool, typer.Option("--allow-mass-delete", help="Archive missing files even when more than 50 files and half of those scanned are missing (normally skipped as a likely mount problem).")] = False,
+    allow_mass_delete: Annotated[bool, typer.Option("--allow-mass-delete", help="Archive missing files even when more than 50 clips and half of the library's clips in what was scanned are missing (normally skipped as a likely mount problem).")] = False,
     thorough: Annotated[bool, typer.Option("--thorough", help="SHA-verify all existing files instead of fast mtime+size check.")] = False,
 ) -> None:
     """Discover files, compute SHA, extract EXIF, generate proxies, upload.
