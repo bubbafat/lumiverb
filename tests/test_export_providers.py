@@ -387,6 +387,15 @@ def test_a_timeline_of_only_photos_has_a_frame_rate_in_fcpxml() -> None:
     assert sequence.get("duration") == "300/30s"
 
 
+def test_a_timeline_led_by_a_video_of_unknown_size_is_hd_in_fcpxml() -> None:
+    from src.server.export import still
+
+    root = _render("fcpxml", ExportBin(name="x", clips=[UNPROBED, still("p", "p.jpg", "/p.jpg", 4032, 3024)]))
+    sequence = root.find("library/event/project/sequence")
+    fmt = root.find(f"resources/format[@id='{sequence.get('format')}']")
+    assert (fmt.get("width"), fmt.get("height"), fmt.get("frameDuration")) == ("1920", "1080", "1/30s")
+
+
 @pytest.mark.parametrize("num, den, frames", [(30000, 1001, 150), (24000, 1001, 120), (25, 1, 125)])
 def test_a_still_is_five_seconds_to_the_nearest_frame(num: int, den: int, frames: int) -> None:
     # A still has no end of media to stay inside: 5 s on a 29.97 timeline is
