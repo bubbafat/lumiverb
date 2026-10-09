@@ -37,6 +37,7 @@ import { useClipActions } from "../lib/useClipActions";
 import { useRevisionRefresh } from "../lib/useRevisionRefresh";
 import { buildVirtualRows, buildFixedGridRows } from "../lib/virtualRows";
 import { useScrollAnchor } from "../lib/useScrollAnchor";
+import { NewClipsPill } from "../components/NewClipsPill";
 import { useLocalStorage } from "../lib/useLocalStorage";
 // parseSearchQuery available for future prefix query support
 import type { VirtualRowKind } from "../lib/virtualRows";
@@ -524,8 +525,9 @@ export default function BrowsePage() {
   });
 
   // A refresh that adds clips above a scrolled grid (newest first, during an
-  // ingest) or takes some away keeps the first clip on screen where it was.
-  useScrollAnchor(
+  // ingest) or takes some away keeps the first clip on screen where it was,
+  // and a pill counts the clips it added above.
+  const { newAbove, showNewAbove } = useScrollAnchor(
     parentEl,
     gridEl,
     virtualRows,
@@ -836,6 +838,7 @@ export default function BrowsePage() {
         </div>
       ) : (
         <div ref={setGridEl} style={{ width: "100%" }}>
+          <NewClipsPill count={newAbove} onClick={showNewAbove} />
           <div
             style={{
               height: `${rowVirtualizer.getTotalSize()}px`,

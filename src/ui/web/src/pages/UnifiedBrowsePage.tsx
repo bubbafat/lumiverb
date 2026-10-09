@@ -29,6 +29,7 @@ import { groupAssetsByDate } from "../lib/groupByDate";
 import { useSelection } from "../lib/useSelection";
 import { buildVirtualRows, buildFixedGridRows } from "../lib/virtualRows";
 import { useScrollAnchor } from "../lib/useScrollAnchor";
+import { NewClipsPill } from "../components/NewClipsPill";
 import { useLocalStorage } from "../lib/useLocalStorage";
 import type { VirtualRowKind } from "../lib/virtualRows";
 import { buildSavedQuery, composeDate, composeNear } from "../lib/queryFilter";
@@ -402,8 +403,9 @@ export default function UnifiedBrowsePage() {
   });
 
   // A refresh that adds clips above a scrolled grid (newest first, during an
-  // ingest) or takes some away keeps the first clip on screen where it was.
-  useScrollAnchor(
+  // ingest) or takes some away keeps the first clip on screen where it was,
+  // and a pill counts the clips it added above.
+  const { newAbove, showNewAbove } = useScrollAnchor(
     parentEl,
     gridEl,
     virtualRows,
@@ -628,6 +630,7 @@ export default function UnifiedBrowsePage() {
         </div>
       ) : (
         <div ref={setGridEl} style={{ width: "100%" }}>
+          <NewClipsPill count={newAbove} onClick={showNewAbove} />
           <div
             style={{
               height: `${rowVirtualizer.getTotalSize()}px`,
