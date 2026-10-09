@@ -32,7 +32,14 @@ from src.server.api.dependencies import (
 )
 from src.server.api.errors import ConflictError
 from src.server.repository import lineage
-from src.shared.producers import PAUSE_ALL, PAUSE_SCANS, PAUSE_UPKEEP, PRODUCERS, pause_state, pause_targets
+from src.shared.producers import (
+    PAUSE_ALL,
+    PAUSE_SCANS,
+    PAUSE_UPKEEP,
+    PRODUCERS,
+    pause_state,
+    pause_targets,
+)
 
 logger = logging.getLogger(__name__)
 
