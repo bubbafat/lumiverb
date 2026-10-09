@@ -25,6 +25,7 @@ from sqlmodel import Session
 
 from src.server import system_health as h
 from src.server.api.dependencies import get_tenant_session, require_signed_in
+from src.shared.producers import PAUSE_SCANS
 from src.shared.utils import utcnow
 
 logger = logging.getLogger(__name__)
@@ -64,8 +65,11 @@ class HealthRow(BaseModel):
 class LibraryReach(BaseModel):
     library_id: str
     name: str
-    # Whether the scheduler reached its storage at its last look; None when it hasn't looked lately.
+    # Whether the scheduler's latest look since it started reached its storage;
+    # None when that isn't known now (not looked at since, Scans paused, or the
+    # scheduler isn't running).
     reachable: bool | None
+    seen_at: datetime | None = None  # last seen reachable
 
 
 class SystemHealth(BaseModel):
@@ -106,22 +110,23 @@ def system_health(request: Request, session: Annotated[Session, Depends(get_tena
     ]
     libraries: list[tuple[str, str]] = []
     at = status.at if status else None
-    unreachable = list(status.unreachable) if status else []
+    seen = {i: r.model_dump() for i, r in status.storage.items()} if status else {}
+    scans_paused = bool(status and any(sw.target == PAUSE_SCANS and sw.paused for sw in status.switches))
 
     def storage() -> h.Row:
         from src.server.repository.tenant import LibraryRepository
 
         libraries.extend((lib.library_id, lib.name) for lib in LibraryRepository(session).list_all())
-        return h.storage_row(libraries=libraries, unreachable=unreachable, at=at, now=now)
+        return h.storage_row(libraries=libraries, storage=seen, scans_paused=scans_paused, at=at, now=now)
 
     rows.append(_row("storage", "Storage", storage, db_error, session))
     rows.append(_row("disk", "Disk", lambda: _disk(now)))
 
-    looked = at is not None and now - at < h.SCHEDULER_SILENT
     return SystemHealth(
         state=h.overall(rows),
         rows=[HealthRow(**r.as_dict()) for r in rows],
-        libraries=[LibraryReach(library_id=i, name=n, reachable=(i not in unreachable) if looked else None)
+        libraries=[LibraryReach(library_id=i, name=n, seen_at=(seen.get(i) or {}).get("seen_at"),
+                                reachable=h.library_reachable(seen.get(i), at=at, now=now, scans_paused=scans_paused))
                    for i, n in libraries],
     )
 

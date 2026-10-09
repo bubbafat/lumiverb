@@ -215,29 +215,96 @@ def search_row(*, enabled: bool, fallback_on: bool, quickwit: str | None, quickw
 # -- Storage --------------------------------------------------------------------
 
 
-def storage_row(*, libraries: Sequence[tuple[str, str]], unreachable: Sequence[str], at: datetime | None,
-                now: datetime) -> Row:
-    """libraries: (library_id, name) of those not trashed; unreachable: the
-    ids the scheduler couldn't reach at its last look (at). Red when one
-    is unreachable; yellow when the scheduler hasn't looked lately, so it
-    can't be told (Proposed); green when all are reachable."""
+def short_ago(delta: timedelta) -> str:
+    """Terse and rough: '1 min' (the least), '45 min', '2 h', '3 days'."""
+    minutes = max(1, round(delta.total_seconds() / 60))
+    if minutes < 60:
+        return f"{minutes} min"
+    if minutes < 48 * 60:
+        return f"{round(minutes / 60)} h"
+    return f"{round(minutes / 1440)} days"
+
+
+def _clock_time(at: datetime, now: datetime) -> str:
+    """'14:20' today, 'Oct 8 14:20' before, in the server's time zone."""
+    local, today = at.astimezone(), now.astimezone().date()
+    return f"{local:%H:%M}" if local.date() == today else f"{local:%b} {local.day} {local:%H:%M}"
+
+
+def _last_seen(libraries: Sequence[tuple[str, str]], storage: Mapping[str, Mapping[str, Any]],
+               now: datetime) -> str:
+    """When each was last seen: 'Media last seen 2 h ago.', 'Photos last
+    seen 2 h ago, Footage 5 min ago.', 'All last seen within 3 h.'."""
+    seen = [(n, (storage.get(i) or {}).get("seen_at")) for i, n in libraries]
+    never = [n for n, at in seen if at is None]
+    seen = [(n, at) for n, at in seen if at is not None]
+    if len(libraries) <= 2:
+        parts = [f"{n} {'last seen ' if k == 0 else ''}{short_ago(now - at)} ago" for k, (n, at) in enumerate(seen)]
+        text = (", ".join(parts) + ".") if parts else ""
+        if never:
+            text = (text + " " if text else "") + f"{_names(never)} never seen."
+        return text
+    within = f"last seen within {short_ago(now - min(at for _, at in seen))}." if seen else ""
+    if not never:
+        return f"All {within}"
+    return f"{_names(never)} never seen." + (f" The others {within}" if within else "")
+
+
+def library_reachable(seen: Mapping[str, Any] | None, *, at: datetime | None, now: datetime,
+                      scans_paused: bool) -> bool | None:
+    """A library's dot: True when the latest look since the scheduler started
+    reached it, False when it found it unreachable, None when that isn't
+    known now (not looked at since a restart, Scans paused, or the scheduler
+    isn't running)."""
+    if at is None or now - at >= SCHEDULER_SILENT or not seen or not seen.get("checked"):
+        return None
+    if seen.get("away_since"):
+        return False
+    return None if scans_paused else True
+
+
+def storage_row(*, libraries: Sequence[tuple[str, str]], storage: Mapping[str, Mapping[str, Any]],
+                scans_paused: bool, at: datetime | None, now: datetime) -> Row:
+    """libraries: (library_id, name) of those not trashed; storage: the
+    scheduler's looks at each, {seen_at, away_since, checked} (checked:
+    looked at since it started; otherwise a record from before), as of its
+    status at `at`.
+
+    Red when the latest look found one unreachable ("since" when); yellow
+    while Scans are paused (nothing looks, so what's known is stale:
+    Proposed), when one hasn't been looked at since the scheduler started,
+    or the scheduler isn't running (each saying when it was last seen);
+    green when the latest look reached them all."""
     row = Row("storage", "Storage", GREEN, "", link="/libraries", checked_at=at)
     if not libraries:
         row.reason = "No libraries."
         return row
-    away = [(i, n) for i, n in libraries if i in set(unreachable)]
+
+    def rec(i: str) -> Mapping[str, Any]:
+        return storage.get(i) or {}
+
+    away = [(i, n) for i, n in libraries if rec(i).get("checked") and rec(i).get("away_since")]
     if at is None or now - at >= SCHEDULER_SILENT:
         row.state = YELLOW
         row.reason = ("Not checked: the scheduler isn't running." if at is None else
                       f"Last checked {ago(now - at)} ago: the scheduler isn't running.")
         if away:
-            row.reason += f" Then {_names([n for _, n in away])} couldn't be reached."
+            since = ", ".join(_clock_time(rec(i)["away_since"], now) for i, _ in away)
+            row.reason += f" Then {_names([n for _, n in away])} couldn't be reached (since {since})."
         return row
     if away:
         row.state = RED
-        row.reason = f"Can't reach {_names([n for _, n in away])}: work on {'its' if len(away) == 1 else 'their'} originals waits."
+        row.reason = "Can't reach " + ", ".join(
+            f"{n} since {_clock_time(rec(i)['away_since'], now)}" for i, n in away) + "."
         if len(away) == 1:
             row.link = f"/libraries/{away[0][0]}/settings"
+        return row
+    if scans_paused:
+        row.state, row.reason = YELLOW, f"Scans paused. {_last_seen(libraries, storage, now)}"
+        return row
+    unchecked = [(i, n) for i, n in libraries if not rec(i).get("checked")]
+    if unchecked:
+        row.state, row.reason = YELLOW, f"Not checked yet. {_last_seen(unchecked, storage, now)}"
         return row
     row.reason = f"All {len(libraries)} {'library' if len(libraries) == 1 else 'libraries'} reachable."
     return row

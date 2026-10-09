@@ -31,9 +31,10 @@ function health(over: Partial<SystemHealth> = {}): SystemHealth {
       row("disk", "Disk"),
     ],
     libraries: [
-      { library_id: "lib_1", name: "Photos", reachable: true },
-      { library_id: "lib_2", name: "Footage", reachable: false },
-      { library_id: "lib_3", name: "Archive", reachable: null },
+      { library_id: "lib_1", name: "Photos", reachable: true, seen_at: new Date().toISOString() },
+      { library_id: "lib_2", name: "Footage", reachable: false, seen_at: null },
+      { library_id: "lib_3", name: "Archive", reachable: null,
+        seen_at: new Date(Date.now() - 2 * 3600_000 - 60_000).toISOString() },
     ],
     ...over,
   };
@@ -108,7 +109,17 @@ describe("AdminPage", () => {
     const dot = (name: string) => within(within(libs).getByText(name).closest("li")!).getByRole("img");
     expect(dot("Photos").getAttribute("aria-label")).toBe("Reachable");
     expect(dot("Footage").getAttribute("aria-label")).toBe("Can't be reached");
-    expect(dot("Archive").getAttribute("aria-label")).toBe("Not checked lately");
+    expect(dot("Archive").getAttribute("aria-label")).toBe("Not checked lately · last seen 2h ago");
+  });
+
+  it("says a library not checked lately was never seen when it wasn't", async () => {
+    api.getSystemHealth.mockResolvedValue(health({
+      libraries: [{ library_id: "lib_3", name: "Archive", reachable: null, seen_at: null }],
+    }));
+    renderPage();
+    const libs = await screen.findByRole("list", { name: "Libraries" });
+    const dot = within(within(libs).getByText("Archive").closest("li")!).getByRole("img");
+    expect(dot.getAttribute("aria-label")).toBe("Not checked lately · never seen");
   });
 
   it("keeps the link to manage users", async () => {

@@ -221,35 +221,124 @@ def test_search_is_red_when_quickwit_is_down_and_the_fallback_is_off():
 LIBS = [("lib_a", "Photos"), ("lib_b", "Footage")]
 
 
-def test_storage_is_green_when_every_library_is_reachable():
-    row = h.storage_row(libraries=LIBS, unreachable=[], at=ago(seconds=5), now=NOW)
-    assert row.state == h.GREEN and "2 libraries" in row.reason
+def seen(minutes: float | None = 1, *, away_minutes: float | None = None, checked: bool = True) -> dict:
+    """One library's record: last seen reachable minutes ago (None: never), and
+    unreachable since away_minutes ago (None: the latest look reached it)."""
+    return {"seen_at": ago(minutes=minutes) if minutes is not None else None,
+            "away_since": ago(minutes=away_minutes) if away_minutes is not None else None,
+            "checked": checked}
 
 
-def test_storage_is_red_when_a_library_is_unreachable():
-    row = h.storage_row(libraries=LIBS, unreachable=["lib_b"], at=ago(seconds=5), now=NOW)
-    assert row.state == h.RED and "Footage" in row.reason and "Photos" not in row.reason
+def storage(storage: dict, *, scans_paused: bool = False, at=None, libraries=LIBS) -> h.Row:
+    return h.storage_row(libraries=libraries, storage=storage, scans_paused=scans_paused,
+                         at=at or ago(seconds=5), now=NOW)
+
+
+def _clock(minutes: float) -> str:
+    d = ago(minutes=minutes).astimezone()
+    return f"{d:%H:%M}" if d.date() == NOW.astimezone().date() else f"{d:%b} {d.day} {d:%H:%M}"
+
+
+def test_storage_is_green_when_every_library_was_reachable_at_the_latest_look():
+    row = storage({"lib_a": seen(), "lib_b": seen()})
+    assert row.state == h.GREEN and row.reason == "All 2 libraries reachable."
+
+
+def test_storage_is_red_since_the_look_that_found_it_unreachable():
+    row = storage({"lib_a": seen(), "lib_b": seen(120, away_minutes=100)})
+    assert row.state == h.RED and row.reason == f"Can't reach Footage since {_clock(100)}."
     assert row.link == "/libraries/lib_b/settings"
 
 
-def test_storage_with_several_unreachable_links_to_the_libraries():
-    row = h.storage_row(libraries=LIBS, unreachable=["lib_a", "lib_b"], at=ago(seconds=5), now=NOW)
+def test_storage_with_several_unreachable_names_each_and_links_to_the_libraries():
+    row = storage({"lib_a": seen(None, away_minutes=30), "lib_b": seen(120, away_minutes=100)})
     assert row.state == h.RED and row.link == "/libraries"
+    assert row.reason == f"Can't reach Photos since {_clock(30)}, Footage since {_clock(100)}."
 
 
-def test_storage_ignores_unreachable_ids_that_arent_libraries_any_more():
-    row = h.storage_row(libraries=LIBS, unreachable=["lib_gone"], at=ago(seconds=5), now=NOW)
+def test_storage_says_the_day_when_unreachable_since_before_today():
+    row = storage({"lib_a": seen(), "lib_b": seen(None, away_minutes=3 * 24 * 60)})
+    assert row.state == h.RED and row.reason == f"Can't reach Footage since {_clock(3 * 24 * 60)}."
+    assert ago(minutes=3 * 24 * 60).astimezone().strftime("%b") in row.reason
+
+
+def test_storage_ignores_records_of_libraries_that_are_gone():
+    row = storage({"lib_a": seen(), "lib_b": seen(), "lib_gone": seen(away_minutes=5)})
     assert row.state == h.GREEN
 
 
+def test_storage_while_scans_are_paused_is_yellow_with_when_each_was_last_seen():
+    # Proposed (Robert, Oct 9): paused, nothing looks, so what's known is stale, not broken.
+    row = storage({"lib_a": seen(120), "lib_b": seen(5)}, scans_paused=True)
+    assert row.state == h.YELLOW and row.reason == "Scans paused. Photos last seen 2 h ago, Footage 5 min ago."
+    one = storage({"lib_a": seen(120, checked=False)}, scans_paused=True, libraries=LIBS[:1])
+    assert one.state == h.YELLOW and one.reason == "Scans paused. Photos last seen 2 h ago."
+
+
+def test_storage_while_scans_are_paused_after_a_restart_isnt_red_for_an_old_record():
+    # Unreachable when the scheduler last looked, before a restart: not looked at since.
+    row = storage({"lib_a": seen(120, checked=False), "lib_b": seen(300, away_minutes=200, checked=False)},
+                  scans_paused=True)
+    assert row.state == h.YELLOW and row.reason == "Scans paused. Photos last seen 2 h ago, Footage 5 h ago."
+
+
+def test_storage_while_scans_are_paused_with_many_libraries_says_the_oldest():
+    libs = [("a", "A"), ("b", "B"), ("c", "C")]
+    row = storage({"a": seen(1), "b": seen(30), "c": seen(180)}, scans_paused=True, libraries=libs)
+    assert row.state == h.YELLOW and row.reason == "Scans paused. All last seen within 3 h."
+    row = storage({"a": seen(1), "b": seen(30)}, scans_paused=True, libraries=libs)
+    assert row.reason == "Scans paused. C never seen. The others last seen within 30 min."
+
+
+def test_storage_while_scans_are_paused_is_red_when_a_job_found_it_gone():
+    # Looked at since the restart (a job found the storage gone): that's known now.
+    row = storage({"lib_a": seen(120), "lib_b": seen(120, away_minutes=3)}, scans_paused=True)
+    assert row.state == h.RED and row.reason == f"Can't reach Footage since {_clock(3)}."
+
+
+def test_storage_not_looked_at_since_a_restart_with_a_record_is_yellow():
+    row = storage({"lib_a": seen(), "lib_b": seen(45, checked=False)})
+    assert row.state == h.YELLOW and row.reason == "Not checked yet. Footage last seen 45 min ago."
+    row = storage({"lib_a": seen(), "lib_b": seen(45, away_minutes=40, checked=False)})
+    assert row.state == h.YELLOW and row.reason == "Not checked yet. Footage last seen 45 min ago."
+
+
+def test_storage_not_looked_at_since_a_restart_without_a_record_is_never_seen():
+    row = storage({})
+    assert row.state == h.YELLOW and row.reason == "Not checked yet. Photos and Footage never seen."
+    row = storage({"lib_a": seen()})
+    assert row.state == h.YELLOW and row.reason == "Not checked yet. Footage never seen."
+
+
 def test_storage_is_yellow_when_nothing_has_checked_lately():
-    row = h.storage_row(libraries=LIBS, unreachable=[], at=ago(minutes=10), now=NOW)
-    assert row.state == h.YELLOW and "isn't running" in row.reason
-    assert h.storage_row(libraries=LIBS, unreachable=[], at=None, now=NOW).state == h.YELLOW
+    row = storage({"lib_a": seen(), "lib_b": seen()}, at=ago(minutes=10))
+    assert row.state == h.YELLOW and row.reason == "Last checked 10 minutes ago: the scheduler isn't running."
+    row = h.storage_row(libraries=LIBS, storage={}, scans_paused=False, at=None, now=NOW)
+    assert row.state == h.YELLOW and row.reason == "Not checked: the scheduler isn't running."
+    row = storage({"lib_a": seen(), "lib_b": seen(20, away_minutes=15)}, at=ago(minutes=10))
+    assert row.state == h.YELLOW and row.reason.endswith(f" Then Footage couldn't be reached (since {_clock(15)}).")
 
 
 def test_storage_is_green_with_no_libraries():
-    assert h.storage_row(libraries=[], unreachable=[], at=None, now=NOW).state == h.GREEN
+    row = h.storage_row(libraries=[], storage={}, scans_paused=True, at=None, now=NOW)
+    assert row.state == h.GREEN and row.reason == "No libraries."
+
+
+def test_short_ago():
+    assert [h.short_ago(timedelta(seconds=s)) for s in (5, 90, 45 * 60, 2 * 3600 + 600, 30 * 3600, 3 * 86400)] == [
+        "1 min", "2 min", "45 min", "2 h", "30 h", "3 days"]
+
+
+def test_a_librarys_dot_follows_the_same_looks():
+    reach = h.library_reachable
+    live = dict(at=ago(seconds=5), now=NOW, scans_paused=False)
+    assert reach(seen(), **live) is True
+    assert reach(seen(away_minutes=3), **live) is False
+    assert reach(seen(checked=False), **live) is None  # not looked at since the restart
+    assert reach(None, **live) is None
+    assert reach(seen(), at=ago(seconds=5), now=NOW, scans_paused=True) is None  # stale while paused
+    assert reach(seen(away_minutes=3), at=ago(seconds=5), now=NOW, scans_paused=True) is False
+    assert reach(seen(), at=ago(minutes=5), now=NOW, scans_paused=False) is None  # the scheduler isn't running
 
 
 # -- Disk -------------------------------------------------------------------------

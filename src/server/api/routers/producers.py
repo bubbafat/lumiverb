@@ -439,6 +439,14 @@ class PauseSwitch(BaseModel):
     paused_at: datetime | None = None
 
 
+class StorageSeen(BaseModel):
+    """What the scheduler's looks at one library's storage found."""
+
+    seen_at: datetime | None = None  # last seen reachable
+    away_since: datetime | None = None  # unreachable since (None: the latest look reached it)
+    checked: bool = False  # looked at since the scheduler started
+
+
 class SchedulerStatus(BaseModel):
     """What the scheduler is doing for the account (written every few seconds)."""
 
@@ -459,8 +467,13 @@ class SchedulerStatus(BaseModel):
     pace: dict[str, float] = Field(default_factory=dict)
     # Jobs running now: {kind, units, elapsed}.
     jobs: list[dict[str, Any]] = Field(default_factory=list)
-    # Libraries whose storage it can't reach now: what reads their originals waits.
-    unreachable: list[str] = Field(default_factory=list)
+    # Libraries whose work on the originals waits: not reachable at the latest
+    # look, or not looked at since the scheduler started (not "can't reach":
+    # storage says which).
+    storage_waits: list[str] = Field(default_factory=list)
+    # Each library's storage looks: {seen_at, away_since, checked}. checked:
+    # looked at since the scheduler started; otherwise a record from before.
+    storage: dict[str, StorageSeen] = Field(default_factory=dict)
     # How long until things are made (src/server/scheduler/eta.py); None when it isn't running.
     eta: Eta | None = None
 
@@ -527,7 +540,7 @@ def scheduler_status(request: Request, session: Annotated[Session, Depends(get_t
     if status.live:
         held_producers = {t for t in held if t in PRODUCERS}
         try:
-            status.eta = Eta(**eta(status.model_dump(), _work_left(request, session, status.unreachable), now=now,
+            status.eta = Eta(**eta(status.model_dump(), _work_left(request, session, status.storage_waits), now=now,
                                    paused=held_producers))
         except Exception:  # noqa: BLE001 — the time left is extra; what's running is still said
             logger.exception("producers: working out how long is left failed")
