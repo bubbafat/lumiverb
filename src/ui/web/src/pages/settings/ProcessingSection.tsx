@@ -211,8 +211,7 @@ function ProducerRow({
         </button>
       )}
       {showFailures && <FailureList producer={producer} canRetry={canRetry} libraryId={libraryId} />}
-      {c && c.stale > 0 && <RedoLine producer={producer} stale={c.stale} admin={admin}
-                                     paused={producer.paused || allPaused} />}
+      {c && c.stale > 0 && <RedoLine producer={producer} stale={c.stale} admin={admin} allPaused={allPaused} />}
       <Settings producer={producer} admin={admin} />
     </li>
   );
@@ -434,8 +433,8 @@ function FailureList({ producer, canRetry, libraryId }: { producer: Producer; ca
 }
 
 /** What happens to a producer's stale clips: redone after anything missing, stopped, or not yet possible. */
-function RedoLine({ producer, stale, admin, paused }: { producer: Producer; stale: number; admin: boolean;
-                                                       paused: boolean }) {
+function RedoLine({ producer, stale, admin, allPaused }: { producer: Producer; stale: number; admin: boolean;
+                                                          allPaused: boolean }) {
   const queryClient = useQueryClient();
   const toggle = useMutation({
     mutationFn: () => (producer.redo_stopped ? resumeRedo(producer.artifact) : stopRedo(producer.artifact)),
@@ -453,8 +452,10 @@ function RedoLine({ producer, stale, admin, paused }: { producer: Producer; stal
         <span>
           {producer.redo_stopped
             ? `Redo stopped: ${clips(stale)} stay as they are until it's resumed.`
-            : paused
+            : producer.paused
               ? `Redoes ${clips(stale)} once it's resumed, after anything missing.`
+              : allPaused
+                ? `Redoes ${clips(stale)} once processing is resumed, after anything missing.`
               : `Redoing ${clips(stale)}, after anything missing.`}
         </span>
         {admin && (

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+import itertools
 import signal
 import threading
 import time
@@ -132,6 +133,7 @@ class Scheduler:
         self._holding: dict[str, Future] = {}
         self._hold_at: dict[str, float] = {}
         self._hold_unread: set[str] = set()
+        self._hold_reads = itertools.count()  # which read of what's paused is newest
 
     # -- one tick -----------------------------------------------------------
 
@@ -195,6 +197,7 @@ class Scheduler:
         """What an admin paused: PAUSE_ALL, or producers' artifacts. The
         dispatcher hands out none of it from now on; what's running
         finishes. Until it can be read, as if all of it is paused."""
+        seq = next(self._hold_reads)
         try:
             held = set(self._on_hold(tenant_id))
             if tenant_id in self._hold_unread:
@@ -206,7 +209,7 @@ class Scheduler:
                 logger.exception("scheduler: reading what %s paused failed; nothing starts until it can be", tenant_id)
             held = {PAUSE_ALL}
         self.dispatcher.hold(tenant_id, {k.name for k in KINDS.values()
-                                         if PAUSE_ALL in held or (k.flag and k.artifact in held)})
+                                         if PAUSE_ALL in held or (k.flag and k.artifact in held)}, seq=seq)
         return held
 
     def _refill_soon(self, tenant_id: str, acct: Any) -> None:

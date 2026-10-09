@@ -246,7 +246,7 @@ describe("ProcessingSection", () => {
     producers = [producer({})];
     renderSection();
     expect((await row("Descriptions and tags")).textContent).toContain(
-      "Redoes 3 clips once it's resumed, after anything missing.");
+      "Redoes 3 clips once processing is resumed, after anything missing.");
     expect((await screen.findByLabelText("Now")).textContent).toContain("Now: nothing more starts while paused");
   });
 

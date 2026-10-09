@@ -95,8 +95,10 @@ class Dispatcher:
         self._taken_until: dict[tuple[str, str, str], float] = {}
         self._busy: dict[str, int] = {}
         self._running_kinds: dict[tuple[str, str], int] = {}
-        # Each account's kinds an admin paused: none handed out, no offer kept.
-        self._held: dict[str, set[str]] = {}
+        # Each account's kinds an admin paused: none handed out, no offer
+        # kept; and the newest read of it applied (an older one landing late is ignored).
+        self._paused_kinds: dict[str, set[str]] = {}
+        self._paused_seq: dict[str, int] = {}
 
     # -- capacity -----------------------------------------------------------
 
@@ -148,7 +150,7 @@ class Dispatcher:
         tier = self._kinds[kind].tier
         now = self._clock()
         with self._lock:
-            if kind in self._held.get(tenant_id, ()):
+            if kind in self._paused_kinds.get(tenant_id, ()):
                 return  # paused since it was asked: its answer isn't kept
             self._taken_until = {k: t for k, t in self._taken_until.items() if t > now}
             same = _same(kind, self._kinds[kind])
@@ -181,12 +183,18 @@ class Dispatcher:
         self._all_known_at.pop(key, None)
         self._empty_wait.pop(key, None)
 
-    def hold(self, tenant_id: str, kinds: Collection[str]) -> None:
+    def hold(self, tenant_id: str, kinds: Collection[str], *, seq: int | None = None) -> None:
         """The account's kinds an admin paused, all of them each time (none:
         nothing is): none is handed out and no offer of one is kept, from
-        now on; what was waiting is let go. Let go of, one is asked for again at once."""
+        now on; what was waiting is let go. Let go of, one is asked for
+        again at once. seq: when it was read; a read older than one already
+        applied is ignored."""
         with self._lock:
-            self._held[tenant_id] = set(kinds)
+            if seq is not None:
+                if seq < self._paused_seq.get(tenant_id, -1):
+                    return
+                self._paused_seq[tenant_id] = seq
+            self._paused_kinds[tenant_id] = set(kinds)
             for kind in kinds:
                 self._clear(tenant_id, kind)
 
@@ -199,7 +207,7 @@ class Dispatcher:
             best: tuple | None = None
             for (tenant_id, kind), buffer in self._buffers.items():
                 spec = self._kinds[kind]
-                if pool_key(spec, tenant_id) != pool or kind in self._held.get(tenant_id, ()):
+                if pool_key(spec, tenant_id) != pool or kind in self._paused_kinds.get(tenant_id, ()):
                     continue
                 # A clip another kind took meanwhile (its redo, say) waits for it.
                 same = _same(kind, spec)

@@ -334,3 +334,13 @@ def test_a_held_kind_hands_out_nothing_and_takes_no_offer_until_let_go() -> None
     assert d.wanted("t1", "vision")
     d.offer("t1", "vision", [_item("a", "2026-10-01")])
     assert d.status("t1")["waiting"] == {"vision": 1}
+
+
+@pytest.mark.fast
+def test_an_older_read_of_whats_paused_never_undoes_a_newer_one() -> None:
+    # Two threads read what's paused; a slow, older read lands last.
+    d = _d({"vision": 2})
+    d.hold("t1", set(), seq=2)  # resumed, read second
+    d.hold("t1", {"vision"}, seq=1)  # paused, read first, landed late: ignored
+    d.offer("t1", "vision", [_item("a", "2026-10-01")])
+    assert d.take("vision") is not None

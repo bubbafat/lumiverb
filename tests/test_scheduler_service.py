@@ -699,6 +699,8 @@ def test_a_pause_stops_jobs_starting_while_a_slow_refill_is_still_running() -> N
     # hands out nothing of it from then on.
     rec = Recorder()
     rec.hold.clear()
+    release = threading.Event()  # a holds its slot until told, however slow the machine
+    vision = rec.runner("vision")
     held: set = set()
     slow = threading.Event()
     slow.set()
@@ -707,24 +709,30 @@ def test_a_pause_stops_jobs_starting_while_a_slow_refill_is_still_running() -> N
     s = Scheduler(lambda: {"t1": acct}, capacity={"scan": 1, "probe": 2, "render": 1, "gpu": 1, "scenes": 1},
                   candidates=lambda t, kind, libs, skip=(): [_item("a"), _item("b", "2026-10-02")]
                   if kind.name == "vision" else [],
-                  runners=rec.all(), scan=MagicMock(), paused=lambda t: set(), on_hold=lambda t: set(held),
+                  runners={**rec.all(), "vision": lambda acct, job: (release.wait(30), vision(acct, job))[1]},
+                  scan=MagicMock(), paused=lambda t: set(), on_hold=lambda t: set(held),
                   retry_requested=lambda t: None, write_status=lambda t, st: None)
     deadline = time.monotonic() + 5
     while s.running == 0 and time.monotonic() < deadline:  # a in hand, b waiting
         s.tick()
         time.sleep(0.02)
+    assert s.running == 1
+    deadline = time.monotonic() + 10
     slow.clear()
     refreshing = threading.Event()
     acct.refresh = lambda: (refreshing.set(), slow.wait(10))
     while not refreshing.is_set() and time.monotonic() < deadline:  # a refill, past its look at what's paused, hangs
         s.tick()
         time.sleep(0.02)
+    assert refreshing.is_set()
     held.add("vision")
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + 10
     while s.dispatcher.status("t1")["waiting"] and time.monotonic() < deadline:
         s.tick()
         time.sleep(0.05)
+    assert not s.dispatcher.status("t1")["waiting"]
     rec.hold.set()
+    release.set()
     for _ in range(20):
         s.tick()
         s.collect(timeout=0.05)
