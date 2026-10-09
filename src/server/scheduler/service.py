@@ -358,12 +358,9 @@ def _from_database(tenant_id: str, kind: Any, libraries: list[str], skip: list[s
 
 def _job_models(tenant_id: str) -> dict[str, str]:
     """The account's model per AI job (Settings → AI)."""
-    from src.server.database import get_control_session
-    from src.server.repository.ai_machines import job_models
-    from src.server.repository.control_plane import TenantRepository
+    from src.server.repository.ai_machines import account_job_models
 
-    with get_control_session() as ctrl:
-        return job_models(TenantRepository(ctrl).get_by_id(tenant_id))
+    return account_job_models(tenant_id)
 
 
 def _retry_requested_in_database(tenant_id: str) -> str | None:

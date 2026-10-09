@@ -296,6 +296,22 @@ describe("ProcessingSection", () => {
     expect(now.textContent).toContain("and 2 more");
   });
 
+  it("says a producer's time isn't known yet, and caught up not counting what no machine is doing", async () => {
+    queue = { live: true, at: new Date().toISOString(), running: {}, waiting: {}, pools: {}, gpu_hold: 0,
+              eta: { producers: { ocr: null, transcript: null }, pools: {}, caught_up: 0, jobs: [],
+                     not_counted: [{ artifact: "transcript", title: "Transcripts", why: "no_machine" }] } };
+    producers = [producer({ artifact: "ocr", title: "Text in images (OCR)" })];
+    renderSection();
+    expect((await screen.findByLabelText("Now")).textContent).toContain(
+      "Caught up, not counting transcripts (no machine doing them now).");
+    expect((await row("Text in images (OCR)")).textContent).not.toContain("not known yet");
+    cleanup();
+    queue = { ...(queue as object), eta: { producers: { ocr: null }, pools: {}, caught_up: null, jobs: [],
+              not_counted: [{ artifact: "ocr", title: "Text in images (OCR)", why: "not_known_yet" }] } };
+    renderSection();
+    expect((await row("Text in images (OCR)")).textContent).toContain("time left not known yet");
+  });
+
   it("asks the scheduler what it's doing once for the whole page, not once a row", async () => {
     queue = { live: true, at: new Date().toISOString(), running: {}, waiting: {}, pools: {}, gpu_hold: 0,
               eta: { producers: {}, pools: {}, caught_up: 0, not_counted: [], jobs: [] } };

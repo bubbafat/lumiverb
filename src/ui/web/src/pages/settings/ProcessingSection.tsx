@@ -114,6 +114,8 @@ export default function ProcessingSection() {
               canRetry={canRetry}
               libraryId={kind === "library" ? id : undefined}
               timeLeft={kind === "all" && status?.live ? status.eta?.producers[p.artifact] : undefined}
+              timeNotKnown={kind === "all" && !!status?.live && !!status.eta?.not_counted?.some(
+                (n) => n.artifact === p.artifact && n.why === "not_known_yet")}
             />
           ))}
         </ul>
@@ -142,6 +144,7 @@ function ProducerRow({
   canRetry,
   libraryId,
   timeLeft,
+  timeNotKnown = false,
 }: {
   producer: Producer;
   admin: boolean;
@@ -149,6 +152,8 @@ function ProducerRow({
   libraryId?: string;
   // Seconds until it's caught up: the whole account's, so only with its counts.
   timeLeft?: number | null;
+  // It has work and no pace yet (one waiting for a machine says so already).
+  timeNotKnown?: boolean;
 }) {
   const [showFailures, setShowFailures] = useState(false);
   const c = producer.counts;
@@ -183,6 +188,7 @@ function ProducerRow({
                 </span>
               )}
               {!!left && <span> · {about(left)} left</span>}
+              {timeNotKnown && <span> · time left not known yet</span>}
             </>
           )}
         </p>

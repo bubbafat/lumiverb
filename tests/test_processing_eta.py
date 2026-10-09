@@ -40,11 +40,11 @@ def test_nothing_left_is_caught_up_now():
     assert out["caught_up"] == 0 and out["producers"]["vision"] == 0
 
 
-def test_a_kind_with_no_pace_yet_or_no_slots_has_no_time_and_neither_has_caught_up():
+def test_a_kind_with_no_pace_yet_or_no_slots_has_no_time():
     out = eta(_status(pace={}), {"vision": 10.0}, now=AT)
     assert out["producers"]["vision"] is None and "vision" not in out["pools"] and out["caught_up"] is None
     out = eta(_status(pools={"vision": [0, 0]}), {"vision": 10.0}, now=AT)  # no machine does it
-    assert out["producers"]["vision"] is None and out["caught_up"] is None
+    assert out["producers"]["vision"] is None and out["caught_up"] == 0  # caught up, not counting it
 
 
 def test_a_running_jobs_time_left_counts_from_when_the_status_was_written():
@@ -78,3 +78,15 @@ def test_a_job_far_past_its_pace_is_late_and_scans_arent_timed():
     out = eta(status, {}, now=AT)
     assert [j["kind"] for j in out["jobs"]] == ["render"]
     assert out["jobs"][0]["late"] is True  # 100 s for what takes 30
+
+
+def test_only_work_no_machine_is_doing_left_is_caught_up_not_counting_it():
+    out = eta(_status(pools={"transcripts": [0, 0]}), {"transcript": 120.0, "vision": 0.0}, now=AT)
+    assert out["caught_up"] == 0 and [n["why"] for n in out["not_counted"]] == ["no_machine"]
+    out = eta(_status(pace={}), {"vision": 10.0}, now=AT)  # its pace isn't known: neither is when
+    assert out["caught_up"] is None
+
+
+def test_a_job_with_no_length_to_go_by_isnt_late():
+    out = eta(_status(jobs=[{"kind": "render", "units": 0.0, "elapsed": 50.0}]), {}, now=AT)
+    assert out["jobs"][0]["late"] is False

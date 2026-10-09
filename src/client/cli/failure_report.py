@@ -31,6 +31,7 @@ class FailureReport:
         self._off = client is None
         self._clock = clock
         self._charged: dict[tuple[str, str], float] = {}  # (artifact, asset_id) → when
+        self._pruned_at = float("-inf")
 
     def add(self, artifact: str, asset_id: str, error: object) -> None:
         text = str(error).strip() or type(error).__name__
@@ -38,7 +39,8 @@ class FailureReport:
         with self._lock:
             self._items.append({"asset_id": asset_id, "artifact": artifact, "error": text[:2000]})
             self._charged[(artifact, asset_id)] = now
-            if len(self._charged) > 10_000:
+            if len(self._charged) > 10_000 and now - self._pruned_at > 60:  # at most once a minute
+                self._pruned_at = now
                 self._charged = {k: t for k, t in self._charged.items() if now - t < REMEMBER_SEC}
             full = len(self._items) >= BATCH
         if full:

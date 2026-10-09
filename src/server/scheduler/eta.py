@@ -71,7 +71,8 @@ def eta(status: Mapping[str, Any], left: Mapping[str, float], *, now: Any) -> di
     if pools:
         caught_up: float | None = max(pools.values())
     else:
-        caught_up = None if not_counted else 0.0
+        # Only what no machine is doing now is left: caught up, not counting it.
+        caught_up = None if any(n["why"] == "not_known_yet" for n in not_counted) else 0.0
 
     written, now_at = _at(status.get("at")), _at(now)
     since = max(0.0, (now_at - written).total_seconds()) if written and now_at else 0.0
@@ -87,6 +88,6 @@ def eta(status: Mapping[str, Any], left: Mapping[str, float], *, now: Any) -> di
         jobs.append({"kind": job.get("kind"), "artifact": artifact, "unit": PRODUCERS[artifact].unit,
                      "units": units, "elapsed": elapsed,
                      "left": None if expected is None else max(0.0, expected - elapsed),
-                     "late": expected is not None and elapsed > LATE_AFTER * expected})
+                     "late": bool(expected) and elapsed > LATE_AFTER * expected})
     return {"producers": producers, "pools": pools, "caught_up": caught_up, "not_counted": not_counted,
             "jobs": jobs}

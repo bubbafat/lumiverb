@@ -445,7 +445,9 @@ def _work_left(request: Request, session: Session, away: list[str]) -> dict[str,
     cached = _work_left_cache.get(tenant_id)
     if cached and time.monotonic() - cached[0] < WORK_LEFT_EVERY_SEC:
         return cached[1]
-    models = _job_models(tenant_id)
+    from src.server.repository.ai_machines import account_job_models
+
+    models = account_job_models(tenant_id)
     stopped = lineage.paused(session)
     out = {}
     for artifact, p in PRODUCERS.items():
@@ -457,17 +459,6 @@ def _work_left(request: Request, session: Session, away: list[str]) -> dict[str,
     _work_left_cache[tenant_id] = (time.monotonic(), out)
     return out
 
-
-def _job_models(tenant_id: str) -> dict[str, str]:
-    """The account's model per AI job (Settings → AI)."""
-    from src.server.database import get_control_session
-    from src.server.repository.ai_machines import job_models
-    from src.server.repository.control_plane import TenantRepository
-
-    if not tenant_id:
-        return {}
-    with get_control_session() as ctrl:
-        return job_models(TenantRepository(ctrl).get_by_id(tenant_id))
 
 
 class FailingClip(BaseModel):
