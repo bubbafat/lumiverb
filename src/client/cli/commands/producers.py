@@ -67,6 +67,45 @@ def _redo(p: dict, all_paused: bool = False) -> str:
     return "paused" if p.get("paused") or all_paused else "redoing"
 
 
+def _duration(seconds: float) -> str:
+    """A span of time, roughly, as Settings → Processing says it."""
+    if seconds < 60:
+        return "under a minute"
+    minutes = round(seconds / 60)
+    if minutes < 60:
+        return f"{minutes} min"
+    hours = minutes // 60
+    if hours < 10:
+        return f"{hours} h {minutes % 60} min" if minutes % 60 else f"{hours} h"
+    if hours < 48:
+        return f"{round(minutes / 60)} h"
+    days, rest = divmod(hours, 24)
+    if days > 30:
+        return "over a month"
+    return f"{days} days {rest} h" if rest else f"{days} days"
+
+
+def _caught_up(eta: dict) -> str:
+    """The headline, as Settings → Processing says it: when everything is
+    made, leaving out (and naming) what has no time."""
+    why = {"no_machine": "no machine doing them now", "paused": "paused"}
+    left = [f"{n['title'][:1].lower()}{n['title'][1:]} ({why.get(n.get('why', ''), 'not known yet')})"
+            for n in eta.get("not_counted") or []]
+    caught_up = eta.get("caught_up")
+    if caught_up is None:
+        whys = [n.get("why") for n in eta.get("not_counted") or []]
+        if whys and all(w == "paused" for w in whys):
+            return "What's left is paused: no time is promised until it's resumed."
+        return "How long until everything is made isn't known yet: it's learned from the jobs as they finish."
+    if caught_up == 0 and not left:
+        return "Caught up: everything is made."
+    except_ = f", not counting {', '.join(left[:-1])}{' and ' if len(left) > 1 else ''}{left[-1]}" if left else ""
+    if caught_up == 0:
+        return f"Caught up{except_}."
+    span = "under a minute" if caught_up < 60 else _duration(caught_up)
+    return f"Caught up in {span if span in ('under a minute', 'over a month') else 'about ' + span}{except_}."
+
+
 @producers_app.callback()
 def producers_list(
     ctx: typer.Context,
@@ -87,15 +126,21 @@ def producers_list(
     if queue.get("scans_paused") and not all_paused:
         console.print(f"[yellow]Scans are paused{_since(queue.get('scans_paused_at'))}: no new or changed files "
                       "are found. lumiverb producers resume scans carries on.[/yellow]")
+    # How long is left is the whole account's: only with its counts, and while the scheduler runs.
+    eta = (queue.get("eta") or {}) if queue.get("live") and not params else {}
+    left = eta.get("producers") or {}
     table = Table(show_header=True, header_style="bold")
-    for col in ("Producer", "Current", "Missing", "Stale", "Failing", "Redo"):
-        table.add_column(col, justify="left" if col in ("Producer", "Redo") else "right")
+    columns = ("Producer", "Current", "Missing", "Stale", "Failing", "Redo", *(("Left",) if eta else ()))
+    for col in columns:
+        table.add_column(col, justify="left" if col in ("Producer", "Redo", "Left") else "right")
     notes = []
     for p in producers:
         c = p.get("counts") or {}
         paused = " [yellow]paused[/yellow]" if p.get("paused") and not all_paused else ""
+        took = left.get(p["artifact"])
         table.add_row(f"{escape(p['title'])} [dim]({p['artifact']})[/dim]{paused}", _n(c.get("current", 0)),
-                      _n(c.get("missing", 0)), _n(c.get("stale", 0)), _n(c.get("failing", 0)), _redo(p, all_paused))
+                      _n(c.get("missing", 0)), _n(c.get("stale", 0)), _n(c.get("failing", 0)), _redo(p, all_paused),
+                      *((_duration(took) if took else "",) if eta else ()))
         if p.get("paused") and not all_paused:
             notes.append(f"{p['title']}: paused; lumiverb producers resume {p['artifact']} carries on.")
         if c.get("stale") and not p.get("redoable", True):
@@ -103,6 +148,8 @@ def producers_list(
         elif p.get("redo_stopped"):
             notes.append(f"{p['title']}: redo stopped; lumiverb producers redo resume {p['artifact']} carries on.")
     console.print(table)
+    if eta:
+        console.print(escape(_caught_up(eta)))
     for note in notes:
         console.print(escape(note))
     console.print("[dim]Stale ones were made with another model or settings than now; they're made again "

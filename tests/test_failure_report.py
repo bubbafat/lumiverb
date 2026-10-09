@@ -192,3 +192,14 @@ def test_success_reports_nothing(home: Path, library: dict):
     with patch("src.client.cli.repair.probe_video", return_value=facet):
         _run(client, library, "probe", "missing_probe", page)
     assert _reported(client) == []
+
+
+@pytest.mark.fast
+def test_it_says_which_of_a_jobs_clips_it_charged_since_the_job_began() -> None:
+    clock = [100.0]
+    report = FailureReport(MagicMock(), clock=lambda: clock[0])
+    report.add("scenes", "old", "before the job")
+    clock[0] = 200.0
+    report.add("scenes", "a", "bad file")
+    report.add("vision", "b", "another artifact")
+    assert report.charged("scenes", ["a", "b", "old", "c"], since=150.0) == {"a"}

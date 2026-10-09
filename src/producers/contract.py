@@ -116,6 +116,8 @@ class ProducerSpec:
     # What's made from it and goes when it's made again (made anew after it):
     # the 409 before new settings names them.
     redo_also: tuple[str, ...] = ()
+    # What making it again keeps, in plain words: the question before new settings says it.
+    redo_note: str = ""
     # Handed out again when its clip's file changes. Not the analysis copy
     # and what's made from it: a file with other content is a new clip
     # (#37), so a change in place isn't a reason to find scenes again.
@@ -136,6 +138,9 @@ class ProducerSpec:
     # itself (scan, probe, render, gpu, scenes) and machines don't (an AI job's).
     slots: int = 1
     storage: bool = False  # reads the originals: only libraries reachable now
+    # What its work grows with, for how long is left: "second" (of video:
+    # a render, a transcript) or "clip" (a photo described).
+    unit: str = "clip"
 
     @property
     def scheduled(self) -> bool:

@@ -27,7 +27,7 @@ from src.client.video.analysis_proxy import (
 )
 from src.client.video.audio import audio_tracks, speech_wav_command
 from src.client.video.probe import probe_video
-from src.client.workers.faces.insightface_provider import InsightFaceProvider
+from src.client.workers.faces.insightface_provider import FaceSettings, InsightFaceProvider
 from src.shared.io_utils import resolve_source_path
 from src.shared.producers import PRODUCERS
 
@@ -436,12 +436,28 @@ def _repair_embed_one(
     }
 
 
+# This process's face model, kept between batches (loading it costs seconds);
+# a new one only when the detector's size changes.
+_PROVIDER: InsightFaceProvider | None = None
+
+
+def _face_provider(settings: FaceSettings) -> InsightFaceProvider:
+    """The process's face provider, finding faces as settings say."""
+    global _PROVIDER
+    if _PROVIDER is None or _PROVIDER.settings.det_size != settings.det_size:
+        _PROVIDER = InsightFaceProvider(settings)
+    else:
+        _PROVIDER.settings = settings
+    return _PROVIDER
+
+
 def _face_batch_worker(
     base_url: str,
     token: str,
     batch: list[dict],
     cache_dir: str | None = None,
     lineage: dict | None = None,
+    settings: dict | None = None,
 ) -> dict:
     """Run face detection on a batch of assets in a subprocess.
     lineage: how the faces are found, sent with them (each item's file hash
@@ -466,7 +482,13 @@ def _face_batch_worker(
     sys.stderr.flush()
 
     client = LumiverbClient(base_url=base_url, token=token)
-    provider = InsightFaceProvider()
+    if lineage is None or settings is None:  # the server's, read once: what's found and its lineage agree
+        from src.client.cli.producer_settings import ProducerSettings
+
+        server = ProducerSettings(client)
+        settings = server.settings("faces") if settings is None else settings
+        lineage = server.lineage("faces", None, used=dict(settings)) if lineage is None else lineage
+    provider = _face_provider(FaceSettings.for_producer(settings))
     provider.ensure_loaded()
 
     _t_load = _startup_time.perf_counter() - _t0
@@ -543,10 +565,6 @@ def _face_batch_worker(
 
     # Single batch POST instead of N individual requests
     if batch_items:
-        if lineage is None:  # the server refuses faces that don't say how they were found
-            from src.client.cli.producer_settings import ProducerSettings
-
-            lineage = ProducerSettings(client).lineage("faces", None)
         try:
             resp = client.post("/v1/assets/batch-faces", json={"items": batch_items, "lineage": lineage})
             result_data = resp.json()
@@ -715,8 +733,10 @@ def _run_face_pipeline(
     label: str = "faces",
     lineage: dict | None = None,
     on_fail: "Callable[[str, object], None] | None" = None,
+    settings: dict | None = None,
 ) -> None:
     """Pipeline proxy generation → face detection → result collection.
+    settings: how faces are found, which lineage records (the server's when not given).
 
     Proxy generation runs in a thread pool; face detection in a subprocess pool.
     A queue connects them: proxy threads put ready items, main thread consumes
@@ -799,7 +819,7 @@ def _run_face_pipeline(
                 logger.info("%s batch %d: %d assets", label, batch_num, len(batch_buf))
                 ar = pool.apply_async(
                     _face_batch_worker,
-                    (client.base_url, client.token, batch_buf, str(proxy_cache.path), lineage),
+                    (client.base_url, client.token, batch_buf, str(proxy_cache.path), lineage, settings),
                 )
                 inflight.append((batch_num, [b["asset_id"] for b in batch_buf], ar))
                 batch_buf = []
@@ -814,7 +834,7 @@ def _run_face_pipeline(
             logger.info("%s batch %d: %d assets (final)", label, batch_num, len(batch_buf))
             ar = pool.apply_async(
                 _face_batch_worker,
-                (client.base_url, client.token, batch_buf, str(proxy_cache.path), lineage),
+                (client.base_url, client.token, batch_buf, str(proxy_cache.path), lineage, settings),
             )
             inflight.append((batch_num, [b["asset_id"] for b in batch_buf], ar))
 
@@ -1387,6 +1407,7 @@ def run_repair(
             with progress:
                 tid = progress.add_task("Faces", total=len(assets), ok=0, fail=0)
                 for chunk in _until(stop, chunks, _take_chunk if on_take else None):
+                    face_used = producers.settings("faces")  # one read: what's found and its lineage agree
                     _run_face_pipeline(
                         assets=chunk,
                         client=client,
@@ -1400,7 +1421,8 @@ def run_repair(
                         tid=tid,
                         console=console,
                         label="faces",
-                        lineage=producers.lineage("faces", None),
+                        lineage=producers.lineage("faces", None, used=face_used),
+                        settings=face_used,
                         on_fail=failures.for_artifact("faces"),
                     )
 
@@ -1418,6 +1440,7 @@ def run_repair(
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Re-detect faces", total=len(assets), ok=0, fail=0)
+                face_used = producers.settings("faces")  # one read: what's found and its lineage agree
                 _run_face_pipeline(
                     assets=assets,
                     client=client,
@@ -1431,7 +1454,8 @@ def run_repair(
                     tid=tid,
                     console=console,
                     label="redetect-faces",
-                    lineage=producers.lineage("faces", None),
+                    lineage=producers.lineage("faces", None, used=face_used),
+                    settings=face_used,
                     on_fail=failures.for_artifact("faces"),
                 )
 

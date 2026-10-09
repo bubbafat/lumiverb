@@ -14,6 +14,7 @@ what's running finishes."""
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -32,6 +33,8 @@ from src.server.api.dependencies import (
 from src.server.api.errors import ConflictError
 from src.server.repository import lineage
 from src.shared.producers import PAUSE_ALL, PAUSE_SCANS, PRODUCERS
+
+logger = logging.getLogger(__name__)
 
 PRODUCER_ARTIFACTS = tuple(PRODUCERS)
 
@@ -161,6 +164,8 @@ class ProducerItem(BaseModel):
     paused_at: datetime | None = None
     # Why its work waits now (its AI job has no machine, none online, or is off).
     waiting: str | None = None
+    # What its work grows with: "second" (of video) or "clip"; time left is reckoned in it.
+    unit: str = "clip"
 
 
 class ProducerList(BaseModel):
@@ -236,7 +241,7 @@ def _item(artifact: str, want: dict[str, Any], waits: dict[str, str | None]) -> 
                              advanced=s.advanced, fixed=s.fixed or None)
                 for s in p.settings],
         scheduled=p.scheduled, redoable=lineage.redoable(artifact), why_not=lineage.CANT_REDO.get(artifact),
-        waiting=waits.get(p.job) if p.job else None,
+        waiting=waits.get(p.job) if p.job else None, unit=p.unit,
     )
 
 
@@ -299,6 +304,7 @@ def set_settings(
                 f"New settings make {clips:,} clip{'' if clips == 1 else 's'} of {p.title.lower()} again"
                 + (f", and their {also} with them" if also else "") + ". That "
                 "runs after anything missing; until it's done, results mix the old settings and the new."
+                + (f" {p.redo_note}" if p.redo_note else "")
                 + (" Its stopped redo starts again." if stopped else "")
                 + (" All processing is paused: none of it is made until it's resumed." if all_held
                    else " It's paused: none of it is made until it's resumed." if held else ""),
@@ -483,15 +489,56 @@ class SchedulerStatus(BaseModel):
     # Producers an admin paused on their own (POST /v1/producers/{artifact}/pause), whatever
     # scope a page's counts are for, so a pause shows wherever the status does.
     paused_producers: list[PausedProducer] = Field(default_factory=list)
+    # Seconds a slot spends per unit of work, by kind (learned from finished jobs).
+    pace: dict[str, float] = Field(default_factory=dict)
+    # Jobs running now: {kind, units, elapsed}.
+    jobs: list[dict[str, Any]] = Field(default_factory=list)
+    # Libraries whose storage it can't reach now: what reads their originals waits.
+    unreachable: list[str] = Field(default_factory=list)
+    # How long until things are made (src/server/scheduler/eta.py); None when it isn't running.
+    eta: Eta | None = None
+
+
+class JobLeft(BaseModel):
+    kind: str
+    artifact: str | None  # the producer whose job it is
+    unit: str = "clip"  # the producer's: "second" (of video) or "clip"
+    units: float  # its work, in that unit
+    elapsed: float  # seconds it has run
+    left: float | None  # seconds left at its pace; None: no pace yet
+    late: bool = False  # well past its pace
+
+
+class NotCounted(BaseModel):
+    artifact: str
+    title: str
+    why: str  # "no_machine" (none doing its work now) | "not_known_yet" (no pace yet) | "paused" (an admin paused it)
+
+
+class Eta(BaseModel):
+    # Seconds until each producer, each pool and everything is caught up.
+    # A producer with work and no time is in not_counted, saying why, and
+    # caught_up leaves it out (None: nothing with work is counted).
+    producers: dict[str, float | None]
+    pools: dict[str, float]
+    caught_up: float | None
+    not_counted: list[NotCounted] = []
+    jobs: list[JobLeft]
+
+
+SchedulerStatus.model_rebuild()
 
 
 @router.get("/queue", response_model=SchedulerStatus, dependencies=[Depends(require_signed_in)])
 def scheduler_status(request: Request, session: Annotated[Session, Depends(get_tenant_session)]) -> SchedulerStatus:
     """What the scheduler is doing now, and whether an admin paused it all or its scans;
-    live is false when it hasn't said for 30 seconds."""
+    live is false when it hasn't said for 30 seconds. While it's live, eta says
+    how long until each producer and everything is caught up, from each kind's
+    pace and what's left; paused work gets no time."""
     import json
     from datetime import timedelta
 
+    from src.server.scheduler.eta import eta
     from src.shared.utils import utcnow
 
     raw = session.execute(text("SELECT value FROM system_metadata WHERE key = 'scheduler.status'")).scalar()
@@ -501,7 +548,8 @@ def scheduler_status(request: Request, session: Annotated[Session, Depends(get_t
             status = SchedulerStatus(**json.loads(raw))
         except (ValueError, TypeError):
             pass
-    status.live = status.at is not None and utcnow() - status.at < timedelta(seconds=30)
+    now = utcnow()
+    status.live = status.at is not None and now - status.at < timedelta(seconds=30)
     held, admin = lineage.processing_paused(session), _admin(request)
     if (pause := held.get(PAUSE_ALL)) is not None:
         status.paused, status.paused_at = True, pause["paused_at"]
@@ -511,7 +559,46 @@ def scheduler_status(request: Request, session: Annotated[Session, Depends(get_t
         status.scans_paused_by = pause["paused_by"] if admin else None
     status.paused_producers = [PausedProducer(artifact=a, title=PRODUCERS[a].title)
                                for a in sorted(held) if a in PRODUCERS]
+    # No time is promised for paused work (Proposed, Oct 9): a producer paused alone, or all of them;
+    # what's running still says its time left, since it finishes.
+    if status.live:
+        held_producers = set(PRODUCERS) if status.paused else {p.artifact for p in status.paused_producers}
+        try:
+            status.eta = Eta(**eta(status.model_dump(), _work_left(request, session, status.unreachable), now=now,
+                                   paused=held_producers))
+        except Exception:  # noqa: BLE001 — the time left is extra; what's running is still said
+            logger.exception("producers: working out how long is left failed")
     return status
+
+
+# Work left is counted over every clip: once in a while per account, not every poll.
+WORK_LEFT_EVERY_SEC = 30.0
+_work_left_cache: dict[str, tuple[float, dict[str, float]]] = {}
+
+
+def _work_left(request: Request, session: Session, away: list[str]) -> dict[str, float]:
+    """Each scheduled producer's work left in its unit: what the scheduler
+    will make (lineage.work_left), counted at most every WORK_LEFT_EVERY_SEC."""
+    import time
+
+    tenant_id = getattr(request.state, "tenant_id", None) or ""
+    cached = _work_left_cache.get(tenant_id)
+    if cached and time.monotonic() - cached[0] < WORK_LEFT_EVERY_SEC:
+        return cached[1]
+    from src.server.repository.ai_machines import account_job_models
+
+    models = account_job_models(tenant_id)
+    stopped = lineage.paused(session)
+    out = {}
+    for artifact, p in PRODUCERS.items():
+        if not p.scheduled:
+            continue
+        left = lineage.work_left(session, artifact, lineage.desired(session, artifact, models),
+                                 redo=lineage.redoable(artifact) and artifact not in stopped, away=away)
+        out[artifact] = left["seconds"] if p.unit == "second" else left["clips"]
+    _work_left_cache[tenant_id] = (time.monotonic(), out)
+    return out
+
 
 
 class FailingClip(BaseModel):

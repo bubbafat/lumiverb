@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import ProcessingSection from "./ProcessingSection";
+import ProcessingSection, { duration } from "./ProcessingSection";
 import type { Producer } from "../../api/client";
 import { MemoryRouter } from "react-router-dom";
 
@@ -170,7 +170,7 @@ describe("ProcessingSection", () => {
     const vision = await row("Descriptions and tags");
     expect(vision.textContent).toContain("Redoing 3 clips, after anything missing.");
     expect(screen.queryByRole("button", { name: /Upgrade/ })).toBeNull();
-    expect(screen.getByText(/Changing a model in Settings → AI is what starts that/)).toBeTruthy();
+    expect(screen.getByText(/Changing a model in Settings → AI, or a producer.s settings below, is what starts that/)).toBeTruthy();
   });
 
   it("says nothing about redoing when nothing is stale", async () => {
@@ -411,6 +411,94 @@ describe("ProcessingSection", () => {
     expect(now.textContent).toContain("AI machines sharing it take 1 fewer request meanwhile");
   });
 
+  it("says how long until everything is made, and each job running", async () => {
+    queue = { live: true, at: new Date().toISOString(), running: { render: 1, vision: 1 }, waiting: {}, pools: {},
+              gpu_hold: 0, eta: { producers: { vision: 7500, analysis_proxy: 90 }, pools: {}, caught_up: 7500,
+              jobs: [{ kind: "render", artifact: "analysis_proxy", unit: "second", units: 1440, elapsed: 60, left: 250 },
+                     { kind: "vision", artifact: "vision", unit: "clip", units: 1, elapsed: 4, left: null }] } };
+    producers = [producer({}), producer({ artifact: "analysis_proxy", title: "Analysis proxies", media: ["video"],
+                                          unit: "second" })];
+    renderSection();
+    const now = await screen.findByLabelText("Now");
+    expect(now.textContent).toContain("Caught up in about 2 h 5 min");
+    expect(now.textContent).toContain("analysis copy of 24 min of video · about 4 min left");
+    expect(now.textContent).toContain("description · time left not known yet");
+    expect((await row("Descriptions and tags")).textContent).toContain("about 2 h 5 min left");
+    expect((await row("Analysis proxies")).textContent).toContain("about 2 min left");
+  });
+
+  it("says when everything is made, and when how long isn't known yet", async () => {
+    queue = { live: true, at: new Date().toISOString(), running: {}, waiting: {}, pools: {}, gpu_hold: 0,
+              eta: { producers: { vision: 0 }, pools: {}, caught_up: 0, jobs: [] } };
+    renderSection();
+    expect((await screen.findByLabelText("Now")).textContent).toContain("Caught up");
+    cleanup();
+    queue = { ...(queue as object), eta: { producers: { vision: null }, pools: {}, caught_up: null, jobs: [] } };
+    renderSection();
+    expect((await screen.findByLabelText("Now")).textContent).toContain(
+      "How long until everything is made isn't known yet: it's learned from the jobs as they finish.");
+  });
+
+  it("promises no time for paused work, and names it", async () => {
+    queue = { live: true, at: new Date().toISOString(), running: {}, waiting: {}, pools: {}, gpu_hold: 0,
+              eta: { producers: { vision: null }, pools: {}, caught_up: null, jobs: [],
+                     not_counted: [{ artifact: "vision", title: "Descriptions and tags", why: "paused" }] } };
+    renderSection();
+    expect((await screen.findByLabelText("Now")).textContent).toContain(
+      "What's left is paused: no time is promised until it's resumed.");
+    cleanup();
+    queue = { ...(queue as object), eta: { producers: { vision: null, ocr: 1800 }, pools: { vision: 1800 },
+              caught_up: 1800, jobs: [],
+              not_counted: [{ artifact: "vision", title: "Descriptions and tags", why: "paused" }] } };
+    renderSection();
+    expect((await screen.findByLabelText("Now")).textContent).toContain(
+      "not counting descriptions and tags (paused)");
+  });
+
+  it("names what the headline leaves out, and says a job is late or how short its video is", async () => {
+    queue = { live: true, at: new Date().toISOString(), running: { render: 9 }, waiting: {}, pools: {}, gpu_hold: 0,
+              eta: { producers: { analysis_proxy: 600 }, pools: { render: 600 }, caught_up: 600,
+                     not_counted: [{ artifact: "transcript", title: "Transcripts", why: "no_machine" },
+                                   { artifact: "ocr", title: "Text in images (OCR)", why: "not_known_yet" }],
+                     jobs: [{ kind: "render", artifact: "analysis_proxy", unit: "second", units: 45, elapsed: 400,
+                              left: 0, late: true },
+                            ...Array.from({ length: 9 }, () => ({ kind: "render", artifact: "analysis_proxy",
+                              unit: "second", units: 600, elapsed: 10, left: 290, late: false }))] } };
+    renderSection();
+    const now = await screen.findByLabelText("Now");
+    expect(now.textContent).toContain(
+      "Caught up in about 10 min, not counting transcripts (no machine doing them now) and text in images (OCR) (not known yet).");
+    expect(now.textContent).toContain("analysis copy of 45 s of video · taking longer than usual");
+    expect(now.textContent).toContain("and 2 more");
+  });
+
+  it("says a producer's time isn't known yet, and caught up not counting what no machine is doing", async () => {
+    queue = { live: true, at: new Date().toISOString(), running: {}, waiting: {}, pools: {}, gpu_hold: 0,
+              eta: { producers: { ocr: null, transcript: null }, pools: {}, caught_up: 0, jobs: [],
+                     not_counted: [{ artifact: "transcript", title: "Transcripts", why: "no_machine" }] } };
+    producers = [producer({ artifact: "ocr", title: "Text in images (OCR)" })];
+    renderSection();
+    expect((await screen.findByLabelText("Now")).textContent).toContain(
+      "Caught up, not counting transcripts (no machine doing them now).");
+    expect((await row("Text in images (OCR)")).textContent).not.toContain("not known yet");
+    cleanup();
+    queue = { ...(queue as object), eta: { producers: { ocr: null }, pools: {}, caught_up: null, jobs: [],
+              not_counted: [{ artifact: "ocr", title: "Text in images (OCR)", why: "not_known_yet" }] } };
+    renderSection();
+    expect((await row("Text in images (OCR)")).textContent).toContain("time left not known yet");
+  });
+
+  it("asks the scheduler what it's doing once for the whole page, not once a row", async () => {
+    queue = { live: true, at: new Date().toISOString(), running: {}, waiting: {}, pools: {}, gpu_hold: 0,
+              eta: { producers: {}, pools: {}, caught_up: 0, not_counted: [], jobs: [] } };
+    producers = [producer({}), producer({ artifact: "ocr", title: "Text in images (OCR)" }),
+                 producer({ artifact: "clip", title: "Visual search (CLIP)" })];
+    renderSection();
+    await row("Visual search (CLIP)");
+    await screen.findByLabelText("Now");
+    expect(sent.filter((r) => r.url.includes("/producers/queue"))).toHaveLength(1);
+  });
+
   it("says when the scheduler isn't running", async () => {
     queue = { live: false, at: "2026-10-09T01:00:00Z", running: {}, waiting: {}, pools: {}, gpu_hold: 0 };
     renderSection();
@@ -566,5 +654,14 @@ describe("ProcessingSection settings", () => {
     expect(screen.getByText("Shortest silence skipped")).toBeTruthy();
     expect(screen.getByText("500 ms")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Save the settings of Transcripts" })).toBeNull();
+  });
+});
+
+
+describe("duration", () => {
+  it("says a span of time roughly, as people would", () => {
+    expect([30, 90, 3600, 7500, 36000, 3 * 86400, 200000].map(duration)).toEqual(
+      ["under a minute", "2 min", "1 h", "2 h 5 min", "10 h", "3 days", "2 days 7 h"]);
+    expect(duration(40 * 86400)).toBe("over a month");
   });
 });

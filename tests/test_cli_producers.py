@@ -397,3 +397,62 @@ def test_a_fixed_setting_is_refused_saying_why(settings_client):
         422, {"error": {"code": "setting_fixed", "message": "Model: Chosen in Settings → AI"}})
     result = _settings("transcript", "model=large-v3")
     assert result.exit_code == 1 and "Settings → AI" in result.output
+
+
+
+def test_says_how_long_until_each_and_everything_is_made(client):
+    def get(path, params=None):
+        r = MagicMock()
+        if path == "/v1/producers/queue":
+            r.json.return_value = {"live": True, "eta": {"producers": {"vision": 7500.0, "ocr": None},
+                                                          "pools": {}, "caught_up": 7500.0, "jobs": []}}
+        else:
+            r.json.return_value = {"producers": [_producer(), _producer("ocr", "Text in images (OCR)")]}
+        return r
+
+    client.get.side_effect = get
+    result = _run()
+    assert result.exit_code == 0, result.output
+    flat = " ".join(result.output.split())
+    assert "Caught up in about 2 h 5 min." in flat and "2 h 5 min" in flat.split("Caught up")[0]
+
+
+def test_one_library_says_no_time_left_its_the_whole_accounts(client):
+    # The queue is still read: what's paused is the whole account's too, and said for one library.
+    base = client.get.side_effect
+
+    def get(path, params=None):
+        if path == "/v1/producers/queue":
+            r = MagicMock()
+            r.json.return_value = {"live": True, "paused": True, "eta": {"producers": {"vision": 7500.0},
+                                                                         "pools": {}, "caught_up": 7500.0, "jobs": []}}
+            return r
+        return base(path, params)
+
+    client.get.side_effect = get
+    result = _run("--library", "Footage")
+    assert result.exit_code == 0, result.output
+    flat = " ".join(result.output.split())
+    assert "Caught up" not in flat and "Left" not in flat and "All processing is paused" in flat
+
+
+def test_the_headline_says_paused_work_gets_no_time(client):
+    from src.client.cli.commands.producers import _caught_up
+
+    assert _caught_up({"caught_up": None, "not_counted": [
+        {"artifact": "vision", "title": "Descriptions and tags", "why": "paused"}]}) == (
+        "What's left is paused: no time is promised until it's resumed.")
+    assert _caught_up({"caught_up": 60.0 * 30, "not_counted": [
+        {"artifact": "vision", "title": "Descriptions and tags", "why": "paused"}]}) == (
+        "Caught up in about 30 min, not counting descriptions and tags (paused).")
+
+
+
+def test_the_headline_names_what_it_leaves_out(client):
+    from src.client.cli.commands.producers import _caught_up
+
+    assert _caught_up({"caught_up": 7500.0, "not_counted": [
+        {"artifact": "transcript", "title": "Transcripts", "why": "no_machine"}]}) == (
+        "Caught up in about 2 h 5 min, not counting transcripts (no machine doing them now).")
+    assert _caught_up({"caught_up": 40 * 86400.0}) == "Caught up in over a month."
+    assert _caught_up({"caught_up": 0}) == "Caught up: everything is made."

@@ -99,6 +99,7 @@ class Scheduler:
         inline_refill: bool = False,
         gpu_decodes: int = 0,
         write_status: Callable[[str, dict], None] | None = None,
+        last_status: Callable[[str], dict | None] | None = None,
     ) -> None:
         from src.server.scheduler import runners as runner_mod
 
@@ -108,6 +109,9 @@ class Scheduler:
         self._on_hold = on_hold or _on_hold_in_database
         self._retry_requested = retry_requested or _retry_requested_in_database
         self._retry_seen: dict[str, str | None] = {}
+        # Each account's last status, read once: its paces start there.
+        self._last_status = last_status or _status_from_database
+        self._paced: set[str] = set()
         self._runners = dict(runners or runner_mod.runners())
         self._scan = scan or runner_mod.scan
         self._clock = clock
@@ -150,7 +154,7 @@ class Scheduler:
                 if acct is None:
                     self.dispatcher.done(job, tried=False)
                     continue
-                self._running[self._pool.submit(self._run, acct, job)] = job
+                self._running[self._pool.submit(self._run_job, acct, job)] = job
                 started += 1
         self.collect()
         self._share_the_gpu(accounts)
@@ -231,10 +235,17 @@ class Scheduler:
             acct.refresh()
         except Exception:  # noqa: BLE001 — tried again at the next tick
             logger.exception("scheduler: refreshing %s failed", tenant_id)
+        if tenant_id not in self._paced:
+            self._paced.add(tenant_id)
+            try:
+                self.dispatcher.seed_pace(tenant_id, (self._last_status(tenant_id) or {}).get("pace") or {})
+            except Exception:  # noqa: BLE001 — it learns them again from its jobs
+                logger.exception("scheduler: reading %s's last pace failed", tenant_id)
         if self._clock() - self._status_at.get(tenant_id, float("-inf")) >= STATUS_EVERY_SEC:
             self._status_at[tenant_id] = self._clock()
             try:
-                self._write_status(tenant_id, self.status(tenant_id))
+                away = sorted(set(acct.library_ids(storage=False)) - set(acct.library_ids(storage=True)))
+                self._write_status(tenant_id, {**self.status(tenant_id), "unreachable": away})
             except Exception:  # noqa: BLE001 — only a view of it
                 logger.exception("scheduler: writing %s's status failed", tenant_id)
         for job in AI_JOB_KINDS:
@@ -295,6 +306,20 @@ class Scheduler:
                 acct.follow_settings(kind.artifact, items[0].get("settings_hash"))
             self.dispatcher.offer(tenant_id, kind.name, items, complete=len(items) < BUFFER)
 
+    def _run_job(self, acct: Any, job: Job) -> tuple[Outcome, set[str]]:
+        """Run the job; its outcome, and which of its clips failures were
+        charged to meanwhile (its kind learns its pace from the rest)."""
+        failures = getattr(acct, "failures", None)
+        mark = failures.mark() if hasattr(failures, "mark") else None
+        outcome = self._run(acct, job)
+        kind = KINDS.get(job.kind)
+        if mark is None or kind is None or not kind.flag:
+            return outcome, set()
+        try:
+            return outcome, set(failures.charged(kind.artifact, job.asset_ids, since=mark))
+        except Exception:  # noqa: BLE001 — only the pace's to lose
+            return outcome, set()
+
     def _run(self, acct: Any, job: Job) -> Outcome:
         try:
             if job.kind == "scan":
@@ -322,13 +347,13 @@ class Scheduler:
         for future in done:
             job = self._running.pop(future)
             try:
-                outcome = future.result()
+                outcome, failed = future.result()
             except Exception:  # noqa: BLE001 — _run catches its own
-                outcome = list(job.asset_ids)
+                outcome, failed = list(job.asset_ids), set()
             if outcome == NOT_TRIED:
                 self.dispatcher.done(job, tried=False)
             else:
-                self.dispatcher.done(job, waiting=outcome or ())
+                self.dispatcher.done(job, waiting=outcome or (), failed=failed)
 
     @property
     def running(self) -> int:
@@ -387,12 +412,9 @@ def _from_database(tenant_id: str, kind: Any, libraries: list[str], skip: list[s
 
 def _job_models(tenant_id: str) -> dict[str, str]:
     """The account's model per AI job (Settings → AI)."""
-    from src.server.database import get_control_session
-    from src.server.repository.ai_machines import job_models
-    from src.server.repository.control_plane import TenantRepository
+    from src.server.repository.ai_machines import account_job_models
 
-    with get_control_session() as ctrl:
-        return job_models(TenantRepository(ctrl).get_by_id(tenant_id))
+    return account_job_models(tenant_id)
 
 
 def _retry_requested_in_database(tenant_id: str) -> str | None:
@@ -430,6 +452,23 @@ def _on_hold_in_database(tenant_id: str) -> set[str]:
 
     with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
         return set(lineage.processing_paused(session))
+
+
+def _status_from_database(tenant_id: str) -> dict | None:
+    """The status the scheduler last wrote for the account (its paces)."""
+    import json
+
+    from sqlalchemy import text
+    from sqlmodel import Session
+
+    from src.server.database import get_engine_for_url
+
+    with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
+        raw = session.execute(text("SELECT value FROM system_metadata WHERE key = 'scheduler.status'")).scalar()
+    try:
+        return json.loads(raw) if raw else None
+    except ValueError:
+        return None
 
 
 def _paused_in_database(tenant_id: str) -> set[str]:

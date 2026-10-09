@@ -56,8 +56,9 @@ def _made_first(needs: tuple[str, ...]) -> str:
 # A kind per producer the scheduler runs (src/producers/<artifact>/), and the scan.
 _FIRST: dict[str, Kind] = {k.name: k for k in (
     Kind("scan", KindSpec(SEE, "scan", retake_after=SCAN_EVERY_SEC)),
-    *(Kind(p.kind, KindSpec(p.tier, p.pool, batch=p.batch, per_account=p.per_account), p.flag,
-           _made_first(p.needs), storage=p.storage)
+    *(Kind(p.kind, KindSpec(p.tier, p.pool, batch=p.batch, per_account=p.per_account,
+                            by_seconds=p.unit == "second"),
+           p.flag, _made_first(p.needs), storage=p.storage)
       for p in PRODUCERS.values() if p.scheduled),
 )}
 

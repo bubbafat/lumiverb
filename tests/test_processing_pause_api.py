@@ -340,3 +340,31 @@ def test_while_everything_is_paused_the_trash_days_question_says_the_purge_waits
     finally:
         client.post("/v1/producers/resume", headers=headers)
     assert "within minutes" in _settings(env, trash_days=7).json()["error"]["message"]
+
+
+def test_the_queue_promises_no_time_for_paused_work_but_running_jobs_say_theirs(env):
+    """Pausing and time left (Proposed, Oct 9): a paused producer has no time and is named;
+    under Pause all no producer has one; a running job still says its time left, since it finishes."""
+    from src.server.api.routers import producers as producers_router
+    from src.shared.utils import utcnow
+    from tests.test_lineage_api import _ingest_with
+    from tests.test_scheduler_status_api import _write
+
+    client, headers, *_ = env
+    _ingest_with(_library(env, "PausedEta"), "a.jpg", _sha(), None)  # a photo nothing has described yet
+    _write(env, {"at": utcnow().isoformat(), "running": {"vision": 1}, "waiting": {},
+                 "pools": {"vision": [1, 3], "gpu": [0, 1], "probe": [0, 1]},
+                 "pace": {"vision": 6.0, "ocr": 3.0, "clip": 0.5, "faces": 0.5},
+                 "jobs": [{"kind": "vision", "units": 1.0, "elapsed": 2.0}]})
+    try:
+        assert client.post("/v1/producers/vision/pause", headers=headers).status_code == 204
+        producers_router._work_left_cache.clear()
+        eta = _queue(env)["eta"]
+        assert eta["producers"]["vision"] is None and eta["producers"]["ocr"] is not None
+        assert {"artifact": "vision", "title": _producers(env)["vision"]["title"], "why": "paused"} in eta["not_counted"]
+        assert client.post("/v1/producers/pause", headers=headers).status_code == 204
+        eta = _queue(env)["eta"]
+        assert all(t is None or t == 0 for t in eta["producers"].values()) and eta["caught_up"] is None
+        assert eta["jobs"][0]["left"] is not None  # what's running finishes
+    finally:
+        client.post("/v1/producers/resume", headers=headers)

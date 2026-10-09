@@ -7,7 +7,7 @@ from src.producers.prompts import VISION_PROMPT, ai_settings
 NOT_OFFERED = "Scenes are described with these settings; changing them isn't offered yet."
 
 PRODUCER = ProducerSpec(
-    artifact="scene_vision", producer="scene-vision", version="1", media=VIDEO, title="Scene descriptions",
+    artifact="scene_vision", producer="scene-vision", version="1", media=VIDEO, unit="second", title="Scene descriptions",
     order=60,
     applies=("a.media_type = 'video' AND a.video_indexed"
              " AND EXISTS (SELECT 1 FROM video_scenes s WHERE s.asset_id = a.asset_id)"),

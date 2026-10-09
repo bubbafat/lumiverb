@@ -46,6 +46,8 @@ def _check(found: list[ProducerSpec]) -> None:
     for p in found:
         if p.scheduled and not (p.flag and p.run and ":" in p.run and p.pool):
             raise ValueError(f"{p.artifact}: a producer the scheduler runs needs a flag, a run and a pool")
+        if p.unit not in ("second", "clip"):
+            raise ValueError(f"{p.artifact}: its unit is a second (of video) or a clip, not {p.unit!r}")
         if p.per_account and not (p.job and p.pool == p.job):
             raise ValueError(f"{p.artifact}: an account's pool is its AI job's machines (pool = job)")
         missing = [n for n in (*p.needs, *p.redo_also) if n not in {q.artifact for q in found}]
