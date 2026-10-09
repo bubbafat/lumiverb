@@ -17,6 +17,7 @@ skip if Docker isn't there.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 import uuid
@@ -42,6 +43,36 @@ QUICKWIT_IMAGE = os.environ.get("QUICKWIT_TEST_IMAGE", "quickwit/quickwit:0.8.1"
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
+def _start(container) -> None:
+    """container.start(), again if Docker picked a host port that was taken.
+
+    Docker takes host ports from the kernel's ephemeral range, which the
+    run's own Postgres connections are using too; late in a busy `-n auto`
+    run, binding one (for this container, or for the worker's first Ryuk)
+    can fail with "address already in use". What failed is left made but not
+    started, under a fixed name, so remove it before trying again."""
+    import docker
+    from testcontainers.core.container import Reaper
+
+    for attempt in range(5):
+        try:
+            container.start()
+            return
+        except docker.errors.APIError as e:
+            if "address already in use" not in str(e) or attempt == 4:
+                raise
+        if Reaper._instance is None and Reaper._container is not None:
+            if Reaper._container._container is not None:
+                with contextlib.suppress(docker.errors.APIError):
+                    Reaper._container._container.remove(force=True)
+            Reaper._container = None
+        if container._container is not None:
+            with contextlib.suppress(docker.errors.APIError):
+                container._container.remove(force=True)
+            container._container = None
+        time.sleep(0.5)
+
+
 @pytest.fixture(scope="module")
 def quickwit_url():
     """A Quickwit of the run's own, gone when the module is done."""
@@ -59,7 +90,7 @@ def quickwit_url():
         .with_env("QW_DISABLE_TELEMETRY", "1")
         .with_exposed_ports(7280)
     )
-    container.start()
+    _start(container)
     try:
         url = f"http://{container.get_container_host_ip()}:{container.get_exposed_port(7280)}"
         deadline = time.monotonic() + 60
