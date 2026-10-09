@@ -204,6 +204,32 @@ def test_get_clusters_returns_seeded_groups(clusters_client) -> None:
 
 
 @pytest.mark.slow
+def test_get_clusters_sorts(clusters_client) -> None:
+    """Largest first unless asked otherwise; every order is total (ties by first face)."""
+    auth_client, _ = clusters_client
+
+    default = auth_client.get("/v1/faces/clusters").json()["clusters"]
+    sizes = [c["size"] for c in default]
+    assert sizes == sorted(sizes, reverse=True)
+    assert default == auth_client.get("/v1/faces/clusters", params={"sort": "size_desc"}).json()["clusters"]
+
+    smallest = auth_client.get("/v1/faces/clusters", params={"sort": "size_asc"}).json()["clusters"]
+    assert [c["size"] for c in smallest] == sorted(sizes)
+
+    newest = auth_client.get("/v1/faces/clusters", params={"sort": "newest"}).json()["clusters"]
+    assert all(c["newest"] for c in newest)
+    dates = [c["newest"] for c in newest]
+    assert dates == sorted(dates, reverse=True)
+
+
+@pytest.mark.slow
+def test_get_clusters_unknown_sort_is_refused(clusters_client) -> None:
+    auth_client, _ = clusters_client
+    r = auth_client.get("/v1/faces/clusters", params={"sort": "random"})
+    assert r.status_code == 422
+
+
+@pytest.mark.slow
 def test_list_cluster_faces_paginates(clusters_client) -> None:
     auth_client, _ = clusters_client
 

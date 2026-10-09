@@ -77,12 +77,7 @@ class RecomputeCentroidsForTrashFilterStep:
         # fetch recomputes against the (now-correct) embedding pool.
         if person_ids:
             ctx.session.execute(
-                text(
-                    "INSERT INTO system_metadata (key, value, updated_at)"
-                    " VALUES ('face_clusters_dirty', 'true', NOW())"
-                    " ON CONFLICT (key) DO UPDATE"
-                    "   SET value = 'true', updated_at = NOW()"
-                )
+                text("SELECT mark_face_clusters_changed()")
             )
 
         ctx.session.commit()
