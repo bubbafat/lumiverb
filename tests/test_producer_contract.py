@@ -38,6 +38,9 @@ def test_every_producer_declares_what_the_rest_needs():
             assert p.flag.startswith("missing_") and p.pool and callable(load(p.run)), p.artifact
         if p.job:
             assert "model" in p.defaults, p.artifact
+        # A setting that doesn't remake is outside lineage: something must act when it changes.
+        if any(not s.remakes for s in p.settings):
+            assert callable(load(p.regroup)), p.artifact
     flags = [p.flag for p in producers.values() if p.flag]
     assert len(set(flags)) == len(flags)
 

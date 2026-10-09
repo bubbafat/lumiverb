@@ -100,6 +100,17 @@ def effective_settings(artifact: str, overrides: Mapping[str, Any] | None = None
     return out
 
 
+def use_settings(artifact: str, overrides: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """The producer's settings that don't remake (not in lineage): their
+    defaults, then explicit overrides."""
+    p = PRODUCERS[artifact]
+    out = dict(p.use_defaults)
+    for key, value in (overrides or {}).items():
+        if key in out:
+            out[key] = value
+    return out
+
+
 def lineage(artifact: str, settings: Mapping[str, Any], source_sha256: str | None) -> dict[str, Any]:
     """What a write records about how the artifact was made."""
     p = PRODUCERS[artifact]

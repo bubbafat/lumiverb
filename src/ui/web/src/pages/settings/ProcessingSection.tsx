@@ -590,6 +590,7 @@ function RedoLine({ producer, stale, admin, paused }: { producer: Producer; stal
 
 function shown(field: SettingField, value: unknown): string {
   if (value === "" || value === null || value === undefined) return "—";
+  if (field.kind === "bool") return value ? "On" : "Off";
   return `${String(value)}${field.unit ? ` ${field.unit}` : ""}`;
 }
 
@@ -634,6 +635,7 @@ function SettingsList({ fields }: { fields: SettingField[] }) {
 
 /** What a field holds as its setting: an empty field is the default (null), as the CLI's KEY= is. */
 function asSetting(f: SettingField, raw: string): unknown {
+  if (f.kind === "bool") return raw === "true";
   if (raw.trim() === "") return null;
   return f.kind === "text" ? raw : Number(raw);
 }
@@ -654,6 +656,7 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
   // 409 redo_on_change: what the old settings made is made again; the API asks first.
   const [redoing, setRedoing] = useState<string | null>(null);
   const changed = fields.filter((f) => !f.fixed && !same(f, values[f.key]));
+  const remade = changed.some((f) => f.remakes !== false);
   const edit = (key: string, value: string) => {
     setValues({ ...values, [key]: value });
     setRedoing(null); // its answer was for the values asked about
@@ -681,6 +684,15 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
   });
   const input = (f: SettingField) => {
     const id = `${producer.artifact}-${f.key}`;
+    if (f.kind === "bool" && !f.fixed) {
+      return (
+        <div key={f.key} className="flex items-center gap-2">
+          <input id={id} type="checkbox" className="h-4 w-4 accent-indigo-500" checked={values[f.key] === "true"}
+            onChange={(e) => edit(f.key, String(e.target.checked))} />
+          <label htmlFor={id} className="text-gray-400">{f.label}</label>
+        </div>
+      );
+    }
     return (
       <div key={f.key} className="space-y-1">
         <label htmlFor={id} className="block text-gray-400">
@@ -718,8 +730,11 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
           <div className="mt-2 space-y-3">{advanced.map(input)}</div>
         </details>
       )}
-      {changed.length > 0 && !redoing && (
+      {remade && !redoing && (
         <p className="text-amber-300">What these settings made is made again with the new ones, after anything missing.</p>
+      )}
+      {changed.length > 0 && !remade && (
+        <p className="text-gray-400">Face groups are worked out again; no face is found again.</p>
       )}
       {problem && (
         <p role="alert" className="text-red-300">

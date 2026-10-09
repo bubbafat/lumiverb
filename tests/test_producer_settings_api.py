@@ -44,7 +44,8 @@ def test_each_setting_comes_with_its_bounds_and_whether_it_can_change(env):
     fields = {f["key"]: f for f in _producer(env, "transcript")["fields"]}
     assert fields["vad_min_silence_ms"] == {
         "key": "vad_min_silence_ms", "label": "Shortest silence skipped", "kind": "int", "value": 500,
-        "default": 500, "minimum": 100, "maximum": 2000, "unit": "ms", "advanced": False, "fixed": None}
+        "default": 500, "minimum": 100, "maximum": 2000, "unit": "ms", "advanced": False, "fixed": None,
+        "remakes": True}
     assert "Settings → AI" in fields["model"]["fixed"]
     clip = {f["key"]: f for f in _producer(env, "clip")["fields"]}
     assert all(f["fixed"] for f in clip.values())  # CLIP doesn't read them yet
@@ -235,4 +236,101 @@ def test_faces_settings_ask_saying_what_a_redo_keeps(env):
         r = _put(env, "faces", settings=settings)
         assert r.status_code == 422 and r.json()["error"]["code"] == "setting_fixed", r.text
     r = _put(env, "faces", settings={"max_detect_edge": 2048})  # past the proxies' size
+    assert r.status_code == 422 and r.json()["error"]["code"] == "bad_setting", r.text
+
+
+def _meta(env, key: str) -> str | None:
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine(env[5])
+    try:
+        with engine.connect() as conn:
+            return conn.execute(text("SELECT value FROM system_metadata WHERE key = :k"), {"k": key}).scalar()
+    finally:
+        engine.dispose()
+
+
+def _clusters_current(env) -> bool:
+    """The face cluster cache was computed at the clusters' version now (it's served)."""
+    import json
+
+    cache = _meta(env, "face_clusters_cache")
+    return bool(cache) and json.loads(cache).get("version") == (_meta(env, "face_clusters_version") or "0")
+
+
+def _merge_epsilon(env) -> float:
+    from sqlmodel import Session, create_engine
+
+    from src.server.repository.tenant import face_merge_epsilon
+
+    engine = create_engine(env[5])
+    try:
+        with Session(engine) as session:
+            return face_merge_epsilon(session)
+    finally:
+        engine.dispose()
+
+
+def test_face_grouping_settings_regroup_without_finding_faces_again(env):
+    """Merging close face groups is the account's (Settings → Processing →
+    Faces), on by default; changing it works the groups out again and makes
+    no face again: it isn't in what faces are made with."""
+    from src.producers.faces import PRODUCER as FACES
+    from tests.test_lineage_api import _want
+
+    lib = _library(env, "FaceGrouping")
+    client, headers, *_ = lib
+    sha = _sha()
+    photo = _ingest_with(lib, "a.jpg", sha, None)
+    r = client.post(f"/v1/assets/{photo}/faces", json={
+        "detection_model": "insightface", "detection_model_version": "buffalo_l", "faces": [],
+        "lineage": _want(lib, "faces", sha)}, headers=headers)
+    assert r.status_code == 201, r.text
+
+    distance = FACES.setting("merge_distance").default
+    before = _producer(env, "faces")
+    fields = {f["key"]: f for f in before["fields"]}
+    assert fields["merge_close_clusters"] == {
+        "key": "merge_close_clusters", "label": "Merge close groups", "kind": "bool", "value": True,
+        "default": True, "minimum": None, "maximum": None, "unit": "", "advanced": False, "fixed": None,
+        "remakes": False}
+    assert fields["merge_distance"]["advanced"] and not fields["merge_distance"]["remakes"]
+    assert fields["merge_distance"]["value"] == distance
+    assert fields["min_confidence"]["remakes"]
+    assert "merge_close_clusters" not in before["settings"] and "merge_distance" not in before["settings"]
+    assert _merge_epsilon(env) == distance
+
+    _put(env, "faces", settings={"merge_close_clusters": None})  # the cache starts clean
+    client.get("/v1/faces/clusters", headers=headers)
+    assert _clusters_current(env)
+    try:
+        r = _put(env, "faces", settings={"merge_close_clusters": False})  # no redo asked: none needed
+        assert r.status_code == 200, r.text
+        assert {f["key"]: f for f in r.json()["fields"]}["merge_close_clusters"]["value"] is False
+        after = _producer(env, "faces")
+        assert after["settings_hash"] == before["settings_hash"]
+        assert _counts(lib, "faces")["stale"] == 0
+        assert not _clusters_current(env)
+        assert _merge_epsilon(env) == 0.0
+
+        client.get("/v1/faces/clusters", headers=headers)
+        r = _put(env, "faces", settings={"merge_close_clusters": False})  # the same again: nothing to redo
+        assert r.status_code == 200 and _clusters_current(env)
+
+        r = _put(env, "faces", settings={"merge_close_clusters": True, "merge_distance": 0.3})
+        assert r.status_code == 200, r.text
+        assert _merge_epsilon(env) == 0.3 and not _clusters_current(env)
+    finally:
+        _put(env, "faces", settings={"merge_close_clusters": None, "merge_distance": None})
+    assert _merge_epsilon(env) == distance
+
+
+@pytest.mark.parametrize("settings", [
+    {"merge_close_clusters": 1},  # a number for yes or no
+    {"merge_close_clusters": "true"},
+    {"merge_distance": 0.0},
+    {"merge_distance": 0.9},
+])
+def test_face_grouping_settings_are_checked(env, settings):
+    r = _put(env, "faces", settings=settings)
     assert r.status_code == 422 and r.json()["error"]["code"] == "bad_setting", r.text

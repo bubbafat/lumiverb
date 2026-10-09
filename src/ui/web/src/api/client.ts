@@ -929,7 +929,7 @@ export interface ProducerCounts {
 export interface SettingField {
   key: string;
   label: string;
-  kind: "int" | "float" | "text";
+  kind: "int" | "float" | "text" | "bool";
   value: unknown;
   default: unknown;
   minimum: number | null;
@@ -937,6 +937,9 @@ export interface SettingField {
   unit: string;
   advanced: boolean;
   fixed: string | null;
+  /** Changing it makes the artifact again; false: it changes only what's done with what's made
+   * (how faces are grouped). Absent: true. */
+  remakes?: boolean;
 }
 
 export interface Producer {

@@ -16,10 +16,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from src.producers import registry
 from src.server.repository.tenant import (
     LARGE_INPUT_THRESHOLD,
     _cluster_face_embeddings,
 )
+
+DEFAULT_MERGE_DISTANCE = registry()["faces"].setting("merge_distance").default
 
 
 def _unit(v: np.ndarray) -> np.ndarray:
@@ -256,3 +259,140 @@ def test_large_uniform_input_falls_back_to_single_cluster() -> None:
     # And the surviving cluster(s) must come entirely from the real blob.
     for c in clusters:
         assert all(0 <= i < n for i in c)
+
+
+# ---------------------------------------------------------------------------
+# Merging close clusters (leaf selection + an epsilon)
+#
+# Real photos of one person don't form one tight blob: years, glasses,
+# lighting and angle make a few tight sub-modes. Leaf selection picks the
+# finest clusters, so it hands back one group per sub-mode: one person in
+# many groups of 5-15. Merging clusters closer than an epsilon puts them
+# back together, while distinct people (relatives too) stay apart.
+# ---------------------------------------------------------------------------
+
+
+def _mix(rng: np.random.Generator, base: np.ndarray, cos: float) -> np.ndarray:
+    """A unit vector at about ``cos`` to ``base`` (512-d: random directions are near-orthogonal)."""
+    other = rng.normal(size=base.shape[0])
+    other /= np.linalg.norm(other)
+    v = np.sqrt(cos) * base + np.sqrt(1 - cos) * other
+    return v / np.linalg.norm(v)
+
+
+def _photo_library(seed: int, *, sibling_cos: float = 0.55) -> tuple[np.ndarray, np.ndarray]:
+    """ArcFace-like embeddings of a family photo library (512-d).
+
+    Eight families of one to four people (relatives share a family
+    direction: ``sibling_cos`` between their centers); each person in two
+    to five sub-modes, 4-12 faces each; plus 150 strangers seen once.
+    Calibrated to InsightFace buffalo_l on LFW (4,268 faces, 212 people):
+    there one person's faces are 0.20 / 0.32 / 0.48 apart in cosine
+    distance (5th / 50th / 95th percentile), two people's never under
+    0.72; here 0.24 / 0.36 / 0.43, and relatives come closer (0.58).
+    Labels: the person, -1 for strangers.
+    """
+    rng = np.random.default_rng(seed)
+    dim = 512
+    everyone = rng.normal(size=dim)
+    everyone /= np.linalg.norm(everyone)
+    faces, labels, person = [], [], 0
+    for _ in range(8):
+        family = _mix(rng, everyone, 0.11)
+        for _ in range(rng.integers(1, 5)):
+            center = _mix(rng, family, sibling_cos)
+            for _ in range(rng.integers(2, 6)):
+                mode = _mix(rng, center, 0.85)
+                for _ in range(rng.integers(4, 13)):
+                    faces.append(_mix(rng, mode, rng.uniform(0.65, 0.8)))
+                    labels.append(person)
+            person += 1
+    for _ in range(150):
+        faces.append(_mix(rng, everyone, 0.05))
+        labels.append(-1)
+    return np.array(faces, dtype=np.float32), np.array(labels)
+
+
+def _groups_per_person(clusters: list[list[int]], labels: np.ndarray) -> float:
+    people = sorted(set(labels[labels >= 0]))
+    return float(np.mean([sum(1 for c in clusters if any(labels[i] == p for i in c)) for p in people]))
+
+
+def _mixed(clusters: list[list[int]], labels: np.ndarray) -> list[set[int]]:
+    """Clusters holding more than one person (strangers aside)."""
+    return [people for c in clusters if len(people := {int(labels[i]) for i in c if labels[i] >= 0}) > 1]
+
+
+@pytest.mark.fast
+def test_leaf_alone_splits_one_person_into_many_groups() -> None:
+    """The problem: leaf selection hands back a group per sub-mode."""
+    for seed in range(3):
+        vecs, labels = _photo_library(seed)
+        assert len(vecs) > LARGE_INPUT_THRESHOLD
+        clusters = _cluster_face_embeddings(vecs, min_cluster_size=3)
+        assert _groups_per_person(clusters, labels) > 2.5
+        assert _mixed(clusters, labels) == []
+
+
+@pytest.mark.fast
+def test_merging_close_clusters_reunites_each_person() -> None:
+    """At the default distance each person is one group, or very nearly,
+    and no group holds two people."""
+    for seed in range(3):
+        vecs, labels = _photo_library(seed)
+        clusters = _cluster_face_embeddings(vecs, min_cluster_size=3, merge_epsilon=DEFAULT_MERGE_DISTANCE)
+        assert _groups_per_person(clusters, labels) <= 1.1
+        assert _mixed(clusters, labels) == []
+        # Faces left out of every cluster stay out: merging adds none.
+        alone = _cluster_face_embeddings(vecs, min_cluster_size=3)
+        assert sum(map(len, clusters)) == sum(map(len, alone))
+
+
+@pytest.mark.fast
+def test_merging_keeps_close_relatives_apart() -> None:
+    """Siblings whose centers are closer than this library's (cos 0.7) stay two people."""
+    for seed in range(3):
+        vecs, labels = _photo_library(seed, sibling_cos=0.7)
+        clusters = _cluster_face_embeddings(vecs, min_cluster_size=3, merge_epsilon=DEFAULT_MERGE_DISTANCE)
+        assert _mixed(clusters, labels) == []
+
+
+@pytest.mark.fast
+def test_too_wide_a_distance_merges_people() -> None:
+    """Why the distance has an upper bound: far enough, people merge."""
+    vecs, labels = _photo_library(0)
+    clusters = _cluster_face_embeddings(vecs, min_cluster_size=3, merge_epsilon=0.65)
+    assert _mixed(clusters, labels)
+
+
+@pytest.mark.fast
+def test_no_epsilon_is_leaf_selection_as_before() -> None:
+    vecs, _ = _photo_library(1)
+    assert _cluster_face_embeddings(vecs, min_cluster_size=3, merge_epsilon=0.0) == \
+        _cluster_face_embeddings(vecs, min_cluster_size=3)
+
+
+@pytest.mark.fast
+def test_merging_does_not_chain_through_a_bridge() -> None:
+    """The union-find regression, with merging on: one face between two
+    people can't join them (it has no dense neighbourhood of its own)."""
+    rng = np.random.default_rng(11)
+    a_center = _mix(rng, np.eye(512)[0], 1.0)
+    b_center = _mix(rng, a_center, 0.3)
+    a = np.array([_mix(rng, a_center, 0.7) for _ in range(40)])
+    b = np.array([_mix(rng, b_center, 0.7) for _ in range(40)])
+    bridge = (a_center + b_center) / np.linalg.norm(a_center + b_center)
+    vecs = np.vstack([a, b, bridge[None, :]]).astype(np.float32)
+    clusters = _cluster_face_embeddings(vecs, min_cluster_size=3, merge_epsilon=DEFAULT_MERGE_DISTANCE)
+    for c in clusters:
+        assert not ({i for i in c if i < 40} and {i for i in c if 40 <= i < 80}), "identities merged via bridge"
+
+
+@pytest.mark.fast
+def test_small_inputs_are_not_merged() -> None:
+    """Up to LARGE_INPUT_THRESHOLD faces the EOM path runs, as before."""
+    rng = np.random.default_rng(12)
+    center = np.zeros(32); center[0] = 1.0
+    vecs = _blob(rng, center, 20, jitter=0.03)
+    assert _cluster_face_embeddings(vecs, min_cluster_size=3, merge_epsilon=0.5) == \
+        _cluster_face_embeddings(vecs, min_cluster_size=3)

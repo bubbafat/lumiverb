@@ -653,6 +653,51 @@ describe("ProcessingSection settings", () => {
     expect(screen.getAllByText(why)).toHaveLength(1);  // said once for all of them
   });
 
+  describe("face grouping", () => {
+    const grouping = [
+      { key: "min_confidence", label: "Least confidence", kind: "float", value: 0.5, default: 0.5, minimum: 0.3,
+        maximum: 0.99, unit: "", advanced: false, fixed: null, remakes: true },
+      { key: "merge_close_clusters", label: "Merge close groups", kind: "bool", value: true, default: true,
+        minimum: null, maximum: null, unit: "", advanced: false, fixed: null, remakes: false },
+      { key: "merge_distance", label: "Merge distance (cosine)", kind: "float", value: 0.45, default: 0.45,
+        minimum: 0.05, maximum: 0.6, unit: "", advanced: true, fixed: null, remakes: false },
+    ] as Producer["fields"];
+
+    it("a yes-or-no setting is a checkbox, and turning it off sends false", async () => {
+      producers = [producer({ artifact: "faces", title: "Faces", fields: grouping })];
+      renderSection();
+      fireEvent.click(await screen.findByText("Settings · version 1"));
+      const box = screen.getByLabelText("Merge close groups") as HTMLInputElement;
+      expect(box.type).toBe("checkbox");
+      expect(box.checked).toBe(true);
+      fireEvent.click(box);
+      expect(box.checked).toBe(false);
+      fireEvent.click(screen.getByRole("button", { name: "Save the settings of Faces" }));
+      await waitFor(() => expect(sent.some((r) => r.method === "PUT")).toBe(true));
+      expect(sent.find((r) => r.method === "PUT")!.body).toEqual({ settings: { merge_close_clusters: false } });
+    });
+
+    it("says a grouping change regroups, and not that anything is made again", async () => {
+      producers = [producer({ artifact: "faces", title: "Faces", fields: grouping })];
+      renderSection();
+      fireEvent.click(await screen.findByText("Settings · version 1"));
+      fireEvent.click(screen.getByLabelText("Merge close groups"));
+      expect(screen.getByText("Face groups are worked out again; no face is found again.")).toBeTruthy();
+      expect(screen.queryByText(/made again with the new ones/)).toBeNull();
+      fireEvent.change(screen.getByLabelText(/Least confidence/), { target: { value: "0.6" } });
+      expect(screen.getByText(/made again with the new ones/)).toBeTruthy();
+    });
+
+    it("shows editors yes or no as On or Off", async () => {
+      role = "editor";
+      producers = [producer({ artifact: "faces", title: "Faces",
+                              fields: [{ ...grouping![1], value: false }] })];
+      renderSection();
+      fireEvent.click(await screen.findByText("Settings · version 1"));
+      expect(screen.getByText("Off")).toBeTruthy();
+    });
+  });
+
   it("shows editors the settings, not a form", async () => {
     role = "editor";
     await openSettings();

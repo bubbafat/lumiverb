@@ -46,13 +46,16 @@ NOT_READ_YET = "Not read by this producer yet: changing it would change nothing 
 
 @dataclass(frozen=True)
 class Setting:
-    """An output-affecting setting: its default goes into the lineage hash,
-    and Settings → Processing shows it from this (bounds, advanced or not)."""
+    """A producer's setting, as Settings → Processing shows it (bounds,
+    advanced or not). An output-affecting one (remakes) goes into the
+    lineage hash; one that only changes what's done with the artifacts
+    made (how faces are grouped) doesn't, and its producer's ``regroup``
+    runs when it changes."""
 
     key: str
     default: Any
     label: str
-    kind: str = "int"  # "int" | "float" | "text"
+    kind: str = "int"  # "int" | "float" | "text" | "bool"
     minimum: float | None = None
     maximum: float | None = None
     unit: str = ""
@@ -60,9 +63,16 @@ class Setting:
     # Why it can't be changed here ("" = it can): only what the producer's
     # code reads is offered, or lineage would claim settings nothing used.
     fixed: str = ""
+    # Changing it makes the artifact again (it's in lineage). False: it
+    # changes only what's done with what's made; nothing is made again.
+    remakes: bool = True
 
     def check(self, value: Any) -> Any:
         """The value as stored, or ValueError saying what's wrong with it."""
+        if self.kind == "bool":
+            if not isinstance(value, bool):
+                raise ValueError(f"{self.label} is yes or no (true or false)")
+            return value
         if self.kind == "text":
             if not isinstance(value, str):
                 raise ValueError(f"{self.label} is text")
@@ -124,6 +134,9 @@ class ProducerSpec:
     redo_on_source_change: bool = True
     # Where it shows in lists (Settings → Processing); one without sorts last.
     order: int = 1000
+    # "module:function", called with (session) when a setting that doesn't
+    # remake changes (faces: the face groups are worked out again).
+    regroup: str = ""
 
     # --- How the scheduler runs it (none of these: made by a scan) ---
     kind: str = ""  # the job kind's name ("render" for analysis copies)
@@ -148,7 +161,13 @@ class ProducerSpec:
 
     @property
     def defaults(self) -> Mapping[str, Any]:
-        return {s.key: s.default for s in self.settings}
+        """The output-affecting settings' defaults: what lineage hashes."""
+        return {s.key: s.default for s in self.settings if s.remakes}
+
+    @property
+    def use_defaults(self) -> Mapping[str, Any]:
+        """The defaults of settings that don't remake (what's done with what's made)."""
+        return {s.key: s.default for s in self.settings if not s.remakes}
 
     def setting(self, key: str) -> Setting | None:
         return next((s for s in self.settings if s.key == key), None)

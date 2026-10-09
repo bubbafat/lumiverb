@@ -275,6 +275,15 @@ def _number(f: dict, raw: str) -> int | float:
     return int(number) if f["kind"] == "int" else number
 
 
+def _yes_no(f: dict, raw: str) -> bool:
+    """A yes-or-no setting as typed (true/false, on/off, yes/no), or exit 2."""
+    value = {"true": True, "on": True, "yes": True, "false": False, "off": False, "no": False}.get(raw.lower())
+    if value is None:
+        console.print(f"[red]{escape(f['label'])} is true or false.[/red]")
+        raise typer.Exit(2)
+    return value
+
+
 @producers_app.command("settings")
 def producers_settings(
     artifact: Annotated[str, typer.Argument(help="The producer, as the listing names it (e.g. transcript).")],
@@ -319,6 +328,8 @@ def producers_settings(
             body[key] = None
         elif f["kind"] == "text":
             body[key] = raw
+        elif f["kind"] == "bool":
+            body[key] = _yes_no(f, raw)
         else:
             body[key] = _number(f, raw)
     r = client.raw("PUT", f"/v1/producers/{artifact}/settings", json={"settings": body, "redo": yes})
@@ -331,5 +342,6 @@ def producers_settings(
     if r.status_code >= 400:
         console.print(f"[red]Couldn't change them: {escape(_error(r))}[/red]")
         raise typer.Exit(1)
-    now = r.json().get("settings", {})
+    saved = r.json()
+    now = {**{f["key"]: f.get("value") for f in saved.get("fields") or []}, **saved.get("settings", {})}
     console.print(", ".join(f"{escape(k)} = {escape(_shown(now.get(k)))}" for k in body))
