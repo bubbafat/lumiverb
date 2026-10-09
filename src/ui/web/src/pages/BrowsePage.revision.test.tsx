@@ -320,3 +320,73 @@ describe("BrowsePage revision polling", () => {
     expect(gridFetches.length - 1).toBeLessThanOrEqual(polls / 3 + 1);
   });
 });
+
+describe("BrowsePage folder tree", () => {
+  // Trips holds Paris; counts follow the server's revision, so a test can see
+  // which revision each listing was read at.
+  function serveFolders() {
+    api.listDirectories.mockImplementation(async (_lib: string, parent?: string) => {
+      if (!parent) return [{ name: "Trips", path: "Trips", asset_count: serverRevision * 10 }];
+      if (parent === "Trips") return [{ name: "Paris", path: "Trips/Paris", asset_count: serverRevision }];
+      return [];
+    });
+  }
+  const rootListings = () => api.listDirectories.mock.calls.filter(([, parent]) => !parent).length;
+
+  async function openTrips(view: ReturnType<typeof renderPage>) {
+    await advance(100);
+    // The page loads, then the tree mounts and loads its top level.
+    await advance(100);
+    const [trips] = view.getAllByRole("button", { name: /^Trips: / });
+    const expand = trips.parentElement!.parentElement!.querySelector<HTMLButtonElement>(
+      'button[aria-label="Expand"]',
+    )!;
+    act(() => expand.click());
+    await advance(100);
+  }
+
+  it("refreshes the counts of folders open in the tree when the library changes elsewhere", async () => {
+    serveFolders();
+    const view = renderPage();
+    await openTrips(view);
+    expect(view.getAllByRole("button", { name: "Paris: 1 clip, folder actions" }).length).toBeGreaterThan(0);
+
+    // Another tab archives a clip in Paris.
+    serverRevision = 2;
+    await advance(POLL_MS);
+    await advance(100);
+
+    expect(view.getAllByRole("button", { name: "Trips: 20 clips, folder actions" }).length).toBeGreaterThan(0);
+    expect(view.getAllByRole("button", { name: "Paris: 2 clips, folder actions" }).length).toBeGreaterThan(0);
+    expect(view.queryByRole("button", { name: "Paris: 1 clip, folder actions" })).toBeNull();
+  });
+
+  it("doesn't reload the folder tree on every poll during a long ingest, and ends up current", async () => {
+    serveFolders();
+    const view = renderPage();
+    await openTrips(view);
+    const before = rootListings();
+
+    const polls = 12;
+    for (let i = 0; i < polls; i++) {
+      serverRevision += 1;
+      await advance(POLL_MS);
+    }
+    // At most one per 30 seconds, as the grid: 4 in two minutes, not 12.
+    expect(rootListings() - before).toBeLessThanOrEqual(polls / 3);
+
+    await advance(30_000);
+    expect(
+      view.getAllByRole("button", { name: `Paris: ${serverRevision} clips, folder actions` }).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("leaves the folder tree alone while the revision stays put", async () => {
+    serveFolders();
+    const view = renderPage();
+    await openTrips(view);
+    const calls = api.listDirectories.mock.calls.length;
+    await advance(POLL_MS * 3);
+    expect(api.listDirectories.mock.calls.length).toBe(calls);
+  });
+});

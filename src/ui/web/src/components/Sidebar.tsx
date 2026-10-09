@@ -1,7 +1,7 @@
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { getApiKey, getLibraryRevision, listLibraries, listSavedViews, deleteSavedView, updateSavedView, logout } from "../api/client";
+import { getApiKey, listLibraries, listSavedViews, deleteSavedView, updateSavedView, logout } from "../api/client";
 import type { SavedViewItem } from "../api/client";
 import { useCanEdit } from "../lib/useCanEdit";
 import { useClipActions } from "../lib/useClipActions";
@@ -180,14 +180,6 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette }: Sidebar
     refetchInterval: 10_000,
   });
 
-  const revisionQuery = useQuery({
-    queryKey: ["library-revision", libraryId!],
-    queryFn: () => getLibraryRevision(libraryId!),
-    enabled: !!libraryId,
-    refetchInterval: 10_000,
-  });
-  const revision = revisionQuery.data?.revision ?? 0;
-
   const isLibrariesRootActive = location.pathname === "/";
 
   const items = useMemo(
@@ -352,7 +344,6 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette }: Sidebar
                       libraryId={libraryId}
                       activePath={activePath}
                       onNavigate={onNavigate}
-                      revision={revision}
                       onExcludeFolder={(path) =>
                         navigate(
                           `/libraries/${libraryId}/settings?tab=filters&exclude=${encodeURIComponent(path + "/**")}`,

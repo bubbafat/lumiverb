@@ -9,7 +9,7 @@ type Revision = number | string;
 
 // The revision each scope's page last refreshed to, per query client: it
 // outlives the page, because the cache a page comes back to can hold a newer
-// revision (the sidebar keeps polling) next to a grid fetched before it.
+// revision (another page polled it) next to a grid fetched before it.
 const shownByClient = new WeakMap<QueryClient, Map<string, Revision>>();
 
 function shownFor(client: QueryClient): Map<string, Revision> {

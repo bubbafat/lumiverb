@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { listDirectories } from "../api/client";
 import type { DirectoryNode } from "../api/types";
+import { directoriesKey } from "../lib/directoriesKey";
 
 export interface DirectoryTreeProps {
   libraryId: string;
   activePath: string | null;
   onNavigate: (path: string | null) => void;
-  revision?: number;
   onExcludeFolder?: (path: string) => void;
   /** Archive every clip under the folder; count is how many (subfolders included). */
   onArchiveFolder?: (path: string, count: number) => void;
@@ -16,17 +17,20 @@ export function DirectoryTree({
   libraryId,
   activePath,
   onNavigate,
-  revision,
   onExcludeFolder,
   onArchiveFolder,
 }: DirectoryTreeProps) {
   const hasMenu = Boolean(onExcludeFolder || onArchiveFolder);
-  const [rootNodes, setRootNodes] = useState<DirectoryNode[] | null>(null);
-  const [childrenCache, setChildrenCache] = useState<
-    Map<string, DirectoryNode[]>
-  >(new Map());
-  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
-  const [loadingPath, setLoadingPath] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  // Open folders belong to one library.
+  const [expanded, setExpanded] = useState<{ libraryId: string; paths: Set<string> }>({
+    libraryId,
+    paths: new Set(),
+  });
+  const expandedPaths = useMemo(
+    () => (expanded.libraryId === libraryId ? expanded.paths : new Set<string>()),
+    [expanded, libraryId],
+  );
   const [dropdownPath, setDropdownPath] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -49,80 +53,67 @@ export function DirectoryTree({
     };
   }, [dropdownPath]);
 
-  // Full reset when library changes
+  // Another library starts with every folder closed (the guard above covers
+  // the render before this runs).
   useEffect(() => {
-    let cancelled = false;
-    setRootNodes(null);
-    setChildrenCache(new Map());
-    setExpandedPaths(new Set());
-    setLoadingPath(null);
-
-    listDirectories(libraryId)
-      .then((nodes) => {
-        if (!cancelled) setRootNodes(nodes);
-      })
-      .catch(() => {
-        if (!cancelled) setRootNodes([]);
-      });
-
-    return () => {
-      cancelled = true;
-    };
+    setExpanded({ libraryId, paths: new Set() });
+    setDropdownPath(null);
   }, [libraryId]);
 
-  // Seamless refresh when revision changes (keep existing data visible)
-  useEffect(() => {
-    if (revision === undefined) return;
-    let cancelled = false;
+  // Each listing is a query, ["directories", libraryId, parent]: the page
+  // invalidates ["directories", libraryId] when the library changes (at most
+  // every 30 seconds while it keeps changing, see useRevisionRefresh), so the
+  // top level and every open folder refetch together, and a closed one
+  // refetches when it's opened again.
+  const rootQuery = useQuery({
+    queryKey: directoriesKey(libraryId, null),
+    queryFn: () => listDirectories(libraryId),
+  });
+  const rootNodes = rootQuery.data ?? (rootQuery.isError ? [] : null);
 
-    listDirectories(libraryId)
-      .then((nodes) => {
-        if (!cancelled) setRootNodes(nodes);
-      })
-      .catch(() => {
-        // keep existing data on error
-      });
-
-    return () => {
-      cancelled = true;
+  // The listings of open folders that are on screen: open, under open
+  // parents. One under a closed parent stays open for when the parent opens
+  // again, but isn't fetched (or refreshed) until then.
+  const openPaths = useMemo(
+    () =>
+      [...expandedPaths].filter((path) => {
+        const parts = path.split("/");
+        for (let i = 1; i < parts.length; i++) {
+          if (!expandedPaths.has(parts.slice(0, i).join("/"))) return false;
+        }
+        return true;
+      }),
+    [expandedPaths],
+  );
+  const childQueries = useQueries({
+    queries: openPaths.map((path) => ({
+      queryKey: directoriesKey(libraryId, path),
+      queryFn: () => listDirectories(libraryId, path),
+    })),
+  });
+  const childrenOf = (path: string) => {
+    const i = openPaths.indexOf(path);
+    if (i >= 0) {
+      const q = childQueries[i];
+      return { children: q.data ?? (q.isError ? [] : undefined), isLoading: q.isPending && !q.isError };
+    }
+    // A closed folder: what it held when last open, for its chevron.
+    return {
+      children: queryClient.getQueryData<DirectoryNode[]>(directoriesKey(libraryId, path)),
+      isLoading: false,
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [revision]);
+  };
 
-  const loadChildren = useCallback(
-    (path: string) => {
-      setLoadingPath(path);
-      listDirectories(libraryId, path)
-        .then((nodes) => {
-          setChildrenCache((prev) => new Map(prev).set(path, nodes));
-          setExpandedPaths((prev) => new Set(prev).add(path));
-        })
-        .catch(() => {
-          setChildrenCache((prev) => new Map(prev).set(path, []));
-        })
-        .finally(() => setLoadingPath(null));
-    },
-    [libraryId],
-  );
-
-  const toggleExpand = useCallback(
-    (path: string, e: React.MouseEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const cached = childrenCache.get(path);
-      if (cached !== undefined) {
-        setExpandedPaths((prev) => {
-          const next = new Set(prev);
-          if (next.has(path)) next.delete(path);
-          else next.add(path);
-          return next;
-        });
-      } else {
-        loadChildren(path);
-      }
-    },
-    [childrenCache, loadChildren],
-  );
+  const toggleExpand = useCallback((path: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setExpanded((prev) => {
+      const next = new Set(prev.libraryId === libraryId ? prev.paths : []);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return { libraryId, paths: next };
+    });
+  }, [libraryId]);
 
   const handleNodeClick = useCallback(
     (path: string) => {
@@ -133,11 +124,10 @@ export function DirectoryTree({
 
   const renderNodes = (nodes: DirectoryNode[], depth: number) => {
       return nodes.map((node) => {
-        const isExpanded = expandedPaths.has(node.path);
-        const children = childrenCache.get(node.path);
+        const { children, isLoading } = childrenOf(node.path);
         const hasFetched = children !== undefined;
+        const isExpanded = expandedPaths.has(node.path) && hasFetched;
         const showChevron = !hasFetched || children.length > 0;
-        const isLoading = loadingPath === node.path;
         const isActive = activePath === node.path;
         const isDropdownOpen = dropdownPath === node.path;
 
