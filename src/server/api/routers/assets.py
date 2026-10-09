@@ -1025,7 +1025,7 @@ def _back_in_search(background: BackgroundTasks, request: Request, session: Sess
 
         def run() -> None:
             for asset in with_transcripts:
-                index_transcript_segments(tenant_id, asset)
+                index_transcript_segments(session, tenant_id, asset)
 
         background.add_task(run)
 
@@ -1147,14 +1147,14 @@ def trash_asset(
     _refresh_grids(session, [asset_id])
 
 
-def reindex_restored_asset(request: Request, asset: Asset) -> None:
+def reindex_restored_asset(request: Request, session: Session, asset: Asset) -> None:
     """Put a restored asset's transcript segments back in search; the sync
     sweep re-indexes the asset and its scenes (restore queued them)."""
     tenant_id = getattr(request.state, "tenant_id", None)
     if tenant_id and asset.transcript_srt:
         from src.server.search.sync import index_transcript_segments
 
-        index_transcript_segments(tenant_id, asset)
+        index_transcript_segments(session, tenant_id, asset)
 
 
 _NOT_THE_TRASH = {
@@ -1639,7 +1639,7 @@ def _transcript_searched(session: Session, request: Request, asset: Asset, srt: 
 
             QuickwitClient().delete_tenant_transcript_documents(tid, asset.asset_id)
             if srt:
-                index_transcript_segments(tid, asset, srt)
+                index_transcript_segments(session, tid, asset, srt)
         except Exception as exc:  # noqa: BLE001 — search catches up on its own
             logger.warning("Transcript segment re-index failed for %s: %s", asset.asset_id, exc)
     LibraryRepository(session).bump_revision(asset.library_id)

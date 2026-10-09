@@ -254,24 +254,133 @@ def test_a_row_that_cant_be_checked_says_so_without_taking_the_page_down(env):
     assert row["state"] == "yellow" and "boom" in row["reason"]
 
 
-def test_a_missing_index_made_by_an_inline_sync_indexes_everything_again(env):
-    """Before, an inline sync made the missing index and nothing else: every
-    clip synced before it was deleted stayed out of search for good."""
+def _quickwit_that(*remade: str) -> MagicMock:
+    """A Quickwit whose indexes are there, but those named (assets, scenes, transcripts) made just now."""
+    qw = MagicMock()
+    qw.ensure_tenant_index.return_value = "assets" in remade
+    qw.ensure_tenant_scene_index.return_value = "scenes" in remade
+    qw.ensure_tenant_transcript_index.return_value = "transcripts" in remade
+    return qw
+
+
+def _sweep(env, qw: MagicMock) -> dict:
+    from src.server.search.sync import run_search_sync_sweep
+
+    with _db(env) as s, patch("src.server.search.sync._get_quickwit", return_value=qw):
+        return run_search_sync_sweep(s, tenant_id=env[4])
+
+
+def _synced(env, column: str, ids: list[str]) -> dict:
+    with _db(env) as s:
+        return dict(s.execute(text(f"SELECT asset_id, {column} IS NOT NULL FROM assets WHERE asset_id = ANY(:ids)"),
+                              {"ids": ids}).all())
+
+
+def _marks(env) -> set[str]:
+    with _db(env) as s:
+        return set(s.execute(text("SELECT key FROM system_metadata WHERE key LIKE 'search.reindex.%'")).scalars())
+
+
+def test_a_missing_index_made_by_an_inline_sync_is_refilled_by_the_sweep(env):
+    """The request that made the missing index only marks it; the sweep
+    clears the sync times and indexes every clip again. Before, the request
+    ran the reset itself."""
     from src.server.models.tenant import Asset
     from src.server.search.sync import try_sync_asset
 
     tenant_id = env[4]
     a = _ingest_with(env, "kept.jpg", _sha())
     b = _ingest_with(env, "edited.jpg", _sha())
+    _forget(env, "search.reindex.assets")
     with _db(env) as s:
         s.execute(text("UPDATE assets SET search_synced_at = now()"))
         s.commit()
-        qw = MagicMock()
-        qw.ensure_tenant_index.return_value = True  # it was missing: made just now
-        assert try_sync_asset(s, s.get(Asset, b), None, tenant_id=tenant_id, quickwit=qw)
-        synced = dict(s.execute(text("SELECT asset_id, search_synced_at IS NOT NULL FROM assets"
-                                     " WHERE asset_id = ANY(:ids)"), {"ids": [a, b]}).all())
-    assert synced == {a: False, b: True}  # the sweep puts a back in
+        assert try_sync_asset(s, s.get(Asset, b), None, tenant_id=tenant_id, quickwit=_quickwit_that("assets"))
+    assert _synced(env, "search_synced_at", [a, b]) == {a: True, b: True}  # the request reset nothing
+    assert "search.reindex.assets" in _marks(env)
+    qw = _quickwit_that()
+    _sweep(env, qw)
+    docs = {d["asset_id"] for c in qw.ingest_tenant_documents.call_args_list for d in c.args[1]}
+    assert {a, b} <= docs  # the sweep put a back in
+    assert "search.reindex.assets" not in _marks(env)
+
+
+def test_recreating_the_indexes_only_marks_them(env):
+    from src.server.config import get_settings as settings
+
+    client, headers, *_ = env
+    a = _ingest_with(env, "recreated.jpg", _sha())
+    with _db(env) as s:
+        s.execute(text("UPDATE assets SET search_synced_at = now()"))
+        s.commit()
+    with (patch.object(settings(), "quickwit_enabled", True),
+          patch("src.server.search.quickwit_client.QuickwitClient.recreate_tenant_indexes"),
+          patch("src.server.database.get_tenant_session", lambda tenant_id: _db(env))):
+        r = client.post("/v1/upkeep/recreate-search-indexes", headers=headers)
+    assert r.status_code == 200 and r.json()["tenants_processed"] == 1, r.text
+    assert _synced(env, "search_synced_at", [a]) == {a: True}
+    assert {"search.reindex.assets", "search.reindex.scenes", "search.reindex.transcripts"} <= _marks(env)
+    _sweep(env, _quickwit_that())
+    assert not _marks(env)
+
+
+SRT = "1\n00:00:00,000 --> 00:00:01,500\nthe ferry leaves at noon\n"
+
+
+def test_a_lost_transcript_index_is_refilled_by_the_sweep(env):
+    """Before, the sweep never indexed transcripts: one went back in only when submitted again."""
+    from src.server.models.tenant import Asset
+    from src.server.search.sync import index_transcript_segments
+
+    tenant_id = env[4]
+    kept = _ingest_with(env, "ferry.mov", _sha(), media_type="video")
+    resent = _ingest_with(env, "dock.mov", _sha(), media_type="video")
+    _forget(env, "search.reindex.transcripts")
+    with _db(env) as s:
+        s.execute(text("UPDATE assets SET transcript_srt = :t, transcribed_at = now() - interval '1 hour',"
+                       " transcript_synced_at = now() WHERE asset_id = ANY(:ids)"),
+                  {"t": SRT, "ids": [kept, resent]})
+        s.commit()
+        qw = _quickwit_that("transcripts")
+        qw.enabled = True
+        with patch("src.server.search.quickwit_client.QuickwitClient", return_value=qw):
+            index_transcript_segments(s, tenant_id, s.get(Asset, resent))  # finds the index gone and makes it
+    assert _synced(env, "transcript_synced_at", [kept, resent]) == {kept: True, resent: True}
+    assert "search.reindex.transcripts" in _marks(env)
+    qw = _quickwit_that()
+    result = _sweep(env, qw)
+    docs = [d for c in qw.ingest_tenant_transcript_documents.call_args_list for d in c.args[1]]
+    assert {kept, resent} <= {d["asset_id"] for d in docs} and result["transcripts_synced"] >= 2
+    assert any(d["asset_id"] == kept and d["text"] == "the ferry leaves at noon" for d in docs)
+    with _db(env) as s:  # synced again, so the next sweep leaves them
+        assert s.execute(text("SELECT count(*) FROM assets WHERE asset_id = ANY(:ids)"
+                              " AND transcript_synced_at > transcribed_at"), {"ids": [kept, resent]}).scalar() == 2
+    qw = _quickwit_that("transcripts")  # the sweep finds it gone itself
+    _sweep(env, qw)
+    docs = {d["asset_id"] for c in qw.ingest_tenant_transcript_documents.call_args_list for d in c.args[1]}
+    assert {kept, resent} <= docs
+
+
+def test_a_search_with_the_clip_search_failing_is_noted_and_keeps_its_hits(env, quickwit_on):
+    """Before, a search whose clip search failed but whose scenes answered noted nothing."""
+    from src.server.search.quickwit_client import QuickwitClient
+
+    client, headers, library_id, *_ = env
+    clip = _ingest_with(env, "harbour.mov", _sha(), media_type="video")
+    _forget(env, "search.fallback", "search.failure")
+    scene = {"asset_id": clip, "score": 1.0, "description": "a harbour", "start_ms": 0, "end_ms": 1000}
+    with (patch.object(QuickwitClient, "search_tenant", side_effect=RuntimeError("index gone")),
+          patch.object(QuickwitClient, "search_tenant_scenes", return_value=[scene]),
+          patch.object(QuickwitClient, "search_tenant_transcripts", return_value=[])):
+        r = client.get("/v1/query", params=[("f", f"library:{library_id}"), ("f", "query:harbour")],
+                       headers=headers)
+    assert r.status_code == 200 and r.json()["search_source"] == "quickwit", r.text
+    assert clip in [item["asset_id"] for item in r.json()["items"]]
+    with _db(env) as s:
+        noted = json.loads(s.execute(text("SELECT value FROM system_metadata WHERE key = 'search.failure'")).scalar())
+    assert "only scenes and transcripts" in noted["reason"]
+    assert _rows(env)["search"]["state"] == "red"
+    _forget(env, "search.failure")
 
 
 def test_noting_is_throttled_per_kind(env):

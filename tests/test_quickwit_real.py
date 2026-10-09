@@ -23,6 +23,7 @@ import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 import requests
@@ -238,7 +239,7 @@ def test_transcript_document_is_found(qw: QuickwitClient) -> None:
     asset = _asset(library_id, "video", rel_path="Clips/ferry.mov", transcript_language="en")
 
     _make_indexes(qw, tenant_id)
-    index_transcript_segments(tenant_id, asset, SRT)  # builds and ingests
+    index_transcript_segments(MagicMock(), tenant_id, asset, SRT)  # builds and ingests
 
     scores, contexts, source = _search(tenant_id, library_id, "cormorants")
     assert source == "quickwit"

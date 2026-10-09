@@ -197,7 +197,7 @@ def search_row(*, enabled: bool, fallback_on: bool, quickwit: str | None, quickw
         row.state = YELLOW
         if quickwit == "missing" and enabled:
             row.reason = (f"{why}: search uses Postgres (simpler matching) until upkeep remakes it, "
-                          "within 5 minutes, and indexes clips and scenes again.")
+                          "within 5 minutes, and indexes clips, scenes and transcripts again.")
         else:
             detail = f" ({quickwit_error})" if quickwit_error and enabled and quickwit == "down" else ""
             row.reason = f"{why}{detail}: search uses Postgres (simpler matching)."

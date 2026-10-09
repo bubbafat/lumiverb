@@ -1,4 +1,4 @@
-"""Search sync: build Quickwit documents and sync assets/scenes.
+"""Search sync: build Quickwit documents and sync assets, scenes and transcripts.
 
 This module provides:
 - Document builders (shared between inline sync and maintenance sweep)
@@ -20,6 +20,46 @@ from src.server.models.tenant import Asset, AssetMetadata, VideoScene
 from src.server.search.quickwit_client import QuickwitClient
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Reindex after an index was remade
+# ---------------------------------------------------------------------------
+
+# A remade index (it was missing, or its schema changed) holds nothing, so
+# everything goes in again. Whatever remakes one only records it here, in
+# system_metadata; the upkeep sweep clears the sync times and reindexes.
+REINDEX_RESETS = {
+    "assets": "UPDATE assets SET search_synced_at = NULL",
+    "scenes": "UPDATE video_scenes SET search_synced_at = NULL",
+    "transcripts": "UPDATE assets SET transcript_synced_at = NULL",
+}
+_REINDEX_KEY = "search.reindex."
+
+
+def mark_reindex(session: Session, kinds: list[str]) -> None:
+    """Record that these indexes ("assets", "scenes", "transcripts") need
+    everything again; the next sweep does it. Commits."""
+    for kind in kinds:
+        if kind not in REINDEX_RESETS:
+            raise ValueError(f"Unknown search index kind: {kind!r}")
+        session.execute(text(
+            "INSERT INTO system_metadata (key, value, updated_at) VALUES (:k, 'needed', now())"
+            " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"),
+            {"k": _REINDEX_KEY + kind})
+    session.commit()
+
+
+def reset_marked(session: Session) -> list[str]:
+    """Clear the sync times of the indexes marked for a reindex, and the
+    marks, in one transaction. Returns the kinds reset."""
+    keys = session.execute(text("DELETE FROM system_metadata WHERE key = ANY(:keys) RETURNING key"),
+                           {"keys": [_REINDEX_KEY + k for k in REINDEX_RESETS]}).scalars().all()
+    kinds = sorted(k.removeprefix(_REINDEX_KEY) for k in keys)
+    for kind in kinds:
+        session.execute(text(REINDEX_RESETS[kind]))
+    session.commit()
+    return kinds
 
 
 # ---------------------------------------------------------------------------
@@ -96,41 +136,66 @@ def build_scene_document(scene: VideoScene, asset: Asset) -> dict:
 # Inline sync (best-effort, never raises)
 # ---------------------------------------------------------------------------
 
-def index_transcript_segments(tenant_id: str, asset: Asset, srt: str | None = None) -> None:
-    """Replace an asset's documents in the transcript-segment index.
-
-    The sync sweep never touches this index, so it's called wherever the
-    segments change or come back: when a transcript is submitted, and when
-    a trashed asset is restored (trashing deletes them). Best effort.
-    """
-    from src.server.search import quickwit_client as qwc
+def _transcript_documents(asset: Asset, srt: str | None) -> list[dict]:
+    """The transcript index's documents for a clip: one per SRT segment."""
     from src.server.srt import parse_srt_segments
 
+    now = int(utcnow().timestamp())
+    return [
+        {
+            "id": f"{asset.asset_id}_{seg.start_ms}_{seg.end_ms}",
+            "asset_id": asset.asset_id,
+            "library_id": asset.library_id,
+            "rel_path": asset.rel_path,
+            "media_type": asset.media_type,
+            "start_ms": seg.start_ms,
+            "end_ms": seg.end_ms,
+            "text": seg.text,
+            "language": asset.transcript_language or "",
+            "indexed_at": now,
+        }
+        for seg in (parse_srt_segments(srt) if srt else [])
+    ]
+
+
+def index_transcript_segments(session: Session, tenant_id: str, asset: Asset, srt: str | None = None) -> None:
+    """Replace an asset's documents in the transcript-segment index.
+
+    Called wherever the segments change or come back: when a transcript is
+    submitted, and when a trashed asset is restored (trashing deletes them).
+    Best effort: on failure the clip's transcript_synced_at is cleared and
+    the sync sweep indexes it. That's written in its own transaction on the
+    session's database (the caller's isn't touched).
+    """
+    from src.server.search import quickwit_client as qwc
+
     srt = srt if srt is not None else asset.transcript_srt
+    started = utcnow()
+    synced: datetime | None = None
+    remade = False
     try:
         qw = qwc.QuickwitClient()
-        qw.ensure_tenant_transcript_index(tenant_id)
+        if not qw.enabled:
+            return
+        remade = qw.ensure_tenant_transcript_index(tenant_id)
         qw.delete_tenant_transcript_documents(tenant_id, asset.asset_id)
-        segments = parse_srt_segments(srt) if srt else []
-        if segments:
-            now = int(utcnow().timestamp())
-            qw.ingest_tenant_transcript_documents(tenant_id, [
-                {
-                    "id": f"{asset.asset_id}_{seg.start_ms}_{seg.end_ms}",
-                    "asset_id": asset.asset_id,
-                    "library_id": asset.library_id,
-                    "rel_path": asset.rel_path,
-                    "media_type": asset.media_type,
-                    "start_ms": seg.start_ms,
-                    "end_ms": seg.end_ms,
-                    "text": seg.text,
-                    "language": asset.transcript_language or "",
-                    "indexed_at": now,
-                }
-                for seg in segments
-            ])
+        docs = _transcript_documents(asset, srt)
+        if docs:
+            qw.ingest_tenant_transcript_documents(tenant_id, docs)
+        synced = started
     except Exception as exc:
         logger.warning("Transcript segment indexing failed for %s: %s", asset.asset_id, exc)
+    try:
+        with Session(session.get_bind()) as own:
+            if remade:
+                mark_reindex(own, ["transcripts"])
+            # Never waits long on a lock the caller holds on the row.
+            own.execute(text("SET LOCAL lock_timeout = '2s'"))
+            own.execute(text("UPDATE assets SET transcript_synced_at = :t WHERE asset_id = :a"),
+                        {"t": synced, "a": asset.asset_id})
+            own.commit()
+    except Exception as exc:
+        logger.warning("Couldn't record %s's transcript sync: %s", asset.asset_id, exc)
 
 
 def _get_quickwit() -> QuickwitClient | None:
@@ -161,9 +226,8 @@ def try_sync_asset(
     try:
         if tenant_id and qw.ensure_tenant_index(tenant_id):
             # Made just now (it was missing): every clip goes in again, by the sweep.
-            logger.info("Quickwit asset index made for %s — forcing full re-sync", tenant_id)
-            session.execute(text("UPDATE assets SET search_synced_at = NULL"))
-            session.commit()
+            logger.info("Quickwit asset index made for %s — the sweep reindexes every clip", tenant_id)
+            mark_reindex(session, ["assets"])
         from src.server.repository.corrections import CorrectionsRepository
         from src.server.repository.tenant import AssetOcrRepository
 
@@ -194,9 +258,8 @@ def try_sync_scene(
 
     try:
         if tenant_id and qw.ensure_tenant_scene_index(tenant_id):
-            logger.info("Quickwit scene index made for %s — forcing full scene re-sync", tenant_id)
-            session.execute(text("UPDATE video_scenes SET search_synced_at = NULL"))
-            session.commit()
+            logger.info("Quickwit scene index made for %s — the sweep reindexes every scene", tenant_id)
+            mark_reindex(session, ["scenes"])
         doc = build_scene_document(scene, asset)
         if tenant_id:
             qw.ingest_tenant_scene_documents(tenant_id, [doc])
@@ -226,16 +289,36 @@ STALE_SEARCH = (
 
 
 def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dict:
-    """Find and sync all assets/scenes with stale or missing search_synced_at.
+    """Find and sync all assets, scenes and transcripts with stale or missing sync times.
 
     Uses per-tenant indexes. tenant_id is required for Quickwit sync.
-    Returns {"synced": N, "failed": M, "scenes_synced": S, "scenes_failed": F}.
+    First makes any missing index, and clears the sync times of every index
+    marked for a reindex (mark_reindex), so what a lost index held goes back.
+    Returns {"synced", "failed", "scenes_synced", "scenes_failed",
+    "transcripts_synced", "transcripts_failed"}.
     """
+    result = {"synced": 0, "failed": 0, "scenes_synced": 0, "scenes_failed": 0,
+              "transcripts_synced": 0, "transcripts_failed": 0}
     qw = _get_quickwit()
     if qw is None or not tenant_id:
-        return {"synced": 0, "failed": 0, "scenes_synced": 0, "scenes_failed": 0}
+        return result
 
     from src.server.repository.tenant import AssetMetadataRepository
+
+    # Every index is made here even with nothing to put in it yet (searches
+    # on a missing transcript index fail).
+    ready: set[str] = set()
+    for kind, ensure in (("assets", qw.ensure_tenant_index), ("scenes", qw.ensure_tenant_scene_index),
+                         ("transcripts", qw.ensure_tenant_transcript_index)):
+        try:
+            if ensure(tenant_id):
+                logger.info("Quickwit %s index made for %s — reindexing all of it", kind, tenant_id)
+                mark_reindex(session, [kind])
+            ready.add(kind)
+        except Exception as exc:
+            logger.warning("Cannot ensure tenant Quickwit %s index for %s: %s", kind, tenant_id, exc)
+    for kind in reset_marked(session):
+        logger.info("Search sync times cleared for %s's %s: reindexing", tenant_id, kind)
 
     # --- Asset sync ---
     rows = session.execute(text(f"""
@@ -249,48 +332,11 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
         ORDER BY a.library_id, a.asset_id
         LIMIT 1000
     """)).fetchall()
+    if "assets" not in ready:
+        result["failed"] += len(rows)
+        rows = []
 
-    synced = 0
-    failed = 0
     meta_repo = AssetMetadataRepository(session)
-
-    try:
-        index_recreated = qw.ensure_tenant_index(tenant_id)
-        # Eagerly ensure the transcript index exists even when the
-        # tenant has no video transcripts yet. Without this the
-        # search endpoint's per-query transcript search hits a
-        # non-existent index on every single search and Quickwit
-        # returns 400 — which we catch and log, but that's dozens
-        # of warning-level log lines per active user per day.
-        # Cheap idempotent call; creates the index from the schema
-        # if missing, no-op if already there.
-        try:
-            qw.ensure_tenant_transcript_index(tenant_id)
-        except Exception as exc:
-            logger.warning(
-                "Could not ensure tenant transcript index for %s: %s",
-                tenant_id, exc,
-            )
-        if index_recreated:
-            logger.info("Quickwit asset index recreated for %s — forcing full re-sync", tenant_id)
-            session.execute(text("UPDATE assets SET search_synced_at = NULL"))
-            session.commit()
-            # Re-query with cleared timestamps
-            rows = session.execute(text(f"""
-                SELECT a.asset_id, a.library_id, COALESCE(o.text, '') AS ocr_text,
-                       c.description AS c_description, c.ocr_text AS c_ocr_text,
-                       c.asset_id AS c_asset_id, c.tags AS c_tags
-                FROM active_assets a
-                LEFT JOIN asset_ocr o ON o.asset_id = a.asset_id
-                LEFT JOIN asset_corrections c ON c.asset_id = a.asset_id
-                WHERE {STALE_SEARCH}
-                ORDER BY a.library_id, a.asset_id
-                LIMIT 1000
-            """)).fetchall()
-    except Exception as exc:
-        logger.warning("Cannot ensure tenant Quickwit index for %s: %s", tenant_id, exc)
-        return {"synced": 0, "failed": len(rows), "scenes_synced": 0, "scenes_failed": 0}
-
     all_docs: list[dict] = []
     all_asset_ids: list[str] = []
 
@@ -319,11 +365,11 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
                 {"now": now, "ids": all_asset_ids},
             )
             session.commit()
-            synced += len(all_asset_ids)
+            result["synced"] += len(all_asset_ids)
         except Exception as exc:
             logger.warning("Quickwit tenant batch ingest failed for %s: %s", tenant_id, exc)
             session.rollback()
-            failed += len(all_docs)
+            result["failed"] += len(all_docs)
 
     # --- Scene sync ---
     scene_rows = session.execute(text("""
@@ -335,28 +381,9 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
         ORDER BY a.library_id, vs.scene_id
         LIMIT 1000
     """)).fetchall()
-
-    scenes_synced = 0
-    scenes_failed = 0
-
-    try:
-        scene_index_recreated = qw.ensure_tenant_scene_index(tenant_id)
-        if scene_index_recreated:
-            logger.info("Quickwit scene index recreated for %s — forcing full scene re-sync", tenant_id)
-            session.execute(text("UPDATE video_scenes SET search_synced_at = NULL"))
-            session.commit()
-            scene_rows = session.execute(text("""
-                SELECT vs.scene_id, a.asset_id, a.library_id
-                FROM video_scenes vs
-                JOIN active_assets a ON a.asset_id = vs.asset_id
-                WHERE vs.description IS NOT NULL
-                  AND (vs.search_synced_at IS NULL OR vs.search_synced_at < vs.created_at)
-                ORDER BY a.library_id, vs.scene_id
-                LIMIT 1000
-            """)).fetchall()
-    except Exception as exc:
-        logger.warning("Cannot ensure tenant scene index for %s: %s", tenant_id, exc)
-        return {"synced": synced, "failed": failed, "scenes_synced": 0, "scenes_failed": len(scene_rows)}
+    if "scenes" not in ready:
+        result["scenes_failed"] += len(scene_rows)
+        scene_rows = []
 
     all_scene_docs: list[dict] = []
     all_scene_ids: list[str] = []
@@ -386,15 +413,44 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
                 {"now": now, "ids": all_scene_ids},
             )
             session.commit()
-            scenes_synced += len(all_scene_ids)
+            result["scenes_synced"] += len(all_scene_ids)
         except Exception as exc:
             logger.warning("Quickwit tenant scene batch ingest failed for %s: %s", tenant_id, exc)
             session.rollback()
-            scenes_failed += len(all_scene_docs)
+            result["scenes_failed"] += len(all_scene_docs)
 
-    return {
-        "synced": synced,
-        "failed": failed,
-        "scenes_synced": scenes_synced,
-        "scenes_failed": scenes_failed,
-    }
+    # --- Transcript sync ---
+    # Synced as of when this began: a transcript replaced meanwhile is newer, and goes in next time.
+    started = utcnow()
+    transcript_ids = list(session.execute(text("""
+        SELECT a.asset_id FROM active_assets a
+        WHERE a.transcript_srt IS NOT NULL
+          AND (a.transcript_synced_at IS NULL OR a.transcript_synced_at < a.transcribed_at)
+        ORDER BY a.asset_id
+        LIMIT 200
+    """)).scalars().all())
+    if "transcripts" not in ready:
+        result["transcripts_failed"] += len(transcript_ids)
+        transcript_ids = []
+
+    if transcript_ids:
+        try:
+            docs: list[dict] = []
+            for asset_id in transcript_ids:
+                asset = session.get(Asset, asset_id)
+                if asset is not None:
+                    docs.extend(_transcript_documents(asset, asset.transcript_srt))
+            qw.delete_transcript_index_documents_by_asset_ids(tenant_id, transcript_ids)
+            qw.ingest_tenant_transcript_documents(tenant_id, docs)
+            session.execute(
+                text("UPDATE assets SET transcript_synced_at = :t WHERE asset_id = ANY(:ids)"),
+                {"t": started, "ids": transcript_ids},
+            )
+            session.commit()
+            result["transcripts_synced"] += len(transcript_ids)
+        except Exception as exc:
+            logger.warning("Quickwit tenant transcript batch ingest failed for %s: %s", tenant_id, exc)
+            session.rollback()
+            result["transcripts_failed"] += len(transcript_ids)
+
+    return result
