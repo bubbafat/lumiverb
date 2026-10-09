@@ -674,6 +674,67 @@ def test_until_what_was_paused_can_be_read_nothing_starts() -> None:
 
 
 @pytest.mark.fast
+def test_a_pause_that_came_and_went_while_listing_doesnt_hold_the_kind_back() -> None:
+    # Paused after this refill read what's paused, resumed before the next:
+    # the listing said "paused", and the kind is asked for again at once,
+    # not after the wait an empty answer gets.
+    rec = Recorder()
+    answers = [None, [_item("a")]]
+
+    def candidates(tenant_id, kind, libraries, skip=()):
+        return answers.pop(0) if kind.name == "vision" and answers else []
+
+    s = _scheduler({"t1": FakeAccount()}, {}, rec)
+    s._candidates = candidates
+    s.tick()
+    s.tick()
+    _settle(s)
+    assert [ids for _, kind, ids in rec.ran if kind == "vision"] == [("a",)]
+
+
+@pytest.mark.fast
+def test_a_pause_stops_jobs_starting_while_a_slow_refill_is_still_running() -> None:
+    # The refill can take a while (a machine check that times out); what's
+    # paused is read on its own, every second or so, and the dispatcher
+    # hands out nothing of it from then on.
+    rec = Recorder()
+    rec.hold.clear()
+    held: set = set()
+    slow = threading.Event()
+    slow.set()
+    acct = FakeAccount(vision=1)
+    acct.refresh = lambda: slow.wait(10)
+    s = Scheduler(lambda: {"t1": acct}, capacity={"scan": 1, "probe": 2, "render": 1, "gpu": 1, "scenes": 1},
+                  candidates=lambda t, kind, libs, skip=(): [_item("a"), _item("b", "2026-10-02")]
+                  if kind.name == "vision" else [],
+                  runners=rec.all(), scan=MagicMock(), paused=lambda t: set(), on_hold=lambda t: set(held),
+                  retry_requested=lambda t: None, write_status=lambda t, st: None)
+    deadline = time.monotonic() + 5
+    while s.running == 0 and time.monotonic() < deadline:  # a in hand, b waiting
+        s.tick()
+        time.sleep(0.02)
+    slow.clear()
+    refreshing = threading.Event()
+    acct.refresh = lambda: (refreshing.set(), slow.wait(10))
+    while not refreshing.is_set() and time.monotonic() < deadline:  # a refill, past its look at what's paused, hangs
+        s.tick()
+        time.sleep(0.02)
+    held.add("vision")
+    deadline = time.monotonic() + 5
+    while s.dispatcher.status("t1")["waiting"] and time.monotonic() < deadline:
+        s.tick()
+        time.sleep(0.05)
+    rec.hold.set()
+    for _ in range(20):
+        s.tick()
+        s.collect(timeout=0.05)
+    slow.set()
+    _settle(s)
+    s.stop(grace=1)
+    assert [ids for _, kind, ids in rec.ran if kind == "vision"] == [("a",)]
+
+
+@pytest.mark.fast
 def test_asking_to_try_failing_clips_again_lets_go_of_the_hour() -> None:
     # The scheduler keeps a clip that waited without saying why for an hour;
     # someone asking to try again shouldn't wait that out.

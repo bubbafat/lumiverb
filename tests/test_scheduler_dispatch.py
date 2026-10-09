@@ -308,3 +308,29 @@ def test_forgetting_an_accounts_taken_clips() -> None:
     job = d.take("vision")
     assert (job.tenant_id, job.items[0]["asset_id"]) == ("t1", "a")
     assert d.take("vision") is None  # t2's still waits its hour
+
+
+@pytest.mark.fast
+def test_clearing_a_kind_asks_the_database_again_at_once_when_it_can_be() -> None:
+    d = _d()
+    d.offer("t1", "vision", [])  # nothing due: not asked again for a while
+    assert not d.wanted("t1", "vision")
+    d.clear("t1", "vision")
+    assert d.wanted("t1", "vision")
+
+
+@pytest.mark.fast
+def test_a_held_kind_hands_out_nothing_and_takes_no_offer_until_let_go() -> None:
+    # Pausing (Robert, Oct 9): what was waiting is let go at once, and an
+    # answer that was on its way when the pause came isn't kept.
+    d = _d({"vision": 2})
+    d.offer("t1", "vision", [_item("a", "2026-10-01"), _item("b", "2026-10-02")])
+    d.offer("t2", "vision", [_item("c", "2026-10-03")])
+    d.hold("t1", {"vision"})
+    assert d.status("t1")["waiting"] == {}
+    d.offer("t1", "vision", [_item("a", "2026-10-01")])
+    assert [j.tenant_id for j in (d.take("vision"), d.take("vision")) if j] == ["t2"]  # the other account goes on
+    d.hold("t1", set())
+    assert d.wanted("t1", "vision")
+    d.offer("t1", "vision", [_item("a", "2026-10-01")])
+    assert d.status("t1")["waiting"] == {"vision": 1}
