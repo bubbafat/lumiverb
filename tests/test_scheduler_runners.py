@@ -287,10 +287,14 @@ def test_a_scan_look_notes_which_libraries_can_be_reached(acct: FakeAccount, mon
     acct.set_libraries = MagicMock()
     acct.set_reachable = MagicMock()
     acct.scan_state = MagicMock()
-    monkeypatch.setattr("src.server.scheduler.scans.scan_pass", lambda *a, **kw: {"lib_1": Path("/mnt/x")})
+    def scan_pass(*a, on_roots, **kw):
+        on_roots({"lib_1": Path("/mnt/x")})  # before any scan
+        return {"lib_1": Path("/mnt/x")}
+
+    monkeypatch.setattr("src.server.scheduler.scans.scan_pass", scan_pass)
     runners.scan(acct, _job("scan", "scan:t1"), now=123.0)
     acct.set_libraries.assert_called_once_with(libs)
-    acct.set_reachable.assert_called_once_with({"lib_1": Path("/mnt/x")})
+    assert acct.set_reachable.call_args_list[0].args == ({"lib_1": Path("/mnt/x")},)
 
 
 

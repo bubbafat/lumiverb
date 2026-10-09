@@ -167,9 +167,15 @@ def test_storage_work_only_in_libraries_reachable_at_the_last_look() -> None:
 def test_nothing_is_asked_where_no_library_can_be_used() -> None:
     rec = Recorder()
     asked: list = []
-    s = _scheduler({"t1": FakeAccount(reachable=())}, {}, rec, asked=asked)
+    acct = FakeAccount(reachable=())
+    s = _scheduler({"t1": acct}, {}, rec, asked=asked)
     s.tick()
     assert not any(kind in ("probe", "render") for _, kind, _ in asked)
+    # Review round 2: that wasn't an empty answer to wait on; once the
+    # storage is there, it's asked at once.
+    acct.reachable = ("lib_1",)
+    s.tick()
+    assert ("t1", "probe", ("lib_1",)) in asked
 
 
 @pytest.mark.fast
@@ -283,9 +289,9 @@ def test_importing_the_entry_point_starts_nothing() -> None:
     import runpy
     from unittest.mock import patch
 
-    with patch("src.server.scheduler.service.main") as main:
+    with patch("src.server.scheduler.service.entry") as entry:
         runpy.run_module("src.server.scheduler.__main__", run_name="__mp_main__")
-    main.assert_not_called()
+    entry.assert_not_called()
 
 
 @pytest.mark.fast
@@ -494,3 +500,74 @@ def test_the_log_has_no_line_per_request(monkeypatch: pytest.MonkeyPatch) -> Non
     finally:
         for name, level in levels.items():
             logging.getLogger(name).setLevel(level)
+
+
+@pytest.mark.fast
+def test_a_listing_that_failed_is_tried_again_soon(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Review round 2: it waited the full five minutes.
+    from src.server.scheduler import service
+
+    clock = Clock()
+    tries: list[float] = []
+
+    def failing_list(self) -> None:
+        tries.append(clock.now)
+        raise ConnectionError("the control plane isn't answering")
+
+    monkeypatch.setattr(service.Accounts, "_list", failing_list)
+    accounts = service.Accounts(MagicMock(), url="http://api", clock=clock)
+    assert accounts() == {}
+    clock.now += service.Accounts.LIST_RETRY_SEC + 1
+    accounts()
+    assert len(tries) == 2
+
+
+@pytest.mark.fast
+def test_failures_are_sent_off_the_dispatching_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Review round 2: a slow server held up every tick (up to 120 s).
+    from src.server.scheduler import service
+
+    monkeypatch.setattr(service, "FLUSH_EVERY_SEC", 0)
+    gate = threading.Event()
+    acct = FakeAccount()
+    acct.failures.flush.side_effect = lambda: gate.wait(5)
+    s = Scheduler(lambda: {"t1": acct}, capacity={"scan": 0}, candidates=lambda *a, **kw: [],
+                  runners=Recorder().all(), scan=MagicMock())
+    started = time.monotonic()
+    s.tick()
+    assert time.monotonic() - started < 1
+    gate.set()
+    s.stop()
+
+
+@pytest.mark.fast
+def test_losing_the_database_lock_stops_the_scheduler() -> None:
+    # Review round 2: after a Postgres restart the lock is gone; a second
+    # scheduler could take it. This one stops (systemd starts it again).
+    rec = Recorder()
+    s = _scheduler({"t1": FakeAccount()}, {}, rec)
+    stop = threading.Event()
+    checks: list[int] = []
+
+    def holds() -> bool:
+        checks.append(1)
+        return len(checks) < 2
+
+    t = threading.Thread(target=run, kwargs={"stop": stop, "scheduler": s, "tick_sec": 0.01, "holds_lock": holds,
+                                             "lock_check_sec": 0})
+    t.start()
+    t.join(5)
+    assert not t.is_alive() and stop.is_set() and len(checks) == 2
+
+
+@pytest.mark.fast
+def test_the_program_exits_without_waiting_on_jobs_past_their_grace(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Review round 2: job threads still running (a render past the 25 s
+    # grace) were joined at exit, until systemd's SIGKILL at 40 s.
+    from src.server.scheduler import service
+
+    exited: list[int] = []
+    monkeypatch.setattr(service, "main", lambda: 3)
+    monkeypatch.setattr(service.os, "_exit", exited.append)
+    service.entry()
+    assert exited == [3]

@@ -157,6 +157,19 @@ def test_reported_changes_are_scanned_then_acknowledged(das: Path) -> None:
 
 
 @pytest.mark.fast
+def test_where_each_librarys_storage_is_is_said_before_any_scan(das: Path) -> None:
+    # Review round 2: probes and renders waited for the whole first pass (a
+    # full scan of a big library) to learn where the storage is.
+    seen: list[dict] = []
+    scan = MagicMock(side_effect=lambda *a, **kw: (seen.append(dict(said)), ScanStats())[1])
+    said: dict = {}
+    server = FakeServer([LIB, {"library_id": "lib_2", "name": "Gone", "root_path": "/nowhere"}],
+                        pending={"lib_1": [CHANGE]})
+    _pass(server, scan=scan, on_roots=said.update)
+    assert seen and seen[0] == {"lib_1": das / "Footage", "lib_2": None}
+
+
+@pytest.mark.fast
 def test_a_folder_named_in_nfd_on_disk_is_scanned_itself(das: Path) -> None:
     import unicodedata
 

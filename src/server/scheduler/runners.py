@@ -397,7 +397,7 @@ def scan(acct: Account, job: Job, *, now: float) -> None:
 
     libraries = acct.client.get("/v1/libraries").json()
     acct.set_libraries(libraries)
-    acct.set_reachable(scan_pass(acct.client, libraries, acct.scan_state, now=now))
+    acct.set_reachable(scan_pass(acct.client, libraries, acct.scan_state, now=now, on_roots=acct.set_reachable))
 
 
 RUNNERS: dict[str, Callable[[Account, Job], Outcome]] = {
