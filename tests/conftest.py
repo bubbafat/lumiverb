@@ -21,6 +21,7 @@ Parallel: `pytest -n auto` (pytest-xdist). Each module's tests stay together
 on one worker (`--dist loadfile` unless you pick another `--dist`).
 """
 
+import contextlib
 import itertools
 import os
 import subprocess
@@ -56,7 +57,7 @@ import pytest
 import testcontainers.postgres
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine import URL, make_url
 
 # The Postgres image tests run against. Keep it the version production runs
 # (scripts/deploy-api.sh); LUMIVERB_TEST_PG_IMAGE overrides it to try another.
@@ -135,14 +136,25 @@ class _Server:
             tmpfs={"/var/lib/postgresql": "rw"},
             shm_size="1g",
         )
-        container.start()
-        host, port = container.get_container_host_ip(), int(container.get_exposed_port(5432))
+        try:
+            container.start()
+            host, port = container.get_container_host_ip(), int(container.get_exposed_port(5432))
+        except Exception:
+            with contextlib.suppress(Exception):
+                container.stop()
+            raise
         return cls(host, port, container.username, container.password, container)
 
     def url(self, dbname: str, driver: str | None = "psycopg2") -> str:
         p = self.params
-        dialect = f"postgresql+{driver}" if driver else "postgresql"
-        return f"{dialect}://{p['user']}:{p['password']}@{p['host']}:{p['port']}/{dbname}"
+        return URL.create(
+            f"postgresql+{driver}" if driver else "postgresql",
+            username=p["user"],
+            password=p["password"],
+            host=p["host"],
+            port=p["port"],
+            database=dbname,
+        ).render_as_string(hide_password=False)
 
     def connect(self, dbname: str = "postgres"):
         conn = psycopg2.connect(dbname=dbname, **self.params)
@@ -160,15 +172,22 @@ class _Server:
 
 
 _server: _Server | None = None
+_server_error: Exception | None = None  # why it didn't start, so later modules don't wait again
 _handed_out: set[str] = set()  # the empty databases this process made
 _templates: set[str] = set()  # templates known to be built
 _current_item: pytest.Item | None = None
 
 
 def _the_server() -> _Server:
-    global _server
+    global _server, _server_error
     if _server is None:
-        _server = _Server.start()
+        if _server_error is not None:
+            raise RuntimeError("the tests' Postgres didn't start") from _server_error
+        try:
+            _server = _Server.start()
+        except Exception as e:
+            _server_error = e
+            raise
     return _server
 
 
@@ -178,7 +197,12 @@ class _Database:
 
     _numbers = itertools.count(1)
 
-    def __init__(self, image: str = PG_IMAGE, *args: object, driver: str | None = "psycopg2", **kwargs: object) -> None:
+    def __new__(cls, image: str = PG_IMAGE, *args: object, **kwargs: object):
+        if image != PG_IMAGE or args or set(kwargs) - {"driver"}:
+            return _RealPostgresContainer(image, *args, **kwargs)  # asked for something else
+        return super().__new__(cls)
+
+    def __init__(self, image: str = PG_IMAGE, driver: str | None = "psycopg2") -> None:
         self.dbname = f"lv_{os.environ.get('PYTEST_XDIST_WORKER', 'main')}_{next(self._numbers)}"
         self.driver = driver
 
@@ -201,7 +225,7 @@ class _Database:
 
     def get_connection_url(self, host: str | None = None, driver: object = "default") -> str:
         url = _the_server().url(self.dbname, self.driver if driver == "default" else driver)
-        return url if host is None else str(make_url(url).set(host=host))
+        return url if host is None else make_url(url).set(host=host).render_as_string(hide_password=False)
 
 
 if not _PG_PER_MODULE:
@@ -236,6 +260,24 @@ def _template(tree: str) -> str:
     return name
 
 
+# Nothing in the database but what every new one has, and pgvector: no
+# relations, schemas, functions or types of its own (objects below 16384 come
+# with Postgres; an extension's own are its members), no other extension and
+# no settings of its own, none of which a clone would keep.
+_IS_EMPTY = """
+SELECT NOT EXISTS (SELECT 1 FROM pg_class WHERE oid >= 16384)
+   AND NOT EXISTS (SELECT 1 FROM pg_namespace WHERE oid >= 16384)
+   AND NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname NOT IN ('plpgsql', 'vector'))
+   AND NOT EXISTS (SELECT 1 FROM pg_db_role_setting s JOIN pg_database d ON d.oid = s.setdatabase
+                   WHERE d.datname = current_database())
+   AND NOT EXISTS (
+       SELECT 1 FROM (SELECT 'pg_proc'::regclass AS cls, oid FROM pg_proc
+                      UNION ALL SELECT 'pg_type'::regclass, oid FROM pg_type) o
+       WHERE o.oid >= 16384 AND NOT EXISTS (
+           SELECT 1 FROM pg_depend d WHERE d.classid = o.cls AND d.objid = o.oid AND d.deptype IN ('e', 'i')))
+"""
+
+
 def _clone_migrated(url: str, tree: str) -> bool:
     """Replace the empty database at `url` with a clone of `tree`'s template,
     if it's one this run handed out and the test isn't a migration test.
@@ -248,11 +290,8 @@ def _clone_migrated(url: str, tree: str) -> bool:
     conn = _server.connect(u.database)
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace"
-                " WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast'))"
-            )
-            if cur.fetchone()[0]:
+            cur.execute(_IS_EMPTY)
+            if not cur.fetchone()[0]:
                 return False  # something's in it already: migrate it in place
     finally:
         conn.close()
@@ -302,7 +341,7 @@ def pytest_xdist_setupnodes(config: pytest.Config, specs: list) -> None:
     if not _PG_PER_MODULE:
         try:
             _the_server()
-        except Exception as e:  # no Docker: workers fail on their DB tests alone
+        except Exception as e:  # each worker then tries for itself, and fails its DB tests
             print(f"lumiverb tests: could not start Postgres ({e})", file=sys.stderr)
 
 
