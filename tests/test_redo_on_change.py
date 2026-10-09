@@ -146,6 +146,18 @@ def test_a_description_nobody_said_how_was_made_isnt_kept_so_its_made_not_redone
     assert _due(lib, "redo_vision") == []
 
 
+def test_a_description_whose_lineage_row_went_missing_is_redone(env):
+    # Review: written before lineage was kept (no row): it exists, so it's
+    # stale, not missing, and it's redone after anything missing.
+    lib = _library(env, "RedoNoRow")
+    clip, sha = _stale_clip(lib, "a.jpg")
+    with _db(lib) as s:
+        s.execute(text("DELETE FROM artifact_lineage WHERE asset_id = :a AND artifact = 'vision'"), {"a": clip})
+        s.commit()
+    assert _due(lib, "vision") == []
+    assert _due(lib, "redo_vision") == [clip]
+
+
 def test_a_failed_redo_waits_its_turn(env):
     lib = _library(env, "RedoFailed")
     client, headers, *_ = lib

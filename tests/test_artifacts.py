@@ -243,6 +243,7 @@ def test_upload_thumbnail_returns_key_and_sha256(artifact_env) -> None:
     r = auth.post(
         f"/v1/assets/{asset_id}/artifacts/thumbnail",
         files={"file": ("thumb.jpg", content, "image/jpeg")},
+        data={"lineage": made_json("proxy")},  # the proxy producer makes thumbnails
     )
     assert r.status_code == 200, r.text
     body = r.json()
@@ -266,6 +267,7 @@ def test_upload_thumbnail_does_not_overwrite_proxy_key(artifact_env) -> None:
     auth.post(
         f"/v1/assets/{asset_id}/artifacts/thumbnail",
         files={"file": ("thumb.jpg", _make_jpeg(64), "image/jpeg")},
+        data={"lineage": made_json("proxy")},
     )
 
     engine = create_engine(tenant_url)
@@ -289,6 +291,7 @@ def test_upload_thumbnail_persists_sha256_in_db(artifact_env) -> None:
     auth.post(
         f"/v1/assets/{asset_id}/artifacts/thumbnail",
         files={"file": ("thumb.jpg", content, "image/jpeg")},
+        data={"lineage": made_json("proxy")},  # the proxy producer makes thumbnails
     )
 
     engine = create_engine(tenant_url)
@@ -617,6 +620,7 @@ def test_download_thumbnail_returns_bytes(artifact_env) -> None:
     auth.post(
         f"/v1/assets/{asset_id}/artifacts/thumbnail",
         files={"file": ("thumb.jpg", content, "image/jpeg")},
+        data={"lineage": made_json("proxy")},  # the proxy producer makes thumbnails
     )
 
     r = auth.get(f"/v1/assets/{asset_id}/artifacts/thumbnail")

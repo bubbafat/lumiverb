@@ -40,8 +40,8 @@ class LineageIn(BaseModel):
     machine write says (require_lineage)."""
 
     producer: str = Field(max_length=100)
-    version: str = Field(max_length=50)
-    settings_hash: str = Field(max_length=64)
+    version: str = Field(min_length=1, max_length=50)
+    settings_hash: str = Field(min_length=1, max_length=64)
     source_sha256: str | None = Field(default=None, max_length=128)
 
 
@@ -77,8 +77,7 @@ def with_source(made: dict | None, source_sha256: str | None) -> dict | None:
     return {**made, "source_sha256": source_sha256} if made is not None and source_sha256 else made
 
 
-def require_lineage(value: LineageIn | dict | str | None, artifact: str,
-                    source_sha256: str | None = None) -> dict:
+def require_lineage(value: LineageIn | dict | str | None, artifact: str) -> dict:
     """A machine write's lineage, which it must give (Robert, Oct 9: the API
     doesn't take writes that don't say how they were made): 422
     lineage_required when it's absent or unreadable, 422
@@ -87,18 +86,18 @@ def require_lineage(value: LineageIn | dict | str | None, artifact: str,
     from src.server.api.errors import InvalidChoiceError
 
     producer = PRODUCERS[artifact]
-    made = lineage_dict(value, source_sha256)
+    made = lineage_dict(value)
     if made is None:
         raise InvalidChoiceError(
             "lineage_required",
             f"A machine write must say how it was made ({producer.title.lower()}): lineage (producer, version, "
             "settings_hash), as GET /v1/producers gives them.",
-            {"artifact": artifact, "producer": producer.producer})
+            {"artifact": artifact, "expected": producer.producer})
     if made["producer"] != producer.producer:
         raise InvalidChoiceError(
             "lineage_wrong_producer",
             f"{made['producer']} isn't the producer of {producer.title.lower()}: {producer.producer} is.",
-            {"artifact": artifact, "producer": made["producer"], "expected": producer.producer})
+            {"artifact": artifact, "sent": made["producer"], "expected": producer.producer})
     return made
 
 

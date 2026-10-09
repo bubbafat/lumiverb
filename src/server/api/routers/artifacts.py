@@ -43,17 +43,6 @@ CONTENT_TYPES: dict[str, str] = {
 }
 
 
-def _per_kind(raw: str | None) -> dict:
-    """A JSON object of lineage by artifact kind, or {} when absent or unreadable."""
-    import json
-
-    try:
-        value = json.loads(raw) if raw else {}
-    except ValueError:
-        return {}
-    return value if isinstance(value, dict) else {}
-
-
 class ArtifactUploadResponse(BaseModel):
     key: str
     sha256: str
@@ -80,8 +69,11 @@ async def upload_artifact(
     """
     from src.server.api.routers.producers import require_lineage
 
-    # Proxies, previews and analysis copies say how they were made, before anything is saved.
+    # Proxies, previews and analysis copies say how they were made, before
+    # anything is saved; a thumbnail as the proxy's (one producer makes both).
     made = require_lineage(lineage, artifact_type) if artifact_type in ("proxy", "video_preview", "analysis_proxy") else None
+    if artifact_type == "thumbnail":
+        require_lineage(lineage, "proxy")
     if artifact_type not in ALLOWED_ARTIFACT_TYPES:
         raise HTTPException(
             status_code=400,
@@ -204,6 +196,8 @@ async def upload_artifacts_batch(
     by_kind = _per_kind(lineage)
     made = {kind: require_lineage(by_kind.get(kind), kind)
             for kind, sent in (("proxy", proxy), ("video_preview", video_preview)) if sent is not None}
+    if thumbnail is not None:  # a thumbnail is the proxy producer's too
+        require_lineage(by_kind.get("proxy"), "proxy")
     files: dict[str, UploadFile] = {}
     if proxy is not None:
         files["proxy"] = proxy

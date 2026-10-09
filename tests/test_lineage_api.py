@@ -383,7 +383,7 @@ def test_a_client_cant_claim_a_person_made_it(env):
     before = _everything(env, img)
     r = client.post(f"/v1/assets/{img}/vision", json={
         "model_id": "m", "description": "d",
-        "lineage": {"producer": P.PERSON, "version": "", "settings_hash": "", "source_sha256": sha}}, headers=headers)
+        "lineage": {"producer": P.PERSON, "version": "1", "settings_hash": "x", "source_sha256": sha}}, headers=headers)
     _refused(r, "lineage_wrong_producer")
     assert _everything(env, img) == before and _row(env, img, "vision") is None
 
@@ -391,7 +391,7 @@ def test_a_client_cant_claim_a_person_made_it(env):
     before = _everything(env, vid)
     _refused(client.post(f"/v1/assets/{vid}/transcript", json={
         "srt": "1\n00:00:00,000 --> 00:00:01,000\nhi\n", "source": "whisper",
-        "lineage": {"producer": P.PERSON, "version": "", "settings_hash": ""}}, headers=headers),
+        "lineage": {"producer": P.PERSON, "version": "1", "settings_hash": "x"}}, headers=headers),
         "lineage_wrong_producer")
     assert _everything(env, vid) == before and _row(env, vid, "transcript") is None
     # A transcript a person typed is theirs.
@@ -553,6 +553,20 @@ def test_every_machine_write_that_doesnt_say_is_refused_and_saves_nothing(env):
             "next_scene_start_ms": None}, headers=headers)),
         ("scene_vision", vid, lambda: client.patch(f"/v1/video/scenes/scn_{vid}_0", json={
             "model_id": "m", "model_version": "1", "description": "a beach", "tags": []}, headers=headers)),
+        # Review: a thumbnail is the proxy producer's, however it arrives.
+        ("proxy", img, lambda: client.post(f"/v1/assets/{img}/artifacts/thumbnail", files={"file": jpeg()},
+                                           headers=headers)),
+        ("proxy", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts", files={"thumbnail": jpeg()},
+                                           headers=headers)),
+        ("proxy", vid, lambda: client.post(f"/v1/assets/{vid}/thumbnail-key", json={
+            "thumbnail_key": "t/l/thumbnails/00/x.jpg"}, headers=headers)),
+        # Lineage that can't be read is no lineage, in the same envelope on every route.
+        ("vision", img, lambda: client.post(f"/v1/assets/{img}/vision", json={
+            "model_id": "m", "description": "d", "lineage": {"producer": "vision"}}, headers=headers)),
+        ("ocr", img, lambda: client.post(f"/v1/assets/{img}/ocr", json={
+            "ocr_text": "EXIT", "lineage": "not lineage"}, headers=headers)),
+        ("faces", img, lambda: client.post(f"/v1/assets/{img}/faces", json={"faces": [face], "lineage": {
+            "producer": "insightface", "version": "", "settings_hash": ""}}, headers=headers)),
     ]
     for artifact, clip, write in writes:
         before = _everything(env, clip)
@@ -560,6 +574,12 @@ def test_every_machine_write_that_doesnt_say_is_refused_and_saves_nothing(env):
         assert r.status_code == 422 and r.json()["error"]["code"] == "lineage_required", (artifact, r.text)
         assert r.json()["error"]["details"]["artifact"] == artifact, r.text
         assert _everything(env, clip) == before, artifact
+
+    # Another kind's producer is named in what it says.
+    r = client.post(f"/v1/assets/{img}/vision", json={"model_id": "m", "description": "d",
+                                                      "lineage": _want(env, "faces", sha)}, headers=headers)
+    assert r.status_code == 422 and r.json()["error"]["details"] == {
+        "artifact": "vision", "sent": "insightface", "expected": "vision"}, r.text
 
     # A new clip that doesn't say how its proxy was made isn't kept at all.
     _refused(_ingest_post(env, "lin/refused-new.jpg", sha, SAYS_NOTHING))
@@ -577,3 +597,10 @@ def test_every_machine_write_that_doesnt_say_is_refused_and_saves_nothing(env):
     r = client.post(f"/v1/assets/{img}/embeddings", json={
         "model_id": "apple_vision", "model_version": "1", "vector": [0.0] * 768}, headers=headers)
     assert r.status_code == 201, r.text
+
+
+@pytest.mark.slow
+def test_an_ingests_description_that_isnt_an_object_is_a_400(env):
+    # Review: a list there was a 500.
+    r = _ingest_post(env, "lin/vision-list.jpg", _sha(), None, vision="[]")
+    assert r.status_code == 400 and "JSON object" in r.text
