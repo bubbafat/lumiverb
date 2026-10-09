@@ -125,23 +125,57 @@ def test_a_clip_that_failed_today_makes_processing_yellow(env):
             s.commit()
 
 
+def _seen(minutes: float | None = 0, away: float | None = None, checked: bool = True) -> dict:
+    t = utcnow()
+    return {"seen_at": (t - timedelta(minutes=minutes)).isoformat() if minutes is not None else None,
+            "away_since": (t - timedelta(minutes=away)).isoformat() if away is not None else None,
+            "checked": checked}
+
+
+def _storage_and_dots(env) -> tuple[dict, dict]:
+    body = _health(env)
+    return ({r["key"]: r for r in body["rows"]}["storage"],
+            {lib["library_id"]: lib for lib in body["libraries"]})
+
+
 def test_storage_and_the_libraries_say_which_cant_be_reached(env):
     library_id = env[2]
-    _status(env, unreachable=[library_id])
-    body = _health(env)
-    row = {r["key"]: r for r in body["rows"]}["storage"]
-    assert row["state"] == "red" and "Footage" in row["reason"]
+    _status(env, storage={library_id: _seen(120, away=90)})
+    row, dots = _storage_and_dots(env)
+    assert row["state"] == "red" and row["reason"] == "Can't reach Footage. Last seen 2 hours ago."
     assert row["link"] == f"/libraries/{library_id}/settings"
-    assert {lib["library_id"]: lib["reachable"] for lib in body["libraries"]}[library_id] is False
-    _status(env, unreachable=[])
-    body = _health(env)
-    assert {r["key"]: r for r in body["rows"]}["storage"]["state"] == "green"
-    assert all(lib["reachable"] is True for lib in body["libraries"])
+    assert dots[library_id]["reachable"] is False and dots[library_id]["seen_at"]
+    _status(env, storage={library_id: _seen()})
+    row, dots = _storage_and_dots(env)
+    assert row["state"] == "green" and all(d["reachable"] is True for d in dots.values())
     # The scheduler stopped: it can't be told.
-    _status(env, at=(utcnow() - timedelta(minutes=5)).isoformat(), unreachable=[])
-    body = _health(env)
-    assert {r["key"]: r for r in body["rows"]}["storage"]["state"] == "yellow"
-    assert all(lib["reachable"] is None for lib in body["libraries"])
+    _status(env, at=(utcnow() - timedelta(minutes=5)).isoformat(), storage={library_id: _seen()})
+    row, dots = _storage_and_dots(env)
+    assert row["state"] == "yellow" and all(d["reachable"] is None for d in dots.values())
+
+
+def test_storage_after_a_restart_isnt_red_until_its_looked_at(env):
+    # The bug (Oct 9): restarted with Scans paused, every library read "Can't reach".
+    library_id = env[2]
+    _status(env, storage={library_id: _seen(120, checked=False)})
+    row, dots = _storage_and_dots(env)
+    assert row["state"] == "yellow" and row["reason"] == "Not checked yet. Footage last seen 2 hours ago."
+    assert dots[library_id]["reachable"] is None
+    _status(env, storage={})
+    row, _ = _storage_and_dots(env)
+    assert row["state"] == "yellow" and row["reason"] == "Not checked yet. Footage never seen."
+
+
+def test_storage_while_scans_are_paused_says_when_each_was_last_seen(env):
+    client, headers, library_id, *_ = env
+    try:
+        assert client.post("/v1/producers/scans/pause", headers=headers).status_code == 204
+        _status(env, storage={library_id: _seen(120, checked=False)})
+        row, dots = _storage_and_dots(env)
+        assert row["state"] == "yellow" and row["reason"] == "Scans paused. Footage last seen 2 hours ago."
+        assert dots[library_id]["reachable"] is None
+    finally:
+        client.post("/v1/producers/all/resume", headers=headers)
 
 
 def test_ai_machines_are_yellow_when_one_doing_a_job_is_offline(env):

@@ -44,6 +44,15 @@ class FakeAccount:
         self.stopping = threading.Event()
         self.gpu_holds: list[int] = []
         self.followed: list[tuple[str, str | None]] = []
+        self.seen: dict[str, dict] = {}
+        self.seeded: list = []
+
+    def storage_seen(self) -> dict[str, dict]:
+        return dict(self.seen)
+
+    def seed_storage(self, record) -> None:
+        self.seeded.append(record)
+        self.seen = {k: {**v, "checked": False} for k, v in (record or {}).items()}
 
     def follow_settings(self, artifact: str, settings_hash: str | None) -> None:
         self.followed.append((artifact, settings_hash))
@@ -1053,11 +1062,39 @@ def test_a_kind_learns_its_pace_only_from_the_clips_its_jobs_made() -> None:
 
 
 @pytest.mark.fast
-def test_the_status_names_libraries_whose_storage_is_away() -> None:
+def test_the_status_names_libraries_whose_storage_work_waits() -> None:
     written: list[dict] = []
     acct = FakeAccount(libraries=("lib_1", "lib_2"), reachable=("lib_1",))
     s = Scheduler(lambda: {"t1": acct}, capacity={"scan": 0}, candidates=lambda *a, **kw: [], inline_refill=True,
                   runners=Recorder().all(), scan=MagicMock(), paused=lambda tenant_id: set(),
                   retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: written.append(status))
     s.tick()
-    assert written and written[-1]["unreachable"] == ["lib_2"]
+    assert written and written[-1]["storage_waits"] == ["lib_2"] and "unreachable" not in written[-1]
+
+
+@pytest.mark.fast
+def test_the_status_keeps_each_librarys_looks_and_a_restart_starts_from_them() -> None:
+    record = {"lib_1": {"seen_at": "2026-10-09T10:00:00+00:00", "away_since": None, "checked": True}}
+    written: list[dict] = []
+    acct = FakeAccount()
+    s = Scheduler(lambda: {"t1": acct}, capacity={"scan": 0}, candidates=lambda *a, **kw: [], inline_refill=True,
+                  runners=Recorder().all(), scan=MagicMock(), paused=lambda tenant_id: set(),
+                  retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: written.append(status),
+                  last_status=lambda tenant_id: {"storage": record})
+    s.tick()
+    s.tick()
+    assert acct.seeded == [record]  # once
+    assert written[0]["storage"] == {"lib_1": {"seen_at": "2026-10-09T10:00:00+00:00", "away_since": None,
+                                               "checked": False}}
+
+
+@pytest.mark.fast
+def test_a_restart_without_a_record_starts_with_none() -> None:
+    acct = FakeAccount()
+    written: list[dict] = []
+    s = Scheduler(lambda: {"t1": acct}, capacity={"scan": 0}, candidates=lambda *a, **kw: [], inline_refill=True,
+                  runners=Recorder().all(), scan=MagicMock(), paused=lambda tenant_id: set(),
+                  retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: written.append(status),
+                  last_status=lambda tenant_id: None)
+    s.tick()
+    assert acct.seeded == [None] and written[0]["storage"] == {}

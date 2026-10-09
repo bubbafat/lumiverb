@@ -112,6 +112,7 @@ class Scheduler:
         # Each account's last status, read once: its paces start there.
         self._last_status = last_status or _status_from_database
         self._paced: set[str] = set()
+        self._seeded: dict[str, Any] = {}
         self._runners = dict(runners or runner_mod.runners())
         self._scan = scan or runner_mod.scan
         self._clock = clock
@@ -235,17 +236,26 @@ class Scheduler:
             acct.refresh()
         except Exception:  # noqa: BLE001 — tried again at the next tick
             logger.exception("scheduler: refreshing %s failed", tenant_id)
-        if tenant_id not in self._paced:
-            self._paced.add(tenant_id)
+        if self._seeded.get(tenant_id) is not acct:
+            # The last status: each kind's pace (once), and what the looks at
+            # each library's storage found before this start (each new account).
+            self._seeded[tenant_id] = acct
             try:
-                self.dispatcher.seed_pace(tenant_id, (self._last_status(tenant_id) or {}).get("pace") or {})
-            except Exception:  # noqa: BLE001 — it learns them again from its jobs
-                logger.exception("scheduler: reading %s's last pace failed", tenant_id)
+                last = self._last_status(tenant_id) or {}
+                if tenant_id not in self._paced:
+                    self._paced.add(tenant_id)
+                    self.dispatcher.seed_pace(tenant_id, last.get("pace") or {})
+                acct.seed_storage(last.get("storage"))
+            except Exception:  # noqa: BLE001 — it learns them again
+                logger.exception("scheduler: reading %s's last status failed", tenant_id)
         if self._clock() - self._status_at.get(tenant_id, float("-inf")) >= STATUS_EVERY_SEC:
             self._status_at[tenant_id] = self._clock()
             try:
-                away = sorted(set(acct.library_ids(storage=False)) - set(acct.library_ids(storage=True)))
-                self._write_status(tenant_id, {**self.status(tenant_id), "unreachable": away})
+                # Libraries whose work on the originals waits: not reachable at
+                # the latest look, or not looked at since this start.
+                waits = sorted(set(acct.library_ids(storage=False)) - set(acct.library_ids(storage=True)))
+                self._write_status(tenant_id, {**self.status(tenant_id), "storage_waits": waits,
+                                               "storage": acct.storage_seen()})
             except Exception:  # noqa: BLE001 — only a view of it
                 logger.exception("scheduler: writing %s's status failed", tenant_id)
         for job in AI_JOB_KINDS:
@@ -452,7 +462,7 @@ def _on_hold_in_database(tenant_id: str) -> set[str]:
 
 
 def _status_from_database(tenant_id: str) -> dict | None:
-    """The status the scheduler last wrote for the account (its paces)."""
+    """The status the scheduler last wrote for the account (its paces, its storage looks)."""
     import json
 
     from sqlalchemy import text

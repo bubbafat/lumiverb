@@ -11,7 +11,9 @@ dispatching thread; machines that can't be used are looked at again as
 often. No job of the account's is handed out until its settings were read
 once. Each library's storage is looked at by the scan pass only, and jobs
 go by that look (several jobs probing one mount at once would see it as
-unreachable).
+unreachable). What each look found is kept as when the library was last
+seen and since when it's been unreachable; the scheduler's status carries
+it over a restart, where it's a record, not a look (storage_seen).
 """
 
 from __future__ import annotations
@@ -19,7 +21,8 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +41,7 @@ IDLE_SEC = 600.0
 
 class Account:
     def __init__(self, tenant_id: str, client: Any, scan_state: ScanState, *,
-                 clock: Callable[[], float] = time.monotonic) -> None:
+                 clock: Callable[[], float] = time.monotonic, wall: Callable[[], datetime] | None = None) -> None:
         from src.client.cli.config import load_config
         from src.client.cli.failure_report import FailureReport
         from src.client.cli.producer_settings import ProducerSettings
@@ -51,6 +54,9 @@ class Account:
         self.scan_state = scan_state
         self.cfg = load_config()
         self._clock = clock
+        if wall is None:
+            from src.shared.utils import utcnow as wall
+        self._wall = wall
         self.failures = FailureReport(client)
         self.producers = ProducerSettings(client, fetch=False)  # read by refresh()
         self.vision = VisionGuard(client, self.failures)
@@ -64,6 +70,12 @@ class Account:
         # last scan pass's look (None: not reachable).
         self.libraries: dict[str, dict] = {}
         self.roots: dict[str, Path | None] = {}
+        # library_id -> {seen_at, away_since} (ISO times or None): when its
+        # storage was last seen reachable, and since when it's been
+        # unreachable (None: the latest look reached it); and the libraries
+        # looked at since this start (a record from before isn't a look).
+        self._seen: dict[str, dict[str, str | None]] = {}
+        self._checked: set[str] = set()
         self._lock = threading.Lock()
         self._proxy_caches: dict[str, Any] = {}
         self._clip: tuple[tuple, Any] | None = None
@@ -128,8 +140,35 @@ class Account:
 
     def set_reachable(self, roots: dict[str, Path | None]) -> None:
         """The scan pass's look at each library's storage."""
+        now = self._wall().isoformat()
         with self._lock:
             self.roots = dict(roots)
+            for library_id, root in roots.items():
+                self._looked(library_id, root is not None, now)
+
+    def _looked(self, library_id: str, reached: bool, now: str) -> None:
+        seen = self._seen.setdefault(library_id, {"seen_at": None, "away_since": None})
+        if reached:
+            seen["seen_at"], seen["away_since"] = now, None
+        elif seen["away_since"] is None:
+            seen["away_since"] = now
+        self._checked.add(library_id)
+
+    def seed_storage(self, record: Mapping[str, Any] | None) -> None:
+        """What the looks before a restart found (the last status's storage):
+        when each library was last seen, until it's looked at again."""
+        with self._lock:
+            for library_id, seen in (record or {}).items():
+                if library_id in self._seen or not isinstance(seen, Mapping):
+                    continue
+                self._seen[library_id] = {"seen_at": seen.get("seen_at"), "away_since": seen.get("away_since")}
+
+    def storage_seen(self) -> dict[str, dict[str, Any]]:
+        """Each library's {seen_at, away_since, checked}: checked when it was
+        looked at since this start (otherwise it's the record from before)."""
+        with self._lock:
+            return {i: {**seen, "checked": i in self._checked} for i, seen in self._seen.items()
+                    if not self.libraries or i in self.libraries}
 
     @property
     def reachable(self) -> dict[str, bool]:
@@ -137,8 +176,10 @@ class Account:
 
     def unreachable(self, library_id: str) -> None:
         """A job found the storage gone: storage work in it waits for the next look."""
+        now = self._wall().isoformat()
         with self._lock:
             self.roots[library_id] = None
+            self._looked(library_id, False, now)
 
     def storage_gone(self, library_id: str) -> bool:
         """The library's storage can't be read now, looked at as the scan pass

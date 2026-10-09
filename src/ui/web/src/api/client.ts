@@ -1045,8 +1045,10 @@ export interface SystemHealth {
   /** The worst row's. */
   state: HealthState;
   rows: HealthRow[];
-  /** Whether the scheduler reached each library's storage at its last look (null: it hasn't looked lately). */
-  libraries: { library_id: string; name: string; reachable: boolean | null }[];
+  /** Whether the scheduler's latest look since it started reached each library's storage
+   * (null: not known now: not looked at since, Scans paused, or the scheduler isn't running),
+   * and when it was last seen reachable (null: never). */
+  libraries: { library_id: string; name: string; reachable: boolean | null; seen_at: string | null }[];
 }
 
 export async function getSystemHealth(): Promise<SystemHealth> {

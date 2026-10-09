@@ -66,9 +66,15 @@ const REACH: Record<string, { state: HealthState | null; label: string }> = {
   null: { state: null, label: "Not checked lately" },
 };
 
-function LibraryRow({ lib, reachable }: { lib: LibraryListItem; reachable: boolean | null }) {
+type Reach = { reachable: boolean | null; seen_at: string | null };
+
+function LibraryRow({ lib, reach: seen }: { lib: LibraryListItem; reach: Reach }) {
   const lastScan = lib.last_scan_at ? relativeTime(lib.last_scan_at) : "Never";
-  const reach = REACH[String(reachable)];
+  const known = REACH[String(seen.reachable)];
+  // Not known now: when it was last seen.
+  const reach = known.state ? known : {
+    ...known, label: `${known.label} · ${seen.seen_at ? `last seen ${relativeTime(seen.seen_at)}` : "never seen"}`,
+  };
   return (
     <li className="flex items-center gap-3 rounded-lg border border-gray-700/50 bg-gray-900/50 px-4 py-3">
       {reach.state ? (
@@ -100,7 +106,7 @@ export default function AdminPage() {
   });
 
   const activeLibraries = libraries?.filter((l) => l.status !== "trashed") ?? [];
-  const reach = new Map((health.data?.libraries ?? []).map((l) => [l.library_id, l.reachable]));
+  const reach = new Map<string, Reach>((health.data?.libraries ?? []).map((l) => [l.library_id, l]));
 
   // The API not answering is the Website row's red; the rest is what it said last.
   let rows = health.data?.rows ?? [];
@@ -172,7 +178,7 @@ export default function AdminPage() {
         ) : (
           <ul aria-label="Libraries" className="space-y-3">
             {activeLibraries.map((lib) => (
-              <LibraryRow key={lib.library_id} lib={lib} reachable={reach.get(lib.library_id) ?? null} />
+              <LibraryRow key={lib.library_id} lib={lib} reach={reach.get(lib.library_id) ?? { reachable: null, seen_at: null }} />
             ))}
           </ul>
         )}
