@@ -133,10 +133,10 @@ markers = [
     "fast: no DB, no AI — pure unit tests, mocks, tmp_path only",
     "slow: requires DB (testcontainers Postgres)",
     "ai: requires real AI inference (Moondream Station running)",
-    "quickwit: requires dev Quickwit at port 7281",
+    "quickwit: real Quickwit (a throwaway one in Docker, never the dev one); opt-in: pytest -m quickwit",
     "migration: Alembic migration tests (run separately)",
 ]
-# Default: run fast and slow tests; exclude AI and migration suites
+# Default: run fast and slow tests; exclude AI, migration and real-Quickwit suites
 addopts = ["-m", "not migration and not ai and not quickwit"]
 filterwarnings = [
     "ignore::DeprecationWarning",

@@ -226,6 +226,9 @@ uv run pytest -m "fast or slow"
 # Migration tests
 uv run pytest -m migration
 
+# Search documents against a real Quickwit (starts a throwaway one in Docker)
+uv run pytest -m quickwit
+
 # Everything
 uv run pytest --all-extras
 ```

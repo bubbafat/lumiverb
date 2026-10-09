@@ -99,6 +99,7 @@ Standard incantations work (`uvicorn src.server.api.main:app --reload`,
 
 - Python: `uv run pytest -m fast` (no DB/AI), `-m slow` (testcontainers Postgres 18, `PG_IMAGE` in `tests/conftest.py`), `ai` (real inference, opt-in). Bare `pytest` runs fast + slow.
   `-n auto` runs it in parallel (pytest-xdist, a module's tests on one worker). One Postgres serves the whole run: `PostgresContainer` in a test is a fresh database on it, and the migration helpers clone a template migrated once (`tests/conftest.py` docstring; `LUMIVERB_TEST_PG_PER_MODULE=1` for a container per module).
+  Quickwit is off for every test (conftest pins `QUICKWIT_ENABLED=false`, whatever `.env.local` says; mock `QuickwitClient` to test sync code). `uv run pytest -m quickwit` (opt-in) checks the real document builders against the real index schemas and search in a throwaway Quickwit in Docker (`tests/test_quickwit_real.py`).
 - Swift: XCTest in `LumiverbKit`. **No macOS-target test bundle** — testable code must live in LumiverbKit.
 - Web UI: `npx vitest run` in `src/ui/web` (Testing Library component tests sit beside their components), plus `npx tsc --noEmit -p .`.
 
