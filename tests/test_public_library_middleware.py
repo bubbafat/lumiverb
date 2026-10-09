@@ -327,7 +327,7 @@ def spoken(public_lib_client):
     """A public video whose transcript says 'zebra' at one minute, past the 10 s public cap."""
     client, api_key, library_id, _ = public_lib_client
     asset_id = _ingest(client, api_key, library_id, "talk/clip 1.mov")
-    r = client.post(f"/v1/assets/{asset_id}/transcript", json={"srt": _SRT, "language": "en"},
+    r = client.post(f"/v1/assets/{asset_id}/transcript", json={"source": "manual", "srt": _SRT, "language": "en"},
                     headers={"Authorization": f"Bearer {api_key}"})
     assert r.status_code == 200, r.text
     return asset_id
@@ -463,7 +463,7 @@ def test_a_public_projects_clip_detail_is_privacy_stripped(public_lib_client, sh
     # What's seen or heard still comes through, within the public cap.
     srt = "1\n00:00:02,000 --> 00:00:04,000\nearly words\n\n2\n00:01:00,000 --> 00:01:02,000\nlate words\n"
     auth = {"Authorization": f"Bearer {api_key}"}
-    assert client.post(f"/v1/assets/{asset_id}/transcript", json={"srt": srt, "language": "en"},
+    assert client.post(f"/v1/assets/{asset_id}/transcript", json={"source": "manual", "srt": srt, "language": "en"},
                        headers=auth).status_code == 200
     shown = client.get(f"/v1/assets/{asset_id}", params={"public_project_id": project_id}).json()
     assert "early words" in shown["transcript_srt"] and "late words" not in shown["transcript_srt"]

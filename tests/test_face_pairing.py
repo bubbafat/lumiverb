@@ -102,3 +102,10 @@ def test_without_a_switch_boxes_without_embeddings_pair_from_0_3() -> None:
     old = [SwitchRow("f0", _box(0.30), None, True, "buffalo_l")]
     new = [{"bounding_box": _box(0.40)}]  # IoU 0.33
     assert FaceRepository._pair_redetected_faces(old, new, "buffalo_l") == {0: "f0"}
+
+
+def test_across_a_switch_a_face_without_an_embedding_needs_a_substantial_overlap_too():
+    # Review: a named face never embedded (too small, say) paired at 0.3 across a switch.
+    old = [SwitchRow("f0", _box(0.30), None, True, "buffalo_l")]
+    assert FaceRepository._pair_redetected_faces(old, [{"bounding_box": _box(0.40)}], "antelopev2") == {}  # IoU 0.33
+    assert FaceRepository._pair_redetected_faces(old, [{"bounding_box": _box(0.36)}], "antelopev2") == {0: "f0"}

@@ -434,10 +434,19 @@ def test_submit_transcript_rejects_image(submission_client) -> None:
     client, auth, _, image_asset_ids, _ = submission_client
     r = client.post(
         f"/v1/assets/{image_asset_ids[0]}/transcript",
-        json={"srt": _VALID_SRT, "language": "en"},
+        json={"source": "manual", "srt": _VALID_SRT, "language": "en"},
         headers=auth,
     )
     assert r.status_code == 400
+
+
+@pytest.mark.slow
+def test_a_transcript_says_whose_it_is(submission_client) -> None:
+    # A machine that left it out was taken for a person (no lineage asked, never redone).
+    client, auth, _, _, video_asset_id = submission_client
+    r = client.post(f"/v1/assets/{video_asset_id}/transcript", json={"srt": _VALID_SRT, "language": "en"},
+                    headers=auth)
+    assert r.status_code == 422, r.text
 
 
 @pytest.mark.slow
@@ -445,7 +454,7 @@ def test_submit_transcript_404(submission_client) -> None:
     client, auth, _, _, _ = submission_client
     r = client.post(
         "/v1/assets/ast_doesnotexist0000000000000/transcript",
-        json={"srt": _VALID_SRT},
+        json={"source": "manual", "srt": _VALID_SRT},
         headers=auth,
     )
     assert r.status_code == 404
@@ -456,7 +465,7 @@ def test_submit_transcript_invalid_srt(submission_client) -> None:
     client, auth, _, _, video_asset_id = submission_client
     r = client.post(
         f"/v1/assets/{video_asset_id}/transcript",
-        json={"srt": "not a real srt at all", "language": "en"},
+        json={"source": "manual", "srt": "not a real srt at all", "language": "en"},
         headers=auth,
     )
     assert r.status_code == 400
@@ -467,7 +476,7 @@ def test_submit_empty_transcript_marks_no_speech(submission_client) -> None:
     client, auth, _, _, video_asset_id = submission_client
     r = client.post(
         f"/v1/assets/{video_asset_id}/transcript",
-        json={"srt": "   ", "language": "en"},
+        json={"source": "manual", "srt": "   ", "language": "en"},
         headers=auth,
     )
     assert r.status_code == 200
@@ -482,7 +491,7 @@ def test_submit_then_delete_transcript(submission_client) -> None:
     # endpoint still returns 200 even without a quickwit sidecar running.
     r = client.post(
         f"/v1/assets/{video_asset_id}/transcript",
-        json={"srt": _VALID_SRT, "language": "en"},
+        json={"source": "manual", "srt": _VALID_SRT, "language": "en"},
         headers=auth,
     )
     assert r.status_code == 200, r.text

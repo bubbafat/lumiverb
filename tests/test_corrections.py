@@ -411,3 +411,91 @@ def test_a_correction_is_human_data_and_a_public_page_shows_only_the_result(env)
 
     with _db(env) as s:
         assert AssetRepository(s).has_human_data(clip)
+
+
+# ---------------------------------------------------------------------------
+# Review: what a person wrote isn't the machine's work to redo, and their
+# choices hold against machine output arriving late or at the same time.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def vision_on(env):
+    from tests.test_redo_on_change import VISION, _set_model
+
+    _set_model(env, "vision", VISION)
+
+
+@pytest.mark.slow
+def test_text_a_person_wrote_isnt_read_again_or_counted_for_a_new_model(env, vision_on):
+    from src.server.repository import lineage
+    from tests.test_redo_on_change import _due as _redo_due, _made_old
+
+    lib = _library(env, "CorrOcrTheirs")
+    sha = _sha()
+    clip = _ingest_with(lib, "a.jpg", sha, None)
+    _made_old(lib, clip, sha, "ocr")
+    assert _redo_due(lib, "redo_ocr") == [clip]
+    assert _correct(lib, clip, ocr_text="PLATFORM 9").status_code == 200
+    assert _redo_due(lib, "redo_ocr") == []
+    with _db(lib) as s:
+        assert lineage.made_by_a_producer(s, ["ocr"]).get("ocr", 0) == 0
+    # On a clip never read, it isn't missing either: the reading would only be dropped.
+    unread = _ingest_with(lib, "b.jpg", _sha(), None)
+    _correct(lib, unread, ocr_text="EXIT")
+    assert unread not in _due(lib, "missing_ocr")
+    # Removed, it's the machine's to read again.
+    _correct(lib, unread, ocr_text=None)
+    assert unread in _due(lib, "missing_ocr")
+
+
+@pytest.mark.slow
+def test_a_description_and_tags_a_person_wrote_arent_described_again(env, vision_on):
+    from tests.test_redo_on_change import _due as _redo_due, _made_old
+
+    lib = _library(env, "CorrVisionTheirs")
+    sha = _sha()
+    clip = _ingest_with(lib, "a.jpg", sha, None)
+    _made_old(lib, clip, sha, "vision")
+    _correct(lib, clip, description="Mittens")
+    assert _redo_due(lib, "redo_vision") == [clip]  # the machine's tags are still its to redo
+    _correct(lib, clip, tags=["cat"])
+    assert _redo_due(lib, "redo_vision") == []
+    unread = _ingest_with(lib, "b.jpg", _sha(), None)
+    _correct(lib, unread, description="The old station", tags=["station"])
+    assert unread not in _due(lib, "missing_vision")
+    assert _detail(lib, unread)["ai_description"] == "The old station"
+    # Removing the description makes it the machine's again; the person's tags stay theirs.
+    _correct(lib, unread, description=None)
+    assert unread in _due(lib, "missing_vision")
+    assert _detail(lib, unread)["ai_tags"] == ["station"]
+
+
+@pytest.mark.slow
+def test_a_late_machine_transcript_doesnt_undo_removing_the_machines(env):
+    # A transcription in flight when a person removed the machine's for good.
+    lib, vid, sha = _video(env, "CorrLateMachine")
+    _transcribe(env, vid, SRT_MACHINE, sha)
+    _remove(env, vid, "machine")
+    assert _transcribe(env, vid, SRT_MACHINE_2, sha) == "kept_manual"
+    assert _shown(env, vid) == {"srt": None, "source": None}
+    assert _row(env, vid, "transcript")[0] == P.PERSON
+    # A person's own goes on, as always.
+    _transcribe(env, vid, SRT_PERSON, source="manual")
+    assert _shown(env, vid)["srt"] == SRT_PERSON
+
+
+@pytest.mark.slow
+def test_removing_a_transcript_while_search_is_down_still_reaches_search(env, monkeypatch):
+    import src.server.search.sync as sync
+
+    lib, vid, sha = _video(env, "CorrTranscriptSearchDown")
+    _transcribe(env, vid, SRT_MACHINE, sha)
+    with _db(env) as s:
+        s.execute(text("UPDATE assets SET search_synced_at = now() WHERE asset_id = :a"), {"a": vid})
+        s.commit()
+    monkeypatch.setattr(sync, "try_sync_asset", lambda *a, **k: None)  # Quickwit down
+    _remove(env, vid, "machine")
+    with _db(env) as s:
+        assert s.execute(text(f"SELECT {sync.STALE_SEARCH} FROM active_assets a WHERE a.asset_id = :a"),
+                         {"a": vid}).scalar() is True

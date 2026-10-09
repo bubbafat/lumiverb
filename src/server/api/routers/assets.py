@@ -20,6 +20,7 @@ from src.shared.io_utils import normalize_path_prefix
 from src.server.repository.tenant import AssetMetadataRepository, AssetOcrRepository, AssetRepository, LibraryRepository
 from src.server.repository import lineage
 from src.shared.producers import CLIP_MODEL_ID
+from src.shared.producers import PERSON as P_PERSON
 from src.server.api.routers.producers import LineageIn, require_lineage, with_source
 from src.server.models.tenant import Asset
 from src.server.storage.local import get_storage
@@ -1486,9 +1487,9 @@ def correct_asset(
 class TranscriptSubmitRequest(BaseModel):
     srt: str
     language: str | None = None
-    # "manual" for a person's transcript; a provider id (e.g. "whisper") for
-    # machine output, which never replaces a person's.
-    source: str = "manual"
+    # Whose it is, which every upload says: "manual" for a person's; a provider
+    # id (e.g. "whisper") for machine output, which never replaces a person's.
+    source: str = Field(min_length=1, max_length=64)
     # How a machine transcript was made (a person's needs none).
     lineage: LineageIn | None = None
 
@@ -1505,6 +1506,29 @@ def _transcript_lineage(body: TranscriptSubmitRequest) -> dict:
     if body.source == "manual":
         return {"lineage": None, "person": True}
     return {"lineage": require_lineage(body.lineage, "transcript")}
+
+
+def _lock_transcript(session: Session, asset: Asset) -> None:
+    """One write of a clip's transcript at a time (a person's and the
+    machine's never cross), with the clip as it is now."""
+    from sqlalchemy import text as sa_text
+
+    session.execute(sa_text("SELECT 1 FROM assets WHERE asset_id = :a FOR UPDATE"), {"a": asset.asset_id})
+    session.refresh(asset)
+
+
+def _persons_transcript(session: Session, asset: Asset) -> bool:
+    """The clip's transcript is a person's call: theirs is shown, or they
+    removed the machine's for good (none shown, a person's lineage)."""
+    from sqlalchemy import text as sa_text
+
+    if asset.transcript_source == "manual":
+        return True
+    if _shown_transcript(asset) is not None:
+        return False
+    return session.execute(sa_text(
+        "SELECT producer FROM artifact_lineage WHERE asset_id = :a AND artifact = 'transcript'"
+    ), {"a": asset.asset_id}).scalar() == P_PERSON
 
 
 def _shown_transcript(asset: Asset) -> str | None:
@@ -1538,7 +1562,8 @@ def submit_transcript(
         raise HTTPException(status_code=404, detail="Asset not found")
     if asset.media_type != "video":
         raise HTTPException(status_code=400, detail="Transcripts are only supported for video assets")
-    if body.source != "manual" and asset.transcript_source == "manual":
+    _lock_transcript(session, asset)
+    if body.source != "manual" and _persons_transcript(session, asset):
         return TranscriptSubmitResponse(asset_id=asset_id, status="kept_manual")
 
     # Empty SRT = "checked, no speech" (e.g., silent video processed by Whisper)
@@ -1579,6 +1604,10 @@ def _transcript_searched(session: Session, request: Request, asset: Asset, srt: 
     """Search has the clip's transcript as it is now (segments replaced), and its library changed."""
     from src.server.search.sync import index_transcript_segments, try_sync_asset
 
+    # Stale until search has it (search may be down: the sweep catches up).
+    asset.search_synced_at = None
+    session.add(asset)
+    session.commit()
     meta = AssetMetadataRepository(session).get_latest(asset_id=asset.asset_id)
     try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
     tid = getattr(request.state, "tenant_id", None)
@@ -1611,6 +1640,7 @@ def delete_transcript(
     asset = AssetRepository(session).get_by_id(asset_id)
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
+    _lock_transcript(session, asset)
 
     shown = _shown_transcript(asset)
     if shown is None:
@@ -1632,14 +1662,13 @@ def delete_transcript(
     if shown == "manual":
         asset.has_transcript = None  # missing again: the machine makes one
         session.add(asset)
-        session.commit()
-        lineage.forget(session, [asset_id], "transcript")
+        lineage.forget(session, [asset_id], "transcript", commit=False)
     else:
         asset.has_transcript = False
         session.add(asset)
-        session.commit()
         # A person removed the machine's: their choice stands, nothing makes it again.
-        lineage.record(session, asset_id, "transcript", None, person=True, outcome="empty")
+        lineage.record(session, asset_id, "transcript", None, person=True, outcome="empty", commit=False)
+    session.commit()
     _transcript_searched(session, request, asset, None)
 
 

@@ -91,13 +91,13 @@ def require_lineage(value: LineageIn | dict | str | None, artifact: str,
     if made is None:
         raise InvalidChoiceError(
             "lineage_required",
-            f"Say how the {producer.title.lower()} was made: lineage (producer, version, settings_hash), "
-            "as GET /v1/producers gives them.",
+            f"A machine write must say how it was made ({producer.title.lower()}): lineage (producer, version, "
+            "settings_hash), as GET /v1/producers gives them.",
             {"artifact": artifact, "producer": producer.producer})
     if made["producer"] != producer.producer:
         raise InvalidChoiceError(
             "lineage_wrong_producer",
-            f"{made['producer']} doesn't make {producer.title.lower()}: {producer.producer} does.",
+            f"{made['producer']} isn't the producer of {producer.title.lower()}: {producer.producer} is.",
             {"artifact": artifact, "producer": made["producer"], "expected": producer.producer})
     return made
 

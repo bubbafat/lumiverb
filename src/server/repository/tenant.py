@@ -1747,6 +1747,8 @@ class AssetOcrRepository:
         one copy: the machine's isn't kept under it (Robert, Oct 9)."""
         from src.server.repository.corrections import persons_fields
 
+        # A person's save waits for this one (and this for theirs): no copy lands under it.
+        self._session.execute(sa_text("SELECT 1 FROM assets WHERE asset_id = :a FOR SHARE"), {"a": asset_id})
         if "ocr_text" in persons_fields(self._session, asset_id):
             text = ""
         self._session.execute(sa_text(
@@ -1783,6 +1785,8 @@ class AssetMetadataRepository:
         """
         from src.server.repository.corrections import without_persons
 
+        # A person's save waits for this one (and this for theirs): no copy lands under it.
+        self._session.execute(sa_text("SELECT 1 FROM assets WHERE asset_id = :a FOR SHARE"), {"a": asset_id})
         data = without_persons(self._session, asset_id, data)
         now = utcnow()
         stmt = pg_insert(AssetMetadata).values(
@@ -3751,7 +3755,7 @@ class FaceRepository:
                 iou = _bbox_iou(row.bounding_box_json, f.get("bounding_box"))
                 dist = distance(oi, ni)
                 if dist is None:
-                    ok = iou >= (cls.REDETECT_MIN_IOU_ACROSS_SWITCH if old_vecs[oi] is not None and switched(oi)
+                    ok = iou >= (cls.REDETECT_MIN_IOU_ACROSS_SWITCH if switched(oi)
                                  else cls.REDETECT_MIN_IOU_NO_EMBEDDING)
                 else:
                     ok = iou >= cls.REDETECT_MIN_IOU and dist < cls.REDETECT_MAX_EMBEDDING_DISTANCE

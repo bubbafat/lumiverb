@@ -117,7 +117,7 @@ def test_restore_queues_the_asset_and_its_scenes_for_search_sync(env):
 def test_restore_reindexes_transcript_segments(env):
     client, auth, library_id, _ = env
     asset_id = _video(client, auth, library_id, "restore/transcribed.mov")
-    r = client.post(f"/v1/assets/{asset_id}/transcript", json={"srt": SRT, "language": "en"}, headers=auth)
+    r = client.post(f"/v1/assets/{asset_id}/transcript", json={"source": "manual", "srt": SRT, "language": "en"}, headers=auth)
     assert r.status_code == 200, r.text
     assert client.delete(f"/v1/assets/{asset_id}", headers=auth).status_code == 204
 
@@ -158,7 +158,7 @@ def _synced(engine, asset_id):
 
 
 def _mark_synced_with_transcript(client, auth, engine, asset_id):
-    r = client.post(f"/v1/assets/{asset_id}/transcript", json={"srt": SRT, "language": "en"}, headers=auth)
+    r = client.post(f"/v1/assets/{asset_id}/transcript", json={"source": "manual", "srt": SRT, "language": "en"}, headers=auth)
     assert r.status_code == 200, r.text
     with engine.begin() as conn:
         conn.execute(text("UPDATE assets SET search_synced_at = now() WHERE asset_id = :a"), {"a": asset_id})

@@ -68,6 +68,33 @@ describe("CorrectableText", () => {
     await waitFor(() => expect(screen.queryByLabelText("Description")).toBeNull());
   });
 
+  it("an unchanged Save saves nothing: the machine's stays the machine's", async () => {
+    // Review: a Save alone made the field a person's for good.
+    const onSave = vi.fn();
+    render(
+      <CorrectableText label="Text in Image" value={null} corrected={false} canEdit emptyText="No text found" onSave={onSave} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Edit text in image" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByLabelText("Text in Image")).toBeNull());
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("removes what a person wrote, and says the machine writes it again", async () => {
+    const onRemove = vi.fn().mockResolvedValue(undefined);
+    const { rerender } = render(
+      <CorrectableText label="Description" value="Mittens" corrected canEdit emptyText="No description yet"
+        onSave={vi.fn()} onRemove={onRemove} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Remove your description (the machine writes it again)" }));
+    await waitFor(() => expect(onRemove).toHaveBeenCalled());
+    rerender(
+      <CorrectableText label="Description" value="a cat" corrected={false} canEdit emptyText="No description yet"
+        onSave={vi.fn()} onRemove={onRemove} />,
+    );
+    expect(screen.queryByRole("button", { name: /Remove your description/ })).toBeNull();  // only a person's
+  });
+
   it("cancels without saving", () => {
     const onSave = vi.fn();
     render(<CorrectableText label="Text in Image" value="EXIT" corrected={false} canEdit emptyText="No text found" onSave={onSave} />);
@@ -121,6 +148,22 @@ describe("CorrectableTags", () => {
     expect(screen.getByText("Edited")).toBeTruthy();
     expect(screen.queryByText(/The AI's/)).toBeNull();
     expect(screen.queryByRole("button", { name: /Use the AI's/ })).toBeNull();
+  });
+
+  it("an unchanged Save of the machine's tags saves nothing", async () => {
+    const onSave = vi.fn();
+    render(<CorrectableTags tags={["dog", "beach"]} corrected={false} canEdit onSave={onSave} renderTag={renderTag} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit tags" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByLabelText("Add a tag")).toBeNull());
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("removes a person's tags (the machine tags it again)", async () => {
+    const onRemove = vi.fn().mockResolvedValue(undefined);
+    render(<CorrectableTags tags={["Rex"]} corrected canEdit onSave={vi.fn()} onRemove={onRemove} renderTag={renderTag} />);
+    fireEvent.click(screen.getByRole("button", { name: "Remove your tags (the machine tags it again)" }));
+    await waitFor(() => expect(onRemove).toHaveBeenCalled());
   });
 
   it("says when there are none", () => {

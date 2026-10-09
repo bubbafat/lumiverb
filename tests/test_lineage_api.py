@@ -246,7 +246,7 @@ def test_changing_one_producers_setting_makes_exactly_its_artifacts_stale(env):
 def test_a_persons_transcript_is_current_whatever_the_settings(env):
     client, headers, *_ = env
     clip = _ingest(env, "lin/person.mov", media_type="video", sha=_sha())
-    client.post(f"/v1/assets/{clip}/transcript", json={"srt": "1\n00:00:00,000 --> 00:00:01,000\nmine\n"},
+    client.post(f"/v1/assets/{clip}/transcript", json={"source": "manual", "srt": "1\n00:00:00,000 --> 00:00:01,000\nmine\n"},
                 headers=headers)
     assert _row(env, clip, "transcript")[0] == P.PERSON and _state(env, clip, "transcript") == "current"
     # Removing theirs leaves none, and it's missing again: the machine makes one (Robert, Oct 9).
@@ -395,7 +395,7 @@ def test_a_client_cant_claim_a_person_made_it(env):
         "lineage_wrong_producer")
     assert _everything(env, vid) == before and _row(env, vid, "transcript") is None
     # A transcript a person typed is theirs.
-    client.post(f"/v1/assets/{vid}/transcript", json={"srt": "1\n00:00:00,000 --> 00:00:01,000\nmine\n"},
+    client.post(f"/v1/assets/{vid}/transcript", json={"source": "manual", "srt": "1\n00:00:00,000 --> 00:00:01,000\nmine\n"},
                 headers=headers)
     assert _row(env, vid, "transcript")[0] == P.PERSON
 
@@ -566,7 +566,7 @@ def test_every_machine_write_that_doesnt_say_is_refused_and_saves_nothing(env):
     assert _clips_at(env, "lin/refused-new.jpg") == 0
 
     # A person's writes need none.
-    r = client.post(f"/v1/assets/{vid}/transcript", json={"srt": "1\n00:00:00,000 --> 00:00:01,000\nmine\n"},
+    r = client.post(f"/v1/assets/{vid}/transcript", json={"source": "manual", "srt": "1\n00:00:00,000 --> 00:00:01,000\nmine\n"},
                     headers=headers)
     assert r.status_code == 200, r.text
     assert _row(env, vid, "transcript")[0] == P.PERSON

@@ -200,7 +200,7 @@ def test_a_persons_transcript_stays_when_the_file_changes(env):
     with _db(env) as s:
         s.execute(text("UPDATE assets SET duration_sec = 30 WHERE asset_id = :a"), {"a": vid})
         s.commit()
-    r = client.post(f"/v1/assets/{vid}/transcript", json={"srt": "1\n00:00:00,000 --> 00:00:01,000\nmine\n"},
+    r = client.post(f"/v1/assets/{vid}/transcript", json={"source": "manual", "srt": "1\n00:00:00,000 --> 00:00:01,000\nmine\n"},
                     headers=headers)
     assert r.status_code == 200, r.text
     _ingest_with(lib, "a.mov", _sha(), None, media_type="video")

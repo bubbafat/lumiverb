@@ -508,7 +508,7 @@ def test_public_transcripts_stop_at_the_public_cap(env, media):
     srt = ("1\n00:00:02,000 --> 00:00:04,000\nearly words\n\n"
            "2\n00:00:09,500 --> 00:00:12,000\nstraddling\n\n"
            "3\n00:00:20,000 --> 00:00:22,000\nlate secret\n")
-    r = client.post(f"/v1/assets/{asset_id}/transcript", json={"srt": srt, "language": "en"}, headers=admin)
+    r = client.post(f"/v1/assets/{asset_id}/transcript", json={"source": "manual", "srt": srt, "language": "en"}, headers=admin)
     assert r.status_code == 200, r.text
     params = _public(env)
     public = client.get(f"/v1/assets/{asset_id}", params=params).json()["transcript_srt"]
