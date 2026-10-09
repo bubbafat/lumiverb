@@ -1407,6 +1407,7 @@ def run_repair(
             with progress:
                 tid = progress.add_task("Faces", total=len(assets), ok=0, fail=0)
                 for chunk in _until(stop, chunks, _take_chunk if on_take else None):
+                    face_used = producers.settings("faces")  # one read: what's found and its lineage agree
                     _run_face_pipeline(
                         assets=chunk,
                         client=client,
@@ -1420,8 +1421,8 @@ def run_repair(
                         tid=tid,
                         console=console,
                         label="faces",
-                        lineage=producers.lineage("faces", None, used=producers.settings("faces")),
-                        settings=producers.settings("faces"),
+                        lineage=producers.lineage("faces", None, used=face_used),
+                        settings=face_used,
                         on_fail=failures.for_artifact("faces"),
                     )
 
@@ -1439,6 +1440,7 @@ def run_repair(
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Re-detect faces", total=len(assets), ok=0, fail=0)
+                face_used = producers.settings("faces")  # one read: what's found and its lineage agree
                 _run_face_pipeline(
                     assets=assets,
                     client=client,
@@ -1452,8 +1454,8 @@ def run_repair(
                     tid=tid,
                     console=console,
                     label="redetect-faces",
-                    lineage=producers.lineage("faces", None, used=producers.settings("faces")),
-                    settings=producers.settings("faces"),
+                    lineage=producers.lineage("faces", None, used=face_used),
+                    settings=face_used,
                     on_fail=failures.for_artifact("faces"),
                 )
 

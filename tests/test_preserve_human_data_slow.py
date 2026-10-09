@@ -327,6 +327,35 @@ def test_redetect_keeps_confirmed_face_it_does_not_refind(env) -> None:
     assert _match(tenant_url, face_id) == (person_id, True)
 
 
+def _reject(tenant_url: str, face_id: str, person_id: str) -> None:
+    """A person said "not them" (un-assigning the face from them)."""
+    with _db(tenant_url) as s:
+        s.execute(text("INSERT INTO face_person_rejections (face_id, person_id, created_at)"
+                       " VALUES (:f, :p, NOW())"), {"f": face_id, "p": person_id})
+        s.commit()
+
+
+@pytest.mark.slow
+def test_redetect_keeps_a_face_someone_said_isnt_a_person(env) -> None:
+    """Stricter face settings that don't find it keep the face and its "not
+    them"; looser ones that find it again don't put it back on them (Oct 9:
+    face settings are two clicks now)."""
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    alice = _seed_person(tenant_url, emb=91)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=91)
+    _reject(tenant_url, face_id, alice)
+
+    stricter = _redetect(client, headers, asset_id, [(_box(0.60, 0.60), 92)])
+    assert face_id not in stricter["face_ids"]
+    assert _face_exists(tenant_url, face_id) and _rejected(tenant_url, face_id) == {alice}
+
+    looser = _redetect(client, headers, asset_id, [(_box(0.11, 0.10), _near(91)), (_box(0.60, 0.60), 92)])
+    assert face_id in looser["face_ids"]  # the same face, found again
+    assert _rejected(tenant_url, face_id) == {alice}
+    assert (_match(tenant_url, face_id) or (None,))[0] != alice
+
+
 @pytest.mark.slow
 def test_redetect_drops_machine_made_data(env) -> None:
     """Auto-assigned matches are derived data: a face that isn't re-found is

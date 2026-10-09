@@ -186,3 +186,27 @@ def test_faces_settings_that_can_change_and_those_that_cant():
                         "min_relative_size", "min_sharpness"}
     assert FACES.setting("model").fixed and FACES.setting("det_size").fixed
     assert FACES.setting("max_detect_edge").maximum <= PROXY_CACHE_EDGE  # faces are found in the proxies
+
+
+def test_the_detector_keeps_faces_down_to_the_least_confidence_set():
+    """SCRFD drops faces under its own det_thresh (0.5) before our gate sees
+    them: a lower setting would change nothing yet redo every photo."""
+    app = MagicMock()
+    app.get.return_value = [_make_mock_face([64, 48, 320, 336], det_score=0.35)]
+    provider = InsightFaceProvider(FaceSettings(min_confidence=0.3))
+    provider._app = app
+    assert len(provider.detect_faces(_make_sharp_image(640, 480))) == 1
+    assert app.det_model.det_thresh == 0.3
+    provider.settings = FaceSettings()  # the next batch, at the default
+    provider.detect_faces(_make_sharp_image(640, 480))
+    assert app.det_model.det_thresh == 0.5
+
+
+@pytest.fixture(autouse=True)
+def _no_provider_left_behind():
+    """repair._PROVIDER is per process: a test's mock mustn't reach the next test."""
+    from src.client.cli import repair
+
+    repair._PROVIDER = None
+    yield
+    repair._PROVIDER = None

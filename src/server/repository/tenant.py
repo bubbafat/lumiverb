@@ -3634,7 +3634,8 @@ class FaceRepository:
             text(
                 "SELECT f.face_id, f.bounding_box_json, f.embedding_vector::text AS emb, f.embedding_model,"
                 " EXISTS (SELECT 1 FROM face_person_matches m"
-                "         WHERE m.face_id = f.face_id AND m.confirmed) AS confirmed"
+                "         WHERE m.face_id = f.face_id AND m.confirmed) AS confirmed,"
+                " EXISTS (SELECT 1 FROM face_person_rejections r WHERE r.face_id = f.face_id) AS rejected"
                 " FROM faces f WHERE f.asset_id = :aid"
             ),
             {"aid": asset_id},
@@ -3642,9 +3643,13 @@ class FaceRepository:
 
         pairs = self._pair_redetected_faces(old_rows, faces, embedding_model)
         reused_ids = set(pairs.values())
-        kept_ids = [r.face_id for r in old_rows if r.face_id not in reused_ids and r.confirmed]
+        # A person's word on a face is kept even when it isn't found again:
+        # a name (confirmed), or "not them" (a rejection), which a later
+        # detection that finds it again must still honour.
+        said = {r.face_id for r in old_rows if r.confirmed or r.rejected}
+        kept_ids = [r.face_id for r in old_rows if r.face_id not in reused_ids and r.face_id in said]
         dropped_ids = [
-            r.face_id for r in old_rows if r.face_id not in reused_ids and not r.confirmed
+            r.face_id for r in old_rows if r.face_id not in reused_ids and r.face_id not in said
         ]
 
         # Machine-made assignments on re-found faces are derived from the old

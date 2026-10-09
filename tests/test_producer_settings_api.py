@@ -209,11 +209,30 @@ def test_a_new_prompt_is_saved_whole_with_its_equals_signs(env):
     assert _producer(env, "vision")["settings"]["prompt"] == prompt
 
 
-def test_faces_settings_change_and_ask_before_finding_faces_again(env):
-    r = _put(env, "faces", settings={"min_confidence": 0.7}, redo=True)
-    assert r.status_code == 200 and r.json()["settings"]["min_confidence"] == 0.7, r.text
-    r = _put(env, "faces", settings={"model": "antelopev2"})
-    assert r.status_code == 422 and r.json()["error"]["code"] == "setting_fixed", r.text
+def test_faces_settings_ask_saying_what_a_redo_keeps(env):
+    from tests.test_lineage_api import _want
+
+    lib = _library(env, "FaceSettings")
+    client, headers, *_ = lib
+    sha = _sha()
+    photo = _ingest_with(lib, "a.jpg", sha, None)
+    r = client.post(f"/v1/assets/{photo}/faces", json={
+        "detection_model": "insightface", "detection_model_version": "buffalo_l", "faces": [],
+        "lineage": _want(lib, "faces", sha)}, headers=headers)
+    assert r.status_code == 201, r.text
+    assert _counts(lib, "faces")["current"] == 1
+    try:
+        r = _put(env, "faces", settings={"min_confidence": 0.7})
+        assert r.status_code == 409, r.text
+        assert "Faces people named, or said aren't someone, are kept" in r.json()["error"]["message"]
+        assert r.json()["error"]["details"]["clips"] >= 1
+        r = _put(env, "faces", settings={"min_confidence": 0.7}, redo=True)
+        assert r.status_code == 200 and r.json()["settings"]["min_confidence"] == 0.7, r.text
+        assert _counts(lib, "faces")["stale"] == 1
+    finally:
+        _put(env, "faces", settings={"min_confidence": None}, redo=True)
+    for settings in ({"model": "antelopev2"}, {"det_size": 320}):
+        r = _put(env, "faces", settings=settings)
+        assert r.status_code == 422 and r.json()["error"]["code"] == "setting_fixed", r.text
     r = _put(env, "faces", settings={"max_detect_edge": 2048})  # past the proxies' size
     assert r.status_code == 422 and r.json()["error"]["code"] == "bad_setting", r.text
-    _put(env, "faces", settings={"min_confidence": None}, redo=True)

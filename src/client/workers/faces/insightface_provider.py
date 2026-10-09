@@ -134,12 +134,6 @@ class InsightFaceProvider:
         """Force model loading now (fail fast). Thread-safe."""
         self._load()
 
-    # Max long edge for face detection input (settings.max_detect_edge).
-    # InsightFace resizes to det_size internally for detection anyway — larger
-    # inputs just waste memory. Bounding boxes are returned as fractions, so
-    # resizing is transparent.
-    _MAX_DETECT_EDGE = MAX_DETECT_EDGE
-
     def detect_faces(self, pil_image: "PIL.Image.Image") -> list[FaceDetection]:
         """Detect faces and generate ArcFace embeddings in one pass.
 
@@ -173,6 +167,9 @@ class InsightFaceProvider:
         del img_array  # free RGB copy
 
         with self._infer_lock:
+            # The detector drops faces under its own threshold (0.5 by
+            # default) before the gates below see them: it follows the setting.
+            app.det_model.det_thresh = gates.min_confidence
             faces = app.get(img_bgr)
         h, w = img_bgr.shape[:2]
 
