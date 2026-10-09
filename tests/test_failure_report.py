@@ -17,6 +17,7 @@ from rich.console import Console
 from src.client.cli.config import CLIConfig, save_config
 from src.client.cli.failure_report import FailureReport
 from src.client.cli.repair import run_repair
+from tests.ai_machine_fakes import built_in_whisper
 
 pytestmark = pytest.mark.fast
 
@@ -60,6 +61,7 @@ def _run(client: MagicMock, library: dict, job_type: str, flag: str, page: list[
     with (
         patch("src.client.cli.repair.get_repair_summary", return_value={"total_assets": len(page), flag: len(page)}),
         patch("src.client.cli.repair._page_missing", return_value=page),
+        built_in_whisper(),
     ):
         run_repair(client, library, job_type=job_type, console=Console(quiet=True))
 

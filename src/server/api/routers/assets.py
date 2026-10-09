@@ -380,10 +380,10 @@ def page_assets(
     work = None
     upgrading_now: set[str] = set()
     if flags and upgrades:
-        from src.server.api.routers.producers import tenant_vision_model
+        from src.server.api.routers.producers import tenant_job_models
 
         if lineage.any_upgrades(session):
-            lineage.retire_outdated(session, tenant_vision_model(request))
+            lineage.retire_outdated(session, tenant_job_models(request))
             upgrading_now = lineage.upgrading_artifacts(session)
             work = {f: lineage.work(f, upgrading_now) for f in flags}
     assets = asset_repo.page_by_library(
@@ -524,11 +524,11 @@ def repair_summary(
     lib = LibraryRepository(session).get_by_id(library_id)
     if lib is None:
         raise HTTPException(status_code=404, detail="Library not found")
-    from src.server.api.routers.producers import tenant_vision_model
+    from src.server.api.routers.producers import tenant_job_models
     from src.server.repository.tenant import MISSING_CONDITIONS
     from src.shared.producers import MISSING_FLAGS
 
-    live = lineage.prepare(session, tenant_vision_model(request)) if upgrades else set()
+    live = lineage.prepare(session, tenant_job_models(request)) if upgrades else set()
     c = dict(MISSING_CONDITIONS)
     for flag in MISSING_FLAGS:
         c[flag] = lineage.work(flag, live)

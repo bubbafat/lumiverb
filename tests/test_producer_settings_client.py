@@ -213,7 +213,7 @@ def test_descriptions_say_which_file_each_came_from(tmp_path, monkeypatch):
     [call] = [c for c in client.post.call_args_list if c.args[0] == "/v1/assets/batch-vision"]
     body = call.kwargs["json"]
     assert body["items"][0]["source_sha256"] == SHA and "lineage" not in body["items"][0]
-    assert body["lineage"] == P.lineage("vision", P.effective_settings("vision", account={"model": model}), None)
+    assert body["lineage"] == P.lineage("vision", P.effective_settings("vision", account={"vision": model}), None)
 
 
 def test_descriptions_record_the_model_that_made_them(tmp_path, monkeypatch):
@@ -241,7 +241,7 @@ def test_descriptions_record_the_model_that_made_them(tmp_path, monkeypatch):
     assert provider.call_args.args[0] == "qwen3-vl:8b"
     [call] = [c for c in client.post.call_args_list if c.args[0] == "/v1/assets/batch-vision"]
     assert call.kwargs["json"]["lineage"]["settings_hash"] == P.settings_hash(
-        P.effective_settings("vision", account={"model": "qwen3-vl:8b"}))
+        P.effective_settings("vision", account={"vision": "qwen3-vl:8b"}))
 
 
 def test_descriptions_take_upgrades_after_what_is_missing(tmp_path, monkeypatch):

@@ -127,17 +127,18 @@ class ProducerList(BaseModel):
     producers: list[ProducerItem]
 
 
-def tenant_vision_model(request: Request) -> str:
-    """The tenant's vision model from the control plane, if any."""
+def tenant_job_models(request: Request) -> dict[str, str]:
+    """The tenant's model per AI job (Settings → AI), from the control plane."""
     from src.server.database import get_control_session
+    from src.server.repository.ai_machines import job_models
     from src.server.repository.control_plane import TenantRepository
 
     tenant_id = getattr(request.state, "tenant_id", None)
     if not tenant_id:
-        return ""
+        return {}
     with get_control_session() as ctrl:
         tenant = TenantRepository(ctrl).get_by_id(tenant_id)
-    return (tenant.vision_model_id if tenant else "") or ""
+    return job_models(tenant)
 
 
 @router.get("", response_model=ProducerList, dependencies=[Depends(require_signed_in)])
@@ -151,17 +152,17 @@ def list_producers(
 ) -> ProducerList:
     """Every producer with its settings now and its upgrades; counts (in one
     library or project when given) unless counts=false, as the worker asks."""
-    vision_model = tenant_vision_model(request)
+    models = tenant_job_models(request)
     asset_ids = None
     if counts and project_id:
         require_editor(request)  # like every project route
         asset_ids = _project_clips(request, session, user_id, project_id)
     if counts:
-        lineage.retire_outdated(session, vision_model)
+        lineage.retire_outdated(session, models)
     admin = getattr(request.state, "role", None) == "admin"
     items = []
     for artifact, p in PRODUCERS.items():
-        want = lineage.desired(session, artifact, vision_model)
+        want = lineage.desired(session, artifact, models)
         item = ProducerItem(
             artifact=artifact, producer=p.producer, version=p.version, title=p.title, media=list(p.media),
             uniform=p.uniform, settings=want["settings"], settings_hash=want["settings_hash"],
@@ -249,9 +250,9 @@ def approve_upgrade(
         scope = UpgradeScope(kind="project", id=body.project_id,
                              name=ProjectRepository(session).get_by_id(body.project_id).name)
 
-    vision_model = tenant_vision_model(request)
-    lineage.retire_outdated(session, vision_model)
-    want = lineage.desired(session, artifact, vision_model)
+    models = tenant_job_models(request)
+    lineage.retire_outdated(session, models)
+    want = lineage.desired(session, artifact, models)
     stale, edited = lineage.stale_ids(session, artifact, want, body.library_id, asset_ids)
     where = {"all": "", "library": f" in {scope.name}", "project": f" in {scope.name}"}[scope.kind]
     if not stale:

@@ -797,6 +797,8 @@ export interface AiMachine {
   /** Requests it takes at once. */
   at_once: number;
   enabled: boolean;
+  /** The worker's own computer (its Whisper): no URL or key, can't be removed. */
+  built_in: boolean;
   /** null until it has been checked. */
   status: MachineStatus | null;
 }
@@ -808,6 +810,10 @@ export interface AiJob {
   model: string;
   machines: number;
   offering: number;
+  /** The models the machines doing it offer, to pick its model from. */
+  choices: string[];
+  /** The built-in machine can do it. */
+  built_in: boolean;
 }
 
 export interface AiSettings {
@@ -844,12 +850,14 @@ export async function addMachine(body: MachineFields): Promise<AiSettings> {
 
 /** Change a machine (admins): only the fields sent. 409
  * job_left_without_machine (details.jobs) unless leaveJobs, when it's the last
- * machine doing a job; otherwise as addMachine. */
+ * machine doing a job; otherwise as addMachine. The built-in machine takes no
+ * api_url or api_key, and only the jobs it can do (409 built_in_machine). */
 export async function updateMachine(machineId: string, body: Partial<MachineFields>, leaveJobs = false): Promise<AiSettings> {
   return apiFetch<AiSettings>(`/ai/machines/${machineId}${leaveJobs ? "?leave_jobs=true" : ""}`, { method: "PATCH", body });
 }
 
-/** Remove a machine (admins). 409 job_left_without_machine unless leaveJobs. */
+/** Remove a machine (admins). 409 job_left_without_machine unless leaveJobs;
+ * 409 built_in_machine for the built-in one (turn it off instead). */
 export async function removeMachine(machineId: string, leaveJobs = false): Promise<AiSettings> {
   return apiFetch<AiSettings>(`/ai/machines/${machineId}${leaveJobs ? "?leave_jobs=true" : ""}`, { method: "DELETE" });
 }

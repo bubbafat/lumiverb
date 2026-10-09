@@ -27,6 +27,7 @@ its own. "Replace my edits" happens as each clip is made again
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import timedelta
 from typing import Any
 
@@ -89,10 +90,10 @@ def _meta(session: Session, key: str) -> str | None:
     return row[0] if row else None
 
 
-def account_settings(session: Session, tenant_vision_model: str | None = None) -> dict[str, Any]:
-    """Account-wide values producers take: the vision model chosen in
+def account_settings(session: Session, job_models: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Account-wide values producers take: each AI job's model, chosen in
     Settings → AI (the tenant's, in the control plane)."""
-    return {"model": tenant_vision_model or ""}
+    return {job: model for job, model in (job_models or {}).items() if model}
 
 
 def overrides(session: Session, artifact: str) -> dict[str, Any]:
@@ -103,11 +104,11 @@ def overrides(session: Session, artifact: str) -> dict[str, Any]:
         return {}
 
 
-def desired(session: Session, artifact: str, tenant_vision_model: str | None = None) -> dict[str, Any]:
+def desired(session: Session, artifact: str, job_models: Mapping[str, str] | None = None) -> dict[str, Any]:
     """What a current artifact of this kind is made with now: producer,
-    version, settings and their hash."""
+    version, settings and their hash. job_models: the account's model per AI job."""
     p = PRODUCERS[artifact]
-    settings = effective_settings(artifact, overrides(session, artifact), account_settings(session, tenant_vision_model))
+    settings = effective_settings(artifact, overrides(session, artifact), account_settings(session, job_models))
     return {"producer": p.producer, "version": p.version, "settings": settings,
             "settings_hash": settings_hash(settings)}
 
@@ -225,7 +226,9 @@ EDITED: dict[str, str] = {
     "ocr": "EXISTS (SELECT 1 FROM asset_corrections c WHERE c.asset_id = a.asset_id AND c.ocr_text IS NOT NULL)",
 }
 # What each AI job's model makes (Settings → AI): a new model makes these stale.
-JOB_ARTIFACTS: dict[str, tuple[str, ...]] = {"vision": ("vision", "ocr", "scene_vision")}
+JOB_ARTIFACTS: dict[str, tuple[str, ...]] = {
+    job: tuple(a for a, p in PRODUCERS.items() if p.job == job) for job in {p.job for p in PRODUCERS.values() if p.job}
+}
 
 # The corrections each artifact's edits are, as they're kept in correction_history.
 EDIT_FIELDS: dict[str, tuple[str, ...]] = {"vision": ("description", "tags"), "ocr": ("ocr_text",)}
@@ -267,7 +270,7 @@ def any_upgrades(session: Session) -> bool:
     return session.execute(text("SELECT 1 FROM producer_upgrades LIMIT 1")).first() is not None
 
 
-def retire_outdated(session: Session, tenant_vision_model: str | None) -> None:
+def retire_outdated(session: Session, job_models: Mapping[str, str] | None) -> None:
     """Drop upgrades to settings that aren't the producer's any more: what's
     left of them would be made with newer settings nobody was asked about."""
     rows = session.execute(text(
@@ -280,7 +283,7 @@ def retire_outdated(session: Session, tenant_vision_model: str | None) -> None:
         if artifact not in PRODUCERS:
             gone.append(upgrade_id)
             continue
-        w = want.setdefault(artifact, desired(session, artifact, tenant_vision_model))
+        w = want.setdefault(artifact, desired(session, artifact, job_models))
         if (w["producer"], w["version"], w["settings_hash"]) != (producer, version, h):
             gone.append(upgrade_id)
     if gone:
@@ -301,12 +304,12 @@ def work(flag: str, upgrading_now: set[str]) -> str:
     return MISSING_CONDITIONS[flag]
 
 
-def prepare(session: Session, tenant_vision_model: str | None) -> set[str]:
+def prepare(session: Session, job_models: Mapping[str, str] | None) -> set[str]:
     """Before handing out upgrade work: drop outdated and finished upgrades;
     the artifacts still being upgraded."""
     if not any_upgrades(session):
         return set()
-    retire_outdated(session, tenant_vision_model)
+    retire_outdated(session, job_models)
     for artifact in upgrading_artifacts(session):
         upgrades(session, artifact)  # drops finished ones
     return upgrading_artifacts(session)

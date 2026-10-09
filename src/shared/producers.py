@@ -9,7 +9,9 @@ any of them differs from what's registered now, the artifact is stale.
 
 Bump a producer's ``version`` when its code changes what it makes. Change a
 default in ``defaults`` when a setting changes; the hash follows. Settings an
-account changes are stored on the server and laid over these defaults.
+account changes are stored on the server and laid over these defaults. An AI
+producer's model is its job's (Settings → AI, src/shared/ai_jobs.py), and
+only the job's: one model per job.
 
 Shared by the server (what's current) and the worker (what it makes and
 records), so they agree on both.
@@ -52,8 +54,8 @@ class Producer:
     # Its output must come from one model across the library (an embedding
     # space): an upgrade can't be partial.
     uniform: bool = False
-    # Settings whose empty default means "the account's": filled in by the server.
-    from_account: tuple[str, ...] = ()
+    # The AI job whose model is its "model" (the account's, on the server).
+    job: str = ""
 
 
 def _producers() -> tuple[Producer, ...]:
@@ -69,20 +71,21 @@ def _producers() -> tuple[Producer, ...]:
         Producer("scenes", "scene-detect", "1", VIDEO, "Scenes",
                  {"frame_width": 480, "frames": "keyframes", "phash_threshold": 51, "phash_hash_size": 16,
                   "temporal_ceiling_sec": 30.0, "debounce_sec": 3.0}),
-        Producer("scene_vision", "scene-vision", "1", VIDEO, "Scene descriptions", vision,
-                 from_account=("model",)),
-        Producer("vision", "vision", "1", IMAGE, "Descriptions and tags", vision, from_account=("model",)),
+        Producer("scene_vision", "scene-vision", "1", VIDEO, "Scene descriptions", vision, job="vision"),
+        Producer("vision", "vision", "1", IMAGE, "Descriptions and tags", vision, job="vision"),
         Producer("ocr", "ocr", "1", IMAGE, "Text in images (OCR)",
                  {"model": "", "prompt": OCR_PROMPT, "max_edge": 1280, "temperature": 0.2, "max_tokens": 500},
-                 from_account=("model",)),
+                 job="vision"),
         Producer("clip", "clip", "1", IMAGE, "Visual search (CLIP)",
                  {"model": "ViT-B-32", "pretrained": "openai", "input_edge": 1280}, uniform=True),
         Producer("faces", "insightface", "1", IMAGE, "Faces",
                  {"model": "buffalo_l", "det_size": 640, "max_detect_edge": 1280, "min_confidence": 0.5,
                   "min_area_fraction": 0.003, "min_face_pixels": 40, "min_relative_size": 0.15,
                   "min_sharpness": 15.0}, uniform=True),
+        # The silences skipped (VAD) are found on the worker, whichever machine
+        # transcribes the speech (src/client/workers/transcripts/speech.py).
         Producer("transcript", "whisper", "1", VIDEO, "Transcripts",
-                 {"model": "small", "vad_min_silence_ms": 500}),
+                 {"model": "small", "vad_min_silence_ms": 500}, job="transcripts"),
     )
 
 
@@ -134,18 +137,18 @@ def settings_hash(settings: Mapping[str, Any]) -> str:
 
 
 def effective_settings(artifact: str, overrides: Mapping[str, Any] | None = None,
-                       account: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """The producer's defaults, then the account's values for its from_account
-    settings (e.g. the vision model), then explicit overrides. Unknown keys
-    in overrides are ignored: only declared settings change output."""
+                       account: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """The producer's defaults, then explicit overrides, then its job's model
+    from the account ({job: model}; a job without one leaves the default).
+    Unknown keys in overrides are ignored: only declared settings change
+    output. A job's model comes from the job alone: an override can't say another."""
     p = PRODUCERS[artifact]
     out = dict(p.defaults)
-    for key in p.from_account:
-        if account and account.get(key):
-            out[key] = account[key]
     for key, value in (overrides or {}).items():
-        if key in p.defaults:
+        if key in p.defaults and not (p.job and key == "model"):
             out[key] = value
+    if p.job and account and account.get(p.job):
+        out["model"] = account[p.job]
     return out
 
 

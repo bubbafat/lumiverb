@@ -17,8 +17,8 @@ enriches them:
    queue doesn't hold them back. Enrichment runs again only when a library's
    counts change, its storage comes back, or an hour has passed, so a
    file that fails every time isn't retried every minute. Steps that need
-   vision AI wait while the endpoint chosen in Settings → AI doesn't offer
-   its model (the server is told, and Settings shows it). Enrichment gets 15
+   an AI job (vision, transcripts) wait while no machine doing it in
+   Settings → AI can (the server is told, and Settings shows it). Enrichment gets 15
    minutes a cycle (a first ingest's can take days), stopping between
    items so change reports are scanned next cycle; it goes on from there,
    least recently enriched library first. An item enrichment took isn't
@@ -70,8 +70,10 @@ DEFAULT_ENRICH_BUDGET_SEC = 15 * 60.0
 # getting going.
 ENRICH_MIN_START_SEC = 60.0
 
-# Enrich steps that need a vision AI endpoint, and the count each repairs.
+# Enrich steps that need an AI job's machines (Settings → AI), and the count each repairs.
 VISION_STEPS = {"vision": "missing_vision", "ocr": "missing_ocr", "scene-vision": "missing_scene_vision"}
+TRANSCRIPT_STEPS = {"transcribe": "missing_transcription"}
+AI_STEPS = {**VISION_STEPS, **TRANSCRIPT_STEPS}
 
 # repair-summary counts that enrich acts on. Counts like missing_proxy are
 # scan's job.
@@ -214,6 +216,15 @@ def _vision_ready(client: LumiverbClient) -> bool:
     return VisionGuard(client).check()
 
 
+def _transcripts_ready(client: LumiverbClient) -> bool:
+    """Whether a machine doing transcripts can now (the built-in Whisper or a
+    server; the server is told). When none can, or transcripts are off,
+    transcription waits; no clip is charged a failure for it."""
+    from src.client.cli.transcript_guard import TranscriptGuard
+
+    return TranscriptGuard(client).check()
+
+
 def _is_dir(root: Path, rel: str) -> bool:
     """False when it can't be checked: its parent's scan covers it either way."""
     try:
@@ -224,7 +235,7 @@ def _is_dir(root: Path, rel: str) -> bool:
 
 
 def _fingerprint(summary: dict, reachable: bool, skip: set[str]) -> tuple:
-    skipped = {VISION_STEPS[s] for s in skip}
+    skipped = {AI_STEPS[s] for s in skip}
     return (reachable, tuple(summary.get(k, 0) for k in ENRICH_COUNTS if k not in skipped))
 
 
@@ -340,7 +351,8 @@ def run_cycle(
     libraries = client.get("/v1/libraries").json()
     if only:
         libraries = [lib for lib in libraries if lib["name"] in only]
-    skip = set() if _vision_ready(client) else set(VISION_STEPS)
+    skip = (set() if _vision_ready(client) else set(VISION_STEPS)) | \
+        (set() if _transcripts_ready(client) else set(TRANSCRIPT_STEPS))
 
     reachable: dict[str, bool] = {}
     for library in libraries:

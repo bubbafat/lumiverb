@@ -281,3 +281,129 @@ def test_a_failed_item_says_which_machine_served_it():
     with pytest.raises(CaptionError) as e:
         PooledCaptionProvider(pool, lambda m: bad).describe("a.jpg")
     assert e.value.machine is pool.machines[0]
+
+
+# ---------------------------------------------------------------------------
+# Transcripts: the built-in Whisper, and servers that name a model their way
+# ---------------------------------------------------------------------------
+
+BUILT_IN = {"machine_id": "aim_self", "name": "Built in", "api_url": "", "api_key": "", "at_once": 1, "built_in": True}
+SPEACHES = {"machine_id": "aim_sp", "name": "Speaches", "api_url": "http://speaches/v1", "api_key": "", "at_once": 2,
+            "built_in": False}
+
+
+def _transcripts(machines=(BUILT_IN, SPEACHES), model="small"):
+    client = MagicMock()
+    client.get.return_value.json.return_value = {"job": "transcripts", "model": model, "machines": list(machines)}
+    return client
+
+
+def test_the_built_in_whisper_is_checked_on_this_computer_not_asked():
+    from src.shared.whisper_models import BUILT_IN_MODELS
+
+    client = _transcripts((BUILT_IN,))
+    with _offering({}) as asked:
+        pool = MachinePool(client, "transcripts")
+        assert pool.check() is True
+    asked.assert_not_called()
+    built_in = pool.machines[0]
+    assert built_in.built_in and built_in.online and built_in.serves == "small"
+    assert _statuses(client)["aim_self"] == [{"online": True, "error": "", "models": BUILT_IN_MODELS}]
+
+
+def test_the_built_in_whisper_without_faster_whisper_or_the_model_says_why():
+    client = _transcripts((BUILT_IN,))
+    with patch("src.client.workers.transcripts.local.unavailable", return_value="faster-whisper isn't installed."):
+        pool = MachinePool(client, "transcripts")
+        assert pool.check() is False
+    assert "faster-whisper isn't installed" in _statuses(client)["aim_self"][-1]["error"]
+    pool = MachinePool(_transcripts((BUILT_IN,), model="whisper-1"), "transcripts")
+    assert pool.check() is False
+    assert "doesn't know whisper-1" in pool.machines[0].error
+
+
+def test_a_server_is_asked_for_the_model_by_the_name_it_lists():
+    client = _transcripts((SPEACHES,), model="small")
+    with _offering({"http://speaches/v1": ("Systran/faster-whisper-small", "kokoro")}):
+        pool = MachinePool(client, "transcripts")
+        assert pool.check() is True
+    assert pool.machines[0].serves == "Systran/faster-whisper-small"
+    with _offering({"http://speaches/v1": ("Systran/faster-whisper-medium",)}):
+        assert pool.recheck() is False
+    assert "doesn't offer small" in pool.machines[0].error
+
+
+def test_transcripts_go_to_each_machine_as_it_names_the_model_and_move_on_when_one_fails():
+    from src.client.cli.ai_pool import PooledTranscriber
+    from src.client.workers.transcripts.base import Heard, Segment, TranscriptError
+
+    client = _transcripts()
+    with _offering({"http://speaches/v1": ("Systran/faster-whisper-small",)}):
+        pool = MachinePool(client, "transcripts")
+        pool.check()
+    made = {}
+
+    def make(machine):
+        t = MagicMock()
+        made[machine.name] = (machine.serves, t)
+        if machine.built_in:
+            t.transcribe.side_effect = TranscriptError("Couldn't load small: no space left", endpoint_fault=True)
+        else:
+            t.transcribe.return_value = Heard([Segment(0.0, 1.0, " hi")], "en")
+        return t
+
+    transcriber = PooledTranscriber(pool, make)
+    assert transcriber.transcribe("speech.wav") == Heard([Segment(0.0, 1.0, " hi")], "en")
+    assert made["Built in"][0] == "small" and made["Speaches"][0] == "Systran/faster-whisper-small"
+    assert [m.name for m in pool.machines if m.online] == ["Speaches"]
+    assert _statuses(client)["aim_self"][-1]["error"] == "Couldn't load small: no space left"
+
+    # A clip's own failure says which machine heard it (with the built-in out, no other to try).
+    made["Speaches"][1].transcribe.side_effect = TranscriptError("audio too short", endpoint_fault=False)
+    with pytest.raises(TranscriptError) as e:
+        transcriber.transcribe("b.wav")
+    assert e.value.endpoint_fault is False and e.value.machine.name == "Speaches"
+    assert [m.name for m in pool.machines if m.online] == ["Speaches"]  # not held against it
+    # None left: the machines' fault.
+    made["Speaches"][1].transcribe.side_effect = TranscriptError("connection refused", endpoint_fault=True)
+    with pytest.raises(TranscriptError) as e:
+        transcriber.transcribe("c.wav")
+    assert e.value.endpoint_fault is True and pool.down
+
+
+def test_a_clip_one_server_refuses_goes_to_the_others_first():
+    """A server may refuse what another takes (nginx's body limit in front of
+    it, say); the clip is the clip's only once every machine has refused it."""
+    from src.client.cli.ai_pool import PooledTranscriber
+    from src.client.workers.transcripts.base import Heard, TranscriptError
+
+    client = _transcripts()
+    with _offering({"http://speaches/v1": ("Systran/faster-whisper-small",)}):
+        pool = MachinePool(client, "transcripts")
+        pool.check()
+    calls = []
+
+    def make(machine):
+        t = MagicMock()
+
+        def transcribe(wav):
+            calls.append(machine.name)
+            if machine.name == "Speaches" or wav == "bad.wav":
+                raise TranscriptError(f"{machine.name} answered 413", endpoint_fault=False)
+            return Heard()
+        t.transcribe.side_effect = transcribe
+        return t
+
+    transcriber = PooledTranscriber(pool, make)
+    pool.machines[0].busy = 1  # the built-in is busy: the server is asked first
+    got = []
+    worker = threading.Thread(target=lambda: got.append(transcriber.transcribe("big.wav")))
+    worker.start()
+    time.sleep(0.2)
+    pool.release(pool.machines[0])
+    worker.join(5)
+    assert got == [Heard()] and calls == ["Speaches", "Built in"]
+    assert all(m.online for m in pool.machines)
+    with pytest.raises(TranscriptError) as e:
+        transcriber.transcribe("bad.wav")
+    assert e.value.endpoint_fault is False and sorted(calls[2:]) == ["Built in", "Speaches"]

@@ -3,7 +3,10 @@
 Each machine is an OpenAI-compatible endpoint with its own limit of
 requests at once; the job has one model (Robert's call, Oct 8). Before
 sending a machine work, the worker checks it offers the model, and tells
-the server what it found, per machine. Requests go to online machines, each
+the server what it found, per machine. The built-in machine is the
+worker's own computer: it's checked here (faster-whisper installed, and
+the model one it knows), not asked. A server is asked for the model by the
+name it lists it as (Systran/faster-whisper-small for small). Requests go to online machines, each
 up to its limit, least busy for its size first. A machine that fails a
 request (the endpoint's fault: unreachable, out of memory, the model gone)
 is skipped and its item goes to another; it's checked again a minute
@@ -22,8 +25,10 @@ from pathlib import Path
 from typing import Any
 
 from src.client.workers.captions.base import CaptionError, CaptionProvider
+from src.client.workers.transcripts.base import Heard, Transcriber, TranscriptError
 from src.shared.ai_jobs import JOBS
 from src.shared.vision_endpoint import VisionEndpointError, list_models
+from src.shared.whisper_models import BUILT_IN_MODELS, canonical, served_as
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +45,10 @@ class Machine:
     api_url: str
     api_key: str | None
     at_once: int
+    # The worker's own computer (no URL): it does the job itself.
+    built_in: bool = False
+    # The name it knows the job's model by, once checked.
+    serves: str = ""
     online: bool = False
     error: str = ""
     checked_at: float | None = None
@@ -66,7 +75,8 @@ class MachinePool:
         data = self._client.get(f"/v1/ai/jobs/{self.job}").json()
         self.model = data.get("model") or ""
         self.machines = [Machine(machine_id=m["machine_id"], name=m["name"], api_url=m["api_url"],
-                                 api_key=m.get("api_key") or None, at_once=max(1, int(m.get("at_once") or 1)))
+                                 api_key=m.get("api_key") or None, at_once=max(1, int(m.get("at_once") or 1)),
+                                 built_in=bool(m.get("built_in")))
                          for m in data.get("machines") or []]
 
     def check(self) -> bool:
@@ -138,20 +148,36 @@ class MachinePool:
             self._report(machine, [])
 
     def _check(self, machine: Machine) -> None:
-        try:
-            models = list_models(machine.api_url, machine.api_key)
-            error = "" if self.model in models else f"{machine.api_url} doesn't offer {self.model}."
-        except VisionEndpointError as e:
-            models, error = [], str(e)
+        if machine.built_in:
+            models, serves, error = self._check_built_in()
+        else:
+            try:
+                models = list_models(machine.api_url, machine.api_key)
+                serves = served_as(models, self.model) or ""
+                error = "" if serves else f"{machine.api_url} doesn't offer {self.model}."
+            except VisionEndpointError as e:
+                models, serves, error = [], "", str(e)
         with self._cond:
             machine.online = not error
             machine.error = error
+            machine.serves = serves
             machine.checked_at = self._clock()
             machine.checking = False
             self._cond.notify_all()
         if error:
             logger.warning("%s: %s can't be used: %s", self.label, machine.name, error)
         self._report(machine, models)
+
+    def _check_built_in(self) -> tuple[list[str], str, str]:
+        """(models, the name it serves the model by, why it can't): this computer's Whisper."""
+        from src.client.workers.transcripts.local import unavailable
+
+        why = unavailable()
+        if why:
+            return [], "", why
+        if canonical(self.model) not in BUILT_IN_MODELS:
+            return BUILT_IN_MODELS, "", f"The built-in Whisper doesn't know {self.model}."
+        return BUILT_IN_MODELS, canonical(self.model), ""
 
     def _recheck_due(self) -> None:
         now = self._clock()
@@ -182,15 +208,64 @@ class MachinePool:
             self.error = None
 
 
-class PooledCaptionProvider(CaptionProvider):
-    """Describes and reads images on whichever of the pool's machines is free;
-    a machine's own failure moves the item to another."""
+class _OnAMachine:
+    """Work on whichever of the pool's machines is free; a machine's own
+    failure moves the item to another. error: the job's error type, which
+    says whether a failure was the machine's (endpoint_fault)."""
 
-    def __init__(self, pool: MachinePool, make: Callable[[Machine], CaptionProvider]) -> None:
+    error: type[CaptionError] | type[TranscriptError]
+    # A failure that's the item's, not the machine's: try the other machines
+    # before giving up on it (a server may refuse what another takes).
+    move_item_faults = False
+
+    def __init__(self, pool: MachinePool, make: Callable[[Machine], Any]) -> None:
         self._pool = pool
         self._make = make
-        self._providers: dict[str, CaptionProvider] = {}
+        self._providers: dict[str, Any] = {}
         self._lock = threading.Lock()
+
+    def _provider(self, machine: Machine) -> Any:
+        with self._lock:
+            if machine.machine_id not in self._providers:
+                self._providers[machine.machine_id] = self._make(machine)
+            return self._providers[machine.machine_id]
+
+    def _on_a_machine(self, call: Callable[[Any], Any]) -> Any:
+        """Each machine at most once per item: machines that list the model but
+        fail every request come back after their recheck, and an item mustn't
+        go round them forever. A failure that isn't the machine's says which
+        machine served it (the guard charges the clip only if it's still fine)."""
+        tried: list[Machine] = []
+        last: Exception | None = None
+        item_fault: Exception | None = None
+        while True:
+            machine = self._pool.acquire(exclude=tried)
+            if machine is None:
+                if item_fault is not None:
+                    raise item_fault
+                why = self._pool.error if self._pool.down else None
+                raise self.error(why or (f"Every machine failed it; the last: {last}" if last else "No machine is online."),
+                                 endpoint_fault=True)
+            tried.append(machine)
+            try:
+                return call(self._provider(machine))
+            except self.error as e:
+                if not e.endpoint_fault:
+                    e.machine = machine
+                    if not self.move_item_faults:
+                        raise
+                    item_fault = e
+                    continue
+                last = e
+                self._pool.fault(machine, e)
+            finally:
+                self._pool.release(machine)
+
+
+class PooledCaptionProvider(_OnAMachine, CaptionProvider):
+    """Describes and reads images on whichever of the pool's machines is free."""
+
+    error = CaptionError
 
     @property
     def provider_id(self) -> str:
@@ -202,33 +277,13 @@ class PooledCaptionProvider(CaptionProvider):
     def extract_text(self, proxy_path: Path) -> str:
         return self._on_a_machine(lambda p: p.extract_text(proxy_path))
 
-    def _provider(self, machine: Machine) -> CaptionProvider:
-        with self._lock:
-            if machine.machine_id not in self._providers:
-                self._providers[machine.machine_id] = self._make(machine)
-            return self._providers[machine.machine_id]
 
-    def _on_a_machine(self, call: Callable[[CaptionProvider], Any]) -> Any:
-        """Each machine at most once per item: machines that list the model but
-        fail every request come back after their recheck, and an item mustn't
-        go round them forever. A failure that isn't the machine's says which
-        machine served it (the guard charges the clip only if it's still fine)."""
-        tried: list[Machine] = []
-        last: CaptionError | None = None
-        while True:
-            machine = self._pool.acquire(exclude=tried)
-            if machine is None:
-                why = self._pool.error if self._pool.down else None
-                raise CaptionError(why or (f"Every machine failed it; the last: {last}" if last else "No machine is online."),
-                                   endpoint_fault=True)
-            tried.append(machine)
-            try:
-                return call(self._provider(machine))
-            except CaptionError as e:
-                if not e.endpoint_fault:
-                    e.machine = machine
-                    raise
-                last = e
-                self._pool.fault(machine, e)
-            finally:
-                self._pool.release(machine)
+class PooledTranscriber(_OnAMachine, Transcriber):
+    """Transcribes speech on whichever of the pool's machines is free; a
+    clip one machine refuses (too big for it, say) goes to the others first."""
+
+    error = TranscriptError
+    move_item_faults = True
+
+    def transcribe(self, speech_wav: Path) -> Heard:
+        return self._on_a_machine(lambda t: t.transcribe(speech_wav))

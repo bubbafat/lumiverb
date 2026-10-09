@@ -41,9 +41,9 @@ def test_the_frozen_v1_hashes_are_the_registry_s():
         assert PRODUCERS[artifact].producer == producer
         assert PRODUCERS[artifact].version == "1"
         assert settings_hash(effective_settings(artifact)) == h, artifact
-    assert m._vision_hash("qwen3-vl:8b") == settings_hash(effective_settings("vision", account={"model": "qwen3-vl:8b"}))
+    assert m._vision_hash("qwen3-vl:8b") == settings_hash(effective_settings("vision", account={"vision": "qwen3-vl:8b"}))
     assert m._vision_hash("qwen3-vl:8b", m._OCR_PROMPT) == settings_hash(
-        effective_settings("ocr", account={"model": "qwen3-vl:8b"}))
+        effective_settings("ocr", account={"vision": "qwen3-vl:8b"}))
 
 
 @pytest.mark.migration

@@ -17,8 +17,10 @@ class Tenant(SQLModel, table=True):
     name: str = Field(nullable=False)
     plan: str = Field(default="free", nullable=False)
     status: str = Field(default="active", nullable=False)
-    # The vision job's model (one model per job; the machines that run it are ai_machines).
+    # Each AI job's model (one model per job; the machines that run it are
+    # ai_machines). "" turns the job off. Transcripts start at small.
     vision_model_id: str = Field(default="", nullable=False)
+    transcript_model_id: str = Field(default="small", nullable=False)
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
@@ -29,7 +31,8 @@ class AiMachine(SQLModel, table=True):
     """A GPU machine the account's AI work runs on: an OpenAI-compatible
     endpoint, the jobs it does (src/shared/ai_jobs.py), and how many requests
     it takes at once. Its status is the latest check of it (the worker's, or
-    Connect's when it was saved)."""
+    Connect's when it was saved). The built-in one (one per tenant) is the
+    worker's own computer: no URL, only the jobs the worker does itself."""
 
     __tablename__ = "ai_machines"
 
@@ -41,6 +44,7 @@ class AiMachine(SQLModel, table=True):
     jobs: list[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
     at_once: int = Field(default=2, nullable=False)
     enabled: bool = Field(default=True, nullable=False)
+    built_in: bool = Field(default=False, nullable=False)
     online: bool | None = Field(default=None, nullable=True)
     status_error: str = Field(default="", nullable=False)
     models: list[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))

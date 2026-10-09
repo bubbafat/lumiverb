@@ -112,8 +112,9 @@ class FakeServer:
 
 
 @pytest.fixture(autouse=True)
-def vision_on(monkeypatch: pytest.MonkeyPatch) -> None:
+def ai_on(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("src.client.cli.worker._vision_ready", lambda client: True)
+    monkeypatch.setattr("src.client.cli.worker._transcripts_ready", lambda client: True)
 
 
 @pytest.fixture
@@ -846,6 +847,20 @@ def test_without_vision_ai_its_steps_are_skipped(das: Path, monkeypatch: pytest.
     server.summaries["lib_1"]["missing_transcription"] = 1
     _, enrich, _ = _cycle(server, WorkerState(last_full_scan={"lib_1": 100 * HOUR}))
     assert enrich.call_args.kwargs["skip_types"] == {"vision", "ocr", "scene-vision"}
+
+
+@pytest.mark.fast
+def test_without_a_machine_for_transcripts_transcription_is_skipped(das: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Transcripts off, or no machine doing them online: clips waiting for one
+    don't count as work, so the library isn't enriched for them every cycle."""
+    monkeypatch.setattr("src.client.cli.worker._transcripts_ready", lambda client: False)
+    server = FakeServer([LIB], summaries={"lib_1": {"total_assets": 2, "missing_transcription": 2}})
+    _, enrich, _ = _cycle(server, WorkerState(last_full_scan={"lib_1": 100 * HOUR}))
+    enrich.assert_not_called()
+
+    server.summaries["lib_1"]["missing_vision"] = 1
+    _, enrich, _ = _cycle(server, WorkerState(last_full_scan={"lib_1": 100 * HOUR}))
+    assert enrich.call_args.kwargs["skip_types"] == {"transcribe"}
 
 
 @pytest.mark.fast
