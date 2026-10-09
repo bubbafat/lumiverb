@@ -8,7 +8,8 @@ frame grid: Resolve imports FCPXML as timelines too. It holds the clips;
 it isn't an edit (ADR-016). A photo is an image asset (no length of its
 own, a format with no frame rate), STILL_SEC long in the event and on the
 timeline (a <video> there, as Final Cut writes stills). A project of only
-photos gets an HD timeline at 30 fps.
+photos gets an HD timeline at 30 fps; so does one led by a video of unknown
+size, at its rate.
 """
 
 from __future__ import annotations
@@ -94,9 +95,10 @@ class FcpxmlProvider:
             lead = timeline_lead([clip for clip, _, _ in assets])
             lead_format = next(f for clip, _, f in assets if clip is lead)
             num, den = lead.rate
-            if lead.still:
+            if lead.still or not (lead.width and lead.height):
                 # Only photos: a photo's format has no frame rate, and a
-                # sequence needs one. An HD timeline at the fallback rate.
+                # sequence needs one; an unprobed video's has no size. An HD
+                # timeline at the lead's rate (the fallback for photos).
                 lead_format = f"r{next_id}"
                 next_id += 1
                 ET.SubElement(resources, "format", {"id": lead_format, "frameDuration": f"{den}/{num}s",
