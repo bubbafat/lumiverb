@@ -531,7 +531,7 @@ OLD = {"producer": "scene-vision", "version": "1", "settings_hash": "old"}
 
 @patch("src.client.cli.video_index.enrich_scene")
 def test_scenes_described_another_way_are_described_again(mock_enrich):
-    """An upgrade hands out a video described with older settings: each
+    """A redo hands out a video described with older settings: each
     scene whose description wasn't made the way this run makes it is
     described again; ones already made this way are left (ADR-016 phase 3)."""
     client = MagicMock()
@@ -583,7 +583,7 @@ def test_a_video_handed_out_with_every_scene_made_this_way_is_described_again(mo
         progress = MagicMock()
         progress.console = MagicMock()
         run_video_enrich(client=client, source_for=lambda v: root / f"{v['asset_id']}.mp4",
-                         videos=[{"asset_id": "a1", "rel_path": "a1.mp4", "upgrade": True},
+                         videos=[{"asset_id": "a1", "rel_path": "a1.mp4", "redo": True},
                                  {"asset_id": "a2", "rel_path": "a2.mp4"}],  # missing work: a race, nothing to do
                          vision_provider=MagicMock(), vision_model_id="m", console=MagicMock(), progress=progress,
                          task_id=0, lineage_for=lambda v: NOW, concurrency=1)
