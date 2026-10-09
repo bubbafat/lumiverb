@@ -215,36 +215,20 @@ def search_row(*, enabled: bool, fallback_on: bool, quickwit: str | None, quickw
 # -- Storage --------------------------------------------------------------------
 
 
-def short_ago(delta: timedelta) -> str:
-    """Terse and rough: '1 min' (the least), '45 min', '2 h', '3 days'."""
-    minutes = max(1, round(delta.total_seconds() / 60))
-    if minutes < 60:
-        return f"{minutes} min"
-    if minutes < 48 * 60:
-        return f"{round(minutes / 60)} h"
-    return f"{round(minutes / 1440)} days"
-
-
-def _clock_time(at: datetime, now: datetime) -> str:
-    """'14:20' today, 'Oct 8 14:20' before, in the server's time zone."""
-    local, today = at.astimezone(), now.astimezone().date()
-    return f"{local:%H:%M}" if local.date() == today else f"{local:%b} {local.day} {local:%H:%M}"
-
-
 def _last_seen(libraries: Sequence[tuple[str, str]], storage: Mapping[str, Mapping[str, Any]],
                now: datetime) -> str:
-    """When each was last seen: 'Media last seen 2 h ago.', 'Photos last
-    seen 2 h ago, Footage 5 min ago.', 'All last seen within 3 h.'."""
+    """When each was last seen: 'Media last seen 2 hours ago.', 'Photos last
+    seen 2 hours ago, Footage 5 minutes ago.', 'All last seen within 3 hours.'."""
     seen = [(n, (storage.get(i) or {}).get("seen_at")) for i, n in libraries]
     never = [n for n, at in seen if at is None]
     seen = [(n, at) for n, at in seen if at is not None]
     if len(libraries) <= 2:
-        parts = [f"{n} {'last seen ' if k == 0 else ''}{short_ago(now - at)} ago" for k, (n, at) in enumerate(seen)]
+        parts = [f"{n} {'last seen ' if k == 0 else ''}{ago(now - at)} ago" for k, (n, at) in enumerate(seen)]
         text = (", ".join(parts) + ".") if parts else ""
         if never:
             text = (text + " " if text else "") + f"{_names(never)} never seen."
         return text
-    within = f"last seen within {short_ago(now - min(at for _, at in seen))}." if seen else ""
+    within = f"last seen within {ago(now - min(at for _, at in seen))}." if seen else ""
     if not never:
         return f"All {within}"
     return f"{_names(never)} never seen." + (f" The others {within}" if within else "")
@@ -270,7 +254,7 @@ def storage_row(*, libraries: Sequence[tuple[str, str]], storage: Mapping[str, M
     looked at since it started; otherwise a record from before), as of its
     status at `at`.
 
-    Red when the latest look found one unreachable ("since" when); yellow
+    Red when the latest look found one unreachable; yellow
     while Scans are paused (nothing looks, so what's known is stale:
     Proposed), when one hasn't been looked at since the scheduler started,
     or the scheduler isn't running (each saying when it was last seen);
@@ -289,13 +273,19 @@ def storage_row(*, libraries: Sequence[tuple[str, str]], storage: Mapping[str, M
         row.reason = ("Not checked: the scheduler isn't running." if at is None else
                       f"Last checked {ago(now - at)} ago: the scheduler isn't running.")
         if away:
-            since = ", ".join(_clock_time(rec(i)["away_since"], now) for i, _ in away)
-            row.reason += f" Then {_names([n for _, n in away])} couldn't be reached (since {since})."
+            row.reason += f" Then {_names([n for _, n in away])} couldn't be reached."
         return row
     if away:
         row.state = RED
-        row.reason = "Can't reach " + ", ".join(
-            f"{n} since {_clock_time(rec(i)['away_since'], now)}" for i, n in away) + "."
+
+        def last(i: str) -> str:
+            at = rec(i).get("seen_at")
+            return f"last seen {ago(now - at)} ago" if at else "never seen"
+
+        if len(away) == 1:
+            row.reason = f"Can't reach {away[0][1]}. {last(away[0][0]).capitalize()}."
+        else:
+            row.reason = "Can't reach " + ", ".join(f"{n} ({last(i)})" for i, n in away) + "."
         if len(away) == 1:
             row.link = f"/libraries/{away[0][0]}/settings"
         return row

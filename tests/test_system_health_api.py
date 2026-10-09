@@ -142,7 +142,7 @@ def test_storage_and_the_libraries_say_which_cant_be_reached(env):
     library_id = env[2]
     _status(env, storage={library_id: _seen(120, away=90)})
     row, dots = _storage_and_dots(env)
-    assert row["state"] == "red" and row["reason"].startswith("Can't reach Footage since ")
+    assert row["state"] == "red" and row["reason"] == "Can't reach Footage. Last seen 2 hours ago."
     assert row["link"] == f"/libraries/{library_id}/settings"
     assert dots[library_id]["reachable"] is False and dots[library_id]["seen_at"]
     _status(env, storage={library_id: _seen()})
@@ -159,7 +159,7 @@ def test_storage_after_a_restart_isnt_red_until_its_looked_at(env):
     library_id = env[2]
     _status(env, storage={library_id: _seen(120, checked=False)})
     row, dots = _storage_and_dots(env)
-    assert row["state"] == "yellow" and row["reason"] == "Not checked yet. Footage last seen 2 h ago."
+    assert row["state"] == "yellow" and row["reason"] == "Not checked yet. Footage last seen 2 hours ago."
     assert dots[library_id]["reachable"] is None
     _status(env, storage={})
     row, _ = _storage_and_dots(env)
@@ -172,7 +172,7 @@ def test_storage_while_scans_are_paused_says_when_each_was_last_seen(env):
         assert client.post("/v1/producers/scans/pause", headers=headers).status_code == 204
         _status(env, storage={library_id: _seen(120, checked=False)})
         row, dots = _storage_and_dots(env)
-        assert row["state"] == "yellow" and row["reason"] == "Scans paused. Footage last seen 2 h ago."
+        assert row["state"] == "yellow" and row["reason"] == "Scans paused. Footage last seen 2 hours ago."
         assert dots[library_id]["reachable"] is None
     finally:
         client.post("/v1/producers/all/resume", headers=headers)
