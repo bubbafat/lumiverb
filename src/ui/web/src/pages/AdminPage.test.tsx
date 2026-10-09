@@ -109,7 +109,7 @@ describe("AdminPage", () => {
     const dot = (name: string) => within(within(libs).getByText(name).closest("li")!).getByRole("img");
     expect(dot("Photos").getAttribute("aria-label")).toBe("Reachable");
     expect(dot("Footage").getAttribute("aria-label")).toBe("Can't be reached");
-    expect(dot("Archive").getAttribute("aria-label")).toBe("Not checked lately · last seen 2h ago");
+    expect(dot("Archive").getAttribute("aria-label")).toBe("Not checked lately · last seen 2 hours ago");
   });
 
   it("says a library not checked lately was never seen when it wasn't", async () => {

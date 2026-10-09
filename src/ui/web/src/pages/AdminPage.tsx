@@ -4,21 +4,10 @@ import { Link } from "react-router-dom";
 import { ApiError, listLibraries, type HealthRow, type HealthState } from "../api/client";
 import type { LibraryListItem } from "../api/types";
 import { HealthDot } from "../components/HealthDot";
+import { timeAgo } from "../lib/format";
 import { useSystemHealth } from "../lib/useSystemHealth";
 
 const POLL_INTERVAL = 10_000;
-
-function relativeTime(iso: string | null): string {
-  if (!iso) return "—";
-  const ms = Date.now() - new Date(iso).getTime();
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s ago`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
-}
 
 function SectionHeader({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
@@ -69,11 +58,11 @@ const REACH: Record<string, { state: HealthState | null; label: string }> = {
 type Reach = { reachable: boolean | null; seen_at: string | null };
 
 function LibraryRow({ lib, reach: seen }: { lib: LibraryListItem; reach: Reach }) {
-  const lastScan = lib.last_scan_at ? relativeTime(lib.last_scan_at) : "Never";
+  const lastScan = lib.last_scan_at ? timeAgo(lib.last_scan_at) : "Never";
   const known = REACH[String(seen.reachable)];
   // Not known now: when it was last seen.
   const reach = known.state ? known : {
-    ...known, label: `${known.label} · ${seen.seen_at ? `last seen ${relativeTime(seen.seen_at)}` : "never seen"}`,
+    ...known, label: `${known.label} · ${seen.seen_at ? `last seen ${timeAgo(seen.seen_at)}` : "never seen"}`,
   };
   return (
     <li className="flex items-center gap-3 rounded-lg border border-gray-700/50 bg-gray-900/50 px-4 py-3">
