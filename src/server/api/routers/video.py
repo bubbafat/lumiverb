@@ -12,7 +12,7 @@ from sqlalchemy import text
 from sqlmodel import Session, select
 
 from src.server.api.dependencies import get_tenant_session
-from src.server.api.routers.producers import LineageIn, lineage_dict
+from src.server.api.routers.producers import LineageIn, require_lineage
 from src.server.repository.lineage import record as record_lineage
 from src.server.models.tenant import VideoIndexChunk
 from src.server.repository.tenant import (
@@ -149,6 +149,7 @@ def complete_chunk(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> ChunkCompleteResponse:
+    made = require_lineage(body.lineage, "scenes")  # how the scenes were found, before anything is saved
     chunk_repo = VideoIndexChunkRepository(session)
     chunk = session.exec(select(VideoIndexChunk).where(VideoIndexChunk.chunk_id == chunk_id)).first()
     if chunk is None:
@@ -171,7 +172,7 @@ def complete_chunk(
         asset_repo = AssetRepository(session)
         asset_repo.set_video_indexed(asset_id)
         session.commit()
-        record_lineage(session, asset_id, "scenes", lineage_dict(body.lineage))
+        record_lineage(session, asset_id, "scenes", made)
         # Inline search sync (best-effort)
         asset_obj = asset_repo.get_by_id(asset_id)
         if asset_obj:
@@ -286,8 +287,9 @@ def update_scene_vision(
     body: SceneVisionUpdateRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> SceneVisionUpdateResponse:
-    """Update vision results on a scene after describing its rep frame."""
-    made = lineage_dict(body.lineage)
+    """Update vision results on a scene after describing its rep frame; it
+    says how (422 lineage_required, before anything is saved)."""
+    made = require_lineage(body.lineage, "scene_vision")
     scene_repo = VideoSceneRepository(session)
     scene_repo.update_vision(
         scene_id=scene_id,

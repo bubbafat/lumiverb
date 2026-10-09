@@ -11,7 +11,6 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session
 
-from src.server.api.routers.producers import lineage_dict
 from src.server.repository.lineage import record as record_lineage
 
 from src.server.api.dependencies import get_tenant_session
@@ -79,6 +78,10 @@ async def upload_artifact(
     SHA-256 incrementally, and atomic-renames the temp file into place. DB is updated
     after the file is safely on disk.
     """
+    from src.server.api.routers.producers import require_lineage
+
+    # Proxies, previews and analysis copies say how they were made, before anything is saved.
+    made = require_lineage(lineage, artifact_type) if artifact_type in ("proxy", "video_preview", "analysis_proxy") else None
     if artifact_type not in ALLOWED_ARTIFACT_TYPES:
         raise HTTPException(
             status_code=400,
@@ -156,7 +159,7 @@ async def upload_artifact(
     elif artifact_type == "analysis_proxy":
         asset_repo.set_analysis_proxy(asset_id, key, sha256)
     if artifact_type in ("proxy", "video_preview", "analysis_proxy"):
-        record_lineage(session, asset_id, artifact_type, lineage_dict(lineage))
+        record_lineage(session, asset_id, artifact_type, made)
     # scene_rep: no asset-level column to update. The on-disk path is derived
     # from (tenant_id, library_id, asset_id, rep_frame_ms) on download via
     # storage.scene_rep_key(), so the file is fully addressable from
@@ -194,6 +197,13 @@ async def upload_artifacts_batch(
     Accepts optional multipart fields: proxy, thumbnail, video_preview.
     Each file is streamed to disk, SHA-256 computed, and DB updated.
     """
+    from src.server.api.routers.ingest import _per_kind
+    from src.server.api.routers.producers import require_lineage
+
+    # Each proxy or preview sent says how it was made, before anything is saved.
+    by_kind = _per_kind(lineage)
+    made = {kind: require_lineage(by_kind.get(kind), kind)
+            for kind, sent in (("proxy", proxy), ("video_preview", video_preview)) if sent is not None}
     files: dict[str, UploadFile] = {}
     if proxy is not None:
         files["proxy"] = proxy
@@ -259,7 +269,7 @@ async def upload_artifacts_batch(
         elif artifact_type == "video_preview":
             asset_repo.set_video_preview(asset_id, video_preview_key=key)
         if artifact_type in ("proxy", "video_preview"):
-            record_lineage(session, asset_id, artifact_type, lineage_dict(_per_kind(lineage).get(artifact_type)))
+            record_lineage(session, asset_id, artifact_type, made[artifact_type])
 
         items.append(BatchArtifactItem(artifact_type=artifact_type, key=key, sha256=sha256))
 

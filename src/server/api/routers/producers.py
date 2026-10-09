@@ -36,8 +36,8 @@ router = APIRouter(prefix="/v1/producers", tags=["producers"])
 class LineageIn(BaseModel):
     """How an artifact a write carries was made: the producer and version that
     made it, the hash of the settings it used (as GET /v1/producers gave
-    them), and the SHA-256 of the source file it was made from. A write
-    without it is recorded as an unknown producer's, so it isn't current."""
+    them), and the SHA-256 of the source file it was made from. Every
+    machine write says (require_lineage)."""
 
     producer: str = Field(max_length=100)
     version: str = Field(max_length=50)
@@ -70,6 +70,36 @@ def lineage_dict(value: LineageIn | dict | str | None, source_sha256: str | None
     if source_sha256:
         out["source_sha256"] = source_sha256
     return out
+
+
+def with_source(made: dict | None, source_sha256: str | None) -> dict | None:
+    """A batch's lineage for one item: its own source SHA-256 when it gives one."""
+    return {**made, "source_sha256": source_sha256} if made is not None and source_sha256 else made
+
+
+def require_lineage(value: LineageIn | dict | str | None, artifact: str,
+                    source_sha256: str | None = None) -> dict:
+    """A machine write's lineage, which it must give (Robert, Oct 9: the API
+    doesn't take writes that don't say how they were made): 422
+    lineage_required when it's absent or unreadable, 422
+    lineage_wrong_producer when another kind's producer says it made it.
+    Checked before anything is saved."""
+    from src.server.api.errors import InvalidChoiceError
+
+    producer = PRODUCERS[artifact]
+    made = lineage_dict(value, source_sha256)
+    if made is None:
+        raise InvalidChoiceError(
+            "lineage_required",
+            f"Say how the {producer.title.lower()} was made: lineage (producer, version, settings_hash), "
+            "as GET /v1/producers gives them.",
+            {"artifact": artifact, "producer": producer.producer})
+    if made["producer"] != producer.producer:
+        raise InvalidChoiceError(
+            "lineage_wrong_producer",
+            f"{made['producer']} doesn't make {producer.title.lower()}: {producer.producer} does.",
+            {"artifact": artifact, "producer": made["producer"], "expected": producer.producer})
+    return made
 
 
 class ProducerCounts(BaseModel):
