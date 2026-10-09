@@ -382,7 +382,7 @@ export function Lightbox({
   const correct = useMutation({
     mutationFn: ({ assetId, body }: {
       assetId: string;
-      body: { description?: string; ocr_text?: string; tags?: string[] };
+      body: { description?: string | null; ocr_text?: string | null; tags?: string[] | null };
     }) => correctAsset(assetId, body),
     onSuccess: (_detail, { assetId }) => correctionClient.invalidateQueries({ queryKey: ["asset", assetId] }),
   });
@@ -1207,6 +1207,7 @@ export function Lightbox({
                   emptyText="No description yet"
                   saving={correct.isPending}
                   onSave={(value) => correct.mutateAsync({ assetId: asset.asset_id, body: { description: value } })}
+                  onRemove={() => correct.mutateAsync({ assetId: asset.asset_id, body: { description: null } })}
                   render={(value) => <p className="italic text-gray-300">{value}</p>}
                 />
               )}
@@ -1224,6 +1225,7 @@ export function Lightbox({
                     emptyText="No text found"
                     saving={correct.isPending}
                     onSave={(value) => correct.mutateAsync({ assetId: asset.asset_id, body: { ocr_text: value } })}
+                    onRemove={() => correct.mutateAsync({ assetId: asset.asset_id, body: { ocr_text: null } })}
                   />
                 </>
               )}
@@ -1245,6 +1247,7 @@ export function Lightbox({
                         canEdit={canCorrect}
                         saving={correct.isPending}
                         onSave={(tags) => correct.mutateAsync({ assetId: asset.asset_id, body: { tags } })}
+                        onRemove={() => correct.mutateAsync({ assetId: asset.asset_id, body: { tags: null } })}
                         renderTag={(tag) =>
                           onTagClick ? (
                             <button

@@ -21,6 +21,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlmodel import Session
 
+from ulid import ULID
+
 from src.shared.utils import utcnow
 
 # The fields a person can write, and the machine's artifact each belongs to.
@@ -129,6 +131,22 @@ class CorrectionsRepository:
             else:
                 self._session.execute(text("DELETE FROM asset_ocr WHERE asset_id = :a"), {"a": asset_id})
             lineage.forget(self._session, [asset_id], artifact, commit=False)
+        # An artifact whose every field a person wrote is theirs: made (so not
+        # missing) and never redone or counted for a new model (the machine's
+        # work would only be dropped).
+        if "ocr_text" in written and values["ocr_text"] is not None:
+            self._session.execute(text(
+                "INSERT INTO asset_ocr (asset_id, text, has_text, model_id, generated_at)"
+                " VALUES (:a, '', false, 'person', :now) ON CONFLICT (asset_id) DO NOTHING"
+            ), {"a": asset_id, "now": utcnow()})
+            lineage.record(self._session, asset_id, "ocr", None, person=True, commit=False)
+        if written & {"description", "tags"} and values["description"] is not None and values["tags"] is not None:
+            self._session.execute(text(
+                "INSERT INTO asset_metadata (metadata_id, asset_id, model_id, model_version, generated_at, data)"
+                " SELECT :id, :a, 'person', '1', :now, '{}'::jsonb"
+                " WHERE NOT EXISTS (SELECT 1 FROM asset_metadata WHERE asset_id = :a)"
+            ), {"id": f"meta_{ULID()}", "a": asset_id, "now": utcnow()})
+            lineage.record(self._session, asset_id, "vision", None, person=True, commit=False)
 
         if all(v is None for v in values.values()):
             self._session.execute(text("DELETE FROM asset_corrections WHERE asset_id = :a"), {"a": asset_id})
