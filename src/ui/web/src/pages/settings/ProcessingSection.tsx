@@ -311,8 +311,9 @@ function FailureList({ producer, canRetry, libraryId }: { producer: Producer; ca
         {items.map((f) => (
           <li key={`${f.asset_id}|${f.artifact}`} className="min-w-0 border-t border-gray-800 pt-2 first:border-0 first:pt-0">
             <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-              <span className="min-w-0 break-all text-gray-200">
-                {f.rel_path} <span className="text-gray-500">· {f.library_name}</span>
+              <span className="min-w-0 text-gray-200">
+                <span className="[overflow-wrap:anywhere]">{f.rel_path}</span>{" "}
+                <span className="whitespace-nowrap text-gray-500">· {f.library_name}</span>
               </span>
               {canRetry && (
                 <button
@@ -330,7 +331,9 @@ function FailureList({ producer, canRetry, libraryId }: { producer: Producer; ca
             <p className="text-xs text-gray-500">
               {f.given_up
                 ? `Gave up after ${f.attempts} tries.`
-                : `Tried ${f.attempts} time${f.attempts === 1 ? "" : "s"}; next try ${when(f.retry_at)}.`}
+                : f.retry_at
+                  ? `Tried ${f.attempts} time${f.attempts === 1 ? "" : "s"}; next try ${when(f.retry_at)}.`
+                  : "Being tried again."}
               {f.failed_at && ` Last failed ${when(f.failed_at)}.`}
             </p>
           </li>

@@ -233,4 +233,16 @@ describe("ProcessingSection", () => {
     renderSection();
     expect((await screen.findByLabelText("Now")).textContent).toContain("Now: nothing to make");
   });
+
+  it("says a clip someone asked to try again is being tried", async () => {
+    producers = [producer({ counts: { applicable: 10, current: 9, stale: 0, missing: 0, failing: 1, given_up: 0 } })];
+    failures = [{ asset_id: "ast_1", artifact: "vision", title: "Descriptions and tags", rel_path: "a.jpg",
+                  library_id: "lib_1", library_name: "Test footage", media_type: "image", error: "no",
+                  attempts: 0, failed_at: "2026-10-09T01:00:00Z", retry_at: null, given_up: false }];
+    renderSection();
+    const vision = await row("Descriptions and tags");
+    fireEvent.click(within(vision).getByRole("button", { name: "Show failures: Descriptions and tags" }));
+    expect(await within(vision).findByText(/Being tried again\./)).toBeTruthy();
+    expect(vision.textContent).not.toContain("Tried 0 times");
+  });
 });
