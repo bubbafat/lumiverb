@@ -727,10 +727,14 @@ for map in "${ROOT_MAPS[@]}"; do
 done
 if [[ "$WITH_WORKER" == "true" ]]; then
   step "Starting the scheduler"
-  # It replaces the worker: the two never run together.
+  # It replaces the worker: the two never run together. The worker's stop
+  # reaches only its main process (as in update-api.sh).
   if [[ -f /etc/systemd/system/lumiverb-worker.service ]]; then
+    mkdir -p /etc/systemd/system/lumiverb-worker.service.d
+    printf '[Service]\nKillMode=mixed\n' > /etc/systemd/system/lumiverb-worker.service.d/stop.conf
+    systemctl daemon-reload
     systemctl disable --now lumiverb-worker 2>/dev/null || true
-    rm -f /etc/systemd/system/lumiverb-worker.service
+    rm -rf /etc/systemd/system/lumiverb-worker.service /etc/systemd/system/lumiverb-worker.service.d
     systemctl daemon-reload
   fi
   systemctl enable lumiverb-scheduler

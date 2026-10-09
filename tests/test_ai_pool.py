@@ -460,3 +460,25 @@ def test_a_machine_no_longer_listed_is_dropped():
         client.get.return_value.json.return_value = {"job": "vision", "model": QWEN, "machines": [BRAIN]}
         pool.check()
     assert [m.name for m in pool.machines] == ["Brain"] and pool.capacity() == 2
+
+
+def test_a_new_model_sends_nothing_to_a_machine_until_its_checked_with_it():
+    """Review round 2: work started right after a model change was recorded as
+    the new model's while the machine still served the old one."""
+    llava = "llava:13b"
+    client = _client()
+    with _offering({"http://brain/v1": (QWEN, llava), "http://studio/v1": (QWEN,)}) as listed:
+        pool = MachinePool(client, "vision")
+        pool.check()
+        assert all(m.online and m.serves == QWEN for m in pool.machines)
+        client.get.return_value.json.return_value = {"job": "vision", "model": llava, "machines": [BRAIN, STUDIO]}
+        pool.load()  # the recheck hasn't run yet
+        assert pool.model == llava
+        assert not any(m.online or m.serves for m in pool.machines)
+        listed.reset_mock()
+        machine = pool.acquire()  # checks them with the new model first
+        assert listed.call_count == 2
+        assert machine is not None and machine.name == "Brain" and machine.serves == llava
+        pool.release(machine)
+    studio = next(m for m in pool.machines if m.name == "Studio")
+    assert not studio.online and llava in studio.error
