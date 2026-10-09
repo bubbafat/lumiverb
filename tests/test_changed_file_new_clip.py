@@ -98,3 +98,13 @@ def test_restoring_from_the_trash_onto_a_path_another_clip_holds_is_skipped(env)
     r = client.post("/v1/assets/restore", json={"asset_ids": [trashed]}, headers=headers)
     assert r.status_code == 200 and r.json()["skipped"] == [trashed]
     assert _row(env, trashed)[1] == "user" and _row(env, holder)[0] is None
+
+
+def test_restoring_one_clip_onto_a_held_path_says_why(env):
+    client, headers, *_ = env
+    trashed = _ingest(env, "ncf/one-binned.jpg", media_type="image", sha=_sha())
+    client.request("DELETE", "/v1/assets", json={"asset_ids": [trashed], "reason": "user"}, headers=headers)
+    _ingest(env, "ncf/one-binned.jpg", media_type="image", sha=_sha())
+    r = client.post(f"/v1/assets/{trashed}/restore", headers=headers)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "path_taken", r.text
+    assert _row(env, trashed)[1] == "user"

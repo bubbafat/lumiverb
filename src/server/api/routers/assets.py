@@ -1141,6 +1141,8 @@ _NOT_THE_TRASH = {
     "archived": ("archived", "This clip is archived, not in the trash: unarchive it (POST /v1/assets/unarchive)."),
     "missing": ("file_missing", "This clip's file is missing; it comes back when the file does."),
     "library_trashed": ("library_trashed", "This clip went to the trash with its library; restore the library."),
+    "path_taken": ("path_taken", "Another clip is at this clip's path now (a different file there is its own clip);"
+                                 " this one stays in the trash."),
 }
 
 

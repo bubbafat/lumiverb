@@ -968,9 +968,10 @@ class AssetRepository:
 
     def restore(self, asset_id: str) -> str:
         """Take one clip out of the trash. Returns "restored", "not_found",
-        "not_trashed", "library_trashed" (it comes back with its library), or
-        the clip's archive reason ("archived" or "missing"): an archive isn't
-        the trash. See restore_many."""
+        "not_trashed", "library_trashed" (it comes back with its library),
+        "path_taken" (another clip in sight is at its path now), or the clip's
+        archive reason ("archived" or "missing"): an archive isn't the trash.
+        See restore_many."""
         asset = self._session.get(Asset, asset_id)
         if asset is None:
             return "not_found"
@@ -983,7 +984,12 @@ class AssetRepository:
         if asset.deleted_reason != "user":
             return "not_trashed"
         restored, _, _ = self.restore_many([asset_id])
-        return "restored" if restored else "library_trashed"
+        if restored:
+            return "restored"
+        held = self._session.execute(text(
+            "SELECT 1 FROM assets o WHERE o.library_id = :lib AND o.rel_path = :p AND o.deleted_at IS NULL"
+            " AND o.asset_id <> :a"), {"lib": asset.library_id, "p": asset.rel_path, "a": asset_id}).first()
+        return "path_taken" if held else "library_trashed"
 
     _IN_A_LIVE_LIBRARY = (
         " AND NOT EXISTS (SELECT 1 FROM libraries l WHERE l.library_id = a.library_id AND l.status = 'trashed')"
