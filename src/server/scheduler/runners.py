@@ -262,7 +262,7 @@ def scene_vision(acct: Account, job: Job) -> Outcome:
     scene_provider = acct.vision.provider(settings=used)
     reported: set[str] = set()
     videos = [{"asset_id": a["asset_id"], "rel_path": a["rel_path"], "sha256": a.get("sha256"),
-               "upgrade": bool(a.get("upgrade"))} for a in job.items]
+               "redo": bool(a.get("redo"))} for a in job.items]
     # One scene at a time: the job holds one of the vision machines' slots.
     run_video_enrich(concurrency=1, client=acct.client,
                      source_for=lambda v: acct.analysis_cache.get(v["asset_id"]), videos=videos,

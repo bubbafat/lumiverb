@@ -244,9 +244,9 @@ def test_descriptions_record_the_model_that_made_them(tmp_path, monkeypatch):
         P.effective_settings("vision", account={"vision": "qwen3-vl:8b"}))
 
 
-def test_descriptions_take_upgrades_after_what_is_missing(tmp_path, monkeypatch):
-    """The worker asks for an approved upgrade's clips too, and describes
-    what's missing first (ADR-016 phase 3, piece 5)."""
+def test_descriptions_ask_for_whats_missing_only(tmp_path, monkeypatch):
+    """Redoing stale work is the scheduler's (ADR-016 phase 4): a manual run
+    describes what's missing, in the server's order."""
     from unittest.mock import patch
 
     from rich.console import Console
@@ -259,8 +259,8 @@ def test_descriptions_take_upgrades_after_what_is_missing(tmp_path, monkeypatch)
     client = _client({a: {"model": model} for a in ("vision", "ocr", "scene_vision")})
     producers = ProducerSettings(client)
     client.get.return_value.json.return_value = {"items": [
-        {"asset_id": "ast_old", "rel_path": "old.jpg", "sha256": SHA, "upgrade": True},
-        {"asset_id": "ast_new", "rel_path": "new.jpg", "sha256": SHA, "upgrade": False}]}
+        {"asset_id": "ast_a", "rel_path": "a.jpg", "sha256": SHA},
+        {"asset_id": "ast_b", "rel_path": "b.jpg", "sha256": SHA}]}
     order = []
 
     def one(**kwargs):
@@ -275,8 +275,8 @@ def test_descriptions_take_upgrades_after_what_is_missing(tmp_path, monkeypatch)
         ingest.run_backfill_vision(client, {"library_id": "lib_1", "name": "L", "root_path": str(tmp_path)},
                                    console=Console(quiet=True), producers=producers, concurrency=1)
     pages = [c for c in client.get.call_args_list if c.args and c.args[0] == "/v1/assets/page"]
-    assert pages and all(c.kwargs["params"]["upgrades"] == "true" for c in pages)
-    assert order == ["ast_new", "ast_old"]
+    assert pages and all("upgrades" not in c.kwargs["params"] for c in pages)
+    assert order == ["ast_a", "ast_b"]
 
 
 def test_a_refresh_swaps_the_settings_in_at_once_and_keeps_them_when_the_server_cant_say():

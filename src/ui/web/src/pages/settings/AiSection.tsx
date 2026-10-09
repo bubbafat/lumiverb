@@ -125,8 +125,8 @@ export default function AiSection() {
         ))}
         {replaced && (
           <p role="status" className="text-sm text-amber-200">
-            What {replaced.label.toLowerCase()} made with {replaced.model} is now stale: it's made again only when you
-            upgrade it in{" "}
+            What {replaced.label.toLowerCase()} made with {replaced.model} is being made again, after anything missing.
+            Follow it, or stop it, in{" "}
             <Link to="/settings/processing" className="text-indigo-300 underline hover:text-indigo-200">
               Processing
             </Link>
@@ -523,15 +523,15 @@ function JobModel({
   const [changing, setChanging] = useState(false);
   const [model, setModel] = useState(job.model);
   const [problem, setProblem] = useState<string | null>(null);
-  // 409 upgrades_stop: the model change would stop upgrades under way; ask first.
-  const [stopping, setStopping] = useState<{ message: string; next: string } | null>(null);
+  // 409 redo_on_change: the new model makes what the job made again; the API asks first.
+  const [redoing, setRedoing] = useState<{ message: string; next: string; clips: number } | null>(null);
   // What the machines doing it offer (the server says).
   const offered = job.choices;
   const save = useMutation({
-    mutationFn: ({ next, stop }: { next: string; stop?: boolean }) => setJobModel(job.job, next, stop),
+    mutationFn: ({ next, redo }: { next: string; redo?: boolean }) => setJobModel(job.job, next, redo),
     onMutate: () => {
       setProblem(null);
-      setStopping(null);
+      setRedoing(null);
     },
     onSuccess: (next, { next: chosen }) => {
       onChanged(job.model && chosen && chosen !== job.model ? job.model : null);
@@ -539,8 +539,8 @@ function JobModel({
       setChanging(false);
     },
     onError: (e, { next }) => {
-      if (e instanceof ApiError && e.code === "upgrades_stop") {
-        setStopping({ message: e.message, next });
+      if (e instanceof ApiError && e.code === "redo_on_change") {
+        setRedoing({ message: e.message, next, clips: Number(e.details?.clips ?? 0) });
       } else if (e instanceof ApiError && e.code === "model_not_offered") {
         const machines = (e.details?.machines as { name: string; models: string[]; error: string }[] | undefined) ?? [];
         setProblem(
@@ -577,7 +577,7 @@ function JobModel({
         >
           <select aria-label={`Model for ${job.label}`} value={model} className={inputClass} onChange={(e) => {
               setModel(e.target.value);
-              setStopping(null);  // the question was about another choice
+              setRedoing(null);  // the question was about another choice
             }}>
             <option value="" disabled>
               {offered.length ? "Pick a model…" : "No machine doing it has been checked yet"}
@@ -588,9 +588,9 @@ function JobModel({
               </option>
             ))}
           </select>
-          {job.model && model && model !== job.model && (
+          {job.model && model && model !== job.model && !redoing && (
             <p className="text-sm text-amber-300">
-              What was made with {job.model} becomes stale: it's made again only when you upgrade it in Processing.
+              What was made with {job.model} is made again with {model}, after anything missing.
             </p>
           )}
           {problem && (
@@ -598,16 +598,16 @@ function JobModel({
               {problem}
             </p>
           )}
-          {stopping && (
+          {redoing && (
             <div role="alert" className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2">
-              <p className="text-sm text-amber-100">{stopping.message}</p>
+              <p className="text-sm text-amber-100">{redoing.message}</p>
               <button
                 type="button"
                 disabled={save.isPending}
                 className={`${buttonClass} bg-amber-600 text-white hover:bg-amber-500`}
-                onClick={() => save.mutate({ next: stopping.next, stop: true })}
+                onClick={() => save.mutate({ next: redoing.next, redo: true })}
               >
-                {stopping.next ? "Change it and stop them" : "Turn it off and stop them"}
+                {`Change it and redo ${redoing.clips.toLocaleString()} clip${redoing.clips === 1 ? "" : "s"}`}
               </button>
             </div>
           )}
@@ -631,7 +631,7 @@ function JobModel({
                 setChanging(false);
                 setModel(job.model);
                 setProblem(null);
-                setStopping(null);
+                setRedoing(null);
               }}
             >
               Cancel

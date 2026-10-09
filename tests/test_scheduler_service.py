@@ -17,6 +17,17 @@ import pytest
 from src.server.scheduler.service import Scheduler, run
 
 
+@pytest.fixture(autouse=True)
+def _no_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Scheduler made here without them reads nothing from a database."""
+    from src.server.scheduler import service
+
+    for name, stub in (("_paused_in_database", lambda tenant_id: set()),
+                       ("_retry_requested_in_database", lambda tenant_id: None),
+                       ("_status_to_database", lambda tenant_id, status: None)):
+        monkeypatch.setattr(service, name, stub, raising=False)
+
+
 class FakeAccount:
     def __init__(self, tenant_id: str = "t1", *, vision: int = 2, transcripts: int = 1,
                  libraries: tuple[str, ...] = ("lib_1",), reachable: tuple[str, ...] = ("lib_1",)) -> None:
@@ -65,7 +76,7 @@ def _item(asset_id: str, added: str = "2026-10-01") -> dict:
 
 
 def _scheduler(accounts: dict, due: dict[str, list[dict]], recorder: Recorder, *, scan=None,
-               capacity: dict | None = None, asked: list | None = None) -> Scheduler:
+               capacity: dict | None = None, asked: list | None = None, paused: set | None = None) -> Scheduler:
     def candidates(tenant_id, kind, libraries, skip=()):
         if asked is not None:
             asked.append((tenant_id, kind.name, tuple(libraries)))
@@ -73,7 +84,8 @@ def _scheduler(accounts: dict, due: dict[str, list[dict]], recorder: Recorder, *
 
     return Scheduler(lambda: accounts, capacity=capacity or {"scan": 1, "probe": 2, "render": 1, "gpu": 1,
                                                             "scenes": 1},
-                     candidates=candidates, runners=recorder.all(), scan=scan or MagicMock(), inline_refill=True)
+                     candidates=candidates, runners=recorder.all(), scan=scan or MagicMock(), inline_refill=True,
+                     paused=lambda tenant_id: set(paused or ()))
 
 
 def _settle(s: Scheduler) -> None:
@@ -219,7 +231,7 @@ def test_a_job_that_fails_frees_its_slot_and_the_rest_go_on() -> None:
     runners["clip"] = boom
     s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"gpu": 1, "scan": 1},
                   candidates=lambda t, k, libs, skip=(): [_item("c1"), _item("c2", "2026-10-02")] if k.name == "clip" else [],
-                  runners=runners, scan=MagicMock(), inline_refill=True)
+                  runners=runners, scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set())
     s.tick()
     _settle(s)
     assert s.dispatcher.free("gpu") == 1
@@ -348,7 +360,7 @@ def test_a_job_that_couldnt_try_is_offered_again_and_one_that_tried_waits() -> N
     runners["probe"] = probe
     s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"probe": 1, "scan": 0},
                   candidates=lambda t, k, libs, skip=(): [i for i in [_item("p")] if i["asset_id"] not in skip]
-                  if k.name == "probe" else [], runners=runners, scan=MagicMock(), inline_refill=True)
+                  if k.name == "probe" else [], runners=runners, scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set())
     for _ in range(4):
         s.tick()
         _settle(s)
@@ -396,7 +408,7 @@ def test_the_database_is_asked_to_leave_out_clips_in_hand_or_just_tried() -> Non
             if kind.name == "vision" else []
 
     s = Scheduler(lambda: {"t1": FakeAccount(vision=1)}, capacity={"scan": 0}, candidates=candidates,
-                  runners=rec.all(), scan=MagicMock(), inline_refill=True)
+                  runners=rec.all(), scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set())
     s.tick()
     s.dispatcher._all_known_at.clear()
     s.dispatcher._buffers.clear()
@@ -416,7 +428,7 @@ def test_one_kinds_trouble_doesnt_hold_up_the_others() -> None:
         return [_item("c")] if kind.name == "clip" else []
 
     s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"probe": 1, "gpu": 1, "scan": 0},
-                  candidates=candidates, runners=rec.all(), scan=MagicMock(), inline_refill=True)
+                  candidates=candidates, runners=rec.all(), scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set())
     s.tick()
     _settle(s)
     assert [kind for _, kind, _ in rec.ran] == ["clip"]
@@ -431,7 +443,7 @@ def test_refills_happen_off_the_dispatching_thread() -> None:
     acct.refresh = lambda: gate.wait(5)
     s = Scheduler(lambda: {"t1": acct}, capacity={"gpu": 1, "scan": 0},
                   candidates=lambda t, k, libs, skip=(): [_item("c")] if k.name == "clip" else [],
-                  runners=rec.all(), scan=MagicMock())
+                  runners=rec.all(), scan=MagicMock(), paused=lambda tenant_id: set())
     start = time.monotonic()
     s.tick()
     assert time.monotonic() - start < 1
@@ -482,6 +494,65 @@ def test_an_account_whose_key_was_revoked_gets_a_new_one(monkeypatch: pytest.Mon
     first.client.unauthorized = True
     second = accounts()["t1"]
     assert second is not first and first.closed and made == ["t1", "t1"]
+
+
+# ---------------------------------------------------------------------------
+# Redo on change: tier 4, after everything else in its pool
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_redo_runs_after_everything_else_in_its_pool() -> None:
+    # Missing beats stale: a redo only fills slots the first makings leave idle.
+    rec = Recorder()
+    rec.hold.clear()
+    s = _scheduler({"t1": FakeAccount(vision=1)}, {"redo_vision": [_item("old", "2020-01-01")],
+                                                   "vision": [_item("new", "2026-10-09")]}, rec)
+    s.tick()
+    rec.hold.set()
+    _settle(s)
+    s.tick()
+    _settle(s)
+    assert [(kind, ids) for _, kind, ids in rec.ran if "vision" in kind] == [("vision", ("new",)),
+                                                                            ("vision", ("old",))]
+
+
+@pytest.mark.fast
+def test_a_redo_runs_with_its_first_kinds_runner() -> None:
+    rec = Recorder()
+    s = _scheduler({"t1": FakeAccount()}, {"redo_clip": [_item("c")]}, rec)
+    s.tick()
+    _settle(s)
+    assert ("t1", "clip", ("c",)) in rec.ran
+
+
+@pytest.mark.fast
+def test_a_stopped_redo_hands_out_nothing_and_is_not_asked_for() -> None:
+    rec = Recorder()
+    asked: list = []
+    s = _scheduler({"t1": FakeAccount()}, {"redo_vision": [_item("old")], "clip": [_item("c")]}, rec,
+                   asked=asked, paused={"vision"})
+    s.tick()
+    _settle(s)
+    assert [kind for _, kind, _ in rec.ran] == ["clip"]
+    assert "redo_vision" not in [kind for _, kind, _ in asked]
+
+
+@pytest.mark.fast
+def test_stopping_a_redo_clears_what_was_waiting_at_once() -> None:
+    rec = Recorder()
+    rec.hold.clear()
+    stopped: set = set()
+    s = _scheduler({"t1": FakeAccount(vision=1)},
+                   {"redo_vision": [_item("a"), _item("b", "2026-10-02")]}, rec, paused=stopped)
+    s._paused = lambda tenant_id: stopped
+    s.tick()  # a in hand, b waiting
+    stopped.add("vision")
+    rec.hold.set()
+    _settle(s)
+    s.tick()
+    _settle(s)
+    assert [ids for _, kind, ids in rec.ran] == [("a",)]
 
 
 @pytest.mark.fast

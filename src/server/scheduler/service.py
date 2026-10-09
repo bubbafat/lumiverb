@@ -49,8 +49,6 @@ LOCK_CHECK_SEC = 60.0
 
 # A save the API refused for what's in it (not who asked, or a clip gone meanwhile).
 _REFUSED = {400, 413, 422}
-# The artifact each kind makes, where its name differs.
-_ARTIFACT_OF = {"render": "analysis_proxy"}
 
 # Kinds whose AI job decides whether they're handed out.
 _JOB_OF = {kind: job for job, kinds in AI_JOB_KINDS.items() for kind in kinds}
@@ -78,6 +76,7 @@ class Scheduler:
         *,
         capacity: Mapping[str, int],
         candidates: Callable[..., list[dict]] | None = None,
+        paused: Callable[[str], set[str]] | None = None,
         runners: Mapping[str, Callable[..., Outcome]] | None = None,
         scan: Callable[..., None] | None = None,
         clock: Callable[[], float] = time.monotonic,
@@ -89,6 +88,7 @@ class Scheduler:
 
         self._accounts = accounts
         self._candidates = candidates or _from_database
+        self._paused = paused or _paused_in_database
         self._runners = dict(runners or runner_mod.RUNNERS)
         self._scan = scan or runner_mod.scan
         self._clock = clock
@@ -154,6 +154,15 @@ class Scheduler:
             if not slots:
                 for kind in AI_JOB_KINDS[job]:
                     self.dispatcher.clear(tenant_id, kind)
+        # A redo an admin stopped hands out nothing more, at once.
+        try:
+            stopped = self._paused(tenant_id)
+        except Exception:  # noqa: BLE001 — as if stopped, until it can be read
+            logger.exception("scheduler: reading %s's stopped redos failed", tenant_id)
+            stopped = {k.artifact for k in QUEUED if k.redo}
+        for kind in QUEUED:
+            if kind.redo and kind.artifact in stopped:
+                self.dispatcher.clear(tenant_id, kind.name)
         if self.dispatcher.wanted(tenant_id, "scan"):
             self.dispatcher.offer(tenant_id, "scan", [{"asset_id": f"scan:{tenant_id}", "created_at": ""}],
                                   complete=False)
@@ -162,6 +171,8 @@ class Scheduler:
         for kind in QUEUED:
             job = _JOB_OF.get(kind.name)
             if job is not None and not acct.capacity(job):
+                continue
+            if kind.redo and kind.artifact in stopped:
                 continue
             if not self.dispatcher.wanted(tenant_id, kind.name):
                 continue
@@ -181,14 +192,14 @@ class Scheduler:
             if job.kind == "scan":
                 self._scan(acct, job, now=self._wall())
                 return None
-            return self._runners[job.kind](acct, job)
+            return self._runners[KINDS[job.kind].base](acct, job)
         except Exception as e:  # noqa: BLE001 — a job's surprise is logged; its clips are tried again later
-            if getattr(e, "status_code", None) in _REFUSED and job.kind != "scan":  # a clip's (not a scan's)
+            if getattr(e, "status_code", None) in _REFUSED and KINDS[job.kind].flag:  # a clip's (not a scan's)
                 # The API can't take what was made: the clip's failure, reported
                 # (the server says when to try again), not made again every hour.
                 logger.warning("scheduler: the server refused %s for %s: %s", job.kind, ", ".join(job.asset_ids[:3]), e)
                 for asset_id in job.asset_ids:
-                    acct.failures.add(_ARTIFACT_OF.get(job.kind, job.kind), asset_id, f"The server refused it: {e}")
+                    acct.failures.add(KINDS[job.kind].artifact, asset_id, f"The server refused it: {e}")
                 return None
             logger.exception("scheduler: %s for %s failed", job.kind, ", ".join(job.asset_ids[:3]))
             return list(job.asset_ids)  # none saved or reported: each waits the long while
@@ -251,7 +262,34 @@ def _from_database(tenant_id: str, kind: Any, libraries: list[str], skip: list[s
     from src.server.scheduler.queue import candidates
 
     with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
-        return candidates(session, kind, libraries, skip=skip)
+        if not kind.redo:
+            return candidates(session, kind, libraries, skip=skip)
+        from src.server.repository import lineage
+
+        if kind.artifact in lineage.paused(session):
+            return []
+        return candidates(session, kind, libraries, skip=skip,
+                          want=lineage.desired(session, kind.artifact, _job_models(tenant_id)))
+
+
+def _job_models(tenant_id: str) -> dict[str, str]:
+    """The account's model per AI job (Settings → AI)."""
+    from src.server.database import get_control_session
+    from src.server.repository.ai_machines import job_models
+    from src.server.repository.control_plane import TenantRepository
+
+    with get_control_session() as ctrl:
+        return job_models(TenantRepository(ctrl).get_by_id(tenant_id))
+
+
+def _paused_in_database(tenant_id: str) -> set[str]:
+    from sqlmodel import Session
+
+    from src.server.database import get_engine_for_url
+    from src.server.repository import lineage
+
+    with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
+        return set(lineage.paused(session))
 
 
 # ---------------------------------------------------------------------------

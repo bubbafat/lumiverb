@@ -55,7 +55,7 @@ def test_scenes_take_their_videos_lineage_and_it_goes_back_down() -> None:
             tables = {r[0] for r in conn.execute(text(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"))}
         assert scenes == {"s0": {"producer": "scene-vision", "version": "1", "settings_hash": "h1"}, "s1": None}
-        assert {"producer_upgrades", "producer_upgrade_items", "correction_history"} <= tables
+        assert {"producer_upgrades", "producer_upgrade_items", "correction_history"} <= tables  # until be66e81c7e5d
 
         _alembic(url, "downgrade", BEFORE)
         with engine.connect() as conn:

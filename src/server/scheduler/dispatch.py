@@ -43,6 +43,9 @@ class KindSpec:
     retake_after: float | None = None  # the dispatcher's default when None
     # The pool is each account's own (its AI machines), named "<pool>@<account>".
     per_account: bool = False
+    # Kinds that make the same thing share one: a clip is never in hand for
+    # two of them at once (descriptions, and redoing descriptions).
+    same_as: str = ""
 
 
 @dataclass(frozen=True)
@@ -55,6 +58,10 @@ class Job:
     @property
     def asset_ids(self) -> list[str]:
         return [i["asset_id"] for i in self.items]
+
+
+def _same(kind: str, spec: KindSpec) -> str:
+    return spec.same_as or kind
 
 
 # What a job says when it's done: "not_tried" (runners.NOT_TRIED: it couldn't
@@ -139,9 +146,10 @@ class Dispatcher:
         now = self._clock()
         with self._lock:
             self._taken_until = {k: t for k, t in self._taken_until.items() if t > now}
+            same = _same(kind, self._kinds[kind])
             fresh = [i for i in items
-                     if (tenant_id, kind, i["asset_id"]) not in self._in_hand
-                     and (tenant_id, kind, i["asset_id"]) not in self._taken_until]
+                     if (tenant_id, same, i["asset_id"]) not in self._in_hand
+                     and (tenant_id, same, i["asset_id"]) not in self._taken_until]
             fresh.sort(key=lambda i: _order(tier, i))
             self._buffers[key] = fresh
             if complete or not fresh:
@@ -170,7 +178,12 @@ class Dispatcher:
             best: tuple | None = None
             for (tenant_id, kind), buffer in self._buffers.items():
                 spec = self._kinds[kind]
-                if pool_key(spec, tenant_id) != pool or not buffer:
+                if pool_key(spec, tenant_id) != pool:
+                    continue
+                # A clip another kind took meanwhile (its redo, say) waits for it.
+                same = _same(kind, spec)
+                buffer[:] = [i for i in buffer if (tenant_id, same, i["asset_id"]) not in self._in_hand]
+                if not buffer:
                     continue
                 rank = _order(spec.tier, buffer[0])
                 if best is None or rank < best[0]:
@@ -182,17 +195,18 @@ class Dispatcher:
             buffer = self._buffers[(tenant_id, kind)]
             items, self._buffers[(tenant_id, kind)] = buffer[:spec.batch], buffer[spec.batch:]
             for i in items:
-                self._in_hand.add((tenant_id, kind, i["asset_id"]))
+                self._in_hand.add((tenant_id, _same(kind, spec), i["asset_id"]))
             self._busy[pool] = self._busy.get(pool, 0) + 1
             return Job(tenant_id, kind, spec.tier, tuple(items))
 
     def held(self, tenant_id: str, kind: str) -> list[str]:
         """The account's clips of this kind in hand or just tried: what the
         database is asked to leave out."""
+        same = _same(kind, self._kinds[kind])
         now = self._clock()
         with self._lock:
             return [k[2] for k in self._in_hand | {k for k, t in self._taken_until.items() if t > now}
-                    if k[0] == tenant_id and k[1] == kind]
+                    if k[0] == tenant_id and k[1] == same]
 
     def done(self, job: Job, *, tried: bool = True, waiting: Collection[str] | None = None) -> None:
         """The job's slot is free; its clips aren't taken again for a while
@@ -206,7 +220,7 @@ class Dispatcher:
             self._busy[pool] = max(0, self._busy.get(pool, 0) - 1)
             now = self._clock()
             for asset_id in job.asset_ids:
-                key = (job.tenant_id, job.kind, asset_id)
+                key = (job.tenant_id, _same(job.kind, spec), asset_id)
                 self._in_hand.discard(key)
                 if tried:
                     self._taken_until[key] = now + (wait if asset_id in waits else min(wait, self.settle_after))

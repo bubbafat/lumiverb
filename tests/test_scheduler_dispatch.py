@@ -18,7 +18,7 @@ KINDS = {
     "render": KindSpec(tier=2, pool="render"),
     "vision": KindSpec(tier=3, pool="vision"),
     "ocr": KindSpec(tier=3, pool="vision"),
-    "redo_vision": KindSpec(tier=4, pool="vision"),
+    "redo_vision": KindSpec(tier=4, pool="vision", same_as="vision"),
     "faces": KindSpec(tier=3, pool="faces", batch=3),
 }
 
@@ -257,6 +257,22 @@ def test_an_accounts_own_pool_serves_only_it() -> None:
 
 
 @pytest.mark.fast
+def test_a_clip_is_never_in_hand_for_its_first_making_and_its_redo_at_once() -> None:
+    d = _d({"vision": 3})
+    d.offer("t1", "vision", [_item("a", "2026-10-01")])
+    d.offer("t1", "redo_vision", [_item("a", "2026-10-01"), _item("b", "2026-10-02")])
+    first = d.take("vision")
+    second = d.take("vision")
+    assert (first.kind, first.items[0]["asset_id"]) == ("vision", "a")
+    assert (second.kind, second.items[0]["asset_id"]) == ("redo_vision", "b")
+    assert d.take("vision") is None
+    d.done(first)
+    # Just made: its redo doesn't take it again at once either.
+    d.offer("t1", "redo_vision", [_item("a", "2026-10-01")])
+    assert d.take("vision") is None
+
+
+@pytest.mark.fast
 def test_held_clips_are_what_the_database_should_leave_out() -> None:
     d = _d({"vision": 2})
     d.offer("t1", "vision", [_item("a", "2026-10-01"), _item("b", "2026-10-02"), _item("c", "2026-10-03")])
@@ -265,6 +281,8 @@ def test_held_clips_are_what_the_database_should_leave_out() -> None:
     d.done(first)
     assert sorted(d.held("t1", "vision")) == ["a", "b"]  # one just tried, one in hand
     assert d.held("t1", "ocr") == [] and d.held("t2", "vision") == []
+    # Its redo leaves the same clips out.
+    assert sorted(d.held("t1", "redo_vision")) == ["a", "b"]
 
 
 @pytest.mark.fast

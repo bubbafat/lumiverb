@@ -299,7 +299,7 @@ def update_scene_vision(
     )
     # One record for the clip's scene descriptions, made once every scene's
     # description was made the same way: a video described half with old
-    # settings and half with new isn't current, and an upgrade isn't done with it.
+    # settings and half with new isn't current, and its redo isn't done.
     asset_id = session.execute(text("SELECT asset_id FROM video_scenes WHERE scene_id = :s"),
                                {"s": scene_id}).scalar()
     if asset_id:

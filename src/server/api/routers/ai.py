@@ -26,7 +26,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, StrictBool, field_validator
-from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
@@ -147,8 +146,8 @@ class Models(BaseModel):
 class JobModelIn(BaseModel):
     # "": the job is off.
     model: str = Field(default="", max_length=200)
-    # Answers 409 upgrades_stop: a new model stops upgrades to the old one.
-    stop_upgrades: bool = False
+    # Answers 409 redo_on_change: a new model makes everything its job made again.
+    redo: bool = False
 
 
 class StatusIn(BaseModel):
@@ -413,27 +412,33 @@ def remove_machine(machine_id: str, request: Request, leave_jobs: bool = False) 
         return _settings(ctrl, request.state.tenant_id)
 
 
-def _upgrades_to_stop(session: Session, tenant: Tenant | None, job: str, model: str, stop: bool) -> list[str]:
-    """The upgrades a new model leaves behind (those whose settings it
-    changes): 409 upgrades_stop, with each producer's clips left, until the
-    request says to stop them. Returns their ids, to drop once the model is saved."""
+def _ask_before_redoing(session: Session, tenant: Tenant | None, job: str, model: str, redo: bool) -> None:
+    """A new model makes everything its job made again, after anything
+    missing (changing it is the approval, Robert Oct 9): 409 redo_on_change,
+    with how many clips of each kind, until the request says yes. Turning a
+    job off redoes nothing."""
     from src.server.repository import lineage
     from src.server.repository.ai_machines import job_models
     from src.shared.producers import PRODUCERS
 
-    stopping = lineage.upgrades_a_change_stops(session, job, job_models(tenant), model)
-    if not stopping or stop:
-        return [u["upgrade_id"] for u in stopping]
-    left: dict[str, int] = {}
-    for u in stopping:
-        left[u["artifact"]] = left.get(u["artifact"], 0) + u["remaining"]
-    running = [{"artifact": a, "title": PRODUCERS[a].title, "remaining": n} for a, n in left.items()]
-    what = " and ".join(f"{r['title'].lower()} ({r['remaining']:,} clip{'' if r['remaining'] == 1 else 's'} left)"
-                        for r in running)
+    if not model or redo:
+        return
+    now = job_models(tenant)
+    then = {**now, job: model}
+    changed = [a for a in lineage.JOB_ARTIFACTS.get(job, ())
+               if lineage.redoable(a)
+               and lineage.desired(session, a, then)["settings_hash"] != lineage.desired(session, a, now)["settings_hash"]]
+    made = {a: n for a, n in lineage.made_by_a_producer(session, changed).items() if n}
+    if not made:
+        return
+    clips = sum(made.values())
+    kinds = [{"artifact": a, "title": PRODUCERS[a].title, "clips": n} for a, n in made.items()]
+    what = ", ".join(f"{k['title'].lower()} ({k['clips']:,})" for k in kinds)
     raise DecisionRequiredError(
-        "upgrades_stop",
-        f"Upgrades under way stop with a new model: {what}. What they haven't made yet stays stale.",
-        {"upgrades": running},
+        "redo_on_change",
+        f"{model} makes {clips:,} clip{'' if clips == 1 else 's'} again: {what}. That runs after anything "
+        "missing; until it's done, results mix the old model and the new.",
+        {"job": job, "model": model, "clips": clips, "artifacts": kinds},
     )
 
 
@@ -445,8 +450,9 @@ def set_job_model(job: str, body: JobModelIn, request: Request,
     with each machine's models or why it couldn't say, when none offers it.
     The built-in machine isn't asked: it offers what faster-whisper knows.
     A faster-whisper model is kept by its one name ("small", not its repo).
-    409 upgrades_stop when upgrades to the current model are under way,
-    unless stop_upgrades says to stop them."""
+    A new model makes everything the job made again (after anything
+    missing): 409 redo_on_change with the count, unless redo says yes. Saving
+    a model resumes its producers' redo if an admin had stopped it."""
     if job not in JOBS:
         raise HTTPException(status_code=404, detail="Unknown job")
     tenant_id = request.state.tenant_id
@@ -470,13 +476,16 @@ def set_job_model(job: str, body: JobModelIn, request: Request,
                 raise ConflictError("model_not_offered",
                                     f"No machine doing {JOBS[job].lower()} offers {model}.",
                                     {"job": job, "model": model, "machines": asked})
-        stopping = (_upgrades_to_stop(session, tenant, job, model, body.stop_upgrades)
-                    if model != _job_model(tenant, job) else [])
+        changing = model != _job_model(tenant, job)
+        if changing:
+            _ask_before_redoing(session, tenant, job, model, body.redo)
         _store_model(tenant, job, model)
         ctrl.add(tenant)
         ctrl.commit()
-        if stopping:  # only once the model is saved
-            session.execute(text("DELETE FROM producer_upgrades WHERE upgrade_id = ANY(:ids)"), {"ids": stopping})
+        if changing:  # the newest ask wins: a stopped redo goes on with the new model
+            from src.server.repository import lineage
+
+            lineage.resume(session, lineage.JOB_ARTIFACTS.get(job, ()))
             session.commit()
         return _settings(ctrl, tenant_id)
 

@@ -609,7 +609,6 @@ class AssetRepository:
         person_id: str | None = None,
         *,
         missing_analysis_proxy: bool = False,
-        work: dict[str, str] | None = None,
         sort: str = "taken_at",
         direction: str = "desc",
         media_types: list[str] | None = None,
@@ -710,8 +709,8 @@ class AssetRepository:
         if tag is not None:
             conditions.append("m.tags @> jsonb_build_array(:tag)")
             params["tag"] = tag
-        # What each step is handed: what's missing, and for the brain's worker an approved upgrade's clips (work).
-        cond = {**MISSING_CONDITIONS, **(work or {})}
+        # What each step is handed: what's missing (the reconciler's).
+        cond = MISSING_CONDITIONS
         if missing_vision:
             conditions.append(cond["missing_vision"])
         if missing_embeddings:
