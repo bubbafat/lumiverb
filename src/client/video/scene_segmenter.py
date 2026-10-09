@@ -6,9 +6,10 @@ See docs/reference/video_scene_segmentation.md for constants and trigger strateg
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, fields
 from enum import Enum
-from typing import Iterable
+from typing import Any, Iterable
 
 import cv2
 import imagehash
@@ -23,7 +24,30 @@ PHASH_THRESHOLD = 51
 PHASH_HASH_SIZE = 16
 TEMPORAL_CEILING_SEC = 30.0
 DEBOUNCE_SEC = 3.0
+FRAME_WIDTH = 480
 SKIP_FRAMES_BEST = 2  # skip first N frames of a scene when picking the sharpest representative
+
+
+@dataclass(frozen=True)
+class SceneSettings:
+    """How scenes are found: the scenes producer's settings
+    (src/producers/scenes), which the account changes in Settings → Processing."""
+
+    # A new scene when a frame's hash differs from the scene's first by more bits than this.
+    phash_threshold: int = PHASH_THRESHOLD
+    phash_hash_size: int = PHASH_HASH_SIZE
+    # A scene closes after this long whatever it shows,
+    temporal_ceiling_sec: float = TEMPORAL_CEILING_SEC
+    # and doesn't close on a change before this long.
+    debounce_sec: float = DEBOUNCE_SEC
+    # Frames are looked at this wide at most (VideoScanner).
+    frame_width: int = FRAME_WIDTH
+
+    @classmethod
+    def for_producer(cls, settings: Mapping[str, Any]) -> SceneSettings:
+        """The account's settings (GET /v1/producers); ones this version doesn't know are left out."""
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in settings.items() if k in known})
 
 
 class SceneKeepReason(str, Enum):
@@ -44,14 +68,14 @@ class Scene:
     phash: str | None
 
 
-def _frame_to_phash(raw: RawFrame) -> str | None:
+def _frame_to_phash(raw: RawFrame, hash_size: int = PHASH_HASH_SIZE) -> str | None:
     """Compute perceptual hash from raw RGB frame. Returns hex string or None."""
     try:
         arr = np.frombuffer(raw.bytes, dtype=np.uint8).reshape(
             (raw.height, raw.width, 3)
         )
         pil = Image.fromarray(arr, mode="RGB")
-        h = imagehash.phash(pil, hash_size=PHASH_HASH_SIZE)
+        h = imagehash.phash(pil, hash_size=hash_size)
         return str(h)
     except Exception as e:
         _log.debug("phash failed for frame at %.2f: %s", raw.pts, e)
@@ -96,8 +120,10 @@ class SceneSegmenter:
         frames: Iterable[RawFrame],
         anchor_phash: str | None = None,
         scene_start_ts: float | None = None,
+        settings: SceneSettings | None = None,
     ) -> None:
         self._frames = frames
+        self._settings = settings or SceneSettings()
         self._anchor_phash = anchor_phash
         self._scene_start_ts = scene_start_ts
         self.next_anchor_phash: str | None = None
@@ -108,6 +134,7 @@ class SceneSegmenter:
         Run segmentation. After return, self.next_anchor_phash and self.next_scene_start_ms
         are set for the next chunk's anchor state.
         """
+        s = self._settings
         scenes: list[Scene] = []
         anchor_phash = self._anchor_phash
         scene_start_pts = self._scene_start_ts
@@ -123,22 +150,22 @@ class SceneSegmenter:
 
             if scene_start_pts is None:
                 scene_start_pts = pts
-                anchor_phash = _frame_to_phash(raw)
+                anchor_phash = _frame_to_phash(raw, s.phash_hash_size)
                 scene_candidates = [(pts, sharpness)]
                 continue
 
             elapsed = pts - scene_start_pts
-            frame_phash = _frame_to_phash(raw)
+            frame_phash = _frame_to_phash(raw, s.phash_hash_size)
 
             trigger: SceneKeepReason | None = None
-            if elapsed >= TEMPORAL_CEILING_SEC:
+            if elapsed >= s.temporal_ceiling_sec:
                 trigger = SceneKeepReason.temporal
             elif (
                 anchor_phash is not None
                 and frame_phash is not None
-                and elapsed >= DEBOUNCE_SEC
+                and elapsed >= s.debounce_sec
             ):
-                if _hamming_hex(anchor_phash, frame_phash) > PHASH_THRESHOLD:
+                if _hamming_hex(anchor_phash, frame_phash) > s.phash_threshold:
                     trigger = SceneKeepReason.phash
 
             if trigger is not None:
@@ -177,7 +204,7 @@ class SceneSegmenter:
             start_ms = int(round(scene_start_pts * 1000))
             end_pts = last_raw.pts if last_raw else scene_start_pts
             end_ms = int(round(end_pts * 1000))
-            last_phash = _frame_to_phash(last_raw) if last_raw else None
+            last_phash = _frame_to_phash(last_raw, s.phash_hash_size) if last_raw else None
             scenes.append(
                 Scene(
                     start_ms=start_ms,

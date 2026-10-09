@@ -30,7 +30,7 @@ from src.server.storage.local import LocalStorage
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.machine_lineage import ingest_made, made_json
 
-_STORAGE_USERS = ("artifacts", "assets", "trash", "ingest")
+_STORAGE_USERS = ("artifacts", "assets", "trash", "ingest", "video")
 
 
 @pytest.fixture(scope="module")

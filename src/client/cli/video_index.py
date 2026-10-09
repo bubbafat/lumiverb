@@ -16,17 +16,18 @@ import io
 import logging
 import tempfile
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from rich.console import Console
 from rich.progress import Progress
 
-from src.client.cli.client import LumiverbClient
+from src.client.cli.client import LumiverbAPIError, LumiverbClient
 from src.client.video.clip_extractor import extract_video_frame_detailed
-from src.client.video.scene_segmenter import SceneSegmenter
+from src.client.video.scene_segmenter import SceneSegmenter, SceneSettings
 from src.client.video.video_scanner import SyncError, VideoScanner
 
 # Where to read a video from: its analysis proxy, or None when there isn't one.
@@ -43,18 +44,25 @@ def index_video_scenes(
     duration_sec: float,
     rel_path: str,
     lineage: dict | None = None,
+    settings: Mapping[str, Any] | None = None,
+    redo: bool = False,
 ) -> dict:
     """Run scene detection on a single video and submit results to server.
-    lineage: how the scenes are found, sent with every chunk and recorded
-    when the last completes; the server's settings when not given (it
-    refuses a chunk that doesn't say).
+    settings: how scenes are found (the scenes producer's, as the server
+    says them); lineage: their record, sent with every chunk and recorded
+    when the last completes. Both the server's when not given (it refuses a
+    chunk that doesn't say). redo: the clip's scenes were found another way;
+    the server starts it over (its old scenes and their descriptions go).
 
     Returns {"scenes": N, "chunks": N, "elapsed": float}.
     """
-    if lineage is None:
+    if lineage is None or settings is None:
         from src.client.cli.producer_settings import ProducerSettings
 
-        lineage = ProducerSettings(client).lineage("scenes", None)
+        server = ProducerSettings(client)
+        settings = server.settings("scenes") if settings is None else settings
+        lineage = server.lineage("scenes", None, used=dict(settings)) if lineage is None else lineage
+    found_with = SceneSettings.for_producer(settings)
 
     t0 = time.perf_counter()
     total_scenes = 0
@@ -64,7 +72,7 @@ def index_video_scenes(
     # 1. Init chunks (idempotent — safe for retry/repair)
     resp = client.post(
         f"/v1/video/{asset_id}/chunks",
-        json={"duration_sec": duration_sec},
+        json={"duration_sec": duration_sec, **({"redo": True, "lineage": lineage} if redo else {})},
     )
     init = resp.json()
     logger.info(
@@ -75,7 +83,7 @@ def index_video_scenes(
     )
 
     # 2. Claim and process chunks
-    scanner = VideoScanner(source_path)
+    scanner = VideoScanner(source_path, width=found_with.frame_width)
 
     while True:
         claim_resp = client.raw("GET", f"/v1/video/{asset_id}/chunks/next")
@@ -101,6 +109,7 @@ def index_video_scenes(
                 frames,
                 anchor_phash=anchor_phash,
                 scene_start_ts=scene_start_ts,
+                settings=found_with,
             )
             scenes = segmenter.segment()
 
@@ -168,9 +177,11 @@ def run_video_index(
     task_id: object,
     lineage_for: "Callable[[dict], dict] | None" = None,
     on_fail: "Callable[[str, object], None] | None" = None,
+    settings: Mapping[str, Any] | None = None,
 ) -> tuple[int, int]:
     """Run scene detection on a batch of videos, updating progress.
-    on_fail(asset_id, error) hears of each video it couldn't do.
+    on_fail(asset_id, error) hears of each video it couldn't do. settings:
+    how scenes are found (index_video_scenes); a video with "redo" is started over.
 
     Each video dict must have: asset_id, rel_path, duration_sec.
     Videos are processed sequentially (FFmpeg is CPU/IO heavy).
@@ -200,6 +211,8 @@ def run_video_index(
                 duration_sec=duration_sec,
                 rel_path=rel_path,
                 lineage=lineage_for(video) if lineage_for else None,
+                settings=settings,
+                redo=bool(video.get("redo")),
             )
             ok += 1
             logger.info(
@@ -239,6 +252,10 @@ def _described(scene: dict, lineage: dict | None) -> bool:
 
 class _NoFrameError(Exception):
     """The scene's representative frame couldn't be read from the proxy."""
+
+
+# A scene dropped while it was described (its video's scenes were found again): no failure.
+_GONE = object()
 
 
 def enrich_scene(
@@ -413,6 +430,12 @@ def run_video_enrich(
         except _NoFrameError as e:
             logger.warning("scene-enrich: %s scene %s — rep frame extraction failed: %s", rel_path, scene_id, e)
             return v, str(e)
+        except LumiverbAPIError as e:
+            if e.code == "scene_gone":  # the video's scenes were found again: the new ones are described next
+                logger.info("scene-enrich: %s scene %s — gone, its scenes were found again", rel_path, scene_id)
+                return v, _GONE
+            logger.exception("scene-enrich: %s scene %s — failed: %s", rel_path, scene_id, e)
+            return v, str(e)
         except Exception as e:
             logger.exception("scene-enrich: %s scene %s — failed: %s", rel_path, scene_id, e)
             return v, str(e) or type(e).__name__
@@ -423,6 +446,8 @@ def run_video_enrich(
         v.pending -= 1
         if error is None:
             v.enriched += 1
+        elif error is _GONE:
+            v.skipped += 1
         elif isinstance(error, CaptionError):
             v.fault = error
             fault = fault or error
