@@ -529,3 +529,35 @@ def test_a_check_for_a_model_no_longer_chosen_is_left_out():
         pool._check(pool.machines[0])
     brain = pool.machines[0]
     assert not brain.online and brain.serves == "" and brain.checked_at is None  # checked again, with llava
+
+
+# ---------------------------------------------------------------------------
+# Video work comes first on a shared GPU (Robert, Oct 9)
+# ---------------------------------------------------------------------------
+
+
+def test_a_machine_sharing_the_gpu_takes_fewer_requests_while_video_is_decoded():
+    client = _client(machines=({**BRAIN, "shares_gpu": True}, STUDIO))
+    with _offering({"http://brain/v1": (QWEN,), "http://studio/v1": (QWEN,)}):
+        pool = MachinePool(client, "vision")
+        pool.check()
+    assert pool.capacity() == 6
+    pool.set_gpu_hold(1)
+    assert pool.capacity() == 5  # the brain takes one fewer
+    held = [pool.acquire() for _ in range(5)]
+    assert sorted(m.name for m in held).count("Brain") == 1
+    pool.set_gpu_hold(5)
+    assert pool.capacity() == 4  # down to none on the brain; the studio keeps going
+    for m in held:
+        pool.release(m)
+    pool.set_gpu_hold(0)
+    assert pool.capacity() == 6
+
+
+def test_the_built_in_machine_always_shares_the_gpu():
+    built_in = {"machine_id": "aim_bi", "name": "Built in", "api_url": "", "api_key": "", "at_once": 1,
+                "built_in": True}
+    client = _client(machines=(built_in,))
+    pool = MachinePool(client, "transcripts")
+    pool.load()
+    assert pool.machines[0].shares_gpu is True

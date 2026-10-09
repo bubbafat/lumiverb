@@ -39,6 +39,11 @@ class FakeAccount:
         self.refreshed = 0
         self.settings_ready = True
         self.stopping = threading.Event()
+        self.gpu_holds: list[int] = []
+
+    def set_gpu_hold(self, hold: int) -> None:
+        if not self.gpu_holds or self.gpu_holds[-1] != hold:
+            self.gpu_holds.append(hold)
 
     def refresh(self) -> None:
         self.refreshed += 1
@@ -86,7 +91,7 @@ def _scheduler(accounts: dict, due: dict[str, list[dict]], recorder: Recorder, *
                                                             "scenes": 1},
                      candidates=candidates, runners=recorder.all(), scan=scan or MagicMock(), inline_refill=True,
                      paused=lambda tenant_id: set(paused or ()),
-                     retry_requested=lambda tenant_id: None)
+                     retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
 
 
 def _settle(s: Scheduler) -> None:
@@ -233,7 +238,7 @@ def test_a_job_that_fails_frees_its_slot_and_the_rest_go_on() -> None:
     s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"gpu": 1, "scan": 1},
                   candidates=lambda t, k, libs, skip=(): [_item("c1"), _item("c2", "2026-10-02")] if k.name == "clip" else [],
                   runners=runners, scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set(),
-                  retry_requested=lambda tenant_id: None)
+                  retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
     s.tick()
     _settle(s)
     assert s.dispatcher.free("gpu") == 1
@@ -363,7 +368,7 @@ def test_a_job_that_couldnt_try_is_offered_again_and_one_that_tried_waits() -> N
     s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"probe": 1, "scan": 0},
                   candidates=lambda t, k, libs, skip=(): [i for i in [_item("p")] if i["asset_id"] not in skip]
                   if k.name == "probe" else [], runners=runners, scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set(),
-                  retry_requested=lambda tenant_id: None)
+                  retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
     for _ in range(4):
         s.tick()
         _settle(s)
@@ -412,7 +417,7 @@ def test_the_database_is_asked_to_leave_out_clips_in_hand_or_just_tried() -> Non
 
     s = Scheduler(lambda: {"t1": FakeAccount(vision=1)}, capacity={"scan": 0}, candidates=candidates,
                   runners=rec.all(), scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set(),
-                  retry_requested=lambda tenant_id: None)
+                  retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
     s.tick()
     s.dispatcher._all_known_at.clear()
     s.dispatcher._buffers.clear()
@@ -433,7 +438,7 @@ def test_one_kinds_trouble_doesnt_hold_up_the_others() -> None:
 
     s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"probe": 1, "gpu": 1, "scan": 0},
                   candidates=candidates, runners=rec.all(), scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set(),
-                  retry_requested=lambda tenant_id: None)
+                  retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
     s.tick()
     _settle(s)
     assert [kind for _, kind, _ in rec.ran] == ["clip"]
@@ -449,7 +454,7 @@ def test_refills_happen_off_the_dispatching_thread() -> None:
     s = Scheduler(lambda: {"t1": acct}, capacity={"gpu": 1, "scan": 0},
                   candidates=lambda t, k, libs, skip=(): [_item("c")] if k.name == "clip" else [],
                   runners=rec.all(), scan=MagicMock(), paused=lambda tenant_id: set(),
-                  retry_requested=lambda tenant_id: None)
+                  retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
     start = time.monotonic()
     s.tick()
     assert time.monotonic() - start < 1
@@ -581,6 +586,63 @@ def test_asking_to_try_failing_clips_again_lets_go_of_the_hour() -> None:
         s.tick()
         _settle(s)
     assert [ids for _, kind, ids in rec.ran if kind == "clip"] == [("c",), ("c",)]
+
+
+# ---------------------------------------------------------------------------
+# Video work comes first on this machine's GPU; what's running, on screen
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_ai_machines_sharing_the_gpu_give_way_while_a_render_decodes() -> None:
+    rec = Recorder()
+    rec.hold.clear()
+    acct = FakeAccount()
+    s = Scheduler(lambda: {"t1": acct}, capacity={"render": 2, "scan": 0},
+                  candidates=lambda t, k, libs, skip=(): [_item("r")] if k.name == "render" else [],
+                  runners=rec.all(), scan=MagicMock(), inline_refill=True, gpu_decodes=1,
+                  paused=lambda t: set(), retry_requested=lambda t: None, write_status=lambda t, st: None)
+    s.tick()
+    assert acct.gpu_holds == [1]
+    rec.hold.set()
+    _settle(s)
+    s.tick()
+    assert acct.gpu_holds == [1, 0]
+
+
+@pytest.mark.fast
+def test_without_gpu_decoding_nothing_gives_way() -> None:
+    rec = Recorder()
+    acct = FakeAccount()
+    s = Scheduler(lambda: {"t1": acct}, capacity={"render": 1, "scan": 0},
+                  candidates=lambda t, k, libs, skip=(): [_item("r")] if k.name == "render" else [],
+                  runners=rec.all(), scan=MagicMock(), inline_refill=True, gpu_decodes=0,
+                  paused=lambda t: set(), retry_requested=lambda t: None, write_status=lambda t, st: None)
+    s.tick()
+    _settle(s)
+    assert acct.gpu_holds == [0]
+
+
+@pytest.mark.fast
+def test_what_the_scheduler_is_doing_is_written_for_processing() -> None:
+    rec = Recorder()
+    rec.hold.clear()
+    written: list[tuple[str, dict]] = []
+    s = Scheduler(lambda: {"t1": FakeAccount(vision=1)}, capacity={"scan": 0},
+                  candidates=lambda t, k, libs, skip=(): [_item("a"), _item("b", "2026-10-02")] if k.name == "vision" else [],
+                  runners=rec.all(), scan=MagicMock(), inline_refill=True,
+                  paused=lambda t: set(), retry_requested=lambda t: None,
+                  write_status=lambda t, st: written.append((t, st)))
+    s.tick()
+    s.tick()  # written every few seconds, not every tick
+    assert len(written) == 1
+    s._status_at.clear()
+    s.tick()
+    tenant, status = written[-1]
+    assert tenant == "t1" and status["running"] == {"vision": 1} and status["waiting"]["vision"] >= 1
+    assert status["pools"]["vision"] == [1, 1] and "at" in status and status["gpu_hold"] == 0
+    rec.hold.set()
+    _settle(s)
 
 
 @pytest.mark.fast

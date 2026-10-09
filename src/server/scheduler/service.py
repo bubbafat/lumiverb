@@ -42,6 +42,8 @@ TICK_SEC = 1.0
 STOP_GRACE_SEC = 25.0
 # Failures are sent to the server at least this often.
 FLUSH_EVERY_SEC = 10.0
+# What the scheduler is doing is written for Settings → Processing this often.
+STATUS_EVERY_SEC = 5.0
 # The control-plane lock only one scheduler holds ("lumv"), and how often
 # it's checked that the lock is still held.
 LOCK_ID = 0x6C756D76
@@ -84,6 +86,8 @@ class Scheduler:
         wall: Callable[[], float] = time.time,
         max_threads: int = 64,
         inline_refill: bool = False,
+        gpu_decodes: int = 0,
+        write_status: Callable[[str, dict], None] | None = None,
     ) -> None:
         from src.server.scheduler import runners as runner_mod
 
@@ -105,6 +109,12 @@ class Scheduler:
         self._inline_refill = inline_refill
         self._refill_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="refill")
         self._refilling: dict[str, Future] = {}
+        # Renders that decode on this machine's GPU at once (0: they don't):
+        # while they run, AI machines sharing that GPU take fewer requests.
+        self._gpu_decodes = gpu_decodes
+        self.gpu_hold = 0
+        self._write_status = write_status or _status_to_database
+        self._status_at: dict[str, float] = {}
         self._flushing: dict[str, Future] = {}
 
     # -- one tick -----------------------------------------------------------
@@ -124,6 +134,7 @@ class Scheduler:
                 self._running[self._pool.submit(self._run, acct, job)] = job
                 started += 1
         self.collect()
+        self._share_the_gpu(accounts)
         if self._clock() - self._flushed_at >= FLUSH_EVERY_SEC:
             self._flushed_at = self._clock()
             for acct_id, acct in accounts.items():
@@ -133,6 +144,26 @@ class Scheduler:
                 elif (flushing := self._flushing.get(acct_id)) is None or flushing.done():
                     self._flushing[acct_id] = self._refill_pool.submit(acct.failures.flush)
         return started
+
+    def _share_the_gpu(self, accounts: Mapping[str, Any]) -> None:
+        """Video work comes first on this machine's GPU (Robert, Oct 9): each
+        render decoding there, and scene detection, takes a request from the
+        AI machines that share it, down to none."""
+        if self._gpu_decodes <= 0:
+            hold = 0
+        else:
+            hold = min(self._gpu_decodes, self.dispatcher.running("render")) + min(1, self.dispatcher.running("scenes"))
+        self.gpu_hold = hold
+        for acct in accounts.values():
+            set_hold = getattr(acct, "set_gpu_hold", None)
+            if set_hold is not None:
+                set_hold(hold)
+
+    def status(self, tenant_id: str) -> dict:
+        """What the scheduler is doing for the account now (Settings → Processing)."""
+        from src.shared.utils import utcnow
+
+        return {"at": utcnow().isoformat(), "gpu_hold": self.gpu_hold, **self.dispatcher.status(tenant_id)}
 
     def _refill_soon(self, tenant_id: str, acct: Any) -> None:
         if self._inline_refill:
@@ -144,11 +175,18 @@ class Scheduler:
 
     def _refill(self, tenant_id: str, acct: Any) -> None:
         """Read the account's settings and machines when due, size its AI
-        pools, and list what's due for each kind that wants more."""
+        pools, list what's due for each kind that wants more, and say what's
+        running (every few seconds)."""
         try:
             acct.refresh()
         except Exception:  # noqa: BLE001 — tried again at the next tick
             logger.exception("scheduler: refreshing %s failed", tenant_id)
+        if self._clock() - self._status_at.get(tenant_id, float("-inf")) >= STATUS_EVERY_SEC:
+            self._status_at[tenant_id] = self._clock()
+            try:
+                self._write_status(tenant_id, self.status(tenant_id))
+            except Exception:  # noqa: BLE001 — only a view of it
+                logger.exception("scheduler: writing %s's status failed", tenant_id)
         for job in AI_JOB_KINDS:
             slots = acct.capacity(job)
             # Transcripts: twice the machines', so each clip's audio is got
@@ -304,6 +342,21 @@ def _retry_requested_in_database(tenant_id: str) -> str | None:
 
     with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
         return session.execute(text("SELECT value FROM system_metadata WHERE key = 'scheduler.retry_at'")).scalar()
+
+
+def _status_to_database(tenant_id: str, status: dict) -> None:
+    import json
+
+    from sqlalchemy import text
+    from sqlmodel import Session
+
+    from src.server.database import get_engine_for_url
+
+    with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
+        session.execute(text(
+            "INSERT INTO system_metadata (key, value, updated_at) VALUES ('scheduler.status', :v, now())"
+            " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"), {"v": json.dumps(status)})
+        session.commit()
 
 
 def _paused_in_database(tenant_id: str) -> set[str]:
@@ -553,7 +606,9 @@ def main() -> int:
                 last[0] = now
 
         accounts = Accounts(state)
-        scheduler = Scheduler(accounts, capacity=default_capacity(load_config()))
+        cfg = load_config()
+        gpu_decodes = cfg.gpu_decodes if cfg.analysis_proxy_decoder != "cpu" else 0
+        scheduler = Scheduler(accounts, capacity=default_capacity(cfg), gpu_decodes=gpu_decodes)
         logger.info("scheduler: started")
         try:
             kept = run(stop=stop, scheduler=scheduler, save=save, accounts=accounts.all,

@@ -5,6 +5,7 @@ import {
   getCurrentUser,
   getFailures,
   getProducers,
+  getSchedulerStatus,
   listLibraries,
   listProjects,
   resumeRedo,
@@ -12,6 +13,7 @@ import {
   stopRedo,
   type FailingClip,
   type Producer,
+  type SchedulerStatus,
 } from "../../api/client";
 
 const linkClass = "text-sm text-indigo-300 hover:text-indigo-200 disabled:opacity-50";
@@ -56,6 +58,8 @@ export default function ProcessingSection() {
           they're made again after anything missing. Changing a model in Settings → AI is what starts that.
         </p>
       </div>
+
+      <NowPanel />
 
       <label className="block text-sm text-gray-300">
         <span className="mb-1 block">Counts for</span>
@@ -183,6 +187,74 @@ function ProducerRow({
       {c && c.stale > 0 && <RedoLine producer={producer} stale={c.stale} admin={admin} />}
       <Settings producer={producer} />
     </li>
+  );
+}
+
+const KIND_LABELS: Record<string, [string, string]> = {
+  scan: ["scan", "scans"],
+  probe: ["video probe", "video probes"],
+  render: ["analysis copy", "analysis copies"],
+  clip: ["CLIP embedding", "CLIP embeddings"],
+  vision: ["description", "descriptions"],
+  ocr: ["text read", "texts read"],
+  scene_vision: ["scene description", "scene descriptions"],
+  faces: ["face batch", "face batches"],
+  transcript: ["transcript", "transcripts"],
+  scenes: ["scene detection", "scene detections"],
+};
+
+/** "2 descriptions", "1 redo of transcripts". */
+export function kindCount(kind: string, count: number): string {
+  if (kind.startsWith("redo_")) {
+    const base = KIND_LABELS[kind.slice(5)]?.[1] ?? kind.slice(5);
+    return `${n(count)} redo${count === 1 ? "" : "s"} of ${base}`;
+  }
+  const [one, many] = KIND_LABELS[kind] ?? [kind, kind];
+  return `${n(count)} ${count === 1 ? one : many}`;
+}
+
+function listKinds(counts: Record<string, number>): string {
+  return Object.entries(counts)
+    .filter(([, c]) => c > 0)
+    .map(([k, c]) => kindCount(k, c))
+    .join(", ");
+}
+
+/** What the scheduler is doing right now (it says every few seconds). */
+function NowPanel() {
+  const { data } = useQuery({ queryKey: ["scheduler-status"], queryFn: getSchedulerStatus, refetchInterval: 5_000 });
+  if (!data) return null;
+  const status: SchedulerStatus = data;
+  if (!status.live) {
+    return (
+      <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+        {status.at
+          ? `The scheduler isn't running: last heard from ${when(status.at)}. Nothing is being made.`
+          : "The scheduler hasn't said what it's doing yet."}
+      </p>
+    );
+  }
+  const running = listKinds(status.running);
+  const waiting = listKinds(status.waiting);
+  return (
+    <div className="space-y-1 rounded-md border border-gray-700/60 bg-gray-950/40 px-3 py-2 text-sm" aria-label="Now">
+      <p className="text-gray-200">
+        <span className="text-gray-400">Now: </span>
+        {running || "nothing to make"}
+      </p>
+      {waiting && (
+        <p className="text-gray-400">
+          <span>Next: </span>
+          {waiting}
+        </p>
+      )}
+      {status.gpu_hold > 0 && (
+        <p className="text-gray-400">
+          Video work has the GPU: AI machines sharing it take {status.gpu_hold} fewer request
+          {status.gpu_hold === 1 ? "" : "s"} meanwhile.
+        </p>
+      )}
+    </div>
   );
 }
 

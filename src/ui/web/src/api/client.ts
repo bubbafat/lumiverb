@@ -799,6 +799,9 @@ export interface AiMachine {
   enabled: boolean;
   /** The worker's own computer (its Whisper): no URL or key, can't be removed. */
   built_in: boolean;
+  /** It shares the GPU video is decoded on here: it gets fewer requests while
+   * video work runs there (the built-in one always does). */
+  shares_gpu?: boolean;
   /** null until it has been checked. */
   status: MachineStatus | null;
 }
@@ -840,6 +843,7 @@ export interface MachineFields {
   jobs: string[];
   at_once: number;
   enabled?: boolean;
+  shares_gpu?: boolean;
 }
 
 /** Add a machine (admins); it's asked for its models. 502 machine_unreachable,
@@ -916,6 +920,22 @@ export async function getProducers(scope: { libraryId?: string; projectId?: stri
   if (scope.projectId) qs.set("project_id", scope.projectId);
   const q = qs.toString();
   return (await apiFetch<{ producers: Producer[] }>(`/producers${q ? `?${q}` : ""}`)).producers;
+}
+
+/** What the scheduler is doing now (written every few seconds); live: it wrote in the last 30 s. */
+export interface SchedulerStatus {
+  live: boolean;
+  at: string | null;
+  running: Record<string, number>;
+  waiting: Record<string, number>;
+  /** Each pool's [busy, slots]. */
+  pools: Record<string, [number, number]>;
+  /** Requests AI machines sharing its GPU give up while video is decoded there. */
+  gpu_hold: number;
+}
+
+export async function getSchedulerStatus(): Promise<SchedulerStatus> {
+  return apiFetch<SchedulerStatus>("/producers/queue");
 }
 
 /** A clip whose last try failed (Settings → Processing). */

@@ -274,8 +274,9 @@ def test_the_worker_gets_a_jobs_machines_with_their_keys_and_a_viewer_doesnt(env
     assert r.status_code == 200, r.text
     assert r.json() == {"job": "vision", "model": QWEN, "machines": [
         {"machine_id": _machine(_ai(env), "Brain")["machine_id"], "name": "Brain", "api_url": BRAIN,
-         "api_key": "sk-1", "at_once": 2, "built_in": False},
-        {"machine_id": studio, "name": "Studio", "api_url": STUDIO, "api_key": "", "at_once": 4, "built_in": False},
+         "api_key": "sk-1", "at_once": 2, "built_in": False, "shares_gpu": False},
+        {"machine_id": studio, "name": "Studio", "api_url": STUDIO, "api_key": "", "at_once": 4, "built_in": False,
+         "shares_gpu": False},
     ]}
     assert client.get("/v1/ai/jobs/vision", headers=_key_with_role(env, "viewer")).status_code == 403
 

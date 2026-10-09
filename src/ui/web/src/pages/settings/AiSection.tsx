@@ -238,6 +238,7 @@ function MachineRow({ ai, machine, admin }: { ai: AiSettings; machine: AiMachine
       )}
       <p className="text-sm text-gray-300">
         {labels.length ? `Does: ${labels.join(", ")}` : "Does nothing yet"} · {machine.at_once} at once
+        {machine.shares_gpu && " · video work comes first on its GPU"}
       </p>
       <MachineStatusLine machine={machine} />
       {confirm && (
@@ -286,6 +287,7 @@ function MachineForm({ ai, machine, onDone }: { ai: AiSettings; machine?: AiMach
   const [picked, setPicked] = useState(!!machine);
   const [atOnce, setAtOnce] = useState(machine?.at_once ?? 2);
   const [enabled, setEnabled] = useState(machine?.enabled ?? true);
+  const [sharesGpu, setSharesGpu] = useState(machine?.shares_gpu ?? false);
   // What it offered at the last Connect; null until connected (again).
   const [models, setModels] = useState<string[] | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -328,7 +330,8 @@ function MachineForm({ ai, machine, onDone }: { ai: AiSettings; machine?: AiMach
       if (builtIn && machine) {
         return updateMachine(machine.machine_id, { name: name.trim(), jobs, at_once: atOnce, enabled }, leaveJobs);
       }
-      const fields: MachineFields = { name: name.trim(), api_url: url.trim(), jobs, at_once: atOnce, enabled };
+      const fields: MachineFields = { name: name.trim(), api_url: url.trim(), jobs, at_once: atOnce, enabled,
+                                      shares_gpu: sharesGpu };
       if (keyToSend !== undefined) fields.api_key = keyToSend;
       return machine ? updateMachine(machine.machine_id, fields, leaveJobs) : addMachine(fields);
     },
@@ -466,6 +469,18 @@ function MachineForm({ ai, machine, onDone }: { ai: AiSettings; machine?: AiMach
           How many it works on together (images to describe, clips to transcribe); more needs more GPU memory.
         </span>
       </label>
+      {!builtIn && (
+        <label className="flex items-start gap-2 text-sm text-gray-300">
+          <input type="checkbox" className="mt-1" checked={sharesGpu} onChange={(e) => setSharesGpu(e.target.checked)} />
+          <span>
+            Shares the GPU with video work here
+            <span className="block text-xs text-gray-500">
+              It runs on the server Lumiverb decodes video on. While video is decoded there, it gets fewer requests,
+              so previews and analysis copies come first.
+            </span>
+          </span>
+        </label>
+      )}
       {machine && (
         <label className="flex items-center gap-2 text-sm text-gray-300">
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />

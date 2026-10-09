@@ -47,6 +47,8 @@ class Machine:
     at_once: int
     # The worker's own computer (no URL): it does the job itself.
     built_in: bool = False
+    # It shares the GPU video is decoded on here: video work comes first.
+    shares_gpu: bool = False
     # The name it knows the job's model by, once checked.
     serves: str = ""
     online: bool = False
@@ -69,6 +71,9 @@ class MachinePool:
         # Why the job can't go ahead; None while a machine is online.
         self.error: str | None = None
         self._cond = threading.Condition()
+        # Requests a machine sharing the GPU gives up while video is decoded
+        # on it (the scheduler sets it): video work comes first, down to none.
+        self.gpu_hold = 0
 
     def load(self) -> None:
         """The job's model and machines, from the server (raises when it can't say).
@@ -93,6 +98,7 @@ class MachinePool:
                 machine.name, machine.api_url, machine.api_key = m["name"], m["api_url"], api_key
                 machine.at_once = max(1, int(m.get("at_once") or 1))
                 machine.built_in = bool(m.get("built_in"))
+                machine.shares_gpu = bool(m.get("shares_gpu")) or machine.built_in
                 machines.append(machine)
             self.machines = machines
             self.model = model
@@ -116,10 +122,20 @@ class MachinePool:
     def down(self) -> bool:
         return not self.model or not any(m.online for m in self.machines)
 
-    def capacity(self) -> int:
-        """Requests the online machines take at once, together."""
+    def limit(self, machine: Machine) -> int:
+        """Requests the machine takes at once now: fewer while video work has
+        the GPU it shares."""
+        return max(0, machine.at_once - self.gpu_hold) if machine.shares_gpu else machine.at_once
+
+    def set_gpu_hold(self, hold: int) -> None:
         with self._cond:
-            return sum(m.at_once for m in self.machines if m.online)
+            self.gpu_hold = max(0, hold)
+            self._cond.notify_all()
+
+    def capacity(self) -> int:
+        """Requests the online machines take at once, together (now)."""
+        with self._cond:
+            return sum(self.limit(m) for m in self.machines if m.online)
 
     def describe(self) -> str:
         on = [f"{m.name} ({m.at_once} at once)" for m in self.machines if m.online]
@@ -141,9 +157,9 @@ class MachinePool:
                         continue
                     self._why()
                     return None
-                free = [m for m in online if m.busy < m.at_once]
+                free = [m for m in online if m.busy < self.limit(m)]
                 if free:
-                    machine = min(free, key=lambda m: m.busy / m.at_once)
+                    machine = min(free, key=lambda m: m.busy / max(1, self.limit(m)))
                     machine.busy += 1
                     return machine
                 self._cond.wait(WAIT_SEC)
