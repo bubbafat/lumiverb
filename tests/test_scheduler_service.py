@@ -23,6 +23,7 @@ def _no_database(monkeypatch: pytest.MonkeyPatch) -> None:
     from src.server.scheduler import service
 
     for name, stub in (("_paused_in_database", lambda tenant_id: set()),
+                       ("_on_hold_in_database", lambda tenant_id: set()),
                        ("_retry_requested_in_database", lambda tenant_id: None),
                        ("_status_to_database", lambda tenant_id, status: None),
                        ("_status_from_database", lambda tenant_id: None)):
@@ -86,7 +87,8 @@ def _item(asset_id: str, added: str = "2026-10-01") -> dict:
 
 
 def _scheduler(accounts: dict, due: dict[str, list[dict]], recorder: Recorder, *, scan=None,
-               capacity: dict | None = None, asked: list | None = None, paused: set | None = None) -> Scheduler:
+               capacity: dict | None = None, asked: list | None = None, paused: set | None = None,
+               held: set | None = None) -> Scheduler:
     def candidates(tenant_id, kind, libraries, skip=()):
         if asked is not None:
             asked.append((tenant_id, kind.name, tuple(libraries)))
@@ -95,7 +97,7 @@ def _scheduler(accounts: dict, due: dict[str, list[dict]], recorder: Recorder, *
     return Scheduler(lambda: accounts, capacity=capacity or {"scan": 1, "probe": 2, "render": 1, "gpu": 1,
                                                             "scenes": 1},
                      candidates=candidates, runners=recorder.all(), scan=scan or MagicMock(), inline_refill=True,
-                     paused=lambda tenant_id: set(paused or ()),
+                     paused=lambda tenant_id: set(paused or ()), on_hold=lambda tenant_id: set(held or ()),
                      retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
 
 
@@ -569,6 +571,189 @@ def test_stopping_a_redo_clears_what_was_waiting_at_once() -> None:
     s.tick()
     _settle(s)
     assert [ids for _, kind, ids in rec.ran] == [("a",)]
+
+
+# ---------------------------------------------------------------------------
+# Pausing (Robert, Oct 9): all of an account's processing, or one producer's
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_a_paused_account_starts_nothing_and_asks_for_nothing() -> None:
+    rec = Recorder()
+    asked: list = []
+    scan = MagicMock()
+    s = _scheduler({"t1": FakeAccount()}, {"probe": [_item("p")], "vision": [_item("v")]}, rec,
+                   asked=asked, held={"all"}, scan=scan)
+    s.tick()
+    _settle(s)
+    assert rec.ran == [] and asked == [] and not scan.called
+    assert s.status("t1")["waiting"] == {}
+
+
+@pytest.mark.fast
+def test_a_paused_account_still_says_what_its_doing() -> None:
+    written: list = []
+    s = _scheduler({"t1": FakeAccount()}, {}, Recorder(), held={"all"})
+    s._write_status = lambda tenant_id, status: written.append(tenant_id)
+    s.tick()
+    assert written == ["t1"]
+
+
+@pytest.mark.fast
+def test_paused_scans_stop_only_scans() -> None:
+    # Robert, Oct 9: scans can be paused on their own; the rest goes on.
+    rec = Recorder()
+    scan = MagicMock()
+    s = _scheduler({"t1": FakeAccount()}, {"probe": [_item("p")], "clip": [_item("c")]}, rec,
+                   held={"scans"}, scan=scan)
+    s.tick()
+    _settle(s)
+    assert not scan.called
+    assert sorted(kind for _, kind, _ in rec.ran) == ["clip", "probe"]
+
+
+@pytest.mark.fast
+def test_pausing_lets_running_jobs_finish_and_starts_nothing_more() -> None:
+    rec = Recorder()
+    rec.hold.clear()
+    held: set = set()
+    s = _scheduler({"t1": FakeAccount(vision=1)}, {"vision": [_item("a"), _item("b", "2026-10-02")]}, rec)
+    s._on_hold = lambda tenant_id: held
+    s.tick()  # a in hand, b waiting
+    held.add("all")
+    s.tick()
+    assert s.status("t1")["waiting"] == {}
+    rec.hold.set()
+    _settle(s)
+    s.tick()
+    _settle(s)
+    assert [ids for _, kind, ids in rec.ran] == [("a",)]
+
+
+@pytest.mark.fast
+def test_other_accounts_go_on_while_one_is_paused() -> None:
+    rec = Recorder()
+    s = _scheduler({"t1": FakeAccount("t1"), "t2": FakeAccount("t2")}, {"clip": [_item("c")]}, rec)
+    s._on_hold = lambda tenant_id: {"all"} if tenant_id == "t1" else set()
+    s.tick()
+    _settle(s)
+    assert [(t, kind) for t, kind, _ in rec.ran] == [("t2", "clip")]
+
+
+@pytest.mark.fast
+def test_a_paused_producer_starts_nothing_of_its_own_and_the_rest_go_on() -> None:
+    rec = Recorder()
+    asked: list = []
+    s = _scheduler({"t1": FakeAccount()}, {"vision": [_item("v")], "redo_vision": [_item("old")],
+                                           "ocr": [_item("o")], "clip": [_item("c")]}, rec,
+                   asked=asked, held={"vision"})
+    s.tick()
+    _settle(s)
+    assert sorted(kind for _, kind, _ in rec.ran) == ["clip", "ocr"]
+    assert not {"vision", "redo_vision"} & {kind for _, kind, _ in asked}
+
+
+@pytest.mark.fast
+def test_resuming_hands_out_what_was_waiting_at_once() -> None:
+    # Pausing let go of the waiting clips; resuming asks for them again
+    # without waiting out the pause before the database is asked again.
+    rec = Recorder()
+    rec.hold.clear()
+    held: set = set()
+    s = _scheduler({"t1": FakeAccount(vision=1)}, {"vision": [_item("a"), _item("b", "2026-10-02")]}, rec)
+    s._on_hold = lambda tenant_id: held
+    s.tick()  # a in hand, b waiting (all of them known)
+    held.add("vision")
+    s.tick()
+    rec.hold.set()
+    _settle(s)
+    held.clear()
+    s.tick()
+    _settle(s)
+    assert [ids for _, kind, ids in rec.ran] == [("a",), ("b",)]
+
+
+@pytest.mark.fast
+def test_until_what_was_paused_can_be_read_nothing_starts() -> None:
+    def unreadable(tenant_id):
+        raise RuntimeError("database down")
+
+    rec = Recorder()
+    s = _scheduler({"t1": FakeAccount()}, {"clip": [_item("c")]}, rec)
+    s._on_hold = unreadable
+    s.tick()
+    _settle(s)
+    assert rec.ran == []
+
+
+@pytest.mark.fast
+def test_a_pause_that_came_and_went_while_listing_doesnt_hold_the_kind_back() -> None:
+    # Paused after this refill read what's paused, resumed before the next:
+    # the listing said "paused", and the kind is asked for again at once,
+    # not after the wait an empty answer gets.
+    rec = Recorder()
+    answers = [None, [_item("a")]]
+
+    def candidates(tenant_id, kind, libraries, skip=()):
+        return answers.pop(0) if kind.name == "vision" and answers else []
+
+    s = _scheduler({"t1": FakeAccount()}, {}, rec)
+    s._candidates = candidates
+    s.tick()
+    s.tick()
+    _settle(s)
+    assert [ids for _, kind, ids in rec.ran if kind == "vision"] == [("a",)]
+
+
+@pytest.mark.fast
+def test_a_pause_stops_jobs_starting_while_a_slow_refill_is_still_running() -> None:
+    # The refill can take a while (a machine check that times out); what's
+    # paused is read on its own, every second or so, and the dispatcher
+    # hands out nothing of it from then on.
+    rec = Recorder()
+    rec.hold.clear()
+    release = threading.Event()  # a holds its slot until told, however slow the machine
+    vision = rec.runner("vision")
+    held: set = set()
+    slow = threading.Event()
+    slow.set()
+    acct = FakeAccount(vision=1)
+    acct.refresh = lambda: slow.wait(10)
+    s = Scheduler(lambda: {"t1": acct}, capacity={"scan": 1, "probe": 2, "render": 1, "gpu": 1, "scenes": 1},
+                  candidates=lambda t, kind, libs, skip=(): [_item("a"), _item("b", "2026-10-02")]
+                  if kind.name == "vision" else [],
+                  runners={**rec.all(), "vision": lambda acct, job: (release.wait(30), vision(acct, job))[1]},
+                  scan=MagicMock(), paused=lambda t: set(), on_hold=lambda t: set(held),
+                  retry_requested=lambda t: None, write_status=lambda t, st: None)
+    deadline = time.monotonic() + 5
+    while s.running == 0 and time.monotonic() < deadline:  # a in hand, b waiting
+        s.tick()
+        time.sleep(0.02)
+    assert s.running == 1
+    deadline = time.monotonic() + 10
+    slow.clear()
+    refreshing = threading.Event()
+    acct.refresh = lambda: (refreshing.set(), slow.wait(10))
+    while not refreshing.is_set() and time.monotonic() < deadline:  # a refill, past its look at what's paused, hangs
+        s.tick()
+        time.sleep(0.02)
+    assert refreshing.is_set()
+    held.add("vision")
+    deadline = time.monotonic() + 10
+    while s.dispatcher.status("t1")["waiting"] and time.monotonic() < deadline:
+        s.tick()
+        time.sleep(0.05)
+    assert not s.dispatcher.status("t1")["waiting"]
+    rec.hold.set()
+    release.set()
+    for _ in range(20):
+        s.tick()
+        s.collect(timeout=0.05)
+    slow.set()
+    _settle(s)
+    s.stop(grace=1)
+    assert [ids for _, kind, ids in rec.ran if kind == "vision"] == [("a",)]
 
 
 @pytest.mark.fast

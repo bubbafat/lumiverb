@@ -398,7 +398,7 @@ def _ask_before_redoing(session: Session, tenant: Tenant | None, job: str, model
     job off redoes nothing."""
     from src.server.repository import lineage
     from src.server.repository.ai_machines import job_models
-    from src.shared.producers import PRODUCERS
+    from src.shared.producers import PAUSE_ALL, PRODUCERS
 
     if not model or redo:
         return
@@ -411,13 +411,17 @@ def _ask_before_redoing(session: Session, tenant: Tenant | None, job: str, model
     if not made:
         return
     clips = sum(made.values())
-    kinds = [{"artifact": a, "title": PRODUCERS[a].title, "clips": n} for a, n in made.items()]
+    held = lineage.processing_paused(session)
+    kinds = [{"artifact": a, "title": PRODUCERS[a].title, "clips": n, "paused": a in held} for a, n in made.items()]
     what = ", ".join(f"{k['title'].lower()} ({k['clips']:,})" for k in kinds)
+    paused = [k["title"] for k in kinds if k["paused"]]
     raise DecisionRequiredError(
         "redo_on_change",
         f"{model} makes {clips:,} clip{'' if clips == 1 else 's'} again: {what}. That runs after anything "
-        "missing; until it's done, results mix the old model and the new.",
-        {"job": job, "model": model, "clips": clips, "artifacts": kinds},
+        "missing; until it's done, results mix the old model and the new."
+        + (" All processing is paused: none of it is made until it's resumed." if PAUSE_ALL in held
+           else f" Paused, so not made until it's resumed: {', '.join(paused)}." if paused else ""),
+        {"job": job, "model": model, "clips": clips, "artifacts": kinds, "all_paused": PAUSE_ALL in held},
     )
 
 

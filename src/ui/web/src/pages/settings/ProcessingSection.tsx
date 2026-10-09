@@ -9,6 +9,8 @@ import {
   getSchedulerStatus,
   listLibraries,
   listProjects,
+  pauseProcessing,
+  resumeProcessing,
   resumeRedo,
   retryFailures,
   setProducerSettings,
@@ -37,9 +39,13 @@ function mediaLabel(media: string[]): string {
   return media.includes("video") ? "Videos" : "Images";
 }
 
-/** Account-wide: what each producer has made for the clips, and stopping or resuming its redo (admins). */
+const STATUS_QUERY_KEY = ["scheduler-status"];
+
+/** Account-wide: what each producer has made for the clips, pausing all of it or one producer, and stopping or
+ * resuming a redo (admins). */
 export default function ProcessingSection() {
   const { data: user } = useQuery({ queryKey: ["settings", "me"], queryFn: getCurrentUser });
+  const { data: status } = useQuery({ queryKey: STATUS_QUERY_KEY, queryFn: getSchedulerStatus, refetchInterval: 5_000 });
   const { data: libraries = [] } = useQuery({ queryKey: ["libraries"], queryFn: () => listLibraries() });
   const { data: projects = [] } = useQuery({ queryKey: ["projects", "active"], queryFn: () => listProjects() });
   const [scopeValue, setScopeValue] = useState("all");
@@ -51,16 +57,22 @@ export default function ProcessingSection() {
       getProducers(kind === "library" ? { libraryId: id } : kind === "project" ? { projectId: id } : {}),
     refetchInterval: 30_000,
   });
-  // What the scheduler is doing (it says every few seconds): asked once for the page.
-  const { data: status } = useQuery({ queryKey: ["scheduler-status"], queryFn: getSchedulerStatus,
-                                      refetchInterval: 5_000 });
   const admin = user?.role === "admin";
   const canRetry = user?.role === "admin" || user?.role === "editor";
 
   return (
     <div className="rounded-lg border border-gray-700/50 bg-gray-900/50 p-6 space-y-6">
       <div>
-        <h2 className="text-lg font-semibold text-gray-100">Processing</h2>
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <h2 className="text-lg font-semibold text-gray-100">Processing</h2>
+          {status && <MasterSwitch status={status} parts={pausedParts(status)} admin={admin} />}
+        </div>
+        {status && !status.paused && pausedParts(status).length > 0 && (
+          <p className="mt-1 text-sm text-amber-300">
+            Paused on their own: {pausedParts(status).join(", ")}.
+            {admin && " Pause all stops everything; Resume all then turns everything back on, these included."}
+          </p>
+        )}
         <p className="mt-1 text-sm text-gray-400">
           What each producer has made for your clips. Stale ones were made with another model or settings than now:
           they're made again after anything missing. Changing a model in Settings → AI, or a producer's settings below, is what starts that.
@@ -112,6 +124,8 @@ export default function ProcessingSection() {
               producer={p}
               admin={admin}
               canRetry={canRetry}
+              allPaused={!!status?.paused}
+              scansPaused={!!status?.scans_paused}
               libraryId={kind === "library" ? id : undefined}
               timeLeft={kind === "all" && status?.live ? status.eta?.producers[p.artifact] : undefined}
               timeNotKnown={kind === "all" && !!status?.live && !!status.eta?.not_counted?.some(
@@ -120,7 +134,7 @@ export default function ProcessingSection() {
           ))}
         </ul>
       )}
-      {user && !admin && <p className="text-sm text-gray-500">Only admins can stop or resume a redo.</p>}
+      {user && !admin && <p className="text-sm text-gray-500">Only admins can pause processing or stop a redo.</p>}
     </div>
   );
 }
@@ -142,6 +156,8 @@ function ProducerRow({
   producer,
   admin,
   canRetry,
+  allPaused,
+  scansPaused,
   libraryId,
   timeLeft,
   timeNotKnown = false,
@@ -149,6 +165,8 @@ function ProducerRow({
   producer: Producer;
   admin: boolean;
   canRetry: boolean;
+  allPaused: boolean;
+  scansPaused: boolean;
   libraryId?: string;
   // Seconds until it's caught up: the whole account's, so only with its counts.
   timeLeft?: number | null;
@@ -165,12 +183,27 @@ function ProducerRow({
         <h3 id={headingId} className="text-sm font-medium text-gray-100">
           {producer.title}
         </h3>
-        <span className="text-xs text-gray-500">
-          {mediaLabel(producer.media)}
-          {producer.uniform && " · one model for all"}
+        <span className="flex flex-wrap items-baseline gap-x-3 text-xs text-gray-500">
+          <span>
+            {mediaLabel(producer.media)}
+            {producer.uniform && " · one model for all"}
+          </span>
+          {admin && producer.scheduled && !allPaused && (
+            <PauseButton paused={producer.paused} title={producer.title} artifact={producer.artifact} />
+          )}
         </span>
       </div>
       <CountsBar producer={producer} />
+      {producer.paused && !allPaused && (
+        <p role="status" className="text-sm text-amber-300">
+          Paused: nothing more of it starts until it's resumed.
+        </p>
+      )}
+      {!producer.scheduled && scansPaused && !allPaused && (
+        <p role="status" className="text-sm text-amber-300">
+          Paused with scans: none are made until they're resumed.
+        </p>
+      )}
       {producer.waiting && <WaitingLine why={producer.waiting} />}
       {c && (
         <p className="text-sm text-gray-400">
@@ -205,7 +238,7 @@ function ProducerRow({
         </button>
       )}
       {showFailures && <FailureList producer={producer} canRetry={canRetry} libraryId={libraryId} />}
-      {c && c.stale > 0 && <RedoLine producer={producer} stale={c.stale} admin={admin} />}
+      {c && c.stale > 0 && <RedoLine producer={producer} stale={c.stale} admin={admin} allPaused={allPaused} />}
       <Settings producer={producer} admin={admin} />
     </li>
   );
@@ -276,10 +309,13 @@ const JOBS_SHOWN = 8;
 
 /** The headline: when everything is made, leaving out (and naming) what has no time. */
 function caughtUp(eta: NonNullable<SchedulerStatus["eta"]>): string {
-  const left = (eta.not_counted ?? []).map(
-    (n) => `${n.title.charAt(0).toLowerCase()}${n.title.slice(1)} (${n.why === "no_machine" ? "no machine doing them now" : "not known yet"})`,
-  );
+  const why = { no_machine: "no machine doing them now", not_known_yet: "not known yet", paused: "paused" };
+  const left = (eta.not_counted ?? []).map((n) => `${n.title.charAt(0).toLowerCase()}${n.title.slice(1)} (${why[n.why]})`);
   if (eta.caught_up === null) {
+    const notCounted = eta.not_counted ?? [];
+    if (notCounted.length > 0 && notCounted.every((n) => n.why === "paused")) {
+      return "Paused.";
+    }
     return "How long until everything is made isn't known yet: it's learned from the jobs as they finish.";
   }
   if (eta.caught_up === 0 && left.length === 0) return "Caught up: everything is made.";
@@ -305,8 +341,90 @@ function listKinds(counts: Record<string, number>): string {
     .join(", ");
 }
 
-/** What the scheduler is doing right now (it says every few seconds). */
+/** What's paused on its own (scans, producers), named, while the kill switch is off. */
+function pausedParts(status: SchedulerStatus): string[] {
+  // From the status, not the producers list: that one is for the "Counts for" scope and refetches less often.
+  return [...(status.scans_paused ? ["scans"] : []), ...(status.paused_producers ?? []).map((p) => p.title)];
+}
+
+const STATE_DOT = { running: "bg-emerald-500", partly: "bg-amber-400", all: "bg-red-500" };
+const STATE_WORDS = { running: "Running", partly: "Partly paused", all: "All paused" };
+
+/** The kill switch (Robert, Oct 9) and its state: green running, yellow
+ * partly paused (scans or producers paused on their own: Pause all affects
+ * them all), red all paused. Pause scans beside it while it's off (admins). */
+function MasterSwitch({ status, parts, admin }: { status: SchedulerStatus; parts: string[]; admin: boolean }) {
+  const state = status.paused ? "all" : parts.length ? "partly" : "running";
+  return (
+    <span className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+      <span data-state={state} className="inline-flex items-center gap-1.5 text-sm text-gray-300">
+        <span aria-hidden="true" className={`inline-block h-2 w-2 rounded-full ${STATE_DOT[state]}`} />
+        <span>{STATE_WORDS[state]}</span>
+      </span>
+      {admin && !status.paused && (
+        <PauseButton paused={status.scans_paused} title="scans" artifact="scans" label="scans" />
+      )}
+      {admin && <PauseButton paused={status.paused} title="all processing" label="all" />}
+    </span>
+  );
+}
+
+/** Pause or resume all processing, scans, or one producer's (admins); a refusal says why beside it. */
+function PauseButton({ paused, title, artifact, label }: { paused: boolean; title: string; artifact?: string;
+                                                          label?: string }) {
+  const queryClient = useQueryClient();
+  const toggle = useMutation({
+    mutationFn: () => (paused ? resumeProcessing(artifact) : pauseProcessing(artifact)),
+    onSuccess: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: STATUS_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: PRODUCERS_QUERY_KEY }),
+      ]),
+  });
+  return (
+    <span className="inline-flex flex-wrap items-baseline gap-x-2">
+      <button
+        type="button"
+        className={linkClass}
+        disabled={toggle.isPending}
+        aria-label={`${paused ? "Resume" : "Pause"} ${title}`}
+        onClick={() => toggle.mutate()}
+      >
+        {paused ? "Resume" : "Pause"}
+        {label && ` ${label}`}
+      </button>
+      {toggle.error && (
+        <span role="alert" className="text-sm text-red-300">
+          {message(toggle.error)}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** What the scheduler is doing right now (it says every few seconds), and whether all of it is paused. */
 function NowPanel({ status }: { status: SchedulerStatus }) {
+  return (
+    <div className="space-y-2">
+      {status.paused && (
+        <p role="status" className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-100">
+          All processing is paused{status.paused_at ? ` since ${when(status.paused_at)}` : ""}: nothing starts, scans
+          included, and upkeep changes nothing, until it's resumed. What's running finishes; the website stays up.
+          Resume all turns everything back on.
+        </p>
+      )}
+      {status.scans_paused && !status.paused && (
+        <p role="status" className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+          Scans are paused{status.scans_paused_at ? ` since ${when(status.scans_paused_at)}` : ""}: no new or changed
+          files are found, and no thumbnails or video previews made, until they're resumed. The rest goes on.
+        </p>
+      )}
+      <NowBox status={status} />
+    </div>
+  );
+}
+
+function NowBox({ status }: { status: SchedulerStatus }) {
   if (!status.live) {
     return (
       <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
@@ -324,7 +442,7 @@ function NowPanel({ status }: { status: SchedulerStatus }) {
       {eta && <p className="font-medium text-gray-100">{caughtUp(eta)}</p>}
       <p className="text-gray-200">
         <span className="text-gray-400">Now: </span>
-        {running || "nothing to make"}
+        {running || (status.paused ? "nothing more starts while paused" : "nothing to make")}
       </p>
       {eta && eta.jobs.length > 0 && (
         <ul className="space-y-0.5 pl-3 text-gray-400">
@@ -444,35 +562,40 @@ function FailureList({ producer, canRetry, libraryId }: { producer: Producer; ca
 }
 
 /** What happens to a producer's stale clips: redone after anything missing, stopped, or not yet possible. */
-function RedoLine({ producer, stale, admin }: { producer: Producer; stale: number; admin: boolean }) {
+function RedoLine({ producer, stale, admin, allPaused }: { producer: Producer; stale: number; admin: boolean;
+                                                          allPaused: boolean }) {
   const queryClient = useQueryClient();
   const toggle = useMutation({
-    mutationFn: () => (producer.paused ? resumeRedo(producer.artifact) : stopRedo(producer.artifact)),
+    mutationFn: () => (producer.redo_stopped ? resumeRedo(producer.artifact) : stopRedo(producer.artifact)),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: PRODUCERS_QUERY_KEY }),
   });
   if (!producer.redoable) {
     return <p className="text-sm text-gray-500">Not made again yet. {producer.why_not}</p>;
   }
-  const box = producer.paused
+  const box = producer.redo_stopped
     ? "border-gray-600/60 bg-gray-800/40 text-gray-300"
     : "border-indigo-500/30 bg-indigo-500/10 text-indigo-100";
   return (
     <div className={`rounded-md border px-3 py-2 text-sm ${box}`}>
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <span>
-          {producer.paused
+          {producer.redo_stopped
             ? `Redo stopped: ${clips(stale)} stay as they are until it's resumed.`
-            : `Redoing ${clips(stale)}, after anything missing.`}
+            : producer.paused && !allPaused
+              ? `Redoes ${clips(stale)} once it's resumed, after anything missing.`
+              : allPaused
+                ? `Redoes ${clips(stale)} once processing is resumed, after anything missing.`
+              : `Redoing ${clips(stale)}, after anything missing.`}
         </span>
         {admin && (
           <button
             type="button"
             className={linkClass}
             disabled={toggle.isPending}
-            aria-label={`${producer.paused ? "Resume" : "Stop"} redoing ${producer.title}`}
+            aria-label={`${producer.redo_stopped ? "Resume" : "Stop"} redoing ${producer.title}`}
             onClick={() => toggle.mutate()}
           >
-            {producer.paused ? "Resume" : "Stop"}
+            {producer.redo_stopped ? "Resume" : "Stop"}
           </button>
         )}
       </div>

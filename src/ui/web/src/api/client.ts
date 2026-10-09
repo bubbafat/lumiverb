@@ -940,10 +940,17 @@ export interface Producer {
   /** Its settings with their bounds; the ones its code reads can be changed (admins). */
   fields?: SettingField[];
   counts: ProducerCounts | null;
+  /** The scheduler makes it; false: scans do (proxies, video previews), which can't be paused alone. */
+  scheduled: boolean;
   /** Its stale clips are made again (after anything missing); if they can't be yet, why_not says why. */
   redoable: boolean;
   why_not: string | null;
   /** An admin stopped its redo: stale clips wait until it's resumed (or its model changes). */
+  redo_stopped: boolean;
+  /** Admins only. */
+  redo_stopped_by: string | null;
+  redo_stopped_at: string | null;
+  /** An admin paused it: nothing more of it starts until it's resumed; what's running finishes. */
   paused: boolean;
   /** Admins only. */
   paused_by: string | null;
@@ -986,6 +993,18 @@ export interface SchedulerStatus {
   pools: Record<string, [number, number]>;
   /** Requests AI machines sharing its GPU give up while video is decoded there. */
   gpu_hold: number;
+  /** The kill switch: an admin paused everything but the website until it's resumed. */
+  paused: boolean;
+  /** Admins only. */
+  paused_by: string | null;
+  paused_at: string | null;
+  /** An admin paused scans alone; the rest goes on. */
+  scans_paused: boolean;
+  /** Admins only. */
+  scans_paused_by: string | null;
+  scans_paused_at: string | null;
+  /** Producers an admin paused on their own, whatever scope the counts are for. */
+  paused_producers: { artifact: string; title: string }[];
   /** How long until things are made; null or absent when it isn't running. */
   eta?: Eta | null;
 }
@@ -997,7 +1016,7 @@ export interface Eta {
   producers: Record<string, number | null>;
   pools: Record<string, number>;
   caught_up: number | null;
-  not_counted?: { artifact: string; title: string; why: "no_machine" | "not_known_yet" }[];
+  not_counted?: { artifact: string; title: string; why: "no_machine" | "not_known_yet" | "paused" }[];
   /** Jobs running now: their size in their producer's unit, seconds run and left, and whether well past its pace. */
   jobs: { kind: string; artifact: string | null; unit: "second" | "clip"; units: number; elapsed: number;
           left: number | null; late?: boolean }[];
@@ -1050,6 +1069,19 @@ export async function stopRedo(artifact: string): Promise<void> {
 /** Redo a producer's stale clips again (admins), after anything missing. */
 export async function resumeRedo(artifact: string): Promise<void> {
   await apiFetch<void>(`/producers/${artifact}/redo/resume`, { method: "POST" });
+}
+
+/** Pause everything but the website (no artifact: the kill switch), scans
+ * ("scans") or one producer (admins): nothing more of it starts until it's
+ * resumed; what's running finishes. 409 not_scheduled for what scans make,
+ * all_paused for a part while everything is paused. */
+export async function pauseProcessing(artifact?: string): Promise<void> {
+  await apiFetch<void>(artifact ? `/producers/${artifact}/pause` : "/producers/pause", { method: "POST" });
+}
+
+/** Turn everything back on (no artifact: every pause goes), or scans or one producer (admins). */
+export async function resumeProcessing(artifact?: string): Promise<void> {
+  await apiFetch<void>(artifact ? `/producers/${artifact}/resume` : "/producers/resume", { method: "POST" });
 }
 
 export async function findSimilar(params: {

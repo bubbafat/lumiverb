@@ -21,6 +21,7 @@ runs at a time, on any machine (a lock in the control-plane database).
 
 from __future__ import annotations
 
+import itertools
 import logging
 import os
 import signal
@@ -33,6 +34,7 @@ from typing import Any
 from src.server.scheduler.dispatch import Dispatcher, Job, Outcome
 from src.server.scheduler.kinds import AI_JOB_KINDS, KINDS, QUEUED
 from src.server.scheduler.queue import BUFFER
+from src.shared.producers import PAUSE_ALL, PAUSE_SCANS
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +46,8 @@ STOP_GRACE_SEC = 25.0
 FLUSH_EVERY_SEC = 10.0
 # What the scheduler is doing is written for Settings → Processing this often.
 STATUS_EVERY_SEC = 5.0
+# What an admin paused is read this often, apart from the refill (which can be slow).
+HOLD_EVERY_SEC = 1.0
 # The control-plane lock only one scheduler holds ("lumv"), and how often
 # it's checked that the lock is still held.
 LOCK_ID = 0x6C756D76
@@ -83,8 +87,9 @@ class Scheduler:
         accounts: Callable[[], Mapping[str, Any]],
         *,
         capacity: Mapping[str, int],
-        candidates: Callable[..., list[dict]] | None = None,
+        candidates: Callable[..., list[dict] | None] | None = None,
         paused: Callable[[str], set[str]] | None = None,
+        on_hold: Callable[[str], set[str]] | None = None,
         retry_requested: Callable[[str], str | None] | None = None,
         runners: Mapping[str, Callable[..., Outcome]] | None = None,
         scan: Callable[..., None] | None = None,
@@ -101,6 +106,7 @@ class Scheduler:
         self._accounts = accounts
         self._candidates = candidates or _from_database
         self._paused = paused or _paused_in_database
+        self._on_hold = on_hold or _on_hold_in_database
         self._retry_requested = retry_requested or _retry_requested_in_database
         self._retry_seen: dict[str, str | None] = {}
         # Each account's last status, read once: its paces start there.
@@ -126,6 +132,12 @@ class Scheduler:
         self._write_status = write_status or _status_to_database
         self._status_at: dict[str, float] = {}
         self._flushing: dict[str, Future] = {}
+        # What's paused is read on its own threads, so a slow refill doesn't hold it up.
+        self._hold_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="hold")
+        self._holding: dict[str, Future] = {}
+        self._hold_at: dict[str, float] = {}
+        self._hold_unread: set[str] = set()
+        self._hold_reads = itertools.count()  # which read of what's paused is newest
 
     # -- one tick -----------------------------------------------------------
 
@@ -133,6 +145,7 @@ class Scheduler:
         """Top up the queue, start what fits, collect what's done. Returns the jobs started."""
         accounts = dict(self._accounts())
         for tenant_id, acct in accounts.items():
+            self._read_hold_soon(tenant_id)
             self._refill_soon(tenant_id, acct)
         started = 0
         for pool in self.dispatcher.pools(list(accounts)):
@@ -175,6 +188,35 @@ class Scheduler:
 
         return {"at": utcnow().isoformat(), "gpu_hold": self.gpu_hold, **self.dispatcher.status(tenant_id)}
 
+    def _read_hold_soon(self, tenant_id: str) -> None:
+        """Every second or so, off this thread: what an admin paused (a refill reads it too)."""
+        if self._inline_refill or self._clock() - self._hold_at.get(tenant_id, float("-inf")) < HOLD_EVERY_SEC:
+            return
+        reading = self._holding.get(tenant_id)
+        if reading is None or reading.done():
+            self._hold_at[tenant_id] = self._clock()
+            self._holding[tenant_id] = self._hold_pool.submit(self._read_hold, tenant_id)
+
+    def _read_hold(self, tenant_id: str) -> set[str]:
+        """What an admin paused: PAUSE_ALL, PAUSE_SCANS, or producers' artifacts. The
+        dispatcher hands out none of it from now on; what's running
+        finishes. Until it can be read, as if all of it is paused."""
+        seq = next(self._hold_reads)
+        try:
+            held = set(self._on_hold(tenant_id))
+            if tenant_id in self._hold_unread:
+                self._hold_unread.discard(tenant_id)
+                logger.warning("scheduler: what %s paused can be read again", tenant_id)
+        except Exception:  # noqa: BLE001
+            if tenant_id not in self._hold_unread:  # once, not every second
+                self._hold_unread.add(tenant_id)
+                logger.exception("scheduler: reading what %s paused failed; nothing starts until it can be", tenant_id)
+            held = {PAUSE_ALL}
+        self.dispatcher.hold(tenant_id, {k.name for k in KINDS.values()
+                                         if PAUSE_ALL in held or (k.flag and k.artifact in held)
+                                         or (k.name == "scan" and PAUSE_SCANS in held)}, seq=seq)
+        return held
+
     def _refill_soon(self, tenant_id: str, acct: Any) -> None:
         if self._inline_refill:
             self._refill(tenant_id, acct)
@@ -186,7 +228,9 @@ class Scheduler:
     def _refill(self, tenant_id: str, acct: Any) -> None:
         """Read the account's settings and machines when due, size its AI
         pools, list what's due for each kind that wants more, and say what's
-        running (every few seconds)."""
+        running (every few seconds). What an admin paused hands out nothing
+        more, at once; what's running finishes."""
+        held = self._read_hold(tenant_id)
         try:
             acct.refresh()
         except Exception:  # noqa: BLE001 — tried again at the next tick
@@ -231,7 +275,9 @@ class Scheduler:
         for kind in QUEUED:
             if kind.redo and kind.artifact in stopped:
                 self.dispatcher.clear(tenant_id, kind.name)
-        if self.dispatcher.wanted(tenant_id, "scan"):
+        if PAUSE_ALL in held:
+            return
+        if PAUSE_SCANS not in held and self.dispatcher.wanted(tenant_id, "scan"):
             self.dispatcher.offer(tenant_id, "scan", [{"asset_id": f"scan:{tenant_id}", "created_at": ""}],
                                   complete=False)
         if not acct.settings_ready:
@@ -240,7 +286,7 @@ class Scheduler:
             job = _JOB_OF.get(kind.name)
             if job is not None and not acct.capacity(job):
                 continue
-            if kind.redo and kind.artifact in stopped:
+            if kind.artifact in held or (kind.redo and kind.artifact in stopped):
                 continue
             if not self.dispatcher.wanted(tenant_id, kind.name):
                 continue
@@ -253,6 +299,9 @@ class Scheduler:
             except Exception:  # noqa: BLE001 — one kind's trouble doesn't hold up the others
                 logger.exception("scheduler: listing %s for %s failed", kind.name, tenant_id)
                 items = []
+            if items is None:  # paused (or its redo stopped) since this refill looked: not an empty answer
+                self.dispatcher.clear(tenant_id, kind.name)
+                continue
             if kind.redo and items:
                 acct.follow_settings(kind.artifact, items[0].get("settings_hash"))
             self.dispatcher.offer(tenant_id, kind.name, items, complete=len(items) < BUFFER)
@@ -319,6 +368,7 @@ class Scheduler:
         while self._running and self._clock() < deadline:
             self.collect(timeout=min(1.0, max(0.0, deadline - self._clock())))
         self._refill_pool.shutdown(wait=False, cancel_futures=True)
+        self._hold_pool.shutdown(wait=False, cancel_futures=True)
         self._pool.shutdown(wait=False, cancel_futures=True)
 
 
@@ -339,19 +389,22 @@ def tenant_url(tenant_id: str) -> str:
     return _tenant_urls[tenant_id]
 
 
-def _from_database(tenant_id: str, kind: Any, libraries: list[str], skip: list[str] | None = None) -> list[dict]:
+def _from_database(tenant_id: str, kind: Any, libraries: list[str], skip: list[str] | None = None) -> list[dict] | None:
+    """The kind's due clips, oldest first; None when it was paused (or its
+    redo stopped) since the scheduler last looked."""
     from sqlmodel import Session
 
     from src.server.database import get_engine_for_url
+    from src.server.repository import lineage
     from src.server.scheduler.queue import candidates
 
     with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
+        if {PAUSE_ALL, kind.artifact} & set(lineage.processing_paused(session)):
+            return None
         if not kind.redo:
             return candidates(session, kind, libraries, skip=skip)
-        from src.server.repository import lineage
-
         if kind.artifact in lineage.paused(session):
-            return []
+            return None
         return candidates(session, kind, libraries, skip=skip,
                           want=lineage.desired(session, kind.artifact, _job_models(tenant_id)))
 
@@ -387,6 +440,17 @@ def _status_to_database(tenant_id: str, status: dict) -> None:
             "INSERT INTO system_metadata (key, value, updated_at) VALUES ('scheduler.status', :v, now())"
             " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"), {"v": json.dumps(status)})
         session.commit()
+
+
+def _on_hold_in_database(tenant_id: str) -> set[str]:
+    """What an admin paused: PAUSE_ALL, PAUSE_SCANS, or producers' artifacts (lineage.processing_paused)."""
+    from sqlmodel import Session
+
+    from src.server.database import get_engine_for_url
+    from src.server.repository import lineage
+
+    with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
+        return set(lineage.processing_paused(session))
 
 
 def _status_from_database(tenant_id: str) -> dict | None:
@@ -625,7 +689,13 @@ def main() -> int:
     from src.client.cache_dir import cache_dir
     from src.client.cli.config import load_config
     from src.client.proxy.analysis_cache import clear_leftovers
-    from src.server.scheduler.scans import STATE_FILE, ServiceLock, load_state, save_state, saved_form
+    from src.server.scheduler.scans import (
+        STATE_FILE,
+        ServiceLock,
+        load_state,
+        save_state,
+        saved_form,
+    )
 
     configure_logging()
     lock = ServiceLock()

@@ -143,6 +143,7 @@ def _ask_before_shortening(session: Session, old: int | None, new: int | None, c
         return
     from datetime import timedelta
 
+    from src.server.repository import lineage
     from src.server.repository.tenant import AssetRepository
     from src.shared.utils import utcnow
 
@@ -152,7 +153,8 @@ def _ask_before_shortening(session: Session, old: int | None, new: int | None, c
         what = ", ".join(f"{n} {one[k] if n == 1 else k}" for k, n in counts.items() if n)
         raise DecisionRequiredError(
             "trash_days_shortened",
-            f"With {new} trash days, {what} in the trash for longer would be deleted for good within minutes. "
+            f"With {new} trash days, {what} in the trash for longer would be deleted for good "
+            f"{'once processing is resumed' if lineage.all_paused(session) else 'within minutes'}. "
             "Send confirm_purge: true to go ahead.",
             {"trash_days": new, **counts},
         )

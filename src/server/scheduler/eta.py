@@ -12,7 +12,7 @@ no time, rather than a guess.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from datetime import datetime
 from typing import Any
 
@@ -33,7 +33,8 @@ def _at(value: Any) -> datetime | None:
 LATE_AFTER = 2.0
 
 
-def eta(status: Mapping[str, Any], left: Mapping[str, float], *, now: Any) -> dict[str, Any]:
+def eta(status: Mapping[str, Any], left: Mapping[str, float], *, now: Any,
+        paused: Collection[str] = ()) -> dict[str, Any]:
     """status: the scheduler's last (pace, pools, jobs, at); left: each
     producer's work left in its unit (artifact → seconds of video or clips).
     Returns {"producers": {artifact: seconds | None}, "pools": {pool: seconds},
@@ -41,7 +42,9 @@ def eta(status: Mapping[str, Any], left: Mapping[str, float], *, now: Any) -> di
     "jobs": [{kind, artifact, unit, units, elapsed, left, late}]}. A producer
     with work but no machine doing it ("no_machine") or no pace yet
     ("not_known_yet") has no time, and caught up leaves it out, naming it;
-    caught up is None only when nothing with work is counted."""
+    caught up is None only when nothing with work is counted. A producer an
+    admin paused (paused) is left out the same way ("paused"): it has no time
+    while paused, and its pool's slots go to the rest."""
     pace: Mapping[str, float] = status.get("pace") or {}
     slots = {pool: (counts[1] if len(counts) > 1 else 0) for pool, counts in (status.get("pools") or {}).items()}
 
@@ -55,6 +58,9 @@ def eta(status: Mapping[str, Any], left: Mapping[str, float], *, now: Any) -> di
         members.setdefault(p.pool, [])
         per, n = pace.get(p.kind), slots.get(p.pool, 0)
         if work <= 0:
+            continue
+        if artifact in paused:
+            not_counted.append({"artifact": artifact, "title": p.title, "why": "paused"})
             continue
         if not n or not per:
             not_counted.append({"artifact": artifact, "title": p.title, "why": "no_machine" if not n else "not_known_yet"})
@@ -72,7 +78,8 @@ def eta(status: Mapping[str, Any], left: Mapping[str, float], *, now: Any) -> di
         caught_up: float | None = max(pools.values())
     else:
         # Only what no machine is doing now is left: caught up, not counting it.
-        caught_up = None if any(n["why"] == "not_known_yet" for n in not_counted) else 0.0
+        # Only paused work left: no estimate either.
+        caught_up = None if any(n["why"] in ("not_known_yet", "paused") for n in not_counted) else 0.0
 
     written, now_at = _at(status.get("at")), _at(now)
     since = max(0.0, (now_at - written).total_seconds()) if written and now_at else 0.0
