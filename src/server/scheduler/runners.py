@@ -395,14 +395,12 @@ def scan(acct: Account, job: Job, *, now: float) -> None:
     acct.set_reachable(scan_pass(acct.client, libraries, acct.scan_state, now=now, on_roots=acct.set_reachable))
 
 
-RUNNERS: dict[str, Callable[[Account, Job], Outcome]] = {
-    "probe": probe,
-    "render": render,
-    "clip": clip,
-    "vision": vision,
-    "ocr": ocr,
-    "faces": faces,
-    "transcript": transcript,
-    "scenes": scenes,
-    "scene_vision": scene_vision,
-}
+def _runners() -> dict[str, Callable[[Account, Job], Outcome]]:
+    """The function each producer the scheduler runs names (its ``run``)."""
+    from src.producers import load
+    from src.shared.producers import PRODUCERS
+
+    return {p.kind: load(p.run) for p in PRODUCERS.values() if p.scheduled}
+
+
+RUNNERS: dict[str, Callable[[Account, Job], Outcome]] = _runners()

@@ -40,38 +40,11 @@ from src.shared.producers import (
 )
 from src.shared.utils import utcnow
 
-# Which clips each producer applies to (SQL on active_assets a).
-APPLIES: dict[str, str] = {
-    "probe": "a.media_type = 'video'",
-    "proxy": "true",
-    "video_preview": "a.media_type = 'video'",
-    "analysis_proxy": "a.media_type = 'video'",
-    # Need the probe's duration first.
-    "scenes": "a.media_type = 'video' AND a.duration_sec IS NOT NULL",
-    "transcript": "a.media_type = 'video' AND a.duration_sec IS NOT NULL",
-    "scene_vision": ("a.media_type = 'video' AND a.video_indexed"
-                     " AND EXISTS (SELECT 1 FROM video_scenes s WHERE s.asset_id = a.asset_id)"),
-    "vision": "a.media_type = 'image'",
-    "ocr": "a.media_type = 'image'",
-    "clip": "a.media_type = 'image'",
-    "faces": "a.media_type = 'image'",
-}
-# Whether a clip has the artifact (SQL on active_assets a). One made in
-# parts exists once every part does.
-MADE: dict[str, str] = {
-    "probe": "EXISTS (SELECT 1 FROM video_facets vf WHERE vf.asset_id = a.asset_id)",
-    "proxy": "a.proxy_key IS NOT NULL",
-    "video_preview": "a.video_preview_key IS NOT NULL",
-    "analysis_proxy": "a.analysis_proxy_key IS NOT NULL",
-    "scenes": "a.video_indexed",
-    "scene_vision": ("NOT EXISTS (SELECT 1 FROM video_scenes s"
-                     " WHERE s.asset_id = a.asset_id AND s.description IS NULL)"),
-    "vision": "EXISTS (SELECT 1 FROM asset_metadata am WHERE am.asset_id = a.asset_id)",
-    "ocr": "EXISTS (SELECT 1 FROM asset_ocr o WHERE o.asset_id = a.asset_id)",
-    "clip": f"EXISTS (SELECT 1 FROM asset_embeddings ae WHERE ae.asset_id = a.asset_id AND ae.model_id = '{CLIP_MODEL_ID}')",
-    "faces": "a.face_count IS NOT NULL",
-    "transcript": "a.has_transcript IS NOT NULL",
-}
+# Which clips each producer applies to, and whether a clip has its artifact
+# (SQL on active_assets a; one made in parts exists once every part does).
+# Each producer declares both (src/producers/<artifact>/).
+APPLIES: dict[str, str] = {a: p.applies for a, p in PRODUCERS.items()}
+MADE: dict[str, str] = {a: p.made for a, p in PRODUCERS.items()}
 
 _OVERRIDES = "producer.{}"
 
@@ -138,10 +111,10 @@ LINEAGE_JOIN = (f"LEFT JOIN LATERAL (SELECT {_lineage_cols()} FROM artifact_line
                 " WHERE l.asset_id = a.asset_id) la ON TRUE")
 
 
-# Ingest removes these when a file is replaced (routers/ingest.py), so they
-# come back as missing; handing them out as "changed" too could loop, since
-# the worker can't redo them in place.
-RESET_AT_INGEST = frozenset({"analysis_proxy", "scenes", "scene_vision"})
+# Not handed out again when their clip's file changes: what's made from
+# parts that would be stale too, which can't be redone in place. (A
+# different file at a path is a new clip, so a file seldom changes under one.)
+RESET_AT_INGEST = frozenset(a for a, p in PRODUCERS.items() if not p.redo_on_source_change)
 
 
 def source_changed(artifact: str) -> str:
@@ -208,12 +181,8 @@ def counts(session: Session, artifact: str, want: dict[str, Any], library_id: st
 # ---------------------------------------------------------------------------
 
 # Producers whose artifact can't be made again in place yet, and why: they
-# show as stale and wait (their redo comes with phase 4).
-CANT_REDO: dict[str, str] = {
-    "scenes": "Finding a video's scenes again means deleting the ones it has first; that isn't built yet.",
-    "proxy": "Proxies and thumbnails are made when a file is scanned: lumiverb scan --force makes them again.",
-    "video_preview": "Video previews are made when a file is scanned: lumiverb scan --force makes them again.",
-}
+# show as stale and wait.
+CANT_REDO: dict[str, str] = {a: p.cant_redo for a, p in PRODUCERS.items() if p.cant_redo}
 # What each AI job's model makes (Settings → AI): a new model makes these stale.
 JOB_ARTIFACTS: dict[str, tuple[str, ...]] = {
     job: tuple(a for a, p in PRODUCERS.items() if p.job == job) for job in {p.job for p in PRODUCERS.values() if p.job}

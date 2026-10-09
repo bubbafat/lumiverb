@@ -16,17 +16,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from src.producers.contract import FIND, PREPARE, REDO, SEE  # noqa: F401 — the tiers
 from src.server.scheduler.dispatch import KindSpec
-from src.shared.producers import MISSING_FLAGS
-
-SEE, PREPARE, FIND, REDO = 1, 2, 3, 4
+from src.shared.producers import MISSING_FLAGS, PRODUCERS
 
 # Scans aren't in the database's queue: each account's libraries are
 # looked at this often (reported changes; a full scan once a day).
 SCAN_EVERY_SEC = 30.0
-
-_HAS_PROXY = "a.proxy_key IS NOT NULL"
-_HAS_ANALYSIS_PROXY = "a.analysis_proxy_key IS NOT NULL"
 
 
 @dataclass(frozen=True)
@@ -50,20 +46,19 @@ class Kind:
         return self.spec.same_as or self.name
 
 
+def _made_first(needs: tuple[str, ...]) -> str:
+    """What a clip needs first: the artifacts the producer is made from."""
+    from src.server.repository.lineage import MADE
+
+    return " AND ".join(f"({MADE[n]})" for n in needs) or "true"
+
+
+# A kind per producer the scheduler runs (src/producers/<artifact>/), and the scan.
 _FIRST: dict[str, Kind] = {k.name: k for k in (
     Kind("scan", KindSpec(SEE, "scan", retake_after=SCAN_EVERY_SEC)),
-    Kind("probe", KindSpec(SEE, "probe"), "missing_probe", storage=True),
-    Kind("render", KindSpec(PREPARE, "render"), "missing_analysis_proxy", storage=True),
-    # CLIP and face detection take turns on this machine's GPU.
-    Kind("clip", KindSpec(FIND, "gpu"), "missing_embeddings", _HAS_PROXY),
-    # The AI machines are each account's own (Settings → AI).
-    Kind("vision", KindSpec(FIND, "vision", per_account=True), "missing_vision", _HAS_PROXY),
-    Kind("ocr", KindSpec(FIND, "vision", per_account=True), "missing_ocr", _HAS_PROXY),
-    Kind("scene_vision", KindSpec(FIND, "vision", per_account=True), "missing_scene_vision", _HAS_ANALYSIS_PROXY),
-    Kind("faces", KindSpec(FIND, "gpu", batch=25), "missing_faces", _HAS_PROXY),
-    Kind("transcript", KindSpec(FIND, "transcripts", per_account=True), "missing_transcription",
-         _HAS_ANALYSIS_PROXY),
-    Kind("scenes", KindSpec(FIND, "scenes"), "missing_video_scenes", _HAS_ANALYSIS_PROXY),
+    *(Kind(p.kind, KindSpec(p.tier, p.pool, batch=p.batch, per_account=p.per_account), p.flag,
+           _made_first(p.needs), storage=p.storage)
+      for p in PRODUCERS.values() if p.scheduled),
 )}
 
 
@@ -84,6 +79,6 @@ KINDS: dict[str, Kind] = {**_FIRST, **{f"redo_{k.name}": _redo(k) for k in _FIRS
 QUEUED = tuple(k for k in KINDS.values() if k.flag)
 # Kinds that need an AI job's machines (Settings → AI), by job.
 AI_JOB_KINDS: dict[str, tuple[str, ...]] = {
-    job: tuple(k.name for k in KINDS.values() if k.base in bases)
-    for job, bases in {"vision": ("vision", "ocr", "scene_vision"), "transcripts": ("transcript",)}.items()
+    job: tuple(k.name for k in KINDS.values() if k.base in {p.kind for p in PRODUCERS.values() if p.job == job})
+    for job in dict.fromkeys(p.job for p in PRODUCERS.values() if p.job and p.scheduled)
 }
