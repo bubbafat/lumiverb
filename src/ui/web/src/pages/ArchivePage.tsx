@@ -1,10 +1,19 @@
 import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
-import { listArchive, listLibraries, unarchiveClips, type ArchivedClip } from "../api/client";
+import {
+  ApiError,
+  deleteMissingClips,
+  listArchive,
+  listLibraries,
+  unarchiveClips,
+  type ArchivedClip,
+  type ProjectUsage,
+} from "../api/client";
 import { HiddenClipGrid } from "../components/HiddenClipGrid";
-import { clipCount } from "../components/ProjectUsageList";
-import { useCanEdit } from "../lib/useCanEdit";
+import { Modal } from "../components/Modal";
+import { ProjectUsageList, clipCount } from "../components/ProjectUsageList";
+import { useCanEdit, useRole } from "../lib/useCanEdit";
 import { useClipActions } from "../lib/useClipActions";
 import { shortDate } from "../lib/format";
 
@@ -24,6 +33,9 @@ export default function ArchivePage() {
   const path = params.get("path") ?? undefined;
   const kind = (KINDS.find((k) => k.value === params.get("kind"))?.value ?? "all") as Kind;
   const canEdit = useCanEdit();
+  const isAdmin = useRole() === "admin";
+  // Deleting missing clips for good: how many the server said, and the projects using them once it asks.
+  const [purging, setPurging] = useState<{ count: number; listedAt: string; usage?: ProjectUsage } | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [notice, setNotice] = useState<{ text: string; error?: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -77,6 +89,28 @@ export default function ArchivePage() {
     }
   };
 
+  /** Asks the server first: it says how many (and then which projects use them). */
+  const deleteMissing = async (told?: { count: number; listedAt: string }, removeFromProjects = false) => {
+    setBusy(true);
+    try {
+      const r = await deleteMissingClips({ libraryId, path }, told, removeFromProjects);
+      setPurging(null);
+      void queryClient.invalidateQueries();
+      setNotice({ text: r.deleted ? `Deleted ${clipCount(r.deleted)} for good.` : "No clips with missing files here." });
+    } catch (err) {
+      if (err instanceof ApiError && err.code === "confirm_delete_missing") {
+        setPurging({ count: Number(err.details?.count ?? 0), listedAt: String(err.details?.listed_at ?? "") });
+      } else if (err instanceof ApiError && err.code === "in_projects" && err.details && told) {
+        setPurging({ ...told, usage: err.details as unknown as ProjectUsage });
+      } else {
+        setPurging(null);
+        setNotice({ text: `Couldn't delete them: ${err instanceof Error ? err.message : String(err)}`, error: true });
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const meta = (clip: ArchivedClip) => (
     <span>
       {clip.file_missing ? <span className="text-amber-300/80">File missing</span> : "Archived"}{" "}
@@ -85,6 +119,7 @@ export default function ArchivePage() {
   );
   const allShown = clips.length > 0 && clips.every((c) => selected.has(c.asset_id));
   const folderName = path ? path.split("/").pop() : undefined;
+  const libraryName = libraries?.find((l) => l.library_id === libraryId)?.name;
 
   return (
     <div className="mx-auto max-w-6xl space-y-5 px-4 py-6 sm:px-6">
@@ -146,6 +181,16 @@ export default function ArchivePage() {
             className="rounded-lg px-2 py-1 text-sm text-indigo-300 hover:bg-gray-800"
           >
             {allShown ? "Select none" : "Select all shown"}
+          </button>
+        )}
+        {isAdmin && kind === "missing" && total > 0 && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void deleteMissing()}
+            className="rounded-lg border border-red-900/60 px-3 py-1.5 text-sm text-red-300 hover:bg-red-950/50 disabled:opacity-50"
+          >
+            Delete these for good
           </button>
         )}
         {canEdit && libraryId && path && kind !== "missing" && total > 0 && (
@@ -232,6 +277,45 @@ export default function ArchivePage() {
         </div>
       )}
       {clipActions.ui}
+
+      <Modal isOpen={purging !== null} onClose={() => setPurging(null)} title="Delete missing clips for good?">
+        {purging && (
+          <div className="space-y-4">
+            <p className="text-sm text-gray-300">
+              {clipCount(purging.count)} whose file{purging.count === 1 ? " is" : "s are"} missing
+              {libraryName ? ` in ${libraryName}` : ""}
+              {folderName ? ` under ${folderName}` : ""} will be deleted for good, with everything made or written
+              for {purging.count === 1 ? "it" : "them"}. This can&apos;t be undone. If a file comes back later,
+              it&apos;s a new clip.
+            </p>
+            {purging.usage && (
+              <ProjectUsageList usage={purging.usage}>
+                {clipCount(purging.usage.assets_in_projects)}{" "}
+                {purging.usage.assets_in_projects === 1 ? "is" : "are"} in projects; deleting{" "}
+                {purging.usage.assets_in_projects === 1 ? "it" : "them"} for good removes{" "}
+                {purging.usage.assets_in_projects === 1 ? "it" : "them"} from those projects.
+              </ProjectUsageList>
+            )}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPurging(null)}
+                className="rounded-lg border border-gray-600 px-4 py-2 text-sm font-medium text-gray-300 hover:bg-gray-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void deleteMissing({ count: purging.count, listedAt: purging.listedAt }, Boolean(purging.usage))}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-50"
+              >
+                {purging.usage ? "Delete and remove from projects" : `Delete ${clipCount(purging.count)} for good`}
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

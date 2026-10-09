@@ -142,11 +142,12 @@ def _fetch_ignored_paths(client: LumiverbClient, library_id: str) -> set[str]:
             return paths
 
 
-# Same threshold as the macOS scanner (ScanPipeline.swift): a scan that
-# would delete more than 50 files AND more than 5% of the library's assets
-# skips deletions. A half-mounted volume looks exactly like that.
+# A scan that would archive more than 50 clips AND more than half of the
+# library's clips in what it scanned as missing skips that: a half-mounted volume looks exactly
+# like it. Half, not 5% (Robert, Oct 9): missing clips are archived, not
+# deleted, and come back by themselves when the files do.
 MASS_DELETE_MIN_FILES = 50
-MASS_DELETE_MIN_FRACTION = 0.05
+MASS_DELETE_MIN_FRACTION = 0.50
 
 
 def _deletion_guard_trips(deleting: int, on_server: int) -> bool:

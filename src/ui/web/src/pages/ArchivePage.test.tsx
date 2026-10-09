@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import ArchivePage from "./ArchivePage";
+import { ApiError } from "../api/client";
 
 const api = vi.hoisted(() => ({
   listArchive: vi.fn(),
@@ -12,6 +13,7 @@ const api = vi.hoisted(() => ({
   restoreClips: vi.fn(),
   getCurrentUser: vi.fn(),
   getTenantSettings: vi.fn(),
+  deleteMissingClips: vi.fn(),
 }));
 vi.mock("../api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/client")>()),
@@ -90,6 +92,44 @@ describe("ArchivePage", () => {
     expect(api.listArchive).toHaveBeenCalledWith(expect.objectContaining({ libraryId: "lib_1", path: "Trips/Paris" }));
     fireEvent.click(screen.getByRole("button", { name: "Unarchive everything in Paris" }));
     await waitFor(() => expect(api.unarchiveClips).toHaveBeenCalledWith({ library_id: "lib_1", path: "Trips/Paris" }));
+  });
+
+  it("lets an admin delete missing clips for good, after saying how many and which projects use them", async () => {
+    // Robert, Oct 9: admins can purge missing clips explicitly.
+    api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role: "admin" });
+    api.listArchive.mockResolvedValue({ items: [clip("a2", "Trips/Paris/b.mov", true)], next_cursor: null, total: 1 });
+    api.deleteMissingClips
+      .mockRejectedValueOnce(new ApiError(409, "1 clip", "confirm_delete_missing", { count: 1, listed_at: "T" }))
+      .mockRejectedValueOnce(new ApiError(409, "in projects", "in_projects", {
+        assets_in_projects: 1,
+        projects: [{ project_id: "col_1", name: "Promo", status: "active", in_trash: false, clips: 1 }],
+        other_projects: 0,
+      }))
+      .mockResolvedValueOnce({ deleted: 1 });
+    renderPage("/archive?kind=missing&library=lib_1");
+    fireEvent.click(await screen.findByRole("button", { name: "Delete these for good" }));
+    expect((await screen.findByText(/1 clip whose file is missing in Media will be deleted for good/))).toBeTruthy();
+    expect(api.deleteMissingClips).toHaveBeenLastCalledWith({ libraryId: "lib_1", path: undefined }, undefined, false);
+    fireEvent.click(screen.getByRole("button", { name: "Delete 1 clip for good" }));
+    expect(await screen.findByText("Promo: 1 clip")).toBeTruthy();
+    expect(api.deleteMissingClips).toHaveBeenLastCalledWith({ libraryId: "lib_1", path: undefined },
+      { count: 1, listedAt: "T" }, false);
+    fireEvent.click(screen.getByRole("button", { name: "Delete and remove from projects" }));
+    expect((await screen.findByRole("status")).textContent).toContain("Deleted 1 clip for good.");
+    expect(api.deleteMissingClips).toHaveBeenLastCalledWith({ libraryId: "lib_1", path: undefined },
+      { count: 1, listedAt: "T" }, true);
+  });
+
+  it("only admins see Delete these for good, and only on missing clips", async () => {
+    api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role: "admin" });
+    renderPage("/archive?kind=by_hand");
+    await screen.findByText("a.mov");
+    expect(screen.queryByRole("button", { name: "Delete these for good" })).toBeNull();
+    cleanup();
+    api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role: "editor" });
+    renderPage("/archive?kind=missing");
+    await screen.findByText("a.mov");
+    expect(screen.queryByRole("button", { name: "Delete these for good" })).toBeNull();
   });
 
   it("viewers only look", async () => {

@@ -1142,16 +1142,33 @@ def test_a_trashed_clip_is_hidden_and_counted_until_restored(projects_env):
 
 
 @pytest.mark.slow
-def test_a_chosen_cover_survives_its_clip_going_to_the_trash(projects_env):
+def test_trashing_the_chosen_cover_clip_clears_the_choice(projects_env):
+    # Robert, Oct 9: "Deleting the chosen clip goes back to the first rule
+    # about default": the first active clip, until a new choice is made.
     client, api_key, library_id = projects_env
     a1, a2 = (_ingest_asset(client, api_key, library_id, f"links/cover-{i}.jpg") for i in range(2))
     project_id = _project(client, api_key, "Chosen cover", [a1, a2])
     client.patch(f"/v1/projects/{project_id}", json={"cover_asset_id": a2}, headers=_headers(api_key))
 
     _trash_clips(client, api_key, a2)
-    assert _item(client, api_key, project_id)["cover_asset_id"] == a1  # shown meanwhile
+    assert _item(client, api_key, project_id)["cover_asset_id"] == a1
     _restore_clip(client, api_key, a2)
-    assert _item(client, api_key, project_id)["cover_asset_id"] == a2  # the choice is kept
+    assert _item(client, api_key, project_id)["cover_asset_id"] == a1  # the choice went with it
+
+
+@pytest.mark.slow
+def test_a_chosen_cover_whose_file_goes_missing_is_shown_again_when_it_comes_back(projects_env):
+    # Missing isn't a person deleting it: the first active clip shows meanwhile.
+    client, api_key, library_id = projects_env
+    a1, a2 = (_ingest_asset(client, api_key, library_id, f"links/missing-cover-{i}.jpg") for i in range(2))
+    project_id = _project(client, api_key, "Missing cover", [a1, a2])
+    client.patch(f"/v1/projects/{project_id}", json={"cover_asset_id": a2}, headers=_headers(api_key))
+
+    r = client.request("DELETE", "/v1/assets", json={"asset_ids": [a2], "reason": "missing"}, headers=_headers(api_key))
+    assert r.status_code in (200, 204), r.text
+    assert _item(client, api_key, project_id)["cover_asset_id"] == a1
+    assert _ingest_asset(client, api_key, library_id, "links/missing-cover-1.jpg") == a2  # the file is back
+    assert _item(client, api_key, project_id)["cover_asset_id"] == a2
 
 
 @pytest.mark.slow

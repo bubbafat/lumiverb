@@ -312,6 +312,26 @@ export async function restoreClips(
   return apiFetch("/assets/restore", { method: "POST", body: { asset_ids: assetIds } });
 }
 
+/** Delete for good the clips whose files went missing (admins), in a library
+ * or under a folder. Asks first: 409 confirm_delete_missing (details.count,
+ * details.listed_at) until `told` says both; then 409 in_projects unless removeFromProjects. */
+export async function deleteMissingClips(
+  scope: { libraryId?: string; path?: string },
+  told?: { count: number; listedAt: string },
+  removeFromProjects = false,
+): Promise<{ deleted: number }> {
+  return apiFetch("/archive/missing", {
+    method: "DELETE",
+    body: {
+      ...(scope.libraryId ? { library_id: scope.libraryId } : {}),
+      ...(scope.path ? { path: scope.path } : {}),
+      // What the admin was told: only clips missing since before then go.
+      ...(told ? { count: told.count, missing_before: told.listedAt } : {}),
+      remove_from_projects: removeFromProjects,
+    },
+  });
+}
+
 /** Delete clips in the trash for good now: these, or every one shown (a
  * library's, under a folder, when given). Admins. 409 in_projects until
  * removeFromProjects. Never reaches archived clips or a trashed library's. */

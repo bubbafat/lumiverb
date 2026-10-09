@@ -77,12 +77,14 @@ def test_resolve_source_path_plain_hit_and_miss(tmp_path: Path) -> None:
     [
         (50, 100, False),  # 50 or fewer files always proceed
         (60, 10_000, False),  # 0.6% of the library
-        (60, 100, True),
-        (600, 10_000, True),
+        (600, 10_000, False),  # 6%: archived (reversible), not a mount problem
+        (60, 100, True),  # 60%
+        (5_001, 10_000, True),
+        (5_000, 10_000, False),  # exactly half proceeds
         (0, 0, False),
     ],
 )
-def test_deletion_guard_matches_macos_threshold(deleting: int, on_server: int, trips: bool) -> None:
+def test_deletion_guard_trips_past_half(deleting: int, on_server: int, trips: bool) -> None:
     assert _deletion_guard_trips(deleting, on_server) is trips
 
 
