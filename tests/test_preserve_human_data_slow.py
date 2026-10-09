@@ -1096,10 +1096,11 @@ def test_across_a_switch_a_named_face_not_found_again_is_kept(env) -> None:
 
 
 @pytest.mark.slow
-def test_one_named_face_and_one_found_by_the_new_model_are_the_same_face(env) -> None:
-    """Robert's case: the picture had one face, named; the new model finds
-    one. Its box can differ a lot (a tight box inside a loose one) and its
-    embedding can't be compared: it's the same face, and keeps the name."""
+def test_across_a_switch_a_name_carries_only_on_a_substantial_overlap(env) -> None:
+    """Robert, Oct 9: stricter than boxes touching. The new model's box over
+    most of the named one (IoU 0.64) is the same face; one that only
+    overlaps a little (IoU 0.16, a tight box in a corner) is another face,
+    and the named one is kept beside it."""
     client, headers, library_id, tenant_url = env
     asset_id = _seed_asset(tenant_url, library_id)
     person_id = _seed_person(tenant_url, emb=3)
@@ -1107,9 +1108,15 @@ def test_one_named_face_and_one_found_by_the_new_model_are_the_same_face(env) ->
     _seed_match(tenant_url, face_id, person_id, confirmed=True, confidence=None)
 
     result = _redetect_with(client, headers, asset_id, [(_box(0.15, 0.15, 0.08, 0.08), 301)], "antelopev2")
+    assert face_id not in result["face_ids"]
+    assert _match(tenant_url, face_id) == (person_id, True)  # kept, beside the new face
 
-    assert result["face_ids"] == [face_id]
-    assert _match(tenant_url, face_id) == (person_id, True)
+    other = _seed_asset(tenant_url, library_id)
+    named = _seed_face(tenant_url, other, _box(0.10, 0.10), emb=3)
+    _seed_match(tenant_url, named, person_id, confirmed=True, confidence=None)
+    result = _redetect_with(client, headers, other, [(_box(0.12, 0.12, 0.16, 0.16), 301)], "antelopev2")
+    assert result["face_ids"] == [named]
+    assert _match(tenant_url, named) == (person_id, True)
 
 
 @pytest.mark.slow

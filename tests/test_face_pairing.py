@@ -82,3 +82,23 @@ def test_one_gate_for_overlap_and_embedding_alone(distance: float, paired: bool)
         old = [Row("f0", _box(0.30), _text(PEOPLE[0]), True)]
         new = [{"bounding_box": new_box, "embedding": seen}]
         assert (FaceRepository._pair_redetected_faces(old, new) == {0: "f0"}) is paired
+
+
+SwitchRow = namedtuple("SwitchRow", "face_id bounding_box_json emb confirmed embedding_model")
+
+
+@pytest.mark.parametrize(("x", "paired"), [(0.36, True), (0.40, False), (0.45, False)])
+def test_across_a_face_model_switch_only_a_substantial_overlap_pairs(x: float, paired: bool) -> None:
+    """Robert, Oct 9: names carry over a model switch only where the boxes
+    overlap substantially (IoU 0.5 or more), not where they just touch,
+    even with one face before and one now."""
+    old = [SwitchRow("f0", _box(0.30), _text(PEOPLE[0]), True, "buffalo_l")]
+    new = [{"bounding_box": _box(x), "embedding": _vec((3, 1.0))}]
+    # IoU at x=0.36: 0.14/0.26 = 0.54; at 0.40: 0.10/0.30 = 0.33; at 0.45: 0.05/0.35 = 0.14.
+    assert (FaceRepository._pair_redetected_faces(old, new, "antelopev2") == {0: "f0"}) is paired
+
+
+def test_without_a_switch_boxes_without_embeddings_pair_from_0_3() -> None:
+    old = [SwitchRow("f0", _box(0.30), None, True, "buffalo_l")]
+    new = [{"bounding_box": _box(0.40)}]  # IoU 0.33
+    assert FaceRepository._pair_redetected_faces(old, new, "buffalo_l") == {0: "f0"}

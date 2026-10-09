@@ -3464,6 +3464,9 @@ class FaceRepository:
     REDETECT_MIN_IOU = 0.1
     REDETECT_MIN_IOU_NO_EMBEDDING = 0.3
     REDETECT_MAX_EMBEDDING_DISTANCE = 0.4
+    # Across a face-model switch the embeddings can't be compared: a name
+    # carries over only where the boxes overlap substantially (Robert, Oct 9).
+    REDETECT_MIN_IOU_ACROSS_SWITCH = 0.5
 
     def submit_faces(
         self,
@@ -3688,7 +3691,8 @@ class FaceRepository:
 
         Embeddings are compared only when one model made both (a face-model
         switch puts them in different spaces, maybe of different sizes);
-        otherwise the pair is judged like boxes without embeddings.
+        across a switch the pair is judged on overlap alone, and only a
+        substantial one (IoU >= REDETECT_MIN_IOU_ACROSS_SWITCH) counts.
 
         Greedy one-to-one. First overlapping boxes whose embeddings agree
         (distance < REDETECT_MAX_EMBEDDING_DISTANCE), closest embedding
@@ -3710,11 +3714,13 @@ class FaceRepository:
         ]
         new_vecs = [unit(f["embedding"]) if f.get("embedding") else None for f in faces]
 
+        def switched(oi: int) -> bool:
+            return (getattr(old_rows[oi], "embedding_model", None) or "buffalo_l") != embedding_model
+
         def distance(oi: int, ni: int) -> float | None:
             if old_vecs[oi] is None or new_vecs[ni] is None:
                 return None
-            if (getattr(old_rows[oi], "embedding_model", None) or "buffalo_l") != embedding_model \
-                    or old_vecs[oi].shape != new_vecs[ni].shape:
+            if switched(oi) or old_vecs[oi].shape != new_vecs[ni].shape:
                 return None
             return 1.0 - float(old_vecs[oi] @ new_vecs[ni])
 
@@ -3734,7 +3740,8 @@ class FaceRepository:
                 iou = _bbox_iou(row.bounding_box_json, f.get("bounding_box"))
                 dist = distance(oi, ni)
                 if dist is None:
-                    ok = iou >= cls.REDETECT_MIN_IOU_NO_EMBEDDING
+                    ok = iou >= (cls.REDETECT_MIN_IOU_ACROSS_SWITCH if old_vecs[oi] is not None and switched(oi)
+                                 else cls.REDETECT_MIN_IOU_NO_EMBEDDING)
                 else:
                     ok = iou >= cls.REDETECT_MIN_IOU and dist < cls.REDETECT_MAX_EMBEDDING_DISTANCE
                 if ok:
@@ -3753,14 +3760,6 @@ class FaceRepository:
                 if dist is not None and dist < cls.REDETECT_MAX_EMBEDDING_DISTANCE:
                     close.append((dist, oi, ni))
         take(sorted(close))
-
-        # One face before and one now, across a face-model switch (no
-        # embeddings to compare): if the boxes touch at all, it's the same
-        # face, however differently the two models frame it.
-        switched = (getattr(old_rows[0], "embedding_model", None) or "buffalo_l") != embedding_model if old_rows else False
-        if (not pairs and switched and len(old_rows) == 1 and len(faces) == 1 and distance(0, 0) is None
-                and _bbox_iou(old_rows[0].bounding_box_json, faces[0].get("bounding_box")) > 0):
-            pairs[0] = old_rows[0].face_id
         return pairs
 
     def _rejections_for(self, face_ids: list[str]) -> dict[str, set[str]]:
