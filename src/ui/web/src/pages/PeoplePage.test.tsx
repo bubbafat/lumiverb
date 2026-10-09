@@ -62,3 +62,50 @@ describe("PeoplePage clusters", () => {
     expect(screen.getByText(/5 faces in 1 clusters/)).toBeTruthy();
   });
 });
+
+describe("PeoplePage cluster order", () => {
+  const clusterUrls = () =>
+    fetchMock.mock.calls
+      .map(([url]) => new URL(url as string, "http://x"))
+      .filter((u) => u.pathname.endsWith("/faces/clusters"));
+
+  beforeEach(() => {
+    try {
+      window.localStorage.clear();
+    } catch {
+      /* no storage */
+    }
+  });
+
+  it("asks for the largest first by default", async () => {
+    renderPage();
+    const select = (await screen.findByLabelText("Sort clusters")) as HTMLSelectElement;
+    expect(select.value).toBe("size_desc");
+    expect(screen.getByRole("option", { name: "Largest first" })).toBeTruthy();
+    expect(clusterUrls()[0].searchParams.get("sort")).toBe("size_desc");
+  });
+
+  it("asks again in the order chosen and remembers it", async () => {
+    renderPage();
+    const select = await screen.findByLabelText("Sort clusters");
+    fireEvent.change(select, { target: { value: "size_asc" } });
+    await vi.waitFor(() => expect(clusterUrls().map((u) => u.searchParams.get("sort"))).toContain("size_asc"));
+    expect(window.localStorage.getItem("lv_cluster_sort")).toBe(JSON.stringify("size_asc"));
+  });
+
+  it("starts in the order remembered", async () => {
+    window.localStorage.setItem("lv_cluster_sort", JSON.stringify("newest"));
+    renderPage();
+    const select = (await screen.findByLabelText("Sort clusters")) as HTMLSelectElement;
+    expect(select.value).toBe("newest");
+    expect(clusterUrls()[0].searchParams.get("sort")).toBe("newest");
+  });
+
+  it("ignores an order it doesn't know", async () => {
+    window.localStorage.setItem("lv_cluster_sort", JSON.stringify("random"));
+    renderPage();
+    const select = (await screen.findByLabelText("Sort clusters")) as HTMLSelectElement;
+    expect(select.value).toBe("size_desc");
+    expect(clusterUrls()[0].searchParams.get("sort")).toBe("size_desc");
+  });
+});

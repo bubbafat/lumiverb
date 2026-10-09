@@ -179,10 +179,11 @@ def test_clusters_cache_marked_dirty_on_face_assign(people_client: Tuple[_AuthCl
 
     engine = create_engine(tenant_url)
     with engine.connect() as conn:
-        v = conn.execute(
-            text("SELECT value FROM system_metadata WHERE key = 'face_clusters_dirty'")
-        ).scalar()
-        assert v == "false"
+        clean = conn.execute(text(
+            "SELECT (SELECT (SELECT value::json->>'version' FROM system_metadata WHERE key = 'face_clusters_cache')"
+            " IS NOT DISTINCT FROM (SELECT value FROM system_metadata WHERE key = 'face_clusters_version'))"
+        )).scalar()
+        assert clean is True
 
     # Create a person and assign one of the faces.
     r_person = auth_client.post("/v1/people", json={"display_name": "CacheTest"})
@@ -193,10 +194,11 @@ def test_clusters_cache_marked_dirty_on_face_assign(people_client: Tuple[_AuthCl
     assert r2.status_code == 200
 
     with engine.connect() as conn:
-        v2 = conn.execute(
-            text("SELECT value FROM system_metadata WHERE key = 'face_clusters_dirty'")
-        ).scalar()
-        assert v2 == "true"
+        clean = conn.execute(text(
+            "SELECT (SELECT (SELECT value::json->>'version' FROM system_metadata WHERE key = 'face_clusters_cache')"
+            " IS NOT DISTINCT FROM (SELECT value FROM system_metadata WHERE key = 'face_clusters_version'))"
+        )).scalar()
+        assert clean is False
 
     engine.dispose()
 

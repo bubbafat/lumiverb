@@ -161,12 +161,7 @@ class CleanupOrphanAssetChildrenStep:
         # recomputes from the cleaned-up face table.
         if counts.get("faces", 0) > 0:
             ctx.session.execute(
-                text(
-                    "INSERT INTO system_metadata (key, value, updated_at)"
-                    " VALUES ('face_clusters_dirty', 'true', NOW())"
-                    " ON CONFLICT (key) DO UPDATE"
-                    "   SET value = 'true', updated_at = NOW()"
-                )
+                text("SELECT mark_face_clusters_changed()")
             )
 
         ctx.session.commit()

@@ -376,13 +376,9 @@ def run_recluster(
     authorization: Annotated[str | None, Header()] = None,
 ) -> ReclusterResult:
     """Force recompute face clusters for all tenants."""
-    import json as _json
-    from datetime import datetime, timezone
-
+    from src.server.api.routers.people import store_clusters
     from src.server.database import get_control_session, get_tenant_session
     from src.server.repository.control_plane import TenantRepository
-    from src.server.repository.system_metadata import SystemMetadataRepository
-    from src.server.repository.tenant import FaceRepository
 
     totals = {"clusters": 0, "total_faces": 0}
 
@@ -392,24 +388,9 @@ def run_recluster(
     for tenant in tenants:
         try:
             with get_tenant_session(tenant.tenant_id) as tsession:
-                repo = FaceRepository(tsession)
-                clusters, all_face_ids, truncated = repo.compute_clusters(max_clusters=50, faces_per_cluster=20)
-
-                cache_clusters = [
-                    {"cluster_index": i, "size": len(ids), "faces": c, "face_ids": ids}
-                    for i, (c, ids) in enumerate(zip(clusters, all_face_ids))
-                ]
-                cache_data = _json.dumps({
-                    "clusters": cache_clusters,
-                    "truncated": truncated,
-                    "computed_at": datetime.now(timezone.utc).isoformat(),
-                })
-                meta = SystemMetadataRepository(tsession)
-                meta.set_value("face_clusters_cache", cache_data)
-                meta.set_value("face_clusters_dirty", "false")
-
+                clusters = store_clusters(tsession)["clusters"]
                 totals["clusters"] += len(clusters)
-                totals["total_faces"] += sum(len(ids) for ids in all_face_ids)
+                totals["total_faces"] += sum(c["size"] for c in clusters)
         except Exception as exc:
             logger.warning("Recluster failed for tenant %s: %s", tenant.tenant_id, exc)
 

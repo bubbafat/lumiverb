@@ -250,6 +250,14 @@ def _meta(env, key: str) -> str | None:
         engine.dispose()
 
 
+def _clusters_current(env) -> bool:
+    """The face cluster cache was computed at the clusters' version now (it's served)."""
+    import json
+
+    cache = _meta(env, "face_clusters_cache")
+    return bool(cache) and json.loads(cache).get("version") == (_meta(env, "face_clusters_version") or "0")
+
+
 def _merge_epsilon(env) -> float:
     from sqlmodel import Session, create_engine
 
@@ -294,7 +302,7 @@ def test_face_grouping_settings_regroup_without_finding_faces_again(env):
 
     _put(env, "faces", settings={"merge_close_clusters": None})  # the cache starts clean
     client.get("/v1/faces/clusters", headers=headers)
-    assert _meta(env, "face_clusters_dirty") == "false"
+    assert _clusters_current(env)
     try:
         r = _put(env, "faces", settings={"merge_close_clusters": False})  # no redo asked: none needed
         assert r.status_code == 200, r.text
@@ -302,16 +310,16 @@ def test_face_grouping_settings_regroup_without_finding_faces_again(env):
         after = _producer(env, "faces")
         assert after["settings_hash"] == before["settings_hash"]
         assert _counts(lib, "faces")["stale"] == 0
-        assert _meta(env, "face_clusters_dirty") == "true"
+        assert not _clusters_current(env)
         assert _merge_epsilon(env) == 0.0
 
         client.get("/v1/faces/clusters", headers=headers)
         r = _put(env, "faces", settings={"merge_close_clusters": False})  # the same again: nothing to redo
-        assert r.status_code == 200 and _meta(env, "face_clusters_dirty") == "false"
+        assert r.status_code == 200 and _clusters_current(env)
 
         r = _put(env, "faces", settings={"merge_close_clusters": True, "merge_distance": 0.3})
         assert r.status_code == 200, r.text
-        assert _merge_epsilon(env) == 0.3 and _meta(env, "face_clusters_dirty") == "true"
+        assert _merge_epsilon(env) == 0.3 and not _clusters_current(env)
     finally:
         _put(env, "faces", settings={"merge_close_clusters": None, "merge_distance": None})
     assert _merge_epsilon(env) == distance

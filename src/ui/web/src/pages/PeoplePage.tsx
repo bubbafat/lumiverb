@@ -13,9 +13,20 @@ import {
   getNearestPeople,
   searchPeople,
   getApiKey,
+  CLUSTER_SORTS,
 } from "../api/client";
-import type { PersonItem, ClusterItem, PersonFaceItem } from "../api/client";
+import type { PersonItem, ClusterItem, ClusterSort, PersonFaceItem } from "../api/client";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
+import { useLocalStorage } from "../lib/useLocalStorage";
+
+const SORT_LABELS: Record<ClusterSort, string> = {
+  size_desc: "Largest first",
+  size_asc: "Smallest first",
+  newest: "Newest",
+};
+
+const isClusterSort = (value: unknown): value is ClusterSort =>
+  (CLUSTER_SORTS as readonly unknown[]).includes(value);
 
 function InfiniteScrollSentinel({
   hasNextPage,
@@ -496,6 +507,9 @@ export default function PeoplePage() {
   const queryClient = useQueryClient();
   const [clustersExpanded, setClustersExpanded] = useState(true);
   const [minClusterSize, setMinClusterSize] = useState(2);
+  // Remembered per viewer; one it doesn't know is the default.
+  const [storedSort, setStoredSort] = useLocalStorage<unknown>("lv_cluster_sort", "size_desc");
+  const sort: ClusterSort = isClusterSort(storedSort) ? storedSort : "size_desc";
   // Track removed cluster indices for optimistic updates — prevents
   // named/dismissed clusters from re-appearing until next manual refresh.
   const [removedIndices, setRemovedIndices] = useState<Set<number>>(new Set());
@@ -512,8 +526,8 @@ export default function PeoplePage() {
   });
 
   const clustersQuery = useQuery({
-    queryKey: ["face-clusters"],
-    queryFn: () => getClusters(50, 6, 1),
+    queryKey: ["face-clusters", sort],
+    queryFn: () => getClusters(sort, 50, 6, 1),
     // No auto-refetch — only refetch on explicit user action.
     // This prevents clusters from shuffling while the user is naming/dismissing.
     refetchOnWindowFocus: false,
@@ -587,6 +601,18 @@ export default function PeoplePage() {
     } catch { /* ignore */ }
     setUndoState(null);
   }, [undoState, queryClient]);
+
+  // Another order is another load, whose cluster_index can name other clusters:
+  // nothing kept from this one (removed, fading, undo, a card's faces or nearest people) carries over.
+  const handleSortChange = useCallback((next: ClusterSort) => {
+    if (undoState) { clearTimeout(undoState.timer); setUndoState(null); }
+    queryClient.removeQueries({ queryKey: ["face-clusters"] });
+    queryClient.removeQueries({ queryKey: ["cluster-faces"] });
+    queryClient.removeQueries({ queryKey: ["nearest-people"] });
+    setRemovedIndices(new Set());
+    setFadingIndices(new Map());
+    setStoredSort(next);
+  }, [queryClient, undoState, setStoredSort]);
 
   const handleRefreshClusters = useCallback(async () => {
     if (undoState) { clearTimeout(undoState.timer); setUndoState(null); }
@@ -665,23 +691,42 @@ export default function PeoplePage() {
 
           {clustersExpanded && (
             <>
-              {maxClusterSize > 1 && (
-                <div className="mb-4 flex items-center gap-3">
-                  <label htmlFor="cluster-size-slider" className="text-xs text-gray-400 whitespace-nowrap">
-                    Min faces
+              <div className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-3">
+                <div>
+                  <label htmlFor="cluster-sort" className="sr-only">
+                    Sort clusters
                   </label>
-                  <input
-                    id="cluster-size-slider"
-                    type="range"
-                    min={1}
-                    max={maxClusterSize}
-                    value={minClusterSize}
-                    onChange={(e) => setMinClusterSize(Number(e.target.value))}
-                    className="h-1.5 w-40 cursor-pointer appearance-none rounded-full bg-gray-700 accent-indigo-500"
-                  />
-                  <span className="text-xs tabular-nums text-gray-400">{minClusterSize}</span>
+                  <select
+                    id="cluster-sort"
+                    value={sort}
+                    onChange={(e) => isClusterSort(e.target.value) && handleSortChange(e.target.value)}
+                    className="rounded-lg border border-gray-700 bg-gray-800 px-2 py-1 text-xs text-gray-200"
+                  >
+                    {CLUSTER_SORTS.map((s) => (
+                      <option key={s} value={s}>
+                        {SORT_LABELS[s]}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-              )}
+                {maxClusterSize > 1 && (
+                  <div className="flex items-center gap-3">
+                    <label htmlFor="cluster-size-slider" className="text-xs text-gray-400 whitespace-nowrap">
+                      Min faces
+                    </label>
+                    <input
+                      id="cluster-size-slider"
+                      type="range"
+                      min={1}
+                      max={maxClusterSize}
+                      value={minClusterSize}
+                      onChange={(e) => setMinClusterSize(Number(e.target.value))}
+                      className="h-1.5 w-40 cursor-pointer appearance-none rounded-full bg-gray-700 accent-indigo-500"
+                    />
+                    <span className="text-xs tabular-nums text-gray-400">{minClusterSize}</span>
+                  </div>
+                )}
+              </div>
               {truncated && (
                 <p className="mb-4 text-xs text-yellow-500">
                   Showing top clusters. Name the largest clusters first to see more.
