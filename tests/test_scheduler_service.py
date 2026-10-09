@@ -268,3 +268,37 @@ def test_failures_are_sent_to_the_server_regularly(monkeypatch: pytest.MonkeyPat
     s = _scheduler({"t1": acct}, {}, rec)
     s.tick()
     assert acct.failures.flush.called
+
+
+@pytest.mark.fast
+def test_running_the_module_in_a_spawned_child_starts_nothing() -> None:
+    # Face detection's subprocess is started with "spawn": the child imports
+    # the main module again (as __mp_main__), and must not start a scheduler.
+    import runpy
+    from unittest.mock import patch
+
+    with patch("src.server.scheduler.service.main") as main:
+        runpy.run_module("src.server.scheduler.__main__", run_name="__mp_main__")
+    main.assert_not_called()
+
+
+@pytest.mark.fast
+def test_accounts_are_listed_once_however_many_ask_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.server.scheduler.service import Accounts
+
+    listings: list[int] = []
+    gate = threading.Event()
+
+    def slow_list(self) -> None:
+        listings.append(1)
+        gate.wait(1)
+
+    monkeypatch.setattr(Accounts, "_list", slow_list)
+    accounts = Accounts(MagicMock(), url="http://api")
+    threads = [threading.Thread(target=accounts) for _ in range(4)]
+    for t in threads:
+        t.start()
+    gate.set()
+    for t in threads:
+        t.join(5)
+    assert listings == [1]

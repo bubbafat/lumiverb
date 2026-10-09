@@ -239,13 +239,16 @@ class Accounts:
         self._clock = clock
         self._accounts: dict[str, Any] = {}
         self._listed_at: float | None = None
+        # One listing at a time: two would each make a key, revoking the other's.
+        self._lock = threading.Lock()
 
     def __call__(self) -> dict[str, Any]:
-        now = self._clock()
-        if self._listed_at is None or now - self._listed_at >= self.LIST_EVERY_SEC:
-            self._listed_at = now
-            self._list()
-        return self._accounts
+        with self._lock:
+            now = self._clock()
+            if self._listed_at is None or now - self._listed_at >= self.LIST_EVERY_SEC:
+                self._listed_at = now
+                self._list()
+            return dict(self._accounts)
 
     def _list(self) -> None:
         from src.client.cli.client import LumiverbClient
