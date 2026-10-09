@@ -167,11 +167,21 @@ def test_an_answer_of_only_clips_in_hand_is_not_asked_again_at_once() -> None:
 
 
 @pytest.mark.fast
-def test_an_empty_answer_is_not_asked_again_at_once() -> None:
+def test_an_empty_answer_is_not_asked_again_at_once_and_less_often_while_it_stays_empty() -> None:
     clock = Clock()
     d = _d(clock=clock)
+    waits = []
+    for _ in range(5):
+        d.offer("t1", "vision", [])
+        waited = 0
+        while not d.wanted("t1", "vision"):
+            clock.now += 1
+            waited += 1
+        waits.append(waited)
+    assert waits == [15, 30, 60, 120, 120]
+    d.offer("t1", "vision", [_item("a", "2026-10-01")])  # something new: as often as usual again
+    d.take("vision")
     d.offer("t1", "vision", [])
-    assert not d.wanted("t1", "vision")
     clock.now += 16
     assert d.wanted("t1", "vision")
 
@@ -231,6 +241,29 @@ def test_a_clip_is_never_in_hand_for_its_first_making_and_its_redo_at_once() -> 
     # Just made: its redo doesn't take it again at once either.
     d.offer("t1", "redo_vision", [_item("a", "2026-10-01")])
     assert d.take("vision") is None
+
+
+@pytest.mark.fast
+def test_held_clips_are_what_the_database_should_leave_out() -> None:
+    d = _d({"vision": 2})
+    d.offer("t1", "vision", [_item("a", "2026-10-01"), _item("b", "2026-10-02"), _item("c", "2026-10-03")])
+    first = d.take("vision")
+    d.take("vision")
+    d.done(first)
+    assert sorted(d.held("t1", "vision")) == ["a", "b"]  # one just tried, one in hand
+    assert d.held("t1", "ocr") == [] and d.held("t2", "vision") == []
+    # Its redo leaves the same clips out.
+    assert sorted(d.held("t1", "redo_vision")) == ["a", "b"]
+
+
+@pytest.mark.fast
+def test_a_job_that_couldnt_try_holds_nothing_back() -> None:
+    d = _d()
+    d.offer("t1", "probe", [_item("p", "2026-10-01")])
+    d.done(d.take("probe"), tried=False)
+    assert d.held("t1", "probe") == []
+    d.offer("t1", "probe", [_item("p", "2026-10-01")])
+    assert d.take("probe") is not None
 
 
 @pytest.mark.fast

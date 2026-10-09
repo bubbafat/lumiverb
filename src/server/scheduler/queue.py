@@ -21,8 +21,9 @@ BUFFER = 200  # due clips listed per kind at a time
 
 
 def candidates(session: Session, kind: Kind, library_ids: list[str], limit: int = BUFFER,
-               want: dict[str, Any] | None = None) -> list[dict]:
-    """The kind's due clips in these libraries, oldest first, at most limit.
+               skip: list[str] | None = None, want: dict[str, Any] | None = None) -> list[dict]:
+    """The kind's due clips in these libraries, oldest first, at most limit,
+    less skip (clips in hand or just tried: they mustn't fill the answer).
     A redo kind needs want: what its producer makes now (lineage.desired)."""
     from src.server.repository import lineage
     from src.server.repository.lineage import LINEAGE_JOIN
@@ -30,7 +31,7 @@ def candidates(session: Session, kind: Kind, library_ids: list[str], limit: int 
 
     if not kind.flag or not library_ids:
         return []
-    params: dict[str, Any] = {"libs": library_ids, "n": limit}
+    params: dict[str, Any] = {"libs": library_ids, "n": limit, "skip": list(skip or [])}
     if kind.redo:
         if want is None:
             raise ValueError(f"{kind.name}: what its producer makes now is needed")
@@ -43,6 +44,7 @@ def candidates(session: Session, kind: Kind, library_ids: list[str], limit: int 
         " a.created_at, a.analysis_proxy_key IS NOT NULL AS has_analysis_proxy"
         f" FROM active_assets a {LINEAGE_JOIN}"
         f" WHERE a.library_id = ANY(:libs) AND ({condition}) AND ({kind.extra})"
+        "   AND a.asset_id <> ALL(CAST(:skip AS text[]))"
         " ORDER BY a.created_at, a.asset_id LIMIT :n"
     ), params).mappings().all()
     return [{**r, "created_at": r["created_at"].isoformat() if r["created_at"] else "", "redo": kind.redo}

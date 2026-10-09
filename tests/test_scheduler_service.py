@@ -26,6 +26,8 @@ class FakeAccount:
         self.reachable = reachable
         self.failures = MagicMock()
         self.refreshed = 0
+        self.settings_ready = True
+        self.stopping = threading.Event()
 
     def refresh(self) -> None:
         self.refreshed += 1
@@ -64,15 +66,16 @@ def _item(asset_id: str, added: str = "2026-10-01") -> dict:
 
 def _scheduler(accounts: dict, due: dict[str, list[dict]], recorder: Recorder, *, scan=None,
                capacity: dict | None = None, asked: list | None = None, paused: set | None = None) -> Scheduler:
-    def candidates(tenant_id, kind, libraries):
+    def candidates(tenant_id, kind, libraries, skip=()):
         if asked is not None:
             asked.append((tenant_id, kind.name, tuple(libraries)))
-        return [i for i in due.get(kind.name, []) if i["library_id"] in libraries]
+        return [i for i in due.get(kind.name, []) if i["library_id"] in libraries and i["asset_id"] not in skip]
 
-    return Scheduler(lambda: accounts, capacity=capacity or {"scan": 1, "probe": 2, "render": 1, "clip": 1,
-                                                            "faces": 1, "scenes": 1},
-                     candidates=candidates, runners=recorder.all(), scan=scan or MagicMock(),
-                     paused=lambda tenant_id: set(paused or ()), retry_requested=lambda tenant_id: None)
+    return Scheduler(lambda: accounts, capacity=capacity or {"scan": 1, "probe": 2, "render": 1, "gpu": 1,
+                                                            "scenes": 1},
+                     candidates=candidates, runners=recorder.all(), scan=scan or MagicMock(), inline_refill=True,
+                     paused=lambda tenant_id: set(paused or ()),
+                     retry_requested=lambda tenant_id: None)
 
 
 def _settle(s: Scheduler) -> None:
@@ -183,7 +186,9 @@ def test_a_pool_runs_no_more_than_its_slots() -> None:
     _settle(s)
     s.tick()
     _settle(s)
-    assert [ids[0] for _, kind, ids in rec.ran if kind == "vision"] == ["v1", "v2", "v3", "v4"]
+    ran = [ids[0] for _, kind, ids in rec.ran if kind == "vision"]
+    # The first two ran side by side (either may finish first); then the next two.
+    assert sorted(ran[:2]) == ["v1", "v2"] and sorted(ran[2:]) == ["v3", "v4"]
 
 
 @pytest.mark.fast
@@ -208,14 +213,14 @@ def test_a_job_that_fails_frees_its_slot_and_the_rest_go_on() -> None:
         raise RuntimeError("model crashed")
 
     runners["clip"] = boom
-    s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"clip": 1, "scan": 1},
-                  candidates=lambda t, k, libs: [_item("c1"), _item("c2", "2026-10-02")] if k.name == "clip" else [],
-                  runners=runners, scan=MagicMock(), paused=lambda tenant_id: set(),
+    s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"gpu": 1, "scan": 1},
+                  candidates=lambda t, k, libs, skip=(): [_item("c1"), _item("c2", "2026-10-02")] if k.name == "clip" else [],
+                  runners=runners, scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set(),
                   retry_requested=lambda tenant_id: None)
     s.tick()
     _settle(s)
-    assert s.dispatcher.free("clip") == 1
-    assert s.dispatcher.running("clip") == 0
+    assert s.dispatcher.free("gpu") == 1
+    assert s.dispatcher.running("gpu") == 0
 
 
 @pytest.mark.fast
@@ -234,9 +239,12 @@ def test_one_accounts_trouble_does_not_stop_the_others() -> None:
     broken = FakeAccount("t1")
     broken.refresh = MagicMock(side_effect=RuntimeError("database gone"))
     s = _scheduler({"t1": broken, "t2": FakeAccount("t2")}, {"clip": [_item("c")]}, rec)
-    s.tick()
-    _settle(s)
+    for _ in range(2):  # the two accounts take turns on the one GPU slot
+        s.tick()
+        _settle(s)
     assert ("t2", "clip", ("c",)) in rec.ran
+    # Its settings read before stay: its own work goes on too.
+    assert ("t1", "clip", ("c",)) in rec.ran
 
 
 @pytest.mark.fast
@@ -273,9 +281,8 @@ def test_failures_are_sent_to_the_server_regularly(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.fast
-def test_running_the_module_in_a_spawned_child_starts_nothing() -> None:
-    # Face detection's subprocess is started with "spawn": the child imports
-    # the main module again (as __mp_main__), and must not start a scheduler.
+def test_importing_the_entry_point_starts_nothing() -> None:
+    # Only running it as a program starts the scheduler.
     import runpy
     from unittest.mock import patch
 
@@ -304,6 +311,155 @@ def test_accounts_are_listed_once_however_many_ask_at_once(monkeypatch: pytest.M
     for t in threads:
         t.join(5)
     assert listings == [1]
+
+
+@pytest.mark.fast
+def test_nothing_is_handed_out_until_the_accounts_settings_were_read() -> None:
+    # Made with the registry's defaults, it would be wrong (and stale) at once.
+    rec = Recorder()
+    acct = FakeAccount()
+    acct.settings_ready = False
+    s = _scheduler({"t1": acct}, {"clip": [_item("c")]}, rec)
+    s.tick()
+    _settle(s)
+    assert [kind for _, kind, _ in rec.ran] == []
+    acct.settings_ready = True
+    s.tick()
+    _settle(s)
+    assert [kind for _, kind, _ in rec.ran] == ["clip"]
+
+
+@pytest.mark.fast
+def test_a_job_that_couldnt_try_is_offered_again_and_one_that_tried_waits() -> None:
+    from src.server.scheduler.runners import NOT_TRIED
+
+    rec = Recorder()
+    outcomes = iter([NOT_TRIED, None, None])
+    runners = rec.all()
+    tries: list[str] = []
+
+    def probe(acct, job):
+        tries.append(job.asset_ids[0])
+        return next(outcomes)
+
+    runners["probe"] = probe
+    s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"probe": 1, "scan": 0},
+                  candidates=lambda t, k, libs, skip=(): [i for i in [_item("p")] if i["asset_id"] not in skip]
+                  if k.name == "probe" else [], runners=runners, scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set(),
+                  retry_requested=lambda tenant_id: None)
+    for _ in range(4):
+        s.tick()
+        _settle(s)
+        s.dispatcher._all_known_at.clear()  # ask the database every tick here
+    assert tries == ["p", "p"]  # not tried: again at once; tried: held for the hour
+
+
+@pytest.mark.fast
+def test_the_database_is_asked_to_leave_out_clips_in_hand_or_just_tried() -> None:
+    rec = Recorder()
+    rec.hold.clear()
+    skipped: list[tuple] = []
+
+    def candidates(tenant_id, kind, libraries, skip=()):
+        skipped.append((kind.name, tuple(sorted(skip))))
+        return [i for i in [_item("a"), _item("b", "2026-10-02")] if i["asset_id"] not in skip] \
+            if kind.name == "vision" else []
+
+    s = Scheduler(lambda: {"t1": FakeAccount(vision=1)}, capacity={"scan": 0}, candidates=candidates,
+                  runners=rec.all(), scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set(),
+                  retry_requested=lambda tenant_id: None)
+    s.tick()
+    s.dispatcher._all_known_at.clear()
+    s.dispatcher._buffers.clear()
+    s.tick()
+    assert ("vision", ("a",)) in skipped
+    rec.hold.set()
+    _settle(s)
+
+
+@pytest.mark.fast
+def test_one_kinds_trouble_doesnt_hold_up_the_others() -> None:
+    rec = Recorder()
+
+    def candidates(tenant_id, kind, libraries, skip=()):
+        if kind.name == "probe":
+            raise RuntimeError("statement timeout")
+        return [_item("c")] if kind.name == "clip" else []
+
+    s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"probe": 1, "gpu": 1, "scan": 0},
+                  candidates=candidates, runners=rec.all(), scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set(),
+                  retry_requested=lambda tenant_id: None)
+    s.tick()
+    _settle(s)
+    assert [kind for _, kind, _ in rec.ran] == ["clip"]
+
+
+@pytest.mark.fast
+def test_refills_happen_off_the_dispatching_thread() -> None:
+    # A slow database or AI machine check doesn't hold up starting jobs.
+    rec = Recorder()
+    gate = threading.Event()
+    acct = FakeAccount()
+    acct.refresh = lambda: gate.wait(5)
+    s = Scheduler(lambda: {"t1": acct}, capacity={"gpu": 1, "scan": 0},
+                  candidates=lambda t, k, libs, skip=(): [_item("c")] if k.name == "clip" else [],
+                  runners=rec.all(), scan=MagicMock(), paused=lambda tenant_id: set(),
+                  retry_requested=lambda tenant_id: None)
+    start = time.monotonic()
+    s.tick()
+    assert time.monotonic() - start < 1
+    gate.set()
+    deadline = time.monotonic() + 5
+    while not rec.ran and time.monotonic() < deadline:
+        s.tick()
+        _settle(s)
+        time.sleep(0.02)
+    assert [kind for _, kind, _ in rec.ran] == ["clip"]
+    s.stop()
+
+
+@pytest.mark.fast
+def test_stopping_tells_jobs_in_hand_to_save_nothing_more() -> None:
+    rec = Recorder()
+    acct = FakeAccount()
+    s = _scheduler({"t1": acct}, {}, rec)
+    s.stop({"t1": acct}, grace=0)
+    assert acct.stopping.is_set()
+
+
+@pytest.mark.fast
+def test_an_account_whose_key_was_revoked_gets_a_new_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.server.scheduler import service
+
+    made: list[str] = []
+
+    class Acct:
+        def __init__(self, tenant_id):
+            self.client = MagicMock(unauthorized=False)
+            self.closed = False
+            made.append(tenant_id)
+
+        def close(self):
+            self.closed = True
+
+    accounts = service.Accounts(MagicMock(), url="http://api")
+
+    def listing(self):
+        for t in ("t1",):
+            if t not in self._accounts:
+                self._accounts[t] = Acct(t)
+
+    monkeypatch.setattr(service.Accounts, "_list", listing)
+    first = accounts()["t1"]
+    assert accounts()["t1"] is first
+    first.client.unauthorized = True
+    second = accounts()["t1"]
+    assert second is not first and first.closed and made == ["t1", "t1"]
+
+
+# ---------------------------------------------------------------------------
+# Redo on change: tier 4, after everything else in its pool
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.fast
@@ -368,14 +524,13 @@ def test_asking_to_try_failing_clips_again_lets_go_of_the_hour() -> None:
     asked: list[str | None] = [None]
     s = _scheduler({"t1": FakeAccount()}, {"clip": [_item("c")]}, rec)
     s._retry_requested = lambda tenant_id: asked[0]
-    s.tick()
-    _settle(s)
-    s.tick()
-    _settle(s)
+    for _ in range(2):
+        s.tick()
+        _settle(s)
+        s.dispatcher._all_known_at.clear()
     assert [ids for _, kind, ids in rec.ran if kind == "clip"] == [("c",)]  # held for the hour
     asked[0] = "2026-10-09T01:00:00"
-    s.tick()
-    _settle(s)
-    s.tick()
-    _settle(s)
+    for _ in range(2):
+        s.tick()
+        _settle(s)
     assert [ids for _, kind, ids in rec.ran if kind == "clip"] == [("c",), ("c",)]

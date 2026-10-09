@@ -1,7 +1,7 @@
 """Redo on change: a settings change is the approval (ADR-016 phase 4, Robert Oct 9).
 
 Revision ID: be66e81c7e5d
-Revises: fbd7f3be1cb0
+Revises: 5a0272639723
 Create Date: 2026-10-09
 
 Changing a model or setting now redoes everything made another way, after
@@ -21,7 +21,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "be66e81c7e5d"
-down_revision: Union[str, Sequence[str], None] = "fbd7f3be1cb0"
+down_revision: Union[str, Sequence[str], None] = "5a0272639723"
 branch_labels = None
 depends_on = None
 

@@ -95,6 +95,7 @@ def test_a_description_goes_from_the_queue_to_the_database(env, home: Path) -> N
     acct = Account(env[4], _client(scheduler_key(env[4])), ScanState())
     acct.vision, acct.transcripts = FakeVision(), NoMachines()
     acct.refresh(force=True)
+    assert acct.settings_ready  # the server's settings were read
     # Only the vision pool has slots: nothing else runs here.
     s = Scheduler(lambda: {env[4]: acct}, capacity={"scan": 0})
     deadline = time.monotonic() + 30
