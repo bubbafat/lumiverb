@@ -71,15 +71,23 @@ class EmptyLibraryTrashRequest(BaseModel):
     remove_from_projects: bool = False
 
 
+class IgnoredFileItem(BaseModel):
+    sha256: str
+    # Its size and time when a person removed it: a scanner hashes the file
+    # at the path only when they differ.
+    file_size: int | None = None
+    file_mtime: datetime | None = None
+
+
 class IgnoredPathItem(BaseModel):
     rel_path: str
     # "trashed": in the trash by the user's choice. "archived": a person
     # archived it. "emptied": the user emptied its trash; the file may still
     # be on disk.
     reason: str
-    # The files skipped at this path, by SHA-256; None when one isn't known
+    # The files skipped at this path; None when one's content isn't known
     # (then whatever is there). Another file at the path is a new clip.
-    contents: list[str] | None = None
+    files: list[IgnoredFileItem] | None = None
 
 
 class IgnoredPathPage(BaseModel):
@@ -436,7 +444,7 @@ def page_ignored_paths(
     limit = max(1, min(limit, 1000))
     rows = AssetRepository(session).page_ignored_paths(library_id, after=after, limit=limit)
     return IgnoredPathPage(
-        items=[IgnoredPathItem(rel_path=p, reason=k, contents=c) for p, k, c in rows],
+        items=[IgnoredPathItem(rel_path=p, reason=k, files=f) for p, k, f in rows],
         next_cursor=rows[-1][0] if len(rows) == limit else None,
     )
 

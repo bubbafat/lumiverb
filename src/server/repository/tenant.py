@@ -237,6 +237,17 @@ class LibraryRepository:
         if library is None:
             raise ValueError(f"Library not in the trash: {library_id}")
         self._session.refresh(library)
+        # A clip whose path another clip holds now (a file ingested there as
+        # the library went) stays out of sight, archived as missing where it
+        # was: a different file at a path is a new clip.
+        self._session.execute(
+            text(
+                "UPDATE assets a SET deleted_reason = 'missing' WHERE a.library_id = :lib"
+                "   AND a.deleted_reason = 'library' AND EXISTS (SELECT 1 FROM assets o"
+                "       WHERE o.library_id = a.library_id AND o.rel_path = a.rel_path AND o.deleted_at IS NULL)"
+            ),
+            {"lib": library_id},
+        )
         self._session.execute(
             text(
                 "UPDATE assets SET deleted_at = NULL, deleted_reason = NULL, trashed_from = NULL,"
@@ -1162,6 +1173,14 @@ class AssetRepository:
         )
         return self._session.exec(stmt).first()
 
+    def missing_ids_with_sha(self, library_id: str, sha256: str) -> list[str]:
+        """The library's clips archived as missing with this content (no lock)."""
+        return list(self._session.execute(
+            text("SELECT asset_id FROM assets WHERE library_id = :lib AND sha256 = :sha"
+                 "   AND deleted_at IS NOT NULL AND deleted_reason = 'missing' ORDER BY deleted_at DESC"),
+            {"lib": library_id, "sha": sha256},
+        ).scalars())
+
     def find_missing_by_sha(self, library_id: str, sha256: str | None) -> Asset | None:
         """The library's most recently missing asset with this content,
         locked for restoring. A row someone else holds is waited for, not
@@ -1302,30 +1321,34 @@ class AssetRepository:
 
     def page_ignored_paths(
         self, library_id: str, *, after: str | None = None, limit: int = 500
-    ) -> list[tuple[str, str, list[str] | None]]:
-        """Files scanners must skip, by rel_path: (rel_path, reason, contents).
+    ) -> list[tuple[str, str, list[dict] | None]]:
+        """Files scanners must skip, by rel_path: (rel_path, reason, files).
 
         reason: "trashed" = in the trash by a person's choice; "archived" = a
         person archived it; "emptied" = a person deleted it for good
         (ignored_files); the first of these when a path has several.
-        contents: the SHA-256s of the files skipped there, or None when one
-        isn't known (then whatever is at the path). Another file at the path
-        is a new clip. Not a path a clip in sight holds now: that file is the
-        clip's (a changed file is a new clip, and the old one may be trashed).
+        files: each one skipped there, {sha256, file_size, file_mtime}, or
+        None when one's content isn't known (then whatever is at the path).
+        Another file at the path is a new clip. Not a path a clip in sight
+        holds now: that file is the clip's (a changed file is a new clip, and
+        the old one may be trashed).
         """
         rows = self._session.execute(
             text(
                 """
                 SELECT rel_path,
                        (array_agg(kind ORDER BY CASE kind WHEN 'trashed' THEN 0 WHEN 'archived' THEN 1 ELSE 2 END))[1],
-                       CASE WHEN bool_or(sha256 IS NULL) THEN NULL ELSE array_agg(DISTINCT sha256) END
+                       CASE WHEN bool_or(sha256 IS NULL) THEN NULL
+                            ELSE jsonb_agg(DISTINCT jsonb_build_object('sha256', sha256, 'file_size', file_size,
+                                                                       'file_mtime', file_mtime)) END
                 FROM (
-                    SELECT rel_path, CASE deleted_reason WHEN 'user' THEN 'trashed' ELSE 'archived' END AS kind, sha256
+                    SELECT rel_path, CASE deleted_reason WHEN 'user' THEN 'trashed' ELSE 'archived' END AS kind,
+                           sha256, file_size, file_mtime
                     FROM assets
                     WHERE library_id = :lib AND deleted_at IS NOT NULL
                       AND deleted_reason IN ('user', 'archived')
                     UNION ALL
-                    SELECT rel_path, 'emptied' AS kind, sha256 FROM ignored_files
+                    SELECT rel_path, 'emptied' AS kind, sha256, file_size, file_mtime FROM ignored_files
                     WHERE library_id = :lib
                 ) p
                 WHERE (CAST(:after AS text) IS NULL OR rel_path > :after)
@@ -1338,7 +1361,7 @@ class AssetRepository:
             ),
             {"lib": library_id, "after": after, "limit": limit},
         ).all()
-        return [(r[0], r[1], sorted(r[2]) if r[2] is not None else None) for r in rows]
+        return [(r[0], r[1], sorted(r[2], key=lambda f: f["sha256"]) if r[2] is not None else None) for r in rows]
 
     VIDEO_FACET_FIELDS = (
         "duration_sec", "container", "video_codec", "width", "height", "rotation",
@@ -1485,8 +1508,8 @@ class AssetRepository:
         # still be on disk. Remember it, or the next scan would bring it back.
         self._session.execute(
             text(
-                "INSERT INTO ignored_files (library_id, rel_path, sha256, created_at)"
-                " SELECT a.library_id, a.rel_path, a.sha256, :now FROM assets a"
+                "INSERT INTO ignored_files (library_id, rel_path, sha256, file_size, file_mtime, created_at)"
+                " SELECT a.library_id, a.rel_path, a.sha256, a.file_size, a.file_mtime, :now FROM assets a"
                 " WHERE a.asset_id = ANY(:asset_ids)"
                 "   AND a.deleted_at IS NOT NULL AND a.deleted_reason = 'user'"
                 # A file whose content isn't known names the whole path: not

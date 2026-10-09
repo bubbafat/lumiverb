@@ -223,7 +223,8 @@ def test_a_scan_never_undoes_an_archive(env):
     _archive(env, asset_ids=[clip])
 
     items = client.get(f"/v1/libraries/{library_id}/ignored-paths", params={"limit": 1000}, headers=headers).json()
-    assert {"rel_path": "scan/kept.mov", "reason": "archived", "contents": [sha]} in items["items"]
+    item = next(i for i in items["items"] if i["rel_path"] == "scan/kept.mov")
+    assert item["reason"] == "archived" and [f["sha256"] for f in item["files"]] == [sha]
     with pytest.raises(AssertionError, match="409"):
         _ingest(env, "scan/kept.mov", sha=sha)
     assert _row(env, clip)[1] == "archived"
