@@ -55,14 +55,16 @@ def _n(value: int) -> str:
     return f"{value:,}" if value else "-"
 
 
-def _redo(p: dict) -> str:
-    """What happens to its stale clips."""
+def _redo(p: dict, all_paused: bool = False) -> str:
+    """What happens to its stale clips: redone, stopped, waiting for a pause to end, or not yet possible."""
     stale = (p.get("counts") or {}).get("stale", 0)
     if not stale:
         return ""
     if not p.get("redoable", True):
         return "not yet"
-    return "stopped" if p.get("redo_stopped") else "redoing"
+    if p.get("redo_stopped"):
+        return "stopped"
+    return "paused" if p.get("paused") or all_paused else "redoing"
 
 
 @producers_app.callback()
@@ -78,7 +80,8 @@ def producers_list(
     params = _scope(client, library, project)
     producers = client.get("/v1/producers", params=params).json().get("producers", [])
     queue = client.get("/v1/producers/queue").json() or {}
-    if queue.get("paused"):
+    all_paused = bool(queue.get("paused"))
+    if all_paused:
         since = str(queue.get("paused_at") or "")[:16].replace("T", " ")
         console.print(f"[yellow]All processing is paused{f' (since {since})' if since else ''}: nothing more "
                       "starts. lumiverb producers resume carries on.[/yellow]")
@@ -90,7 +93,7 @@ def producers_list(
         c = p.get("counts") or {}
         paused = " [yellow]paused[/yellow]" if p.get("paused") else ""
         table.add_row(f"{escape(p['title'])} [dim]({p['artifact']})[/dim]{paused}", _n(c.get("current", 0)),
-                      _n(c.get("missing", 0)), _n(c.get("stale", 0)), _n(c.get("failing", 0)), _redo(p))
+                      _n(c.get("missing", 0)), _n(c.get("stale", 0)), _n(c.get("failing", 0)), _redo(p, all_paused))
         if p.get("paused"):
             notes.append(f"{p['title']}: paused; lumiverb producers resume {p['artifact']} carries on.")
         if c.get("stale") and not p.get("redoable", True):
@@ -156,8 +159,8 @@ def redo_stop(
     if r.status_code >= 400:
         console.print(f"[red]Couldn't stop: {escape(_error(r))}[/red]")
         raise typer.Exit(1)
-    console.print(f"Stopped redoing {escape(artifact)}: its stale clips stay as they are until you resume it "
-                  "(or its model changes).")
+    console.print(f"Stopped redoing {escape(artifact)}: its stale clips stay as they are until lumiverb producers "
+                  f"redo resume {escape(artifact)} (or its model or settings change).")
 
 
 @redo_app.command("resume")

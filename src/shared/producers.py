@@ -44,6 +44,7 @@ ARTIFACTS: tuple[str, ...] = tuple(PRODUCERS)
 # What an admin pauses (Settings → Processing): all of the account's
 # processing, or one producer's (its artifact).
 PAUSE_ALL = "all"
+assert PAUSE_ALL not in PRODUCERS, "a producer can't be named what pausing everything is"
 
 # The repair summary's counts and page filters (what the scheduler is
 # handed) and the artifact each is about.

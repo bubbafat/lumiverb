@@ -289,7 +289,8 @@ def set_settings(
         clips = lineage.would_redo(session, artifact, after)
         if clips and not body.redo:
             stopped = artifact in lineage.paused(session)
-            held = artifact in lineage.processing_paused(session)
+            on_hold = lineage.processing_paused(session)
+            held, all_held = artifact in on_hold, PAUSE_ALL in on_hold
             session.rollback()
             also = " and ".join(PRODUCERS[a].title.lower() for a in p.redo_also)
             raise DecisionRequiredError(
@@ -298,8 +299,10 @@ def set_settings(
                 + (f", and their {also} with them" if also else "") + ". That "
                 "runs after anything missing; until it's done, results mix the old settings and the new."
                 + (" Its stopped redo starts again." if stopped else "")
-                + (" It's paused: none of it is made until it's resumed." if held else ""),
+                + (" All processing is paused: none of it is made until it's resumed." if all_held
+                   else " It's paused: none of it is made until it's resumed." if held else ""),
                 {"artifact": artifact, "clips": clips, "redo_stopped": stopped, "paused": held,
+                 "all_paused": all_held,
                  "artifacts": [{"artifact": artifact, "title": p.title, "clips": clips}]},
             )
         lineage.resume(session, [artifact])

@@ -39,7 +39,7 @@ function mediaLabel(media: string[]): string {
   return media.includes("video") ? "Videos" : "Images";
 }
 
-export const STATUS_QUERY_KEY = ["scheduler-status"];
+const STATUS_QUERY_KEY = ["scheduler-status"];
 
 /** Account-wide: what each producer has made for the clips, pausing all of it or one producer, and stopping or
  * resuming a redo (admins). */
@@ -118,6 +118,7 @@ export default function ProcessingSection() {
               producer={p}
               admin={admin}
               canRetry={canRetry}
+              allPaused={!!status?.paused}
               libraryId={kind === "library" ? id : undefined}
             />
           ))}
@@ -145,11 +146,13 @@ function ProducerRow({
   producer,
   admin,
   canRetry,
+  allPaused,
   libraryId,
 }: {
   producer: Producer;
   admin: boolean;
   canRetry: boolean;
+  allPaused: boolean;
   libraryId?: string;
 }) {
   const [showFailures, setShowFailures] = useState(false);
@@ -208,7 +211,8 @@ function ProducerRow({
         </button>
       )}
       {showFailures && <FailureList producer={producer} canRetry={canRetry} libraryId={libraryId} />}
-      {c && c.stale > 0 && <RedoLine producer={producer} stale={c.stale} admin={admin} />}
+      {c && c.stale > 0 && <RedoLine producer={producer} stale={c.stale} admin={admin}
+                                     paused={producer.paused || allPaused} />}
       <Settings producer={producer} admin={admin} />
     </li>
   );
@@ -325,7 +329,7 @@ function NowBox({ status }: { status: SchedulerStatus }) {
     <div className="space-y-1 rounded-md border border-gray-700/60 bg-gray-950/40 px-3 py-2 text-sm" aria-label="Now">
       <p className="text-gray-200">
         <span className="text-gray-400">Now: </span>
-        {running || "nothing to make"}
+        {running || (status.paused ? "nothing more starts while paused" : "nothing to make")}
       </p>
       {waiting && (
         <p className="text-gray-400">
@@ -430,7 +434,8 @@ function FailureList({ producer, canRetry, libraryId }: { producer: Producer; ca
 }
 
 /** What happens to a producer's stale clips: redone after anything missing, stopped, or not yet possible. */
-function RedoLine({ producer, stale, admin }: { producer: Producer; stale: number; admin: boolean }) {
+function RedoLine({ producer, stale, admin, paused }: { producer: Producer; stale: number; admin: boolean;
+                                                       paused: boolean }) {
   const queryClient = useQueryClient();
   const toggle = useMutation({
     mutationFn: () => (producer.redo_stopped ? resumeRedo(producer.artifact) : stopRedo(producer.artifact)),
@@ -448,7 +453,7 @@ function RedoLine({ producer, stale, admin }: { producer: Producer; stale: numbe
         <span>
           {producer.redo_stopped
             ? `Redo stopped: ${clips(stale)} stay as they are until it's resumed.`
-            : producer.paused
+            : paused
               ? `Redoes ${clips(stale)} once it's resumed, after anything missing.`
               : `Redoing ${clips(stale)}, after anything missing.`}
         </span>

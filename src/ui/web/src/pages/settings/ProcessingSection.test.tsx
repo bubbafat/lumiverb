@@ -241,6 +241,15 @@ describe("ProcessingSection", () => {
     await waitFor(() => expect(vision.textContent).not.toContain("Paused"));
   });
 
+  it("while all processing is paused, the redo waits for it and Now says so", async () => {
+    queue = { ...queue, live: true, at: new Date().toISOString(), paused: true, paused_at: "2026-10-09T10:00:00Z" };
+    producers = [producer({})];
+    renderSection();
+    expect((await row("Descriptions and tags")).textContent).toContain(
+      "Redoes 3 clips once it's resumed, after anything missing.");
+    expect((await screen.findByLabelText("Now")).textContent).toContain("Now: nothing more starts while paused");
+  });
+
   it("offers no pause for what scans make: pausing all processing stops it", async () => {
     producers = [producer({ artifact: "proxy", title: "Proxies and thumbnails", scheduled: false, redoable: false,
                             why_not: "Made by scans." })];

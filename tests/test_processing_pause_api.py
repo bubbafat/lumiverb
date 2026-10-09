@@ -144,5 +144,13 @@ def test_the_redo_question_says_a_paused_producer_waits(env):
         r = client.put("/v1/producers/vision/settings", json={"settings": {"temperature": 0.7}}, headers=headers)
         assert r.status_code == 409 and r.json()["error"]["code"] == "redo_on_change", r.text
         assert "paused" in r.json()["error"]["message"] and r.json()["error"]["details"]["paused"] is True
+        assert r.json()["error"]["details"]["all_paused"] is False
+        assert client.post("/v1/producers/vision/resume", headers=headers).status_code == 204
+        assert client.post("/v1/producers/pause", headers=headers).status_code == 204
+        r = client.put("/v1/producers/vision/settings", json={"settings": {"temperature": 0.7}}, headers=headers)
+        assert r.status_code == 409, r.text
+        assert "All processing is paused" in r.json()["error"]["message"]
+        assert r.json()["error"]["details"]["all_paused"] is True and r.json()["error"]["details"]["paused"] is False
     finally:
         client.post("/v1/producers/vision/resume", headers=headers)
+        client.post("/v1/producers/resume", headers=headers)

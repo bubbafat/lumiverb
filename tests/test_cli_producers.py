@@ -124,6 +124,14 @@ def test_the_listing_says_when_all_processing_is_paused(client):
     assert "All processing is paused (since 2026-10-09 10:00)" in out and "lumiverb producers resume carries on" in out
 
 
+def test_the_redo_column_says_a_paused_producers_redo_waits():
+    mod = importlib.import_module("src.client.cli.commands.producers")
+    assert mod._redo(_producer(), all_paused=False) == "redoing"
+    assert mod._redo(_producer(paused=True), all_paused=False) == "paused"
+    assert mod._redo(_producer(), all_paused=True) == "paused"
+    assert mod._redo(_producer(redo_stopped=True), all_paused=True) == "stopped"
+
+
 def test_pause_and_resume_all_processing_or_one_producer(client):
     client.raw.return_value = _response(204)
     for args, path, says in [
@@ -144,6 +152,7 @@ def test_stop_and_resume_a_redo(client):
     assert result.exit_code == 0, result.output
     client.raw.assert_called_with("POST", "/v1/producers/vision/redo/stop")
     assert "Stopped redoing vision" in result.output
+    assert "lumiverb producers redo resume vision" in " ".join(result.output.split())
     result = _run("redo", "resume", "vision")
     assert result.exit_code == 0, result.output
     client.raw.assert_called_with("POST", "/v1/producers/vision/redo/resume")
