@@ -575,10 +575,17 @@ class IgnoredFile(SQLModel, table=True):
 
     __tablename__ = "ignored_files"
 
+    __table_args__ = (
+        Index("uq_ignored_files_file", "library_id", "rel_path", text("COALESCE(sha256, '')"), unique=True),
+    )
+
     ignored_id: int | None = Field(default=None, primary_key=True)
     library_id: str = Field(foreign_key="libraries.library_id")
     rel_path: str
     sha256: str | None = Field(default=None, nullable=True)
+    # When it was deleted: a scan hashes the file at the path only when these differ.
+    file_size: int | None = Field(default=None, sa_column=Column(BigInteger, nullable=True))
+    file_mtime: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),

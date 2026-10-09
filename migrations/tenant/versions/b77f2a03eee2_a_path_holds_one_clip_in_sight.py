@@ -7,7 +7,8 @@ among clips in sight (deleted_at IS NULL).
 
 An emptied-trash record names a file at a path, so a path can have several
 (versions deleted for good over time): one row per (library, path, content),
-a row without a SHA-256 naming whatever is at the path.
+a row without a SHA-256 naming whatever is at the path. Each keeps the
+file's size and time, so a scan hashes a file there only when they differ.
 
 Downgrading fails once any path holds more than one clip (a file changed
 since this ran): those have to be deleted for good, or moved, first.
@@ -38,14 +39,18 @@ def upgrade() -> None:
     op.execute("ALTER TABLE ignored_files DROP CONSTRAINT ignored_files_pkey")
     op.execute("ALTER TABLE ignored_files ADD COLUMN ignored_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY")
     op.execute("CREATE UNIQUE INDEX uq_ignored_files_file ON ignored_files (library_id, rel_path, COALESCE(sha256, ''))")
+    # Its size and time when it was deleted: a scan hashes the file at that path
+    # only when they differ, not every file a person removed on every scan.
+    op.execute("ALTER TABLE ignored_files ADD COLUMN file_size BIGINT, ADD COLUMN file_mtime TIMESTAMPTZ")
 
 
 def downgrade() -> None:
+    op.execute("ALTER TABLE ignored_files DROP COLUMN file_size, DROP COLUMN file_mtime")
     op.execute("DROP INDEX IF EXISTS uq_ignored_files_file")
-    op.execute("ALTER TABLE ignored_files DROP COLUMN ignored_id")
-    # One per path again: the most recent.
+    # One per path again: the most recent (one emptying records several at once).
     op.execute("DELETE FROM ignored_files a USING ignored_files b WHERE a.library_id = b.library_id"
-               " AND a.rel_path = b.rel_path AND a.created_at < b.created_at")
+               " AND a.rel_path = b.rel_path AND (a.created_at, a.ignored_id) < (b.created_at, b.ignored_id)")
+    op.execute("ALTER TABLE ignored_files DROP COLUMN ignored_id")
     op.execute("ALTER TABLE ignored_files ADD PRIMARY KEY (library_id, rel_path)")
     op.execute("DROP INDEX IF EXISTS ix_assets_library_rel_path")
     op.execute("DROP INDEX IF EXISTS uq_assets_library_rel_path_in_sight")

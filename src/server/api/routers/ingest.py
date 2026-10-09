@@ -455,13 +455,15 @@ async def create_and_ingest(
             from src.server.api.routers.assets import _out_of_search
 
             asset_repo.trash_many([existing.asset_id], reason="missing")  # commits
-            _out_of_search(background, request, [existing.asset_id])
+            moved: list[str] = []
             if get_follow_moves(session):
                 # Its content may already be at another path (copied, then
                 # overwritten here): it moves there, with everything it had.
                 from src.server.api.routers.trash import hand_over_to_copies
 
-                hand_over_to_copies(session, request, [existing.asset_id])
+                moved = hand_over_to_copies(session, request, [existing.asset_id])
+            # Not one that moved: it's back in search, transcript and all.
+            _out_of_search(background, request, [a for a in [existing.asset_id] if a not in moved])
         # This content's own clip at this path, if it had one: back where it was.
         existing = asset_repo.find_at(library_id, rel_path, sha)
 
@@ -523,20 +525,28 @@ async def create_and_ingest(
             reappeared = existing
         session.add(existing)
 
-    result = _do_ingest(
-        asset_id=asset_id,
-        library_id=library_id,
-        rel_path=rel_path,
-        tenant_id=tenant_id,
-        raw_proxy=raw_proxy,
-        width=width,
-        height=height,
-        exif_data=exif_data,
-        vision_data=vision_data,
-        embeddings_data=embeddings_data,
-        session=session,
-        lineage_by_kind=made,
-    )
+    from sqlalchemy.exc import IntegrityError
+
+    try:
+        result = _do_ingest(
+            asset_id=asset_id,
+            library_id=library_id,
+            rel_path=rel_path,
+            tenant_id=tenant_id,
+            raw_proxy=raw_proxy,
+            width=width,
+            height=height,
+            exif_data=exif_data,
+            vision_data=vision_data,
+            embeddings_data=embeddings_data,
+            session=session,
+            lineage_by_kind=made,
+        )
+    except IntegrityError:
+        # A clip brought back to this path (moved, or back where it was) while
+        # another ingest put a clip here: one clip in sight holds a path.
+        session.rollback()
+        raise HTTPException(status_code=409, detail=f"Another file was just ingested at {rel_path}; scan again") from None
     if facet_data is not None:
         asset_repo.upsert_video_facet(asset_id, facet_data)
         from src.server.repository.lineage import record as record_lineage
@@ -546,6 +556,19 @@ async def create_and_ingest(
         from src.server.search.sync import index_transcript_segments
 
         index_transcript_segments(tenant_id, reappeared)
+    if created and sha and get_follow_moves(session):
+        # A clip with this content may have gone missing while this one was
+        # made (a copy and the overwritten original in one scan, ingested at
+        # once): then this is its copy, and it moves here, as copy-then-delete.
+        # Whichever ingest commits second sees the other.
+        from src.server.api.routers.trash import hand_over_to_copies
+
+        went = asset_repo.missing_ids_with_sha(library_id, sha)
+        if went and hand_over_to_copies(session, request, went):
+            here = asset_repo.get_by_library_and_rel_path(library_id, rel_path)
+            if here is not None and here.deleted_at is None:
+                result.asset_id = here.asset_id
+                created = False
     result.created = created
     return result
 
