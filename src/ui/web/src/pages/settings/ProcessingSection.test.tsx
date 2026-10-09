@@ -12,7 +12,8 @@ let producers: Producer[] = [];
 let answers: Response[] = [];
 let failures: unknown[] = [];
 let queue: Record<string, unknown> = { live: false, at: null, running: {}, waiting: {}, pools: {}, gpu_hold: 0,
-                                       paused: false, paused_by: null, paused_at: null };
+                                       paused: false, paused_by: null, paused_at: null, scans_paused: false,
+                                       scans_paused_by: null, scans_paused_at: null };
 const sent: { method: string; url: string; body: unknown }[] = [];
 
 function producer(over: Partial<Producer>): Producer {
@@ -77,6 +78,12 @@ beforeEach(() => {
       queue = { ...queue, paused, paused_at: paused ? "2026-10-09T10:00:00Z" : null };
       return new Response(null, { status: 204 });
     }
+    const scans = path.match(/^\/producers\/scans\/(pause|resume)$/);
+    if (scans && method === "POST") {
+      const scansPaused = scans[1] === "pause";
+      queue = { ...queue, scans_paused: scansPaused, scans_paused_at: scansPaused ? "2026-10-09T11:00:00Z" : null };
+      return new Response(null, { status: 204 });
+    }
     const one = path.match(/^\/producers\/([^/]+)\/(pause|resume)$/);
     if (one && method === "POST") {
       const next = answers.shift();
@@ -99,7 +106,7 @@ afterEach(() => {
   answers = [];
   failures = [];
   queue = { live: false, at: null, running: {}, waiting: {}, pools: {}, gpu_hold: 0, paused: false, paused_by: null,
-            paused_at: null };
+            paused_at: null, scans_paused: false, scans_paused_by: null, scans_paused_at: null };
   sent.length = 0;
 });
 
@@ -250,7 +257,24 @@ describe("ProcessingSection", () => {
     expect((await screen.findByLabelText("Now")).textContent).toContain("Now: nothing more starts while paused");
   });
 
-  it("offers no pause for what scans make: pausing all processing stops it", async () => {
+  it("pauses scans alone and resumes them (admins)", async () => {
+    queue = { ...queue, live: true, at: new Date().toISOString() };
+    producers = [producer({}), producer({ artifact: "proxy", title: "Proxies and thumbnails", scheduled: false,
+                                          redoable: false, why_not: "Made by scans." })];
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Pause scans" }));
+    await waitFor(() => expect(sent.some((s) => s.method === "POST" && s.url.endsWith("/producers/scans/pause"))).toBe(true));
+    expect((await screen.findByText(/Scans are paused/)).textContent).toContain(
+      "no new or changed files are found, and no thumbnails or video previews made, until they're resumed.");
+    expect(screen.queryByText(/All processing is paused/)).toBeNull();
+    expect((await row("Proxies and thumbnails")).textContent).toContain("Paused with scans");
+    expect((await row("Descriptions and tags")).textContent).not.toContain("Paused");
+    fireEvent.click(await screen.findByRole("button", { name: "Resume scans" }));
+    await waitFor(() => expect(sent.some((s) => s.method === "POST" && s.url.endsWith("/producers/scans/resume"))).toBe(true));
+    await waitFor(() => expect(screen.queryByText(/Scans are paused/)).toBeNull());
+  });
+
+  it("offers no pause for what scans make: pausing scans stops it", async () => {
     producers = [producer({ artifact: "proxy", title: "Proxies and thumbnails", scheduled: false, redoable: false,
                             why_not: "Made by scans." })];
     renderSection();
@@ -274,6 +298,7 @@ describe("ProcessingSection", () => {
     expect(await screen.findByText(/All processing is paused/)).toBeTruthy();
     expect((await row("Descriptions and tags")).textContent).toContain("Paused: nothing more of it starts");
     expect(screen.queryByRole("button", { name: /Pause|Resume/ })).toBeNull();
+    expect(screen.getByText("Only admins can pause processing or stop a redo.")).toBeTruthy();
   });
 
   it("says one clip right", async () => {

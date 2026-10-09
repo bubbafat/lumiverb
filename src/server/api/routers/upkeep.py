@@ -104,6 +104,14 @@ def _tenant_for_key(authorization: str | None) -> tuple[str, str, str] | None:
         return api_key.tenant_id, routing.connection_string, api_key.role
 
 
+def _all_paused(session) -> bool:
+    """An admin paused all of the account's processing (the kill switch):
+    upkeep that changes data waits; search sync goes on (Robert, Oct 9)."""
+    from src.server.repository import lineage
+
+    return lineage.all_paused(session)
+
+
 def _propagate_faces_all_tenants() -> dict:
     """Run face propagation across all tenants."""
     from src.server.database import get_control_session, get_tenant_session
@@ -118,6 +126,8 @@ def _propagate_faces_all_tenants() -> dict:
     for tenant in tenants:
         try:
             with get_tenant_session(tenant.tenant_id) as session:
+                if _all_paused(session):
+                    continue
                 result = FaceRepository(session).propagate_assignments()
                 totals["assigned"] += result["assigned"]
                 totals["scanned"] += result["scanned"]
@@ -138,6 +148,8 @@ def _propagate_faces_single_tenant(authorization: str | None) -> dict:
         return {"assigned": 0, "scanned": 0}
     _, connection_string, _ = tenant
     with TenantSession(get_engine_for_url(connection_string)) as session:
+        if _all_paused(session):
+            return {"assigned": 0, "scanned": 0}
         return FaceRepository(session).propagate_assignments()
 
 
@@ -153,6 +165,8 @@ def _purge_expired_trash_all_tenants() -> dict:
     for tenant in tenants:
         try:
             with get_tenant_session(tenant.tenant_id) as session:
+                if _all_paused(session):
+                    continue
                 for key, n in purge_expired_trash(session, tenant.tenant_id).items():
                     totals[key] += n
         except Exception as exc:
@@ -173,6 +187,8 @@ def _purge_expired_trash_single_tenant(authorization: str | None) -> dict:
     tenant_id, connection_string, _ = tenant
     try:
         with TenantSession(get_engine_for_url(connection_string)) as session:
+            if _all_paused(session):
+                return {}
             return purge_expired_trash(session, tenant_id)
     except Exception as exc:
         logger.warning("Trash purge failed for tenant %s: %s", tenant_id, exc)

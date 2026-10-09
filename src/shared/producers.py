@@ -42,9 +42,10 @@ PRODUCERS: dict[str, Producer] = registry()
 ARTIFACTS: tuple[str, ...] = tuple(PRODUCERS)
 
 # What an admin pauses (Settings → Processing): all of the account's
-# processing, or one producer's (its artifact).
+# processing, its scans alone, or one producer's (its artifact).
 PAUSE_ALL = "all"
-assert PAUSE_ALL not in PRODUCERS, "a producer can't be named what pausing everything is"
+PAUSE_SCANS = "scans"
+assert not {PAUSE_ALL, PAUSE_SCANS} & set(PRODUCERS), "a producer can't be named what pausing all or scans is"
 
 # The repair summary's counts and page filters (what the scheduler is
 # handed) and the artifact each is about.

@@ -8,8 +8,9 @@ producer's stale clips are made again after anything missing, everywhere.
 An admin can stop that for a producer and resume it.
 
 Pausing (Robert, Oct 9): an admin pauses all of the account's processing,
-or one producer's, and resumes it. The scheduler starts nothing more of
-it; what's running finishes."""
+its scans alone, or one producer's, and resumes it with its own switch
+(nothing else lifts a pause). The scheduler starts nothing more of it;
+what's running finishes."""
 
 from __future__ import annotations
 
@@ -30,7 +31,7 @@ from src.server.api.dependencies import (
 )
 from src.server.api.errors import ConflictError
 from src.server.repository import lineage
-from src.shared.producers import PAUSE_ALL, PRODUCERS
+from src.shared.producers import PAUSE_ALL, PAUSE_SCANS, PRODUCERS
 
 PRODUCER_ARTIFACTS = tuple(PRODUCERS)
 
@@ -143,7 +144,7 @@ class ProducerItem(BaseModel):
     fields: list[SettingField] = []
     counts: ProducerCounts | None = None
     # Made by the scheduler; false: by scans (proxies, video previews), which
-    # can't be paused alone: pausing all processing stops them.
+    # aren't paused one by one: pausing scans (or all processing) stops them.
     scheduled: bool = True
     # Whether its stale artifacts are made again (after anything missing),
     # and if they can't be yet, why.
@@ -351,18 +352,49 @@ def pause_all(
     session: Annotated[Session, Depends(get_tenant_session)],
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> None:
-    """Pause all of the account's processing (admins): the scheduler starts
-    nothing more, scans included, until it's resumed; what's running
-    finishes. Again is fine: who paused it first, and when, stay."""
+    """The kill switch (admins, Robert Oct 9): everything but the website
+    stops until it's resumed. The scheduler starts nothing more, scans
+    included (what's running finishes), and upkeep changes nothing (no face
+    names spread, no trash emptied, no files cleaned up); search keeps up
+    with edits. Again is fine: who paused it first, and when, stay."""
     lineage.pause_processing(session, PAUSE_ALL, by=user_id)
     session.commit()
 
 
 @router.post("/resume", status_code=204, dependencies=[Depends(require_tenant_admin)])
 def resume_all(session: Annotated[Session, Depends(get_tenant_session)]) -> None:
-    """Carry on with all of the account's processing (admins). Producers
-    paused one by one stay paused."""
-    lineage.resume_processing(session, PAUSE_ALL)
+    """Turn everything back on (admins): scans and producers paused on their
+    own too. No paused part is kept (Robert, Oct 9)."""
+    lineage.resume_everything(session)
+    session.commit()
+
+
+def _not_while_all_paused(session: Session) -> None:
+    """While the kill switch is on, its parts aren't switched alone: 409 all_paused."""
+    if lineage.all_paused(session):
+        raise ConflictError("all_paused", "All processing is paused. Resume all turns everything back on; then "
+                                          "pause or resume a part of it.")
+
+
+@router.post("/scans/pause", status_code=204, dependencies=[Depends(require_tenant_admin)])
+def pause_scans(
+    session: Annotated[Session, Depends(get_tenant_session)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> None:
+    """Pause the account's scans alone (admins): no new or changed files are
+    found, and no proxies, thumbnails or video previews made, until they're
+    resumed; the rest of processing goes on. A scan running finishes. 409
+    all_paused while all of it is."""
+    _not_while_all_paused(session)
+    lineage.pause_processing(session, PAUSE_SCANS, by=user_id)
+    session.commit()
+
+
+@router.post("/scans/resume", status_code=204, dependencies=[Depends(require_tenant_admin)])
+def resume_scans(session: Annotated[Session, Depends(get_tenant_session)]) -> None:
+    """Carry on with the account's scans (admins). 409 all_paused while all of it is."""
+    _not_while_all_paused(session)
+    lineage.resume_processing(session, PAUSE_SCANS)
     session.commit()
 
 
@@ -374,20 +406,22 @@ def pause_producer(
 ) -> None:
     """Pause one producer (admins): nothing more of it starts, missing or
     stale, until it's resumed; what's running finishes. 409 not_scheduled
-    for what scans make (proxies, video previews): pausing all processing
-    stops those."""
+    for what scans make (proxies, video previews): pausing scans stops
+    those."""
     p = producer_or_404(artifact)
+    _not_while_all_paused(session)
     if not p.scheduled:
-        raise ConflictError("not_scheduled", f"{p.title} are made by scans, not on their own: pausing all "
-                                             "processing stops them.", {"artifact": artifact})
+        raise ConflictError("not_scheduled", f"{p.title} are made by scans, not on their own: pausing scans "
+                                             "(or all processing) stops them.", {"artifact": artifact})
     lineage.pause_processing(session, artifact, by=user_id)
     session.commit()
 
 
 @router.post("/{artifact}/resume", status_code=204, dependencies=[Depends(require_tenant_admin)])
 def resume_producer(artifact: str, session: Annotated[Session, Depends(get_tenant_session)]) -> None:
-    """Carry on with a paused producer (admins)."""
+    """Carry on with a paused producer (admins). 409 all_paused while all of it is."""
     producer_or_404(artifact)
+    _not_while_all_paused(session)
     lineage.resume_processing(session, artifact)
     session.commit()
 
@@ -437,11 +471,15 @@ class SchedulerStatus(BaseModel):
     paused: bool = False
     paused_by: str | None = None  # admins only
     paused_at: datetime | None = None
+    # An admin paused the account's scans alone (POST /v1/producers/scans/pause, /resume).
+    scans_paused: bool = False
+    scans_paused_by: str | None = None  # admins only
+    scans_paused_at: datetime | None = None
 
 
 @router.get("/queue", response_model=SchedulerStatus, dependencies=[Depends(require_signed_in)])
 def scheduler_status(request: Request, session: Annotated[Session, Depends(get_tenant_session)]) -> SchedulerStatus:
-    """What the scheduler is doing now, and whether an admin paused it all;
+    """What the scheduler is doing now, and whether an admin paused it all or its scans;
     live is false when it hasn't said for 30 seconds."""
     import json
     from datetime import timedelta
@@ -456,9 +494,13 @@ def scheduler_status(request: Request, session: Annotated[Session, Depends(get_t
         except (ValueError, TypeError):
             pass
     status.live = status.at is not None and utcnow() - status.at < timedelta(seconds=30)
-    if (pause := lineage.processing_paused(session).get(PAUSE_ALL)) is not None:
+    held, admin = lineage.processing_paused(session), _admin(request)
+    if (pause := held.get(PAUSE_ALL)) is not None:
         status.paused, status.paused_at = True, pause["paused_at"]
-        status.paused_by = pause["paused_by"] if _admin(request) else None
+        status.paused_by = pause["paused_by"] if admin else None
+    if (pause := held.get(PAUSE_SCANS)) is not None:
+        status.scans_paused, status.scans_paused_at = True, pause["paused_at"]
+        status.scans_paused_by = pause["paused_by"] if admin else None
     return status
 
 

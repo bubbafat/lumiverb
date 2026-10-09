@@ -34,7 +34,7 @@ from typing import Any
 from src.server.scheduler.dispatch import Dispatcher, Job, Outcome
 from src.server.scheduler.kinds import AI_JOB_KINDS, KINDS, QUEUED
 from src.server.scheduler.queue import BUFFER
-from src.shared.producers import PAUSE_ALL
+from src.shared.producers import PAUSE_ALL, PAUSE_SCANS
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +194,7 @@ class Scheduler:
             self._holding[tenant_id] = self._hold_pool.submit(self._read_hold, tenant_id)
 
     def _read_hold(self, tenant_id: str) -> set[str]:
-        """What an admin paused: PAUSE_ALL, or producers' artifacts. The
+        """What an admin paused: PAUSE_ALL, PAUSE_SCANS, or producers' artifacts. The
         dispatcher hands out none of it from now on; what's running
         finishes. Until it can be read, as if all of it is paused."""
         seq = next(self._hold_reads)
@@ -209,7 +209,8 @@ class Scheduler:
                 logger.exception("scheduler: reading what %s paused failed; nothing starts until it can be", tenant_id)
             held = {PAUSE_ALL}
         self.dispatcher.hold(tenant_id, {k.name for k in KINDS.values()
-                                         if PAUSE_ALL in held or (k.flag and k.artifact in held)}, seq=seq)
+                                         if PAUSE_ALL in held or (k.flag and k.artifact in held)
+                                         or (k.name == "scan" and PAUSE_SCANS in held)}, seq=seq)
         return held
 
     def _refill_soon(self, tenant_id: str, acct: Any) -> None:
@@ -265,7 +266,7 @@ class Scheduler:
                 self.dispatcher.clear(tenant_id, kind.name)
         if PAUSE_ALL in held:
             return
-        if self.dispatcher.wanted(tenant_id, "scan"):
+        if PAUSE_SCANS not in held and self.dispatcher.wanted(tenant_id, "scan"):
             self.dispatcher.offer(tenant_id, "scan", [{"asset_id": f"scan:{tenant_id}", "created_at": ""}],
                                   complete=False)
         if not acct.settings_ready:
@@ -421,7 +422,7 @@ def _status_to_database(tenant_id: str, status: dict) -> None:
 
 
 def _on_hold_in_database(tenant_id: str) -> set[str]:
-    """What an admin paused: PAUSE_ALL, or producers' artifacts (lineage.processing_paused)."""
+    """What an admin paused: PAUSE_ALL, PAUSE_SCANS, or producers' artifacts (lineage.processing_paused)."""
     from sqlmodel import Session
 
     from src.server.database import get_engine_for_url

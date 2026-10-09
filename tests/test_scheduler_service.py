@@ -600,6 +600,19 @@ def test_a_paused_account_still_says_what_its_doing() -> None:
 
 
 @pytest.mark.fast
+def test_paused_scans_stop_only_scans() -> None:
+    # Robert, Oct 9: scans can be paused on their own; the rest goes on.
+    rec = Recorder()
+    scan = MagicMock()
+    s = _scheduler({"t1": FakeAccount()}, {"probe": [_item("p")], "clip": [_item("c")]}, rec,
+                   held={"scans"}, scan=scan)
+    s.tick()
+    _settle(s)
+    assert not scan.called
+    assert sorted(kind for _, kind, _ in rec.ran) == ["clip", "probe"]
+
+
+@pytest.mark.fast
 def test_pausing_lets_running_jobs_finish_and_starts_nothing_more() -> None:
     rec = Recorder()
     rec.hold.clear()

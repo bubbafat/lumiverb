@@ -82,9 +82,11 @@ def producers_list(
     queue = client.get("/v1/producers/queue").json() or {}
     all_paused = bool(queue.get("paused"))
     if all_paused:
-        since = str(queue.get("paused_at") or "")[:16].replace("T", " ")
-        console.print(f"[yellow]All processing is paused{f' (since {since})' if since else ''}: nothing more "
+        console.print(f"[yellow]All processing is paused{_since(queue.get('paused_at'))}: nothing more "
                       "starts. lumiverb producers resume carries on.[/yellow]")
+    if queue.get("scans_paused"):
+        console.print(f"[yellow]Scans are paused{_since(queue.get('scans_paused_at'))}: no new or changed files "
+                      "are found. lumiverb producers resume scans carries on.[/yellow]")
     table = Table(show_header=True, header_style="bold")
     for col in ("Producer", "Current", "Missing", "Stale", "Failing", "Redo"):
         table.add_column(col, justify="left" if col in ("Producer", "Redo") else "right")
@@ -107,6 +109,11 @@ def producers_list(
                   "after anything missing.[/dim]")
 
 
+def _since(at: object) -> str:
+    at = str(at or "")[:16].replace("T", " ")
+    return f" (since {at})" if at else ""
+
+
 def _error(r) -> str:
     try:
         body = r.json() or {}
@@ -118,15 +125,18 @@ def _error(r) -> str:
 @producers_app.command("pause")
 def producers_pause(
     artifact: Annotated[str | None, typer.Argument(
-        help="Only this producer (e.g. vision, transcript); without it, all processing.")] = None,
+        help="Only this producer (e.g. vision, transcript), or scans; without it, all processing.")] = None,
 ) -> None:
-    """Pause all processing, or one producer's (admins): nothing more of it
-    starts until it's resumed; what's running finishes."""
+    """Pause all processing, scans alone, or one producer's (admins): nothing
+    more of it starts until it's resumed; what's running finishes."""
     r = LumiverbClient().raw("POST", f"/v1/producers/{artifact}/pause" if artifact else "/v1/producers/pause")
     if r.status_code >= 400:
         console.print(f"[red]Couldn't pause: {escape(_error(r))}[/red]")
         raise typer.Exit(1)
-    if artifact:
+    if artifact == "scans":
+        console.print("Paused scans: no new or changed files are found, and no thumbnails or video previews made, "
+                      "until lumiverb producers resume scans. The rest goes on.")
+    elif artifact:
         console.print(f"Paused {escape(artifact)}: nothing more of it starts until lumiverb producers resume "
                       f"{escape(artifact)}. What's running finishes.")
     else:
@@ -137,9 +147,9 @@ def producers_pause(
 @producers_app.command("resume")
 def producers_resume(
     artifact: Annotated[str | None, typer.Argument(
-        help="Only this producer; without it, all processing.")] = None,
+        help="Only this producer, or scans; without it, all processing.")] = None,
 ) -> None:
-    """Carry on with all processing, or one paused producer (admins)."""
+    """Carry on with all processing, scans, or one paused producer (admins)."""
     r = LumiverbClient().raw("POST", f"/v1/producers/{artifact}/resume" if artifact else "/v1/producers/resume")
     if r.status_code >= 400:
         console.print(f"[red]Couldn't resume: {escape(_error(r))}[/red]")
@@ -147,7 +157,7 @@ def producers_resume(
     if artifact:
         console.print(f"Resumed {escape(artifact)}.")
     else:
-        console.print("Resumed all processing. Producers paused one by one stay paused.")
+        console.print("Resumed all processing. Scans or producers paused on their own stay paused.")
 
 
 @redo_app.command("stop")

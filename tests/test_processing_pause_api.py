@@ -97,8 +97,8 @@ def test_only_admins_pause_or_resume_and_only_they_see_who(env):
         assert client.post(path, headers=editor).status_code == 403, path
         assert client.post(path, headers=viewer).status_code == 403, path
     try:
-        assert client.post("/v1/producers/pause", headers=headers).status_code == 204
         assert client.post("/v1/producers/ocr/pause", headers=headers).status_code == 204
+        assert client.post("/v1/producers/pause", headers=headers).status_code == 204
         q = _queue(env, viewer)
         assert q["paused"] is True and q["paused_at"] and q["paused_by"] is None
         p = _producers(env, viewer)["ocr"]
@@ -114,7 +114,7 @@ def test_an_unknown_producer_is_404_and_one_scans_make_is_paused_with_everything
     assert client.post("/v1/producers/nope/resume", headers=headers).status_code == 404
     r = client.post("/v1/producers/proxy/pause", headers=headers)
     assert r.status_code == 409 and r.json()["error"]["code"] == "not_scheduled", r.text
-    assert "pausing all processing" in r.json()["error"]["message"]
+    assert "pausing scans" in r.json()["error"]["message"]
     producers = _producers(env)
     assert producers["proxy"]["paused"] is False and producers["proxy"]["scheduled"] is False
     assert producers["vision"]["scheduled"] is True
@@ -154,3 +154,116 @@ def test_the_redo_question_says_a_paused_producer_waits(env):
     finally:
         client.post("/v1/producers/vision/resume", headers=headers)
         client.post("/v1/producers/resume", headers=headers)
+
+
+def test_an_admin_pauses_scans_alone_and_resumes_them(env):
+    from src.server.scheduler.service import _on_hold_in_database
+
+    client, headers, *_ = env
+    viewer = _key_with_role(env, "viewer")
+    editor = _key_with_role(env, "editor")
+    assert _queue(env)["scans_paused"] is False
+    for path in ("/v1/producers/scans/pause", "/v1/producers/scans/resume"):
+        assert client.post(path, headers=editor).status_code == 403, path
+    try:
+        assert client.post("/v1/producers/scans/pause", headers=headers).status_code == 204
+        q = _queue(env)
+        assert q["scans_paused"] is True and q["scans_paused_at"] and q["scans_paused_by"]
+        assert q["paused"] is False  # the rest goes on
+        assert _on_hold_in_database(env[4]) == {"scans"}
+        assert client.post("/v1/producers/scans/pause", headers=headers).status_code == 204  # again: fine
+        assert _queue(env)["scans_paused_at"] == q["scans_paused_at"]
+        seen = _queue(env, viewer)
+        assert seen["scans_paused"] is True and seen["scans_paused_by"] is None
+    finally:
+        assert client.post("/v1/producers/scans/resume", headers=headers).status_code == 204
+        client.post("/v1/producers/resume", headers=headers)
+    q = _queue(env)
+    assert q["scans_paused"] is False and q["scans_paused_at"] is None
+    assert _on_hold_in_database(env[4]) == set()
+
+
+# ---------------------------------------------------------------------------
+# Pause all is the kill switch (Robert, Oct 9): everything but the website
+# stops; Resume all turns everything back on, keeping no paused part.
+# ---------------------------------------------------------------------------
+
+
+def test_resume_all_turns_everything_back_on_scans_and_producers_included(env):
+    from src.server.scheduler.service import _on_hold_in_database
+
+    client, headers, *_ = env
+    try:
+        assert client.post("/v1/producers/scans/pause", headers=headers).status_code == 204
+        assert client.post("/v1/producers/ocr/pause", headers=headers).status_code == 204
+        assert client.post("/v1/producers/pause", headers=headers).status_code == 204
+        assert client.post("/v1/producers/resume", headers=headers).status_code == 204
+        assert _on_hold_in_database(env[4]) == set()
+        q = _queue(env)
+        assert q["paused"] is False and q["scans_paused"] is False
+        assert _producers(env)["ocr"]["paused"] is False
+    finally:
+        client.post("/v1/producers/resume", headers=headers)
+
+
+def test_while_everything_is_paused_its_parts_cant_be_switched_alone(env):
+    client, headers, *_ = env
+    try:
+        assert client.post("/v1/producers/pause", headers=headers).status_code == 204
+        for path in ("/v1/producers/scans/pause", "/v1/producers/scans/resume", "/v1/producers/ocr/pause",
+                     "/v1/producers/ocr/resume"):
+            r = client.post(path, headers=headers)
+            assert r.status_code == 409 and r.json()["error"]["code"] == "all_paused", (path, r.text)
+            assert "Resume all" in r.json()["error"]["message"]
+    finally:
+        client.post("/v1/producers/resume", headers=headers)
+
+
+def test_while_everything_is_paused_upkeep_deletes_and_changes_nothing_but_search_stays_current(env):
+    from unittest.mock import MagicMock, patch
+
+    from tests.test_trash_days import _age, _exists, _ingest, _trash
+    from tests.test_trash_days import _sha as _new_sha
+
+    client, headers, *_ = env
+    old = _ingest(env, "killswitch/old.mov", sha=_new_sha())
+    _trash(env, old)
+    _age(env, "assets", "deleted_at", "asset_id", old, 31)
+    try:
+        assert client.post("/v1/producers/pause", headers=headers).status_code == 204
+        with patch("src.server.search.quickwit_client.QuickwitClient", return_value=MagicMock()), \
+                patch("src.server.repository.tenant.FaceRepository.propagate_assignments") as propagate:
+            r = client.post("/v1/upkeep", headers=headers)
+            assert r.status_code == 200, r.text
+            assert not propagate.called  # names aren't spread to faces meanwhile
+            assert _exists(env, "assets", "asset_id", old)  # the trash isn't emptied meanwhile
+    finally:
+        assert client.post("/v1/producers/resume", headers=headers).status_code == 204
+    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=MagicMock()), \
+            patch("src.server.repository.tenant.FaceRepository.propagate_assignments",
+                  return_value={"assigned": 0, "scanned": 0}) as propagate:
+        assert client.post("/v1/upkeep", headers=headers).status_code == 200
+        assert propagate.called
+    assert not _exists(env, "assets", "asset_id", old)  # resumed: it goes
+
+
+def test_while_everything_is_paused_no_files_are_cleaned_up_but_a_dry_run_still_reports(env, tmp_path):
+    from src.server.search.cleanup import run_cleanup_for_tenant
+    from tests.test_lineage_api import _db
+
+    client, headers, *_ = env
+    tenant_id = env[4]
+    stray = tmp_path / tenant_id / "lib_gone" / "x.jpg"  # a library no longer in the database
+    stray.parent.mkdir(parents=True)
+    stray.write_bytes(b"x")
+    try:
+        assert client.post("/v1/producers/pause", headers=headers).status_code == 204
+        with _db(env) as session:
+            assert run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False).orphan_libraries == 0
+            assert stray.exists()
+            assert run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=True).orphan_libraries == 1
+    finally:
+        assert client.post("/v1/producers/resume", headers=headers).status_code == 204
+    with _db(env) as session:
+        assert run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False).orphan_libraries == 1
+    assert not stray.exists()

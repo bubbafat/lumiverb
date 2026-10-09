@@ -147,8 +147,15 @@ def run_cleanup_for_tenant(
     *,
     dry_run: bool = True,
 ) -> CleanupResult:
-    """Run file cleanup for a single tenant. Session must be for the tenant DB."""
+    """Run file cleanup for a single tenant. Session must be for the tenant DB.
+    While an admin paused all its processing (the kill switch), nothing is
+    deleted; a dry run still reports."""
+    from src.server.repository import lineage
+
     result = CleanupResult()
+    if not dry_run and lineage.all_paused(session):
+        logger.info("cleanup: %s is paused; nothing deleted", tenant_id)
+        return result
     tenant_dir = data_dir / tenant_id
     storage = LocalStorage(str(data_dir))
 

@@ -132,6 +132,21 @@ def test_the_redo_column_says_a_paused_producers_redo_waits():
     assert mod._redo(_producer(redo_stopped=True), all_paused=True) == "stopped"
 
 
+def test_the_listing_says_when_scans_are_paused(client):
+    def get(path, params=None):
+        r = MagicMock()
+        r.json.return_value = ({"paused": False, "scans_paused": True, "scans_paused_at": "2026-10-09T11:00:00Z"}
+                               if path == "/v1/producers/queue" else {"producers": [_producer()]})
+        return r
+
+    client.get.side_effect = get
+    result = _run()
+    out = " ".join(result.output.split())
+    assert result.exit_code == 0, result.output
+    assert "Scans are paused (since 2026-10-09 11:00)" in out and "lumiverb producers resume scans" in out
+    assert "All processing is paused" not in out
+
+
 def test_pause_and_resume_all_processing_or_one_producer(client):
     client.raw.return_value = _response(204)
     for args, path, says in [
@@ -139,6 +154,8 @@ def test_pause_and_resume_all_processing_or_one_producer(client):
         (["pause", "vision"], "/v1/producers/vision/pause", "Paused vision"),
         (["resume"], "/v1/producers/resume", "Resumed all processing"),
         (["resume", "vision"], "/v1/producers/vision/resume", "Resumed vision"),
+        (["pause", "scans"], "/v1/producers/scans/pause", "Paused scans: no new or changed files are found"),
+        (["resume", "scans"], "/v1/producers/scans/resume", "Resumed scans"),
     ]:
         result = _run(*args)
         assert result.exit_code == 0, result.output
