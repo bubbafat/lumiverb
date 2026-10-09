@@ -864,12 +864,13 @@ export async function removeMachine(machineId: string, leaveJobs = false): Promi
 
 /** Set a job's model (admins); "" turns the job off. Every machine doing it is
  * asked: 409 model_not_offered (details.machines: name, models, error) when none offers it.
- * 409 upgrades_stop (details.upgrades: artifact, title, remaining) when upgrades to the
- * current model are under way, unless stopUpgrades. */
-export async function setJobModel(job: string, model: string, stopUpgrades = false): Promise<AiSettings> {
+ * A new model makes everything the job made again, after anything missing:
+ * 409 redo_on_change (details: model, clips, artifacts[{artifact, title, clips}])
+ * until `redo` says yes. Saving a model resumes its producers' redo. */
+export async function setJobModel(job: string, model: string, redo = false): Promise<AiSettings> {
   return apiFetch<AiSettings>(`/ai/jobs/${job}`, {
     method: "PUT",
-    body: stopUpgrades ? { model, stop_upgrades: true } : { model },
+    body: redo ? { model, redo: true } : { model },
   });
 }
 
@@ -877,33 +878,12 @@ export async function setJobModel(job: string, model: string, stopUpgrades = fal
 export interface ProducerCounts {
   applicable: number;
   current: number;
-  /** Made with an older producer or settings. */
+  /** Made with another producer, model or settings than now. */
   stale: number;
   /** Not made yet. */
   missing: number;
   /** The last try failed. */
   failing: number;
-}
-
-export interface UpgradeScope {
-  kind: "all" | "library" | "project";
-  id: string | null;
-  name: string | null;
-}
-
-export type EditsChoice = "keep" | "replace" | "skip";
-
-/** Stale artifacts an admin approved making again: the clips stale in its scope then. */
-export interface ProducerUpgrade {
-  upgrade_id: string;
-  scope: UpgradeScope;
-  edits: EditsChoice;
-  approved_by: string | null;
-  approved_at: string;
-  total: number;
-  remaining: number;
-  /** Made again since, but still not what it upgrades to: stale, not handed out again. */
-  still_stale?: number;
 }
 
 /** What makes one kind of artifact (Settings → Processing). */
@@ -913,16 +893,19 @@ export interface Producer {
   version: string;
   title: string;
   media: string[];
-  /** Its output must come from one model across the library: upgraded all at once. */
+  /** Its output must come from one model across the library. */
   uniform: boolean;
   settings: Record<string, unknown>;
   settings_hash: string;
   counts: ProducerCounts | null;
-  upgradable: boolean;
+  /** Its stale clips are made again (after anything missing); if they can't be yet, why_not says why. */
+  redoable: boolean;
   why_not: string | null;
-  /** Stale clips (in the counts' scope) with a person's edits on top. */
-  edited: number;
-  upgrades: ProducerUpgrade[];
+  /** An admin stopped its redo: stale clips wait until it's resumed (or its model changes). */
+  paused: boolean;
+  /** Admins only. */
+  paused_by: string | null;
+  paused_at: string | null;
 }
 
 export async function getProducers(scope: { libraryId?: string; projectId?: string } = {}): Promise<Producer[]> {
@@ -933,37 +916,14 @@ export async function getProducers(scope: { libraryId?: string; projectId?: stri
   return (await apiFetch<{ producers: Producer[] }>(`/producers${q ? `?${q}` : ""}`)).producers;
 }
 
-export interface UpgradeRequest {
-  library_id?: string;
-  project_id?: string;
-  edits?: EditsChoice;
-  confirm?: boolean;
+/** Stop redoing a producer's stale clips (admins); what's missing is still made. 409 cant_redo. */
+export async function stopRedo(artifact: string): Promise<void> {
+  await apiFetch<void>(`/producers/${artifact}/redo/stop`, { method: "POST" });
 }
 
-export interface UpgradeResult {
-  upgrade_id: string | null;
-  artifact: string;
-  scope: UpgradeScope;
-  edits: EditsChoice;
-  upgrading: number;
-  skipped_edited: number;
-  /** edits=replace: clips whose edits move to history as each is made again. */
-  edits_to_replace: number;
-}
-
-/** Approve making a producer's stale artifacts again (admins). 409
- * edited_clips (details: stale, edited, choices) until `edits` says what to do
- * with clips a person edited; 409 redo_everything (details: stale) until
- * `confirm`, for producers upgraded all at once; 409 nothing_stale /
- * cant_upgrade; 422 all_or_nothing when such a producer is narrowed. */
-export async function upgradeProducer(artifact: string, body: UpgradeRequest): Promise<UpgradeResult> {
-  return apiFetch<UpgradeResult>(`/producers/${artifact}/upgrade`, { method: "POST", body });
-}
-
-/** Stop an upgrade, or all of a producer's (admins): what isn't made again stays stale. */
-export async function cancelUpgrade(artifact: string, upgradeId?: string): Promise<void> {
-  const q = upgradeId ? `?upgrade_id=${encodeURIComponent(upgradeId)}` : "";
-  await apiFetch<void>(`/producers/${artifact}/upgrade${q}`, { method: "DELETE" });
+/** Redo a producer's stale clips again (admins), after anything missing. */
+export async function resumeRedo(artifact: string): Promise<void> {
+  await apiFetch<void>(`/producers/${artifact}/redo/resume`, { method: "POST" });
 }
 
 export async function findSimilar(params: {

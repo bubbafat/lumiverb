@@ -19,8 +19,8 @@ let whisper = "";
 let machines: AiMachine[] = [];
 // What each URL offers when asked; missing: unreachable.
 let offers: Record<string, string[]> = {};
-// An upgrade to the current model is under way (PUT answers 409 upgrades_stop).
-let upgrading = false;
+// Clips the old model made: a new one asks first (PUT answers 409 redo_on_change).
+let made = 0;
 const sent: { method: string; url: string; body: unknown }[] = [];
 
 function machine(over: Partial<AiMachine>): AiMachine {
@@ -99,9 +99,11 @@ beforeEach(() => {
       return json(settings());
     }
     if (path === "/ai/jobs/vision" && method === "PUT") {
-      if (upgrading && body.model !== model && !body.stop_upgrades) {
-        return err(409, "upgrades_stop", "Upgrades under way stop with a new model: descriptions and tags (12 clips left).",
-                   { upgrades: [{ artifact: "vision", title: "Descriptions and tags", remaining: 12 }] });
+      if (made && body.model && body.model !== model && !body.redo) {
+        return err(409, "redo_on_change",
+                   `${body.model} makes ${made} clips again: descriptions and tags (${made}). That runs after anything missing; until it's done, results mix the old model and the new.`,
+                   { job: "vision", model: body.model, clips: made,
+                     artifacts: [{ artifact: "vision", title: "Descriptions and tags", clips: made }] });
       }
       if (body.model && !machines.some((x) => offers[x.api_url]?.includes(body.model))) {
         return err(409, "model_not_offered", `No machine doing descriptions & text offers ${body.model}.`,
@@ -123,7 +125,7 @@ afterEach(() => {
   whisper = "";
   machines = [];
   offers = {};
-  upgrading = false;
+  made = 0;
   sent.length = 0;
 });
 
@@ -383,7 +385,7 @@ describe("AiSection", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Change the model for Descriptions & text" }));
     const select = screen.getByLabelText("Model for Descriptions & text");
     fireEvent.change(select, { target: { value: "llava:13b" } });
-    expect(screen.getByText(/What was made with qwen3-vl:8b becomes stale/)).toBeTruthy();
+    expect(screen.getByText(/What was made with qwen3-vl:8b is made again with llava:13b, after anything missing/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect((await screen.findByRole("alert")).textContent).toContain("Brain: qwen3-vl:8b");
 
@@ -391,42 +393,53 @@ describe("AiSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await screen.findByText(/llava:13b/, { selector: "p" });
     expect(lastSent("PUT", "/ai/jobs/vision")!.body).toEqual({ model: "llava:13b" });
-    // What the old model made is stale now: Processing upgrades it.
-    const note = await screen.findByText(/What descriptions & text made with qwen3-vl:8b is now stale/);
+    // What the old model made is being made again: Processing follows it.
+    const note = await screen.findByText(/What descriptions & text made with qwen3-vl:8b is being made again/);
     expect(within(note).getByRole("link", { name: "Processing" }).getAttribute("href")).toBe("/settings/processing");
   });
 });
 
-describe("AiSection model change during an upgrade", () => {
-  it("asks before a new model stops upgrades under way", async () => {
+describe("AiSection model change that redoes clips", () => {
+  it("asks with the count before a new model makes clips again", async () => {
     machines = [machine({ name: "Brain", status: { online: true, error: "", models: [QWEN, "llava:13b"], checked_at: null } })];
     offers = { [BRAIN]: [QWEN, "llava:13b"] };
-    upgrading = true;
+    made = 12;
     renderSection();
     fireEvent.click(await screen.findByRole("button", { name: "Change the model for Descriptions & text" }));
     fireEvent.change(screen.getByLabelText("Model for Descriptions & text"), { target: { value: "llava:13b" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("Upgrades under way stop with a new model");
+    expect(alert.textContent).toContain("llava:13b makes 12 clips again");
+    expect(alert.textContent).toContain("after anything missing");
     expect(model).toBe(QWEN);  // nothing changed yet
-    fireEvent.click(within(alert).getByRole("button", { name: "Change it and stop them" }));
-    await screen.findByText(/What descriptions & text made with qwen3-vl:8b is now stale/);
-    expect(lastSent("PUT", "/ai/jobs/vision")!.body).toEqual({ model: "llava:13b", stop_upgrades: true });
+    fireEvent.click(within(alert).getByRole("button", { name: "Change it and redo 12 clips" }));
+    await screen.findByText(/What descriptions & text made with qwen3-vl:8b is being made again/);
+    expect(lastSent("PUT", "/ai/jobs/vision")!.body).toEqual({ model: "llava:13b", redo: true });
   });
-});
 
-describe("AiSection turning a job off during an upgrade", () => {
-  it("asks, then turns it off (not whatever the picker shows)", async () => {
+  it("forgets the question when another model is picked", async () => {
+    machines = [machine({ name: "Brain", status: { online: true, error: "", models: [QWEN, "llava:13b", "m3"], checked_at: null } })];
+    offers = { [BRAIN]: [QWEN, "llava:13b", "m3"] };
+    made = 1;
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Change the model for Descriptions & text" }));
+    fireEvent.change(screen.getByLabelText("Model for Descriptions & text"), { target: { value: "llava:13b" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByRole("button", { name: "Change it and redo 1 clip" })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Model for Descriptions & text"), { target: { value: "m3" } });
+    expect(screen.queryByRole("button", { name: /Change it and redo/ })).toBeNull();
+  });
+
+  it("turns a job off without asking", async () => {
     machines = [machine({ name: "Brain", status: { online: true, error: "", models: [QWEN], checked_at: null } })];
     offers = { [BRAIN]: [QWEN] };
-    upgrading = true;
+    made = 12;
     renderSection();
     fireEvent.click(await screen.findByRole("button", { name: "Change the model for Descriptions & text" }));
     fireEvent.click(screen.getByRole("button", { name: "Turn off descriptions & text" }));
-    const alert = await screen.findByRole("alert");
-    fireEvent.click(within(alert).getByRole("button", { name: "Turn it off and stop them" }));
     await waitFor(() => expect(model).toBe(""));
-    expect(lastSent("PUT", "/ai/jobs/vision")!.body).toEqual({ model: "", stop_upgrades: true });
+    expect(lastSent("PUT", "/ai/jobs/vision")!.body).toEqual({ model: "" });
   });
 });
 
