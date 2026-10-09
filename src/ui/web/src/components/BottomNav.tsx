@@ -1,4 +1,5 @@
 import { NavLink, useParams } from "react-router-dom";
+import { AdminAlertDot } from "./HealthDot";
 
 function HomeIcon() {
   return (
@@ -84,7 +85,8 @@ const linkClass = ({ isActive }: { isActive: boolean }) =>
     isActive ? "text-indigo-400" : "text-gray-400"
   }`;
 
-export function BottomNav() {
+/** adminAlert: a yellow or red dot on Admin when the system needs a look (AppShell asks). */
+export function BottomNav({ adminAlert = null }: { adminAlert?: "yellow" | "red" | null } = {}) {
   const { libraryId } = useParams<{ libraryId?: string }>();
 
   return (
@@ -113,7 +115,10 @@ export function BottomNav() {
       </NavLink>
 
       <NavLink to="/admin" className={linkClass}>
-        <GearIcon />
+        <span className="relative flex">
+          <GearIcon />
+          <AdminAlertDot alert={adminAlert} />
+        </span>
         <span>Admin</span>
       </NavLink>
 

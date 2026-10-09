@@ -5,6 +5,7 @@ import { BottomNav } from "./BottomNav";
 import { CommandPalette } from "./CommandPalette";
 import { KeyboardShortcuts } from "./KeyboardShortcuts";
 import { ScrollContainerContext } from "../context/ScrollContainerContext";
+import { healthAlert, useSystemHealth } from "../lib/useSystemHealth";
 
 const SIDEBAR_COLLAPSED_KEY = "lv_sidebar_collapsed";
 
@@ -48,6 +49,10 @@ export default function AppShell() {
     return () => document.removeEventListener("keydown", handler);
   }, []);
 
+  // Admin's dot: the system's health, for anyone signed in.
+  const health = useSystemHealth();
+  const adminAlert = healthAlert(health.data, health.isError);
+
   const sidebarWidth = collapsed ? "w-12" : "w-64";
 
   return (
@@ -60,6 +65,7 @@ export default function AppShell() {
           collapsed={collapsed}
           onToggleCollapsed={() => setCollapsed((prev) => !prev)}
           onOpenPalette={() => setPaletteOpen(true)}
+          adminAlert={adminAlert}
         />
       </div>
       <ScrollContainerContext.Provider value={mainEl}>
@@ -70,7 +76,7 @@ export default function AppShell() {
           <Outlet />
         </main>
       </ScrollContainerContext.Provider>
-      <BottomNav />
+      <BottomNav adminAlert={adminAlert} />
 
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       <KeyboardShortcuts

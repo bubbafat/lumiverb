@@ -26,6 +26,7 @@ from src.server.models.query_filter import (
     SearchTerm,
 )
 from src.server.repository.tenant import LibraryRepository, UnifiedBrowseRepository
+from src.server.search import health as search_health
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,12 @@ def _encode_cursor(sort_col: str, sort_value: object, asset_id: str) -> str:
     return base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
 
 
+def _why(exc: Exception) -> str:
+    """An error in a few words: Quickwit's answer's status, or what kind of failure."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return f"it answered {status}" if status else type(exc).__name__
+
+
 def _run_quickwit_search(
     tenant_id: str,
     search_terms: list[SearchTerm],
@@ -109,8 +116,12 @@ def _run_quickwit_search(
     public_cap_ms: int | None = None,
     public: bool = False,
     capped: set[str] | None = None,
+    problems: list[str] | None = None,
 ) -> tuple[dict[str, float], dict[str, SearchContext], str]:
     """Run text search through Quickwit (or Postgres fallback).
+
+    `problems`: when given, gets why Quickwit couldn't be asked or its
+    asset search failed (what a fallback to Postgres is then down to).
 
     `capped`: when given, gets the name of each index search that came back
     full (its max_hits): matches past it were left out. Each search is
@@ -193,6 +204,8 @@ def _run_quickwit_search(
     except Exception as exc:
         logger.warning("Quickwit client init failed: %r", exc, exc_info=True)
         qw = None
+        if problems is not None:
+            problems.append(f"Quickwit couldn't be set up ({type(exc).__name__})")
 
     if qw is not None and qw.enabled:
         # Each per-index search is wrapped in its own try/except so a
@@ -242,6 +255,8 @@ def _run_quickwit_search(
                     )
         except Exception as exc:
             logger.warning("Quickwit asset search failed: %r", exc, exc_info=True)
+            if problems is not None:
+                problems.append(f"Quickwit's search failed ({_why(exc)})")
 
         # Asset prefix expansion — separate call so prefix-only
         # matches get their own position-based scoring and aren't
@@ -527,20 +542,31 @@ def unified_query(
                 library_ids = list(leaf.library_ids)
                 break
 
+        problems: list[str] = []
         scores, contexts, source = _run_quickwit_search(
             tenant_id, search_terms, library_ids, limit=MAX_CANDIDATE_IDS, public_cap_ms=public_cap_ms,
-            public=getattr(request.state, "is_public_request", False),
+            public=getattr(request.state, "is_public_request", False), problems=problems,
         )
         search_source = source
+
+        # Noted for the Admin page's Search row (src/server/search/health.py).
+        if problems and source == "postgres_fallback":
+            search_health.note(session, search_health.FALLBACK, problems[0])
+        elif problems and not scores:  # Quickwit failed and the fallback is off: nothing found
+            search_health.note(session, search_health.FAILURE, problems[0])
 
         if source == "postgres_fallback":
             # Join raw terms for ILIKE — no parentheses (those are Quickwit syntax)
             pg_query = " ".join(st.q for st in search_terms if st.q)
-            scores, contexts = _run_postgres_fallback(
-                session, pg_query, library_ids, limit=MAX_CANDIDATE_IDS,
-                include_transcripts=public_cap_ms is None,
-                include_notes=not getattr(request.state, "is_public_request", False),
-            )
+            try:
+                scores, contexts = _run_postgres_fallback(
+                    session, pg_query, library_ids, limit=MAX_CANDIDATE_IDS,
+                    include_transcripts=public_cap_ms is None,
+                    include_notes=not getattr(request.state, "is_public_request", False),
+                )
+            except Exception as exc:
+                search_health.note(session, search_health.FAILURE, f"The Postgres search failed ({type(exc).__name__})")
+                raise
 
         if not scores:
             return QueryResponse(

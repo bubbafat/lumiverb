@@ -159,8 +159,11 @@ def try_sync_asset(
         return False
 
     try:
-        if tenant_id:
-            qw.ensure_tenant_index(tenant_id)
+        if tenant_id and qw.ensure_tenant_index(tenant_id):
+            # Made just now (it was missing): every clip goes in again, by the sweep.
+            logger.info("Quickwit asset index made for %s — forcing full re-sync", tenant_id)
+            session.execute(text("UPDATE assets SET search_synced_at = NULL"))
+            session.commit()
         from src.server.repository.corrections import CorrectionsRepository
         from src.server.repository.tenant import AssetOcrRepository
 
@@ -190,8 +193,10 @@ def try_sync_scene(
         return False
 
     try:
-        if tenant_id:
-            qw.ensure_tenant_scene_index(tenant_id)
+        if tenant_id and qw.ensure_tenant_scene_index(tenant_id):
+            logger.info("Quickwit scene index made for %s — forcing full scene re-sync", tenant_id)
+            session.execute(text("UPDATE video_scenes SET search_synced_at = NULL"))
+            session.commit()
         doc = build_scene_document(scene, asset)
         if tenant_id:
             qw.ingest_tenant_scene_documents(tenant_id, [doc])

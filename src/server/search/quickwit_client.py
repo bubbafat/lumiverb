@@ -66,12 +66,26 @@ class QuickwitClient:
     def tenant_transcript_index_id(self, tenant_id: str) -> str:
         return f"lumiverb_tenant_{tenant_id}_transcripts"
 
+    def tenant_index_state(self, tenant_id: str, timeout: float = 2.0) -> tuple[str, str]:
+        """Whether the account's asset index answers: ("ok", ""), ("missing", "")
+        or ("down", why in a few words). For the Admin page's Search row; nothing is changed."""
+        try:
+            resp = requests.get(f"{self._base_url}/api/v1/indexes/{self.tenant_index_id(tenant_id)}", timeout=timeout)
+        except requests.RequestException as exc:
+            return "down", type(exc).__name__
+        if resp.status_code == 200:
+            return "ok", ""
+        if resp.status_code in (400, 404):
+            return "missing", ""
+        return "down", f"it answered {resp.status_code}"
+
     # ------------------------------------------------------------------
     # Index lifecycle
     # ------------------------------------------------------------------
 
     def ensure_tenant_index(self, tenant_id: str) -> bool:
-        """Ensure the per-tenant asset index exists. Returns True if recreated."""
+        """Ensure the per-tenant asset index exists. Returns True if it was
+        (re)made: missing, or its schema changed. Everything goes in again."""
         return self._ensure_index(self.tenant_index_id(tenant_id), self._schema_path())
 
     def ensure_tenant_scene_index(self, tenant_id: str) -> bool:
@@ -118,6 +132,13 @@ class QuickwitClient:
                 # Fall through to create below
             else:
                 return False
+        elif exists_resp.status_code in (404, 400):
+            # Missing (deleted, or Quickwit's data lost): what it held is
+            # gone, so the caller indexes everything again.
+            recreated = True
+        else:
+            # Can't tell: not taken for missing, so a flaky check never sets off a full reindex.
+            raise RuntimeError(f"Quickwit index check failed for {index_id}: {exists_resp.status_code}")
         if exists_resp.status_code not in (200, 404, 400):
             logger.warning("Quickwit index check failed for %s: %s %s", index_id, exists_resp.status_code, exists_resp.text)
         if not schema_path.exists():

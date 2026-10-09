@@ -3,12 +3,12 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { BottomNav } from "./BottomNav";
 
-function renderAt(path: string) {
+function renderAt(path: string, adminAlert: "yellow" | "red" | null = null) {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <Routes>
-        <Route path="/libraries/:libraryId/*" element={<BottomNav />} />
-        <Route path="*" element={<BottomNav />} />
+        <Route path="/libraries/:libraryId/*" element={<BottomNav adminAlert={adminAlert} />} />
+        <Route path="*" element={<BottomNav adminAlert={adminAlert} />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -32,5 +32,18 @@ describe("BottomNav", () => {
     expect(screen.getByRole("link", { name: "Browse" }).getAttribute("href")).toBe("/libraries/lib_1/browse");
     expect(screen.getByRole("link", { name: "Settings" }).getAttribute("href")).toBe("/libraries/lib_1/settings");
     expect(screen.getByRole("link", { name: "Projects" }).className).not.toContain("text-indigo-400");
+  });
+
+  it("puts a dot on Admin when the system needs a look", () => {
+    renderAt("/", "red");
+    const admin = screen.getByRole("link", { name: /Admin/ });
+    expect(admin.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("Something isn't working: see Admin");
+    expect(admin.querySelector('[role="img"]')?.className).toContain("bg-red-500");
+    cleanup();
+    renderAt("/", "yellow");
+    expect(screen.getByRole("link", { name: /Admin/ }).querySelector('[role="img"]')?.className).toContain("bg-amber-400");
+    cleanup();
+    renderAt("/");
+    expect(screen.getByRole("link", { name: "Admin" }).querySelector('[role="img"]')).toBeNull();
   });
 });
