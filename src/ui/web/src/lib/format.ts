@@ -47,3 +47,15 @@ export function shortDate(d: Date): string {
   const sameYear = d.getFullYear() === new Date().getFullYear();
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(sameYear ? {} : { year: "numeric" }) });
 }
+
+/** "40 seconds ago", "1 minute ago", "2 hours ago", "3 days ago": the server's `ago()` wording. */
+export function timeAgo(iso: string, now: number = Date.now()): string {
+  const seconds = Math.max(0, Math.floor((now - new Date(iso).getTime()) / 1000));
+  for (const [unit, size, least] of [["day", 86400, 2], ["hour", 3600, 1], ["minute", 60, 1]] as const) {
+    if (seconds >= size * least) {
+      const n = Math.round(seconds / size);
+      return `${n} ${unit}${n === 1 ? "" : "s"} ago`;
+    }
+  }
+  return `${seconds} second${seconds === 1 ? "" : "s"} ago`;
+}

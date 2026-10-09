@@ -1,5 +1,28 @@
 import { describe, it, expect } from "vitest";
-import { basename, formatFileSize, formatDate, mediaCount } from "./format";
+import { basename, formatFileSize, formatDate, mediaCount, timeAgo } from "./format";
+
+describe("timeAgo", () => {
+  const now = Date.parse("2026-10-08T12:00:00Z");
+  const before = (s: number) => new Date(now - s * 1000).toISOString();
+  it("says seconds, minutes, hours and days like the server", () => {
+    expect(timeAgo(before(5), now)).toBe("5 seconds ago");
+    expect(timeAgo(before(5 * 60), now)).toBe("5 minutes ago");
+    expect(timeAgo(before(5 * 3600), now)).toBe("5 hours ago");
+    expect(timeAgo(before(5 * 86400), now)).toBe("5 days ago");
+  });
+  it("uses the singular for one", () => {
+    expect(timeAgo(before(1), now)).toBe("1 second ago");
+    expect(timeAgo(before(60), now)).toBe("1 minute ago");
+    expect(timeAgo(before(3600), now)).toBe("1 hour ago");
+  });
+  it("stays in hours until two days", () => {
+    expect(timeAgo(before(30 * 3600), now)).toBe("30 hours ago");
+    expect(timeAgo(before(2 * 86400), now)).toBe("2 days ago");
+  });
+  it("never goes negative", () => {
+    expect(timeAgo(before(-10), now)).toBe("0 seconds ago");
+  });
+});
 
 describe("basename", () => {
   it("extracts filename from a nested path", () => {
