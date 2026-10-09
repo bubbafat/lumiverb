@@ -135,11 +135,13 @@ def timeline_lead(clips: list[ExportClip]) -> ExportClip:
 
 def timeline_frames(clip: ExportClip, lead: ExportClip) -> int:
     """The clip's length on the lead's frame grid. At another rate, round
-    down, so the timeline never runs past the end of the clip's media."""
+    down, so the timeline never runs past the end of the clip's media; a
+    still has no end, so it's the nearest frame (150 at 29.97, not 149)."""
     if clip.rate == lead.rate:
         return clip.duration_frames
     num, den = lead.rate
-    return math.floor((clip.duration_sec or 0.0) * num / den)
+    frames = (clip.duration_sec or 0.0) * num / den
+    return round(frames) if clip.still else math.floor(frames)
 
 
 def still(asset_id: str, name: str, path: str, width: int | None, height: int | None) -> ExportClip:

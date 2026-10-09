@@ -16,8 +16,7 @@ from src.server.database import get_control_session
 from src.server.repository.control_plane import PublicProjectRepository
 from src.server.repository.tenant import AssetRepository, LibraryRepository, ProjectRepository
 
-# Mounted at /v1/projects, and at /v1/collections (deprecated) until the
-# macOS/iOS apps move to the new path. See main.py.
+# Mounted at /v1/projects. See main.py.
 router = APIRouter()
 
 
