@@ -6,6 +6,7 @@ import type { SavedViewItem } from "../api/client";
 import { useCanEdit } from "../lib/useCanEdit";
 import { useClipActions } from "../lib/useClipActions";
 import { DirectoryTree } from "./DirectoryTree";
+import { AdminAlertDot } from "./HealthDot";
 
 const SIDEBAR_COLLAPSED_KEY = "lv_sidebar_collapsed";
 
@@ -152,9 +153,11 @@ export interface SidebarProps {
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onOpenPalette?: () => void;
+  /** A yellow or red dot on Admin when the system needs a look (AppShell asks). */
+  adminAlert?: "yellow" | "red" | null;
 }
 
-export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette }: SidebarProps) {
+export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette, adminAlert = null }: SidebarProps) {
   const canEdit = useCanEdit(Boolean(getApiKey()));
   const folderActions = useClipActions();
   const { libraryId } = useParams<{ libraryId: string }>();
@@ -558,7 +561,10 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette }: Sidebar
             location.pathname === "/admin" || location.pathname.startsWith("/admin/") ? "bg-indigo-600/20 text-indigo-300" : ""
           }`}
         >
-          {gearIcon()}
+          <span className="relative flex">
+            {gearIcon()}
+            <AdminAlertDot alert={adminAlert} />
+          </span>
           {showLabels && <span className="font-medium text-gray-300">Admin</span>}
         </Link>
         <Link

@@ -1007,6 +1007,31 @@ export async function getSchedulerStatus(): Promise<SchedulerStatus> {
   return apiFetch<SchedulerStatus>("/producers/queue");
 }
 
+/** One part of the system on the Admin page: green, yellow or red, why, and where to fix it. */
+export type HealthState = "green" | "yellow" | "red";
+
+export interface HealthRow {
+  key: "website" | "processing" | "ai" | "search" | "storage" | "disk";
+  title: string;
+  state: HealthState;
+  reason: string;
+  /** The page where it's fixed; null when there's none. */
+  link: string | null;
+  checked_at: string | null;
+}
+
+export interface SystemHealth {
+  /** The worst row's. */
+  state: HealthState;
+  rows: HealthRow[];
+  /** Whether the scheduler reached each library's storage at its last look (null: it hasn't looked lately). */
+  libraries: { library_id: string; name: string; reachable: boolean | null }[];
+}
+
+export async function getSystemHealth(): Promise<SystemHealth> {
+  return apiFetch<SystemHealth>("/system/health");
+}
+
 /** A clip whose last try failed (Settings → Processing). */
 export interface FailingClip {
   asset_id: string;
