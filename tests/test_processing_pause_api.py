@@ -342,8 +342,8 @@ def test_while_everything_is_paused_the_trash_days_question_says_the_purge_waits
     assert "within minutes" in _settings(env, trash_days=7).json()["error"]["message"]
 
 
-def test_the_queue_promises_no_time_for_paused_work_but_running_jobs_say_theirs(env):
-    """Pausing and time left (Proposed, Oct 9): a paused producer has no time and is named;
+def test_the_queue_gives_paused_work_no_time_but_running_jobs_say_theirs(env):
+    """Pausing and time left (Robert, Oct 9): a paused producer has no time and is named;
     under Pause all no producer has one; a running job still says its time left, since it finishes."""
     from src.server.api.routers import producers as producers_router
     from src.shared.utils import utcnow

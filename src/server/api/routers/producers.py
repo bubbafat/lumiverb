@@ -559,7 +559,7 @@ def scheduler_status(request: Request, session: Annotated[Session, Depends(get_t
         status.scans_paused_by = pause["paused_by"] if admin else None
     status.paused_producers = [PausedProducer(artifact=a, title=PRODUCERS[a].title)
                                for a in sorted(held) if a in PRODUCERS]
-    # No time is promised for paused work (Proposed, Oct 9): a producer paused alone, or all of them;
+    # Paused work has no time left (Robert, Oct 9): a producer paused alone, or all of them;
     # what's running still says its time left, since it finishes.
     if status.live:
         held_producers = set(PRODUCERS) if status.paused else {p.artifact for p in status.paused_producers}

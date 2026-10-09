@@ -439,13 +439,13 @@ describe("ProcessingSection", () => {
       "How long until everything is made isn't known yet: it's learned from the jobs as they finish.");
   });
 
-  it("promises no time for paused work, and names it", async () => {
+  it("says Paused for paused work, and names it", async () => {
     queue = { live: true, at: new Date().toISOString(), running: {}, waiting: {}, pools: {}, gpu_hold: 0,
               eta: { producers: { vision: null }, pools: {}, caught_up: null, jobs: [],
                      not_counted: [{ artifact: "vision", title: "Descriptions and tags", why: "paused" }] } };
     renderSection();
     expect((await screen.findByLabelText("Now")).textContent).toContain(
-      "What's left is paused: no time is promised until it's resumed.");
+      "Paused.");
     cleanup();
     queue = { ...(queue as object), eta: { producers: { vision: null, ocr: 1800 }, pools: { vision: 1800 },
               caught_up: 1800, jobs: [],

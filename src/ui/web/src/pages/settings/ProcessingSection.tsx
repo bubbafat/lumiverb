@@ -314,7 +314,7 @@ function caughtUp(eta: NonNullable<SchedulerStatus["eta"]>): string {
   if (eta.caught_up === null) {
     const notCounted = eta.not_counted ?? [];
     if (notCounted.length > 0 && notCounted.every((n) => n.why === "paused")) {
-      return "What's left is paused: no time is promised until it's resumed.";
+      return "Paused.";
     }
     return "How long until everything is made isn't known yet: it's learned from the jobs as they finish.";
   }

@@ -93,7 +93,7 @@ def test_a_job_with_no_length_to_go_by_isnt_late():
 
 
 def test_a_paused_producer_gets_no_time_and_caught_up_leaves_it_out_naming_it():
-    # Pausing (Proposed, Oct 9): no finish time is promised for paused work; what's running still says its time.
+    # Pausing (Robert, Oct 9): paused work has no time, its reason is "paused"; what's running still says its time.
     status = _status(jobs=[{"kind": "vision", "units": 1.0, "elapsed": 2.0}])
     out = eta(status, {"vision": 30.0, "ocr": 30.0, "analysis_proxy": 600.0}, now=AT, paused={"vision"})
     assert out["producers"]["vision"] is None
@@ -103,6 +103,6 @@ def test_a_paused_producer_gets_no_time_and_caught_up_leaves_it_out_naming_it():
     assert out["jobs"][0]["left"] == pytest.approx(4.0)
 
 
-def test_with_only_paused_work_left_nothing_is_promised():
+def test_with_only_paused_work_left_there_is_no_estimate():
     out = eta(_status(), {"vision": 30.0, "analysis_proxy": 0.0}, now=AT, paused={"vision"})
     assert out["caught_up"] is None and out["producers"]["vision"] is None

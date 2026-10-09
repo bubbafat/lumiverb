@@ -43,8 +43,8 @@ def eta(status: Mapping[str, Any], left: Mapping[str, float], *, now: Any,
     with work but no machine doing it ("no_machine") or no pace yet
     ("not_known_yet") has no time, and caught up leaves it out, naming it;
     caught up is None only when nothing with work is counted. A producer an
-    admin paused (paused) is left out the same way ("paused"): no time is
-    promised for it, and its pool's slots go to the rest."""
+    admin paused (paused) is left out the same way ("paused"): it has no time
+    while paused, and its pool's slots go to the rest."""
     pace: Mapping[str, float] = status.get("pace") or {}
     slots = {pool: (counts[1] if len(counts) > 1 else 0) for pool, counts in (status.get("pools") or {}).items()}
 
@@ -78,7 +78,7 @@ def eta(status: Mapping[str, Any], left: Mapping[str, float], *, now: Any,
         caught_up: float | None = max(pools.values())
     else:
         # Only what no machine is doing now is left: caught up, not counting it.
-        # Only paused work left promises nothing either.
+        # Only paused work left: no estimate either.
         caught_up = None if any(n["why"] in ("not_known_yet", "paused") for n in not_counted) else 0.0
 
     written, now_at = _at(status.get("at")), _at(now)

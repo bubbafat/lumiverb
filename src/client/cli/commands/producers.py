@@ -95,7 +95,7 @@ def _caught_up(eta: dict) -> str:
     if caught_up is None:
         whys = [n.get("why") for n in eta.get("not_counted") or []]
         if whys and all(w == "paused" for w in whys):
-            return "What's left is paused: no time is promised until it's resumed."
+            return "Paused."
         return "How long until everything is made isn't known yet: it's learned from the jobs as they finish."
     if caught_up == 0 and not left:
         return "Caught up: everything is made."
@@ -129,6 +129,7 @@ def producers_list(
     # How long is left is the whole account's: only with its counts, and while the scheduler runs.
     eta = (queue.get("eta") or {}) if queue.get("live") and not params else {}
     left = eta.get("producers") or {}
+    paused_left = {n.get("artifact") for n in eta.get("not_counted") or [] if n.get("why") == "paused"}
     table = Table(show_header=True, header_style="bold")
     columns = ("Producer", "Current", "Missing", "Stale", "Failing", "Redo", *(("Left",) if eta else ()))
     for col in columns:
@@ -138,9 +139,10 @@ def producers_list(
         c = p.get("counts") or {}
         paused = " [yellow]paused[/yellow]" if p.get("paused") and not all_paused else ""
         took = left.get(p["artifact"])
+        held = p["artifact"] in paused_left
         table.add_row(f"{escape(p['title'])} [dim]({p['artifact']})[/dim]{paused}", _n(c.get("current", 0)),
                       _n(c.get("missing", 0)), _n(c.get("stale", 0)), _n(c.get("failing", 0)), _redo(p, all_paused),
-                      *((_duration(took) if took else "",) if eta else ()))
+                      *(("Paused" if held else _duration(took) if took else "",) if eta else ()))
         if p.get("paused") and not all_paused:
             notes.append(f"{p['title']}: paused; lumiverb producers resume {p['artifact']} carries on.")
         if c.get("stale") and not p.get("redoable", True):

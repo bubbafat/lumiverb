@@ -441,7 +441,7 @@ def test_the_headline_says_paused_work_gets_no_time(client):
 
     assert _caught_up({"caught_up": None, "not_counted": [
         {"artifact": "vision", "title": "Descriptions and tags", "why": "paused"}]}) == (
-        "What's left is paused: no time is promised until it's resumed.")
+        "Paused.")
     assert _caught_up({"caught_up": 60.0 * 30, "not_counted": [
         {"artifact": "vision", "title": "Descriptions and tags", "why": "paused"}]}) == (
         "Caught up in about 30 min, not counting descriptions and tags (paused).")
@@ -456,3 +456,21 @@ def test_the_headline_names_what_it_leaves_out(client):
         "Caught up in about 2 h 5 min, not counting transcripts (no machine doing them now).")
     assert _caught_up({"caught_up": 40 * 86400.0}) == "Caught up in over a month."
     assert _caught_up({"caught_up": 0}) == "Caught up: everything is made."
+
+
+def test_a_paused_producers_left_says_paused(client):
+    def get(path, params=None):
+        r = MagicMock()
+        if path == "/v1/producers/queue":
+            r.json.return_value = {"live": True, "eta": {
+                "producers": {"vision": None, "ocr": 1800.0}, "pools": {"vision": 1800.0}, "caught_up": 1800.0,
+                "jobs": [], "not_counted": [{"artifact": "vision", "title": "Descriptions and tags", "why": "paused"}]}}
+        else:
+            r.json.return_value = {"producers": [_producer(paused=True), _producer("ocr", "Text in images (OCR)")]}
+        return r
+
+    client.get.side_effect = get
+    result = _run()
+    assert result.exit_code == 0, result.output
+    assert "Paused" in result.output and "promis" not in result.output  # the Left cell (the title's mark is lowercase)
+    assert "not counting descriptions and tags (paused)" in " ".join(result.output.split())
