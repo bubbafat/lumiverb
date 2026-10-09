@@ -115,7 +115,9 @@ def test_an_unknown_producer_is_404_and_one_scans_make_is_paused_with_everything
     r = client.post("/v1/producers/proxy/pause", headers=headers)
     assert r.status_code == 409 and r.json()["error"]["code"] == "not_scheduled", r.text
     assert "pausing all processing" in r.json()["error"]["message"]
-    assert _producers(env)["proxy"]["paused"] is False
+    producers = _producers(env)
+    assert producers["proxy"]["paused"] is False and producers["proxy"]["scheduled"] is False
+    assert producers["vision"]["scheduled"] is True
 
 
 def test_new_settings_dont_resume_a_paused_producer(env):

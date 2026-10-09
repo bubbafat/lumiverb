@@ -142,6 +142,9 @@ class ProducerItem(BaseModel):
     settings_hash: str
     fields: list[SettingField] = []
     counts: ProducerCounts | None = None
+    # Made by the scheduler; false: by scans (proxies, video previews), which
+    # can't be paused alone: pausing all processing stops them.
+    scheduled: bool = True
     # Whether its stale artifacts are made again (after anything missing),
     # and if they can't be yet, why.
     redoable: bool = True
@@ -231,7 +234,7 @@ def _item(artifact: str, want: dict[str, Any], waits: dict[str, str | None]) -> 
                              default=s.default, minimum=s.minimum, maximum=s.maximum, unit=s.unit,
                              advanced=s.advanced, fixed=s.fixed or None)
                 for s in p.settings],
-        redoable=lineage.redoable(artifact), why_not=lineage.CANT_REDO.get(artifact),
+        scheduled=p.scheduled, redoable=lineage.redoable(artifact), why_not=lineage.CANT_REDO.get(artifact),
         waiting=waits.get(p.job) if p.job else None,
     )
 

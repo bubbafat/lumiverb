@@ -940,10 +940,17 @@ export interface Producer {
   /** Its settings with their bounds; the ones its code reads can be changed (admins). */
   fields?: SettingField[];
   counts: ProducerCounts | null;
+  /** The scheduler makes it; false: scans do (proxies, video previews), which can't be paused alone. */
+  scheduled: boolean;
   /** Its stale clips are made again (after anything missing); if they can't be yet, why_not says why. */
   redoable: boolean;
   why_not: string | null;
   /** An admin stopped its redo: stale clips wait until it's resumed (or its model changes). */
+  redo_stopped: boolean;
+  /** Admins only. */
+  redo_stopped_by: string | null;
+  redo_stopped_at: string | null;
+  /** An admin paused it: nothing more of it starts until it's resumed; what's running finishes. */
   paused: boolean;
   /** Admins only. */
   paused_by: string | null;
@@ -984,6 +991,11 @@ export interface SchedulerStatus {
   pools: Record<string, [number, number]>;
   /** Requests AI machines sharing its GPU give up while video is decoded there. */
   gpu_hold: number;
+  /** An admin paused all of the account's processing: nothing more starts until it's resumed. */
+  paused: boolean;
+  /** Admins only. */
+  paused_by: string | null;
+  paused_at: string | null;
 }
 
 export async function getSchedulerStatus(): Promise<SchedulerStatus> {
@@ -1033,6 +1045,18 @@ export async function stopRedo(artifact: string): Promise<void> {
 /** Redo a producer's stale clips again (admins), after anything missing. */
 export async function resumeRedo(artifact: string): Promise<void> {
   await apiFetch<void>(`/producers/${artifact}/redo/resume`, { method: "POST" });
+}
+
+/** Pause all of the account's processing, or one producer's (admins): nothing
+ * more of it starts until it's resumed; what's running finishes. 409
+ * not_scheduled for what scans make. */
+export async function pauseProcessing(artifact?: string): Promise<void> {
+  await apiFetch<void>(artifact ? `/producers/${artifact}/pause` : "/producers/pause", { method: "POST" });
+}
+
+/** Carry on with all of the account's processing, or one paused producer (admins). */
+export async function resumeProcessing(artifact?: string): Promise<void> {
+  await apiFetch<void>(artifact ? `/producers/${artifact}/resume` : "/producers/resume", { method: "POST" });
 }
 
 export async function findSimilar(params: {
