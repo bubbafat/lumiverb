@@ -1,8 +1,9 @@
-"""`lumiverb producers`: each producer's counts, and stopping or resuming its redo.
+"""`lumiverb producers`: each producer's counts, pausing and resuming, and stopping or resuming a redo.
 
 Mirrors Settings → Processing (ADR-016 phase 4): stale clips are made again
 after anything missing, since changing a setting was the approval; an admin
-can stop that per producer and resume it.
+can stop that per producer and resume it. An admin can also pause all
+processing, or one producer's, and resume it (Robert, Oct 9).
 """
 
 from __future__ import annotations
@@ -20,7 +21,8 @@ def _producer(artifact="vision", title="Descriptions and tags", **over) -> dict:
     p = {"artifact": artifact, "producer": artifact, "version": "1", "title": title, "media": ["image"],
          "uniform": False, "settings": {"model": "qwen3-vl:8b-instruct"}, "settings_hash": "h",
          "counts": {"applicable": 10, "current": 6, "stale": 3, "missing": 1, "failing": 0},
-         "redoable": True, "why_not": None, "paused": False, "paused_by": None, "paused_at": None}
+         "redoable": True, "why_not": None, "redo_stopped": False, "redo_stopped_by": None, "redo_stopped_at": None,
+         "paused": False, "paused_by": None, "paused_at": None}
     p.update(over)
     return p
 
@@ -68,7 +70,8 @@ def test_lists_each_producer_with_its_counts_and_its_redo(client):
         r = MagicMock()
         r.json.return_value = {"producers": [
             _producer(),
-            _producer("ocr", "Text in images (OCR)", paused=True),
+            _producer("ocr", "Text in images (OCR)", redo_stopped=True),
+            _producer("faces", "Faces", paused=True),
             _producer("scenes", "Scenes", redoable=False, why_not="Not yet."),
             _producer("clip", "Visual search (CLIP)",
                       counts={"applicable": 4, "current": 4, "stale": 0, "missing": 0, "failing": 0}),
@@ -78,19 +81,21 @@ def test_lists_each_producer_with_its_counts_and_its_redo(client):
     client.get.side_effect = get
     result = _run()
     assert result.exit_code == 0, result.output
-    client.get.assert_called_once_with("/v1/producers", params={})
+    client.get.assert_any_call("/v1/producers", params={})
     out = result.output
     assert "Descriptions and tags" in out and "redoing" in out
-    assert "stopped" in out and "lumiverb producers resume ocr" in out
+    assert "stopped" in out and "lumiverb producers redo resume ocr" in out
+    assert "Faces: paused" in out and "lumiverb producers resume faces" in out
+    assert "All processing is paused" not in out
     assert "Scenes isn't made again yet: Not yet." in out
     assert "after anything missing" in out
 
 
 def test_lists_one_library_or_project(client):
     assert _run("--library", "Footage").exit_code == 0
-    client.get.assert_called_with("/v1/producers", params={"library_id": "lib_1"})
+    client.get.assert_any_call("/v1/producers", params={"library_id": "lib_1"})
     assert _run("--project", "Wedding").exit_code == 0
-    client.get.assert_called_with("/v1/producers", params={"project_id": "col_1"})
+    client.get.assert_any_call("/v1/producers", params={"project_id": "col_1"})
 
 
 def test_an_unknown_library_or_project(client):
@@ -105,26 +110,65 @@ def test_library_and_project_together_are_refused(client):
     assert result.exit_code == 2
 
 
-def test_stop_and_resume(client):
+def test_the_listing_says_when_all_processing_is_paused(client):
+    def get(path, params=None):
+        r = MagicMock()
+        r.json.return_value = ({"paused": True, "paused_at": "2026-10-09T10:00:00Z"} if path == "/v1/producers/queue"
+                               else {"producers": [_producer()]})
+        return r
+
+    client.get.side_effect = get
+    result = _run()
+    assert result.exit_code == 0, result.output
+    out = " ".join(result.output.split())
+    assert "All processing is paused (since 2026-10-09 10:00)" in out and "lumiverb producers resume carries on" in out
+
+
+def test_pause_and_resume_all_processing_or_one_producer(client):
     client.raw.return_value = _response(204)
-    result = _run("stop", "vision")
+    for args, path, says in [
+        (["pause"], "/v1/producers/pause", "Paused all processing"),
+        (["pause", "vision"], "/v1/producers/vision/pause", "Paused vision"),
+        (["resume"], "/v1/producers/resume", "Resumed all processing"),
+        (["resume", "vision"], "/v1/producers/vision/resume", "Resumed vision"),
+    ]:
+        result = _run(*args)
+        assert result.exit_code == 0, result.output
+        client.raw.assert_called_with("POST", path)
+        assert says in result.output, result.output
+
+
+def test_stop_and_resume_a_redo(client):
+    client.raw.return_value = _response(204)
+    result = _run("redo", "stop", "vision")
     assert result.exit_code == 0, result.output
     client.raw.assert_called_with("POST", "/v1/producers/vision/redo/stop")
     assert "Stopped redoing vision" in result.output
-    result = _run("resume", "vision")
+    result = _run("redo", "resume", "vision")
     assert result.exit_code == 0, result.output
     client.raw.assert_called_with("POST", "/v1/producers/vision/redo/resume")
     assert "Redoing vision again" in result.output
 
 
-@pytest.mark.parametrize(("status", "body", "says"), [
-    (409, {"error": {"code": "cant_redo", "message": "Scenes isn't made again yet."}}, "Scenes isn't made again yet."),
-    (403, {"detail": "Admins only"}, "Admins only"),
-    (404, {"detail": "No such artifact"}, "No such artifact"),
+def test_the_old_stop_command_is_gone(client):
+    client.raw.return_value = _response(204)
+    assert _run("stop", "vision").exit_code == 2  # no such command
+    client.raw.assert_not_called()
+
+
+@pytest.mark.parametrize(("args", "status", "body", "says"), [
+    (["redo", "stop", "scenes"], 409, {"error": {"code": "cant_redo", "message": "Scenes isn't made again yet."}},
+     "Scenes isn't made again yet."),
+    (["redo", "stop", "scenes"], 403, {"detail": "Admins only"}, "Admins only"),
+    (["redo", "resume", "nope"], 404, {"detail": "No such artifact"}, "No such artifact"),
+    (["pause", "proxy"], 409, {"error": {"code": "not_scheduled", "message": "Proxies and thumbnails are made by "
+                                         "scans"}}, "made by scans"),
+    (["pause"], 403, {"detail": "Admins only"}, "Admins only"),
+    (["resume", "nope"], 404, {"detail": "No such artifact"}, "No such artifact"),
 ])
-def test_refusals_say_why(client, status, body, says):
+def test_refusals_say_why(client, args, status, body, says):
     client.raw.return_value = _response(status, body)
-    result = _run("stop", "scenes")
+    result = _run(*args)
     assert result.exit_code == 1 and says in result.output
 
 
