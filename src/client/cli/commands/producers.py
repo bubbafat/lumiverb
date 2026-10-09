@@ -122,3 +122,61 @@ def producers_resume(
         console.print(f"[red]Couldn't resume: {escape(_error(r))}[/red]")
         raise typer.Exit(1)
     console.print(f"Redoing {escape(artifact)} again, after anything missing.")
+
+
+@producers_app.command("failures")
+def producers_failures(
+    artifact: Annotated[str | None, typer.Argument(help="Only this producer's (e.g. vision, transcript).")] = None,
+    library: Annotated[str | None, typer.Option("--library", help="Only this library (name or id).")] = None,
+    limit: Annotated[int, typer.Option("--limit", help="How many (newest failure first).")] = 50,
+) -> None:
+    """Clips whose last try failed: why, how many tries, when the next one is (or that it was given up)."""
+    client = LumiverbClient()
+    params: dict = {"limit": max(1, min(limit, 500))}
+    if artifact:
+        params["artifact"] = artifact
+    if library:
+        params["library_id"] = library_id_for(client, library)
+    r = client.raw("GET", "/v1/producers/failures", params=params)
+    if r.status_code >= 400:
+        console.print(f"[red]Couldn't list failures: {escape(_error(r))}[/red]")
+        raise typer.Exit(1)
+    data = r.json()
+    items = data.get("items", [])
+    if not items:
+        console.print("Nothing is failing.")
+        return
+    table = Table(show_header=True, header_style="bold")
+    for col in ("Clip", "Producer", "Tries", "Next try", "Error"):
+        table.add_column(col, overflow="fold")
+    for f in items:
+        nxt = "given up" if f.get("given_up") else (f.get("retry_at") or "")[:16].replace("T", " ")
+        table.add_row(f"{escape(f['rel_path'])} [dim]({escape(f['library_name'])})[/dim]", f["artifact"],
+                      str(f.get("attempts", 0)), nxt, escape(f.get("error", ""))[:300])
+    console.print(table)
+    if data.get("next_cursor"):
+        console.print(f"[dim]The {len(items)} most recent; --limit shows more.[/dim]")
+    console.print("[dim]lumiverb producers retry tries them again.[/dim]")
+
+
+@producers_app.command("retry")
+def producers_retry(
+    artifact: Annotated[str | None, typer.Argument(help="Only this producer's failing clips.")] = None,
+    asset: Annotated[list[str] | None, typer.Option("--asset", help="Only this clip (repeatable).")] = None,
+    library: Annotated[str | None, typer.Option("--library", help="Only this library (name or id).")] = None,
+) -> None:
+    """Try failing clips again now, given up or not (editors and admins); the back-off starts over."""
+    client = LumiverbClient()
+    body: dict = {}
+    if artifact:
+        body["artifact"] = artifact
+    if asset:
+        body["asset_ids"] = list(asset)
+    if library:
+        body["library_id"] = library_id_for(client, library)
+    r = client.raw("POST", "/v1/producers/failures/retry", json=body)
+    if r.status_code >= 400:
+        console.print(f"[red]Couldn't try them again: {escape(_error(r))}[/red]")
+        raise typer.Exit(1)
+    n = int(r.json().get("retried", 0))
+    console.print(f"{n:,} clip{'' if n == 1 else 's'} will be tried again shortly." if n else "Nothing was failing.")

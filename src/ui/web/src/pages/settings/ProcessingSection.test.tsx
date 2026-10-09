@@ -9,6 +9,7 @@ let role = "admin";
 let producers: Producer[] = [];
 // What the next stop or resume answers (then 204).
 let answers: Response[] = [];
+let failures: unknown[] = [];
 const sent: { method: string; url: string; body: unknown }[] = [];
 
 function producer(over: Partial<Producer>): Producer {
@@ -39,6 +40,11 @@ beforeEach(() => {
     if (path === "/libraries") return json([{ library_id: "lib_1", name: "Footage", root_path: "/f", status: "active" }]);
     if (path === "/projects") return json({ items: [{ project_id: "col_1", name: "Wedding" }] });
     if (path === "/producers") return json({ producers });
+    if (path === "/producers/failures" && method === "GET") return json({ items: failures, next_cursor: null });
+    if (path === "/producers/failures/retry" && method === "POST") {
+      const n = body.asset_ids ? body.asset_ids.length : failures.length;
+      return json({ retried: n });
+    }
     const m = path.match(/^\/producers\/([^/]+)\/redo\/(stop|resume)$/);
     if (m && method === "POST") {
       const next = answers.shift();
@@ -57,6 +63,7 @@ afterEach(() => {
   role = "admin";
   producers = [];
   answers = [];
+  failures = [];
   sent.length = 0;
 });
 
@@ -151,5 +158,54 @@ describe("ProcessingSection", () => {
     producers = [producer({ counts: { applicable: 1, current: 0, stale: 1, missing: 0, failing: 0 } })];
     renderSection();
     expect((await row("Descriptions and tags")).textContent).toContain("Redoing 1 clip, after anything missing.");
+  });
+
+  it("shows why clips fail, and tries them again", async () => {
+    producers = [producer({ counts: { applicable: 10, current: 6, stale: 0, missing: 1, failing: 3, given_up: 1 } })];
+    failures = [
+      { asset_id: "ast_1", artifact: "vision", title: "Descriptions and tags", rel_path: "Day 1/a.jpg",
+        library_id: "lib_1", library_name: "Footage", media_type: "image", error: "the model said nothing",
+        attempts: 10, failed_at: "2026-10-09T01:00:00Z", retry_at: null, given_up: true },
+      { asset_id: "ast_2", artifact: "vision", title: "Descriptions and tags", rel_path: "Day 1/b.jpg",
+        library_id: "lib_1", library_name: "Footage", media_type: "image", error: "timed out",
+        attempts: 2, failed_at: "2026-10-09T01:00:00Z", retry_at: "2026-10-09T01:10:00Z", given_up: false },
+    ];
+    renderSection();
+    const vision = await row("Descriptions and tags");
+    expect(vision.textContent).toContain("3 failing (1 given up)");
+    fireEvent.click(within(vision).getByRole("button", { name: "Show failures: Descriptions and tags" }));
+    expect(await within(vision).findByText("the model said nothing")).toBeTruthy();
+    expect(vision.textContent).toContain("Gave up after 10 tries.");
+    expect(vision.textContent).toContain("Tried 2 times; next try");
+    fireEvent.click(within(vision).getByRole("button", { name: "Try again: Day 1/a.jpg" }));
+    expect(await within(vision).findByText("1 clip will be tried again shortly.")).toBeTruthy();
+    expect(sent.find((s) => s.url.endsWith("/producers/failures/retry"))!.body).toEqual({
+      artifact: "vision", asset_ids: ["ast_1"] });
+    fireEvent.click(within(vision).getByRole("button", { name: "Try all again" }));
+    await waitFor(() => expect(sent.filter((s) => s.url.endsWith("/producers/failures/retry")).length).toBe(2));
+    expect(sent.filter((s) => s.url.endsWith("/producers/failures/retry"))[1].body).toEqual({ artifact: "vision" });
+  });
+
+  it("lets viewers see failures but not try them again", async () => {
+    role = "viewer";
+    producers = [producer({ counts: { applicable: 10, current: 9, stale: 0, missing: 0, failing: 1, given_up: 0 } })];
+    failures = [{ asset_id: "ast_1", artifact: "vision", title: "Descriptions and tags", rel_path: "a.jpg",
+                  library_id: "lib_1", library_name: "Footage", media_type: "image", error: "no",
+                  attempts: 1, failed_at: null, retry_at: "2026-10-09T01:10:00Z", given_up: false }];
+    renderSection();
+    const vision = await row("Descriptions and tags");
+    fireEvent.click(within(vision).getByRole("button", { name: "Show failures: Descriptions and tags" }));
+    expect(await within(vision).findByText("no")).toBeTruthy();
+    expect(within(vision).queryByRole("button", { name: /Try/ })).toBeNull();
+  });
+
+  it("asks for one library's failures when the counts are for it", async () => {
+    producers = [producer({ counts: { applicable: 10, current: 9, stale: 0, missing: 0, failing: 1, given_up: 0 } })];
+    renderSection();
+    await screen.findByRole("option", { name: "Footage" });
+    fireEvent.change(screen.getByLabelText("Counts for"), { target: { value: "library:lib_1" } });
+    const vision = await row("Descriptions and tags");
+    fireEvent.click(await within(vision).findByRole("button", { name: "Show failures: Descriptions and tags" }));
+    await waitFor(() => expect(sent.some((s) => s.url.includes("/producers/failures?artifact=vision&library_id=lib_1"))).toBe(true));
   });
 });
