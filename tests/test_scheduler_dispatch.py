@@ -202,3 +202,16 @@ def test_a_pool_with_no_slots_takes_nothing() -> None:
     assert d.take("vision") is None
     d.set_capacity("vision", 1)
     assert d.take("vision") is not None
+
+
+@pytest.mark.fast
+def test_an_accounts_own_pool_serves_only_it() -> None:
+    # Each account has its own AI machines (Settings → AI).
+    kinds = {"vision": KindSpec(tier=3, pool="vision", per_account=True)}
+    d = Dispatcher(kinds, {"vision@t1": 1, "vision@t2": 1}, clock=Clock())
+    d.offer("t1", "vision", [_item("a", "2026-10-01")])
+    d.offer("t2", "vision", [_item("b", "2026-10-02")])
+    assert d.take("vision@t2").items[0]["asset_id"] == "b"
+    assert d.take("vision@t2") is None
+    assert d.take("vision@t1").items[0]["asset_id"] == "a"
+    assert d.pools(["t1", "t2"]) == ["vision@t1", "vision@t2"]

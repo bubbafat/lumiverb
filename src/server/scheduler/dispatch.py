@@ -33,6 +33,8 @@ class KindSpec:
     pool: str
     batch: int = 1  # items per job (faces: one subprocess call)
     retake_after: float | None = None  # the dispatcher's default when None
+    # The pool is each account's own (its AI machines), named "<pool>@<account>".
+    per_account: bool = False
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,10 @@ class Job:
     @property
     def asset_ids(self) -> list[str]:
         return [i["asset_id"] for i in self.items]
+
+
+def pool_key(spec: KindSpec, tenant_id: str) -> str:
+    return f"{spec.pool}@{tenant_id}" if spec.per_account else spec.pool
 
 
 def _order(tier: int, item: dict) -> tuple:
@@ -84,7 +90,17 @@ class Dispatcher:
 
     def waiting(self, pool: str) -> int:
         with self._lock:
-            return sum(len(b) for (_, kind), b in self._buffers.items() if self._kinds[kind].pool == pool)
+            return sum(len(b) for (tenant_id, kind), b in self._buffers.items()
+                       if pool_key(self._kinds[kind], tenant_id) == pool)
+
+    def pools(self, tenant_ids: list[str]) -> list[str]:
+        """Every pool's key: the shared ones, and each account's own."""
+        out: list[str] = []
+        for spec in self._kinds.values():
+            for key in ([pool_key(spec, t) for t in tenant_ids] if spec.per_account else [spec.pool]):
+                if key not in out:
+                    out.append(key)
+        return out
 
     # -- the queue ----------------------------------------------------------
 
@@ -122,14 +138,15 @@ class Dispatcher:
             self._buffers.pop((tenant_id, kind), None)
 
     def take(self, pool: str) -> Job | None:
-        """The best job a free slot of this pool can run, now in hand; None if none."""
+        """The best job a free slot of this pool can run, now in hand; None
+        if none. pool: a pool's name, or "<pool>@<account>" for an account's own."""
         with self._lock:
             if self._free(pool) <= 0:
                 return None
             best: tuple | None = None
             for (tenant_id, kind), buffer in self._buffers.items():
                 spec = self._kinds[kind]
-                if spec.pool != pool or not buffer:
+                if pool_key(spec, tenant_id) != pool or not buffer:
                     continue
                 rank = _order(spec.tier, buffer[0])
                 if best is None or rank < best[0]:
@@ -149,8 +166,9 @@ class Dispatcher:
         """The job's slot is free; its clips aren't taken again for a while."""
         spec = self._kinds[job.kind]
         wait = self._retake_after if spec.retake_after is None else spec.retake_after
+        pool = pool_key(spec, job.tenant_id)
         with self._lock:
-            self._busy[spec.pool] = max(0, self._busy.get(spec.pool, 0) - 1)
+            self._busy[pool] = max(0, self._busy.get(pool, 0) - 1)
             until = self._clock() + wait
             for asset_id in job.asset_ids:
                 key = (job.tenant_id, job.kind, asset_id)
