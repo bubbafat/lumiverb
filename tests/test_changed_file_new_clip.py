@@ -437,3 +437,160 @@ def test_a_library_back_from_the_trash_onto_a_taken_path_archives_that_clip(env)
         s.commit()
     assert client.post(f"/v1/libraries/{lib}/restore", headers=headers).status_code == 200
     assert _row(env, clip)[1] == "missing" and _row(env, "ast_ncr_taken")[0] is None
+
+
+# Review round 3: the race's other orders.
+
+
+def test_a_clip_back_in_sight_before_its_search_delete_runs_keeps_its_documents(env):
+    # The overwrite queues the original's search delete (its handover found
+    # no copy yet); the copy's ingest then moves the original back in sight;
+    # the queued delete runs last, and leaves it alone.
+    from unittest.mock import patch
+
+    from fastapi.testclient import TestClient
+    from sqlalchemy import text
+
+    import src.server.api.routers.assets as assets_router
+    from src.server.api.main import app
+    from src.server.repository.tenant import AssetRepository
+    from src.server.search.quickwit_client import QuickwitClient
+    from tests.test_archive_by_hand import _db
+
+    client, *_ = env
+    sha = _sha()
+    original = _ingest(env, "ncr3-ts/a.mp4", media_type="video", sha=sha)
+    with _db(env) as s:
+        s.execute(text("UPDATE assets SET transcript_srt = :t WHERE asset_id = :a"),
+                  {"t": "1\n00:00:00,000 --> 00:00:01,000\nhello\n", "a": original})
+        s.commit()
+    deleted: list[str] = []
+    queued: list[tuple] = []
+    real_drop = assets_router._drop_from_search
+    real_find = AssetRepository.find_missing_by_sha
+    fired = []
+
+    def find_missing_by_sha(self, library_id, s):
+        found = real_find(self, library_id, s)
+        if s == sha and not fired:
+            fired.append(1)
+            r = _post(TestClient(app), env, "ncr3-ts/a.mp4", _sha())  # the overwrite, start to finish
+            assert r.status_code == 200, r.text
+        return found
+
+    with (patch.object(assets_router, "_drop_from_search", lambda *a: queued.append(a)),
+          patch.object(QuickwitClient, "delete_tenant_documents_by_asset_ids",
+                       lambda self, tenant_id, ids: deleted.extend(ids)),
+          patch.object(AssetRepository, "find_missing_by_sha", find_missing_by_sha)):
+        r = _post(client, env, "ncr3-ts/copy.mp4", sha)
+        assert r.status_code == 200 and r.json()["asset_id"] == original, r.text
+        for args in queued:  # the overwrite's background work, after all that
+            real_drop(*args)
+    assert queued and original not in deleted
+
+
+def test_the_copy_handed_over_to_by_the_other_ingest_answers_with_the_clip_there(env):
+    # The overwrite's handover moves the original onto the new copy right
+    # after the copy commits: the copy's answer names the clip that's there.
+    from unittest.mock import patch
+
+    from fastapi.testclient import TestClient
+
+    from src.server.api.main import app
+    from src.server.repository.tenant import AssetRepository
+
+    client, headers, *_ = env
+    sha = _sha()
+    original = _ingest(env, "ncr3-win/a.jpg", media_type="image", sha=sha)
+    _note(env, original, "keep")
+    real = AssetRepository.missing_ids_with_sha
+    fired = []
+
+    def missing_ids_with_sha(self, library_id, s):
+        if s == sha and not fired:
+            fired.append(1)
+            r = _post(TestClient(app), env, "ncr3-win/a.jpg", _sha())  # its handover finds the copy
+            assert r.status_code == 200, r.text
+        return real(self, library_id, s)
+
+    with patch.object(AssetRepository, "missing_ids_with_sha", missing_ids_with_sha):
+        r = _post(client, env, "ncr3-win/copy.jpg", sha)
+    assert r.status_code == 200, r.text
+    assert r.json()["asset_id"] == original and r.json()["created"] is False
+    assert client.get(f"/v1/assets/{original}", headers=headers).status_code == 200
+
+
+def test_a_video_copy_handed_over_to_before_its_facet_is_stored_is_not_a_500(env):
+    import io
+    import json
+    from unittest.mock import patch
+
+    from fastapi.testclient import TestClient
+    from PIL import Image
+
+    from src.server.api.main import app
+    from src.server.repository.tenant import AssetRepository
+    from tests.machine_lineage import ingest_made
+
+    client, headers, library_id, *_ = env
+    sha = _sha()
+    facet = {"duration_sec": 2.0, "container": "mp4", "video_codec": "h264", "width": 64, "height": 36}
+    original = _ingest(env, "ncr3-fac/a.mp4", media_type="video", sha=sha, facet=facet)
+    _note(env, original, "keep")
+    real = AssetRepository.upsert_video_facet
+    fired = []
+
+    def upsert_video_facet(self, asset_id, f):
+        if not fired:
+            fired.append(1)
+            r = _post(TestClient(app), env, "ncr3-fac/a.mp4", _sha())  # its handover takes the copy
+            assert r.status_code == 200, r.text
+        return real(self, asset_id, f)
+
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 36)).save(buf, format="JPEG")
+    buf.seek(0)
+    data = {"library_id": library_id, "rel_path": "ncr3-fac/copy.mp4", "file_size": "1000", "media_type": "video",
+            "exif": json.dumps({"sha256": sha}), "lineage": ingest_made(sha), "video_facet": json.dumps(facet)}
+    with patch.object(AssetRepository, "upsert_video_facet", upsert_video_facet):
+        r = TestClient(app, raise_server_exceptions=False).post(
+            "/v1/ingest", headers=headers, files={"proxy": ("p.jpg", buf, "image/jpeg")}, data=data)
+    assert r.status_code == 200, r.text
+    assert r.json()["asset_id"] == original and _row(env, original)[2] == "ncr3-fac/copy.mp4"
+
+
+def test_one_missing_clip_moves_onto_a_new_copy(env):
+    # Two clips of one content go missing at once while a copy is made: one
+    # moves onto the copy; the other isn't then handed over to it (deleting it).
+    from unittest.mock import patch
+
+    from fastapi.testclient import TestClient
+    from sqlalchemy import text
+
+    from src.server.api.main import app
+    from src.server.repository.tenant import AssetRepository
+    from tests.test_archive_by_hand import _db
+
+    client, headers, *_ = env
+    sha = _sha()
+    first = _ingest(env, "ncr3-two/a1.jpg", media_type="image", sha=sha)
+    _note(env, first, "human")
+    second = _ingest(env, "ncr3-two/a2.jpg", media_type="image", sha=sha)
+    real = AssetRepository.find_missing_by_sha
+    fired = []
+
+    def find_missing_by_sha(self, library_id, s):
+        found = real(self, library_id, s)
+        if s == sha and not fired:
+            fired.append(1)
+            rr = TestClient(app).request("DELETE", "/v1/assets", json={"asset_ids": [first, second],
+                                                                       "reason": "missing"}, headers=headers)
+            assert rr.status_code in (200, 204), rr.text
+        return found
+
+    with patch.object(AssetRepository, "find_missing_by_sha", find_missing_by_sha):
+        r = _post(client, env, "ncr3-two/copy.jpg", sha)
+    assert r.status_code == 200, r.text
+    with _db(env) as s:
+        alive = {row[0] for row in s.execute(text("SELECT asset_id FROM assets WHERE sha256 = :s"), {"s": sha})}
+    assert {first, second} <= alive  # neither deleted for good

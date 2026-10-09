@@ -239,22 +239,32 @@ class LibraryRepository:
         self._session.refresh(library)
         # A clip whose path another clip holds now (a file ingested there as
         # the library went) stays out of sight, archived as missing where it
-        # was: a different file at a path is a new clip.
-        self._session.execute(
-            text(
-                "UPDATE assets a SET deleted_reason = 'missing' WHERE a.library_id = :lib"
-                "   AND a.deleted_reason = 'library' AND EXISTS (SELECT 1 FROM assets o"
-                "       WHERE o.library_id = a.library_id AND o.rel_path = a.rel_path AND o.deleted_at IS NULL)"
-            ),
-            {"lib": library_id},
-        )
-        self._session.execute(
-            text(
-                "UPDATE assets SET deleted_at = NULL, deleted_reason = NULL, trashed_from = NULL,"
-                " search_synced_at = NULL WHERE library_id = :lib AND deleted_reason = 'library'"
-            ),
-            {"lib": library_id},
-        )
+        # was: a different file at a path is a new clip. Once more if an
+        # ingest takes a path between the two.
+        from sqlalchemy.exc import IntegrityError
+
+        for attempt in range(3):
+            try:
+                with self._session.begin_nested():
+                    self._session.execute(
+                        text(
+                            "UPDATE assets a SET deleted_reason = 'missing' WHERE a.library_id = :lib"
+                            "   AND a.deleted_reason = 'library' AND EXISTS (SELECT 1 FROM assets o WHERE"
+                            "       o.library_id = a.library_id AND o.rel_path = a.rel_path AND o.deleted_at IS NULL)"
+                        ),
+                        {"lib": library_id},
+                    )
+                    self._session.execute(
+                        text(
+                            "UPDATE assets SET deleted_at = NULL, deleted_reason = NULL, trashed_from = NULL,"
+                            " search_synced_at = NULL WHERE library_id = :lib AND deleted_reason = 'library'"
+                        ),
+                        {"lib": library_id},
+                    )
+                break
+            except IntegrityError:
+                if attempt == 2:
+                    raise
         # Clips a person trashed before the library went were out of the trash's
         # sight with it: back in the trash, they get their full trash days again.
         self._session.execute(
@@ -1177,7 +1187,8 @@ class AssetRepository:
         """The library's clips archived as missing with this content (no lock)."""
         return list(self._session.execute(
             text("SELECT asset_id FROM assets WHERE library_id = :lib AND sha256 = :sha"
-                 "   AND deleted_at IS NOT NULL AND deleted_reason = 'missing' ORDER BY deleted_at DESC"),
+                 "   AND deleted_at IS NOT NULL AND deleted_reason = 'missing'"
+                 " ORDER BY deleted_at DESC, created_at DESC, asset_id"),
             {"lib": library_id, "sha": sha256},
         ).scalars())
 

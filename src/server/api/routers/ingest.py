@@ -547,28 +547,48 @@ async def create_and_ingest(
         # another ingest put a clip here: one clip in sight holds a path.
         session.rollback()
         raise HTTPException(status_code=409, detail=f"Another file was just ingested at {rel_path}; scan again") from None
-    if facet_data is not None:
-        asset_repo.upsert_video_facet(asset_id, facet_data)
+    def took_its_place() -> str | None:
+        """The clip in sight at this path now, if it isn't the one just made:
+        a clip that went missing with this content moved onto it (copy, then
+        delete), so that's the clip here."""
+        here = asset_repo.get_by_library_and_rel_path(library_id, rel_path)
+        return here.asset_id if here is not None and here.deleted_at is None and here.asset_id != asset_id else None
+
+    # Another ingest's handover may already have moved a missing clip onto
+    # this new one (a copy and the overwritten original in one scan).
+    handed_to = took_its_place() if created and asset_repo.get_by_id(asset_id) is None else None
+    if facet_data is not None and handed_to is None:
         from src.server.repository.lineage import record as record_lineage
 
-        record_lineage(session, asset_id, "probe", made["probe"])
+        try:
+            asset_repo.upsert_video_facet(asset_id, facet_data)
+            record_lineage(session, asset_id, "probe", made["probe"])
+        except IntegrityError:
+            # Handed over to just now: the clip that moved here has its own.
+            session.rollback()
+            handed_to = took_its_place()
+            if handed_to is None:
+                raise
     if reappeared is not None and reappeared.transcript_srt:
         from src.server.search.sync import index_transcript_segments
 
         index_transcript_segments(tenant_id, reappeared)
-    if created and sha and get_follow_moves(session):
+    if created and handed_to is None and sha and get_follow_moves(session):
         # A clip with this content may have gone missing while this one was
         # made (a copy and the overwritten original in one scan, ingested at
         # once): then this is its copy, and it moves here, as copy-then-delete.
-        # Whichever ingest commits second sees the other.
+        # Whichever ingest commits second sees the other. One clip at most:
+        # the one that went last.
         from src.server.api.routers.trash import hand_over_to_copies
 
-        went = asset_repo.missing_ids_with_sha(library_id, sha)
+        went = asset_repo.missing_ids_with_sha(library_id, sha)[:1]
         if went and hand_over_to_copies(session, request, went):
-            here = asset_repo.get_by_library_and_rel_path(library_id, rel_path)
-            if here is not None and here.deleted_at is None:
-                result.asset_id = here.asset_id
-                created = False
+            handed_to = took_its_place()
+    if created and handed_to is None and asset_repo.get_by_id(asset_id) is None:
+        handed_to = took_its_place()  # the other ingest's handover took it meanwhile
+    if handed_to is not None:
+        result.asset_id = handed_to
+        created = False
     result.created = created
     return result
 
