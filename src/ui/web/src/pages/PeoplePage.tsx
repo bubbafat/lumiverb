@@ -526,21 +526,23 @@ export default function PeoplePage() {
   const truncated = clustersQuery.data?.truncated ?? false;
   const maxClusterSize = clustersQuery.data?.max_cluster_size ?? 0;
 
-  // Filter out removed clusters and apply min size filter (client-side, no re-fetch)
-  const clusters = useMemo(
-    () => allClusters.filter((c) => !removedIndices.has(c.cluster_index) && c.size >= minClusterSize),
-    [allClusters, removedIndices, minClusterSize],
+  // Filter out removed clusters, then apply the min size filter (client-side, no re-fetch)
+  const remaining = useMemo(
+    () => allClusters.filter((c) => !removedIndices.has(c.cluster_index)),
+    [allClusters, removedIndices],
   );
+  const clusters = useMemo(() => remaining.filter((c) => c.size >= minClusterSize), [remaining, minClusterSize]);
 
-  // Auto-refresh when all clusters have been dismissed/named
+  // Auto-refresh when all clusters have been dismissed/named (not merely
+  // hidden by the min size)
   useEffect(() => {
-    if (allClusters.length > 0 && clusters.length === 0 && removedIndices.size > 0) {
+    if (allClusters.length > 0 && remaining.length === 0 && removedIndices.size > 0) {
       queryClient.refetchQueries({ queryKey: ["face-clusters"] }).then(() => {
         setRemovedIndices(new Set());
         setFadingIndices(new Map());
       });
     }
-  }, [allClusters.length, clusters.length, removedIndices.size, queryClient]);
+  }, [allClusters.length, remaining.length, removedIndices.size, queryClient]);
 
   const startFadeSequence = useCallback((clusterIndex: number) => {
     // Phase 1: lock (desaturated, disabled) for 400ms
@@ -602,7 +604,7 @@ export default function PeoplePage() {
         </Link>
       </div>
 
-      {people.length === 0 && !peopleQuery.isLoading && clusters.length === 0 && (
+      {people.length === 0 && !peopleQuery.isLoading && remaining.length === 0 && (
         <p className="text-sm text-gray-500">
           No named people yet. Use face clustering below to identify and name people in your photos.
         </p>
@@ -622,8 +624,9 @@ export default function PeoplePage() {
         fetchNextPage={peopleQuery.fetchNextPage}
       />
 
-      {/* Unnamed clusters */}
-      {(clusters.length > 0 || clustersQuery.isLoading || clustersQuery.isFetching) && (
+      {/* Unnamed clusters: shown while any are left, even when the min size
+          hides them all, so the slider is there to move back */}
+      {(remaining.length > 0 || clustersQuery.isLoading || clustersQuery.isFetching) && (
         <div className="mt-4">
           <div className="mb-4 flex items-center gap-3">
             <button
@@ -690,6 +693,10 @@ export default function PeoplePage() {
                     <div key={i} className="h-48 animate-pulse rounded-xl bg-gray-800/50" />
                   ))}
                 </div>
+              ) : clusters.length === 0 ? (
+                <p className="text-sm text-gray-500">
+                  No clusters with {minClusterSize} or more faces. Move the slider left to see smaller ones.
+                </p>
               ) : (
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
                   {clusters.map((cluster) => (
