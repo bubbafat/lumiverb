@@ -13,6 +13,7 @@ from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
+from tests.machine_lineage import ingest_made
 
 
 @pytest.fixture(scope="module")
@@ -308,7 +309,8 @@ def _ingest(client, api_key, library_id, rel_path, media_type="video") -> str:
     r = client.post(
         "/v1/ingest",
         data={"library_id": library_id, "rel_path": rel_path, "file_size": "10", "media_type": media_type,
-              "width": "32", "height": "18", "exif": _json.dumps({"sha256": os.urandom(32).hex()})},
+              "width": "32", "height": "18", "exif": _json.dumps({"sha256": os.urandom(32).hex()}),
+              "lineage": ingest_made()},
         files={"proxy": ("p.jpg", buf, "image/jpeg")},
         headers={"Authorization": f"Bearer {api_key}"},
     )
@@ -434,7 +436,7 @@ def shared_clip(public_lib_client):
     exif = {"sha256": os.urandom(32).hex(), "gps_lat": 40.7, "gps_lon": -74.0, "camera_make": "Sony"}
     r = client.post("/v1/ingest", data={"library_id": private_library_id, "rel_path": "Clients/ACME/interview_jane.mov",
                                         "file_size": "10", "media_type": "video", "width": "32", "height": "18",
-                                        "exif": _json.dumps(exif)},
+                                        "exif": _json.dumps(exif), "lineage": ingest_made()},
                     files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=auth)
     assert r.status_code == 200, r.text
     asset_id = r.json()["asset_id"]

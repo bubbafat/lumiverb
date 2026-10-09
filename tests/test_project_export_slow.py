@@ -25,6 +25,7 @@ from src.server.database import _engines, get_control_session
 from src.server.repository.control_plane import TenantDbRoutingRepository
 from src.server.storage.local import LocalStorage
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
+from tests.machine_lineage import ingest_made
 
 FACET = {
     "duration_sec": 7.07, "container": "mov", "video_codec": "h264", "width": 640,
@@ -98,7 +99,7 @@ def _jpeg() -> bytes:
 
 def _ingest(client, headers, library_id, rel_path, media_type, facet=None, exif=None) -> str:
     data = {"library_id": library_id, "rel_path": rel_path, "file_size": "5000",
-            "media_type": media_type}
+            "media_type": media_type, "lineage": ingest_made()}
     if facet:
         data["video_facet"] = json.dumps(facet)
     if exif:

@@ -29,6 +29,7 @@ from src.server.repository.control_plane import TenantDbRoutingRepository
 from src.server.repository.tenant import FaceRepository, PersonRepository
 from src.server.storage.local import LocalStorage
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
+from tests.machine_lineage import ingest_made, made
 
 
 @pytest.fixture(scope="module")
@@ -242,6 +243,7 @@ def _redetect(client, headers, asset_id: str, faces: list[tuple[dict, object]]) 
                 }
                 for box, emb in faces
             ],
+            "lineage": made("faces"),
         },
         headers=headers,
     )
@@ -277,7 +279,7 @@ def _ingest(client, headers, library_id: str, rel_path: str):
         headers=headers,
         files={"proxy": ("p.jpg", io.BytesIO(_image()), "image/jpeg")},
         data={"library_id": library_id, "rel_path": rel_path, "file_size": "5000",
-              "media_type": "image"},
+              "media_type": "image", "lineage": ingest_made()},
     )
 
 
@@ -458,7 +460,8 @@ def test_faces_without_embeddings_pair_by_solid_overlap(env) -> None:
     r = client.post(
         f"/v1/assets/{asset_id}/faces",
         json={"detection_model": "apple_vision", "detection_model_version": "2",
-              "faces": [{"bounding_box": _box(0.12, 0.12), "detection_confidence": 0.9}]},
+              "faces": [{"bounding_box": _box(0.12, 0.12), "detection_confidence": 0.9}],
+              "lineage": made("faces")},
         headers=headers,
     )
 
@@ -996,7 +999,8 @@ def test_machine_transcript_never_replaces_manual(env) -> None:
     def post(srt: str, source: str):
         r = client.post(
             f"/v1/assets/{asset_id}/transcript",
-            json={"srt": srt, "language": "en", "source": source},
+            json={"srt": srt, "language": "en", "source": source,
+                  **({} if source == "manual" else {"lineage": made("transcript")})},
             headers=headers,
         )
         assert r.status_code == 200, r.text
@@ -1031,6 +1035,7 @@ def _redetect_with(client, headers, asset_id: str, faces: list[tuple[dict, objec
             "embedding_model": embedding_model,
             "faces": [{"bounding_box": box, "detection_confidence": 0.9,
                        "embedding": _unit(emb) if isinstance(emb, int) else emb} for box, emb in faces],
+            "lineage": made("faces"),
         },
         headers=headers,
     )
