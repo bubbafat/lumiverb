@@ -134,6 +134,47 @@ def test_new_settings_dont_resume_a_paused_producer(env):
         client.post("/v1/producers/analysis_proxy/resume", headers=headers)
 
 
+def test_new_settings_or_a_new_model_lift_no_pause_only_a_toggle_does(env):
+    """Robert, Oct 9: "New settings do not lift a pause. Only an explicit toggle does."
+    Not a producer's own pause, not scans', not all of it."""
+    from src.server.scheduler.service import _on_hold_in_database
+    from tests.test_ai_machines import BRAIN, LLAVA, QWEN, _add, _machines, _model
+
+    client, headers, *_ = env
+    for m in client.get("/v1/ai", headers=headers).json()["machines"]:
+        if not m["built_in"]:
+            client.delete(f"/v1/ai/machines/{m['machine_id']}", headers=headers)
+    fake, _ = _machines({BRAIN: (QWEN, LLAVA)})
+    try:
+        with fake:
+            assert _add(env).status_code == 201
+            assert _model(env, "vision", QWEN, redo=True).status_code == 200
+            for path in ("/v1/producers/analysis_proxy/pause", "/v1/producers/vision/pause",
+                         "/v1/producers/scans/pause", "/v1/producers/pause"):
+                assert client.post(path, headers=headers).status_code == 204, path
+            held = {"all", "scans", "analysis_proxy", "vision"}
+            assert _on_hold_in_database(env[4]) == held
+
+            r = client.put("/v1/producers/analysis_proxy/settings", json={"settings": {"crf": 30}, "redo": True},
+                           headers=headers)
+            assert r.status_code == 200 and r.json()["paused"] is True, r.text
+            assert _model(env, "vision", LLAVA, redo=True).status_code == 200
+            assert _on_hold_in_database(env[4]) == held
+            q = _queue(env)
+            assert q["paused"] is True and q["scans_paused"] is True
+            assert _producers(env)["vision"]["paused"] is True
+    finally:
+        assert client.post("/v1/producers/resume", headers=headers).status_code == 204  # the toggle
+        client.put("/v1/producers/analysis_proxy/settings", json={"settings": {"crf": None}, "redo": True},
+                   headers=headers)
+        with fake:
+            _model(env, "vision", "")
+        for m in client.get("/v1/ai", headers=headers).json()["machines"]:
+            if not m["built_in"]:
+                client.delete(f"/v1/ai/machines/{m['machine_id']}", headers=headers)
+    assert _on_hold_in_database(env[4]) == set()
+
+
 def test_the_redo_question_says_a_paused_producer_waits(env):
     client, headers, *_ = env
     lib = _library(env, "PausedRedoQuestion")
