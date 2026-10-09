@@ -1037,14 +1037,15 @@ def order_clusters(clusters: list[dict], sort: str) -> list[dict]:
 
 
 def store_clusters(session: Session) -> dict:
-    """Compute every cluster and keep them as the cluster cache (marked clean)."""
+    """Compute every cluster and keep them as the cluster cache, with the
+    version they were computed at. The version is read first: a change
+    committed while computing makes the cache old at once, never current."""
     from src.server.repository.system_metadata import SystemMetadataRepository
-    from src.server.repository.tenant import FaceRepository
+    from src.server.repository.tenant import FaceRepository, face_clusters_version
 
-    data = FaceRepository(session).cluster_cache()
-    meta = SystemMetadataRepository(session)
-    meta.set_value("face_clusters_cache", json.dumps(data))
-    meta.set_value("face_clusters_dirty", "false")
+    version = face_clusters_version(session)
+    data = {**FaceRepository(session).cluster_cache(), "version": version}
+    SystemMetadataRepository(session).set_value("face_clusters_cache", json.dumps(data))
     return data
 
 
@@ -1071,8 +1072,11 @@ def get_clusters(
     sort: ClusterSort = "size_desc",
 ) -> ClustersResponse:
     """Return clusters of unassigned faces in the order asked (largest first
-    unless asked otherwise; see order_clusters). Uses cache; recomputes if dirty."""
+    unless asked otherwise; see order_clusters). Served from the cache while
+    it's current (nothing changed which faces are clustered since it was
+    computed: face_clusters_version); computed again otherwise."""
     from src.server.repository.system_metadata import SystemMetadataRepository
+    from src.server.repository.tenant import face_clusters_version
 
     if limit > 50:
         limit = 50
@@ -1081,16 +1085,14 @@ def get_clusters(
     if min_cluster_size < 1:
         min_cluster_size = 1
 
-    meta = SystemMetadataRepository(session)
-    dirty = meta.get_value("face_clusters_dirty")
-    cached = meta.get_value("face_clusters_cache")
+    cached = SystemMetadataRepository(session).get_value("face_clusters_cache")
     data = None
-    if not dirty and cached:
+    if cached:
         try:
             data = json.loads(cached)
         except json.JSONDecodeError:
             data = None  # corrupted cache, recompute
-    if data is None:
+    if not isinstance(data, dict) or data.get("version") != face_clusters_version(session):
         data = store_clusters(session)
 
     all_clusters = data.get("clusters", [])

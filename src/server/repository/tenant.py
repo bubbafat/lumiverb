@@ -3358,15 +3358,18 @@ class SavedViewRepository:
 
 
 def _mark_clusters_dirty(session: Session) -> None:
-    """Mark face cluster cache as stale. Called after any face mutation."""
-    session.execute(
-        text("""
-            INSERT INTO system_metadata (key, value, updated_at)
-            VALUES ('face_clusters_dirty', 'true', NOW())
-            ON CONFLICT (key) DO UPDATE
-              SET value = 'true', updated_at = NOW()
-        """)
-    )
+    """Say the face clusters changed (the cache is computed again on the next
+    load). Triggers already say so for every change to which faces are
+    clustered (migration d7f2a3b4c5e6); this is for what else regroups them
+    (the faces' grouping settings)."""
+    session.execute(text("SELECT mark_face_clusters_changed()"))
+
+
+def face_clusters_version(session: Session) -> str:
+    """The last transaction that changed which faces are clustered: a cache
+    computed at this version is current."""
+    return session.execute(text(
+        "SELECT value FROM system_metadata WHERE key = 'face_clusters_version'")).scalar() or "0"
 
 
 #: Input-size cutoff between the two HDBSCAN regimes in

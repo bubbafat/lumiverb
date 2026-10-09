@@ -359,15 +359,18 @@ def test_recompute_centroids_upgrade_step_idempotent(session) -> None:
     ctx = UpgradeContext(session=session, metadata=SystemMetadataRepository(session))
     step = RecomputeCentroidsForTrashFilterStep()
 
+    before = session.execute(
+        text("SELECT value FROM system_metadata WHERE key = 'face_clusters_version'")
+    ).scalar()
     assert step.needs_work(ctx) is True
     result = step.run(ctx)
     assert result["recomputed"] == 1
 
-    # And the cluster cache is now dirty.
-    flag = session.execute(
-        text("SELECT value FROM system_metadata WHERE key = 'face_clusters_dirty'")
+    # And the clusters changed: a new version, so any cache is old.
+    version = session.execute(
+        text("SELECT value FROM system_metadata WHERE key = 'face_clusters_version'")
     ).scalar()
-    assert flag == "true"
+    assert version is not None and version != before
 
     # Untrash to make a second run a no-op.
     session.execute(
