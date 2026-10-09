@@ -774,3 +774,88 @@ def test_a_python_change_stops_the_old_worker_gently_too():
     block = text.split('if [[ -n "$HAVE_PY" && -n "$WANT_PY" && "$HAVE_PY" != "$WANT_PY" ]]; then', 1)[1].split("\nfi\n", 1)[0]
     assert block.index("KillMode=mixed") < block.index("systemctl daemon-reload") < block.index(
         'systemctl stop "$unit"')
+
+
+# --- Containers that use the GPU get it back after systemd reloads ----------
+# systemctl daemon-reload takes the GPU from running containers
+# (nvidia-container-toolkit with systemd's cgroups): the brain's Ollama then
+# ran its model on the CPU, with no error, until restarted (Oct 9).
+
+
+def _gpu_step(tmp_path: Path, containers: dict[str, str], *, docker: bool = True) -> tuple[str, list[str]]:
+    """Run update-api.sh's GPU step with docker stubbed. containers: name →
+    "gpu" (has it), "lost" (lost it; a restart gives it back), "gone" (lost
+    it for good), "no-smi" (uses the GPU, no nvidia-smi in it), "cpu" (no GPU asked for).
+    Returns its output and the docker calls."""
+    calls = tmp_path / "docker-calls"
+    calls.write_text("")
+    state = tmp_path / "state"
+    state.mkdir(exist_ok=True)
+    for name, how in containers.items():
+        (state / name).write_text(how)
+    stub = (
+        f'docker() {{ echo "$*" >> "{calls}"; S="{state}"\n'
+        '  case "$1" in\n'
+        '    ps) ls "$S" ;;\n'
+        '    inspect) [[ "$(cat "$S/${@: -1}")" == cpu ]] || echo nvidia ;;\n'
+        '    restart) [[ "$(cat "$S/$2")" == lost ]] && echo gpu > "$S/$2"; echo "$2" ;;\n'
+        '    exec) case "$(cat "$S/$2")" in\n'
+        '            gpu) echo "GPU 0: NVIDIA GeForce RTX 3080" ;;\n'
+        '            lost|gone) echo "Failed to initialize NVML: Unknown Error"; return 255 ;;\n'
+        '            no-smi) echo "exec: nvidia-smi: not found"; return 127 ;;\n'
+        '          esac ;;\n'
+        '  esac; }\n'
+    )
+    text = UPDATE_API.read_text()
+    block = text.split('step "Giving the GPU back to containers"', 1)[1].split("# ----", 1)[0]
+    script = (
+        'step() { :; }; ok() { echo "ok: $1"; }; warn() { echo "warn: $1"; }\n'
+        + (stub if docker else 'command() { [[ "$2" != docker ]] && builtin command "$@"; }\n')
+        + block
+    )
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stdout + out.stderr
+    return out.stdout + out.stderr, calls.read_text().splitlines()
+
+
+def _restarted(calls: list[str]) -> list[str]:
+    return [c.split()[1] for c in calls if c.startswith("restart ")]
+
+
+def test_a_container_that_lost_the_gpu_is_restarted(tmp_path):
+    out, calls = _gpu_step(tmp_path, {"ollama": "lost"})
+    assert _restarted(calls) == ["ollama"]
+    assert "ok: ollama" in out and "GPU again" in out
+
+
+def test_one_that_has_it_is_left_running(tmp_path):
+    out, calls = _gpu_step(tmp_path, {"ollama": "gpu"})
+    assert _restarted(calls) == [] and "ok: ollama has the GPU" in out
+
+
+def test_only_containers_that_use_the_gpu_are_looked_at(tmp_path):
+    _, calls = _gpu_step(tmp_path, {"resolve_pgsql": "cpu", "ollama": "gpu"})
+    assert not any(c.startswith("exec resolve_pgsql") for c in calls)
+
+
+def test_one_that_cant_say_isnt_restarted(tmp_path):
+    # No nvidia-smi in it: its GPU can't be checked, so it's left alone.
+    out, calls = _gpu_step(tmp_path, {"trainer": "no-smi"})
+    assert _restarted(calls) == [] and "warn" not in out
+
+
+def test_one_a_restart_doesnt_fix_says_what_to_do(tmp_path):
+    out, calls = _gpu_step(tmp_path, {"ollama": "gone"})
+    assert _restarted(calls) == ["ollama"]
+    assert "warn: ollama" in out and "docker restart ollama" in out
+
+
+def test_without_docker_the_step_does_nothing(tmp_path):
+    out, _ = _gpu_step(tmp_path, {}, docker=False)
+    assert "warn" not in out
+
+
+def test_the_gpu_comes_back_after_the_last_reload_and_before_the_scheduler_restarts():
+    text = UPDATE_API.read_text()
+    gpu = text.index('step "Giving the GPU back to containers"')
+    assert text.rindex("systemctl daemon-reload") < gpu < text.index("systemctl restart lumiverb-scheduler")
